@@ -46,14 +46,22 @@ EOF
   MESON_ARGS+=(--cross-file cross_file.txt)
 fi
 
-# Build dav1d
-meson setup build \
-  --prefix="$PREFIX" \
-  --default-library=static \
-  --buildtype=release \
-  -Denable_tools=false \
-  -Denable_tests=false \
-  "${MESON_ARGS[@]}"
+if [ ${#MESON_ARGS[@]} -eq 0 ]; then
+  meson setup build \
+    --prefix="$PREFIX" \
+    --default-library=static \
+    --buildtype=release \
+    -Denable_tools=false \
+    -Denable_tests=false
+else
+  meson setup build \
+    --prefix="$PREFIX" \
+    --default-library=static \
+    --buildtype=release \
+    -Denable_tools=false \
+    -Denable_tests=false \
+    "${MESON_ARGS[@]}"
+fi
 
 ninja -C build -j"$CORES"
 ninja -C build install
