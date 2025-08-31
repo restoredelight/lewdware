@@ -10,7 +10,7 @@ if [ -f "$PREFIX/lib/pkgconfig/libavcodec.pc" ]; then
 fi
 
 rm -rf ffmpeg
-git clone --depth=1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
+git clone --depth=1 --branch "release/8.0" https://github.com/FFmpeg/FFmpeg.git ffmpeg
 cd ffmpeg
 
 CONFIGURE_ARGS=(
