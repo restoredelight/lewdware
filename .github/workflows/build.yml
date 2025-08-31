@@ -50,13 +50,13 @@ jobs:
         run: brew install yasm pkg-config meson ninja
 
       # Cache FFmpeg build
-      - name: Cache FFmpeg
+      - name: Cache FFmpeg and dav1d
         uses: actions/cache@v4
         with:
           path: target/ffmpeg-cache
-          key: ffmpeg-${{ matrix.target }}-${{ hashFiles('scripts/build_ffmpeg_minimal.sh') }}
+          key: ffmpeg-dav1d-${{ matrix.target }}-${{ hashFiles('scripts/build_ffmpeg_minimal.sh', 'scripts/build_dav1d.sh') }}
           restore-keys: |
-            ffmpeg-${{ matrix.target }}-
+            ffmpeg-dav1d-${{ matrix.target }}-
 
       - name: Prepare cache dir
         run: mkdir -p target/ffmpeg-cache
