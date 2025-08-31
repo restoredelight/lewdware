@@ -45,21 +45,25 @@ jobs:
             meson \
             ninja-build
 
+          # Build FFmpeg and dav1d to custom location for static linking
+          mkdir -p $HOME/static-libs
+          ./scripts/build_ffmpeg_minimal.sh $HOME/static-libs
+          ./scripts/build_dav1d.sh $HOME/static-libs
+          
+          # Add to PKG_CONFIG_PATH
+          echo "PKG_CONFIG_PATH=$HOME/static-libs/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
-        run: brew install yasm pkg-config meson ninja
+        run: |
+          brew install yasm pkg-config meson ninja
 
-      # Cache FFmpeg build
-      - name: Cache FFmpeg and dav1d
-        uses: actions/cache@v4
-        with:
-          path: target/ffmpeg-cache
-          key: ffmpeg-dav1d-${{ matrix.target }}-${{ hashFiles('scripts/build_ffmpeg_minimal.sh', 'scripts/build_dav1d.sh') }}
-          restore-keys: |
-            ffmpeg-dav1d-${{ matrix.target }}-
-
-      - name: Prepare cache dir
-        run: mkdir -p target/ffmpeg-cache
+          mkdir -p $HOME/static-libs
+          ./scripts/build_ffmpeg_minimal.sh $HOME/static-libs
+          ./scripts/build_dav1d.sh $HOME/static-libs
+          
+          # Add to PKG_CONFIG_PATH
+          echo "PKG_CONFIG_PATH=$HOME/static-libs/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
       - name: Build
         env:
