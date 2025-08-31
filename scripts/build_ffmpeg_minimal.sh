@@ -20,7 +20,6 @@ CONFIGURE_ARGS=(
   --disable-debug
   --disable-doc
   --disable-programs
-  --disable-avdevice
   --disable-network
   --disable-hwaccels
   --disable-autodetect
@@ -35,12 +34,6 @@ CONFIGURE_ARGS=(
   --enable-avfilter
   --enable-avdevice
 
-  # Disable drivers
-  --disable-v4l2
-  --disable-alsa
-  --disable-dshow
-
-  
   # Enable necessary decoders, parsers and demuxers
   --enable-decoder=h264
   --enable-decoder=vp9
