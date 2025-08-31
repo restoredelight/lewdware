@@ -44,7 +44,8 @@ jobs:
             yasm \
             mingw-w64 \
             meson \
-            ninja-build
+            ninja-build \
+            libasound2-dev
 
           # Build FFmpeg and dav1d to custom location for static linking
           mkdir -p $HOME/static-libs
