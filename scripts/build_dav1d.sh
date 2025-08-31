@@ -67,16 +67,14 @@ ninja -C build -j"$CORES"
 ninja -C build install
 
 if [ -f "$PREFIX/lib/pkgconfig/dav1d.pc" ]; then
-  export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
-    PC_DIR="$PREFIX/lib/pkgconfig"
+  export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 elif [ -f "$PREFIX/lib/x86_64-linux-gnu/pkgconfig/dav1d.pc" ]; then
-  export PKG_CONFIG_PATH="$PREFIX/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
-    PC_DIR="$PREFIX/lib/x86_64-linux-gnu/pkgconfig"
+  export PKG_CONFIG_PATH="$PREFIX/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
 else
-    echo "Could not find dav1d.pc after install!"
-    cd "$WORK_DIR"
-    rm -rf "$TEMP_DIR"
-    exit 1
+  echo "Could not find dav1d.pc after install!"
+  cd "$WORK_DIR"
+  rm -rf "$TEMP_DIR"
+  exit 1
 fi
 
 # Clean up
