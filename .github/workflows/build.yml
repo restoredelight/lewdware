@@ -41,11 +41,13 @@ jobs:
             pkg-config \
             git \
             yasm \
-            mingw-w64
+            mingw-w64 \
+            meson \
+            ninja-build
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
-        run: brew install yasm pkg-config
+        run: brew install yasm pkg-config meson ninja
 
       # Cache FFmpeg build
       - name: Cache FFmpeg
@@ -62,6 +64,7 @@ jobs:
       - name: Build
         env:
           CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+          PKG_CONFIG_ALLOW_CROSS: 1
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Upload Artifact
