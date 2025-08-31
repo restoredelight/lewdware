@@ -18,9 +18,9 @@ jobs:
           # - os: macos-latest
           #   target: x86_64-apple-darwin
           #   cross: false
-          - os: ubuntu-latest
-            target: x86_64-pc-windows-gnu
-            cross: true
+          # - os: ubuntu-latest
+          #   target: x86_64-pc-windows-gnu
+          #   cross: true
 
     steps:
       - uses: actions/checkout@v4
