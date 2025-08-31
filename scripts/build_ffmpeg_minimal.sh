@@ -21,6 +21,7 @@ CONFIGURE_ARGS=(
   --disable-doc
   --disable-programs
   --disable-avdevice
+  --disable-avfilter
   --disable-network
   --disable-hwaccels
   --disable-everything
