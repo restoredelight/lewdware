@@ -24,9 +24,16 @@ fn main() {
         println!("Using cached FFmpeg build.");
     }
 
-    println!("cargo:rustc-env=FFMPEG_DIR={}", ffmpeg_prefix.display());
-    println!(
-        "cargo:rustc-env=PKG_CONFIG_PATH={}/lib/pkgconfig",
-        ffmpeg_prefix.display()
-    );
+    let pkg_config_path = ffmpeg_prefix.join("lib/pkgconfig");
+
+    // println!("cargo:rustc-env=FFMPEG_DIR={}", ffmpeg_prefix.display());
+    // println!(
+    //     "cargo:rustc-env=PKG_CONFIG_PATH={}/lib/pkgconfig",
+    //     ffmpeg_prefix.display()
+    // );
+
+    unsafe {
+        env::set_var("FFMPEG_DIR", &ffmpeg_prefix);
+        env::set_var("PKG_CONFIG_PATH", pkg_config_path);
+    }
 }
