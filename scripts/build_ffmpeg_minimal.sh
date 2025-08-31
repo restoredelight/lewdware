@@ -25,7 +25,23 @@ CONFIGURE_ARGS=(
   --disable-hwaccels
   --disable-autodetect
   --disable-everything
+
+  # Minimal libraries required by ffmpeg-sys-next
+  --enable-avcodec
+  --enable-avformat
+  --enable-avutil
+  --enable-swscale
+  --enable-swresample
   --enable-avfilter
+  --enable-avdevice
+
+  # Disable drivers
+  --disable-v4l2
+  --disable-alsa
+  --disable-dshow
+
+  
+  # Enable necessary decoders, parsers and demuxers
   --enable-decoder=h264
   --enable-decoder=vp9
   --enable-parser=h264
@@ -33,8 +49,6 @@ CONFIGURE_ARGS=(
   --enable-demuxer=mov
   --enable-demuxer=matroska
   --enable-protocol=file
-  --enable-swscale
-  --enable-swresample
 )
 
 if [[ "$TARGET" == *"pc-windows-gnu"* ]]; then
