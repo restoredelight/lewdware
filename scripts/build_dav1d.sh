@@ -52,7 +52,8 @@ if [ ${#MESON_ARGS[@]} -eq 0 ]; then
     --default-library=static \
     --buildtype=release \
     -Denable_tools=false \
-    -Denable_tests=false
+    -Denable_tests=false \
+    -Dpkgconfigdir="$PREFIX/lib/pkgconfig"
 else
   meson setup build \
     --prefix="$PREFIX" \
@@ -60,6 +61,7 @@ else
     --buildtype=release \
     -Denable_tools=false \
     -Denable_tests=false \
+    -Dpkgconfigdir="$PREFIX/lib/pkgconfig" \
     "${MESON_ARGS[@]}"
 fi
 
