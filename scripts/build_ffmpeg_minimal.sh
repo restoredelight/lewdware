@@ -21,10 +21,11 @@ CONFIGURE_ARGS=(
   --disable-doc
   --disable-programs
   --disable-avdevice
-  --disable-avfilter
   --disable-network
   --disable-hwaccels
+  --disable-autodetect
   --disable-everything
+  --enable-avfilter
   --enable-decoder=h264
   --enable-decoder=vp9
   --enable-parser=h264

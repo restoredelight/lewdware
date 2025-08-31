@@ -53,6 +53,8 @@ jobs:
           
           # Add to PKG_CONFIG_PATH
           echo "PKG_CONFIG_PATH=$HOME/static-libs/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          echo "FFMPEG_STATIC=1" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -65,6 +67,8 @@ jobs:
           
           # Add to PKG_CONFIG_PATH
           echo "PKG_CONFIG_PATH=$HOME/static-libs/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          echo "FFMPEG_STATIC=1" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
 
       - name: Build
         env:
