@@ -52,8 +52,7 @@ if [ ${#MESON_ARGS[@]} -eq 0 ]; then
     --default-library=static \
     --buildtype=release \
     -Denable_tools=false \
-    -Denable_tests=false \
-    -Dpkgconfigdir="$PREFIX/lib/pkgconfig"
+    -Denable_tests=false
 else
   meson setup build \
     --prefix="$PREFIX" \
@@ -61,12 +60,24 @@ else
     --buildtype=release \
     -Denable_tools=false \
     -Denable_tests=false \
-    -Dpkgconfigdir="$PREFIX/lib/pkgconfig" \
     "${MESON_ARGS[@]}"
 fi
 
 ninja -C build -j"$CORES"
 ninja -C build install
+
+if [ -f "$PREFIX/lib/pkgconfig/dav1d.pc" ]; then
+  export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+    PC_DIR="$PREFIX/lib/pkgconfig"
+elif [ -f "$PREFIX/lib/x86_64-linux-gnu/pkgconfig/dav1d.pc" ]; then
+  export PKG_CONFIG_PATH="$PREFIX/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
+    PC_DIR="$PREFIX/lib/x86_64-linux-gnu/pkgconfig"
+else
+    echo "Could not find dav1d.pc after install!"
+    cd "$WORK_DIR"
+    rm -rf "$TEMP_DIR"
+    exit 1
+fi
 
 # Clean up
 cd "$WORK_DIR"
