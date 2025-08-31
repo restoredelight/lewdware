@@ -40,6 +40,7 @@ jobs:
             build-essential \
             pkg-config \
             git \
+            nasm \
             yasm \
             mingw-w64 \
             meson \
@@ -56,7 +57,7 @@ jobs:
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install yasm pkg-config meson ninja
+          brew install nasm yasm pkg-config meson ninja
 
           mkdir -p $HOME/static-libs
           ./scripts/build_ffmpeg_minimal.sh $HOME/static-libs
