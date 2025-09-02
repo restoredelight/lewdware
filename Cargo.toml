@@ -2,6 +2,7 @@
 name = "lewdware"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/restoredelight/lewdware"
 
 [dependencies]
 anyhow = "1.0.99"
@@ -29,3 +30,8 @@ winit = "0.30.12"
 
 [patch.crates-io]
 pixels = { path = "./pixels" }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
