@@ -10,7 +10,7 @@ byteorder = "1.5.0"
 egui = "0.32.1"
 egui-wgpu = "0.32.1"
 egui-winit = "0.32.1"
-ffmpeg-next = { version = "8.0.0", features = ["format", "codec", "software-scaling", "build", "build-lib-vpx", "build-lib-opus"] }
+ffmpeg-next = { version = "8.0.0", features = ["format", "codec", "software-scaling"] }
 image = "0.25.6"
 wgpu = { version = "25.0.2", features = ["static-dxc"] }
 libavif-image = "0.14.0"

@@ -1,0 +1,121 @@
+name: Build Multi-platform
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+          # macOS (both architectures)
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            git \
+            nasm \
+            meson \
+            ninja-build \
+            libasound2-dev \
+            libx11-dev
+
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install \
+            pkg-config \
+            nasm \
+            meson \
+            ninja
+
+      - name: Install build dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install -y nasm
+          # Find and add nasm to PATH
+          $nasmPath = (Get-Command nasm -ErrorAction SilentlyContinue).Path
+          if (-not $nasmPath) {
+              # Try common locations
+              $possiblePaths = @(
+                  "C:\Program Files\NASM",
+                  "C:\ProgramData\chocolatey\bin",
+                  "C:\tools\nasm"
+              )
+              foreach ($path in $possiblePaths) {
+                  if (Test-Path "$path\nasm.exe") {
+                      echo $path >> $env:GITHUB_PATH
+                      Write-Host "Added $path to PATH"
+                      break
+                  }
+              }
+          }
+          pip install meson ninja
+        shell: pwsh
+
+      - name: Cache FFmpeg build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ffmpeg-${{ matrix.target }}
+          key: ffmpeg-8.0-${{ matrix.target }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+          restore-keys: |
+            ffmpeg-8.0-${{ matrix.target }}-
+
+      - name: Build FFmpeg
+        run: |
+          mkdir -p "$HOME/.ffmpeg-${{ matrix.target }}"
+          export CARGO_BUILD_TARGET="${{ matrix.target }}"
+          ./scripts/build-ffmpeg.sh "$HOME/.ffmpeg-${{ matrix.target }}"
+        shell: bash
+
+      - name: Set FFmpeg environment variables
+        run: |
+          echo "PKG_CONFIG_PATH=$HOME/.ffmpeg-${{ matrix.target }}/lib/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
+          echo "FFMPEG_DIR=$HOME/.ffmpeg-${{ matrix.target }}" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Build Rust project
+        run: cargo build --target ${{ matrix.target }} --release
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/lewdware
+            target/${{ matrix.target }}/release/lewdware.exe
+          if-no-files-found: ignore
