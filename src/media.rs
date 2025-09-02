@@ -60,17 +60,28 @@ impl MediaEntry {
         media_manager.read_image_data(&self)
     }
 
-    pub fn into_video(self) -> Result<Video> {
+    pub fn into_video(self) -> Video {
         assert_eq!(self.media_type, MediaType::Video);
 
-        Ok(Video {
+        Video {
             id: self.id,
             path: self.path,
             width: self.width.unwrap(),
             height: self.height.unwrap(),
             offset: self.offset,
             length: self.length,
-        })
+        }
+    }
+
+    pub fn into_audio(self) -> Audio {
+        assert_eq!(self.media_type, MediaType::Audio);
+
+        Audio {
+            id: self.id,
+            path: self.path,
+            offset: self.offset,
+            length: self.length,
+        }
     }
 }
 
@@ -92,6 +103,13 @@ pub struct Video {
     pub path: String,
     pub width: i64,
     pub height: i64,
+    offset: u64,
+    length: u64,
+}
+
+pub struct Audio {
+    pub id: i64,
+    pub path: String,
     offset: u64,
     length: u64,
 }
@@ -424,7 +442,7 @@ impl MediaManager {
         };
 
         Ok(match media {
-            Some(x) => Some(x.into_video()?),
+            Some(x) => Some(x.into_video()),
             None => None,
         })
     }
@@ -440,9 +458,21 @@ impl MediaManager {
                 if media.media_type == MediaType::Image {
                     Some(Media::Image(media.into_image(self)?))
                 } else {
-                    Some(Media::Video(media.into_video()?))
+                    Some(Media::Video(media.into_video()))
                 }
             },
+            None => None,
+        })
+    }
+
+    pub fn get_random_audio(&mut self, tags: Option<&[&str]>) -> Result<Option<Audio>> {
+        let media = match tags {
+            Some(tags) => self.get_random_media_type_with_tags(MediaType::Audio, tags)?,
+            None => self.get_random_media_type(MediaType::Audio)?,
+        };
+
+        Ok(match media {
+            Some(x) => Some(x.into_audio()),
             None => None,
         })
     }
@@ -464,11 +494,12 @@ impl MediaManager {
     pub fn read_image_data(&mut self, entry: &MediaEntry) -> Result<DynamicImage> {
         self.file.seek(SeekFrom::Start(entry.offset))?;
 
-        let mut limited_reader = self.file.try_clone()?.take(entry.length);
-        let img = ImageReader::with_format(BufReader::new(&mut limited_reader), ImageFormat::Avif)
-            .decode()?;
+        self.file.seek(SeekFrom::Start(entry.offset))?;
 
-        Ok(img)
+        let mut buffer = vec![0u8; entry.length as usize];
+        self.file.read_exact(&mut buffer)?;
+
+        libavif_image::read(&buffer).map_err(|err| anyhow!(err))
     }
 
     /// Extract file data and write to a path
@@ -506,17 +537,26 @@ impl MediaManager {
         }
     }
 
-    pub fn write_to_temp_file(&mut self, video: &Video) -> Result<NamedTempFile> {
+    fn write_to_temp_file(&mut self, offset: u64, length: u64) -> Result<NamedTempFile> {
+        println!("Writing to tempfile");
         let mut tempfile = NamedTempFile::with_suffix(".webm")?;
 
-        self.file.seek(SeekFrom::Start(video.offset))?;
+        self.file.seek(SeekFrom::Start(offset))?;
 
-        let mut buffer = vec![0u8; video.length as usize];
+        let mut buffer = vec![0u8; length as usize];
         self.file.read_exact(&mut buffer)?;
 
-        tempfile.write_all(&mut buffer)?;
+        tempfile.write_all(&buffer)?;
 
         Ok(tempfile)
+    }
+
+    pub fn write_video_to_temp_file(&mut self, video: &Video) -> Result<NamedTempFile> {
+        self.write_to_temp_file(video.offset, video.length)
+    }
+
+    pub fn write_audio_to_temp_file(&mut self, audio: &Audio) -> Result<NamedTempFile> {
+        self.write_to_temp_file(audio.offset, audio.length)
     }
 }
 

@@ -10,9 +10,12 @@ mod window;
 mod media;
 mod video;
 mod config;
+mod egui;
+mod audio;
+mod buffer;
 
 fn main() -> Result<()> {
-    let _config = config::load_config("config.json");
+    let config = config::load_config("config.json");
 
     let media_manager = MediaManager::open("pack.md")?;
 
@@ -37,7 +40,7 @@ fn main() -> Result<()> {
     }
 
     let event_loop = event_loop_builder.build()?;
-    let mut app = ChaosApp::new(media_manager, running);
+    let mut app = ChaosApp::new(media_manager, config, running);
     event_loop.run_app(&mut app)?;
     Ok(())
 }

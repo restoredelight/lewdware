@@ -1,16 +1,34 @@
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        mpsc::{Receiver, SyncSender, sync_channel},
+    },
+    thread,
+    time::Duration,
+};
 
-use anyhow::Result;
-use ffmpeg::{codec, decoder, format, software};
-use ffmpeg_next::{self as ffmpeg, frame::Video, Packet, Stream};
+use anyhow::{Result};
+use ffmpeg::{codec, format, software};
+use ffmpeg_next::{
+    self as ffmpeg, Packet,
+    frame::{Video},
+};
+use rodio::{OutputStream, OutputStreamBuilder};
 
-use crate::media;
+use crate::{audio::spawn_audio_thread, media};
 
 pub struct VideoDecoder {
-    ictx: format::context::Input,
-    decoder: decoder::Video,
-    scaler: software::scaling::Context,
-    stream_index: usize,
+    // ictx: format::context::Input,
+    // decoder: decoder::Video,
+    // scaler: software::scaling::Context,
+    // stream_index: usize,
+    // audio_decoder: Option<decoder::Audio>,
+    // audio_stream_index: Option<usize>,
+    receiver: Receiver<Option<VideoFrame>>,
+    loop_sender: SyncSender<()>,
+    width: i64,
+    height: i64,
+    _audio_stream: Arc<OutputStream>,
 }
 
 pub struct VideoFrame {
@@ -20,64 +38,42 @@ pub struct VideoFrame {
 
 impl VideoDecoder {
     pub fn new(path: &str, video: &media::Video) -> Result<Self> {
-        ffmpeg::init()?;
-        let ictx = format::input(&path)?;
-        let stream_index = ictx
-            .streams()
-            .best(ffmpeg::media::Type::Video)
-            .ok_or_else(|| anyhow::anyhow!("No video stream found"))?
-            .index();
+        println!("Spawning new video decoder");
+        let path = path.to_string();
 
-        let stream = ictx.stream(stream_index).unwrap();
-        let context_decoder = codec::Context::from_parameters(stream.parameters())?;
-        let decoder = context_decoder.decoder().video()?;
+        let receiver = spawn_video_stream(path.clone());
 
-        assert!(video.width as u32 == decoder.width());
-        assert!(video.height as u32 == decoder.height());
+        let audio_stream = Arc::new(OutputStreamBuilder::open_default_stream().unwrap());
 
-        let scaler = software::scaling::context::Context::get(
-            decoder.format(),
-            decoder.width(),
-            decoder.height(),
-            ffmpeg::format::Pixel::RGBA,
-            decoder.width(),
-            decoder.height(),
-            software::scaling::flag::Flags::BILINEAR,
-        )?;
+        let (loop_sender, loop_receiver) = sync_channel(1);
+
+        spawn_audio_thread(path, Arc::downgrade(&audio_stream), Some(loop_receiver));
+
+        let width = video.width;
+        let height = video.height;
 
         Ok(Self {
-            ictx,
-            decoder,
-            scaler,
-            stream_index,
+            receiver,
+            loop_sender,
+            width,
+            height,
+            _audio_stream: audio_stream,
         })
     }
 
-    pub fn dimensions(&self) -> (u32, u32) {
-        (self.decoder.width(), self.decoder.height())
-    }
-
-    pub fn next_frame(&mut self) -> Result<Option<VideoFrame>> {
-        for (stream, packet) in self.ictx.packets() {
-            if stream.index() == self.stream_index {
-                self.decoder.send_packet(&packet)?;
-                let mut decoded = Video::empty();
-                if self.decoder.receive_frame(&mut decoded).is_ok() {
-                    let mut frame = Video::empty();
-                    self.scaler.run(&decoded, &mut frame)?;
-
-                    let duration = frame_duration(&packet, &stream);
-
-                    return Ok(Some(VideoFrame { frame, duration }));
+    pub fn next_frame(&mut self) -> Result<VideoFrame> {
+        loop {
+            match self.receiver.recv()? {
+                Some(frame) => return Ok(frame),
+                None => {
+                    let _ = self.loop_sender.try_send(());
                 }
             }
         }
-
-        Ok(None)
     }
 
     pub fn copy_frame(&self, frame: &Video, buf: &mut [u8]) {
-        let width = self.decoder.width() as usize;
+        let width = self.width as usize;
         let line_size = frame.stride(0); // Bytes per row
         let data = frame.data(0);
 
@@ -88,12 +84,62 @@ impl VideoDecoder {
             chunk.copy_from_slice(&data[src_start..src_end]);
         }
     }
+}
 
-    pub fn seek_to_start(&mut self) -> Result<()> {
-        self.ictx.seek(0, ..0)?;
-        self.decoder.flush();
-        Ok(())
-    }
+fn spawn_video_stream(path: String) -> Receiver<Option<VideoFrame>> {
+    let (tx, rx) = sync_channel(20);
+
+    thread::spawn(move || {
+        ffmpeg::init().unwrap();
+        let mut ictx = format::input(&path).unwrap();
+        let stream_index = ictx
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap()
+            .index();
+
+        let video_stream = ictx.stream(stream_index).unwrap();
+        let context_decoder = codec::Context::from_parameters(video_stream.parameters()).unwrap();
+        let mut decoder = context_decoder.decoder().video().unwrap();
+
+        let mut scaler = software::scaling::context::Context::get(
+            decoder.format(),
+            decoder.width(),
+            decoder.height(),
+            ffmpeg::format::Pixel::RGBA,
+            decoder.width(),
+            decoder.height(),
+            software::scaling::flag::Flags::BILINEAR,
+        )
+        .unwrap();
+
+        loop {
+            for (stream, packet) in ictx.packets() {
+                if stream.index() == stream_index {
+                    decoder.send_packet(&packet).unwrap();
+                    let mut decoded = Video::empty();
+                    if decoder.receive_frame(&mut decoded).is_ok() {
+                        let mut frame = Video::empty();
+                        scaler.run(&decoded, &mut frame).unwrap();
+
+                        let duration = frame_duration(&packet, &stream);
+
+                        if tx.send(Some(VideoFrame { frame, duration })).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if tx.send(None).is_err() {
+                return;
+            }
+            ictx.seek(0, ..0).unwrap();
+            decoder.flush();
+        }
+    });
+
+    rx
 }
 
 fn frame_duration(packet: &Packet, stream: &ffmpeg::Stream) -> Duration {

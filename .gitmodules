@@ -1,0 +1,3 @@
+[submodule "pixels"]
+	path = pixels
+	url = https://github.com/restoredelight/pixels.git
