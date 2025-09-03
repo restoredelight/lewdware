@@ -58,7 +58,6 @@ CONFIGURE_ARGS=(
     --disable-network
     --disable-hwaccels
     --disable-autodetect
-    --disable-everything
 
     # Core libraries required by ffmpeg-sys-next
     --enable-avcodec

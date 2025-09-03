@@ -51,7 +51,11 @@ jobs:
             meson \
             ninja-build \
             libasound2-dev \
-            libx11-dev
+            libx11-dev \
+            libxi-dev \
+            libxtst-dev \
+            libxrandr-dev \
+            libxcursor-dev
 
       - name: Install build dependencies (macOS)
         if: runner.os == 'macOS'
