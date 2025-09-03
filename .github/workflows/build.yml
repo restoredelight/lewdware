@@ -104,7 +104,7 @@ jobs:
 
       - name: Set FFmpeg environment variables
         run: |
-          echo "PKG_CONFIG_PATH=$HOME/.ffmpeg-${{ matrix.target }}/lib/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$HOME/.ffmpeg-${{ matrix.target }}/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
           echo "FFMPEG_DIR=$HOME/.ffmpeg-${{ matrix.target }}" >> $GITHUB_ENV
         shell: bash
 

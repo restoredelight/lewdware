@@ -494,12 +494,10 @@ impl MediaManager {
     pub fn read_image_data(&mut self, entry: &MediaEntry) -> Result<DynamicImage> {
         self.file.seek(SeekFrom::Start(entry.offset))?;
 
-        self.file.seek(SeekFrom::Start(entry.offset))?;
-
         let mut buffer = vec![0u8; entry.length as usize];
         self.file.read_exact(&mut buffer)?;
 
-        libavif_image::read(&buffer).map_err(|err| anyhow!(err))
+        libavif_image::read(&buffer).map_err(|e| anyhow!(e))
     }
 
     /// Extract file data and write to a path

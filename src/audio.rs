@@ -1,17 +1,18 @@
 use anyhow::Result;
 use ffmpeg_next::{self as ffmpeg, frame};
-use tempfile::NamedTempFile;
 use std::{
-    sync::{mpsc::Receiver, Arc, Weak},
-    thread::{self, JoinHandle},
+    sync::{mpsc::{sync_channel, Receiver, SyncSender}, Arc, Weak},
+    thread::{self, JoinHandle}, time::Duration,
 };
+use tempfile::NamedTempFile;
 
-use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamBuilder, Sink};
+use rodio::{OutputStream, OutputStreamBuilder, Sink, buffer::SamplesBuffer};
 
 use crate::media::{Audio, MediaManager};
 
 pub struct AudioPlayer {
     thread: JoinHandle<()>,
+    close_sender: SyncSender<()>,
     _tempfile: NamedTempFile,
     _stream: Arc<OutputStream>,
 }
@@ -22,12 +23,19 @@ impl AudioPlayer {
 
         let stream = Arc::new(OutputStreamBuilder::open_default_stream().unwrap());
 
-        let thread = spawn_audio_thread(tempfile.path().to_str().unwrap().to_string(), Arc::downgrade(&stream), None);
+        let (close_sender, close_receiver) = sync_channel(1);
+
+        let thread = spawn_audio_thread(
+            tempfile.path().to_str().unwrap().to_string(),
+            close_receiver,
+            None,
+        );
 
         Ok(Self {
             thread,
             _tempfile: tempfile,
             _stream: stream,
+            close_sender
         })
     }
 
@@ -36,7 +44,17 @@ impl AudioPlayer {
     }
 }
 
-pub fn spawn_audio_thread(path: String, stream: Weak<OutputStream>, loop_receiver: Option<Receiver<()>>) -> JoinHandle<()> {
+impl Drop for AudioPlayer {
+    fn drop(&mut self) {
+        self.close_sender.send(()).unwrap();
+    }
+}
+
+pub fn spawn_audio_thread(
+    path: String,
+    close_receiver: Receiver<()>,
+    loop_receiver: Option<Receiver<()>>,
+) -> JoinHandle<()> {
     thread::spawn(move || {
         ffmpeg::init().unwrap();
         let mut ictx = ffmpeg::format::input(&path).unwrap();
@@ -53,14 +71,16 @@ pub fn spawn_audio_thread(path: String, stream: Weak<OutputStream>, loop_receive
         .audio()
         .unwrap();
 
-        // Rodio setup
-        let sink = {
-            let stream = match stream.upgrade() {
-                Some(stream) => stream,
-                None => return,
-            };
-            Sink::connect_new(stream.mixer())
+        let stream = match OutputStreamBuilder::open_default_stream() {
+            Ok(stream) => stream,
+            Err(err) => {
+                eprintln!("Error opening audio stream: {}", err);
+                return;
+            }
         };
+
+        // Rodio setup
+        let sink = Sink::connect_new(stream.mixer());
 
         loop {
             for (stream, packet) in ictx.packets() {
@@ -73,12 +93,30 @@ pub fn spawn_audio_thread(path: String, stream: Weak<OutputStream>, loop_receive
                         sink.append(SamplesBuffer::new(frame.channels(), frame.rate(), samples));
                     }
                 }
+
+                if close_receiver.try_recv().is_ok() {
+                    sink.stop();
+                    return;
+                }
             }
 
             sink.sleep_until_end();
 
+            loop {
+                if close_receiver.try_recv().is_ok() {
+                    sink.stop();
+                    return;
+                }
+
+                if sink.empty() {
+                    break;
+                }
+
+                thread::sleep(Duration::from_millis(100));
+            }
+
             if let Some(loop_receiver) = loop_receiver.as_ref() {
-                if loop_receiver.recv().is_err() {
+                if loop_receiver.recv().is_err() || close_receiver.try_recv().is_ok() {
                     return;
                 };
             } else {

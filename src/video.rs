@@ -10,8 +10,7 @@ use std::{
 use anyhow::{Result};
 use ffmpeg::{codec, format, software};
 use ffmpeg_next::{
-    self as ffmpeg, Packet,
-    frame::{Video},
+    self as ffmpeg, frame::Video, threading, Packet
 };
 use rodio::{OutputStream, OutputStreamBuilder};
 
@@ -26,6 +25,7 @@ pub struct VideoDecoder {
     // audio_stream_index: Option<usize>,
     receiver: Receiver<Option<VideoFrame>>,
     loop_sender: SyncSender<()>,
+    close_sender: SyncSender<()>,
     width: i64,
     height: i64,
     _audio_stream: Arc<OutputStream>,
@@ -46,8 +46,9 @@ impl VideoDecoder {
         let audio_stream = Arc::new(OutputStreamBuilder::open_default_stream().unwrap());
 
         let (loop_sender, loop_receiver) = sync_channel(1);
+        let (close_sender, close_receiver) = sync_channel(1);
 
-        spawn_audio_thread(path, Arc::downgrade(&audio_stream), Some(loop_receiver));
+        spawn_audio_thread(path, close_receiver, Some(loop_receiver));
 
         let width = video.width;
         let height = video.height;
@@ -58,6 +59,7 @@ impl VideoDecoder {
             width,
             height,
             _audio_stream: audio_stream,
+            close_sender
         })
     }
 
@@ -86,6 +88,12 @@ impl VideoDecoder {
     }
 }
 
+impl Drop for VideoDecoder {
+    fn drop(&mut self) {
+        let _ = self.close_sender.send(());
+    }
+}
+
 fn spawn_video_stream(path: String) -> Receiver<Option<VideoFrame>> {
     let (tx, rx) = sync_channel(20);
 
@@ -101,6 +109,12 @@ fn spawn_video_stream(path: String) -> Receiver<Option<VideoFrame>> {
         let video_stream = ictx.stream(stream_index).unwrap();
         let context_decoder = codec::Context::from_parameters(video_stream.parameters()).unwrap();
         let mut decoder = context_decoder.decoder().video().unwrap();
+        // let mut threading = decoder.threading();
+        //
+        // threading.count = 0;
+        // threading.kind = threading::Type::Frame;
+        //
+        // decoder.set_threading(threading);
 
         let mut scaler = software::scaling::context::Context::get(
             decoder.format(),

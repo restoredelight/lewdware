@@ -509,6 +509,10 @@ impl<'a> VideoWindow<'a> {
     }
 
     pub fn update(&mut self) -> anyhow::Result<()> {
+        if (self.closed.load(Ordering::Relaxed)) {
+            return Ok(());
+        }
+
         let mut render = false;
 
         if self
