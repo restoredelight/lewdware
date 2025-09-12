@@ -1,4 +1,7 @@
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use anyhow::Result;
 use egui_wgpu::wgpu;
@@ -10,15 +13,43 @@ pub struct EguiWindow<'a> {
     window: Arc<Window>,
     state: egui_winit::State,
     surface: wgpu::Surface<'a>,
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    adapter: Arc<wgpu::Adapter>,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     renderer: egui_wgpu::Renderer,
     closed: Arc<AtomicBool>,
 }
 
+pub struct WgpuState {
+    pub instance: wgpu::Instance,
+    pub adapter: Arc<wgpu::Adapter>,
+    pub device: Arc<wgpu::Device>,
+    pub queue: Arc<wgpu::Queue>,
+}
+
+impl WgpuState {
+    pub async fn new() -> Self {
+        let instance = wgpu::Instance::default();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .unwrap();
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+
+        Self {
+            instance,
+            adapter: Arc::new(adapter),
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+        }
+    }
+}
+
 impl<'a> EguiWindow<'a> {
-    pub fn new(wgpu_instance: &wgpu::Instance, window: Arc<Window>) -> Result<Self> {
+    pub fn new(wgpu_state: &WgpuState, window: Arc<Window>) -> Result<Self> {
         let context = egui::Context::default();
         let viewport_id = egui::ViewportId::from_hash_of(window.id());
         let state = egui_winit::State::new(
@@ -30,23 +61,17 @@ impl<'a> EguiWindow<'a> {
             None,
         );
 
-        let surface = wgpu_instance.create_surface(window.clone())?;
-        let adapter = pollster::block_on(
-            wgpu_instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
-        )?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+        let surface = wgpu_state.instance.create_surface(window.clone())?;
 
-        
         let closed = Arc::new(AtomicBool::new(false));
         let closed_clone = closed.clone();
 
-        device.on_uncaptured_error(Box::new(move |err| {
-            eprintln!("wgpu error: {}", err);
-            closed_clone.store(true, Ordering::Relaxed);
-        }));
+        // device.on_uncaptured_error(Box::new(move |err| {
+        //     eprintln!("wgpu error: {}", err);
+        //     closed_clone.store(true, Ordering::Relaxed);
+        // }));
 
-        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_caps = surface.get_capabilities(&wgpu_state.adapter);
         let surface_format = surface_caps
             .formats
             .iter()
@@ -62,8 +87,8 @@ impl<'a> EguiWindow<'a> {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(&device, &config);
-        let renderer = egui_wgpu::Renderer::new(&device, *surface_format, None, 1, true);
+        surface.configure(&wgpu_state.device, &config);
+        let renderer = egui_wgpu::Renderer::new(&wgpu_state.device, *surface_format, None, 1, true);
 
         context.request_repaint();
 
@@ -73,9 +98,9 @@ impl<'a> EguiWindow<'a> {
             window,
             state,
             surface,
-            adapter,
-            device,
-            queue,
+            adapter: wgpu_state.adapter.clone(),
+            device: wgpu_state.device.clone(),
+            queue: wgpu_state.queue.clone(),
             renderer,
             closed,
         })
@@ -161,7 +186,7 @@ impl<'a> EguiWindow<'a> {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("egui_render_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
@@ -176,11 +201,9 @@ impl<'a> EguiWindow<'a> {
             occlusion_query_set: None,
         });
 
-        let mut render_pass = unsafe {
-            // This is safe as long as we don't use the encoder again
-            // before the render pass is complete.
-            render_pass.forget_lifetime()
-        };
+        // This is safe as long as we don't use the encoder again
+        // before the render pass is complete.
+        let mut render_pass = render_pass.forget_lifetime();
 
         // Render the egui paint commands
         self.renderer

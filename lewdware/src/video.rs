@@ -1,20 +1,21 @@
 use std::{
     sync::{
         Arc,
-        mpsc::{Receiver, SyncSender, sync_channel},
+        mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
     },
     thread,
     time::Duration,
 };
 
-use anyhow::{Result};
+use anyhow::Result;
 use ffmpeg::{codec, format, software};
-use ffmpeg_next::{
-    self as ffmpeg, frame::Video, threading, Packet
-};
+use ffmpeg_next::{self as ffmpeg, Packet, frame::Video, threading};
 use rodio::{OutputStream, OutputStreamBuilder};
 
-use crate::{audio::spawn_audio_thread, media};
+use crate::{
+    audio::{AudioMessage, spawn_audio_thread},
+    media,
+};
 
 pub struct VideoDecoder {
     // ictx: format::context::Input,
@@ -24,11 +25,9 @@ pub struct VideoDecoder {
     // audio_decoder: Option<decoder::Audio>,
     // audio_stream_index: Option<usize>,
     receiver: Receiver<Option<VideoFrame>>,
-    loop_sender: SyncSender<()>,
-    close_sender: SyncSender<()>,
+    audio_message_tx: Option<SyncSender<AudioMessage>>,
     width: i64,
     height: i64,
-    _audio_stream: Arc<OutputStream>,
 }
 
 pub struct VideoFrame {
@@ -37,39 +36,45 @@ pub struct VideoFrame {
 }
 
 impl VideoDecoder {
-    pub fn new(path: &str, video: &media::Video) -> Result<Self> {
-        println!("Spawning new video decoder");
+    pub fn new(path: &str, video: &media::Video, play_audio: bool) -> Result<Self> {
         let path = path.to_string();
 
         let receiver = spawn_video_stream(path.clone());
 
-        let audio_stream = Arc::new(OutputStreamBuilder::open_default_stream().unwrap());
+        let audio_message_tx = if play_audio {
+            let (tx, rx) = sync_channel(10);
 
-        let (loop_sender, loop_receiver) = sync_channel(1);
-        let (close_sender, close_receiver) = sync_channel(1);
+            spawn_audio_thread(path, rx, true);
 
-        spawn_audio_thread(path, close_receiver, Some(loop_receiver));
+            Some(tx)
+        } else {
+            None
+        };
 
         let width = video.width;
         let height = video.height;
 
         Ok(Self {
             receiver,
-            loop_sender,
             width,
             height,
-            _audio_stream: audio_stream,
-            close_sender
+            audio_message_tx,
         })
     }
 
-    pub fn next_frame(&mut self) -> Result<VideoFrame> {
+    pub fn next_frame(&mut self) -> Result<Option<VideoFrame>> {
         loop {
-            match self.receiver.recv()? {
-                Some(frame) => return Ok(frame),
-                None => {
-                    let _ = self.loop_sender.try_send(());
-                }
+            match self.receiver.try_recv() {
+                Ok(message) => match message {
+                    Some(frame) => return Ok(Some(frame)),
+                    None => {
+                        if let Some(tx) = self.audio_message_tx.as_ref() {
+                            let _ = tx.try_send(AudioMessage::Loop);
+                        }
+                    }
+                },
+                Err(TryRecvError::Empty) => return Ok(None),
+                Err(e) => return Err(e.into()),
             }
         }
     }
@@ -86,11 +91,25 @@ impl VideoDecoder {
             chunk.copy_from_slice(&data[src_start..src_end]);
         }
     }
+
+    pub fn pause(&self) {
+        if let Some(tx) = self.audio_message_tx.as_ref() {
+            let _ = tx.try_send(AudioMessage::Pause);
+        }
+    }
+
+    pub fn play(&self) {
+        if let Some(tx) = self.audio_message_tx.as_ref() {
+            let _ = tx.try_send(AudioMessage::Play);
+        }
+    }
 }
 
 impl Drop for VideoDecoder {
     fn drop(&mut self) {
-        let _ = self.close_sender.send(());
+        if let Some(tx) = self.audio_message_tx.as_ref() {
+            let _ = tx.try_send(AudioMessage::Stop);
+        }
     }
 }
 

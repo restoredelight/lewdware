@@ -5,13 +5,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
-use egui_wgpu::wgpu;
+use async_channel::{Receiver, Sender, TryRecvError};
+use futures_lite::future::block_on;
 use notify_rust::Notification;
+use pack_format::config::Metadata;
 use rand::seq::IndexedRandom;
 use rand::{random_bool, random_range};
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::MouseButton;
-use winit::event_loop::ControlFlow;
+use winit::event_loop::{ControlFlow, EventLoop};
 use winit::monitor::MonitorHandle;
 use winit::window::WindowLevel;
 use winit::{
@@ -24,17 +26,26 @@ use winit::{
 
 use crate::audio::AudioPlayer;
 use crate::config::AppConfig;
-use crate::media::{Media, MediaManager};
+use crate::egui::WgpuState;
+use crate::media::{self, Media, MediaRequest, MediaResponse, spawn_media_manager_thread};
+use crate::transition::TransitionManager;
 use crate::window::{ImageWindow, PromptWindow, VideoWindow};
 
 pub struct ChaosApp<'a> {
     config: AppConfig,
-    wgpu_instance: wgpu::Instance,
+    metadata: Metadata,
+    wgpu_state: WgpuState,
     windows: HashMap<WindowId, Window<'a>>,
     running: Arc<AtomicBool>,
     last_spawn: Instant,
-    media_manager: MediaManager,
     audio_player: Option<AudioPlayer>,
+    media_tx: Sender<MediaRequest>,
+    media_rx: Receiver<MediaResponse>,
+    loading_audio: bool,
+    loading_prompt: bool,
+    tags: Option<Vec<String>>,
+    transition_manager: Option<TransitionManager>,
+    wallpaper: Option<String>,
 }
 
 enum Window<'a> {
@@ -43,95 +54,164 @@ enum Window<'a> {
     Prompt(PromptWindow<'a>),
 }
 
+#[derive(Debug)]
+pub enum UserEvent {
+    MediaResponse,
+}
+
 impl<'a> ChaosApp<'a> {
-    pub fn new(media_manager: MediaManager, config: AppConfig, running: Arc<AtomicBool>) -> Self {
-        Self {
+    pub fn new(
+        event_loop: &EventLoop<UserEvent>,
+        config: AppConfig,
+        running: Arc<AtomicBool>,
+    ) -> Result<Self> {
+        let (media_tx, media_rx, metadata) = spawn_media_manager_thread(event_loop)?;
+
+        let transition = metadata.transition.as_ref().cloned();
+
+        let wallpaper = match wallpaper::get() {
+            Ok(wallpaper) => Some(wallpaper),
+            Err(err) => {
+                eprintln!("Error getting wallpaper: {}", err);
+                None
+            }
+        };
+
+        let wgpu_state = block_on(WgpuState::new());
+
+        Ok(Self {
             config,
-            wgpu_instance: wgpu::Instance::new(&wgpu::InstanceDescriptor::default()),
+            metadata,
+            wgpu_state,
             windows: HashMap::new(),
             running,
             last_spawn: Instant::now(),
-            media_manager,
             audio_player: None,
-        }
+            media_tx,
+            media_rx,
+            loading_audio: false,
+            loading_prompt: false,
+            tags: None,
+            transition_manager: transition
+                .map(|transition| TransitionManager::new(transition.clone())),
+            wallpaper,
+        })
     }
 
-    fn play_audio(&mut self) -> Result<Option<AudioPlayer>> {
-        if let Some(audio) = self.media_manager.get_random_audio(None)? {
-            Ok(Some(AudioPlayer::new(audio, &mut self.media_manager)?))
-        } else {
-            println!("No audio files found");
-            Ok(None)
-        }
-    }
-
-    fn spawn_window(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
-        if self
-            .windows
-            .values()
-            .filter(|window| matches!(window, Window::Video(_)))
-            .count()
-            >= self.config.max_videos
-            && let Some(image) = self.media_manager.get_random_image(None)?
-        {
-            let window = create_window(event_loop, image.width(), image.height(), false)?;
-
-            window.request_redraw();
-
-            self.windows.insert(
-                window.id(),
-                Window::Image(ImageWindow::new(window, image, self.config.close_button)?),
-            );
-        } else if let Some(media) = self.media_manager.get_random_item(None)? {
-            match media {
+    fn process_media_response(
+        &mut self,
+        response: MediaResponse,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<()> {
+        match response {
+            MediaResponse::Media(media) => match media {
                 Media::Image(image) => {
                     let window = create_window(event_loop, image.width(), image.height(), false)?;
 
+                    window.request_redraw();
+
                     self.windows.insert(
                         window.id(),
-                        Window::Image(ImageWindow::new(window, image, self.config.close_button)?),
+                        Window::Image(ImageWindow::new(
+                            window,
+                            image,
+                            self.config.close_button,
+                            random_bool(self.config.moving_window_chance),
+                        )?),
                     );
                 }
                 Media::Video(video) => {
                     let window =
                         create_window(event_loop, video.width as u32, video.height as u32, false)?;
 
-                    let tempfile = self.media_manager.write_video_to_temp_file(&video)?;
-
                     self.windows.insert(
                         window.id(),
                         Window::Video(VideoWindow::new(
-                            &self.wgpu_instance,
+                            &self.wgpu_state,
                             window,
                             video,
-                            tempfile,
                             self.config.close_button,
+                            self.config.video_audio,
                         )?),
                     );
                 }
+            },
+            MediaResponse::Audio(audio) => {
+                self.audio_player = Some(AudioPlayer::new(audio)?);
+                self.loading_audio = false;
             }
+            MediaResponse::Notification(notification) => self.send_notification(notification),
+            MediaResponse::Prompt(prompt) => {
+                let window = create_window(event_loop, 400, 400, true)?;
+
+                self.windows.insert(
+                    window.id(),
+                    Window::Prompt(PromptWindow::new(&self.wgpu_state, window, prompt.prompt)?),
+                );
+
+                self.loading_prompt = false;
+            }
+            MediaResponse::Link(link) => self.open_link(link.link),
         }
 
         Ok(())
     }
 
-    fn spawn_prompt(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
-        let window = create_window(event_loop, 400, 400, true)?;
+    fn request_audio(&mut self) -> bool {
+        self.loading_audio = true;
 
-        self.windows.insert(
-            window.id(),
-            Window::Prompt(PromptWindow::new(
-                &self.wgpu_instance,
-                window,
-                "I can't stop gooning".to_string(),
-            )?),
-        );
+        let tags = self.get_tags();
 
-        Ok(())
+        self.media_tx
+            .try_send(MediaRequest::RandomAudio { tags })
+            .is_ok()
     }
 
-    fn open_link(&self) {
-        match webbrowser::open("https://censored.booru.org/index.php?page=post&s=list") {
+    fn request_random_media(&mut self) -> bool {
+        let tags = self.get_tags();
+
+        self.media_tx
+            .try_send(MediaRequest::RandomMedia {
+                only_images: false,
+                // only_images: self
+                //     .windows
+                //     .values()
+                //     .filter(|window| matches!(window, Window::Video(_)))
+                //     .count()
+                //     >= self.config.max_videos,
+                tags: None,
+            })
+            .is_ok()
+    }
+
+    fn request_link(&mut self) {
+        let tags = self.get_tags();
+
+        let _ = self.media_tx.try_send(MediaRequest::RandomLink { tags });
+    }
+
+    fn request_notification(&mut self) {
+        let tags = self.get_tags();
+
+        let _ = self
+            .media_tx
+            .try_send(MediaRequest::RandomNotification { tags });
+    }
+
+    fn request_prompt(&mut self) {
+        let tags = self.get_tags();
+
+        if self
+            .media_tx
+            .try_send(MediaRequest::RandomPrompt { tags })
+            .is_ok()
+        {
+            self.loading_prompt = true;
+        }
+    }
+
+    fn open_link(&self, link: String) {
+        match webbrowser::open(&link) {
             Ok(_) => {}
             Err(err) => {
                 eprintln!("Could not open link in web browser: {}", err);
@@ -139,16 +219,33 @@ impl<'a> ChaosApp<'a> {
         }
     }
 
-    fn send_notification(&self) {
-        match Notification::new()
-            .summary("Kill yourself!")
-            .body("Keep gooning~")
-            .show()
-        {
+    fn send_notification(&self, notification_info: media::Notification) {
+        let mut notification = Notification::new();
+
+        notification.body(&notification_info.body);
+
+        if let Some(summary) = notification_info.summary {
+            notification.summary(&summary);
+        }
+
+        match notification.show() {
             Ok(_) => {}
             Err(err) => {
                 eprintln!("Couldn't show notification: {}", err)
             }
+        }
+    }
+
+    fn get_tags(&mut self) -> Option<Vec<String>> {
+        match self.transition_manager.as_mut() {
+            Some(transition_manager) => Some(
+                transition_manager
+                    .get_tags()
+                    .into_iter()
+                    .filter(|tag| self.tags.as_ref().is_none_or(|tags| tags.contains(tag)))
+                    .collect::<Vec<_>>(),
+            ),
+            None => self.tags.as_ref().cloned(),
         }
     }
 }
@@ -212,15 +309,11 @@ fn create_window(
     event_loop.create_window(attrs).map_err(|err| anyhow!(err))
 }
 
-impl<'a> ApplicationHandler for ChaosApp<'a> {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        self.spawn_window(event_loop).unwrap_or_else(|err| {
-            eprintln!("Error spawning audio: {}", err);
-        });
-        self.audio_player = self.play_audio().unwrap_or_else(|err| {
-            eprintln!("Error playing audio: {}", err);
-            None
-        });
+impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
+    fn resumed(&mut self, _: &ActiveEventLoop) {
+        self.request_random_media();
+
+        self.request_audio();
     }
 
     fn window_event(
@@ -311,6 +404,28 @@ impl<'a> ApplicationHandler for ChaosApp<'a> {
         }
     }
 
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::MediaResponse => loop {
+                match self.media_rx.try_recv() {
+                    Ok(message) => {
+                        self.process_media_response(message, event_loop)
+                            .unwrap_or_else(|err| {
+                                eprintln!("Error: {}", err);
+                            });
+                    }
+                    Err(err) => match err {
+                        TryRecvError::Empty => break,
+                        TryRecvError::Closed => {
+                            eprintln!("Channel disconnected");
+                            break;
+                        }
+                    },
+                }
+            },
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if !self.running.load(Ordering::Relaxed) {
             event_loop.exit();
@@ -318,41 +433,38 @@ impl<'a> ApplicationHandler for ChaosApp<'a> {
         }
 
         if self.last_spawn.elapsed() >= self.config.spawn_interval {
-            if random_bool(1.0 / 5.0)
+            if self.config.prompts
+                && random_bool(1.0 / 5.0)
+                && !self.loading_prompt
                 && !self
                     .windows
                     .values()
                     .any(|window| matches!(window, Window::Prompt(_)))
             {
-                self.spawn_prompt(event_loop).unwrap_or_else(|err| {
-                    println!("Error spawning prompt: {}", err);
-                });
+                self.request_prompt();
             } else {
-                self.spawn_window(event_loop).unwrap_or_else(|err| {
-                    println!("Error spawning window: {}", err);
-                });
+                self.request_random_media();
             }
 
             self.last_spawn = Instant::now();
 
-            if random_bool(1.0 / 50.0) {
-                self.open_link();
+            if self.config.open_links && random_bool(1.0 / 10.0) {
+                self.request_link();
             }
 
-            if random_bool(1.0 / 10.0) {
-                self.send_notification();
+            if self.config.notifications && random_bool(1.0 / 10.0) {
+                self.request_notification();
             }
-        }
 
-        if self
-            .audio_player
-            .as_ref()
-            .is_some_and(|player| player.is_finished())
-        {
-            self.audio_player = self.play_audio().unwrap_or_else(|err| {
-                println!("Error playing audio: {}", err);
-                None
-            });
+            if !self.loading_audio
+                && self
+                    .audio_player
+                    .as_ref()
+                    .is_some_and(|player| player.is_finished())
+                && random_bool(1.0 / 10.0)
+            {
+                self.request_audio();
+            }
         }
 
         if let Some(duration) = self.config.window_duration {
@@ -364,7 +476,7 @@ impl<'a> ApplicationHandler for ChaosApp<'a> {
         }
 
         let mut poll = false;
-        for window in self.windows.values() {
+        for window in self.windows.values_mut() {
             match window {
                 Window::Video(window) => {
                     window.window.request_redraw();
@@ -373,7 +485,15 @@ impl<'a> ApplicationHandler for ChaosApp<'a> {
                 Window::Prompt(_) => {
                     poll = true;
                 }
-                Window::Image(_) => {}
+                Window::Image(window) => {
+                    if window.moving {
+                        if let Err(err) = window.update_position() {
+                            eprintln!("Error moving window: {}", err);
+                        }
+
+                        poll = true;
+                    }
+                }
             }
         }
 
@@ -383,6 +503,18 @@ impl<'a> ApplicationHandler for ChaosApp<'a> {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 self.last_spawn + self.config.spawn_interval,
             ));
+        }
+    }
+}
+
+impl Drop for ChaosApp<'_> {
+    fn drop(&mut self) {
+        if let Some(wallpaper) = &self.wallpaper {
+            if let Err(err) = wallpaper::set_from_path(wallpaper) {
+                eprintln!("Error setting wallpaper back to default: {}", err);
+            }
+        } else {
+            eprintln!("No default wallpaper found; leaving wallpaper as is");
         }
     }
 }

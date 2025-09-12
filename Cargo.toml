@@ -1,37 +1,6 @@
-[package]
-name = "lewdware"
-version = "0.1.0"
-edition = "2024"
-repository = "https://github.com/restoredelight/lewdware"
-
-[dependencies]
-anyhow = "1.0.99"
-byteorder = "1.5.0"
-egui = "0.32.1"
-egui-wgpu = "0.32.1"
-egui-winit = "0.32.1"
-ffmpeg-next = { version = "8.0.0", features = ["format", "codec", "software-scaling"] }
-image = "0.25.6"
-wgpu = { version = "25.0.2", features = ["static-dxc"] }
-libavif-image = "0.14.0"
-notify-rust = "4.11.7"
-pixels = "0.15.0"
-pollster = "0.4.0"
-rand = "0.9.2"
-rdev = "0.5.3"
-rodio = "0.21.1"
-rusqlite = "0.37.0"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.143"
-softbuffer = "0.4.6"
-tempfile = "3.21.0"
-webbrowser = "1.0.5"
-winit = "0.30.12"
+[workspace]
+resolver = "3"
+members = ["lewdware", "packer", "pack-format"]
 
 [patch.crates-io]
 pixels = { path = "./pixels" }
-
-# The profile that 'dist' will build with
-[profile.dist]
-inherits = "release"
-lto = "thin"

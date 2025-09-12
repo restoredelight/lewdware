@@ -1,9 +1,9 @@
 use std::{sync::{atomic::{AtomicBool, Ordering}, Arc}, thread};
 
 use anyhow::Result;
-use winit::event_loop::EventLoopBuilder;
+use winit::event_loop::EventLoop;
 
-use crate::{app::ChaosApp, media::MediaManager};
+use crate::app::ChaosApp;
 
 mod app;
 mod window;
@@ -13,24 +13,25 @@ mod config;
 mod egui;
 mod audio;
 mod buffer;
+mod transition;
 
 fn main() -> Result<()> {
     let config = config::load_config("config.json");
-
-    let media_manager = MediaManager::open("pack.md")?;
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
 
     thread::spawn(move || {
-        rdev::listen(move |event| {
+        if let Err(err) = rdev::listen(move |event| {
             if event.event_type == rdev::EventType::KeyPress(rdev::Key::Escape) {
                 running_clone.store(false, Ordering::Relaxed);
             }
-        }).unwrap();
+        }) {
+            eprintln!("Error occurred while trying to setup panic listener: {:?}", err);
+        }
     });
 
-    let mut event_loop_builder = EventLoopBuilder::default();
+    let mut event_loop_builder = EventLoop::with_user_event();
 
     #[cfg(target_os = "linux")]
     {
@@ -40,7 +41,7 @@ fn main() -> Result<()> {
     }
 
     let event_loop = event_loop_builder.build()?;
-    let mut app = ChaosApp::new(media_manager, config, running);
+    let mut app = ChaosApp::new(&event_loop, config, running)?;
     event_loop.run_app(&mut app)?;
     Ok(())
 }

@@ -9,20 +9,26 @@ pub struct AppConfig {
     pub window_duration: Option<Duration>,
     pub close_button: bool,
     pub max_videos: usize,
+    pub video_audio: bool,
     pub open_links: bool,
     pub prompts: bool,
+    pub notifications: bool,
+    pub moving_window_chance: f64,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             tags: None,
-            spawn_interval: Duration::from_millis(100),
-            window_duration: None,
+            spawn_interval: Duration::from_millis(500),
+            window_duration: Some(Duration::from_secs(60)),
             close_button: true,
-            max_videos: 20,
+            max_videos: 50,
+            video_audio: true,
             open_links: true,
-            prompts: false,
+            prompts: true,
+            notifications: true,
+            moving_window_chance: 1.0 / 20.0,
         }
     }
 }
