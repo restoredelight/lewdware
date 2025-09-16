@@ -1,20 +1,37 @@
 use std::{
     fs,
     io::ErrorKind,
+    mem,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Result, bail};
-use pack_format::config::{MediaOpts, PackOpts, StringOrObject, StringOrVec};
+use glob::Pattern;
+use merge::Merge;
+use pack_format::{
+    config::{MediaOpts, NotificationOpts, OneOrMore, PackOpts},
+    target::{Either, Empty, Item, Items, Target},
+};
 use walkdir::WalkDir;
+
+use crate::db::MediaCategory;
 
 pub fn find_config(root: &PathBuf) -> Result<Config> {
     let config_path = root.join("config.json");
+    let config_path_json5 = root.join("config.json5");
 
     let config: PackOpts = match fs::read_to_string(config_path) {
         Ok(content) => json5::from_str(&content)?,
         Err(err) => match err.kind() {
-            ErrorKind::NotFound => Default::default(),
+            ErrorKind::NotFound => match fs::read_to_string(config_path_json5) {
+                Ok(content) => json5::from_str(&content)?,
+                Err(err) => match err.kind() {
+                    ErrorKind::NotFound => Default::default(),
+                    _ => {
+                        bail!(err)
+                    }
+                },
+            },
             _ => {
                 bail!(err)
             }
@@ -28,9 +45,10 @@ pub fn find_config(root: &PathBuf) -> Result<Config> {
         .filter_map(|e| e.ok())
         .filter(|e| {
             let path = e.path();
+            let name = e.file_name().to_str();
 
             path.is_file()
-                && e.file_name().to_str() == Some("metadata.json")
+                && (name == Some("metadata.json") || name == Some("metadata.json5"))
                 && path.parent() != Some(root.as_path())
         })
     {
@@ -58,226 +76,217 @@ impl Config {
         }
     }
 
-    pub fn get_tags(&self, path: &Path) -> Vec<String> {
+    pub fn resolve(&self) -> Result<Resolved> {
+        Ok(Resolved {
+            popups: self.get_popups()?,
+            wallpapers: self.get_wallpapers()?,
+            notifications: self.get_notifications()?,
+            links: self.get_links()?,
+            prompts: self.get_prompts()?,
+        })
+    }
+
+    pub fn get_tags_and_category(
+        &self,
+        path: &Path,
+        resolved: &Resolved,
+    ) -> Result<(Vec<String>, MediaCategory)> {
         let mut tags = Vec::new();
+        let mut category = MediaCategory::Popup;
 
-        if let Some(default_tag) = &self.root_config.default_tag {
-            tags.push(default_tag.clone());
-        }
+        tags.extend(self.resolve_tags(path)?);
 
-        tags.extend(self.resolve_tags(Some(path)));
-
-        tags.extend(get_tags_from_config(&self.root_config.media, path));
-
-        for (root, config) in &self.nested_config {
-            if let Ok(path) = path.strip_prefix(root) {
-                tags.extend(get_tags_from_config(config, path));
+        for popup in &resolved.popups {
+            if glob_matches(&popup.primary, path)? {
+                tags.extend(popup.tags.clone());
             }
         }
 
-        tags
+        for wallpaper in &resolved.wallpapers {
+            if glob_matches(&wallpaper.primary, path)? {
+                tags.extend(wallpaper.tags.clone());
+
+                category = MediaCategory::Wallpaper;
+            }
+        }
+
+        Ok((tags, category))
     }
 
-    pub fn notifications(&self) -> Result<Vec<(Notification, Vec<String>)>> {
+    pub fn get_popups(&self) -> Result<Vec<ResolvedTarget<String>>> {
+        self.get_targets(|media_opts| media_opts.popups.as_ref())
+    }
+
+    pub fn get_notifications(&self) -> Result<Vec<ResolvedTarget<String, NotificationOpts>>> {
+        self.get_targets(|media_opts| media_opts.notifications.as_ref())
+    }
+
+    pub fn get_links(&self) -> Result<Vec<ResolvedTarget<String>>> {
+        self.get_targets(|media_opts| media_opts.links.as_ref())
+    }
+
+    pub fn get_prompts(&self) -> Result<Vec<ResolvedTarget<String>>> {
+        self.get_targets(|media_opts| media_opts.prompts.as_ref())
+    }
+
+    pub fn get_wallpapers(&self) -> Result<Vec<ResolvedTarget<String>>> {
+        self.get_targets(|media_opts| media_opts.wallpaper.as_ref())
+    }
+
+    fn get_targets<Primary, PrimaryStruct, Opts, ExtraOpts>(
+        &self,
+        f: impl Fn(&MediaOpts) -> Option<&Target<Primary, PrimaryStruct, Opts, ExtraOpts>>,
+    ) -> Result<Vec<ResolvedTarget<Primary, Opts>>>
+    where
+        Primary: Clone,
+        Opts: Default + Merge + Clone,
+        ExtraOpts: Clone,
+        PrimaryStruct: Into<Primary> + Clone,
+    {
         let mut result = Vec::new();
 
-        self.get_notifications_from_config(&self.root_config.media, None, &mut result);
+        if let Some(target) = f(&self.root_config.media) {
+            let mut targets = self.get_targets_from_target(target);
+
+            if let Some(default_tag) = &self.root_config.default_tag {
+                for target in targets.iter_mut() {
+                    target.tags.push(default_tag.clone());
+                }
+            }
+
+            result.extend(targets);
+        }
 
         for (path, config) in &self.nested_config {
-            self.get_notifications_from_config(config, Some(path), &mut result);
+            if let Some(target) = f(config) {
+                let default_tags = self.resolve_tags(path)?;
+
+                let mut targets = self.get_targets_from_target(target);
+
+                for target in targets.iter_mut() {
+                    target.tags.extend(default_tags.clone());
+
+                    if let Some(default_tag) = &self.root_config.default_tag {
+                        target.tags.push(default_tag.clone());
+                    }
+                }
+
+                result.extend(targets);
+            }
         }
 
         Ok(result)
     }
 
-    fn get_notifications_from_config(
+    fn get_targets_from_target<Primary, PrimaryStruct, Opts, ExtraOpts>(
         &self,
-        config: &MediaOpts,
-        path: Option<&Path>,
-        result: &mut Vec<(Notification, Vec<String>)>,
-    ) {
-        if let Some(notifications) = &config.notifications {
-            let mut default_tags: Vec<String> = self.resolve_tags(path);
+        target: &Target<Primary, PrimaryStruct, Opts, ExtraOpts>,
+    ) -> Vec<ResolvedTarget<Primary, Opts>>
+    where
+        Primary: Clone,
+        Opts: Default + Merge + Clone,
+        ExtraOpts: Clone,
+        PrimaryStruct: Into<Primary> + Clone,
+    {
+        match target {
+            Either::Left(items) => self.get_targets_from_items(items),
+            Either::Right(config) => {
+                let mut items = self.get_targets_from_items(&config.items);
 
-            default_tags.extend(notifications.default.tags.iter().cloned());
+                for item in items.iter_mut() {
+                    let default = config.default.opts.clone();
 
-            for notification in &notifications.items {
-                let mut tags = default_tags.to_vec();
-                let notification = match notification {
-                    StringOrObject::String(body) => Notification {
-                        summary: notifications.default.summary.as_ref().cloned(),
-                        body: body.clone(),
-                    },
-                    StringOrObject::Object(notification) => {
-                        for tag in &notification.opts.tags {
-                            tags.push(tag.clone());
-                        }
+                    let opts = mem::replace(&mut item.opts, default);
+                    item.opts.merge(opts);
 
-                        Notification {
-                            summary: notification
-                                .opts
-                                .summary
-                                .as_ref()
-                                .or(notifications.default.summary.as_ref())
-                                .cloned(),
-                            body: notification.body.clone(),
-                        }
-                    }
-                };
+                    item.tags.extend(config.default.tags.clone());
+                }
 
-                result.push((notification, tags));
+                items
             }
         }
     }
 
-    pub fn links(&self) -> Result<Vec<(Link, Vec<String>)>> {
-        let mut result = Vec::new();
-
-        self.get_links_from_config(&self.root_config.media, None, &mut result);
-
-        for (path, config) in &self.nested_config {
-            self.get_links_from_config(config, Some(path), &mut result);
-        }
-
-        Ok(result)
-    }
-
-    fn get_links_from_config(
+    fn get_targets_from_items<Primary, PrimaryStruct, Opts>(
         &self,
-        config: &MediaOpts,
-        path: Option<&Path>,
-        result: &mut Vec<(Link, Vec<String>)>,
-    ) {
-        if let Some(links) = &config.links {
-            let mut default_tags: Vec<String> = self.resolve_tags(path);
-
-            default_tags.extend(links.default.tags.iter().cloned());
-
-            for link in &links.items {
-                let mut tags = default_tags.to_vec();
-
-                let link = match link {
-                    StringOrObject::String(link) => Link { link: link.clone() },
-                    StringOrObject::Object(link) => {
-                        for tag in &link.opts.tags {
-                            tags.push(tag.clone());
-                        }
-
-                        Link {
-                            link: link.link.clone(),
-                        }
-                    }
-                };
-
-                result.push((link, tags));
-            }
+        items: &Items<Primary, PrimaryStruct, Opts>,
+    ) -> Vec<ResolvedTarget<Primary, Opts>>
+    where
+        Opts: Default + Merge + Clone,
+        Primary: Clone,
+        PrimaryStruct: Into<Primary> + Clone,
+    {
+        match items {
+            Items::Single(item) => vec![self.get_target_from_item(item)],
+            Items::Multiple(items) => items
+                .iter()
+                .map(|item| self.get_target_from_item(item))
+                .collect(),
         }
     }
 
-    pub fn prompts(&self) -> Result<Vec<(Prompt, Vec<String>)>> {
-        let mut result = Vec::new();
-
-        self.get_prompts_from_config(&self.root_config.media, None, &mut result);
-
-        for (path, config) in &self.nested_config {
-            self.get_prompts_from_config(config, Some(path), &mut result);
-        }
-
-        Ok(result)
-    }
-
-    fn get_prompts_from_config(
+    fn get_target_from_item<Primary, PrimaryStruct, Opts>(
         &self,
-        config: &MediaOpts,
-        path: Option<&Path>,
-        result: &mut Vec<(Prompt, Vec<String>)>,
-    ) {
-        if let Some(prompts) = &config.prompts {
-            let mut default_tags: Vec<String> = self.resolve_tags(path);
-
-            default_tags.extend(prompts.default.tags.iter().cloned());
-
-            for prompt in &prompts.items {
-                let mut tags = default_tags.to_vec();
-
-                let prompt = match prompt {
-                    StringOrObject::String(prompt) => Prompt {
-                        prompt: prompt.clone(),
-                    },
-                    StringOrObject::Object(prompt) => {
-                        for tag in &prompt.opts.tags {
-                            tags.push(tag.clone());
-                        }
-
-                        Prompt {
-                            prompt: prompt.prompt.clone(),
-                        }
-                    }
-                };
-
-                result.push((prompt, tags));
-            }
+        item: &Item<Primary, PrimaryStruct, Opts>,
+    ) -> ResolvedTarget<Primary, Opts>
+    where
+        Opts: Default + Merge + Clone,
+        Primary: Clone,
+        PrimaryStruct: Into<Primary> + Clone,
+    {
+        match item {
+            Either::Left(primary) => ResolvedTarget {
+                primary: primary.clone(),
+                opts: Opts::default(),
+                tags: Vec::new(),
+            },
+            Either::Right(full) => ResolvedTarget {
+                primary: full.primary.clone().into(),
+                opts: full.opts.clone(),
+                tags: full.tags.clone(),
+            },
         }
     }
 
-    fn resolve_tags(&self, path: Option<&Path>) -> Vec<String> {
+    fn resolve_tags(&self, path: &Path) -> Result<Vec<String>> {
         let mut tags: Vec<String> = self.root_config.default_tag.iter().cloned().collect();
 
-        if let Some(path) = path {
-            for (tag, targets) in &self.root_config.tags {
-                match targets {
-                    StringOrVec::String(x) => {
-                        if path.starts_with(x) {
+        for (tag, targets) in &self.root_config.tags {
+            match targets {
+                OneOrMore::One(x) => {
+                    if glob_matches(x, &path)? {
+                        tags.push(tag.clone());
+                    }
+                }
+                OneOrMore::More(items) => {
+                    for item in items {
+                        if glob_matches(item, &path)? {
                             tags.push(tag.clone());
-                        }
-                    }
-                    StringOrVec::Vec(items) => {
-                        for item in items {
-                            if path.starts_with(item) {
-                                tags.push(tag.clone());
-                                break;
-                            }
+                            break;
                         }
                     }
                 }
             }
         }
 
-        tags
+        Ok(tags)
     }
 }
 
-fn get_tags_from_config(config: &MediaOpts, path: &Path) -> Vec<String> {
-    let mut tags = Vec::new();
-
-    if let Some(popups) = &config.popups {
-        for tag in &popups.default.tags {
-            tags.push(tag.clone());
-        }
-
-        for popup in &popups.items {
-            if let StringOrObject::Object(popup) = popup
-                && path.starts_with(&popup.path)
-            {
-                for tag in &popup.opts.tags {
-                    tags.push(tag.clone());
-                }
-            }
-        }
-    }
-
-    tags
+fn glob_matches(glob: &str, path: &Path) -> Result<bool> {
+    Ok(Pattern::new(glob)?.matches_path(path))
 }
 
-pub struct Notification {
-    pub summary: Option<String>,
-    pub body: String,
+pub struct Resolved {
+    pub popups: Vec<ResolvedTarget<String>>,
+    pub wallpapers: Vec<ResolvedTarget<String>>,
+    pub notifications: Vec<ResolvedTarget<String, NotificationOpts>>,
+    pub links: Vec<ResolvedTarget<String>>,
+    pub prompts: Vec<ResolvedTarget<String>>,
 }
 
-pub struct Link {
-    pub link: String,
-}
-
-pub struct Prompt {
-    pub prompt: String,
+pub struct ResolvedTarget<Primary, Opts = Empty> {
+    pub primary: Primary,
+    pub opts: Opts,
+    pub tags: Vec<String>,
 }

@@ -2,21 +2,18 @@ use std::{
     num::NonZeroU32,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use ab_glyph::FontArc;
 use anyhow::{Result, anyhow};
-use egui_wgpu::wgpu;
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use rand::{rng, seq::IndexedRandom};
-use winit::{dpi::{PhysicalPosition, PhysicalSize}, event::WindowEvent, window::Window};
+use winit::{dpi::{PhysicalPosition}, event::WindowEvent, window::Window};
 
 use crate::{
     buffer::{
-        draw_close_button, draw_text_ab_glyph_with_outline, is_over_close_button, PixelsWrapper, SoftBufferWrapper
+        draw_close_button, is_over_close_button, PixelsWrapper, SoftBufferWrapper
     },
     egui::{EguiWindow, WgpuState},
     media::{Image, Video},
@@ -84,6 +81,7 @@ impl ImageWindow {
                     NonZeroU32::new(image.height()).unwrap(),
                 )
                 .map_err(|err| anyhow!("{}", err))?;
+
             let mut buffer = self
                 .surface
                 .buffer_mut()
@@ -100,19 +98,15 @@ impl ImageWindow {
 
             buffer
         } else {
-            if !self.close_button {
-                return Ok(());
-            }
-
             self.surface
                 .buffer_mut()
                 .map_err(|err| anyhow!("{}", err))?
         };
 
-        let size = self.window.inner_size();
-
-        let font = FontArc::try_from_slice(include_bytes!("ChicagoKare-Regular.ttf")).unwrap();
-
+        // let size = self.window.inner_size();
+        //
+        // let font = FontArc::try_from_slice(include_bytes!("ChicagoKare-Regular.ttf")).unwrap();
+        //
         // draw_text_ab_glyph_with_outline(
         //     &mut SoftBufferWrapper::new(&mut buffer, self.width as usize, self.height as usize),
         //     size.width as usize,
@@ -230,7 +224,7 @@ impl ImageWindow {
     }
 
     pub fn handle_mouse_left_window(&mut self) {
-        if self.cursor_over_button {
+        if self.close_button && self.cursor_over_button {
             self.cursor_over_button = false;
             self.window.request_redraw();
         }
@@ -257,7 +251,6 @@ pub struct VideoWindow<'a> {
     cursor_over_button: bool,
     width: u32,
     height: u32,
-    closed: Arc<AtomicBool>,
 }
 
 impl<'a> VideoWindow<'a> {
@@ -280,14 +273,6 @@ impl<'a> VideoWindow<'a> {
         let pixels = PixelsBuilder::new(width, height, surface_texture)
             .build_with_instance(&wgpu_state.instance, &wgpu_state.adapter, &wgpu_state.device, &wgpu_state.queue)?;
 
-        let closed = Arc::new(AtomicBool::new(false));
-        let closed_clone = closed.clone();
-
-        pixels.device().on_uncaptured_error(Box::new(move |err| {
-            eprintln!("wgpu error: {}", err);
-            closed_clone.store(true, Ordering::Relaxed);
-        }));
-
         Ok(Self {
             window,
             pixels,
@@ -300,15 +285,10 @@ impl<'a> VideoWindow<'a> {
             cursor_over_button: false,
             width,
             height,
-            closed,
         })
     }
 
     pub fn update(&mut self) -> anyhow::Result<()> {
-        if self.closed.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-
         let mut render = false;
 
         if self
@@ -320,14 +300,13 @@ impl<'a> VideoWindow<'a> {
             if let Some(frame) = frame {
                 self.decoder
                     .copy_frame(&frame.frame, self.pixels.frame_mut());
-                // self.pixels.render()?;
                 self.duration = Some(frame.duration);
                 self.last_frame_time = Instant::now();
                 render = true;
             }
         }
 
-        if render || (self.close_button && self.close_button_changed) {
+        if self.close_button && (render || self.close_button_changed) {
             draw_close_button(
                 &mut PixelsWrapper::new(&mut self.pixels),
                 self.window.scale_factor(),
@@ -361,7 +340,7 @@ impl<'a> VideoWindow<'a> {
     }
 
     pub fn handle_mouse_left_window(&mut self) {
-        if self.cursor_over_button {
+        if self.close_button && self.cursor_over_button {
             self.cursor_over_button = false;
             self.window.request_redraw();
         }
@@ -373,10 +352,6 @@ impl<'a> VideoWindow<'a> {
         } else {
             true
         }
-    }
-
-    pub fn closed(&self) -> bool {
-        self.closed.load(Ordering::Relaxed)
     }
 }
 
@@ -448,6 +423,6 @@ impl<'a> PromptWindow<'a> {
     }
 
     pub fn closed(&self) -> bool {
-        self.closed || self.egui_window.closed()
+        self.closed
     }
 }

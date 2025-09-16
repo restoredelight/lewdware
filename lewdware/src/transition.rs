@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use pack_format::config::{Order, Transition, TransitionType};
+use pack_format::config::{MediaType, Order, Transition, TransitionApplyTo, TransitionType};
 use rand::{random_bool, rng, seq::SliceRandom};
 
 use std::mem;
@@ -56,9 +56,20 @@ impl TransitionManager {
         self.prev_tags = mem::replace(&mut self.current_tags, current_tags);
     }
 
-    pub fn get_tags(&mut self) -> Vec<String> {
+    pub fn try_switch(&mut self) -> bool {
         if self.last_switch.elapsed() > self.duration {
+            println!("Switching");
             self.switch();
+            self.last_switch = Instant::now();
+            return true;
+        }
+
+        false
+    }
+
+    pub fn get_tags(&self, media_type: MediaType) -> Option<Vec<String>> {
+        if !self.applies_to(&media_type) {
+            return None;
         }
 
         if self.transition.transition == TransitionType::Linear {
@@ -69,12 +80,19 @@ impl TransitionManager {
             }
 
             if random_bool(p) {
-                self.current_tags.clone()
+                Some(self.current_tags.clone())
             } else {
-                self.prev_tags.clone()
+                Some(self.prev_tags.clone())
             }
         } else {
-            self.current_tags.clone()
+            Some(self.current_tags.clone())
+        }
+    }
+
+    pub fn applies_to(&self, media_type: &MediaType) -> bool {
+        match &self.transition.apply_to {
+            TransitionApplyTo::All => true,
+            TransitionApplyTo::Some(types) => types.contains(media_type),
         }
     }
 }

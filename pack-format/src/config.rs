@@ -1,7 +1,10 @@
 use std::{collections::HashMap, io};
 
 use ciborium::{from_reader, into_writer};
+use merge::Merge;
 use serde::{Deserialize, Serialize};
+
+use crate::{create_arg, target::Target};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct PackOpts {
@@ -11,7 +14,7 @@ pub struct PackOpts {
     pub media: MediaOpts,
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, StringOrVec<String>>,
+    pub tags: HashMap<String, OneOrMore<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_tag: Option<String>,
     #[serde(default)]
@@ -46,107 +49,40 @@ impl Metadata {
 #[derive(Serialize, Deserialize, Default)]
 pub struct MediaOpts {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub popups: Option<Popups>,
+    pub popups: Option<Target<String, PathArg>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub notifications: Option<Notifications>,
+    pub notifications: Option<Target<String, TextArg, NotificationOpts>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub links: Option<Links>,
+    pub links: Option<Target<String, LinkArg>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompts: Option<Prompts>,
+    pub prompts: Option<Target<String, TextArg>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wallpaper: Option<Target<String, PathArg>>,
 }
+
+create_arg!(PathArg, path, String);
+create_arg!(TextArg, text, String);
+create_arg!(LinkArg, link, String);
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum StringOrVec<T> {
-    String(String),
-    Vec(Vec<T>)
+pub enum OneOrMore<T> {
+    One(T),
+    More(Vec<T>),
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct Popups {
-    #[serde(default)]
-    pub default: PopupOpts,
-    pub items: Vec<StringOrObject<Popup>>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Popup {
-    pub path: String,
-    #[serde(flatten)]
-    pub opts: PopupOpts,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-pub struct PopupOpts {
-    #[serde(default)]
-    pub tags: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Notifications {
-    #[serde(default)]
-    pub default: NotificationOpts,
-    pub items: Vec<StringOrObject<Notification>>,
-}
-
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Merge, Clone)]
 pub struct NotificationOpts {
-    #[serde(default)]
-    pub tags: Vec<String>,
+    #[merge(strategy = merge::option::overwrite_none)]
     pub summary: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Notification {
-    #[serde(flatten)]
-    pub opts: NotificationOpts,
-    pub body: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Links {
-    #[serde(default)]
-    pub default: LinkOpts,
-    pub items: Vec<StringOrObject<Link>>,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-pub struct LinkOpts {
-    #[serde(default)]
-    pub tags: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Link {
-    #[serde(flatten)]
-    pub opts: LinkOpts,
-    pub link: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Prompts {
-    #[serde(default)]
-    pub default: PromptOpts,
-    pub items: Vec<StringOrObject<Prompt>>,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-pub struct PromptOpts {
-    #[serde(default)]
-    pub tags: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Prompt {
-    #[serde(flatten)]
-    pub opts: PromptOpts,
-    pub prompt: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Transition {
     #[serde(default)]
     pub transition: TransitionType,
+    #[serde(default)]
+    pub apply_to: TransitionApplyTo,
     #[serde(default)]
     pub order: Order,
     #[serde(rename = "loop")]
@@ -155,9 +91,36 @@ pub struct Transition {
     pub items: Vec<TransitionItem>,
 }
 
-fn return_true() -> bool { true }
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[serde(untagged)]
+pub enum TransitionApplyTo {
+    #[default]
+    #[serde(rename = "all")]
+    All,
+    Some(Vec<MediaType>),
+}
 
-#[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub enum MediaType {
+    #[serde(rename = "popups")]
+    Popups,
+    #[serde(rename = "audio")]
+    Audio,
+    #[serde(rename = "notifications")]
+    Notifications,
+    #[serde(rename = "links")]
+    Links,
+    #[serde(rename = "prompts")]
+    Prompts,
+    #[serde(rename = "wallpaper")]
+    Wallpaper,
+}
+
+fn return_true() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
 pub enum TransitionType {
     #[default]
     #[serde(rename = "linear")]
@@ -185,6 +148,5 @@ pub struct TransitionItem {
 #[serde(untagged)]
 pub enum StringOrObject<T> {
     String(String),
-    Object(T)
+    Object(T),
 }
-

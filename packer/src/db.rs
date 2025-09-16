@@ -1,11 +1,34 @@
 use std::{collections::HashMap, path::Path};
 
-use anyhow::{anyhow, Result};
-use rusqlite::{params, Connection};
+use anyhow::{Result, anyhow};
+use rusqlite::{Connection, params};
 
-use crate::{config::Config, PackedEntry};
+use crate::{
+    PackedEntry,
+    config::{Config, Resolved},
+};
 
-pub fn build_sqlite_index(db_path: &Path, entries: &[PackedEntry], config: &Config) -> Result<()> {
+#[derive(Debug, Clone, Copy)]
+pub enum MediaCategory {
+    Popup,
+    Wallpaper,
+}
+
+impl MediaCategory {
+    fn table_name(&self) -> &'static str {
+        match self {
+            MediaCategory::Popup => "media",
+            MediaCategory::Wallpaper => "wallpapers",
+        }
+    }
+}
+
+pub fn build_sqlite_index(
+    db_path: &Path,
+    entries: &[PackedEntry],
+    config: &Config,
+    resolved: Resolved,
+) -> Result<()> {
     let mut conn = Connection::open(db_path)?;
     conn.execute_batch(
         r#"
@@ -22,6 +45,12 @@ pub fn build_sqlite_index(db_path: &Path, entries: &[PackedEntry], config: &Conf
             width INTEGER,
             height INTEGER,
             duration REAL
+        );
+        CREATE TABLE wallpapers (
+            id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL,
+            offset INTEGER NOT NULL,
+            length INTEGER NOT NULL
         );
         CREATE TABLE notifications (
             id INTEGER PRIMARY KEY,
@@ -45,6 +74,13 @@ pub fn build_sqlite_index(db_path: &Path, entries: &[PackedEntry], config: &Conf
             tag_id INTEGER NOT NULL,
             PRIMARY KEY(media_id, tag_id),
             FOREIGN KEY(media_id) REFERENCES media(id) ON DELETE CASCADE,
+            FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
+        );
+        CREATE TABLE wallpaper_tags (
+            wallpaper_id INTEGER NOT NULL,
+            tag_id INTEGER NOT NULL,
+            PRIMARY KEY(wallpaper_id, tag_id),
+            FOREIGN KEY(wallpaper_id) REFERENCES wallpapers(id) ON DELETE CASCADE,
             FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
         );
         CREATE TABLE notification_tags (
@@ -85,43 +121,65 @@ pub fn build_sqlite_index(db_path: &Path, entries: &[PackedEntry], config: &Conf
         let mut media_tag_stmt =
             tx.prepare("INSERT INTO media_tags (media_id, tag_id) VALUES (?1, ?2)")?;
 
+        let mut wallpaper_stmt = tx.prepare(
+            "INSERT INTO wallpapers (path, offset, length) VALUES (?1, ?2, ?3) RETURNING id",
+        )?;
+        let mut wallpaper_tag_stmt =
+            tx.prepare("INSERT INTO wallpaper_tags (wallpaper_id, tag_id) VALUES (?1, ?2)")?;
+
         for e in entries {
-            let media_id: i64 = media_stmt.query_row(
-                params![
-                    e.rel_path,
-                    e.media_type.as_str(),
-                    e.offset as i64,
-                    e.length as i64,
-                    e.width,
-                    e.height,
-                    e.duration
-                ],
-                |row| row.get("id"),
-            )?;
+            match e.category {
+                MediaCategory::Popup => {
+                    let media_id: i64 = media_stmt.query_row(
+                        params![
+                            e.rel_path,
+                            e.media_type.as_str(),
+                            e.offset as i64,
+                            e.length as i64,
+                            e.width,
+                            e.height,
+                            e.duration
+                        ],
+                        |row| row.get("id"),
+                    )?;
 
-            for tag in &e.tags {
-                let tag_id = tag_cache
-                    .get(tag)
-                    .ok_or_else(|| anyhow!("Tag {} not found", tag))?;
+                    for tag in &e.tags {
+                        let tag_id = tag_cache
+                            .get(tag)
+                            .ok_or_else(|| anyhow!("Tag {} not found", tag))?;
 
-                media_tag_stmt.execute(params![media_id, tag_id])?;
+                        media_tag_stmt.execute(params![media_id, tag_id])?;
+                    }
+                }
+                MediaCategory::Wallpaper => {
+                    let wallpaper_id: i64 = wallpaper_stmt.query_row(
+                        params![e.rel_path, e.offset as i64, e.length as i64],
+                        |row| row.get("id"),
+                    )?;
+
+                    for tag in &e.tags {
+                        let tag_id = tag_cache
+                            .get(tag)
+                            .ok_or_else(|| anyhow!("Tag {} not found", tag))?;
+
+                        wallpaper_tag_stmt.execute(params![wallpaper_id, tag_id])?;
+                    }
+                }
             }
         }
 
-        let mut notification_stmt = tx.prepare("INSERT INTO notifications (summary, body) VALUES (?1, ?2) RETURNING id")?;
+        let mut notification_stmt =
+            tx.prepare("INSERT INTO notifications (summary, body) VALUES (?1, ?2) RETURNING id")?;
         let mut notification_tag_stmt =
             tx.prepare("INSERT INTO notification_tags (notification_id, tag_id) VALUES (?1, ?2)")?;
 
-        for (notification, tags) in config.notifications()? {
+        for notification in resolved.notifications {
             let notification_id: i64 = notification_stmt.query_row(
-                params![
-                    notification.summary,
-                    notification.body
-                ],
+                params![notification.opts.summary, notification.primary],
                 |row| row.get("id"),
             )?;
 
-            for tag in tags {
+            for tag in notification.tags {
                 let tag_id = tag_cache
                     .get(&tag)
                     .ok_or_else(|| anyhow!("Tag {} not found", tag))?;
@@ -134,15 +192,10 @@ pub fn build_sqlite_index(db_path: &Path, entries: &[PackedEntry], config: &Conf
         let mut link_tag_stmt =
             tx.prepare("INSERT INTO link_tags (link_id, tag_id) VALUES (?1, ?2)")?;
 
-        for (link, tags) in config.links()? {
-            let link_id: i64 = link_stmt.query_row(
-                params![
-                    link.link
-                ],
-                |row| row.get("id"),
-            )?;
+        for link in resolved.links {
+            let link_id: i64 = link_stmt.query_row(params![link.primary], |row| row.get("id"))?;
 
-            for tag in tags {
+            for tag in link.tags {
                 let tag_id = tag_cache
                     .get(&tag)
                     .ok_or_else(|| anyhow!("Tag {} not found", tag))?;
@@ -151,19 +204,16 @@ pub fn build_sqlite_index(db_path: &Path, entries: &[PackedEntry], config: &Conf
             }
         }
 
-        let mut prompt_stmt = tx.prepare("INSERT INTO prompts (prompt) VALUES (?1) RETURNING id")?;
+        let mut prompt_stmt =
+            tx.prepare("INSERT INTO prompts (prompt) VALUES (?1) RETURNING id")?;
         let mut prompt_tag_stmt =
             tx.prepare("INSERT INTO prompt_tags (prompt_id, tag_id) VALUES (?1, ?2)")?;
 
-        for (prompt, tags) in config.prompts()? {
-            let prompt_id: i64 = prompt_stmt.query_row(
-                params![
-                    prompt.prompt
-                ],
-                |row| row.get("id"),
-            )?;
+        for prompt in resolved.prompts {
+            let prompt_id: i64 =
+                prompt_stmt.query_row(params![prompt.primary], |row| row.get("id"))?;
 
-            for tag in tags {
+            for tag in prompt.tags {
                 let tag_id = tag_cache
                     .get(&tag)
                     .ok_or_else(|| anyhow!("Tag {} not found", tag))?;
