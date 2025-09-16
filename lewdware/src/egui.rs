@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use anyhow::Result;
 use egui_wgpu::wgpu;
@@ -9,7 +6,6 @@ use winit::{event::WindowEvent, window::Window};
 
 pub struct EguiWindow<'a> {
     context: egui::Context,
-    viewport_id: egui::ViewportId,
     window: Arc<Window>,
     state: egui_winit::State,
     surface: wgpu::Surface<'a>,
@@ -17,7 +13,7 @@ pub struct EguiWindow<'a> {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     renderer: egui_wgpu::Renderer,
-    closed: Arc<AtomicBool>,
+    surface_config: wgpu::SurfaceConfiguration,
 }
 
 pub struct WgpuState {
@@ -38,6 +34,11 @@ impl WgpuState {
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
             .unwrap();
+
+        device.on_uncaptured_error(Box::new(|err| {
+            // #[cfg(debug_assertions)]
+            eprintln!("{}", err);
+        }));
 
         Self {
             instance,
@@ -63,14 +64,6 @@ impl<'a> EguiWindow<'a> {
 
         let surface = wgpu_state.instance.create_surface(window.clone())?;
 
-        let closed = Arc::new(AtomicBool::new(false));
-        let closed_clone = closed.clone();
-
-        // device.on_uncaptured_error(Box::new(move |err| {
-        //     eprintln!("wgpu error: {}", err);
-        //     closed_clone.store(true, Ordering::Relaxed);
-        // }));
-
         let surface_caps = surface.get_capabilities(&wgpu_state.adapter);
         let surface_format = surface_caps
             .formats
@@ -94,7 +87,6 @@ impl<'a> EguiWindow<'a> {
 
         Ok(Self {
             context,
-            viewport_id,
             window,
             state,
             surface,
@@ -102,35 +94,17 @@ impl<'a> EguiWindow<'a> {
             device: wgpu_state.device.clone(),
             queue: wgpu_state.queue.clone(),
             renderer,
-            closed,
+            surface_config: config,
         })
-    }
-
-    pub fn closed(&self) -> bool {
-        self.closed.load(Ordering::Relaxed)
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
         let response = self.state.on_window_event(&self.window, event);
 
         if let WindowEvent::Resized(size) = event {
-            let surface_caps = self.surface.get_capabilities(&self.adapter);
-            let surface_format = surface_caps
-                .formats
-                .iter()
-                .find(|f| f.is_srgb())
-                .unwrap_or(&surface_caps.formats[0]);
-            let config = wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: *surface_format,
-                width: size.width,
-                height: size.height,
-                present_mode: wgpu::PresentMode::Fifo,
-                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            };
-            self.surface.configure(&self.device, &config);
+            self.surface_config.width = size.width;
+            self.surface_config.height = size.height;
+            self.surface.configure(&self.device, &self.surface_config);
 
             return true;
         }
@@ -140,6 +114,7 @@ impl<'a> EguiWindow<'a> {
 
     pub fn redraw(&mut self, run_ui: impl FnMut(&egui::Context)) -> Result<()> {
         let raw_input = self.state.take_egui_input(&self.window);
+
         let full_output = self.context.run(raw_input, run_ui);
 
         self.state

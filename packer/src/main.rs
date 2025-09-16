@@ -5,7 +5,7 @@ mod encode;
 use anyhow::Result;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use pack_format::{Header, HEADER_SIZE};
+use pack_format::{HEADER_SIZE, Header};
 use rayon::prelude::*;
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use walkdir::WalkDir;
 
-use crate::config::{find_config, Config};
-use crate::db::build_sqlite_index;
-use crate::encode::{encode_audio, encode_image, encode_video, is_animated, Metadata};
+use crate::config::{find_config, Config, Resolved};
+use crate::db::{build_sqlite_index, MediaCategory};
+use crate::encode::{Metadata, encode_audio, encode_image, encode_video, is_animated};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -60,6 +60,7 @@ impl MediaType {
 struct PackedEntry {
     rel_path: String,
     media_type: MediaType,
+    category: MediaCategory,
     offset: u64,
     length: u64,
     width: Option<i64>,
@@ -82,6 +83,8 @@ fn main() -> Result<()> {
     }
 
     let config = find_config(&args.input)?;
+
+    let resolved = config.resolve()?;
 
     let mut out = OpenOptions::new()
         .create(true)
@@ -107,10 +110,21 @@ fn main() -> Result<()> {
 
     let files: Vec<_> = WalkDir::new(&args.input)
         .into_iter()
-        .filter_entry(|e| !config.root_config.ignore.iter().any(|path| e.path().starts_with(path)))
+        .filter_entry(|e| {
+            let entry_path = e.path().strip_prefix(&args.input);
+
+            entry_path.is_ok_and(|entry_path| {
+                !config
+                    .root_config
+                    .ignore
+                    .iter()
+                    .any(|path| entry_path.starts_with(path))
+            })
+        })
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_file())
         .collect();
+
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::with_template(
@@ -134,8 +148,7 @@ fn main() -> Result<()> {
                     entry,
                     &args.input,
                     &config,
-                    args.prefer_compression,
-                    args.no_hw_accel,
+                    &resolved
                 ) {
                     Ok(Some(processed)) => {
                         pb.inc(1);
@@ -171,7 +184,7 @@ fn main() -> Result<()> {
     pb.finish_with_message("Encoding complete");
 
     let tmp_db = NamedTempFile::new()?;
-    build_sqlite_index(tmp_db.path(), &all_entries, &config)?;
+    build_sqlite_index(tmp_db.path(), &all_entries, &config, resolved)?;
 
     let index_offset = out.stream_position()?;
     {
@@ -202,8 +215,7 @@ fn process_single_file(
     entry: &walkdir::DirEntry,
     input_dir: &Path,
     config: &Config,
-    prefer_compression: bool,
-    no_hw_accel: bool,
+    resolved: &Resolved,
 ) -> Result<Option<ProcessedFile>> {
     let path = entry.path();
     let rel = path.strip_prefix(input_dir).unwrap().to_owned();
@@ -262,7 +274,7 @@ fn process_single_file(
         MediaType::Other => return Ok(None),
     };
 
-    let tags = config.get_tags(&rel);
+    let (tags, category) = config.get_tags_and_category(&rel, resolved)?;
 
     let entry = PackedEntry {
         rel_path: rel_str,
@@ -273,6 +285,7 @@ fn process_single_file(
         height,
         duration,
         tags,
+        category,
     };
 
     Ok(Some(ProcessedFile {

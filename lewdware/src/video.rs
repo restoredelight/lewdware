@@ -1,8 +1,5 @@
 use std::{
-    sync::{
-        Arc,
-        mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
-    },
+    sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
     thread,
     time::Duration,
 };
@@ -10,7 +7,6 @@ use std::{
 use anyhow::Result;
 use ffmpeg::{codec, format, software};
 use ffmpeg_next::{self as ffmpeg, Packet, frame::Video, threading};
-use rodio::{OutputStream, OutputStreamBuilder};
 
 use crate::{
     audio::{AudioMessage, spawn_audio_thread},
@@ -128,12 +124,12 @@ fn spawn_video_stream(path: String) -> Receiver<Option<VideoFrame>> {
         let video_stream = ictx.stream(stream_index).unwrap();
         let context_decoder = codec::Context::from_parameters(video_stream.parameters()).unwrap();
         let mut decoder = context_decoder.decoder().video().unwrap();
-        // let mut threading = decoder.threading();
-        //
-        // threading.count = 0;
-        // threading.kind = threading::Type::Frame;
-        //
-        // decoder.set_threading(threading);
+        let mut threading = decoder.threading();
+
+        threading.count = 0;
+        threading.kind = threading::Type::Frame;
+
+        decoder.set_threading(threading);
 
         let mut scaler = software::scaling::context::Context::get(
             decoder.format(),
@@ -157,14 +153,17 @@ fn spawn_video_stream(path: String) -> Receiver<Option<VideoFrame>> {
 
                         let duration = frame_duration(&packet, &stream);
 
-                        if tx.send(Some(VideoFrame { frame, duration })).is_err() {
+                        if let Err(err) = tx.send(Some(VideoFrame { frame, duration })) {
+                            eprintln!("{}", err);
                             return;
                         }
                     }
                 }
             }
 
-            if tx.send(None).is_err() {
+            if let Err(err) = tx.send(None) {
+                eprintln!("Error happened at end of video");
+                eprintln!("{}", err);
                 return;
             }
             ictx.seek(0, ..0).unwrap();

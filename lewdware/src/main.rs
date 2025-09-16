@@ -1,35 +1,22 @@
-use std::{sync::{atomic::{AtomicBool, Ordering}, Arc}, thread};
-
 use anyhow::Result;
 use winit::event_loop::EventLoop;
 
-use crate::app::ChaosApp;
+use crate::app_switcher::AppSwitcher;
 
 mod app;
-mod window;
-mod media;
-mod video;
-mod config;
-mod egui;
+mod app_switcher;
 mod audio;
 mod buffer;
+mod config;
+mod egui;
+mod media;
 mod transition;
+mod utils;
+mod video;
+mod window;
 
 fn main() -> Result<()> {
-    let config = config::load_config("config.json");
-
-    let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
-
-    thread::spawn(move || {
-        if let Err(err) = rdev::listen(move |event| {
-            if event.event_type == rdev::EventType::KeyPress(rdev::Key::Escape) {
-                running_clone.store(false, Ordering::Relaxed);
-            }
-        }) {
-            eprintln!("Error occurred while trying to setup panic listener: {:?}", err);
-        }
-    });
+    let config = config::load_config()?;
 
     let mut event_loop_builder = EventLoop::with_user_event();
 
@@ -41,7 +28,8 @@ fn main() -> Result<()> {
     }
 
     let event_loop = event_loop_builder.build()?;
-    let mut app = ChaosApp::new(&event_loop, config, running)?;
+    let mut app = AppSwitcher::new(&event_loop, config);
     event_loop.run_app(&mut app)?;
+
     Ok(())
 }

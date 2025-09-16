@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 ciborium = "0.2.2"
+merge = "0.2.0"
 serde = "1.0.219"

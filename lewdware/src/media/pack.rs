@@ -1,101 +1,16 @@
-use anyhow::{Result, anyhow};
-use async_channel::{Receiver, Sender, bounded};
-use async_executor::LocalExecutor;
+use std::{collections::HashMap, fs, io::{Cursor, Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}};
+
+use anyhow::{anyhow, Result};
 use async_fs::File;
-use futures_lite::future::block_on;
 use futures_lite::{AsyncReadExt, AsyncSeekExt};
 use image::{ImageFormat, ImageReader};
-use pack_format::config::Metadata;
-use pack_format::{HEADER_SIZE, Header};
-use rand::prelude::IndexedRandom;
-use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
-use std::collections::HashMap;
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
-use std::rc::Rc;
-use std::{fs, thread};
+use pack_format::{config::Metadata, Header};
+use rand::seq::IndexedRandom;
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use tempfile::NamedTempFile;
-use winit::event_loop::EventLoop;
 
-use crate::app::UserEvent;
+use crate::utils::read_pack_metadata;
 
-pub fn spawn_media_manager_thread(
-    event_loop: &EventLoop<UserEvent>,
-) -> Result<(Sender<MediaRequest>, Receiver<MediaResponse>, Metadata)> {
-    let (req_tx, req_rx) = bounded(20);
-    let (resp_tx, resp_rx) = bounded(20);
-
-    let event_loop_proxy = event_loop.create_proxy();
-
-    let manager = MediaManager::open("pack.md")?;
-    let metadata = manager.metadata().clone();
-
-    thread::spawn(move || {
-        let executor = Rc::new(LocalExecutor::new());
-        let ex = executor.clone();
-
-        block_on(executor.run(async move {
-            let manager = Rc::new(manager);
-
-            while let Ok(request) = req_rx.recv().await {
-                let resp_tx = resp_tx.clone();
-                let manager = manager.clone();
-
-                let event_loop_proxy = event_loop_proxy.clone();
-
-                ex.spawn(async move {
-                    let response = manager.handle_request(request).await.unwrap();
-
-                    if let Some(response) = response {
-                        match resp_tx.send(response).await {
-                            Ok(_) => {
-                                if let Err(err) =
-                                    event_loop_proxy.send_event(UserEvent::MediaResponse)
-                                {
-                                    eprintln!("{}", err);
-                                };
-                            }
-                            Err(err) => {
-                                eprintln!("{}", err);
-                            }
-                        }
-                    }
-                })
-                .detach();
-            }
-        }));
-    });
-
-    Ok((req_tx, resp_rx, metadata))
-}
-
-#[derive(Debug)]
-pub enum MediaRequest {
-    RandomMedia {
-        only_images: bool,
-        tags: Option<Vec<String>>,
-    },
-    RandomAudio {
-        tags: Option<Vec<String>>,
-    },
-    RandomNotification {
-        tags: Option<Vec<String>>,
-    },
-    RandomPrompt {
-        tags: Option<Vec<String>>,
-    },
-    RandomLink {
-        tags: Option<Vec<String>>,
-    },
-}
-
-pub enum MediaResponse {
-    Media(Media),
-    Audio(Audio),
-    Notification(Notification),
-    Prompt(Prompt),
-    Link(Link),
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaType {
@@ -138,17 +53,17 @@ pub struct MediaEntry {
 }
 
 impl MediaEntry {
-    pub async fn into_image(self, media_manager: &MediaManager) -> Result<Image> {
+    pub async fn into_image(self, media_manager: &MediaPack) -> Result<Image> {
         assert_eq!(self.media_type, MediaType::Image);
 
         media_manager.read_image_data(&self).await
     }
 
-    pub async fn into_video(self, media_manager: &MediaManager) -> Result<Video> {
+    pub async fn into_video(self, media_manager: &MediaPack) -> Result<Video> {
         assert_eq!(self.media_type, MediaType::Video);
 
         let tempfile = media_manager
-            .write_to_temp_file(self.offset, self.length)
+            .write_to_temp_file(self.offset, self.length, ".webm")
             .await?;
 
         Ok(Video {
@@ -158,14 +73,24 @@ impl MediaEntry {
         })
     }
 
-    pub async fn into_audio(self, media_manager: &MediaManager) -> Result<Audio> {
+    pub async fn into_audio(self, media_manager: &MediaPack) -> Result<Audio> {
         assert_eq!(self.media_type, MediaType::Audio);
 
         let tempfile = media_manager
-            .write_to_temp_file(self.offset, self.length)
+            .write_to_temp_file(self.offset, self.length, ".opus")
             .await?;
 
         Ok(Audio { tempfile })
+    }
+
+    pub async fn into_wallpaper(self, media_manager: &MediaPack) -> Result<NamedTempFile> {
+        assert_eq!(self.media_type, MediaType::Image);
+
+        let tempfile = media_manager
+            .write_to_temp_file(self.offset, self.length, ".avif")
+            .await?;
+
+        Ok(tempfile)
     }
 }
 
@@ -199,7 +124,14 @@ pub struct Prompt {
     pub prompt: String,
 }
 
-pub struct MediaManager {
+fn repeat_vars(count: usize) -> String {
+    assert_ne!(count, 0);
+    let mut s = "?,".repeat(count);
+    // Remove trailing comma
+    s.pop();
+    s
+}
+pub struct MediaPack {
     path: PathBuf,
     db: Connection,
     header: Header,
@@ -208,23 +140,13 @@ pub struct MediaManager {
     tag_map: HashMap<String, u64>,
 }
 
-impl MediaManager {
+impl MediaPack {
     /// Open a media pack file for reading
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
         let mut file = fs::File::open(&path)?;
 
-        // Read and validate header
-        let header = Header::read_from(&file)?;
-
-        file.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
-
-        println!("{}", header.metadata_length);
-        let mut buf = vec![0u8; header.metadata_length as usize];
-        file.read_exact(&mut buf)?;
-        println!("{}", String::from_utf8_lossy(&buf));
-        let metadata = Metadata::from_buf(&buf)?;
-        // let metadata = Metadata::default();
+        let (header, metadata) = read_pack_metadata(&mut file)?;
 
         println!("{}", metadata.name);
 
@@ -250,7 +172,7 @@ impl MediaManager {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         }
 
-        Ok(MediaManager {
+        Ok(MediaPack {
             path,
             db,
             header,
@@ -258,35 +180,6 @@ impl MediaManager {
             temp_file,
             tag_map,
         })
-    }
-
-    pub async fn handle_request(&self, request: MediaRequest) -> Result<Option<MediaResponse>> {
-        match request {
-            MediaRequest::RandomMedia { only_images, tags } => {
-                if only_images {
-                    self.get_random_image(tags)
-                        .await
-                        .map(|x| x.map(|image| MediaResponse::Media(Media::Image(image))))
-                } else {
-                    self.get_random_item(tags)
-                        .await
-                        .map(|x| x.map(MediaResponse::Media))
-                }
-            }
-            MediaRequest::RandomAudio { tags } => self
-                .get_random_audio(tags)
-                .await
-                .map(|x| x.map(MediaResponse::Audio)),
-            MediaRequest::RandomNotification { tags } => self
-                .get_random_notification(tags)
-                .map(|x| x.map(MediaResponse::Notification)),
-            MediaRequest::RandomPrompt { tags } => self
-                .get_random_prompt(tags)
-                .map(|x| x.map(MediaResponse::Prompt)),
-            MediaRequest::RandomLink { tags } => self
-                .get_random_link(tags)
-                .map(|x| x.map(MediaResponse::Link)),
-        }
     }
 
     /// Get total number of files in the pack
@@ -690,6 +583,60 @@ impl MediaManager {
         .map_err(|err| anyhow!(err))
     }
 
+    pub async fn get_random_wallpaper(
+        &self,
+        tags: Option<Vec<String>>,
+    ) -> Result<Option<NamedTempFile>> {
+        let sql = match &tags {
+            Some(tag_ids) => format!(
+                r#"
+                SELECT id, path, offset, length
+                FROM wallpapers
+                LEFT JOIN wallpaper_tags ON wallpapers.id = wallpaper_tags.wallpaper_id
+                WHERE wallpaper_tags.tag_id IN ({})
+                ORDER BY random()
+                LIMIT 1
+            "#,
+                repeat_vars(tag_ids.len())
+            ),
+            None => r#"
+                SELECT id, path, offset, length
+                FROM wallpapers
+                ORDER BY random()
+                LIMIT 1
+            "#
+            .to_string(),
+        };
+
+        let mut stmt = self.db.prepare_cached(&sql)?;
+
+        let params = params_from_iter(
+            tags.into_iter()
+                .flatten()
+                .map(|x| self.tag_map.get(&x).unwrap()),
+        );
+
+        let media = stmt
+            .query_row(params, |row| {
+                Ok(MediaEntry {
+                    id: row.get("id")?,
+                    path: row.get("path")?,
+                    media_type: MediaType::Image,
+                    offset: row.get::<_, i64>("offset")? as u64,
+                    length: row.get::<_, i64>("length")? as u64,
+                    width: None,
+                    height: None,
+                    duration: None,
+                })
+            })
+            .optional()?;
+
+        Ok(match media {
+            Some(media) => Some(media.into_wallpaper(self).await?),
+            None => None,
+        })
+    }
+
     /// Get a random entry of any media type
     pub fn get_random_entry(&self) -> Result<Option<MediaEntry>> {
         let all = self.get_all_entries()?;
@@ -720,8 +667,6 @@ impl MediaManager {
         let image = reader.decode()?;
 
         Ok(image.into_rgba8())
-
-        // libavif_image::read(&buffer).map_err(|e| anyhow!(e))
     }
 
     /// Extract file data and write to a path
@@ -759,9 +704,13 @@ impl MediaManager {
         }
     }
 
-    async fn write_to_temp_file(&self, offset: u64, length: u64) -> Result<NamedTempFile> {
-        println!("Writing to tempfile");
-        let mut tempfile = NamedTempFile::with_suffix(".webm")?;
+    async fn write_to_temp_file(
+        &self,
+        offset: u64,
+        length: u64,
+        suffix: &str,
+    ) -> Result<NamedTempFile> {
+        let mut tempfile = NamedTempFile::with_suffix(suffix)?;
         let mut buffer = vec![0u8; length as usize];
 
         let mut file = File::open(&self.path).await?;
@@ -778,12 +727,4 @@ impl MediaManager {
     pub fn metadata(&self) -> &Metadata {
         &self.metadata
     }
-}
-
-fn repeat_vars(count: usize) -> String {
-    assert_ne!(count, 0);
-    let mut s = "?,".repeat(count);
-    // Remove trailing comma
-    s.pop();
-    s
 }
