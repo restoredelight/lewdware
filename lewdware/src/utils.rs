@@ -24,6 +24,7 @@ pub fn create_window(
     width: u32,
     height: u32,
     logical_size: bool,
+    visible: bool,
 ) -> Result<winit::window::Window> {
     let monitor = random_monitor(event_loop);
 
@@ -55,7 +56,8 @@ pub fn create_window(
         .with_position(position)
         .with_decorations(false)
         .with_window_level(WindowLevel::AlwaysOnTop)
-        .with_resizable(false);
+        .with_resizable(false)
+        .with_visible(visible);
 
     if logical_size {
         attrs = attrs.with_inner_size(LogicalSize::new(width, height));
@@ -72,6 +74,8 @@ pub fn create_window(
 
     #[cfg(target_os = "windows")]
     {
+        use winit::platform::windows::WindowAttributesExtWindows;
+
         attrs = attrs.with_skip_taskbar(true);
     }
 

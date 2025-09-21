@@ -14,14 +14,9 @@ use crate::{
 };
 
 pub struct VideoDecoder {
-    // ictx: format::context::Input,
-    // decoder: decoder::Video,
-    // scaler: software::scaling::Context,
-    // stream_index: usize,
-    // audio_decoder: Option<decoder::Audio>,
-    // audio_stream_index: Option<usize>,
     receiver: Receiver<Option<VideoFrame>>,
     audio_message_tx: Option<SyncSender<AudioMessage>>,
+    _video: media::Video,
     width: i64,
     height: i64,
 }
@@ -32,8 +27,8 @@ pub struct VideoFrame {
 }
 
 impl VideoDecoder {
-    pub fn new(path: &str, video: &media::Video, play_audio: bool) -> Result<Self> {
-        let path = path.to_string();
+    pub fn new(video: media::Video, play_audio: bool) -> Result<Self> {
+        let path = video.tempfile.path().to_str().unwrap().to_string();
 
         let receiver = spawn_video_stream(path.clone());
 
@@ -53,6 +48,7 @@ impl VideoDecoder {
         Ok(Self {
             receiver,
             width,
+            _video: video,
             height,
             audio_message_tx,
         })

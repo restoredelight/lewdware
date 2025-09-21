@@ -1,55 +1,20 @@
-name: Build Multi-platform
+name: Build Rust Project
 
-on:
-  push:
-  pull_request:
-
-env:
-  CARGO_TERM_COLOR: always
+on: [push, pull_request]
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Linux
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-
-          # macOS (both architectures)
-          - os: macos-latest
-            target: x86_64-apple-darwin
-          - os: macos-latest
-            target: aarch64-apple-darwin
-
-          # Windows
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+  build-linux:
+    runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           submodules: true
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install build dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            git \
-            nasm \
-            meson \
-            ninja-build \
             libasound2-dev \
             libx11-dev \
             libxi-dev \
@@ -57,69 +22,170 @@ jobs:
             libxrandr-dev \
             libxcursor-dev
 
-      - name: Install build dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install \
-            pkg-config \
-            nasm \
-            meson \
-            ninja
+      - name: Install nasm
+        uses: ilammy/setup-nasm@v1
 
-      - name: Install build dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install -y nasm
-          # Find and add nasm to PATH
-          $nasmPath = (Get-Command nasm -ErrorAction SilentlyContinue).Path
-          if (-not $nasmPath) {
-              # Try common locations
-              $possiblePaths = @(
-                  "C:\Program Files\NASM",
-                  "C:\ProgramData\chocolatey\bin",
-                  "C:\tools\nasm"
-              )
-              foreach ($path in $possiblePaths) {
-                  if (Test-Path "$path\nasm.exe") {
-                      echo $path >> $env:GITHUB_PATH
-                      Write-Host "Added $path to PATH"
-                      break
-                  }
-              }
-          }
-          pip install meson ninja
-        shell: pwsh
-
-      - name: Cache FFmpeg build
-        uses: actions/cache@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
         with:
-          path: |
-            ~/.ffmpeg-${{ matrix.target }}
-          key: ffmpeg-8.0-${{ matrix.target }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
-          restore-keys: |
-            ffmpeg-8.0-${{ matrix.target }}-
+          toolchain: stable
 
-      - name: Build FFmpeg
-        run: |
-          mkdir -p "$HOME/.ffmpeg-${{ matrix.target }}"
-          export CARGO_BUILD_TARGET="${{ matrix.target }}"
-          ./scripts/build-ffmpeg.sh "$HOME/.ffmpeg-${{ matrix.target }}"
-        shell: bash
+      - name: Install Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
 
-      - name: Set FFmpeg environment variables
+      - name: Install pip packages
         run: |
-          echo "PKG_CONFIG_PATH=$HOME/.ffmpeg-${{ matrix.target }}/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
-          echo "FFMPEG_DIR=$HOME/.ffmpeg-${{ matrix.target }}" >> $GITHUB_ENV
-        shell: bash
+          pip install -U pip
+          pip install -U wheel setuptools
+          pip install -U meson ninja
+
+      - name: Build dav1d
+        env:
+          DAV1D_DIR: dav1d_dir
+          LIB_PATH: lib/x86_64-linux-gnu
+        run: |
+          git clone --branch 1.5.0 --depth 1 https://code.videolan.org/videolan/dav1d.git
+          cd dav1d
+          meson build -Dprefix=$HOME/$DAV1D_DIR -Denable_tools=false -Denable_examples=false --buildtype release
+          ninja -C build
+          ninja -C build install
+          echo "PKG_CONFIG_PATH=$HOME/$DAV1D_DIR/$LIB_PATH/pkgconfig" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$HOME/$DAV1D_DIR/$LIB_PATH" >> $GITHUB_ENV
 
       - name: Build Rust project
-        run: cargo build --target ${{ matrix.target }} --release
+        run: |
+          cargo build -p lewdware -F build-ffmpeg --release
+          cargo build -p packer --release
 
-      - name: Upload artifacts
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: binary-${{ matrix.target }}
+          name: linux-build
           path: |
-            target/${{ matrix.target }}/release/lewdware
-            target/${{ matrix.target }}/release/lewdware.exe
-          if-no-files-found: ignore
+            target/release/lewdware
+            target/release/packer
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install vcpkg
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git
+          cd vcpkg
+          .\bootstrap-vcpkg.bat
+          echo "VCPKG_ROOT=${{ github.workspace }}\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Install FFmpeg and dav1d via vcpkg
+        run: |
+          cd vcpkg
+          .\vcpkg install pkgconf:x64-windows
+          .\vcpkg install dav1d:x64-windows-static-release
+          .\vcpkg install ffmpeg:x64-windows-static-release
+
+      - name: Install Rust MSVC toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+
+      - name: Create Cargo config for MSVC
+        run: |
+          mkdir -p .cargo
+          $vcpkgPath = "${{ github.workspace }}/vcpkg/installed/x64-windows-static-release/lib" -replace '\\', '/'
+          @"
+          [target.x86_64-pc-windows-msvc]
+          rustflags = [
+              "-C", "target-feature=+crt-static",
+              "-L", "$vcpkgPath"
+          ]
+          "@ | Out-File -FilePath .cargo\config.toml -Encoding utf8
+
+      - name: Setup environment
+        run: |
+          echo "FFMPEG_DIR=${{ github.workspace }}\vcpkg\installed\x64-windows-static-release" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=${{ github.workspace }}\vcpkg\installed\x64-windows-static-release\lib\pkgconfig" >> $env:GITHUB_ENV
+          echo "VCPKG_ROOT=${{ github.workspace }}\vcpkg" >> $env:GITHUB_ENV
+          # Add vcpkg's pkg-config to PATH (installed in the x64-windows tools directory)
+          $pkgConfigPath = "${{ github.workspace }}\vcpkg\installed\x64-windows\tools\pkgconf"
+          echo $pkgConfigPath >> $env:GITHUB_PATH
+          # Set pkg-config executable explicitly
+          echo "PKG_CONFIG=$pkgConfigPath\pkgconf.exe" >> $env:GITHUB_ENV
+          # List what's actually in the pkgconfig directory for debugging
+          echo "Contents of pkgconfig directory:"
+          Get-ChildItem "${{ github.workspace }}\vcpkg\installed\x64-windows-static-rel\lib\pkgconfig" -ErrorAction SilentlyContinue
+
+      - name: Build Rust project
+        run: |
+          cargo build -p lewdware -F static-ffmpeg --release
+          cargo build -p packer --release
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-msvc
+          path: |
+            target/release/lewdware.exe
+            target/release/packer.exe
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install nasm
+        uses: ilammy/setup-nasm@v1
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: Install pip packages
+        run: |
+          pip install -U pip
+          pip install -U wheel setuptools
+          pip install -U meson ninja
+
+      - name: Build dav1d
+        env:
+          DAV1D_DIR: dav1d_dir
+          LIB_PATH: lib
+        run: |
+          git clone --branch 1.5.0 --depth 1 https://code.videolan.org/videolan/dav1d.git
+          cd dav1d
+          meson build -Dprefix=$HOME/$DAV1D_DIR -Denable_tools=false -Denable_examples=false --buildtype release
+          ninja -C build
+          ninja -C build install
+          echo "PKG_CONFIG_PATH=$HOME/$DAV1D_DIR/$LIB_PATH/pkgconfig" >> $GITHUB_ENV
+          echo "DYLD_LIBRARY_PATH=$HOME/$DAV1D_DIR/$LIB_PATH" >> $GITHUB_ENV
+
+      - name: Build Rust project
+        run: |
+          cargo build -p lewdware -F build-ffmpeg --release
+          cargo build -p packer --release
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: |
+            target/release/lewdware
+            target/release/packer

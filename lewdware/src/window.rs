@@ -33,6 +33,7 @@ pub struct ImageWindow {
     height: u32,
     moving_direction: Direction,
     last_moved: Instant,
+    window_visible: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -70,6 +71,7 @@ impl ImageWindow {
             moving,
             moving_direction,
             last_moved: Instant::now(),
+            window_visible: false,
         })
     }
 
@@ -130,6 +132,11 @@ impl ImageWindow {
         }
 
         buffer.present().map_err(|err| anyhow!("{}", err))?;
+
+        if !self.window_visible {
+            self.window.set_visible(true);
+            self.window_visible = true;
+        }
 
         Ok(())
     }
@@ -251,6 +258,7 @@ pub struct VideoWindow<'a> {
     cursor_over_button: bool,
     width: u32,
     height: u32,
+    window_visible: bool,
 }
 
 impl<'a> VideoWindow<'a> {
@@ -262,11 +270,12 @@ impl<'a> VideoWindow<'a> {
         play_audio: bool,
     ) -> anyhow::Result<Self> {
         let window = Arc::new(window);
-        let decoder =
-            VideoDecoder::new(video.tempfile.path().to_str().unwrap(), &video, play_audio)?;
 
         let width = video.width as u32;
         let height = video.height as u32;
+
+        let decoder =
+            VideoDecoder::new(video, play_audio)?;
 
         let surface_texture = SurfaceTexture::new(width, height, window.clone());
 
@@ -285,6 +294,7 @@ impl<'a> VideoWindow<'a> {
             cursor_over_button: false,
             width,
             height,
+            window_visible: false,
         })
     }
 
@@ -318,6 +328,11 @@ impl<'a> VideoWindow<'a> {
 
         if render {
             self.pixels.render()?;
+
+            if !self.window_visible {
+                self.window.set_visible(true);
+                self.window_visible = true;
+            }
         }
 
         Ok(())

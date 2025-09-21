@@ -273,7 +273,7 @@ impl Config {
     }
 }
 
-fn glob_matches(glob: &str, path: &Path) -> Result<bool> {
+pub fn glob_matches(glob: &str, path: &Path) -> Result<bool> {
     Ok(Pattern::new(glob)?.matches_path(path))
 }
 
