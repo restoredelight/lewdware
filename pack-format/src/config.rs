@@ -17,8 +17,7 @@ pub struct PackOpts {
     pub tags: HashMap<String, OneOrMore<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_tag: Option<String>,
-    #[serde(default)]
-    pub ignore: Vec<String>,
+    pub ignore: Option<OneOrMore<String>>,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]

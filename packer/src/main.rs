@@ -5,6 +5,7 @@ mod encode;
 use anyhow::Result;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
+use pack_format::config::OneOrMore;
 use pack_format::{HEADER_SIZE, Header};
 use rayon::prelude::*;
 use std::ffi::OsStr;
@@ -14,8 +15,8 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use walkdir::WalkDir;
 
-use crate::config::{find_config, Config, Resolved};
-use crate::db::{build_sqlite_index, MediaCategory};
+use crate::config::{Config, Resolved, find_config, glob_matches};
+use crate::db::{MediaCategory, build_sqlite_index};
 use crate::encode::{Metadata, encode_audio, encode_image, encode_video, is_animated};
 
 #[derive(Parser, Debug)]
@@ -110,18 +111,19 @@ fn main() -> Result<()> {
 
     let files: Vec<_> = WalkDir::new(&args.input)
         .into_iter()
-        .filter_entry(|e| {
-            let entry_path = e.path().strip_prefix(&args.input);
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            config.root_config.ignore.as_ref().is_none_or(|ignore| {
+                let entry_path = e.path().strip_prefix(&args.input);
 
-            entry_path.is_ok_and(|entry_path| {
-                !config
-                    .root_config
-                    .ignore
-                    .iter()
-                    .any(|path| entry_path.starts_with(path))
+                entry_path.is_ok_and(|entry_path| match ignore {
+                    OneOrMore::One(path) => !glob_matches(path, entry_path).unwrap(),
+                    OneOrMore::More(items) => !items
+                        .iter()
+                        .any(|path| glob_matches(path, entry_path).unwrap()),
+                })
             })
         })
-        .filter_map(|e| e.ok())
         .filter(|e| e.path().is_file())
         .collect();
 
@@ -144,12 +146,7 @@ fn main() -> Result<()> {
         let processed_files: Vec<ProcessedFile> = chunk
             .par_iter()
             .filter_map(|entry| {
-                match process_single_file(
-                    entry,
-                    &args.input,
-                    &config,
-                    &resolved
-                ) {
+                match process_single_file(entry, &args.input, &config, &resolved) {
                     Ok(Some(processed)) => {
                         pb.inc(1);
                         Some(processed)

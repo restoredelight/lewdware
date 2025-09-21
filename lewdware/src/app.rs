@@ -6,8 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use notify_rust::Notification;
 use pack_format::config::{MediaType, Metadata};
-use rand::{random_bool, rng};
-use rand_distr::{Distribution, Normal};
+use rand::random_bool;
 use tempfile::NamedTempFile;
 use winit::event::MouseButton;
 use winit::event_loop::{ControlFlow, EventLoopProxy};
@@ -89,19 +88,19 @@ impl Spawner {
         {
             self.last_spawn = Instant::now();
 
-            if let Some(frequency) = self.original_frequency {
-                let secs = frequency.as_secs_f64();
-
-                let distr = Normal::new(secs, secs / 3.0).unwrap();
-
-                let mut sample = distr.sample(&mut rng());
-
-                if sample < 0.0 {
-                    sample = 0.0
-                }
-
-                self.frequency = Some(Duration::from_secs_f64(sample));
-            }
+            // if let Some(frequency) = self.original_frequency {
+            //     let secs = frequency.as_secs_f64();
+            //
+            //     let distr = Normal::new(secs, secs / 3.0).unwrap();
+            //
+            //     let mut sample = distr.sample(&mut rng());
+            //
+            //     if sample < 0.0 {
+            //         sample = 0.0
+            //     }
+            //
+            //     self.frequency = Some(Duration::from_secs_f64(sample));
+            // }
 
             if self.lock {
                 self.locked = true;
@@ -249,7 +248,8 @@ impl<'a> ChaosApp<'a> {
         match response.response {
             MediaResponse::Media(media) => match media {
                 Media::Image(image) => {
-                    let window = create_window(event_loop, image.width(), image.height(), false)?;
+                    let window =
+                        create_window(event_loop, image.width(), image.height(), false, false)?;
 
                     window.request_redraw();
 
@@ -270,8 +270,13 @@ impl<'a> ChaosApp<'a> {
                     );
                 }
                 Media::Video(video) => {
-                    let window =
-                        create_window(event_loop, video.width as u32, video.height as u32, false)?;
+                    let window = create_window(
+                        event_loop,
+                        video.width as u32,
+                        video.height as u32,
+                        false,
+                        false,
+                    )?;
 
                     self.windows.insert(
                         window.id(),
@@ -294,7 +299,7 @@ impl<'a> ChaosApp<'a> {
             }
             MediaResponse::Notification(notification) => self.send_notification(notification),
             MediaResponse::Prompt(prompt) => {
-                let window = create_window(event_loop, 400, 400, true)?;
+                let window = create_window(event_loop, 400, 400, true, true)?;
 
                 self.windows.insert(
                     window.id(),
