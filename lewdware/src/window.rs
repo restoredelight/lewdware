@@ -434,6 +434,11 @@ impl<'a> PromptWindow<'a> {
         self.user_input = user_input;
         self.closed = closed;
 
+        if self.egui_window.has_requested_repaint() {
+            println!("Requesting redraw");
+            self.window.request_redraw();
+        }
+
         Ok(())
     }
 

@@ -146,6 +146,7 @@ struct Window<'a> {
     file_tx: mpsc::Sender<(PathBuf, Metadata)>,
     file_rx: mpsc::Receiver<(PathBuf, Metadata)>,
     pack_metadata: Option<Metadata>,
+    listening_for_panic_button: bool,
 }
 
 impl<'a> Window<'a> {
@@ -175,6 +176,7 @@ impl<'a> Window<'a> {
             file_tx,
             file_rx,
             pack_metadata,
+            listening_for_panic_button: false,
         })
     }
 
@@ -337,6 +339,42 @@ impl<'a> Window<'a> {
                             );
 
                             ui.add_space(8.0);
+
+                            ui.horizontal(|ui| {
+                                let text = if self.listening_for_panic_button {
+                                    "Panic button: listening...".to_string()
+                                } else if self.config.panic_modifiers == egui::Modifiers::NONE {
+                                    format!("Panic button: {}", self.config.panic_button.name())
+                                } else {
+                                    format!(
+                                        "Panic button: {}+{}",
+                                        egui::ModifierNames::NAMES
+                                            .format(&self.config.panic_modifiers, ctx.os().is_mac()),
+                                        self.config.panic_button.name()
+                                    )
+                                };
+
+                                if ui.button(text).clicked() {
+                                    self.listening_for_panic_button = true;
+                                    ctx.request_repaint();
+                                }
+
+                                if self.listening_for_panic_button {
+                                    for event in ctx.input(|i| i.events.clone()) {
+                                        if let egui::Event::Key {
+                                            physical_key: Some(key),
+                                            pressed: true,
+                                            modifiers,
+                                            ..
+                                        } = event
+                                        {
+                                            self.config.panic_button = key;
+                                            self.config.panic_modifiers = modifiers;
+                                            self.listening_for_panic_button = false
+                                        }
+                                    }
+                                }
+                            })
                         });
 
                     ui.add_space(8.0);
@@ -517,6 +555,11 @@ impl<'a> Window<'a> {
                 });
             });
         })?;
+
+        if self.egui_window.has_requested_repaint() {
+            println!("Requesting redraw");
+            self.window.request_redraw();
+        }
 
         Ok(())
     }

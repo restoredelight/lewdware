@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{rc::Rc, sync::{atomic::{AtomicBool, Ordering}, Arc}};
 
 use anyhow::Result;
 use egui_wgpu::wgpu;
@@ -14,6 +14,7 @@ pub struct EguiWindow<'a> {
     queue: Arc<wgpu::Queue>,
     renderer: egui_wgpu::Renderer,
     surface_config: wgpu::SurfaceConfiguration,
+    repaint_requested: Arc<AtomicBool>,
 }
 
 pub struct WgpuState {
@@ -85,6 +86,13 @@ impl<'a> EguiWindow<'a> {
 
         context.request_repaint();
 
+        let repaint_requested = Arc::new(AtomicBool::new(false));
+        let repaint_requested_clone = repaint_requested.clone();
+
+        context.set_request_repaint_callback(move |x| {
+            repaint_requested_clone.store(true, Ordering::Release);
+        });
+
         Ok(Self {
             context,
             window,
@@ -95,6 +103,7 @@ impl<'a> EguiWindow<'a> {
             queue: wgpu_state.queue.clone(),
             renderer,
             surface_config: config,
+            repaint_requested
         })
     }
 
@@ -110,6 +119,10 @@ impl<'a> EguiWindow<'a> {
         }
 
         response.repaint
+    }
+
+    pub fn has_requested_repaint(&self) -> bool {
+        self.repaint_requested.swap(false, Ordering::AcqRel)
     }
 
     pub fn redraw(&mut self, run_ui: impl FnMut(&egui::Context)) -> Result<()> {
