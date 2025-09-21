@@ -35,7 +35,7 @@ impl<'a, 'b> AppSwitcher<'a, 'b> {
     }
 
     fn spawn_main_app(&mut self, config: AppConfig, event_loop: &ActiveEventLoop) {
-        spawn_panic_thread(self.event_loop_proxy.clone());
+        spawn_panic_thread(self.event_loop_proxy.clone(), config.panic_button, config.panic_modifiers);
 
         let mut app = ChaosApp::new(
             self.wgpu_state.clone(),

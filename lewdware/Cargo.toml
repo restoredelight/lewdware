@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 pack-format = { path = "../pack-format/" }
 anyhow = "1.0.99"
-egui = "0.32.1"
+egui = { version = "0.32.1", features = ["serde"] }
 egui-wgpu = "0.32.1"
 egui-winit = "0.32.1"
 ffmpeg-next = "8.0.0"

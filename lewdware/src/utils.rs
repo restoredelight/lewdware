@@ -1,4 +1,4 @@
-use std::{fs::{self, File}, io::{Read, Seek, SeekFrom}, path::Path, thread};
+use std::{collections::HashSet, fs::{self, File}, io::{Read, Seek, SeekFrom}, path::Path, thread};
 
 use anyhow::{Result, anyhow};
 use pack_format::{config::Metadata, Header, HEADER_SIZE};
@@ -82,13 +82,36 @@ pub fn create_window(
     event_loop.create_window(attrs).map_err(|err| anyhow!(err))
 }
 
-pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>) {
+pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, key: egui::Key, target_modifiers: egui::Modifiers) {
     thread::spawn(move || {
+        let target_key = match egui_key_to_rdev(key) {
+            Some(x) => x,
+            None => {
+                eprintln!("Key cannot be matched: {:?}", key);
+                return
+            }
+        };
+
+        let mut keys = HashSet::new();
+
         if let Err(err) = rdev::listen(move |event| {
-            if event.event_type == rdev::EventType::KeyPress(rdev::Key::Escape)
-                && let Err(err) = event_loop_proxy.send_event(UserEvent::PanicButtonPressed)
-            {
-                eprintln!("Could not send panic button event: {}", err);
+            if let rdev::EventType::KeyPress(key) = event.event_type {
+                keys.insert(key);
+
+                if key == target_key {
+                    let modifiers = rdev_keys_to_modifiers(&keys);
+
+                    if modifiers.matches_logically(target_modifiers) {
+                        match event_loop_proxy.send_event(UserEvent::PanicButtonPressed) {
+                            Ok(_) => return,
+                            Err(err) => {
+                                eprintln!("Could not send panic button event: {}", err);
+                            }
+                        }
+                    }
+                }
+            } else if let rdev::EventType::KeyRelease(key) = event.event_type {
+                keys.remove(&key);
             }
         }) {
             eprintln!(
@@ -97,6 +120,119 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>) {
             );
         }
     });
+}
+
+pub fn rdev_keys_to_modifiers<'a>(keys: impl IntoIterator<Item = &'a rdev::Key>) -> egui::Modifiers {
+    let mut modifiers = egui::Modifiers::NONE;
+
+    for key in keys.into_iter() {
+        match key {
+            rdev::Key::Alt => {
+                modifiers |= egui::Modifiers::ALT;
+            },
+            rdev::Key::ControlLeft | rdev::Key::ControlRight => {
+                modifiers |= egui::Modifiers::CTRL;
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // On Windows/Linux, Ctrl is the command key
+                    modifiers |= egui::Modifiers::COMMAND;
+                }
+            },
+            rdev::Key::MetaLeft | rdev::Key::MetaRight => {
+                #[cfg(target_os = "macos")]
+                {
+                    // On macOS, Meta is the Command key
+                    modifiers |= egui::Modifiers::COMMAND;
+                }
+            },
+            rdev::Key::ShiftLeft | rdev::Key::ShiftRight => {
+                modifiers |= egui::Modifiers::SHIFT;
+            }
+            _ => {},
+        }
+    }
+
+    modifiers
+}
+
+pub fn egui_key_to_rdev(key: egui::Key) -> Option<rdev::Key> {
+    match key {
+        egui::Key::ArrowDown => Some(rdev::Key::DownArrow),
+        egui::Key::ArrowLeft => Some(rdev::Key::LeftArrow),
+        egui::Key::ArrowRight => Some(rdev::Key::RightArrow),
+        egui::Key::ArrowUp => Some(rdev::Key::UpArrow),
+        egui::Key::Escape => Some(rdev::Key::Escape),
+        egui::Key::Tab => Some(rdev::Key::Tab),
+        egui::Key::Backspace => Some(rdev::Key::Backspace),
+        egui::Key::Enter => Some(rdev::Key::Return),
+        egui::Key::Space => Some(rdev::Key::Space),
+        egui::Key::Insert => Some(rdev::Key::Insert),
+        egui::Key::Delete => Some(rdev::Key::Delete),
+        egui::Key::Home => Some(rdev::Key::Home),
+        egui::Key::End => Some(rdev::Key::End),
+        egui::Key::PageUp => Some(rdev::Key::PageUp),
+        egui::Key::PageDown => Some(rdev::Key::PageDown),
+        egui::Key::Comma => Some(rdev::Key::Comma),
+        egui::Key::Backslash => Some(rdev::Key::BackSlash),
+        egui::Key::Slash => Some(rdev::Key::Slash),
+        egui::Key::OpenBracket => Some(rdev::Key::LeftBracket),
+        egui::Key::CloseBracket => Some(rdev::Key::RightBracket),
+        egui::Key::Minus => Some(rdev::Key::Minus),
+        egui::Key::Period => Some(rdev::Key::Dot),
+        egui::Key::Plus => Some(rdev::Key::KpPlus),
+        egui::Key::Equals => Some(rdev::Key::Equal),
+        egui::Key::Semicolon => Some(rdev::Key::SemiColon),
+        egui::Key::Quote => Some(rdev::Key::Quote),
+        egui::Key::Num0 => Some(rdev::Key::Num0),
+        egui::Key::Num1 => Some(rdev::Key::Num1),
+        egui::Key::Num2 => Some(rdev::Key::Num2),
+        egui::Key::Num3 => Some(rdev::Key::Num3),
+        egui::Key::Num4 => Some(rdev::Key::Num4),
+        egui::Key::Num5 => Some(rdev::Key::Num5),
+        egui::Key::Num6 => Some(rdev::Key::Num6),
+        egui::Key::Num7 => Some(rdev::Key::Num7),
+        egui::Key::Num8 => Some(rdev::Key::Num8),
+        egui::Key::Num9 => Some(rdev::Key::Num9),
+        egui::Key::A => Some(rdev::Key::KeyA),
+        egui::Key::B => Some(rdev::Key::KeyB),
+        egui::Key::C => Some(rdev::Key::KeyC),
+        egui::Key::D => Some(rdev::Key::KeyD),
+        egui::Key::E => Some(rdev::Key::KeyE),
+        egui::Key::F => Some(rdev::Key::KeyF),
+        egui::Key::G => Some(rdev::Key::KeyG),
+        egui::Key::H => Some(rdev::Key::KeyH),
+        egui::Key::I => Some(rdev::Key::KeyI),
+        egui::Key::J => Some(rdev::Key::KeyJ),
+        egui::Key::K => Some(rdev::Key::KeyK),
+        egui::Key::L => Some(rdev::Key::KeyL),
+        egui::Key::M => Some(rdev::Key::KeyM),
+        egui::Key::N => Some(rdev::Key::KeyN),
+        egui::Key::O => Some(rdev::Key::KeyO),
+        egui::Key::P => Some(rdev::Key::KeyP),
+        egui::Key::Q => Some(rdev::Key::KeyQ),
+        egui::Key::R => Some(rdev::Key::KeyR),
+        egui::Key::S => Some(rdev::Key::KeyS),
+        egui::Key::T => Some(rdev::Key::KeyT),
+        egui::Key::U => Some(rdev::Key::KeyU),
+        egui::Key::V => Some(rdev::Key::KeyV),
+        egui::Key::W => Some(rdev::Key::KeyW),
+        egui::Key::X => Some(rdev::Key::KeyX),
+        egui::Key::Y => Some(rdev::Key::KeyY),
+        egui::Key::Z => Some(rdev::Key::KeyZ),
+        egui::Key::F1 => Some(rdev::Key::F1),
+        egui::Key::F2 => Some(rdev::Key::F2),
+        egui::Key::F3 => Some(rdev::Key::F3),
+        egui::Key::F4 => Some(rdev::Key::F4),
+        egui::Key::F5 => Some(rdev::Key::F5),
+        egui::Key::F6 => Some(rdev::Key::F6),
+        egui::Key::F7 => Some(rdev::Key::F7),
+        egui::Key::F8 => Some(rdev::Key::F8),
+        egui::Key::F9 => Some(rdev::Key::F9),
+        egui::Key::F10 => Some(rdev::Key::F10),
+        egui::Key::F11 => Some(rdev::Key::F11),
+        egui::Key::F12 => Some(rdev::Key::F12),
+        _ => None,
+    }
 }
 
 pub fn read_pack_metadata<F: Read + Seek>(mut file: F) -> Result<(Header, Metadata)> {

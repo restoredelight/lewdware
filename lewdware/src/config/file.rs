@@ -21,6 +21,8 @@ pub struct AppConfig {
     pub prompt_frequency: Duration,
     pub moving_windows: bool,
     pub moving_window_chance: u32,
+    pub panic_button: egui::Key,
+    pub panic_modifiers: egui::Modifiers,
 }
 
 impl Default for AppConfig {
@@ -42,6 +44,8 @@ impl Default for AppConfig {
             prompt_frequency: Duration::from_secs(60),
             moving_windows: false,
             moving_window_chance: 5,
+            panic_button: egui::Key::Escape,
+            panic_modifiers: egui::Modifiers::NONE,
         }
     }
 }
