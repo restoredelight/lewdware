@@ -1,25 +1,28 @@
+//! Handles the different popup windows. We draw to image windows using `softbuffer` (which works
+//! on the CPU), and render videos using `pixels` (which works on the GPU, using `wgpu`). Prompt
+//! windows are also drawn using `wgpu`. We do this because having too many GPU rendered windows
+//! can exhaust the device's VRAM, causing a crash. However, we still want to use the GPU to render
+//! videos for smooth playback.
+
 use std::{
     num::NonZeroU32,
-    sync::{
-        Arc,
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use anyhow::{Result, anyhow};
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use rand::{rng, seq::IndexedRandom};
-use winit::{dpi::{PhysicalPosition}, event::WindowEvent, window::Window};
+use winit::{dpi::PhysicalPosition, event::WindowEvent, window::Window};
 
 use crate::{
-    buffer::{
-        draw_close_button, is_over_close_button, PixelsWrapper, SoftBufferWrapper
-    },
+    buffer::{PixelsWrapper, SoftBufferWrapper, draw_close_button, is_over_close_button},
     egui::{EguiWindow, WgpuState},
     media::{Image, Video},
     video::VideoDecoder,
 };
 
+/// A window displaying an image. Image windows are rendered using softbuffer.
 pub struct ImageWindow {
     pub window: Arc<Window>,
     pub created: Instant,
@@ -45,6 +48,10 @@ enum Direction {
 }
 
 impl ImageWindow {
+    /// Create a new image window.
+    ///
+    /// * `close_button`: Whether to display a close button on the window.
+    /// * `moving`: Whether to move the window around the screen.
     pub fn new(window: Window, image: Image, close_button: bool, moving: bool) -> Result<Self> {
         let window = Arc::new(window);
 
@@ -56,7 +63,14 @@ impl ImageWindow {
         let height = image.height();
 
         let mut rng = rng();
-        let moving_direction = *[Direction::TopLeft, Direction::TopRight, Direction::BottomLeft, Direction::BottomRight].choose(&mut rng).unwrap();
+        let moving_direction = *[
+            Direction::TopLeft,
+            Direction::TopRight,
+            Direction::BottomLeft,
+            Direction::BottomRight,
+        ]
+        .choose(&mut rng)
+        .unwrap();
 
         Ok(Self {
             window,
@@ -76,6 +90,7 @@ impl ImageWindow {
     }
 
     pub fn draw(&mut self) -> Result<()> {
+        // We only need to render the image once
         let mut buffer = if let Some(image) = self.image.take() {
             self.surface
                 .resize(
@@ -141,6 +156,7 @@ impl ImageWindow {
         Ok(())
     }
 
+    /// If the window is a moving window, update its position.
     pub fn update_position(&mut self) -> Result<()> {
         let window_size = self.window.inner_size();
         let monitor_size = self.window.current_monitor().map(|x| x.size()).unwrap();
@@ -181,7 +197,9 @@ impl ImageWindow {
                 if window_position.x <= 0 {
                     self.moving_direction = Direction::BottomRight;
                     return self.update_position();
-                } else if window_position.y + window_size.height as i32 >= monitor_size.height as i32 {
+                } else if window_position.y + window_size.height as i32
+                    >= monitor_size.height as i32
+                {
                     self.moving_direction = Direction::TopLeft;
                     return self.update_position();
                 }
@@ -195,7 +213,9 @@ impl ImageWindow {
                 if window_position.x + window_size.width as i32 >= monitor_size.width as i32 {
                     self.moving_direction = Direction::BottomLeft;
                     return self.update_position();
-                } else if window_position.y + window_size.height as i32 >= monitor_size.height as i32 {
+                } else if window_position.y + window_size.height as i32
+                    >= monitor_size.height as i32
+                {
                     self.moving_direction = Direction::TopRight;
                     return self.update_position();
                 }
@@ -204,7 +224,7 @@ impl ImageWindow {
                     window_position.x + delta,
                     window_position.y + delta,
                 ));
-            },
+            }
         }
 
         if delta != 0 {
@@ -237,6 +257,7 @@ impl ImageWindow {
         }
     }
 
+    /// Handle a click event. Returns true if the window should be closed.
     pub fn handle_click(&mut self) -> bool {
         if self.close_button {
             self.cursor_over_button
@@ -246,6 +267,7 @@ impl ImageWindow {
     }
 }
 
+/// A video popup, rendered using pixels.
 pub struct VideoWindow<'a> {
     pub window: Arc<Window>,
     pub created: Instant,
@@ -262,6 +284,10 @@ pub struct VideoWindow<'a> {
 }
 
 impl<'a> VideoWindow<'a> {
+    /// Create a new video popup.
+    ///
+    /// * `close_button`: Whether to display a close button on the window.
+    /// * `play_audio`: Whether to play the video's audio.
     pub fn new(
         wgpu_state: &WgpuState,
         window: Window,
@@ -274,13 +300,16 @@ impl<'a> VideoWindow<'a> {
         let width = video.width as u32;
         let height = video.height as u32;
 
-        let decoder =
-            VideoDecoder::new(video, play_audio)?;
+        let decoder = VideoDecoder::new(video, play_audio)?;
 
         let surface_texture = SurfaceTexture::new(width, height, window.clone());
 
-        let pixels = PixelsBuilder::new(width, height, surface_texture)
-            .build_with_instance(&wgpu_state.instance, &wgpu_state.adapter, &wgpu_state.device, &wgpu_state.queue)?;
+        let pixels = PixelsBuilder::new(width, height, surface_texture).build_with_instance(
+            &wgpu_state.instance,
+            &wgpu_state.adapter,
+            &wgpu_state.device,
+            &wgpu_state.queue,
+        )?;
 
         Ok(Self {
             window,
@@ -370,6 +399,7 @@ impl<'a> VideoWindow<'a> {
     }
 }
 
+/// A prompt window, rendered using `egui`.
 pub struct PromptWindow<'a> {
     pub window: Arc<Window>,
     egui_window: EguiWindow<'a>,
@@ -393,9 +423,7 @@ impl<'a> PromptWindow<'a> {
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) {
-        if self.egui_window.handle_event(event) {
-            self.window.request_redraw();
-        }
+        self.egui_window.handle_event(event);
     }
 
     pub fn render(&mut self) -> Result<()> {
@@ -433,11 +461,6 @@ impl<'a> PromptWindow<'a> {
 
         self.user_input = user_input;
         self.closed = closed;
-
-        if self.egui_window.has_requested_repaint() {
-            println!("Requesting redraw");
-            self.window.request_redraw();
-        }
 
         Ok(())
     }

@@ -1,9 +1,13 @@
-use std::{rc::Rc, sync::{atomic::{AtomicBool, Ordering}, Arc}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use anyhow::Result;
 use egui_wgpu::wgpu;
 use winit::{event::WindowEvent, window::Window};
 
+/// A struct handling rendering onto a winit window using egui.
 pub struct EguiWindow<'a> {
     context: egui::Context,
     window: Arc<Window>,
@@ -17,6 +21,7 @@ pub struct EguiWindow<'a> {
     repaint_requested: Arc<AtomicBool>,
 }
 
+/// A struct holding wgpu resources that should be shared between windows.
 pub struct WgpuState {
     pub instance: wgpu::Instance,
     pub adapter: Arc<wgpu::Adapter>,
@@ -89,7 +94,7 @@ impl<'a> EguiWindow<'a> {
         let repaint_requested = Arc::new(AtomicBool::new(false));
         let repaint_requested_clone = repaint_requested.clone();
 
-        context.set_request_repaint_callback(move |x| {
+        context.set_request_repaint_callback(move |_| {
             repaint_requested_clone.store(true, Ordering::Release);
         });
 
@@ -103,11 +108,13 @@ impl<'a> EguiWindow<'a> {
             queue: wgpu_state.queue.clone(),
             renderer,
             surface_config: config,
-            repaint_requested
+            repaint_requested,
         })
     }
 
-    pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
+    /// Handle a window event. All window events should be passed into this function, aside from
+    /// [WindowEvent::CloseRequested] and [WindowEvent::RedrawRequested].
+    pub fn handle_event(&mut self, event: &WindowEvent) {
         let response = self.state.on_window_event(&self.window, event);
 
         if let WindowEvent::Resized(size) = event {
@@ -115,16 +122,19 @@ impl<'a> EguiWindow<'a> {
             self.surface_config.height = size.height;
             self.surface.configure(&self.device, &self.surface_config);
 
-            return true;
+            self.window.request_redraw();
+            return
         }
 
-        response.repaint
+        if response.repaint {
+            self.window.request_redraw();
+        }
     }
 
-    pub fn has_requested_repaint(&self) -> bool {
-        self.repaint_requested.swap(false, Ordering::AcqRel)
-    }
-
+    /// Redraw the egui window. This should be called whenever the window receives the
+    /// [WindowEvent::RedrawRequested] event.
+    ///
+    /// * `run_ui`: This is where you should define the egui UI of the window.
     pub fn redraw(&mut self, run_ui: impl FnMut(&egui::Context)) -> Result<()> {
         let raw_input = self.state.take_egui_input(&self.window);
 
@@ -203,6 +213,10 @@ impl<'a> EguiWindow<'a> {
         self.queue.submit(Some(encoder.finish()));
 
         output.present();
+
+        if self.repaint_requested.swap(false, Ordering::AcqRel) {
+            self.window.request_redraw();
+        }
 
         Ok(())
     }

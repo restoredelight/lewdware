@@ -26,6 +26,11 @@ use crate::transition::TransitionManager;
 use crate::utils::create_window;
 use crate::window::{ImageWindow, PromptWindow, VideoWindow};
 
+/// The main app.
+/// * `windows`: A map containing all the windows spawned by the app. Since dropping a winit window
+///   closes it, we can close windows by removing them from this map.
+/// * `default_wallpaper`: Stores the user's default wallpaper, so we can restore it on panic.
+/// * `wallpaper`: The current wallpaper.
 pub struct ChaosApp<'a> {
     state: AppState,
     config: AppConfig,
@@ -47,6 +52,7 @@ enum AppState {
     Hibernating,
 }
 
+/// Tracks the timing of all the things the app spawns (popups, notifications, etc.)
 struct Spawners {
     media: Spawner,
     audio: Option<Spawner>,
@@ -61,6 +67,7 @@ enum Window<'a> {
     Prompt(PromptWindow<'a>),
 }
 
+/// Tracks the timing and state of something the app spawns (popups, notifications, ...).
 struct Spawner {
     last_spawn: Instant,
     original_frequency: Option<Duration>,
@@ -70,6 +77,10 @@ struct Spawner {
 }
 
 impl Spawner {
+    /// Create a new spawner.
+    ///
+    /// * `frequency`: How often should we spawn? If [None], always spawn no matter the time of the
+    ///   previous spawn.
     fn new(frequency: Option<Duration>, lock: bool) -> Self {
         Self {
             last_spawn: Instant::now(),
@@ -80,14 +91,14 @@ impl Spawner {
         }
     }
 
-    fn should_spawn(&mut self) -> bool {
+    /// Should we spawn?
+    fn should_spawn(&self) -> bool {
         if self
             .frequency
             .is_some_and(|frequency| self.last_spawn.elapsed() >= frequency)
             && !self.locked
         {
-            self.last_spawn = Instant::now();
-
+            return true;
             // if let Some(frequency) = self.original_frequency {
             //     let secs = frequency.as_secs_f64();
             //
@@ -101,15 +112,19 @@ impl Spawner {
             //
             //     self.frequency = Some(Duration::from_secs_f64(sample));
             // }
-
-            if self.lock {
-                self.locked = true;
-            }
-
-            return true;
         }
 
         false
+    }
+
+    /// Mark the spawner as "locked", which will not allow any spawns until `unlock()` is called.
+    /// This is useful for spawners which only allow one of the thing at a time.
+    fn spawn(&mut self) {
+        self.last_spawn = Instant::now();
+
+        if self.lock {
+            self.locked = true;
+        }
     }
 
     fn unlock(&mut self) {
@@ -196,51 +211,54 @@ impl<'a> ChaosApp<'a> {
                 >= self.config.max_videos;
             let tags = self.get_tags(MediaType::Popups);
 
-            self.media_manager.request_media(tags, only_images);
+            if self
+                .media_manager
+                .request_media(tags, only_images)
+                .is_some()
+            {
+                self.spawners.media.spawn();
+            }
         }
 
-        if self
-            .spawners
-            .audio
-            .as_mut()
-            .is_some_and(|x| x.should_spawn())
+        if let Some(spawner) = &self.spawners.audio
+            && spawner.should_spawn()
         {
             let tags = self.get_tags(MediaType::Audio);
-            self.media_manager.request_audio(tags);
+            if self.media_manager.request_audio(tags).is_some() {
+                self.spawners.audio.as_mut().unwrap().spawn();
+            }
         }
 
-        if self
-            .spawners
-            .notification
-            .as_mut()
-            .is_some_and(|x| x.should_spawn())
+        if let Some(spawner) = &self.spawners.notification
+            && spawner.should_spawn()
         {
             let tags = self.get_tags(MediaType::Notifications);
-            self.media_manager.request_notification(tags);
+            if self.media_manager.request_notification(tags).is_some() {
+                self.spawners.notification.as_mut().unwrap().spawn();
+            }
         }
 
-        if self
-            .spawners
-            .link
-            .as_mut()
-            .is_some_and(|x| x.should_spawn())
+        if let Some(spawner) = &self.spawners.link
+            && spawner.should_spawn()
         {
             let tags = self.get_tags(MediaType::Links);
-            self.media_manager.request_link(tags);
+            if self.media_manager.request_link(tags).is_some() {
+                self.spawners.link.as_mut().unwrap().spawn();
+            }
         }
 
-        if self
-            .spawners
-            .prompt
-            .as_mut()
-            .is_some_and(|x| x.should_spawn())
+        if let Some(spawner) = &self.spawners.prompt
+            && spawner.should_spawn()
         {
             let tags = self.get_tags(MediaType::Prompts);
-            self.media_manager.request_prompt(tags);
+            if self.media_manager.request_prompt(tags).is_some() {
+                self.spawners.prompt.as_mut().unwrap().spawn();
+            }
         }
     }
 
-    fn process_media_response(
+    /// Process a message sent my the media manager.
+    fn process_media_message(
         &mut self,
         response: Response,
         event_loop: &ActiveEventLoop,
@@ -354,8 +372,9 @@ impl<'a> ChaosApp<'a> {
         }
     }
 
-    fn get_tags(&mut self, media_type: MediaType) -> Option<Vec<String>> {
-        match self.transition_manager.as_mut() {
+    /// Get the relevant tags for a specific media type.
+    fn get_tags(&self, media_type: MediaType) -> Option<Vec<String>> {
+        match &self.transition_manager {
             Some(transition_manager) => transition_manager.get_tags(media_type).map(|tags| {
                 tags.into_iter()
                     .filter(|tag| self.tags.as_ref().is_none_or(|tags| tags.contains(tag)))
@@ -369,10 +388,16 @@ impl<'a> ChaosApp<'a> {
 impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
     fn resumed(&mut self, _: &ActiveEventLoop) {
         let tags = self.get_tags(MediaType::Popups);
-        self.media_manager.request_media(tags, false);
+        if self.media_manager.request_media(tags, false).is_some() {
+            self.spawners.media.spawn();
+        }
 
-        let tags = self.get_tags(MediaType::Audio);
-        self.media_manager.request_audio(tags);
+        if self.spawners.audio.is_some() {
+            let tags = self.get_tags(MediaType::Audio);
+            if self.media_manager.request_audio(tags).is_some() {
+                self.spawners.audio.as_mut().unwrap().spawn();
+            }
+        }
 
         let tags = self.get_tags(MediaType::Wallpaper);
         self.media_manager.request_wallpaper(tags);
@@ -465,11 +490,13 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
         }
     }
 
+    /// By user events we really mean custom events, which can be sent by code running outside the
+    /// main event loop (e.g. on another thread).
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::MediaResponse => {
                 while let Some(response) = self.media_manager.try_recv() {
-                    self.process_media_response(response, event_loop)
+                    self.process_media_message(response, event_loop)
                         .unwrap_or_else(|err| {
                             eprintln!("Error: {}", err);
                         });
@@ -490,23 +517,17 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             });
         }
 
-        let mut poll = false;
         for window in self.windows.values_mut() {
             match window {
                 Window::Video(window) => {
                     window.window.request_redraw();
-                    poll = true;
                 }
-                Window::Prompt(_) => {
-                    poll = true;
-                }
+                Window::Prompt(_) => {}
                 Window::Image(window) => {
-                    if window.moving {
-                        if let Err(err) = window.update_position() {
-                            eprintln!("Error moving window: {}", err);
-                        }
-
-                        poll = true;
+                    if window.moving
+                        && let Err(err) = window.update_position()
+                    {
+                        eprintln!("Error moving window: {}", err);
                     }
                 }
             }
@@ -520,6 +541,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             spawner.unlock();
         }
 
+        // The transition has switched from one stage to another
         if self
             .transition_manager
             .as_mut()

@@ -26,6 +26,8 @@ fn main() -> Result<()> {
     {
         use winit::platform::x11::EventLoopBuilderExtX11;
 
+        // Wayland doesn't support a bunch of stuff we need (e.g. setting the position of windows).
+        // So we use XWayland instead.
         event_loop_builder.with_x11();
     }
 
