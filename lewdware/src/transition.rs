@@ -5,12 +5,13 @@ use rand::{random_bool, rng, seq::SliceRandom};
 
 use std::mem;
 
+/// Handles a media pack's transition, if it defines one.
 pub struct TransitionManager {
     transition: Transition,
     last_switch: Instant,
     duration: Duration,
-    prev_tags: Vec<String>,
     current_tags: Vec<String>,
+    next_tags: Vec<String>,
     index: usize,
 }
 
@@ -21,16 +22,16 @@ impl TransitionManager {
             transition.items.shuffle(&mut rng);
         }
 
-        let prev_tags = transition.items[0].tags.as_ref().unwrap().clone();
+        let current_tags = transition.items[0].tags.as_ref().unwrap().clone();
 
-        let current_tags = transition.items[1].tags.as_ref().unwrap().clone();
+        let next_tags = transition.items[1].tags.as_ref().unwrap().clone();
 
         Self {
             transition,
             last_switch: Instant::now(),
             duration: Duration::from_secs(120),
+            next_tags,
             current_tags,
-            prev_tags,
             index: 0,
         }
     }
@@ -47,15 +48,16 @@ impl TransitionManager {
 
         self.index = (self.index + 1) % self.transition.items.len();
 
-        let current_tags = self.transition.items[self.index]
+        let next_tags = self.transition.items[self.index]
             .tags
             .as_ref()
             .unwrap()
             .clone();
 
-        self.prev_tags = mem::replace(&mut self.current_tags, current_tags);
+        self.current_tags = mem::replace(&mut self.next_tags, next_tags);
     }
 
+    /// Check if it's time to switch stages in the transition, and perform the switch if so.
     pub fn try_switch(&mut self) -> bool {
         if self.last_switch.elapsed() > self.duration {
             println!("Switching");
@@ -67,11 +69,13 @@ impl TransitionManager {
         false
     }
 
+    /// Get the tags for a specific media type
     pub fn get_tags(&self, media_type: MediaType) -> Option<Vec<String>> {
         if !self.applies_to(&media_type) {
             return None;
         }
 
+        // A linear transition gradually switches between the two states
         if self.transition.transition == TransitionType::Linear {
             let mut p = self.last_switch.elapsed().div_duration_f64(self.duration);
 
@@ -80,15 +84,16 @@ impl TransitionManager {
             }
 
             if random_bool(p) {
-                Some(self.current_tags.clone())
+                Some(self.next_tags.clone())
             } else {
-                Some(self.prev_tags.clone())
+                Some(self.current_tags.clone())
             }
         } else {
-            Some(self.current_tags.clone())
+            Some(self.next_tags.clone())
         }
     }
 
+    /// Check whether the transition applies to a specific media type
     pub fn applies_to(&self, media_type: &MediaType) -> bool {
         match &self.transition.apply_to {
             TransitionApplyTo::All => true,

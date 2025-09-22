@@ -27,6 +27,7 @@ use crate::{
     utils::read_pack_metadata,
 };
 
+/// The configuration window.
 pub struct ConfigApp<'a> {
     wgpu_state: Arc<WgpuState>,
     window: Option<Window<'a>>,
@@ -34,9 +35,11 @@ pub struct ConfigApp<'a> {
     closed: bool,
     start: bool,
     executor: Arc<Executor<'static>>,
-    shutdown: Sender<()>,
+    _shutdown: Sender<()>,
 }
 
+/// Spawns a thread for async tasks to run on. Returns the executor, and a shutdown sender, which
+/// you can drop to stop the thread.
 fn spawn_executor_thread() -> (Arc<Executor<'static>>, Sender<()>) {
     let executor = Arc::new(Executor::new());
     let ex = executor.clone();
@@ -60,7 +63,7 @@ impl<'a> ConfigApp<'a> {
             closed: false,
             start: false,
             executor,
-            shutdown,
+            _shutdown: shutdown,
         }
     }
 
@@ -72,6 +75,7 @@ impl<'a> ConfigApp<'a> {
         self.closed
     }
 
+    /// Drop and close the app, taking the config.
     pub fn into_config(self) -> AppConfig {
         self.config.unwrap()
     }
@@ -137,6 +141,13 @@ impl<'a> ApplicationHandler<UserEvent> for ConfigApp<'a> {
     }
 }
 
+/// The config window.
+///
+/// * `closed`: Whether the window has been closed.
+/// * `file_tx`, `file_rx`: A channel to send user-selected pack files.
+/// * `listening_for_panic_button`: Whether the user has pressed the button to set a new panic
+///   keybind (in which case, we need to listen for all keypress events to figure out what keybind
+///   the user wants).
 struct Window<'a> {
     pub window: Arc<winit::window::Window>,
     pub config: AppConfig,
@@ -181,9 +192,7 @@ impl<'a> Window<'a> {
     }
 
     fn handle_event(&mut self, event: &WindowEvent) {
-        if self.egui_window.handle_event(event) {
-            self.window.request_redraw();
-        }
+        self.egui_window.handle_event(event);
     }
 
     fn render(&mut self) -> Result<()> {
@@ -341,6 +350,22 @@ impl<'a> Window<'a> {
                             ui.add_space(8.0);
 
                             ui.horizontal(|ui| {
+                                if self.listening_for_panic_button {
+                                    for event in ctx.input(|i| i.events.clone()) {
+                                        if let egui::Event::Key {
+                                            physical_key: Some(key),
+                                            pressed: true,
+                                            modifiers,
+                                            ..
+                                        } = event
+                                        {
+                                            self.config.panic_button = key;
+                                            self.config.panic_modifiers = modifiers;
+                                            self.listening_for_panic_button = false
+                                        }
+                                    }
+                                }
+
                                 let text = if self.listening_for_panic_button {
                                     "Panic button: listening...".to_string()
                                 } else if self.config.panic_modifiers == egui::Modifiers::NONE {
@@ -357,22 +382,6 @@ impl<'a> Window<'a> {
                                 if ui.button(text).clicked() {
                                     self.listening_for_panic_button = true;
                                     ctx.request_repaint();
-                                }
-
-                                if self.listening_for_panic_button {
-                                    for event in ctx.input(|i| i.events.clone()) {
-                                        if let egui::Event::Key {
-                                            physical_key: Some(key),
-                                            pressed: true,
-                                            modifiers,
-                                            ..
-                                        } = event
-                                        {
-                                            self.config.panic_button = key;
-                                            self.config.panic_modifiers = modifiers;
-                                            self.listening_for_panic_button = false
-                                        }
-                                    }
                                 }
                             })
                         });
@@ -550,16 +559,10 @@ impl<'a> Window<'a> {
                     //         ui.add_space(8.0);
                     //     });
 
-                    // Add some bottom padding
                     ui.add_space(20.0);
                 });
             });
         })?;
-
-        if self.egui_window.has_requested_repaint() {
-            println!("Requesting redraw");
-            self.window.request_redraw();
-        }
 
         Ok(())
     }

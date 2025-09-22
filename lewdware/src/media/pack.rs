@@ -5,7 +5,6 @@ use async_fs::File;
 use futures_lite::{AsyncReadExt, AsyncSeekExt};
 use image::{ImageFormat, ImageReader};
 use pack_format::{config::Metadata, Header};
-use rand::seq::IndexedRandom;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use tempfile::NamedTempFile;
 
@@ -41,7 +40,7 @@ impl MediaType {
 }
 
 #[derive(Debug, Clone)]
-pub struct MediaEntry {
+struct MediaEntry {
     pub id: i64,
     pub path: String,
     pub media_type: MediaType,
@@ -124,6 +123,8 @@ pub struct Prompt {
     pub prompt: String,
 }
 
+/// A simple utility to repeat variables n times in a SQLite query (i.e. returns "?,?,?,?..." n
+/// times).
 fn repeat_vars(count: usize) -> String {
     assert_ne!(count, 0);
     let mut s = "?,".repeat(count);
@@ -131,6 +132,10 @@ fn repeat_vars(count: usize) -> String {
     s.pop();
     s
 }
+
+/// A media pack, consisting of a header, some metadata and an SQLite database at the end, which
+/// contains information about all the media in the file. The database stores the offset and length
+/// of each image/video/audio file, which can be used to read it from the pack file.
 pub struct MediaPack {
     path: PathBuf,
     db: Connection,
@@ -141,7 +146,6 @@ pub struct MediaPack {
 }
 
 impl MediaPack {
-    /// Open a media pack file for reading
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
         let mut file = fs::File::open(&path)?;
@@ -180,89 +184,6 @@ impl MediaPack {
             temp_file,
             tag_map,
         })
-    }
-
-    /// Get total number of files in the pack
-    pub fn total_files(&self) -> u32 {
-        self.header.total_files
-    }
-
-    /// Get all media entries
-    pub fn get_all_entries(&self) -> Result<Vec<MediaEntry>> {
-        let mut stmt = self.db.prepare(
-            "SELECT m.id, m.path, m.media_type, m.offset, m.length, m.width, m.height, m.duration,
-                    GROUP_CONCAT(t.name, '|') as tags
-             FROM media m
-             LEFT JOIN media_tags mt ON m.id = mt.media_id
-             LEFT JOIN tags t ON mt.tag_id = t.id
-             GROUP BY m.id
-             ORDER BY m.path",
-        )?;
-
-        let entries: rusqlite::Result<Vec<_>> = stmt
-            .query_map([], |row| {
-                Ok(MediaEntry {
-                    id: row.get("id")?,
-                    path: row.get("path")?,
-                    media_type: MediaType::from_str(&row.get::<_, String>("media_type")?),
-                    offset: row.get::<_, i64>("offset")? as u64,
-                    length: row.get::<_, i64>("length")? as u64,
-                    width: row.get("width")?,
-                    height: row.get("height")?,
-                    duration: row.get("duration")?,
-                })
-            })?
-            .collect();
-
-        entries.map_err(|err| anyhow::anyhow!(err))
-    }
-
-    /// Get entries by media type
-    pub fn get_entries_by_type(&self, media_type: MediaType) -> Result<Vec<MediaEntry>> {
-        let type_str = media_type.to_str();
-
-        let mut stmt = self.db.prepare(
-            "SELECT m.id, m.path, m.media_type, m.offset, m.length, m.width, m.height, m.duration,
-                    GROUP_CONCAT(t.name, '|') as tags
-             FROM media m
-             LEFT JOIN media_tags mt ON m.id = mt.media_id
-             LEFT JOIN tags t ON mt.tag_id = t.id
-             WHERE m.media_type = ?1
-             GROUP BY m.id
-             ORDER BY m.path",
-        )?;
-
-        let entries: rusqlite::Result<Vec<MediaEntry>> = stmt
-            .query_map(params![type_str], |row| {
-                Ok(MediaEntry {
-                    id: row.get("id")?,
-                    path: row.get("path")?,
-                    media_type: MediaType::from_str(&row.get::<_, String>("media_type")?),
-                    offset: row.get::<_, i64>("offset")? as u64,
-                    length: row.get::<_, i64>("length")? as u64,
-                    width: row.get("width")?,
-                    height: row.get("height")?,
-                    duration: row.get("duration")?,
-                })
-            })?
-            .collect();
-
-        entries.map_err(|err| anyhow::anyhow!(err))
-    }
-
-    /// Get all image entries
-    pub fn get_images(&self) -> Result<Vec<MediaEntry>> {
-        self.get_entries_by_type(MediaType::Image)
-    }
-
-    /// Get all video entries
-    pub fn get_videos(&self) -> Result<Vec<MediaEntry>> {
-        self.get_entries_by_type(MediaType::Video)
-    }
-
-    /// Get all audio entries
-    pub fn get_audio(&self) -> Result<Vec<MediaEntry>> {
-        self.get_entries_by_type(MediaType::Audio)
     }
 
     fn get_random_media_type(&self, media_type: MediaType) -> Result<Option<MediaEntry>> {
@@ -432,7 +353,8 @@ impl MediaPack {
         })
     }
 
-    pub async fn get_random_item(&self, tags: Option<Vec<String>>) -> Result<Option<Media>> {
+    /// Get a random popup (either an image or a video).
+    pub async fn get_random_popup(&self, tags: Option<Vec<String>>) -> Result<Option<Media>> {
         let media = match tags {
             Some(tags) => self.get_random_media_with_tags(tags)?,
             None => self.get_random_media()?,
@@ -637,14 +559,8 @@ impl MediaPack {
         })
     }
 
-    /// Get a random entry of any media type
-    pub fn get_random_entry(&self) -> Result<Option<MediaEntry>> {
-        let all = self.get_all_entries()?;
-        Ok(all.choose(&mut rand::rng()).cloned())
-    }
-
     /// Extract file data for a given entry
-    pub async fn extract_file_data(&self, entry: &MediaEntry) -> Result<Vec<u8>> {
+    async fn extract_file_data(&self, entry: &MediaEntry) -> Result<Vec<u8>> {
         let mut file = File::open(&self.path).await?;
         file.seek(SeekFrom::Start(entry.offset)).await?;
         let mut buffer = vec![0u8; entry.length as usize];
@@ -652,7 +568,7 @@ impl MediaPack {
         Ok(buffer)
     }
 
-    pub async fn read_image_data(&self, entry: &MediaEntry) -> Result<Image> {
+    async fn read_image_data(&self, entry: &MediaEntry) -> Result<Image> {
         let mut buffer = vec![0u8; entry.length as usize];
 
         let mut file = File::open(&self.path).await?;
@@ -670,38 +586,10 @@ impl MediaPack {
     }
 
     /// Extract file data and write to a path
-    pub async fn extract_file_to_path(&self, entry: &MediaEntry, output_path: &Path) -> Result<()> {
+    async fn extract_file_to_path(&self, entry: &MediaEntry, output_path: &Path) -> Result<()> {
         let data = self.extract_file_data(entry).await?;
         std::fs::write(output_path, data)?;
         Ok(())
-    }
-
-    /// Get entry by path
-    pub fn get_entry_by_path(&self, path: &str) -> Result<Option<MediaEntry>> {
-        let mut stmt = self.db.prepare(
-            "SELECT id, path, media_type, offset, length, width, height, duration
-             FROM media m
-             WHERE path = ?1
-             GROUP BY id",
-        )?;
-
-        let mut rows = stmt.query_map(params![path], |row| {
-            Ok(MediaEntry {
-                id: row.get("id")?,
-                path: row.get("path")?,
-                media_type: MediaType::from_str(&row.get::<_, String>("media_type")?),
-                offset: row.get::<_, i64>("offset")? as u64,
-                length: row.get::<_, i64>("length")? as u64,
-                width: row.get("width")?,
-                height: row.get("height")?,
-                duration: row.get("duration")?,
-            })
-        })?;
-
-        match rows.next() {
-            Some(entry) => Ok(Some(entry?)),
-            None => Ok(None),
-        }
     }
 
     async fn write_to_temp_file(

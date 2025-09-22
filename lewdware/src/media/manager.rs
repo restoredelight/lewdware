@@ -13,6 +13,12 @@ use crate::{
     media::pack::{Audio, Link, Media, MediaPack, Notification, Prompt},
 };
 
+/// Manages all the media (images, audio, videos). We use a message system to avoid blocking the
+/// event loop on the main thread: requests are sent to a separate thread, which handles reading
+/// and decoding, and then sends back responses.
+///
+/// The [UserEvent::MediaResponse] event will be sent to the event loop whenever a response is
+/// available.
 pub struct MediaManager {
     tx: Sender<Request>,
     rx: Receiver<Response>,
@@ -20,6 +26,8 @@ pub struct MediaManager {
 }
 
 impl MediaManager {
+    /// Start up the media manager thread, opening the specified pack file. Returns the pack
+    /// metadata.
     pub fn open(
         pack_path: &Path,
         event_loop_proxy: EventLoopProxy<UserEvent>,
@@ -29,6 +37,11 @@ impl MediaManager {
         Ok((Self { tx, rx, id: 0 }, metadata))
     }
 
+    /// Request the media for an image or video popup. Returns the id of the request, or [None] if
+    /// the request failed to send (which can happen if the thread is processing too many messages
+    /// at once).
+    ///
+    /// * `only_images`: Whether to allow videos
     pub fn request_media(&mut self, tags: Option<Vec<String>>, only_images: bool) -> Option<u64> {
         self.try_send(MediaRequest::RandomMedia { only_images, tags })
     }
@@ -64,7 +77,8 @@ impl MediaManager {
             Err(_) => None,
         }
     }
-    
+
+    /// Returns a response if there is one.
     pub fn try_recv(&self) -> Option<Response> {
         self.rx.try_recv().ok()
     }
@@ -127,7 +141,7 @@ async fn handle_request(pack: Rc<MediaPack>, request: Request) -> Result<Option<
                     .await
                     .map(|x| x.map(|image| MediaResponse::Media(Media::Image(image))))
             } else {
-                pack.get_random_item(tags)
+                pack.get_random_popup(tags)
                     .await
                     .map(|x| x.map(MediaResponse::Media))
             }

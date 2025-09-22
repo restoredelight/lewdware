@@ -1,40 +1,32 @@
 use anyhow::Result;
 use ffmpeg_next::{self as ffmpeg, frame};
 use std::{
-    sync::{
-        mpsc::{sync_channel, Receiver, SyncSender, TryRecvError}, Arc
-    },
+    path::PathBuf,
+    sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
-use rodio::{OutputStream, OutputStreamBuilder, Sink, buffer::SamplesBuffer};
+use rodio::{OutputStreamBuilder, Sink, buffer::SamplesBuffer};
 
 use crate::media::Audio;
 
+/// An audio player using ffmpeg and rodio.
 pub struct AudioPlayer {
     audio: Audio,
     thread: JoinHandle<()>,
     message_tx: SyncSender<AudioMessage>,
-    _stream: Arc<OutputStream>,
 }
 
 impl AudioPlayer {
     pub fn new(audio: Audio) -> Result<Self> {
-        let stream = Arc::new(OutputStreamBuilder::open_default_stream().unwrap());
-
         let (message_tx, message_rx) = sync_channel(10);
 
-        let thread = spawn_audio_thread(
-            audio.tempfile.path().to_str().unwrap().to_string(),
-            message_rx,
-            false,
-        );
+        let thread = spawn_audio_thread(audio.tempfile.path().to_path_buf(), message_rx, false);
 
         Ok(Self {
             audio,
             thread,
-            _stream: stream,
             message_tx,
         })
     }
@@ -52,102 +44,100 @@ impl AudioPlayer {
     }
 }
 
-impl Drop for AudioPlayer {
-    fn drop(&mut self) {
-        let _ = self.message_tx.send(AudioMessage::Stop);
-    }
-}
-
 pub enum AudioMessage {
     Play,
     Pause,
-    Stop,
     Loop,
 }
 
+/// Spawn a thread to play an audio file
+///
+/// * `path`: The path to the audio (or video) file.
+/// * `message_rx`: A sender for audio messages.
+/// * `loop_audio`: Whether to loop the audio. If so, you must send [AudioMessage::Loop] every time
+///   you want the audio to loop.
 pub fn spawn_audio_thread(
-    path: String,
+    path: PathBuf,
     message_rx: Receiver<AudioMessage>,
     loop_audio: bool,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        ffmpeg::init().unwrap();
-        let mut ictx = ffmpeg::format::input(&path).unwrap();
-        let audio_stream_index = match ictx.streams().best(ffmpeg::media::Type::Audio) {
-            Some(stream) => stream.index(),
-            None => return,
-        };
-
-        let mut decoder = ffmpeg::codec::Context::from_parameters(
-            ictx.stream(audio_stream_index).unwrap().parameters(),
-        )
-        .unwrap()
-        .decoder()
-        .audio()
-        .unwrap();
-
-        let stream = match OutputStreamBuilder::open_default_stream() {
-            Ok(stream) => stream,
-            Err(err) => {
-                eprintln!("Error opening audio stream: {}", err);
-                return;
-            }
-        };
-
-        // Rodio setup
-        let sink = Sink::connect_new(stream.mixer());
-
-        let mut frame = ffmpeg::util::frame::Audio::empty();
-
-        loop {
-            let mut continue_loop = false;
-
-            for (stream, packet) in ictx.packets() {
-                if stream.index() == audio_stream_index {
-                    decoder.send_packet(&packet).unwrap();
-                    while decoder.receive_frame(&mut frame).is_ok() {
-                        let samples = convert_opus_audio_frame(&frame);
-
-                        sink.append(SamplesBuffer::new(frame.channels(), frame.rate(), samples));
-                    }
-                }
-
-                let (stop, continue_loop_received) = process_audio_messages(&sink, &message_rx);
-                if stop {
-                    return;
-                }
-                continue_loop |= continue_loop_received;
-            }
-
-            decoder.flush();
-
-            while decoder.receive_frame(&mut frame).is_ok() {
-                let samples = convert_opus_audio_frame(&frame);
-
-                sink.append(SamplesBuffer::new(frame.channels(), frame.rate(), samples));
-            }
-
-            if !loop_audio {
-                sink.sleep_until_end();
-                return;
-            }
-
-            while !continue_loop {
-                let (stop, continue_loop_received) = process_audio_messages(&sink, &message_rx);
-                if stop {
-                    return;
-                }
-                continue_loop |= continue_loop_received;
-
-                thread::sleep(Duration::from_millis(100));
-            }
-
-            ictx.seek(0, ..0).unwrap();
-            decoder.flush();
+        if let Err(err) = decode_audio(path, message_rx, loop_audio) {
+            eprint!("Error decoding audio: {}", err);
         }
     })
 }
 
+fn decode_audio(path: PathBuf, message_rx: Receiver<AudioMessage>, loop_audio: bool) -> Result<()> {
+    ffmpeg::init()?;
+    let mut ictx = ffmpeg::format::input(&path)?;
+    let audio_stream_index = match ictx.streams().best(ffmpeg::media::Type::Audio) {
+        Some(stream) => stream.index(),
+        None => return Ok(()),
+    };
+
+    let mut decoder = ffmpeg::codec::Context::from_parameters(
+        ictx.stream(audio_stream_index).unwrap().parameters(),
+    )?
+    .decoder()
+    .audio()?;
+
+    let stream = OutputStreamBuilder::open_default_stream()?;
+
+    let sink = Sink::connect_new(stream.mixer());
+
+    let mut frame = ffmpeg::util::frame::Audio::empty();
+
+    loop {
+        let mut continue_loop = false;
+
+        for (stream, packet) in ictx.packets() {
+            if stream.index() == audio_stream_index {
+                decoder.send_packet(&packet)?;
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    let samples = convert_audio_frame(&frame);
+
+                    sink.append(SamplesBuffer::new(frame.channels(), frame.rate(), samples));
+                }
+            }
+
+            let (stop, continue_loop_received) = process_audio_messages(&sink, &message_rx);
+            if stop {
+                return Ok(());
+            }
+            continue_loop |= continue_loop_received;
+        }
+
+        decoder.flush();
+
+        while decoder.receive_frame(&mut frame).is_ok() {
+            let samples = convert_audio_frame(&frame);
+
+            sink.append(SamplesBuffer::new(frame.channels(), frame.rate(), samples));
+        }
+
+        if !loop_audio {
+            sink.sleep_until_end();
+            return Ok(());
+        }
+
+        while !continue_loop {
+            let (stop, continue_loop_received) = process_audio_messages(&sink, &message_rx);
+            if stop {
+                return Ok(());
+            }
+            continue_loop |= continue_loop_received;
+
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        ictx.seek(0, ..0)?;
+        decoder.flush();
+    }
+}
+
+/// Process all messages sent to the audio thread. Returns two booleans indicating whether to stop
+/// the audio thread, and whether a `Loop` message was received.
 fn process_audio_messages(sink: &Sink, message_rx: &Receiver<AudioMessage>) -> (bool, bool) {
     let mut continue_loop = false;
 
@@ -166,21 +156,16 @@ fn process_audio_messages(sink: &Sink, message_rx: &Receiver<AudioMessage>) -> (
                                     break;
                                 }
                                 AudioMessage::Pause => {}
-                                AudioMessage::Stop => {
-                                    sink.stop();
-                                    return (true, continue_loop);
-                                }
                                 AudioMessage::Loop => {
                                     continue_loop = true;
                                 }
                             },
-                            Err(_) => return (true, continue_loop),
+                            Err(_) => {
+                                sink.stop();
+                                return (true, continue_loop);
+                            }
                         }
                     }
-                }
-                AudioMessage::Stop => {
-                    sink.stop();
-                    return (true, continue_loop);
                 }
                 AudioMessage::Loop => {
                     continue_loop = true;
@@ -188,7 +173,10 @@ fn process_audio_messages(sink: &Sink, message_rx: &Receiver<AudioMessage>) -> (
             },
             Err(err) => match err {
                 TryRecvError::Empty => break,
-                TryRecvError::Disconnected => return (true, continue_loop),
+                TryRecvError::Disconnected => {
+                    sink.stop();
+                    return (true, continue_loop);
+                }
             },
         }
     }
@@ -196,7 +184,9 @@ fn process_audio_messages(sink: &Sink, message_rx: &Receiver<AudioMessage>) -> (
     (false, continue_loop)
 }
 
-fn convert_opus_audio_frame(frame: &frame::Audio) -> Vec<f32> {
+// TODO: This currently assumes an f32 format, which doesn't necessarily hold true for non-Opus
+// file types.
+fn convert_audio_frame(frame: &frame::Audio) -> Vec<f32> {
     let channels = frame.channels() as usize;
     let samples = frame.samples();
     let mut interleaved = vec![0f32; samples * channels];

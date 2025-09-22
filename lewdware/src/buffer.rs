@@ -1,5 +1,6 @@
 use ab_glyph::{Font, FontArc, GlyphId, PxScale, ScaleFont, point};
 
+/// A trait that allows us to work with both `pixels` and `softbuffer` buffers.
 pub trait ColorBuffer {
     fn set_pixel(&mut self, x: usize, y: usize, color: u32) -> bool;
     fn get_pixel(&self, x: usize, y: usize) -> u32;
@@ -47,7 +48,6 @@ impl<'a> ColorBuffer for SoftBufferWrapper<'a> {
     }
 }
 
-// Implementation for pixels crate
 pub struct PixelsWrapper<'a, 'b> {
     pixels: &'a mut pixels::Pixels<'b>,
 }
@@ -98,6 +98,7 @@ impl<'a, 'b> ColorBuffer for PixelsWrapper<'a, 'b> {
     }
 }
 
+/// Draw a close button on a buffer. This is done by manually editing the pixels.
 pub fn draw_close_button(
     buffer: &mut impl ColorBuffer,
     scale_factor: f64,
@@ -137,20 +138,19 @@ fn draw_button_background(
 
     // Draw borders
     if !cursor_over_button {
-        // Raised button borders
         for i in 0..size {
-            buffer.set_pixel(x + i, y, border_light); // Top
-            buffer.set_pixel(x, y + i, border_light); // Left
-            buffer.set_pixel(x + i, y + size - 1, border_dark); // Bottom
-            buffer.set_pixel(x + size - 1, y + i, border_dark); // Right
+            buffer.set_pixel(x + i, y, border_light);
+            buffer.set_pixel(x, y + i, border_light);
+            buffer.set_pixel(x + i, y + size - 1, border_dark);
+            buffer.set_pixel(x + size - 1, y + i, border_dark);
         }
     } else {
-        // Pressed button borders (inverted)
+        // Inverted borders
         for i in 0..size {
-            buffer.set_pixel(x + i, y, border_dark); // Top
-            buffer.set_pixel(x, y + i, border_dark); // Left
-            buffer.set_pixel(x + i, y + size - 1, border_light); // Bottom
-            buffer.set_pixel(x + size - 1, y + i, border_light); // Right
+            buffer.set_pixel(x + i, y, border_dark);
+            buffer.set_pixel(x, y + i, border_dark);
+            buffer.set_pixel(x + i, y + size - 1, border_light);
+            buffer.set_pixel(x + size - 1, y + i, border_light);
         }
     }
 }
@@ -169,13 +169,11 @@ fn draw_x_pattern(
     };
 
     let x_size = if button_size <= 16 {
-        // At 100% scale (16px button): use 8px X
         button_size / 2
     } else {
-        // At 200% scale (40px button): use ~12px X
         button_size * 3 / 10
     }
-    .max(6); // Minimum 6px X
+    .max(6);
 
     let block_size = 2;
 
@@ -382,7 +380,9 @@ pub fn draw_text_ab_glyph_with_outline(
                     return;
                 }
 
-                if let Some(pixel) = blend_into_pixel(buffer.get_pixel(px, py), fill_color, coverage) {
+                if let Some(pixel) =
+                    blend_into_pixel(buffer.get_pixel(px, py), fill_color, coverage)
+                {
                     buffer.set_pixel(px, py, pixel);
                 }
             });

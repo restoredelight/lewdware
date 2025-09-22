@@ -1,7 +1,11 @@
-use std::{collections::HashSet, fs::{self, File}, io::{Read, Seek, SeekFrom}, path::Path, thread};
+use std::{
+    collections::HashSet,
+    io::{Read, Seek, SeekFrom},
+    thread,
+};
 
 use anyhow::{Result, anyhow};
-use pack_format::{config::Metadata, Header, HEADER_SIZE};
+use pack_format::{HEADER_SIZE, Header, config::Metadata};
 use rand::{random_range, seq::IndexedRandom};
 use winit::{
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
@@ -12,13 +16,11 @@ use winit::{
 
 use crate::app::UserEvent;
 
-pub struct WindowOpts {
-    pub width: u32,
-    pub height: u32,
-    pub logical_size: bool,
-    pub random_position: bool,
-}
-
+/// Spawn a window in a random position, on a random monitor.
+///
+/// * `logical_size`: Whether to interpret `width` and `height` as a logical or physical size.
+///   Logical sizes will be scaled using the dpi, while physical sizes will not.
+/// * `visible`: Whether to make the window visible initially.
 pub fn create_window(
     event_loop: &ActiveEventLoop,
     width: u32,
@@ -82,13 +84,19 @@ pub fn create_window(
     event_loop.create_window(attrs).map_err(|err| anyhow!(err))
 }
 
-pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, key: egui::Key, target_modifiers: egui::Modifiers) {
+/// Spawn a thread that will listen for the panic key being pressed, and send
+/// [UserEvent::PanicButtonPressed] to the event loop.
+pub fn spawn_panic_thread(
+    event_loop_proxy: EventLoopProxy<UserEvent>,
+    key: egui::Key,
+    target_modifiers: egui::Modifiers,
+) {
     thread::spawn(move || {
         let target_key = match egui_key_to_rdev(key) {
             Some(x) => x,
             None => {
                 eprintln!("Key cannot be matched: {:?}", key);
-                return
+                return;
             }
         };
 
@@ -101,13 +109,10 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, key: egui
                 if key == target_key {
                     let modifiers = rdev_keys_to_modifiers(&keys);
 
-                    if modifiers.matches_logically(target_modifiers) {
-                        match event_loop_proxy.send_event(UserEvent::PanicButtonPressed) {
-                            Ok(_) => return,
-                            Err(err) => {
-                                eprintln!("Could not send panic button event: {}", err);
-                            }
-                        }
+                    if modifiers.matches_logically(target_modifiers)
+                        && let Err(err) = event_loop_proxy.send_event(UserEvent::PanicButtonPressed)
+                    {
+                        eprintln!("Could not send panic button event: {}", err);
                     }
                 }
             } else if let rdev::EventType::KeyRelease(key) = event.event_type {
@@ -122,14 +127,17 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, key: egui
     });
 }
 
-pub fn rdev_keys_to_modifiers<'a>(keys: impl IntoIterator<Item = &'a rdev::Key>) -> egui::Modifiers {
+/// Extract the modifiers from a set of keys
+fn rdev_keys_to_modifiers<'a>(
+    keys: impl IntoIterator<Item = &'a rdev::Key>,
+) -> egui::Modifiers {
     let mut modifiers = egui::Modifiers::NONE;
 
     for key in keys.into_iter() {
         match key {
             rdev::Key::Alt => {
                 modifiers |= egui::Modifiers::ALT;
-            },
+            }
             rdev::Key::ControlLeft | rdev::Key::ControlRight => {
                 modifiers |= egui::Modifiers::CTRL;
                 #[cfg(not(target_os = "macos"))]
@@ -137,24 +145,28 @@ pub fn rdev_keys_to_modifiers<'a>(keys: impl IntoIterator<Item = &'a rdev::Key>)
                     // On Windows/Linux, Ctrl is the command key
                     modifiers |= egui::Modifiers::COMMAND;
                 }
-            },
+            }
             rdev::Key::MetaLeft | rdev::Key::MetaRight => {
                 #[cfg(target_os = "macos")]
                 {
                     // On macOS, Meta is the Command key
                     modifiers |= egui::Modifiers::COMMAND;
                 }
-            },
+            }
             rdev::Key::ShiftLeft | rdev::Key::ShiftRight => {
                 modifiers |= egui::Modifiers::SHIFT;
             }
-            _ => {},
+            _ => {}
         }
     }
 
     modifiers
 }
 
+/// When registering a panic button, we get given an [egui::Key], which we need to turn into an
+/// [rdev::Key] in order to be able to listen for the key properly. Some egui keys don't have rdev
+/// equivalents (mainly because rdev only represents physical keys, while egui also represents
+/// logical keys), in which case the function returns [None].
 pub fn egui_key_to_rdev(key: egui::Key) -> Option<rdev::Key> {
     match key {
         egui::Key::ArrowDown => Some(rdev::Key::DownArrow),
@@ -235,6 +247,7 @@ pub fn egui_key_to_rdev(key: egui::Key) -> Option<rdev::Key> {
     }
 }
 
+/// Read the header and metadata of a pack file.
 pub fn read_pack_metadata<F: Read + Seek>(mut file: F) -> Result<(Header, Metadata)> {
     let header = Header::read_from(&mut file)?;
 

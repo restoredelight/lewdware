@@ -15,6 +15,8 @@ use crate::{
     utils::spawn_panic_thread,
 };
 
+/// A wrapper app that allows us to switch between the config app and the main app without needing
+/// two separate event loops (which winit doesn't allow).
 pub struct AppSwitcher<'a, 'b> {
     config_app: Option<ConfigApp<'a>>,
     main_app: Option<ChaosApp<'b>>,
