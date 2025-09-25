@@ -59,7 +59,7 @@ pub fn create_window(
         .with_decorations(false)
         .with_window_level(WindowLevel::AlwaysOnTop)
         .with_resizable(false)
-        .with_visible(true);
+        .with_visible(false);
 
     if logical_size {
         attrs = attrs.with_inner_size(LogicalSize::new(width, height));
@@ -81,7 +81,11 @@ pub fn create_window(
         attrs = attrs.with_skip_taskbar(true);
     }
 
-    event_loop.create_window(attrs).map_err(|err| anyhow!(err))
+    let window = event_loop.create_window(attrs)?;
+
+    window.set_visible(true);
+
+    Ok(window)
 }
 
 /// Spawn a thread that will listen for the panic key being pressed, and send
