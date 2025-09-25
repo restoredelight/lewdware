@@ -59,7 +59,7 @@ pub fn create_window(
         .with_decorations(false)
         .with_window_level(WindowLevel::AlwaysOnTop)
         .with_resizable(false)
-        .with_visible(visible);
+        .with_visible(true);
 
     if logical_size {
         attrs = attrs.with_inner_size(LogicalSize::new(width, height));
