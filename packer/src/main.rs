@@ -6,6 +6,7 @@ use anyhow::Result;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use pack_format::config::OneOrMore;
+use pack_format::utils::{classify_ext, FileType};
 use pack_format::{HEADER_SIZE, Header};
 use rayon::prelude::*;
 use std::ffi::OsStr;
@@ -38,29 +39,10 @@ struct Cli {
     no_hw_accel: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum MediaType {
-    Image,
-    Video,
-    Audio,
-    Other,
-}
-
-impl MediaType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            MediaType::Image => "image",
-            MediaType::Video => "video",
-            MediaType::Audio => "audio",
-            MediaType::Other => "other",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct PackedEntry {
     rel_path: String,
-    media_type: MediaType,
+    media_type: FileType,
     category: MediaCategory,
     offset: u64,
     length: u64,
@@ -217,21 +199,16 @@ fn process_single_file(
     let path = entry.path();
     let rel = path.strip_prefix(input_dir).unwrap().to_owned();
     let rel_str = rel.to_string_lossy().replace('\\', "/");
-    let ext = path
-        .extension()
-        .and_then(OsStr::to_str)
-        .unwrap_or("")
-        .to_lowercase();
-    let mut mtype = classify_ext(&ext);
+    let mut mtype = classify_ext(&path);
 
     let mut width = None;
     let mut height = None;
     let mut duration = None;
 
     let encoded_bytes = match mtype {
-        MediaType::Image => {
+        FileType::Image => {
             if is_animated(path)? {
-                mtype = MediaType::Video;
+                mtype = FileType::Video;
                 let encoded;
                 (
                     encoded,
@@ -255,7 +232,7 @@ fn process_single_file(
                 encoded
             }
         }
-        MediaType::Video => {
+        FileType::Video => {
             let encoded;
             (
                 encoded,
@@ -267,8 +244,8 @@ fn process_single_file(
             ) = encode_video(path, true)?;
             encoded
         }
-        MediaType::Audio => encode_audio(path)?,
-        MediaType::Other => return Ok(None),
+        FileType::Audio => encode_audio(path)?,
+        FileType::Other => return Ok(None),
     };
 
     let (tags, category) = config.get_tags_and_category(&rel, resolved)?;
@@ -289,13 +266,4 @@ fn process_single_file(
         entry,
         data: encoded_bytes,
     }))
-}
-
-fn classify_ext(ext: &str) -> MediaType {
-    match ext {
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif" | "bmp" | "tiff" => MediaType::Image,
-        "mp4" | "mkv" | "avi" | "mov" | "webm" | "m4v" => MediaType::Video,
-        "mp3" | "wav" | "flac" | "ogg" | "opus" | "m4a" => MediaType::Audio,
-        _ => MediaType::Other,
-    }
 }
