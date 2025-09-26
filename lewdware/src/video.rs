@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, bail, Result};
 use ffmpeg::{codec, format, software};
 use ffmpeg_next::{self as ffmpeg, Packet, frame::Video, threading};
 
@@ -86,17 +86,29 @@ impl VideoDecoder {
     }
 
     /// Utility method to copy a video frame into a buffer.
-    pub fn copy_frame(&self, frame: &Video, buf: &mut [u8]) {
+    pub fn copy_frame(&self, frame: &Video, buf: &mut [u8]) -> Result<()> {
         let width = self.width as usize;
+        let height = self.height as usize;
         let line_size = frame.stride(0); // Bytes per row
         let data = frame.data(0);
 
         // Copy row-by-row into a contiguous Vec
         for (row_idx, chunk) in buf.chunks_exact_mut(width * 4).enumerate() {
+            if row_idx >= height {
+                break;
+            }
+
             let src_start = row_idx * line_size;
             let src_end = src_start + width * 4;
-            chunk.copy_from_slice(&data[src_start..src_end]);
+
+            if src_end <= data.len() {
+                chunk.copy_from_slice(&data[src_start..src_end]);
+            } else {
+                bail!("Invalid stride");
+            }
         }
+
+        Ok(())
     }
 
     pub fn pause(&self) {
