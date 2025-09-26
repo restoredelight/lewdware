@@ -4,7 +4,7 @@ use std::{
     thread,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use pack_format::{HEADER_SIZE, Header, config::Metadata};
 use rand::{random_range, seq::IndexedRandom};
 use winit::{
@@ -20,14 +20,12 @@ use crate::app::UserEvent;
 ///
 /// * `logical_size`: Whether to interpret `width` and `height` as a logical or physical size.
 ///   Logical sizes will be scaled using the dpi, while physical sizes will not.
-/// * `visible`: Whether to make the window visible initially.
 pub fn create_window(
     event_loop: &ActiveEventLoop,
     width: u32,
     height: u32,
     logical_size: bool,
-    visible: bool,
-) -> Result<winit::window::Window> {
+) -> Result<(winit::window::Window, PhysicalPosition<f32>)> {
     let monitor = random_monitor(event_loop);
 
     let position = if let Some(monitor) = monitor {
@@ -83,9 +81,13 @@ pub fn create_window(
 
     let window = event_loop.create_window(attrs)?;
 
+    // If we don't do this, then on Windows, the window flashes on screen with decorations and the
+    // wrong size/position, before going to the correct place. I think this is because winit
+    // creates the window, then sends requests to change the size, position and borders.
+    // See https://github.com/rust-windowing/winit/issues/4116
     window.set_visible(true);
 
-    Ok(window)
+    Ok((window, position))
 }
 
 /// Spawn a thread that will listen for the panic key being pressed, and send

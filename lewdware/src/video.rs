@@ -39,7 +39,7 @@ pub struct VideoFrame {
 
 impl VideoDecoder {
     pub fn new(video: media::Video, play_audio: bool) -> Result<Self> {
-        let path = video.tempfile.path();
+        let path = video.file.path();
 
         let receiver = spawn_video_stream(path.to_path_buf());
 

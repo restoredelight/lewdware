@@ -8,7 +8,7 @@ use pack_format::{config::Metadata, Header};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use tempfile::NamedTempFile;
 
-use crate::utils::read_pack_metadata;
+use crate::{media::{types::{Audio, FileOrPath, Image, Link, Notification, Prompt, Video}, Media}, utils::read_pack_metadata};
 
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,7 +68,7 @@ impl MediaEntry {
         Ok(Video {
             width: self.width.unwrap(),
             height: self.height.unwrap(),
-            tempfile,
+            file: FileOrPath::File(tempfile),
         })
     }
 
@@ -79,7 +79,7 @@ impl MediaEntry {
             .write_to_temp_file(self.offset, self.length, ".opus")
             .await?;
 
-        Ok(Audio { tempfile })
+        Ok(Audio { file: FileOrPath::File(tempfile) })
     }
 
     pub async fn into_wallpaper(self, media_manager: &MediaPack) -> Result<NamedTempFile> {
@@ -91,36 +91,6 @@ impl MediaEntry {
 
         Ok(tempfile)
     }
-}
-
-pub enum Media {
-    Image(Image),
-    Video(Video),
-}
-
-pub type Image = image::ImageBuffer<image::Rgba<u8>, Vec<u8>>;
-
-pub struct Video {
-    pub width: i64,
-    pub height: i64,
-    pub tempfile: NamedTempFile,
-}
-
-pub struct Audio {
-    pub tempfile: NamedTempFile,
-}
-
-pub struct Notification {
-    pub summary: Option<String>,
-    pub body: String,
-}
-
-pub struct Link {
-    pub link: String,
-}
-
-pub struct Prompt {
-    pub prompt: String,
 }
 
 /// A simple utility to repeat variables n times in a SQLite query (i.e. returns "?,?,?,?..." n

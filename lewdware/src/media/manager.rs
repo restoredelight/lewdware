@@ -10,7 +10,7 @@ use winit::event_loop::EventLoopProxy;
 
 use crate::{
     app::UserEvent,
-    media::pack::{Audio, Link, Media, MediaPack, Notification, Prompt},
+    media::{Audio, Link, Media, Notification, Prompt, pack::MediaPack},
 };
 
 /// Manages all the media (images, audio, videos). We use a message system to avoid blocking the

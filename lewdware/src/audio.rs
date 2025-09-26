@@ -22,7 +22,7 @@ impl AudioPlayer {
     pub fn new(audio: Audio) -> Result<Self> {
         let (message_tx, message_rx) = sync_channel(10);
 
-        let thread = spawn_audio_thread(audio.tempfile.path().to_path_buf(), message_rx, false);
+        let thread = spawn_audio_thread(audio.file.path().to_path_buf(), message_rx, false);
 
         Ok(Self {
             audio,
