@@ -26,7 +26,6 @@ use crate::{
 pub struct ImageWindow {
     pub window: Arc<Window>,
     pub created: Instant,
-    pub moving: bool,
     image: Option<Image>,
     close_button: bool,
     cursor_over_button: bool,
@@ -34,9 +33,15 @@ pub struct ImageWindow {
     surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
     width: u32,
     height: u32,
-    moving_direction: Direction,
+    movement_state: Option<MovementState>,
+}
+
+struct MovementState {
+    x: i32,
+    y: i32,
+    dx: i32,
+    dy: i32,
     last_moved: Instant,
-    window_visible: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -52,7 +57,7 @@ impl ImageWindow {
     ///
     /// * `close_button`: Whether to display a close button on the window.
     /// * `moving`: Whether to move the window around the screen.
-    pub fn new(window: Window, image: Image, close_button: bool, moving: bool) -> Result<Self> {
+    pub fn new(window: Window, image: Image, close_button: bool, moving: bool, initial_position: PhysicalPosition<f32>) -> Result<Self> {
         let window = Arc::new(window);
 
         let context = softbuffer::Context::new(window.clone()).map_err(|err| anyhow!("{}", err))?;
@@ -62,15 +67,19 @@ impl ImageWindow {
         let width = image.width();
         let height = image.height();
 
-        let mut rng = rng();
-        let moving_direction = *[
-            Direction::TopLeft,
-            Direction::TopRight,
-            Direction::BottomLeft,
-            Direction::BottomRight,
-        ]
-        .choose(&mut rng)
-        .unwrap();
+        let movement_state = if moving {
+            let mut rng = rng();
+
+            Some(MovementState {
+                x: initial_position.x as i32,
+                y: initial_position.y as i32,
+                dx: *[1, -1].choose(&mut rng).unwrap(),
+                dy: *[1, -1].choose(&mut rng).unwrap(),
+                last_moved: Instant::now(),
+            })
+        } else {
+            None
+        };
 
         Ok(Self {
             window,
@@ -82,10 +91,7 @@ impl ImageWindow {
             surface,
             width,
             height,
-            moving,
-            moving_direction,
-            last_moved: Instant::now(),
-            window_visible: false,
+            movement_state,
         })
     }
 
@@ -148,87 +154,48 @@ impl ImageWindow {
 
         buffer.present().map_err(|err| anyhow!("{}", err))?;
 
-        if !self.window_visible {
-            self.window.set_visible(true);
-            self.window_visible = true;
-        }
-
         Ok(())
+    }
+
+    pub fn moving(&self) -> bool {
+        self.movement_state.is_some()
     }
 
     /// If the window is a moving window, update its position.
     pub fn update_position(&mut self) -> Result<()> {
-        let window_size = self.window.inner_size();
-        let monitor_size = self.window.current_monitor().map(|x| x.size()).unwrap();
-        let window_position = self.window.outer_position()?;
+        let movement_state = match self.movement_state.as_mut() {
+            Some(x) => x,
+            None => return Ok(()),
+        };
 
-        let delta = (self.last_moved.elapsed().as_secs_f64() * 300.0) as i32;
-
-        match self.moving_direction {
-            Direction::TopLeft => {
-                if window_position.x <= 0 {
-                    self.moving_direction = Direction::TopRight;
-                    return self.update_position();
-                } else if window_position.y <= 0 {
-                    self.moving_direction = Direction::BottomLeft;
-                    return self.update_position();
-                }
-
-                self.window.set_outer_position(PhysicalPosition::new(
-                    window_position.x - delta,
-                    window_position.y - delta,
-                ));
-            }
-            Direction::TopRight => {
-                if window_position.x + window_size.width as i32 >= monitor_size.width as i32 {
-                    self.moving_direction = Direction::TopLeft;
-                    return self.update_position();
-                } else if window_position.y <= 0 {
-                    self.moving_direction = Direction::BottomRight;
-                    return self.update_position();
-                }
-
-                self.window.set_outer_position(PhysicalPosition::new(
-                    window_position.x + delta,
-                    window_position.y - delta,
-                ));
-            }
-            Direction::BottomLeft => {
-                if window_position.x <= 0 {
-                    self.moving_direction = Direction::BottomRight;
-                    return self.update_position();
-                } else if window_position.y + window_size.height as i32
-                    >= monitor_size.height as i32
-                {
-                    self.moving_direction = Direction::TopLeft;
-                    return self.update_position();
-                }
-
-                self.window.set_outer_position(PhysicalPosition::new(
-                    window_position.x - delta,
-                    window_position.y + delta,
-                ));
-            }
-            Direction::BottomRight => {
-                if window_position.x + window_size.width as i32 >= monitor_size.width as i32 {
-                    self.moving_direction = Direction::BottomLeft;
-                    return self.update_position();
-                } else if window_position.y + window_size.height as i32
-                    >= monitor_size.height as i32
-                {
-                    self.moving_direction = Direction::TopRight;
-                    return self.update_position();
-                }
-
-                self.window.set_outer_position(PhysicalPosition::new(
-                    window_position.x + delta,
-                    window_position.y + delta,
-                ));
-            }
-        }
+        let delta = (movement_state.last_moved.elapsed().as_secs_f64() * 300.0) as i32;
 
         if delta != 0 {
-            self.last_moved = Instant::now();
+            let window_size = self.window.inner_size();
+            let monitor_size = self.window.current_monitor().map(|x| x.size()).unwrap();
+
+            if movement_state.x <= 0 {
+                movement_state.dx = 1;
+            } else if movement_state.x + window_size.width as i32 >= monitor_size.width as i32 {
+                movement_state.dx = -1;
+            }
+
+            if movement_state.y <= 0 {
+                movement_state.dy = 1;
+            } else if movement_state.y + window_size.height as i32 >= monitor_size.height as i32 {
+                movement_state.dy = -1;
+            }
+
+            let new_x = (movement_state.x + (delta * movement_state.dx))
+                .clamp(0, monitor_size.width as i32 - window_size.width as i32);
+            let new_y = (movement_state.y + (delta * movement_state.dy))
+                .clamp(0, monitor_size.height as i32 - window_size.height as i32);
+
+            self.window.set_outer_position(PhysicalPosition::new(new_x, new_y));
+
+            movement_state.x = new_x;
+            movement_state.y = new_y;
+            movement_state.last_moved = Instant::now();
         }
 
         Ok(())
@@ -280,7 +247,7 @@ pub struct VideoWindow<'a> {
     cursor_over_button: bool,
     width: u32,
     height: u32,
-    window_visible: bool,
+    movement_state: Option<MovementState>,
 }
 
 impl<'a> VideoWindow<'a> {
@@ -294,6 +261,8 @@ impl<'a> VideoWindow<'a> {
         video: Video,
         close_button: bool,
         play_audio: bool,
+        moving: bool,
+        initial_position: PhysicalPosition<f32>
     ) -> anyhow::Result<Self> {
         let window = Arc::new(window);
 
@@ -311,6 +280,20 @@ impl<'a> VideoWindow<'a> {
             &wgpu_state.queue,
         )?;
 
+        let movement_state = if moving {
+            let mut rng = rng();
+
+            Some(MovementState {
+                x: initial_position.x as i32,
+                y: initial_position.y as i32,
+                dx: *[1, -1].choose(&mut rng).unwrap(),
+                dy: *[1, -1].choose(&mut rng).unwrap(),
+                last_moved: Instant::now(),
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             window,
             pixels,
@@ -323,7 +306,7 @@ impl<'a> VideoWindow<'a> {
             cursor_over_button: false,
             width,
             height,
-            window_visible: false,
+            movement_state,
         })
     }
 
@@ -357,11 +340,6 @@ impl<'a> VideoWindow<'a> {
 
         if render {
             self.pixels.render()?;
-
-            if !self.window_visible {
-                self.window.set_visible(true);
-                self.window_visible = true;
-            }
         }
 
         Ok(())
@@ -396,6 +374,50 @@ impl<'a> VideoWindow<'a> {
         } else {
             true
         }
+    }
+
+    pub fn moving(&self) -> bool {
+        self.movement_state.is_some()
+    }
+
+    /// If the window is a moving window, update its position.
+    pub fn update_position(&mut self) -> Result<()> {
+        let movement_state = match self.movement_state.as_mut() {
+            Some(x) => x,
+            None => return Ok(()),
+        };
+
+        let delta = (movement_state.last_moved.elapsed().as_secs_f64() * 300.0) as i32;
+
+        if delta != 0 {
+            let window_size = self.window.inner_size();
+            let monitor_size = self.window.current_monitor().map(|x| x.size()).unwrap();
+
+            if movement_state.x <= 0 {
+                movement_state.dx = 1;
+            } else if movement_state.x + window_size.width as i32 >= monitor_size.width as i32 {
+                movement_state.dx = -1;
+            }
+
+            if movement_state.y <= 0 {
+                movement_state.dy = 1;
+            } else if movement_state.y + window_size.height as i32 >= monitor_size.height as i32 {
+                movement_state.dy = -1;
+            }
+
+            let new_x = (movement_state.x + (delta * movement_state.dx))
+                .clamp(0, monitor_size.width as i32 - window_size.width as i32);
+            let new_y = (movement_state.y + (delta * movement_state.dy))
+                .clamp(0, monitor_size.height as i32 - window_size.height as i32);
+
+            self.window.set_outer_position(PhysicalPosition::new(new_x, new_y));
+
+            movement_state.x = new_x;
+            movement_state.y = new_y;
+            movement_state.last_moved = Instant::now();
+        }
+
+        Ok(())
     }
 }
 

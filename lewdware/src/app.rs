@@ -266,8 +266,8 @@ impl<'a> ChaosApp<'a> {
         match response.response {
             MediaResponse::Media(media) => match media {
                 Media::Image(image) => {
-                    let window =
-                        create_window(event_loop, image.width(), image.height(), false, false)?;
+                    let (window, position) =
+                        create_window(event_loop, image.width(), image.height(), false)?;
 
                     window.request_redraw();
 
@@ -284,17 +284,23 @@ impl<'a> ChaosApp<'a> {
                             image,
                             self.config.close_button,
                             move_window,
+                            position,
                         )?),
                     );
                 }
                 Media::Video(video) => {
-                    let window = create_window(
+                    let (window, position) = create_window(
                         event_loop,
                         video.width as u32,
                         video.height as u32,
                         false,
-                        false,
                     )?;
+
+                    let move_window = if self.config.moving_windows {
+                        random_bool(self.config.moving_window_chance as f64 / 100.0)
+                    } else {
+                        false
+                    };
 
                     self.windows.insert(
                         window.id(),
@@ -304,6 +310,8 @@ impl<'a> ChaosApp<'a> {
                             video,
                             self.config.close_button,
                             self.config.video_audio,
+                            move_window,
+                            position,
                         )?),
                     );
                 }
@@ -317,7 +325,7 @@ impl<'a> ChaosApp<'a> {
             }
             MediaResponse::Notification(notification) => self.send_notification(notification),
             MediaResponse::Prompt(prompt) => {
-                let window = create_window(event_loop, 400, 400, true, true)?;
+                let (window, _) = create_window(event_loop, 400, 400, true)?;
 
                 self.windows.insert(
                     window.id(),
@@ -521,10 +529,16 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             match window {
                 Window::Video(window) => {
                     window.window.request_redraw();
+
+                    if window.moving()
+                        && let Err(err) = window.update_position()
+                    {
+                        eprintln!("Error moving window: {}", err);
+                    }
                 }
                 Window::Prompt(_) => {}
                 Window::Image(window) => {
-                    if window.moving
+                    if window.moving()
                         && let Err(err) = window.update_position()
                     {
                         eprintln!("Error moving window: {}", err);
