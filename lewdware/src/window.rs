@@ -321,7 +321,7 @@ impl<'a> VideoWindow<'a> {
 
             if let Some(frame) = frame {
                 self.decoder
-                    .copy_frame(&frame.frame, self.pixels.frame_mut());
+                    .copy_frame(&frame.frame, self.pixels.frame_mut())?;
                 self.duration = Some(frame.duration);
                 self.last_frame_time = Instant::now();
                 render = true;
