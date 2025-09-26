@@ -1,5 +1,9 @@
-use anyhow::Result;
-use ffmpeg_next::{self as ffmpeg, frame};
+use anyhow::{Result, anyhow, bail};
+use ffmpeg_next::{
+    self as ffmpeg,
+    format::{Sample, sample},
+    frame,
+};
 use std::{
     path::PathBuf,
     sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
@@ -95,7 +99,7 @@ fn decode_audio(path: PathBuf, message_rx: Receiver<AudioMessage>, loop_audio: b
             if stream.index() == audio_stream_index {
                 decoder.send_packet(&packet)?;
                 while decoder.receive_frame(&mut frame).is_ok() {
-                    let samples = convert_audio_frame(&frame);
+                    let samples = convert_audio_frame(&frame)?;
 
                     sink.append(SamplesBuffer::new(frame.channels(), frame.rate(), samples));
                 }
@@ -111,7 +115,7 @@ fn decode_audio(path: PathBuf, message_rx: Receiver<AudioMessage>, loop_audio: b
         decoder.flush();
 
         while decoder.receive_frame(&mut frame).is_ok() {
-            let samples = convert_audio_frame(&frame);
+            let samples = convert_audio_frame(&frame)?;
 
             sink.append(SamplesBuffer::new(frame.channels(), frame.rate(), samples));
         }
@@ -184,21 +188,122 @@ fn process_audio_messages(sink: &Sink, message_rx: &Receiver<AudioMessage>) -> (
     (false, continue_loop)
 }
 
-// TODO: This currently assumes an f32 format, which doesn't necessarily hold true for non-Opus
-// file types.
-fn convert_audio_frame(frame: &frame::Audio) -> Vec<f32> {
+fn convert_audio_frame(frame: &frame::Audio) -> Result<Vec<f32>> {
     let channels = frame.channels() as usize;
     let samples = frame.samples();
     let mut interleaved = vec![0f32; samples * channels];
 
-    for ch in 0..channels {
-        let data = frame.data(ch);
-        let channel_samples: &[f32] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, samples) };
-        for (i, sample) in channel_samples.iter().enumerate() {
-            interleaved[i * channels + ch] = *sample;
+    // ffmpeg can output frames in a bunch of different formats. We want to convert each format to
+    // a floating point number between -1 and 1.
+    //
+    // For unsigned 8 bit integers, for example, the values range from 0 to 255 (2^8 - 1), so we
+    // subtract 128 and divide by 128.
+    //
+    // For signed `n` bit integers, the values range from -2 ^ (n - 1) to 2 ^ (n - 1) - 1, so we
+    // divide by 2 ^ (n - 1) to normalize.
+    match frame.format() {
+        Sample::U8(sample_type) => {
+            convert_samples::<u8>(
+                frame,
+                sample_type,
+                &mut interleaved,
+                samples,
+                channels,
+                |sample| (sample as f32 - 128.0) / 128.0,
+            );
+        }
+        Sample::I16(sample_type) => {
+            convert_samples::<i16>(
+                frame,
+                sample_type,
+                &mut interleaved,
+                samples,
+                channels,
+                |sample| sample as f32 / 32_768.0,
+            );
+        }
+        Sample::I32(sample_type) => {
+            convert_samples::<i32>(
+                frame,
+                sample_type,
+                &mut interleaved,
+                samples,
+                channels,
+                |sample| sample as f32 / 2_147_483_648.0,
+            );
+        }
+        Sample::I64(sample_type) => {
+            convert_samples::<i64>(
+                frame,
+                sample_type,
+                &mut interleaved,
+                samples,
+                channels,
+                |sample| sample as f32 / 9_223_372_036_854_775_808.0,
+            );
+        }
+        Sample::F32(sample_type) => {
+            convert_samples::<f32>(
+                frame,
+                sample_type,
+                &mut interleaved,
+                samples,
+                channels,
+                |sample| sample,
+            );
+        }
+        Sample::F64(sample_type) => {
+            convert_samples::<f64>(
+                frame,
+                sample_type,
+                &mut interleaved,
+                samples,
+                channels,
+                |sample| sample as f32,
+            );
+        }
+        Sample::None => {
+            bail!("No sample type");
         }
     }
 
-    interleaved
+    Ok(interleaved)
+}
+
+fn convert_samples<T: Copy>(
+    frame: &frame::Audio,
+    sample_type: sample::Type,
+    interleaved: &mut [f32],
+    samples: usize,
+    channels: usize,
+    convert_fn: impl Fn(T) -> f32,
+) {
+    // From the ffmpeg docs:
+    // For planar sample formats, each audio channel is in a separate data plane, and linesize is
+    // the buffer size, in bytes, for a single plane. All data planes must be the same size. For
+    // packed sample formats, only the first data plane is used, and samples for each channel are
+    // interleaved. In this case, linesize is the buffer size, in bytes, for the 1 plane. 
+    match sample_type {
+        sample::Type::Packed => {
+            let data = frame.data(0);
+            let all_samples: &[T] = unsafe {
+                std::slice::from_raw_parts(data.as_ptr() as *const T, samples * channels)
+            };
+
+            for (i, &sample) in all_samples.iter().enumerate() {
+                interleaved[i] = convert_fn(sample);
+            }
+        }
+        sample::Type::Planar => {
+            for ch in 0..channels {
+                let data = frame.data(ch);
+                let channel_samples: &[T] =
+                    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const T, samples) };
+
+                for (i, &sample) in channel_samples.iter().enumerate() {
+                    interleaved[i * channels + ch] = convert_fn(sample);
+                }
+            }
+        }
+    }
 }
