@@ -57,7 +57,13 @@ impl ImageWindow {
     ///
     /// * `close_button`: Whether to display a close button on the window.
     /// * `moving`: Whether to move the window around the screen.
-    pub fn new(window: Window, image: Image, close_button: bool, moving: bool, initial_position: PhysicalPosition<f32>) -> Result<Self> {
+    pub fn new(
+        window: Window,
+        image: Image,
+        close_button: bool,
+        moving: bool,
+        initial_position: PhysicalPosition<f32>,
+    ) -> Result<Self> {
         let window = Arc::new(window);
 
         let context = softbuffer::Context::new(window.clone()).map_err(|err| anyhow!("{}", err))?;
@@ -191,7 +197,8 @@ impl ImageWindow {
             let new_y = (movement_state.y + (delta * movement_state.dy))
                 .clamp(0, monitor_size.height as i32 - window_size.height as i32);
 
-            self.window.set_outer_position(PhysicalPosition::new(new_x, new_y));
+            self.window
+                .set_outer_position(PhysicalPosition::new(new_x, new_y));
 
             movement_state.x = new_x;
             movement_state.y = new_y;
@@ -262,7 +269,7 @@ impl<'a> VideoWindow<'a> {
         close_button: bool,
         play_audio: bool,
         moving: bool,
-        initial_position: PhysicalPosition<f32>
+        initial_position: PhysicalPosition<f32>,
     ) -> anyhow::Result<Self> {
         let window = Arc::new(window);
 
@@ -410,7 +417,8 @@ impl<'a> VideoWindow<'a> {
             let new_y = (movement_state.y + (delta * movement_state.dy))
                 .clamp(0, monitor_size.height as i32 - window_size.height as i32);
 
-            self.window.set_outer_position(PhysicalPosition::new(new_x, new_y));
+            self.window
+                .set_outer_position(PhysicalPosition::new(new_x, new_y));
 
             movement_state.x = new_x;
             movement_state.y = new_y;

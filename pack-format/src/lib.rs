@@ -3,6 +3,7 @@ use std::{error, fmt, io::{self, Read, Seek, SeekFrom, Write}};
 pub mod config;
 pub mod target;
 pub mod utils;
+pub mod read;
 
 pub const MAGIC: &[u8; 5] = b"MPACK";
 pub const VERSION: u8 = 1;

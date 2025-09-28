@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use ffmpeg::{codec, format, software};
 use ffmpeg_next::{self as ffmpeg, Packet, frame::Video, threading};
 
