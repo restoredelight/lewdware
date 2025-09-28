@@ -1,27 +1,10 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{Result, anyhow};
+use pack_format::read::{Config, MediaCategory, Resolved};
 use rusqlite::{Connection, params};
 
-use crate::{
-    PackedEntry,
-    config::{Config, Resolved},
-};
-
-#[derive(Debug, Clone, Copy)]
-pub enum MediaCategory {
-    Popup,
-    Wallpaper,
-}
-
-impl MediaCategory {
-    fn table_name(&self) -> &'static str {
-        match self {
-            MediaCategory::Popup => "media",
-            MediaCategory::Wallpaper => "wallpapers",
-        }
-    }
-}
+use crate::PackedEntry;
 
 pub fn build_sqlite_index(
     db_path: &Path,

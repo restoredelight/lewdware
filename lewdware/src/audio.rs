@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use ffmpeg_next::{
     self as ffmpeg,
     format::{Sample, sample},
@@ -99,9 +99,20 @@ fn decode_audio(path: PathBuf, message_rx: Receiver<AudioMessage>, loop_audio: b
             if stream.index() == audio_stream_index {
                 decoder.send_packet(&packet)?;
                 while decoder.receive_frame(&mut frame).is_ok() {
-                    let samples = convert_audio_frame(&frame)?;
-
-                    sink.append(SamplesBuffer::new(frame.channels(), frame.rate(), samples));
+                    match convert_audio_frame(&frame) {
+                        Ok(samples) => {
+                            if !samples.is_empty() {
+                                sink.append(SamplesBuffer::new(
+                                    frame.channels(),
+                                    frame.rate(),
+                                    samples,
+                                ));
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("Converting audio frame failed: {}", err);
+                        },
+                    }
                 }
             }
 
@@ -282,7 +293,7 @@ fn convert_samples<T: Copy>(
     // For planar sample formats, each audio channel is in a separate data plane, and linesize is
     // the buffer size, in bytes, for a single plane. All data planes must be the same size. For
     // packed sample formats, only the first data plane is used, and samples for each channel are
-    // interleaved. In this case, linesize is the buffer size, in bytes, for the 1 plane. 
+    // interleaved. In this case, linesize is the buffer size, in bytes, for the 1 plane.
     match sample_type {
         sample::Type::Packed => {
             let data = frame.data(0);

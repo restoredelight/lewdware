@@ -1,4 +1,3 @@
-mod config;
 mod db;
 mod encode;
 
@@ -6,18 +5,17 @@ use anyhow::Result;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use pack_format::config::OneOrMore;
+use pack_format::read::{find_config, glob_matches, Config, MediaCategory, Resolved};
 use pack_format::utils::{classify_ext, FileType};
 use pack_format::{HEADER_SIZE, Header};
 use rayon::prelude::*;
-use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use walkdir::WalkDir;
 
-use crate::config::{Config, Resolved, find_config, glob_matches};
-use crate::db::{MediaCategory, build_sqlite_index};
+use crate::db::{build_sqlite_index};
 use crate::encode::{Metadata, encode_audio, encode_image, encode_video, is_animated};
 
 #[derive(Parser, Debug)]
@@ -67,7 +65,7 @@ fn main() -> Result<()> {
 
     let config = find_config(&args.input)?;
 
-    let resolved = config.resolve()?;
+    let resolved = config.resolve();
 
     let mut out = OpenOptions::new()
         .create(true)
@@ -99,10 +97,10 @@ fn main() -> Result<()> {
                 let entry_path = e.path().strip_prefix(&args.input);
 
                 entry_path.is_ok_and(|entry_path| match ignore {
-                    OneOrMore::One(path) => !glob_matches(path, entry_path).unwrap(),
+                    OneOrMore::One(path) => !glob_matches(path, entry_path),
                     OneOrMore::More(items) => !items
                         .iter()
-                        .any(|path| glob_matches(path, entry_path).unwrap()),
+                        .any(|path| glob_matches(path, entry_path)),
                 })
             })
         })
@@ -248,7 +246,7 @@ fn process_single_file(
         FileType::Other => return Ok(None),
     };
 
-    let (tags, category) = config.get_tags_and_category(&rel, resolved)?;
+    let (tags, category) = config.get_tags_and_category(&rel, resolved);
 
     let entry = PackedEntry {
         rel_path: rel_str,
