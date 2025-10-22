@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use ffmpeg_next as ffmpeg;
 use image::ImageReader;
-use pack_format::read::{Config, MediaCategory, find_config};
+use shared::read_config::{Config, MediaCategory, find_config};
 use rand::{rng, seq::IndexedRandom};
 use walkdir::WalkDir;
 
@@ -53,7 +53,7 @@ impl DevPack {
                     let (tags, category) = config.get_tags_and_category(path, &resolved);
 
                     match category {
-                        MediaCategory::Popup => media.push(Item { tags, item }),
+                        MediaCategory::Default => media.push(Item { tags, item }),
                         MediaCategory::Wallpaper => wallpapers.push(Item {
                             tags,
                             item: item.path,

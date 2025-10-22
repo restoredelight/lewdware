@@ -111,16 +111,16 @@ fn decode_audio(path: PathBuf, message_rx: Receiver<AudioMessage>, loop_audio: b
                         }
                         Err(err) => {
                             eprintln!("Converting audio frame failed: {}", err);
-                        },
+                        }
                     }
                 }
             }
 
-            let (stop, continue_loop_received) = process_audio_messages(&sink, &message_rx);
-            if stop {
+            let result = process_audio_messages(&sink, &message_rx);
+            if result.stop {
                 return Ok(());
             }
-            continue_loop |= continue_loop_received;
+            continue_loop |= result.continue_loop;
         }
 
         decoder.flush();
@@ -137,11 +137,11 @@ fn decode_audio(path: PathBuf, message_rx: Receiver<AudioMessage>, loop_audio: b
         }
 
         while !continue_loop {
-            let (stop, continue_loop_received) = process_audio_messages(&sink, &message_rx);
-            if stop {
+            let result = process_audio_messages(&sink, &message_rx);
+            if result.stop {
                 return Ok(());
             }
-            continue_loop |= continue_loop_received;
+            continue_loop |= result.continue_loop;
 
             thread::sleep(Duration::from_millis(100));
         }
@@ -151,10 +151,15 @@ fn decode_audio(path: PathBuf, message_rx: Receiver<AudioMessage>, loop_audio: b
     }
 }
 
+struct MessageResult {
+    stop: bool,
+    continue_loop: bool,
+}
+
 /// Process all messages sent to the audio thread. Returns two booleans indicating whether to stop
 /// the audio thread, and whether a `Loop` message was received.
-fn process_audio_messages(sink: &Sink, message_rx: &Receiver<AudioMessage>) -> (bool, bool) {
-    let mut continue_loop = false;
+fn process_audio_messages(sink: &Sink, message_rx: &Receiver<AudioMessage>) -> MessageResult {
+    let mut result = MessageResult { stop: false, continue_loop: false };
 
     loop {
         match message_rx.try_recv() {
@@ -172,31 +177,33 @@ fn process_audio_messages(sink: &Sink, message_rx: &Receiver<AudioMessage>) -> (
                                 }
                                 AudioMessage::Pause => {}
                                 AudioMessage::Loop => {
-                                    continue_loop = true;
+                                    result.continue_loop = true;
                                 }
                             },
                             Err(_) => {
                                 sink.stop();
-                                return (true, continue_loop);
+                                result.stop = true;
+                                break;
                             }
                         }
                     }
                 }
                 AudioMessage::Loop => {
-                    continue_loop = true;
+                    result.continue_loop = true;
                 }
             },
             Err(err) => match err {
                 TryRecvError::Empty => break,
                 TryRecvError::Disconnected => {
                     sink.stop();
-                    return (true, continue_loop);
+                    result.stop = true;
+                    break;
                 }
             },
         }
     }
 
-    (false, continue_loop)
+    result
 }
 
 fn convert_audio_frame(frame: &frame::Audio) -> Result<Vec<f32>> {
@@ -250,7 +257,8 @@ fn convert_audio_frame(frame: &frame::Audio) -> Result<Vec<f32>> {
                 &mut interleaved,
                 samples,
                 channels,
-                |sample| sample as f32 / 9_223_372_036_854_775_808.0,
+                // This number is large, so do f64 division to avoid loss of precision
+                |sample| (sample as f64 / 9_223_372_036_854_775_808.0) as f32,
             );
         }
         Sample::F32(sample_type) => {
@@ -297,6 +305,11 @@ fn convert_samples<T: Copy>(
     match sample_type {
         sample::Type::Packed => {
             let data = frame.data(0);
+            // ffmpeg has told us the format and number of samples, but `data` is a raw byte slice,
+            // so we need a small bit of unsafe code to convert to our required format.
+            //
+            // There are `samples` samples in each channel, and in this case all the data is
+            // contiguous (packed), so there is a total of `samples * channels` values.
             let all_samples: &[T] = unsafe {
                 std::slice::from_raw_parts(data.as_ptr() as *const T, samples * channels)
             };
@@ -308,8 +321,12 @@ fn convert_samples<T: Copy>(
         sample::Type::Planar => {
             for ch in 0..channels {
                 let data = frame.data(ch);
-                let channel_samples: &[T] =
-                    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const T, samples) };
+                // Again, we know the format and number of samples. In this case the data for each
+                // channel is not stored contiguously, so we handle each channel (a buffer of
+                // `samples` values) separately.
+                let channel_samples: &[T] = unsafe {
+                    std::slice::from_raw_parts(data.as_ptr() as *const T, samples)
+                };
 
                 for (i, &sample) in channel_samples.iter().enumerate() {
                     interleaved[i * channels + ch] = convert_fn(sample);

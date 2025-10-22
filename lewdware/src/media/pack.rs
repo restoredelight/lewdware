@@ -4,11 +4,11 @@ use anyhow::{anyhow, Result};
 use async_fs::File;
 use futures_lite::{AsyncReadExt, AsyncSeekExt};
 use image::{ImageFormat, ImageReader};
-use pack_format::{config::Metadata, Header};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use shared::{pack_config::Metadata, read_pack::{read_pack_metadata, Header}};
 use tempfile::NamedTempFile;
 
-use crate::{media::{types::{Audio, FileOrPath, Image, Link, Notification, Prompt, Video}, Media}, utils::read_pack_metadata};
+use crate::{media::{types::{Audio, FileOrPath, Image, Link, Notification, Prompt, Video}, Media, Wallpaper}};
 
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,14 +82,14 @@ impl MediaEntry {
         Ok(Audio { file: FileOrPath::File(tempfile) })
     }
 
-    pub async fn into_wallpaper(self, media_manager: &MediaPack) -> Result<NamedTempFile> {
+    pub async fn into_wallpaper(self, media_manager: &MediaPack) -> Result<Wallpaper> {
         assert_eq!(self.media_type, MediaType::Image);
 
         let tempfile = media_manager
             .write_to_temp_file(self.offset, self.length, ".avif")
             .await?;
 
-        Ok(tempfile)
+        Ok(Wallpaper { file: FileOrPath::File(tempfile) })
     }
 }
 
@@ -123,14 +123,15 @@ impl MediaPack {
         let (header, metadata) = read_pack_metadata(&mut file)?;
 
         println!("{}", metadata.name);
+        println!("Files: {}", header.total_files);
 
         // Extract the SQLite database to a temporary location
-        file.seek(SeekFrom::Start(header.index_offset))?;
+        file.seek(SeekFrom::Start(header.index_offset()))?;
         let mut db_data = Vec::new();
         file.read_to_end(&mut db_data)?;
 
         let mut temp_file = NamedTempFile::new()?;
-        temp_file.write_all(&db_data).unwrap();
+        temp_file.write_all(&db_data)?;
 
         let db = Connection::open(temp_file.path())?;
 
@@ -478,7 +479,7 @@ impl MediaPack {
     pub async fn get_random_wallpaper(
         &self,
         tags: Option<Vec<String>>,
-    ) -> Result<Option<NamedTempFile>> {
+    ) -> Result<Option<Wallpaper>> {
         let sql = match &tags {
             Some(tag_ids) => format!(
                 r#"

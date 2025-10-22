@@ -4,21 +4,64 @@ use std::{
     fs,
     io::{self, ErrorKind},
     mem,
-    path::{Path, PathBuf},
+    path::{Path, PathBuf}, str::FromStr,
 };
 
 use crate::{
-    config::{MediaOpts, NotificationOpts, OneOrMore, PackOpts},
+    pack_config::{MediaOpts, NotificationOpts, OneOrMore, PackOpts},
     target::{Either, Empty, Item, Items, Target},
 };
 use glob::{Pattern, PatternError};
 use merge::Merge;
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum MediaCategory {
-    Popup,
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "wallpaper")]
     Wallpaper,
+}
+
+impl MediaCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MediaCategory::Default => "default",
+            MediaCategory::Wallpaper => "wallpaper",
+        }
+    }
+    //
+    // pub fn from_str(x: &str) -> Option<Self> {
+    //     match x {
+    //         "default" => Some(MediaCategory::Default),
+    //         "wallpaper" => Some(MediaCategory::Wallpaper),
+    //         _ => None,
+    //     }
+    // }
+}
+
+#[derive(Debug)]
+pub struct InvalidMediaCategory;
+
+impl Error for InvalidMediaCategory {}
+
+impl Display for InvalidMediaCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Invalid media category")
+    }
+}
+
+impl FromStr for MediaCategory {
+    type Err = InvalidMediaCategory;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "default" => Ok(MediaCategory::Default),
+            "wallpaper" => Ok(MediaCategory::Wallpaper),
+            _ => Err(InvalidMediaCategory),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -74,7 +117,8 @@ impl From<io::Error> for ConfigError {
     }
 }
 
-/// Will search for `config.json`/`config.json5`
+/// Will search for `config.json`/`config.json5` files in `root` and nested directories.
+/// Throws an error if any of these files are invalid.
 pub fn find_config(root: &Path) -> Result<Config, ConfigError> {
     let config_path = root.join("config.json");
     let config_path_json5 = root.join("config.json5");
@@ -99,6 +143,7 @@ pub fn find_config(root: &Path) -> Result<Config, ConfigError> {
                     })?,
                 ),
                 Err(err) => match err.kind() {
+                    // TODO: Maybe throw here?
                     ErrorKind::NotFound => (None, Default::default()),
                     _ => {
                         return Err(err.into());
@@ -185,7 +230,7 @@ impl Config {
         resolved: &Resolved,
     ) -> (Vec<String>, MediaCategory) {
         let mut tags = Vec::new();
-        let mut category = MediaCategory::Popup;
+        let mut category = MediaCategory::Default;
 
         tags.extend(self.resolve_tags(path));
 
@@ -207,26 +252,30 @@ impl Config {
     }
 
     fn get_popups(&self) -> Vec<ResolvedTarget<String>> {
-        self.get_targets(|media_opts| media_opts.popups.as_ref())
+        self.resolve_targets_from_config(|media_opts| media_opts.popups.as_ref())
     }
 
     fn get_notifications(&self) -> Vec<ResolvedTarget<String, NotificationOpts>> {
-        self.get_targets(|media_opts| media_opts.notifications.as_ref())
+        self.resolve_targets_from_config(|media_opts| media_opts.notifications.as_ref())
     }
 
     fn get_links(&self) -> Vec<ResolvedTarget<String>> {
-        self.get_targets(|media_opts| media_opts.links.as_ref())
+        self.resolve_targets_from_config(|media_opts| media_opts.links.as_ref())
     }
 
     fn get_prompts(&self) -> Vec<ResolvedTarget<String>> {
-        self.get_targets(|media_opts| media_opts.prompts.as_ref())
+        self.resolve_targets_from_config(|media_opts| media_opts.prompts.as_ref())
     }
 
     fn get_wallpapers(&self) -> Vec<ResolvedTarget<String>> {
-        self.get_targets(|media_opts| media_opts.wallpaper.as_ref())
+        self.resolve_targets_from_config(|media_opts| media_opts.wallpaper.as_ref())
     }
 
-    fn get_targets<Primary, PrimaryStruct, Opts, ExtraOpts>(
+    /// Resolve all items from all the config files. Generic over the given `Target` (see
+    /// `target.rs`).
+    ///
+    /// * `f` should be a function that returns the specific `Target` from a `MediaOpts` object.
+    fn resolve_targets_from_config<Primary, PrimaryStruct, Opts, ExtraOpts>(
         &self,
         f: impl Fn(&MediaOpts) -> Option<&Target<Primary, PrimaryStruct, Opts, ExtraOpts>>,
     ) -> Vec<ResolvedTarget<Primary, Opts>>
@@ -239,7 +288,7 @@ impl Config {
         let mut result = Vec::new();
 
         if let Some(target) = f(&self.root_config.media) {
-            let mut targets = self.get_targets_from_target(target);
+            let mut targets = self.resolve_targets(target);
 
             if let Some(default_tag) = &self.root_config.default_tag {
                 for target in targets.iter_mut() {
@@ -254,7 +303,7 @@ impl Config {
             if let Some(target) = f(config) {
                 let default_tags = self.resolve_tags(path);
 
-                let mut targets = self.get_targets_from_target(target);
+                let mut targets = self.resolve_targets(target);
 
                 for target in targets.iter_mut() {
                     target.tags.extend(default_tags.clone());
@@ -271,7 +320,8 @@ impl Config {
         result
     }
 
-    fn get_targets_from_target<Primary, PrimaryStruct, Opts, ExtraOpts>(
+    /// Resolve all targets from a specified `Target`.
+    fn resolve_targets<Primary, PrimaryStruct, Opts, ExtraOpts>(
         &self,
         target: &Target<Primary, PrimaryStruct, Opts, ExtraOpts>,
     ) -> Vec<ResolvedTarget<Primary, Opts>>
@@ -341,6 +391,7 @@ impl Config {
         }
     }
 
+    /// Given a specific path, get the tags from the `tags` field that point to that path.
     fn resolve_tags(&self, path: &Path) -> Vec<String> {
         let mut tags: Vec<String> = self.root_config.default_tag.iter().cloned().collect();
 
@@ -417,6 +468,8 @@ impl Display for PackOptsError {
 
 impl Error for PackOptsError {}
 
+/// Check that a given `PackOpts` struct is valid. Returns the set of valid tags specified in the
+/// `tags` field (in order to pass to `check_media_opts`).
 fn check_opts(opts: &PackOpts) -> Result<Vec<&str>, PackOptsError> {
     let valid_tags: Vec<&str> = opts.tags.keys().map(|x| x.as_str()).collect();
 
@@ -458,6 +511,7 @@ fn check_opts(opts: &PackOpts) -> Result<Vec<&str>, PackOptsError> {
     Ok(valid_tags)
 }
 
+/// Check that a given `MediaOpts` struct is valid.
 fn check_media_opts(valid_tags: &[&str], opts: &MediaOpts) -> Result<(), PackOptsError> {
     if let Some(popups) = &opts.popups {
         check_target(

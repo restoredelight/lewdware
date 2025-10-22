@@ -41,7 +41,10 @@ impl VideoDecoder {
     pub fn new(video: media::Video, play_audio: bool) -> Result<Self> {
         let path = video.file.path();
 
-        let receiver = spawn_video_stream(path.to_path_buf());
+        let width = video.width.max(1280);
+        let height = video.height.max(720);
+
+        let receiver = spawn_video_stream(path.to_path_buf(), width, height);
 
         let audio_message_tx = if play_audio {
             let (tx, rx) = sync_channel(10);
@@ -52,9 +55,6 @@ impl VideoDecoder {
         } else {
             None
         };
-
-        let width = video.width;
-        let height = video.height;
 
         Ok(Self {
             receiver,
@@ -125,11 +125,11 @@ impl VideoDecoder {
 }
 
 /// Spawn a thread to decode frames from a video.
-fn spawn_video_stream(path: PathBuf) -> Receiver<Option<VideoFrame>> {
+fn spawn_video_stream(path: PathBuf, width: i64, height: i64) -> Receiver<Option<VideoFrame>> {
     let (tx, rx) = sync_channel(20);
 
     thread::spawn(move || {
-        if let Err(err) = decode_video(path, tx) {
+        if let Err(err) = decode_video(path, tx, width, height) {
             eprintln!("Error decoding video: {}", err);
         }
     });
@@ -137,7 +137,7 @@ fn spawn_video_stream(path: PathBuf) -> Receiver<Option<VideoFrame>> {
     rx
 }
 
-fn decode_video(path: PathBuf, tx: SyncSender<Option<VideoFrame>>) -> Result<()> {
+fn decode_video(path: PathBuf, tx: SyncSender<Option<VideoFrame>>, width: i64, height: i64) -> Result<()> {
     ffmpeg::init()?;
     let mut ictx = format::input(&path)?;
     let stream_index = ictx
@@ -162,8 +162,8 @@ fn decode_video(path: PathBuf, tx: SyncSender<Option<VideoFrame>>) -> Result<()>
         decoder.width(),
         decoder.height(),
         ffmpeg::format::Pixel::RGBA,
-        decoder.width(),
-        decoder.height(),
+        width as u32,
+        height as u32,
         software::scaling::flag::Flags::BILINEAR,
     )?;
 

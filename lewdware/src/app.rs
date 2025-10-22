@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use notify_rust::Notification;
-use pack_format::config::{MediaType, Metadata};
+use shared::pack_config::{MediaType, Metadata};
 use rand::random_bool;
-use tempfile::NamedTempFile;
+use shared::user_config::AppConfig;
 use winit::event::MouseButton;
 use winit::event_loop::{ControlFlow, EventLoopProxy};
 use winit::{
@@ -19,9 +19,8 @@ use winit::{
 };
 
 use crate::audio::AudioPlayer;
-use crate::config::AppConfig;
 use crate::egui::WgpuState;
-use crate::media::{self, Media, MediaManager, MediaResponse, Response};
+use crate::media::{self, Media, MediaManager, MediaResponse, Response, Wallpaper};
 use crate::transition::TransitionManager;
 use crate::utils::create_window;
 use crate::window::{ImageWindow, PromptWindow, VideoWindow};
@@ -43,7 +42,7 @@ pub struct ChaosApp<'a> {
     tags: Option<Vec<String>>,
     transition_manager: Option<TransitionManager>,
     default_wallpaper: Option<String>,
-    wallpaper: Option<NamedTempFile>,
+    wallpaper: Option<Wallpaper>
 }
 
 enum AppState {
@@ -140,7 +139,7 @@ pub enum UserEvent {
 
 impl<'a> ChaosApp<'a> {
     pub fn new(
-        wgpu_state: Arc<WgpuState>,
+        wgpu_state: WgpuState,
         event_loop_proxy: EventLoopProxy<UserEvent>,
         config: AppConfig,
     ) -> Result<Self> {
@@ -188,7 +187,7 @@ impl<'a> ChaosApp<'a> {
             state: AppState::Running,
             config,
             metadata,
-            wgpu_state,
+            wgpu_state: Arc::new(wgpu_state),
             windows: HashMap::new(),
             spawners,
             audio_player: None,
@@ -337,8 +336,8 @@ impl<'a> ChaosApp<'a> {
                 }
             }
             MediaResponse::Link(link) => self.open_link(link.link),
-            MediaResponse::Wallpaper(file) => {
-                let path = match file.path().to_str() {
+            MediaResponse::Wallpaper(wallpaper) => {
+                let path = match wallpaper.file.path().to_str() {
                     Some(path) => path,
                     None => {
                         eprintln!("Could not convert tempfile to UTF-8");
@@ -347,7 +346,7 @@ impl<'a> ChaosApp<'a> {
                 };
 
                 wallpaper::set_from_path(path).map_err(|err| anyhow!("{}", err))?;
-                self.wallpaper = Some(file);
+                self.wallpaper = Some(wallpaper);
             }
         }
 

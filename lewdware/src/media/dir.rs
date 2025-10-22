@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use image::ImageReader;
-use pack_format::utils::{FileType, classify_ext};
+use shared::utils::{FileType, classify_ext};
 use rand::{random_range, rng, seq::IndexedRandom};
 use walkdir::WalkDir;
 

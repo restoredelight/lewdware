@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tauri App</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="container">
+      <h1>Chaos Config</h1>
+      <div class="separator"></div>
+
+      <div class="scroll-area">
+        <section-container>
+          <span slot="icon">⚙️</span>
+          <span slot="title">General</span>
+          <span>
+            <div class="group">
+              <div class="row">
+                <span class="label">📦 Media Pack:</span>
+                <span id="media-pack-name" class="no-pack">No pack selected</span>
+                <div class="spacer"></div>
+                <button id="browse-pack">📁 Browse...</button>
+              </div>
+            </div>
+
+            <div class="slider-container">
+              <label class="slider-label">⏱️ Popup frequency:</label>
+              <slider-input id="popup-frequency" min="0.1" max="10" step="0.1" value="1" clamp="positive">
+                <span slot="suffix">seconds</span>
+              </slider-input>
+            </div>
+
+            <div class="slider-container">
+              <label class="slider-label">⏳ Max popup duration:</label>
+              <div id="no-max-duration">
+                <span class="no-pack">No limit set</span>
+                <button id="set-max-duration">➕ Set Limit</button>
+              </div>
+              <div id="max-duration-container" class="hidden">
+                <slider-input id="max-duration" min="1" max="600" step="1" value="60" horizontal clamp="positive">
+                  <span slot="suffix">seconds</span>
+                </slider-input>
+                <button id="clear-max-duration">❌ Clear</button>
+              </div>
+            </div>
+
+            <div class="slider-container">
+              <label class="slider-label">🎬 Max videos:</label>
+              <slider-input id="max-videos" min="0" max="100" step="1" value="10" clamp="positive">
+                <span slot="suffix">videos</span>
+              </slider-input>
+            </div>
+
+            <div class="row">
+              <button id="panic-button">Panic button: Escape</button>
+            </div>
+          </span>
+        </section-container>
+
+        <section-container>
+          <span slot="icon">🔊</span>
+          <span slot="title">Audio</span>
+          <span>
+            <label class="checkbox-container">
+              <input type="checkbox" id="video-audio" />
+              <span>🎵 Play audio from videos</span>
+            </label>
+            <label class="checkbox-container">
+              <input type="checkbox" id="audio" />
+              <span>🎶 Play background audio</span>
+            </label>
+          </span>
+        </section-container>
+
+        <section-container>
+          <span slot="icon">🔗</span>
+          <span slot="title">Links & Notifications</span>
+          <span>
+            <label class="checkbox-container">
+              <input type="checkbox" id="open-links" />
+              <span>🌐 Open links</span>
+            </label>
+            <div
+              id="link-frequency-container"
+              class="indent hidden"
+            >
+              <label class="slider-label">Link frequency:</label>
+              <slider-input id="link-frequency" min="1" max="60" step="1" value="10" clamp="positive">
+                <span slot="suffix">seconds</span>
+              </slider-input>
+            </div>
+
+            <label class="checkbox-container">
+              <input type="checkbox" id="notifications" />
+              <span>📢 Show notifications</span>
+            </label>
+            <div
+              id="notification-frequency-container"
+              class="indent hidden"
+            >
+              <label class="slider-label">Notification frequency:</label>
+              <slider-input id="notification-frequency" min="1" max="60" step="1" value="10" clamp="positive">
+                <span slot="suffix">seconds</span>
+              </slider-input>
+            </div>
+
+            <label class="checkbox-container">
+              <input type="checkbox" id="prompts" />
+              <span>✏️ Show prompts</span>
+            </label>
+            <div
+              id="prompt-frequency-container"
+              class="indent hidden"
+            >
+              <label class="slider-label">Prompt frequency:</label>
+              <slider-input id="prompt-frequency" min="1" max="60" step="1" value="10" clamp="positive">
+                <span slot="suffix">seconds</span>
+              </slider-input>
+            </div>
+          </span>
+        </section-container>
+
+        <section-container>
+          <span slot="icon">🪟</span>
+          <span slot="title">Popups</span>
+          <span>
+            <label class="checkbox-container">
+              <input type="checkbox" id="moving-windows" />
+              <span>🏃 Make popups move around</span>
+            </label>
+            <div id="move-chance-container" class="indent hidden">
+              <label class="slider-label">Move chance:</label>
+              <slider-input id="move-chance" min="0" max="100" step="1" value="25" clamp>
+                <span slot="suffix">%</span>
+              </slider-input>
+            </div>
+
+            <label class="checkbox-container">
+              <input type="checkbox" id="close-button" checked />
+              <span>❌ Show close button on popups</span>
+            </label>
+            <div id="close-tip" class="indent tip hidden">
+              💡 Tip: Click anywhere on the popup to close it.
+            </div>
+          </span>
+        </section-container>
+      </div>
+    </main>
+  </body>
+</html>

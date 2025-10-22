@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["lewdware", "packer", "pack-format"]
+members = ["lewdware", "packer", "shared", "pack-maker/src-tauri", "config/src-tauri"]
 
 [patch.crates-io]
 pixels = { path = "./pixels" }

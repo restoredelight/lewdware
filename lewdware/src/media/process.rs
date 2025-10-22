@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use ffmpeg_next as ffmpeg;
 
-use pack_format::utils::{classify_ext, FileType};
+use shared::utils::{classify_ext, FileType};
 
 pub struct Media {
     pub media_type: MediaType,

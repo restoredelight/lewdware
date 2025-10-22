@@ -4,13 +4,12 @@ use anyhow::Result;
 use async_channel::{Receiver, Sender, bounded};
 use async_executor::LocalExecutor;
 use futures_lite::future::block_on;
-use pack_format::config::Metadata;
-use tempfile::NamedTempFile;
+use shared::pack_config::Metadata;
 use winit::event_loop::EventLoopProxy;
 
 use crate::{
     app::UserEvent,
-    media::{Audio, Link, Media, Notification, Prompt, pack::MediaPack},
+    media::{pack::MediaPack, Audio, Link, Media, Notification, Prompt, Wallpaper},
 };
 
 /// Manages all the media (images, audio, videos). We use a message system to avoid blocking the
@@ -212,5 +211,5 @@ pub enum MediaResponse {
     Notification(Notification),
     Prompt(Prompt),
     Link(Link),
-    Wallpaper(NamedTempFile),
+    Wallpaper(Wallpaper),
 }

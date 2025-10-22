@@ -1,3 +1,64 @@
+//! A bunch of generic/serde magic to represent certain repeated patterns in the config file
+//! without writing custom serialization methods.
+//!
+//! Take, for example, the `notifications` field. Users can either pass in:
+//!
+//! - A single notification, e.g.:
+//!   ``` json5
+//!   notifications: "A notification"
+//!   ```
+//!
+//! - Multiple notifications, e.g.:
+//!   ``` json5
+//!   notifications: ["Notification 1", "Notification 2"]
+//!   ```
+//!
+//! - A notification with extra options, e.g.:
+//!   ``` json5
+//!   notifications: {
+//!       summary: "My pack says:"
+//!       text: "Hello!",
+//!       tags: ["tag1", "tag2"]
+//!   }
+//!   ```
+//! - Multiple notifications (using one or more of the above formats):
+//!   ```json5
+//!   notifications: [
+//!       "My notification",
+//!       {
+//!           summary: "Hello",
+//!           text: "How are you?"
+//!       },
+//!       {
+//!           text: "Another notification",
+//!           tags: ["tag2"]
+//!       }
+//!   ]
+//!   ```
+//!
+//! - An object specifying options which apply to all notifications:
+//!   ```json5
+//!   notifications: {
+//!       default: {
+//!           summary: "Default summary",
+//!           tags: ["notification"]
+//!       },
+//!       items: [
+//!           "My notification",
+//!           {
+//!               summary: "I'm overriding the default summary!",
+//!               text: "Another notification"
+//!           }
+//!       ]
+//!   }
+//!   ```
+//!
+//! We use an almost identical pattern for the `popups`, `links`, `prompts` and `wallpaper` fields.
+//! Since this pattern is complex, we only want to write code handling all these cases once. Hence
+//! the `Target` struct, which attempts to be generic over this pattern.
+//!
+//! For examples of code that is generic over the `Target` struct, see `read.rs`.
+
 use std::default;
 
 use merge::Merge;
@@ -21,6 +82,7 @@ use serde::{Deserialize, Serialize};
 ///   }
 pub type Target<Primary, PrimaryStruct, Opts = Empty, ExtraOpts = Empty> = Either<Items<Primary, PrimaryStruct, Opts>, WithDefaults<Primary, PrimaryStruct, Opts, ExtraOpts>>;
 
+/// A helper macro to create a struct to pass into the `PrimaryStruct` argument of `Target`.
 #[macro_export]
 macro_rules! create_arg {
     ($name:ident, $field:ident, $type:ty) => {
