@@ -1,0 +1,90 @@
+<style>
+input {
+  font: inherit;
+  font-feature-settings: inherit;
+  font-variation-settings: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  opacity: 1;
+  width: fit-content;
+  display: inline;
+}
+
+input:focus {
+  outline: none;
+}
+
+input[type="range"] {
+	width: 100%;
+	height: 6px;
+	border-radius: 3px;
+	background: #e0e0e0;
+	outline: none;
+	-webkit-appearance: none;
+  appearance: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	appearance: none;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	background: #007bff;
+	cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	background: #007bff;
+	cursor: pointer;
+	border: none;
+}
+
+#value-container {
+	font-size: 13px;
+	color: #666;
+	text-align: right;
+  margin-left: 1rem;
+}
+
+#value-container {
+  display: flex;
+  justify-content: right;
+  align-items: center;
+}
+
+#container {
+  padding-inline: 1px;
+}
+
+#container.horizontal {
+  display: flex;
+  align-items: center;
+  /* padding-block: 2px; */
+}
+
+#container:not(.horizontal) #value-container {
+	margin-top: 4px;
+}
+
+* {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+</style>
+<div id="container">
+  <input type="range" id="slider" />
+  <div id="value-container">
+    <input id="input" type="text" size="3" />
+    <label>
+      <slot name="suffix"></slot>
+    </label>
+  </div>
+</div>

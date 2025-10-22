@@ -1,0 +1,76 @@
+<style>
+  #section {
+    margin-bottom: 12px;
+  }
+
+  #header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s;
+  }
+
+  #header:hover {
+    background: #f5f5f5;
+  }
+
+  #icon-container ::slotted(span) {
+    font-size: 16px;
+  }
+
+  #title-container {
+    flex: 1;
+  }
+
+  #title-container ::slotted(span) {
+    font-weight: 500;
+  }
+
+  #chevron {
+    transition: transform 0.2s;
+  }
+
+  #chevron.open {
+    transform: rotate(90deg);
+  }
+
+  #content {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition:
+      grid-template-rows 0.3s ease-out,
+      padding 0.3s ease-out;
+    padding: 0 12px;
+  }
+
+  #content > div {
+    overflow: hidden;
+  }
+
+  #content.open {
+    grid-template-rows: 1fr;
+    padding: 16px 12px;
+  }
+</style>
+<div id="section">
+  <div id="header">
+    <div id="icon-container">
+      <slot id="icon" name="icon"></slot>
+    </div>
+    <div id="title-container">
+      <slot id="title" name="title"></slot>
+    </div>
+    <span id="chevron">▶</span>
+  </div>
+  <div id="content">
+    <div>
+      <slot></slot>
+    </div>
+  </div>
+</div>

@@ -1,6 +1,6 @@
 use std::{ffi::OsStr, path::Path};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileType {
     Image,
     Video,

@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct AppConfig {
     pub pack_path: Option<PathBuf>,
     pub tags: Option<Vec<String>>,
@@ -21,8 +21,22 @@ pub struct AppConfig {
     pub prompt_frequency: Duration,
     pub moving_windows: bool,
     pub moving_window_chance: u32,
-    pub panic_button: egui::Key,
-    pub panic_modifiers: egui::Modifiers,
+    pub panic_button: Key,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct Key {
+    pub name: String,
+    pub code: String,
+    pub modifiers: Modifiers,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
+pub struct Modifiers {
+    pub alt: bool,
+    pub ctrl: bool,
+    pub shift: bool,
+    pub meta: bool,
 }
 
 impl Default for AppConfig {
@@ -44,8 +58,14 @@ impl Default for AppConfig {
             prompt_frequency: Duration::from_secs(60),
             moving_windows: false,
             moving_window_chance: 5,
-            panic_button: egui::Key::Escape,
-            panic_modifiers: egui::Modifiers::NONE,
+            panic_button: Key {
+                name: "Escape".to_string(),
+                code: "Escape".to_string(),
+                modifiers: Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            },
         }
     }
 }
@@ -67,9 +87,17 @@ pub fn save_config(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
+pub async fn save_config_async(config: &AppConfig) -> Result<()> {
+    let path = config_path()?;
+
+    tokio::fs::write(path, serde_json::to_string(config)?).await?;
+
+    Ok(())
+}
+
 fn config_path() -> Result<PathBuf> {
-    let mut config_path =
-        dirs::config_dir().ok_or_else(|| anyhow!("Could not find a valid config dir for this OS"))?;
+    let mut config_path = dirs::config_dir()
+        .ok_or_else(|| anyhow!("Could not find a valid config dir for this OS"))?;
 
     config_path.push("lewdware");
 

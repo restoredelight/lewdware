@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use pack_format::config::{MediaType, Order, Transition, TransitionApplyTo, TransitionType};
+use shared::pack_config::{MediaType, Order, Transition, TransitionApplyTo, TransitionType};
 use rand::{random_bool, rng, seq::SliceRandom};
 
 use std::mem;

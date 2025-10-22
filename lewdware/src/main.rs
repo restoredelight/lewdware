@@ -1,15 +1,15 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use anyhow::Result;
+use futures_lite::future::block_on;
+use shared::user_config::load_config;
 use winit::event_loop::EventLoop;
 
-use crate::app_switcher::AppSwitcher;
+use crate::{app::ChaosApp, egui::WgpuState, utils::spawn_panic_thread};
 
 mod app;
-mod app_switcher;
 mod audio;
 mod buffer;
-mod config;
 mod egui;
 mod media;
 mod transition;
@@ -18,7 +18,9 @@ mod video;
 mod window;
 
 fn main() -> Result<()> {
-    let config = config::load_config()?;
+    let config = load_config()?;
+
+    let wgpu_state = block_on(WgpuState::new());
 
     let mut event_loop_builder = EventLoop::with_user_event();
 
@@ -32,7 +34,11 @@ fn main() -> Result<()> {
     }
 
     let event_loop = event_loop_builder.build()?;
-    let mut app = AppSwitcher::new(&event_loop, config);
+    let proxy = event_loop.create_proxy();
+
+    spawn_panic_thread(proxy.clone(), config.panic_button.clone());
+
+    let mut app = ChaosApp::new(wgpu_state, proxy, config)?;
     event_loop.run_app(&mut app)?;
 
     Ok(())

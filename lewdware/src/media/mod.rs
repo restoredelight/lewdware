@@ -7,5 +7,5 @@ mod process;
 
 pub use manager::{MediaManager, Response, MediaResponse};
 
-pub use types::{Image, Video, Audio, Notification, Prompt, Link, Media};
+pub use types::{Image, Video, Audio, Notification, Prompt, Link, Wallpaper, FileOrPath, Media};
 
