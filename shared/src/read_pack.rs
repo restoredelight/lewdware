@@ -13,7 +13,7 @@ pub const HEADER_SIZE: usize = 32;
 
 #[derive(Debug, Clone, Default)]
 pub struct Header {
-    pub metadata_offset: u64,
+    pub index_length: u64,
     pub metadata_length: u64,
     pub total_files: u32,
 }
@@ -49,7 +49,7 @@ impl Header {
         w.write_all(MAGIC)?;
         w.write_all(&[VERSION])?;
         w.write_all(&[0u8; 2])?;
-        w.write_all(&self.metadata_offset.to_le_bytes())?;
+        w.write_all(&self.index_length.to_le_bytes())?;
         w.write_all(&self.metadata_length.to_le_bytes())?;
         w.write_all(&self.total_files.to_le_bytes())?;
         // Make sure header is 32 bytes
@@ -65,7 +65,7 @@ impl Header {
         w.write_all(MAGIC).await?;
         w.write_all(&[VERSION]).await?;
         w.write_all(&[0u8; 2]).await?;
-        w.write_all(&self.metadata_offset.to_le_bytes()).await?;
+        w.write_all(&self.index_length.to_le_bytes()).await?;
         w.write_all(&self.metadata_length.to_le_bytes()).await?;
         w.write_all(&self.total_files.to_le_bytes()).await?;
         // Make sure header is 32 bytes
@@ -74,8 +74,7 @@ impl Header {
     }
 
     pub fn index_offset(&self) -> u64 {
-        // self.metadata_offset + self.metadata_length
-        self.metadata_offset
+        self.index_length + self.metadata_length
     }
 
     pub fn read_from<F: Read + Seek>(mut f: F) -> Result<Self, ReadError> {
@@ -110,7 +109,7 @@ impl Header {
         let total_files = u32::from_le_bytes(buf4);
 
         Ok(Header {
-            metadata_offset,
+            index_length: metadata_offset,
             metadata_length,
             total_files,
         })
@@ -150,7 +149,7 @@ impl Header {
         let total_files = u32::from_le_bytes(buf4);
 
         Ok(Header {
-            metadata_offset,
+            index_length: metadata_offset,
             metadata_length,
             total_files,
         })
@@ -161,7 +160,7 @@ impl Header {
 pub fn read_pack_metadata<F: Read + Seek>(mut file: F) -> anyhow::Result<(Header, Metadata)> {
     let header = Header::read_from(&mut file)?;
 
-    file.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
+    file.seek(SeekFrom::End(-(header.metadata_length as i64)))?;
 
     let mut buf = vec![0u8; header.metadata_length as usize];
     file.read_exact(&mut buf)?;
@@ -176,7 +175,7 @@ pub async fn read_pack_metadata_async<F: AsyncRead + AsyncSeek + Unpin>(
 ) -> anyhow::Result<(Header, Metadata)> {
     let header = Header::read_from_async(&mut file).await?;
 
-    file.seek(SeekFrom::Start(HEADER_SIZE as u64)).await?;
+    file.seek(SeekFrom::End(-(header.metadata_length as i64))).await?;
 
     let mut buf = vec![0u8; header.metadata_length as usize];
     file.read_exact(&mut buf).await?;

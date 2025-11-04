@@ -1,9 +1,11 @@
-use std::{cmp, fs::File, io::Read, path::Path, process::{self, Command}};
+use std::{
+    cmp, fs::File, io::Read, path::Path, process::{self, Command}
+};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
-pub fn is_animated(path: &Path) -> Result<bool> {
-    let output = Command::new("ffprobe")
+pub fn is_animated(mut command: Command,path: &Path) -> Result<bool> {
+    let output = command
         .args([
             "-v",
             "quiet",
@@ -31,7 +33,7 @@ pub fn is_animated(path: &Path) -> Result<bool> {
     }
 }
 
-pub fn encode_image(input: &Path) -> anyhow::Result<(Vec<u8>, Metadata)> {
+pub fn encode_image(mut ffmpeg_command: Command, ffprobe_command: Command, input: &Path) -> anyhow::Result<(Vec<u8>, Metadata)> {
     let tmp = tempfile::NamedTempFile::with_suffix(".avif")?;
     let tmp_path = tmp.path();
 
@@ -50,7 +52,7 @@ pub fn encode_image(input: &Path) -> anyhow::Result<(Vec<u8>, Metadata)> {
         // tmp_path
     ];
 
-    let status = Command::new("ffmpeg")
+    let status = ffmpeg_command
         .arg("-i")
         .arg(input)
         .args(args)
@@ -62,14 +64,14 @@ pub fn encode_image(input: &Path) -> anyhow::Result<(Vec<u8>, Metadata)> {
         bail!("ffmpeg failed for {}", input.display());
     }
 
-    let metadata = get_metadata(tmp_path)?;
+    let metadata = get_metadata(ffprobe_command, tmp_path)?;
 
     let mut buf = Vec::new();
     File::open(tmp_path)?.read_to_end(&mut buf)?;
     Ok((buf, metadata))
 }
 
-pub fn encode_video(input: &Path, audio: bool) -> anyhow::Result<(Vec<u8>, Metadata)> {
+pub fn encode_video(mut ffmpeg_command: Command, ffprobe_command: Command,  input: &Path, audio: bool) -> anyhow::Result<(Vec<u8>, Metadata)> {
     let tmp = tempfile::NamedTempFile::with_suffix(".mp4")?;
     let tmp_path = tmp.path();
 
@@ -81,32 +83,29 @@ pub fn encode_video(input: &Path, audio: bool) -> anyhow::Result<(Vec<u8>, Metad
         "-f", "mp4",
     ];
 
-    let mut command = Command::new("ffmpeg");
-    command.arg("-i").arg(input).args(args);
+    ffmpeg_command.arg("-i").arg(input).args(args);
 
     if audio {
-        command.args(["-c:a", "libopus", "-b:a", "64k"]);
+        ffmpeg_command.args(["-c:a", "libopus", "-b:a", "64k"]);
     } else {
-        command.arg("-an");
+        ffmpeg_command.arg("-an");
     }
 
-    let result = command
-        .arg(tmp_path)
-        .output()?;
+    let result = ffmpeg_command.arg(tmp_path).output()?;
 
     if !result.status.success() {
         eprintln!("{:?}", String::from_utf8_lossy(&result.stderr));
         bail!("ffmpeg failed for {}", input.display());
     }
 
-    let metadata = get_metadata(tmp_path)?;
+    let metadata = get_metadata(ffprobe_command, tmp_path)?;
 
     let mut buf = Vec::new();
     File::open(tmp_path)?.read_to_end(&mut buf)?;
     Ok((buf, metadata))
 }
 
-pub fn encode_audio(input: &Path) -> anyhow::Result<Vec<u8>> {
+pub fn encode_audio(mut command: Command, input: &Path) -> anyhow::Result<Vec<u8>> {
     let tmp = tempfile::NamedTempFile::with_suffix(".opus")?;
     let tmp_path = tmp.path();
 
@@ -119,7 +118,7 @@ pub fn encode_audio(input: &Path) -> anyhow::Result<Vec<u8>> {
         // tmp_path
     ];
 
-    let status = Command::new("ffmpeg")
+    let status = command
         .arg("-i")
         .arg(input)
         .args(args)
@@ -143,7 +142,7 @@ pub struct Metadata {
     pub duration: Option<f64>,
 }
 
-pub fn get_metadata(path: &Path) -> anyhow::Result<Metadata> {
+pub fn get_metadata(mut command: Command, path: &Path) -> anyhow::Result<Metadata> {
     #[rustfmt::skip]
     let args = [
         "-v", "quiet",
@@ -152,7 +151,7 @@ pub fn get_metadata(path: &Path) -> anyhow::Result<Metadata> {
         "-show_streams",
     ];
 
-    let output = Command::new("ffprobe").args(args).arg(path).output()?;
+    let output = command.args(args).arg(path).output()?;
 
     if !output.status.success() {
         bail!("ffprobe failed with status: {}", output.status);

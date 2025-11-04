@@ -1,11 +1,41 @@
-use std::{ffi::OsStr, path::Path};
+use std::{error::Error, ffi::OsStr, fmt::Display, path::Path, str::FromStr};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum FileType {
+    #[serde(rename = "image")]
     Image,
+    #[serde(rename = "video")]
     Video,
+    #[serde(rename = "audio")]
     Audio,
-    Other
+    Other,
+}
+
+#[derive(Debug)]
+pub struct FromStrError();
+
+impl Display for FromStrError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Invalid file type value")
+    }
+}
+
+impl Error for FromStrError {}
+
+impl FromStr for FileType {
+    type Err = FromStrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "image" => Ok(FileType::Image),
+            "video" => Ok(FileType::Video),
+            "audio" => Ok(FileType::Audio),
+            "other" => Ok(FileType::Other),
+            _ => Err(FromStrError()),
+        }
+    }
 }
 
 impl FileType {
@@ -33,4 +63,3 @@ pub fn classify_ext(path: &Path) -> FileType {
         _ => FileType::Other,
     }
 }
-

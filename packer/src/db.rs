@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{Result, anyhow};
-use pack_format::read::{Config, MediaCategory, Resolved};
+use shared::read_config::{Config, Resolved};
 use rusqlite::{Connection, params};
 
 use crate::PackedEntry;
@@ -23,6 +23,7 @@ pub fn build_sqlite_index(
             id INTEGER PRIMARY KEY,
             path TEXT NOT NULL,
             media_type TEXT CHECK(media_type IN ('image','video','audio','other')) NOT NULL,
+            category TEXT CHECK(category IN ('default', 'wallpaper')) NOT NULL,
             offset INTEGER NOT NULL,
             length INTEGER NOT NULL,
             width INTEGER,
@@ -100,54 +101,31 @@ pub fn build_sqlite_index(
             tag_cache.insert(tag.clone(), id);
         }
 
-        let mut media_stmt = tx.prepare("INSERT INTO media (path, media_type, offset, length, width, height, duration) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id")?;
+        let mut media_stmt = tx.prepare("INSERT INTO media (path, media_type, category, offset, length, width, height, duration) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id")?;
         let mut media_tag_stmt =
             tx.prepare("INSERT INTO media_tags (media_id, tag_id) VALUES (?1, ?2)")?;
 
-        let mut wallpaper_stmt = tx.prepare(
-            "INSERT INTO wallpapers (path, offset, length) VALUES (?1, ?2, ?3) RETURNING id",
-        )?;
-        let mut wallpaper_tag_stmt =
-            tx.prepare("INSERT INTO wallpaper_tags (wallpaper_id, tag_id) VALUES (?1, ?2)")?;
-
         for e in entries {
-            match e.category {
-                MediaCategory::Popup => {
-                    let media_id: i64 = media_stmt.query_row(
-                        params![
-                            e.rel_path,
-                            e.media_type.as_str(),
-                            e.offset as i64,
-                            e.length as i64,
-                            e.width,
-                            e.height,
-                            e.duration
-                        ],
-                        |row| row.get("id"),
-                    )?;
+            let media_id: i64 = media_stmt.query_row(
+                params![
+                    e.rel_path,
+                    e.media_type.as_str(),
+                    e.category.as_str(),
+                    e.offset as i64,
+                    e.length as i64,
+                    e.width,
+                    e.height,
+                    e.duration
+                ],
+                |row| row.get("id"),
+            )?;
 
-                    for tag in &e.tags {
-                        let tag_id = tag_cache
-                            .get(tag)
-                            .ok_or_else(|| anyhow!("Tag {} not found", tag))?;
+            for tag in &e.tags {
+                let tag_id = tag_cache
+                    .get(tag)
+                    .ok_or_else(|| anyhow!("Tag {} not found", tag))?;
 
-                        media_tag_stmt.execute(params![media_id, tag_id])?;
-                    }
-                }
-                MediaCategory::Wallpaper => {
-                    let wallpaper_id: i64 = wallpaper_stmt.query_row(
-                        params![e.rel_path, e.offset as i64, e.length as i64],
-                        |row| row.get("id"),
-                    )?;
-
-                    for tag in &e.tags {
-                        let tag_id = tag_cache
-                            .get(tag)
-                            .ok_or_else(|| anyhow!("Tag {} not found", tag))?;
-
-                        wallpaper_tag_stmt.execute(params![wallpaper_id, tag_id])?;
-                    }
-                }
+                media_tag_stmt.execute(params![media_id, tag_id])?;
             }
         }
 

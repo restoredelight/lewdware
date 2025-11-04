@@ -1,8 +1,7 @@
 use std::{collections::HashMap, fs, io::{Cursor, Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}};
 
 use anyhow::{anyhow, Result};
-use async_fs::File;
-use futures_lite::{AsyncReadExt, AsyncSeekExt};
+use tokio::{fs::File, io::{AsyncReadExt, AsyncSeekExt}};
 use image::{ImageFormat, ImageReader};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use shared::{pack_config::Metadata, read_pack::{read_pack_metadata, Header}};
@@ -122,11 +121,8 @@ impl MediaPack {
 
         let (header, metadata) = read_pack_metadata(&mut file)?;
 
-        println!("{}", metadata.name);
-        println!("Files: {}", header.total_files);
-
         // Extract the SQLite database to a temporary location
-        file.seek(SeekFrom::Start(header.index_offset()))?;
+        file.seek(SeekFrom::End(-(header.index_offset() as i64)))?;
         let mut db_data = Vec::new();
         file.read_to_end(&mut db_data)?;
 

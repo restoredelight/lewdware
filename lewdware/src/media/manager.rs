@@ -1,10 +1,8 @@
 use std::{path::Path, rc::Rc, thread};
 
 use anyhow::Result;
-use async_channel::{Receiver, Sender, bounded};
-use async_executor::LocalExecutor;
-use futures_lite::future::block_on;
 use shared::pack_config::Metadata;
+use tokio::{sync::mpsc::{channel, Receiver, Sender}, task::LocalSet};
 use winit::event_loop::EventLoopProxy;
 
 use crate::{
@@ -78,7 +76,7 @@ impl MediaManager {
     }
 
     /// Returns a response if there is one.
-    pub fn try_recv(&self) -> Option<Response> {
+    pub fn try_recv(&mut self) -> Option<Response> {
         self.rx.try_recv().ok()
     }
 }
@@ -87,26 +85,30 @@ fn spawn_media_manager_thread(
     pack_path: &Path,
     event_loop_proxy: EventLoopProxy<UserEvent>,
 ) -> Result<(Sender<Request>, Receiver<Response>, Metadata)> {
-    let (req_tx, req_rx) = bounded(20);
-    let (resp_tx, resp_rx) = bounded(20);
+    let (req_tx, mut req_rx) = channel(20);
+    let (resp_tx, resp_rx) = channel(20);
 
     let file = MediaPack::open(pack_path)?;
     let metadata = file.metadata().clone();
 
     thread::spawn(move || {
-        let executor = Rc::new(LocalExecutor::new());
-        let ex = executor.clone();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to build tokio runtime");
 
-        block_on(executor.run(async move {
+        let local = LocalSet::new();
+
+        local.spawn_local(async move {
             let manager = Rc::new(file);
 
-            while let Ok(request) = req_rx.recv().await {
+            while let Some(request) = req_rx.recv().await {
                 let resp_tx = resp_tx.clone();
                 let manager = manager.clone();
 
                 let event_loop_proxy = event_loop_proxy.clone();
 
-                ex.spawn(async move {
+                tokio::task::spawn_local(async move {
                     let response = handle_request(manager, request).await.unwrap();
 
                     if let Some(response) = response {
@@ -123,10 +125,11 @@ fn spawn_media_manager_thread(
                             }
                         }
                     }
-                })
-                .detach();
+                });
             }
-        }));
+        });
+
+        rt.block_on(local);
     });
 
     Ok((req_tx, resp_rx, metadata))

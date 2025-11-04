@@ -4,10 +4,10 @@ mod encode;
 use anyhow::Result;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use pack_format::config::OneOrMore;
-use pack_format::read::{find_config, glob_matches, Config, MediaCategory, Resolved};
-use pack_format::utils::{classify_ext, FileType};
-use pack_format::{HEADER_SIZE, Header};
+use shared::pack_config::OneOrMore;
+use shared::read_config::{find_config, glob_matches, Config, MediaCategory, Resolved};
+use shared::read_pack::{Header, HEADER_SIZE};
+use shared::utils::{classify_ext, FileType};
 use rayon::prelude::*;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
@@ -75,19 +75,13 @@ fn main() -> Result<()> {
         .open(&args.output)?;
 
     Header {
-        index_offset: 0,
+        index_length: 0,
         total_files: 0,
         metadata_length: 0,
     }
     .write_to(&mut out)?;
 
     out.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
-
-    let buf = config.root_config.metadata.to_buf()?;
-    let metadata_length = buf.len() as u64;
-    println!("{}", metadata_length);
-
-    out.write_all(&buf)?;
 
     let files: Vec<_> = WalkDir::new(&args.input)
         .into_iter()
@@ -116,7 +110,7 @@ fn main() -> Result<()> {
     );
 
     let mut all_entries = Vec::new();
-    let mut current_offset = HEADER_SIZE as u64 + metadata_length;
+    let mut current_offset = HEADER_SIZE as u64;
 
     out.seek(SeekFrom::Start(current_offset))?;
 
@@ -163,24 +157,28 @@ fn main() -> Result<()> {
     let tmp_db = NamedTempFile::new()?;
     build_sqlite_index(tmp_db.path(), &all_entries, &config, resolved)?;
 
-    let index_offset = out.stream_position()?;
-    {
+    let index_length = {
         let mut dbf = File::open(tmp_db.path())?;
-        std::io::copy(&mut dbf, &mut out)?;
-    }
+        std::io::copy(&mut dbf, &mut out)?
+    };
+
+    let buf = config.root_config.metadata.to_buf()?;
+    let metadata_length = buf.len() as u64;
+    println!("{}", metadata_length);
+
+    out.write_all(&buf)?;
 
     let header = Header {
-        index_offset,
+        index_length,
         metadata_length,
         total_files: all_entries.len() as u32,
     };
     header.write_to(&mut out)?;
 
     println!(
-        "✅ Packed {} files into '{}'. Index at offset {} bytes.",
+        "✅ Packed {} files into '{}'.",
         all_entries.len(),
         args.output.display(),
-        index_offset
     );
 
     std::io::stdout().flush().ok();
@@ -197,7 +195,7 @@ fn process_single_file(
     let path = entry.path();
     let rel = path.strip_prefix(input_dir).unwrap().to_owned();
     let rel_str = rel.to_string_lossy().replace('\\', "/");
-    let mut mtype = classify_ext(&path);
+    let mut mtype = classify_ext(path);
 
     let mut width = None;
     let mut height = None;

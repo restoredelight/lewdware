@@ -1,0 +1,116 @@
+<style>
+  #container {
+    padding: 1rem;
+    position: relative;
+  }
+
+  #wrapper {
+    position: absolute;
+    left: 1rem;
+    width: calc(100% - 2rem);
+  }
+
+  #items {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 25px;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  asset-element {
+    width: 150px;
+    height: 200px;
+  }
+
+  #scroll-container {
+    width: 80%;
+    overflow-y: scroll;
+  }
+
+  #main-container {
+    display: flex;
+    width: 100%;
+    max-height: 100vh;
+    min-height: 100vh;
+  }
+
+  #start-sentinel,
+  #end-sentinel {
+    height: 10px;
+  }
+
+  #sidebar {
+    width: 20%;
+    overflow: hidden;
+    background-color: #eff0f1;
+    border-left-width: 1px;
+    border-left-style: solid;
+    border-left-color: #c6c8c9;
+    padding-inline: 5px;
+    padding-block: 2rem;
+  }
+
+  dialog {
+    padding: 0;
+    border: 0;
+    outline: none;
+  }
+
+  #file-dialog {
+    min-width: 80%;
+    min-height: 90%;
+    border-radius: 0.375rem;
+  }
+
+  #file-dialog-container {
+    display: flex;
+    width: 100%;
+    height: 100%;
+  }
+
+  #file-view {
+    height: 100%;
+    width: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 2rem;
+    box-sizing: border-box;
+    object-fit: contain;
+  }
+
+  #file-view img, #file-view video, #file-view audio {
+    box-shadow: 0 0 5px;
+    object-fit: contain;
+    height: 100%;
+    width: 100%;
+  }
+
+  #file-tags {
+    width: 50%;
+  }
+</style>
+<div id="main-container">
+  <div id="scroll-container">
+    <div id="container">
+      <div id="wrapper">
+        <div id="start-sentinel"></div>
+        <div id="items"></div>
+        <div id="end-sentinel"></div>
+      </div>
+    </div>
+  </div>
+  <div id="sidebar">
+    <img id="sidebar-image" />
+    <h3 id="items-selected">No items selected</h3>
+  </div>
+</div>
+<dialog id="file-dialog" closedby="any">
+  <div id="file-dialog-container">
+    <div id="file-view"></div>
+    <div id="file-tags">
+      <h1>Tags</h1>
+    </div>
+  </div>
+</dialog>
