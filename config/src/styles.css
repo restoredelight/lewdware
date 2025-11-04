@@ -14,7 +14,7 @@ body {
 }
 
 .hidden {
-  display: none !important;
+	display: none !important;
 }
 
 .container {
@@ -185,7 +185,7 @@ input[type="range"] {
 	background: #e0e0e0;
 	outline: none;
 	-webkit-appearance: none;
-  appearance: none;
+	appearance: none;
 }
 
 input[type="range"]::-webkit-slider-thumb {
@@ -251,16 +251,16 @@ input[type="checkbox"] {
 }
 
 #max-duration-container {
-  display: flex;
-  width: 100%;
-  align-items: center;
+	display: flex;
+	width: 100%;
+	align-items: center;
 }
 
 #max-duration-container slider-input {
-  flex: 1;
-  padding-right: 1rem;
+	flex: 1;
+	padding-right: 1rem;
 }
 
 #move-chance-container {
-  margin-bottom: 1rem;
+	margin-bottom: 1rem;
 }
