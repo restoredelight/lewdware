@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tauri App</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="container">
+      <div id="open-page">
+        <h1>Pack maker</h1>
+
+        <div class="row">
+          <button id="create-pack-button">
+            <img src="./src/assets/plus.svg" class="logo" />
+            Create
+          </button>
+
+          <button id="select-pack-button">
+            <img src="./src/assets/document-plus.svg" class="logo" />
+            Open
+          </button>
+        </div>
+        <p>Click on the Tauri logo to learn more about the framework</p>
+
+        <form class="row" id="greet-form">
+          <input id="greet-input" placeholder="Enter a name..." />
+          <button type="submit">Greet</button>
+        </form>
+        <p id="greet-msg"></p>
+      </div>
+      <div id="main-page" class="hidden">
+      </div>
+    </main>
+
+    <dialog id="create-pack-dialog" closedby="any">
+      <div>
+        <input class="name-input" placeholder="Pack name" />
+        <button class="submit-button">Create pack</button>
+      </div>
+    </dialog>
+
+    <dialog id="file-dialog" closedby="any">
+      <div id="file-dialog-container">
+        <div id="file-view">
+        </div>
+      </div>
+    </dialog>
+  </body>
+</html>

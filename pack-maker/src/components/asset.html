@@ -1,0 +1,66 @@
+<style>
+  #image-container {
+    width: 150;
+    height: 100px;
+  }
+
+  #image-container img {
+    margin: auto;
+    max-width: 150px;
+    max-height: 100px;
+    box-shadow: 0 0 5px;
+    border-radius: 0.125rem;
+  }
+
+  #container:hover img {
+    filter: brightness(110%);
+  }
+
+  #container:hover #file-name {
+    background-color: #c2e0f5;
+  }
+
+  #container.selected img {
+    filter: sepia(100%) saturate(200%) hue-rotate(170deg);
+  }
+
+  #container.selected #file-name {
+    background-color: #3daee9;
+  }
+
+  #container.selected:hover img {
+    filter: sepia(100%) saturate(200%) brightness(110%) hue-rotate(170deg);
+  }
+
+  #container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  #file-name {
+    text-align: center;
+    max-width: 150px;
+    overflow-wrap: break-word;
+    user-select: none;
+    max-height: 6em;
+    overflow-y: hidden;
+
+    /* https://developer.mozilla.org/en-US/docs/Web/CSS/line-clamp */
+    display: -webkit-box;
+    -webkit-user-select: none;
+    -webkit-box-orient: vertical;
+    line-clamp: 3;
+    -webkit-line-clamp: 3;
+    text-overflow: ellipsis;
+  }
+</style>
+<div id="container">
+  <div id="image-container">
+    <img loading="lazy" />
+  </div>
+  <div id="file-name-container">
+    <p id="file-name">
+    </p>
+  </div>
+</div>

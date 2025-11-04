@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use anyhow::Result;
-use futures_lite::future::block_on;
+use pollster::block_on;
 use shared::user_config::load_config;
 use winit::event_loop::EventLoop;
 
