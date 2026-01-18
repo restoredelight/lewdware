@@ -1,12 +1,17 @@
+import { invoke } from "@tauri-apps/api/core";
 import { Menu, MenuItem, Submenu } from "@tauri-apps/api/menu";
 
 export async function updateMenu(editing: boolean) {
-    await saveItem.setEnabled(editing);
-    await uploadMenu.setEnabled(editing);
+    if (!saveItem || !uploadMenu) {
+        await setupMenu();
+    }
+
+    await saveItem?.setEnabled(editing);
+    await uploadMenu?.setEnabled(editing);
 }
 
-let saveItem: MenuItem;
-let uploadMenu: Submenu;
+let saveItem: MenuItem | null = null;
+let uploadMenu: Submenu | null = null;
 
 async function setupMenu() {
     saveItem = await MenuItem.new({
@@ -47,6 +52,7 @@ async function setupMenu() {
                 text: "Files",
                 action: () => {
                     console.log("Files uploaded");
+                    invoke("upload_files");
                 },
             }),
             await MenuItem.new({
@@ -54,6 +60,7 @@ async function setupMenu() {
                 text: "Folder",
                 action: () => {
                     console.log("Folder uploaded");
+                    invoke("upload_dir");
                 },
             }),
         ],

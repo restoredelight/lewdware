@@ -1,4 +1,5 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use bytemuck::AnyBitPattern;
 use ffmpeg_next::{
     self as ffmpeg,
     format::{Sample, sample},
@@ -13,26 +14,26 @@ use std::{
 
 use rodio::{OutputStreamBuilder, Sink, buffer::SamplesBuffer};
 
-use crate::media::Audio;
+use crate::media::{Audio, FileOrPath};
 
 /// An audio player using ffmpeg and rodio.
 pub struct AudioPlayer {
-    audio: Audio,
+    audio: FileOrPath,
     thread: JoinHandle<()>,
     message_tx: SyncSender<AudioMessage>,
 }
 
 impl AudioPlayer {
-    pub fn new(audio: Audio) -> Result<Self> {
+    pub fn new(audio: FileOrPath, loop_audio: bool) -> Self {
         let (message_tx, message_rx) = sync_channel(10);
 
-        let thread = spawn_audio_thread(audio.file.path().to_path_buf(), message_rx, false);
+        let thread = spawn_audio_thread(audio.path().to_path_buf(), message_rx, loop_audio);
 
-        Ok(Self {
+        Self {
             audio,
             thread,
             message_tx,
-        })
+        }
     }
 
     pub fn is_finished(&self) -> bool {
@@ -81,7 +82,9 @@ fn decode_audio(path: PathBuf, message_rx: Receiver<AudioMessage>, loop_audio: b
     };
 
     let mut decoder = ffmpeg::codec::Context::from_parameters(
-        ictx.stream(audio_stream_index).unwrap().parameters(),
+        ictx.stream(audio_stream_index)
+            .context("Invalid stream index")?
+            .parameters(),
     )?
     .decoder()
     .audio()?;
@@ -159,7 +162,10 @@ struct MessageResult {
 /// Process all messages sent to the audio thread. Returns two booleans indicating whether to stop
 /// the audio thread, and whether a `Loop` message was received.
 fn process_audio_messages(sink: &Sink, message_rx: &Receiver<AudioMessage>) -> MessageResult {
-    let mut result = MessageResult { stop: false, continue_loop: false };
+    let mut result = MessageResult {
+        stop: false,
+        continue_loop: false,
+    };
 
     loop {
         match message_rx.try_recv() {
@@ -289,7 +295,7 @@ fn convert_audio_frame(frame: &frame::Audio) -> Result<Vec<f32>> {
     Ok(interleaved)
 }
 
-fn convert_samples<T: Copy>(
+fn convert_samples<T: Copy + AnyBitPattern>(
     frame: &frame::Audio,
     sample_type: sample::Type,
     interleaved: &mut [f32],
@@ -310,11 +316,9 @@ fn convert_samples<T: Copy>(
             //
             // There are `samples` samples in each channel, and in this case all the data is
             // contiguous (packed), so there is a total of `samples * channels` values.
-            let all_samples: &[T] = unsafe {
-                std::slice::from_raw_parts(data.as_ptr() as *const T, samples * channels)
-            };
+            let all_samples: &[T] = bytemuck::cast_slice(data);
 
-            for (i, &sample) in all_samples.iter().enumerate() {
+            for (i, &sample) in all_samples.iter().take(samples * channels).enumerate() {
                 interleaved[i] = convert_fn(sample);
             }
         }
@@ -324,11 +328,9 @@ fn convert_samples<T: Copy>(
                 // Again, we know the format and number of samples. In this case the data for each
                 // channel is not stored contiguously, so we handle each channel (a buffer of
                 // `samples` values) separately.
-                let channel_samples: &[T] = unsafe {
-                    std::slice::from_raw_parts(data.as_ptr() as *const T, samples)
-                };
+                let channel_samples: &[T] = bytemuck::cast_slice(data);
 
-                for (i, &sample) in channel_samples.iter().enumerate() {
+                for (i, &sample) in channel_samples.iter().take(samples).enumerate() {
                     interleaved[i * channels + ch] = convert_fn(sample);
                 }
             }

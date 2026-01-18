@@ -473,15 +473,15 @@ impl Error for PackOptsError {}
 fn check_opts(opts: &PackOpts) -> Result<Vec<&str>, PackOptsError> {
     let valid_tags: Vec<&str> = opts.tags.keys().map(|x| x.as_str()).collect();
 
-    if let Some(transition) = &opts.metadata.transition {
-        for item in &transition.items {
-            if let Some(tags) = &item.tags {
-                for tag in tags {
-                    check_tag("transition", tag, &valid_tags)?;
-                }
-            }
-        }
-    }
+    // if let Some(transition) = &opts.metadata.transition {
+    //     for item in &transition.items {
+    //         if let Some(tags) = &item.tags {
+    //             for tag in tags {
+    //                 check_tag("transition", tag, &valid_tags)?;
+    //             }
+    //         }
+    //     }
+    // }
 
     check_media_opts(&valid_tags, &opts.media)?;
 

@@ -1,13 +1,15 @@
-use std::io::{Read, Write};
+use std::{io::{Read, Write}};
 
 use anyhow::{bail, Result};
 use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 use tempfile::NamedTempFile;
 
+use crate::pack::FileData;
+
 pub async fn generate_thumbnail(
     app_handle: AppHandle,
-    data: Vec<u8>,
+    file_data: FileData,
     is_image: bool,
     large: bool,
 ) -> Result<Vec<u8>> {
@@ -15,12 +17,23 @@ pub async fn generate_thumbnail(
 
     let mut output_file = NamedTempFile::with_suffix(".png")?;
 
-    let mut input_file = NamedTempFile::with_suffix(if is_image { ".avif" } else { ".mp4" })?;
+    let (_tempfile, input_path) = match file_data {
+        FileData::Path(path_buf) => {
+            (None, path_buf)
+        },
+        FileData::Data(data) => {
+            let mut file = NamedTempFile::with_suffix(if is_image { ".avif" } else { ".webm" })?;
 
-    input_file.write_all(&data)?;
+            let path = file.path().to_path_buf();
+
+            file.write_all(&data)?;
+
+            (Some(file), path)
+        },
+    };
 
     let scale_filter = format!(
-        "scale='iw*min(1,if(gt(iw/{w},ih/{h}),{w}/iw,{h}/ih))':'ih*min(1,if(gt(iw/{w},ih/{h}),{w}/iw,{h}/ih))'",
+        "scale='min({w},iw)':'min({h},ih)':force_original_aspect_ratio=decrease",
         w = width,
         h = height
     );
@@ -29,8 +42,8 @@ pub async fn generate_thumbnail(
 
     command = command
         .arg("-i")
-        .arg(input_file.path())
-        .args(["-vf", &scale_filter, "-y"]);
+        .arg(input_path)
+        .args(["-vf", &scale_filter, "-v", "error", "-y"]);
 
     if !is_image {
         command = command.args(["-ss", "1", "-frames:v", "1", "-vf", &scale_filter]);

@@ -5,35 +5,86 @@
 //! videos for smooth playback.
 
 use std::{
+    cell::{LazyCell, OnceCell},
     num::NonZeroU32,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
+use egui::{RichText, TextEdit};
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
-use rand::{rng, seq::IndexedRandom};
-use winit::{dpi::PhysicalPosition, event::WindowEvent, window::Window};
+use tiny_skia::{
+    BlendMode, Color, IntSize, Paint, Path, PathBuilder, Pixmap, PixmapMut, PixmapPaint, Rect,
+    Stroke, Transform,
+};
+use tokio::sync::mpsc;
+use winit::{
+    dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, PhysicalUnit},
+    event::WindowEvent,
+    window::Window as WinitWindow,
+};
 
 use crate::{
-    buffer::{PixelsWrapper, SoftBufferWrapper, draw_close_button, is_over_close_button},
-    egui::{EguiWindow, WgpuState},
-    media::{Image, Video},
-    video::VideoDecoder,
+    egui::{EguiCPUWindow, WgpuState},
+    error::{LewdwareError, MonitorError},
+    header::{HEADER_HEIGHT, Header},
+    lua::{self, ChoiceWindowOption, Coord, Easing, MoveOpts},
+    media::{FileOrPath, ImageData, Video},
+    utils::resolve_coord,
+    video::{NextFrame, VideoDecoder, VideoFrame, copy_frame_pixmap},
 };
+
+pub enum Window<'a> {
+    Image(ImageWindow),
+    Video(VideoWindow<'a>),
+    Prompt(PromptWindow),
+    Choice(ChoiceWindow),
+}
+
+impl Window<'_> {
+    pub fn inner_window(&self) -> &InnerWindow {
+        match self {
+            Self::Image(image_window) => &image_window.inner_window,
+            Self::Video(video_window) => &video_window.inner_window,
+            Self::Prompt(prompt_window) => &prompt_window.inner_window,
+            Self::Choice(choice_window) => &choice_window.inner_window,
+        }
+    }
+
+    pub fn inner_window_mut(&mut self) -> &mut InnerWindow {
+        match self {
+            Self::Image(image_window) => &mut image_window.inner_window,
+            Self::Video(video_window) => &mut video_window.inner_window,
+            Self::Prompt(prompt_window) => &mut prompt_window.inner_window,
+            Self::Choice(choice_window) => &mut choice_window.inner_window,
+        }
+    }
+
+    pub fn window_type(&self) -> &'static str {
+        match self {
+            Self::Image(image_window) => "image",
+            Self::Video(video_window) => "video",
+            Self::Prompt(prompt_window) => "prompt",
+            Self::Choice(choice_window) => "choice",
+        }
+    }
+}
 
 /// A window displaying an image. Image windows are rendered using softbuffer.
 pub struct ImageWindow {
-    pub window: Arc<Window>,
-    pub created: Instant,
-    image: Option<Image>,
-    close_button: bool,
-    cursor_over_button: bool,
-    _context: softbuffer::Context<Arc<Window>>,
-    surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
-    width: u32,
-    height: u32,
-    movement_state: Option<MovementState>,
+    inner_window: InnerWindow,
+    image: Option<ImageData>,
+    _context: softbuffer::Context<Arc<WinitWindow>>,
+    surface: softbuffer::Surface<Arc<WinitWindow>, Arc<WinitWindow>>,
+    pixmap: Pixmap,
+    border: bool,
+    header: Option<Header>,
+    inner_size: PhysicalSize<u32>,
+    outer_size: PhysicalSize<u32>,
 }
 
 struct MovementState {
@@ -58,397 +109,527 @@ impl ImageWindow {
     /// * `close_button`: Whether to display a close button on the window.
     /// * `moving`: Whether to move the window around the screen.
     pub fn new(
-        window: Window,
-        image: Image,
-        close_button: bool,
-        moving: bool,
-        initial_position: PhysicalPosition<f32>,
+        window: WinitWindow,
+        initial_position: LogicalPosition<u32>,
+        image: ImageData,
+        lua_event_tx: mpsc::UnboundedSender<lua::Event>,
+        header: bool,
+        border: bool,
     ) -> Result<Self> {
         let window = Arc::new(window);
+
+        let inner_window = InnerWindow::new(window.clone(), initial_position, lua_event_tx);
 
         let context = softbuffer::Context::new(window.clone()).map_err(|err| anyhow!("{}", err))?;
         let surface =
             softbuffer::Surface::new(&context, window.clone()).map_err(|err| anyhow!("{}", err))?;
 
-        let width = image.width();
-        let height = image.height();
+        let (outer_size, inner_size) = calculate_size(window.clone(), border);
 
-        let movement_state = if moving {
-            let mut rng = rng();
+        let scale_factor = window.scale_factor();
 
-            Some(MovementState {
-                x: initial_position.x as i32,
-                y: initial_position.y as i32,
-                dx: *[1, -1].choose(&mut rng).unwrap(),
-                dy: *[1, -1].choose(&mut rng).unwrap(),
-                last_moved: Instant::now(),
-            })
-        } else {
-            None
-        };
+        let header = header.then(|| Header::new(window.clone(), inner_size.clone(), scale_factor));
+
+        let mut pixmap = Pixmap::new(outer_size.width, outer_size.height).unwrap();
+
+        if border {
+            draw_border(&mut pixmap.as_mut(), &outer_size);
+        }
 
         Ok(Self {
-            window,
+            inner_window,
             image: Some(image),
-            created: Instant::now(),
-            close_button,
-            cursor_over_button: false,
+            border: true,
             _context: context,
+            header,
             surface,
-            width,
-            height,
-            movement_state,
+            pixmap,
+            inner_size,
+            outer_size,
         })
     }
 
     pub fn draw(&mut self) -> Result<()> {
-        // We only need to render the image once
-        let mut buffer = if let Some(image) = self.image.take() {
-            self.surface
-                .resize(
-                    NonZeroU32::new(image.width()).unwrap(),
-                    NonZeroU32::new(image.height()).unwrap(),
-                )
-                .map_err(|err| anyhow!("{}", err))?;
+        self.surface
+            .resize(
+                NonZeroU32::new(self.outer_size.width).context("Window has 0 width")?,
+                NonZeroU32::new(self.outer_size.height).context("Window has 0 height")?,
+            )
+            .map_err(|err| anyhow!("{}", err))?;
 
-            let mut buffer = self
-                .surface
-                .buffer_mut()
-                .map_err(|err| anyhow!("{}", err))?;
+        let mut buffer = self
+            .surface
+            .buffer_mut()
+            .map_err(|err| anyhow!("{}", err))?;
 
-            for (i, pixel) in image.pixels().enumerate() {
-                let r = pixel[0] as u32;
-                let g = pixel[1] as u32;
-                let b = pixel[2] as u32;
-                let a = pixel[3] as u32;
+        let scale_factor = self.inner_window.window.scale_factor();
 
-                buffer[i] = (a << 24) | (r << 16) | (g << 8) | b;
-            }
-
-            buffer
+        let border_offset = if self.border {
+            PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0
         } else {
-            self.surface
-                .buffer_mut()
-                .map_err(|err| anyhow!("{}", err))?
+            0
         };
 
-        // let size = self.window.inner_size();
-        //
-        // let font = FontArc::try_from_slice(include_bytes!("ChicagoKare-Regular.ttf")).unwrap();
-        //
-        // draw_text_ab_glyph_with_outline(
-        //     &mut SoftBufferWrapper::new(&mut buffer, self.width as usize, self.height as usize),
-        //     size.width as usize,
-        //     size.height as usize,
-        //     &font,
-        //     20.0,
-        //     10.0,
-        //     20.0,
-        //     "Kill yourself",
-        //     0xFF000000,
-        //     Some(0xFF000000),
-        //     2.0,
-        // );
+        if let Some(header) = &mut self.header {
+            let header_pixmap = header.draw();
 
-        if self.close_button {
-            draw_close_button(
-                &mut SoftBufferWrapper::new(&mut buffer, self.width as usize, self.height as usize),
-                self.window.scale_factor(),
-                self.cursor_over_button,
+            copy_pixmap(
+                &mut self.pixmap.as_mut(),
+                &header_pixmap,
+                border_offset,
+                border_offset,
             );
         }
+
+        if let Some(image) = self.image.take() {
+            let width = image.width();
+            let height = image.height();
+
+            let image_pixmap =
+                Pixmap::from_vec(image.into_vec(), IntSize::from_wh(width, height).unwrap())
+                    .unwrap();
+
+            let physical_header_height: u32 = if self.header.is_some() {
+                PhysicalUnit::from_logical::<_, u32>(HEADER_HEIGHT, scale_factor).0
+            } else {
+                0
+            };
+
+            copy_pixmap(
+                &mut self.pixmap.as_mut(),
+                &image_pixmap,
+                border_offset,
+                physical_header_height + border_offset,
+            );
+        }
+
+        render_pixmap_softbuffer(&mut buffer, &self.pixmap);
 
         buffer.present().map_err(|err| anyhow!("{}", err))?;
 
         Ok(())
     }
 
-    pub fn moving(&self) -> bool {
-        self.movement_state.is_some()
-    }
-
-    /// If the window is a moving window, update its position.
-    pub fn update_position(&mut self) -> Result<()> {
-        let movement_state = match self.movement_state.as_mut() {
-            Some(x) => x,
-            None => return Ok(()),
-        };
-
-        let delta = (movement_state.last_moved.elapsed().as_secs_f64() * 300.0) as i32;
-
-        if delta != 0 {
-            let window_size = self.window.inner_size();
-            let monitor_size = self.window.current_monitor().map(|x| x.size()).unwrap();
-
-            if movement_state.x <= 0 {
-                movement_state.dx = 1;
-            } else if movement_state.x + window_size.width as i32 >= monitor_size.width as i32 {
-                movement_state.dx = -1;
-            }
-
-            if movement_state.y <= 0 {
-                movement_state.dy = 1;
-            } else if movement_state.y + window_size.height as i32 >= monitor_size.height as i32 {
-                movement_state.dy = -1;
-            }
-
-            let new_x = (movement_state.x + (delta * movement_state.dx))
-                .clamp(0, monitor_size.width as i32 - window_size.width as i32);
-            let new_y = (movement_state.y + (delta * movement_state.dy))
-                .clamp(0, monitor_size.height as i32 - window_size.height as i32);
-
-            self.window
-                .set_outer_position(PhysicalPosition::new(new_x, new_y));
-
-            movement_state.x = new_x;
-            movement_state.y = new_y;
-            movement_state.last_moved = Instant::now();
-        }
-
-        Ok(())
-    }
-
     pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        if self.close_button {
-            let was_over_button = self.cursor_over_button;
-            self.cursor_over_button = is_over_close_button(
-                position.x,
-                position.y,
-                self.width,
-                self.window.scale_factor(),
-            );
-
-            if was_over_button != self.cursor_over_button {
-                self.window.request_redraw();
-            }
+        if let Some(header) = &mut self.header {
+            header.handle_cursor_moved(position);
         }
     }
 
-    pub fn handle_mouse_left_window(&mut self) {
-        if self.close_button && self.cursor_over_button {
-            self.cursor_over_button = false;
-            self.window.request_redraw();
+    pub fn handle_cursor_left(&mut self) {
+        if let Some(header) = &mut self.header {
+            header.handle_cursor_left();
         }
     }
 
-    /// Handle a click event. Returns true if the window should be closed.
-    pub fn handle_click(&mut self) -> bool {
-        if self.close_button {
-            self.cursor_over_button
+    pub fn handle_mouse_down(&mut self) {
+        if let Some(header) = &mut self.header {
+            header.handle_mouse_down();
+        }
+    }
+
+    pub fn handle_mouse_up(&mut self) -> bool {
+        if let Some(header) = &mut self.header {
+            header.handle_mouse_up()
         } else {
-            true
+            false
         }
     }
+}
+
+fn draw_border(pixmap: &mut PixmapMut, outer_size: &PhysicalSize<u32>) {
+    let border = PathBuilder::from_rect(
+        Rect::from_xywh(
+            1.0,
+            1.0,
+            (outer_size.width + 2) as f32,
+            (outer_size.height + 2) as f32,
+        )
+        .unwrap(),
+    );
+    let mut paint = Paint::default();
+    paint.set_color(Color::BLACK);
+    pixmap.stroke_path(
+        &border,
+        &paint,
+        &Stroke::default(),
+        Transform::default(),
+        None,
+    );
+}
+
+fn calculate_size(
+    window: Arc<WinitWindow>,
+    border: bool,
+) -> (PhysicalSize<u32>, PhysicalSize<u32>) {
+    let outer_size = window.inner_size();
+
+    let inner_size = if border {
+        let logical_size = outer_size.to_logical::<u32>(window.scale_factor());
+        LogicalSize::new(logical_size.width - 2, logical_size.height - 2)
+            .to_physical(window.scale_factor())
+    } else {
+        outer_size.clone()
+    };
+
+    (outer_size, inner_size)
 }
 
 /// A video popup, rendered using pixels.
 pub struct VideoWindow<'a> {
-    pub window: Arc<Window>,
-    pub created: Instant,
-    pixels: Pixels<'a>,
+    inner_window: InnerWindow,
+    buffer: Buffer<'a>,
     decoder: VideoDecoder,
     last_frame_time: Instant,
     duration: Option<Duration>,
-    close_button: bool,
-    close_button_changed: bool,
-    cursor_over_button: bool,
-    width: u32,
-    height: u32,
-    movement_state: Option<MovementState>,
+    border: bool,
+    header: Option<Header>,
+    wgpu_error: Arc<AtomicBool>,
+    loop_video: bool,
+    inner_size: PhysicalSize<u32>,
+    outer_size: PhysicalSize<u32>,
+    paused: bool,
 }
 
-impl<'a> VideoWindow<'a> {
+enum Buffer<'a> {
+    Pixels(Pixels<'a>),
+    Softbuffer {
+        _context: softbuffer::Context<Arc<WinitWindow>>,
+        surface: softbuffer::Surface<Arc<WinitWindow>, Arc<WinitWindow>>,
+        pixmap: Pixmap,
+    },
+}
+
+fn make_softbuffer(
+    window: Arc<WinitWindow>,
+) -> Result<(
+    softbuffer::Context<Arc<WinitWindow>>,
+    softbuffer::Surface<Arc<WinitWindow>, Arc<WinitWindow>>,
+)> {
+    let context = softbuffer::Context::new(window.clone()).map_err(|err| anyhow!("{}", err))?;
+    let surface =
+        softbuffer::Surface::new(&context, window.clone()).map_err(|err| anyhow!("{}", err))?;
+
+    Ok((context, surface))
+}
+
+impl VideoWindow<'_> {
     /// Create a new video popup.
     ///
     /// * `close_button`: Whether to display a close button on the window.
     /// * `play_audio`: Whether to play the video's audio.
     pub fn new(
         wgpu_state: &WgpuState,
-        window: Window,
-        video: Video,
-        close_button: bool,
+        window: WinitWindow,
+        video: FileOrPath,
+        width: u32,
+        height: u32,
         play_audio: bool,
-        moving: bool,
-        initial_position: PhysicalPosition<f32>,
+        loop_video: bool,
+        initial_position: LogicalPosition<u32>,
+        header: bool,
+        border: bool,
+        lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     ) -> anyhow::Result<Self> {
         let window = Arc::new(window);
 
-        let width = video.width as u32;
-        let height = video.height as u32;
+        let (outer_size, inner_size) = calculate_size(window.clone(), border);
 
-        let decoder = VideoDecoder::new(video, play_audio)?;
+        let scale_factor = window.scale_factor();
 
-        let surface_texture = SurfaceTexture::new(width, height, window.clone());
+        let inner_window = InnerWindow::new(window.clone(), initial_position, lua_event_tx);
 
-        let pixels = PixelsBuilder::new(width, height, surface_texture).build_with_instance(
-            &wgpu_state.instance,
-            &wgpu_state.adapter,
-            &wgpu_state.device,
-            &wgpu_state.queue,
+        let video_size = LogicalSize::new(width, height).to_physical(scale_factor);
+
+        let decoder = VideoDecoder::new(
+            video,
+            video_size.width,
+            video_size.height,
+            play_audio,
+            loop_video,
         )?;
 
-        let movement_state = if moving {
-            let mut rng = rng();
+        let buffer = if wgpu_state.error.load(Ordering::Acquire) {
+            let (context, surface) = make_softbuffer(window.clone())?;
 
-            Some(MovementState {
-                x: initial_position.x as i32,
-                y: initial_position.y as i32,
-                dx: *[1, -1].choose(&mut rng).unwrap(),
-                dy: *[1, -1].choose(&mut rng).unwrap(),
-                last_moved: Instant::now(),
-            })
+            let mut pixmap = Pixmap::new(outer_size.width, outer_size.height).unwrap();
+
+            if border {
+                draw_border(&mut pixmap.as_mut(), &outer_size);
+            }
+
+            Buffer::Softbuffer {
+                _context: context,
+                surface,
+                pixmap,
+            }
         } else {
-            None
+            let surface_texture =
+                SurfaceTexture::new(outer_size.width, outer_size.height, window.clone());
+
+            let mut pixels =
+                PixelsBuilder::new(outer_size.width, outer_size.height, surface_texture)
+                    .build_with_instance(
+                        &wgpu_state.instance,
+                        &wgpu_state.adapter,
+                        &wgpu_state.device,
+                        &wgpu_state.queue,
+                    )?;
+
+            let mut pixmap =
+                PixmapMut::from_bytes(pixels.frame_mut(), outer_size.width, outer_size.height)
+                    .unwrap();
+
+            if border {
+                draw_border(&mut pixmap, &outer_size);
+            }
+
+            Buffer::Pixels(pixels)
         };
 
+        let header = header.then(|| Header::new(window.clone(), inner_size.clone(), scale_factor));
+
         Ok(Self {
-            window,
-            pixels,
+            inner_window,
+            buffer,
             decoder,
             last_frame_time: Instant::now(),
             duration: None,
-            created: Instant::now(),
-            close_button,
-            close_button_changed: false,
-            cursor_over_button: false,
-            width,
-            height,
-            movement_state,
+            wgpu_error: wgpu_state.error.clone(),
+            loop_video,
+            border,
+            header,
+            inner_size,
+            outer_size,
+            paused: false,
         })
     }
 
-    pub fn update(&mut self) -> anyhow::Result<()> {
-        let mut render = false;
+    pub fn update(&mut self) -> anyhow::Result<bool> {
+        match &self.buffer {
+            Buffer::Pixels(pixels) => {
+                if self.wgpu_error.load(Ordering::Acquire) {
+                    let (context, surface) = make_softbuffer(self.inner_window.window.clone())?;
 
-        if self
-            .duration
-            .is_none_or(|duration| self.last_frame_time.elapsed() >= duration)
-        {
-            let frame = self.decoder.next_frame()?;
+                    let mut pixmap =
+                        Pixmap::new(self.outer_size.width, self.outer_size.height).unwrap();
 
-            if let Some(frame) = frame {
-                self.decoder
-                    .copy_frame(&frame.frame, self.pixels.frame_mut())?;
-                self.duration = Some(frame.duration);
-                self.last_frame_time = Instant::now();
-                render = true;
+                    if self.border {
+                        draw_border(&mut pixmap.as_mut(), &self.outer_size);
+                    }
+
+                    self.buffer = Buffer::Softbuffer {
+                        _context: context,
+                        surface,
+                        pixmap,
+                    };
+
+                    return self.update();
+                }
+            }
+            _ => {}
+        }
+
+        let scale_factor = self.inner_window.window.scale_factor();
+
+        let border_offset = if self.border {
+            PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0
+        } else {
+            0
+        };
+
+        if let Some(header_pixmap) = self.header.as_ref().map(|header| header.draw()) {
+            let mut pixmap = self.get_pixmap();
+
+            copy_pixmap(&mut pixmap, &header_pixmap, border_offset, border_offset);
+        }
+
+        let (close, frame) = self.get_next_frame()?;
+
+        if close {
+            return Ok(true);
+        }
+
+        if let Some(frame) = frame {
+            let scale_factor = self.inner_window.window.scale_factor();
+
+            let border_offset = if self.border {
+                PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0
+            } else {
+                0
+            };
+
+            let physical_header_height: u32 = if self.header.is_some() {
+                PhysicalUnit::from_logical::<_, u32>(HEADER_HEIGHT, scale_factor).0
+            } else {
+                0
+            };
+
+            copy_frame_pixmap(
+                &frame.frame,
+                &mut self.get_pixmap(),
+                physical_header_height + border_offset,
+                border_offset,
+            )?;
+        }
+
+        self.present()?;
+
+        Ok(false)
+    }
+
+    fn get_pixmap(&'_ mut self) -> PixmapMut<'_> {
+        match &mut self.buffer {
+            Buffer::Pixels(pixels) => PixmapMut::from_bytes(
+                pixels.frame_mut(),
+                self.outer_size.width,
+                self.outer_size.height,
+            )
+            .unwrap(),
+            Buffer::Softbuffer {
+                _context,
+                surface: _,
+                pixmap,
+            } => pixmap.as_mut(),
+        }
+    }
+
+    fn present(&mut self) -> anyhow::Result<()> {
+        match &mut self.buffer {
+            Buffer::Pixels(pixels) => {
+                pixels.render()?;
+            }
+            Buffer::Softbuffer {
+                _context,
+                surface,
+                pixmap,
+            } => {
+                surface
+                    .resize(
+                        NonZeroU32::new(self.outer_size.width).unwrap(),
+                        NonZeroU32::new(self.outer_size.height).unwrap(),
+                    )
+                    .unwrap();
+
+                let mut buffer = surface.buffer_mut().map_err(|err| anyhow!("{err}"))?;
+
+                render_pixmap_softbuffer(&mut buffer, &pixmap);
+
+                buffer.present().map_err(|err| anyhow!("{err}"))?;
             }
         }
 
-        if self.close_button && (render || self.close_button_changed) {
-            draw_close_button(
-                &mut PixelsWrapper::new(&mut self.pixels),
-                self.window.scale_factor(),
-                self.cursor_over_button,
-            );
-
-            render = true;
-        }
-
-        if render {
-            self.pixels.render()?;
-        }
-
         Ok(())
+    }
+
+    fn get_next_frame(&mut self) -> anyhow::Result<(bool, Option<VideoFrame>)> {
+        if self.paused
+            || self
+                .duration
+                .is_some_and(|duration| self.last_frame_time.elapsed() < duration)
+        {
+            return Ok((false, None));
+        }
+
+        let frame = loop {
+            match self.decoder.next_frame() {
+                NextFrame::Ready(frame) => break frame,
+                NextFrame::Finish => {
+                    let _ = self
+                        .inner_window
+                        .lua_event_tx
+                        .send(lua::Event::VideoFinish {
+                            id: self.inner_window.window.id(),
+                        });
+
+                    if !self.loop_video {
+                        return Ok((true, None));
+                    }
+                }
+                NextFrame::None => return Ok((false, None)),
+                NextFrame::Error(err) => return Err(err),
+            }
+        };
+
+        self.duration = Some(frame.duration);
+        self.last_frame_time = Instant::now();
+
+        Ok((false, Some(frame)))
     }
 
     pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        if self.close_button {
-            let was_over_button = self.cursor_over_button;
-            self.cursor_over_button = is_over_close_button(
-                position.x,
-                position.y,
-                self.width,
-                self.window.scale_factor(),
-            );
-
-            if was_over_button != self.cursor_over_button {
-                self.window.request_redraw();
-            }
+        if let Some(header) = &mut self.header {
+            header.handle_cursor_moved(position);
         }
     }
 
-    pub fn handle_mouse_left_window(&mut self) {
-        if self.close_button && self.cursor_over_button {
-            self.cursor_over_button = false;
-            self.window.request_redraw();
+    pub fn handle_cursor_left(&mut self) {
+        if let Some(header) = &mut self.header {
+            header.handle_cursor_left();
         }
     }
 
-    pub fn handle_click(&mut self) -> bool {
-        if self.close_button {
-            self.cursor_over_button
+    pub fn handle_mouse_down(&mut self) {
+        if let Some(header) = &mut self.header {
+            header.handle_mouse_down();
+        }
+    }
+
+    pub fn handle_mouse_up(&mut self) -> bool {
+        if let Some(header) = &mut self.header {
+            header.handle_mouse_up()
         } else {
-            true
+            false
         }
     }
 
-    pub fn moving(&self) -> bool {
-        self.movement_state.is_some()
+    pub fn pause(&mut self) {
+        self.decoder.pause();
+        self.paused = true;
+
+        if let Some(duration) = self.duration.take() {
+            self.duration = Some(duration - self.last_frame_time.elapsed());
+        }
     }
 
-    /// If the window is a moving window, update its position.
-    pub fn update_position(&mut self) -> Result<()> {
-        let movement_state = match self.movement_state.as_mut() {
-            Some(x) => x,
-            None => return Ok(()),
-        };
+    pub fn play(&mut self) {
+        self.paused = false;
+        self.last_frame_time = Instant::now();
 
-        let delta = (movement_state.last_moved.elapsed().as_secs_f64() * 300.0) as i32;
-
-        if delta != 0 {
-            let window_size = self.window.inner_size();
-            let monitor_size = self.window.current_monitor().map(|x| x.size()).unwrap();
-
-            if movement_state.x <= 0 {
-                movement_state.dx = 1;
-            } else if movement_state.x + window_size.width as i32 >= monitor_size.width as i32 {
-                movement_state.dx = -1;
-            }
-
-            if movement_state.y <= 0 {
-                movement_state.dy = 1;
-            } else if movement_state.y + window_size.height as i32 >= monitor_size.height as i32 {
-                movement_state.dy = -1;
-            }
-
-            let new_x = (movement_state.x + (delta * movement_state.dx))
-                .clamp(0, monitor_size.width as i32 - window_size.width as i32);
-            let new_y = (movement_state.y + (delta * movement_state.dy))
-                .clamp(0, monitor_size.height as i32 - window_size.height as i32);
-
-            self.window
-                .set_outer_position(PhysicalPosition::new(new_x, new_y));
-
-            movement_state.x = new_x;
-            movement_state.y = new_y;
-            movement_state.last_moved = Instant::now();
-        }
-
-        Ok(())
+        self.decoder.play();
     }
 }
 
 /// A prompt window, rendered using `egui`.
-pub struct PromptWindow<'a> {
-    pub window: Arc<Window>,
-    egui_window: EguiWindow<'a>,
-    prompt: String,
-    user_input: String,
-    closed: bool,
+pub struct PromptWindow {
+    inner_window: InnerWindow,
+    egui_window: EguiCPUWindow,
+    title: Option<String>,
+    text: Option<String>,
+    placeholder: Option<String>,
+    value: String,
 }
 
-impl<'a> PromptWindow<'a> {
-    pub fn new(wgpu_state: &WgpuState, window: Window, prompt: String) -> Result<Self> {
+impl PromptWindow {
+    pub fn new(
+        window: WinitWindow,
+        position: LogicalPosition<u32>,
+        title: Option<String>,
+        text: Option<String>,
+        placeholder: Option<String>,
+        initial_value: Option<String>,
+        lua_event_tx: mpsc::UnboundedSender<lua::Event>,
+    ) -> Result<Self> {
         let window = Arc::new(window);
-        let window_clone = window.clone();
+        let inner_window = InnerWindow::new(window.clone(), position, lua_event_tx);
 
         Ok(Self {
-            window,
-            egui_window: EguiWindow::new(wgpu_state, window_clone)?,
-            prompt,
-            user_input: String::new(),
-            closed: false,
+            inner_window,
+            egui_window: EguiCPUWindow::new(window)?,
+            title,
+            text,
+            placeholder,
+            value: initial_value.unwrap_or_default(),
         })
     }
 
@@ -457,45 +638,323 @@ impl<'a> PromptWindow<'a> {
     }
 
     pub fn render(&mut self) -> Result<()> {
-        let mut user_input = self.user_input.clone();
-        let prompt_text = self.prompt.clone();
-        let mut closed = self.closed;
-
         self.egui_window.redraw(|ctx| {
-            ctx.set_visuals(egui::Visuals::light());
-
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                     ui.heading("Repeat after me");
                     ui.add_space(20.0);
 
-                    ui.add(egui::Label::new(format!("\"{}\"", prompt_text)));
+                    if let Some(title) = &self.title {
+                        ui.label(RichText::new(title).heading());
+                    }
 
-                    let response = ui.text_edit_singleline(&mut user_input);
+                    if let Some(text) = &self.text {
+                        ui.label(text);
+                    }
+
+                    let mut prompt = TextEdit::singleline(&mut self.value);
+
+                    if let Some(placeholder) = &self.placeholder {
+                        prompt = prompt.hint_text(placeholder);
+                    };
+
+                    let response = ui.add(prompt);
                     response.request_focus();
 
                     ui.add_space(ui.available_height() - 50.0);
 
                     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                         if ui.add(egui::Button::new("Submit")).clicked() {
-                            if user_input == prompt_text {
-                                closed = true;
+                            if let Err(err) =
+                                self.inner_window
+                                    .lua_event_tx
+                                    .send(lua::Event::PromptSubmit {
+                                        id: self.inner_window.window.id(),
+                                        text: self.value.clone(),
+                                    })
+                            {
+                                eprintln!("{err}");
                             }
-
-                            println!("User submitted: {}", user_input);
                         }
                     })
                 })
             });
         })?;
 
-        self.user_input = user_input;
-        self.closed = closed;
+        Ok(())
+    }
+
+    pub fn set_title(&mut self, title: Option<String>) {
+        self.title = title;
+        self.inner_window.window.request_redraw();
+    }
+
+    pub fn set_text(&mut self, text: Option<String>) {
+        self.text = text;
+        self.inner_window.window.request_redraw();
+    }
+
+    pub fn set_value(&mut self, value: Option<String>) {
+        self.value = value.unwrap_or_default();
+        self.inner_window.window.request_redraw();
+    }
+}
+
+pub struct ChoiceWindow {
+    inner_window: InnerWindow,
+    egui_window: EguiCPUWindow,
+    title: Option<String>,
+    text: Option<String>,
+    options: Vec<ChoiceWindowOption>,
+}
+
+impl ChoiceWindow {
+    pub fn new(
+        window: WinitWindow,
+        position: LogicalPosition<u32>,
+        title: Option<String>,
+        text: Option<String>,
+        options: Vec<ChoiceWindowOption>,
+        lua_event_tx: mpsc::UnboundedSender<lua::Event>,
+    ) -> Result<Self> {
+        let window = Arc::new(window);
+        let inner_window = InnerWindow::new(window.clone(), position, lua_event_tx);
+
+        Ok(Self {
+            inner_window,
+            egui_window: EguiCPUWindow::new(window)?,
+            title,
+            text,
+            options,
+        })
+    }
+
+    pub fn handle_event(&mut self, event: &WindowEvent) {
+        self.egui_window.handle_event(event);
+    }
+
+    pub fn render(&mut self) -> Result<()> {
+        self.egui_window.redraw(|ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.heading("Repeat after me");
+                    ui.add_space(20.0);
+
+                    if let Some(title) = &self.title {
+                        ui.label(RichText::new(title).heading());
+                    }
+
+                    if let Some(text) = &self.text {
+                        ui.label(text);
+                    }
+
+                    ui.add_space(ui.available_height() - 50.0);
+
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                        for option in &self.options {
+                            if ui.button(&option.label).clicked() {
+                                let _ =
+                                    self.inner_window
+                                        .lua_event_tx
+                                        .send(lua::Event::ChoiceSelect {
+                                            id: self.inner_window.window.id(),
+                                            option_id: option.id.clone(),
+                                        });
+                            }
+                        }
+                    })
+                })
+            });
+        })?;
 
         Ok(())
     }
 
-    pub fn closed(&self) -> bool {
-        self.closed
+    pub fn set_title(&mut self, title: Option<String>) {
+        self.title = title;
+        self.inner_window.window.request_redraw();
+    }
+
+    pub fn set_text(&mut self, text: Option<String>) {
+        self.text = text;
+        self.inner_window.window.request_redraw();
+    }
+
+    pub fn set_options(&mut self, options: Vec<ChoiceWindowOption>) {
+        self.options = options;
+        self.inner_window.window.request_redraw();
+    }
+}
+
+pub struct InnerWindow {
+    window: Arc<WinitWindow>,
+    position: LogicalPosition<u32>,
+    lua_event_tx: mpsc::UnboundedSender<lua::Event>,
+    current_move: Option<Move>,
+}
+
+struct Move {
+    id: u64,
+    from: LogicalPosition<u32>,
+    to: LogicalPosition<u32>,
+    duration: Duration,
+    start: Instant,
+    easing: Easing,
+}
+
+impl InnerWindow {
+    fn new(
+        window: Arc<WinitWindow>,
+        position: LogicalPosition<u32>,
+        lua_event_tx: mpsc::UnboundedSender<lua::Event>,
+    ) -> Self {
+        Self {
+            window,
+            position,
+            lua_event_tx,
+            current_move: None,
+        }
+    }
+
+    pub fn request_redraw(&self) {
+        self.window.request_redraw();
+    }
+
+    pub fn start_move(&mut self, id: u64, opts: MoveOpts) -> Result<(), LewdwareError> {
+        let scale_factor = self.window.scale_factor();
+
+        let size = self.window.inner_size().to_logical(scale_factor);
+
+        let monitor_size = self
+            .window
+            .current_monitor()
+            .ok_or(LewdwareError::MonitorError(MonitorError::WindowMonitorNotFound))?
+            .size()
+            .to_logical::<u32>(scale_factor);
+
+        let x = match opts.x {
+            Some(Coord::Pixel(x)) => Some(opts.anchor.resolve(x, size.width)),
+            Some(Coord::Percent { percent }) => Some(opts.anchor.resolve(
+                ((percent * monitor_size.width as f64) / 100.0).round() as u32,
+                size.width,
+            )),
+            None => None,
+        };
+
+        let y = match opts.y {
+            Some(Coord::Pixel(y)) => Some(opts.anchor.resolve(y, size.height)),
+            Some(Coord::Percent { percent }) => Some(opts.anchor.resolve(
+                ((percent * monitor_size.height as f64) / 100.0).round() as u32,
+                size.height,
+            )),
+            None => None,
+        };
+
+        let new_position = if opts.relative {
+            LogicalPosition::new(
+                self.position.x + x.unwrap_or(0),
+                self.position.y + y.unwrap_or(0),
+            )
+        } else {
+            LogicalPosition::new(x.unwrap_or(self.position.x), y.unwrap_or(self.position.y))
+        };
+
+        let move_obj = Move {
+            id: id,
+            from: self.position.clone(),
+            to: new_position,
+            duration: Duration::from_millis(opts.duration),
+            start: Instant::now(),
+            easing: opts.easing,
+        };
+
+        self.current_move = Some(move_obj);
+
+        Ok(())
+    }
+
+    pub fn update_position(&mut self) {
+        if let Some(current_move) = &self.current_move {
+            let percent = current_move
+                .start
+                .elapsed()
+                .div_duration_f64(current_move.duration)
+                .min(1.0);
+
+            let new_position = LogicalPosition::new(
+                ((current_move.to.x - current_move.from.x) as f64 * percent).round() as u32,
+                ((current_move.to.y - current_move.from.y) as f64 * percent).round() as u32,
+            );
+
+            if new_position != self.position {
+                let monitor_position = self
+                    .window
+                    .current_monitor()
+                    .map(|monitor| monitor.position().to_logical(self.window.scale_factor()))
+                    .unwrap_or(LogicalPosition::new(0, 0));
+
+                self.window.set_outer_position(LogicalPosition::new(
+                    monitor_position.x + new_position.x,
+                    monitor_position.y + new_position.y,
+                ));
+
+                self.position = new_position;
+            }
+
+            if percent >= 1.0 {
+                if let Err(err) = self.lua_event_tx.send(lua::Event::MoveFinish {
+                    id: self.window.id(),
+                    move_id: current_move.id,
+                }) {
+                    eprintln!("{err}");
+                }
+
+                self.current_move = None;
+            }
+        }
+    }
+}
+
+impl Drop for InnerWindow {
+    fn drop(&mut self) {
+        if let Err(_) = self.lua_event_tx.send(lua::Event::WindowClosed {
+            id: self.window.id(),
+        }) {
+            eprintln!("Event receiver closed");
+        }
+    }
+}
+
+fn render_pixmap_softbuffer(buffer: &mut [u32], pixmap: &Pixmap) {
+    let data = pixmap.data();
+
+    for index in 0..(pixmap.width() * pixmap.height()) as usize {
+        let r = data[index * 4] as u32;
+        let g = data[index * 4 + 1] as u32;
+        let b = data[index * 4 + 2] as u32;
+        let a = data[index * 4 + 3] as u32;
+
+        buffer[index] = (a << 24) | (r << 16) | (g << 8) | b;
+    }
+}
+
+fn copy_pixmap(destination: &mut PixmapMut<'_>, source: &Pixmap, x: u32, y: u32) {
+    let offset = (y * destination.width()) as usize * 4;
+    let dst_width = destination.width();
+    let dst_data = &mut destination.data_mut()[offset..];
+
+    if x == 0 && dst_width == source.width() {
+        dst_data[..source.data().len()].copy_from_slice(source.data());
+    } else {
+        let src_data = source.data();
+
+        for (i, row) in src_data
+            .chunks_exact(source.width() as usize * 4)
+            .enumerate()
+        {
+            let index = (dst_width * i as u32 + x) as usize * 4;
+
+            dst_data[index..index + row.len()].copy_from_slice(row);
+        }
     }
 }

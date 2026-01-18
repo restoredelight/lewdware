@@ -22,6 +22,7 @@ pub struct AppConfig {
     pub moving_windows: bool,
     pub moving_window_chance: u32,
     pub panic_button: Key,
+    pub disabled_monitors: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -66,6 +67,7 @@ impl Default for AppConfig {
                     ..Default::default()
                 },
             },
+            disabled_monitors: Vec::new(),
         }
     }
 }
@@ -81,16 +83,10 @@ pub fn load_config() -> Result<AppConfig> {
 
 pub fn save_config(config: &AppConfig) -> Result<()> {
     let path = config_path()?;
+    let temp_config_path = path.with_added_extension("tmp");
 
-    fs::write(path, serde_json::to_string(config)?)?;
-
-    Ok(())
-}
-
-pub async fn save_config_async(config: &AppConfig) -> Result<()> {
-    let path = config_path()?;
-
-    tokio::fs::write(path, serde_json::to_string(config)?).await?;
+    fs::write(&temp_config_path, serde_json::to_string(config)?)?;
+    fs::rename(temp_config_path, path)?;
 
     Ok(())
 }

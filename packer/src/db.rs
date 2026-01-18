@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{Result, anyhow};
-use shared::read_config::{Config, Resolved};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection, OptionalExtension};
+use shared::{db::{migrate, Database}, read_config::{Config, Resolved}};
 
 use crate::PackedEntry;
 
@@ -13,83 +13,11 @@ pub fn build_sqlite_index(
     resolved: Resolved,
 ) -> Result<()> {
     let mut conn = Connection::open(db_path)?;
-    conn.execute_batch(
-        r#"
-        PRAGMA journal_mode = OFF;
-        PRAGMA synchronous = OFF;
-        PRAGMA temp_store = MEMORY;
-        PRAGMA page_size = 4096;
-        CREATE TABLE media (
-            id INTEGER PRIMARY KEY,
-            path TEXT NOT NULL,
-            media_type TEXT CHECK(media_type IN ('image','video','audio','other')) NOT NULL,
-            category TEXT CHECK(category IN ('default', 'wallpaper')) NOT NULL,
-            offset INTEGER NOT NULL,
-            length INTEGER NOT NULL,
-            width INTEGER,
-            height INTEGER,
-            duration REAL
-        );
-        CREATE TABLE wallpapers (
-            id INTEGER PRIMARY KEY,
-            path TEXT NOT NULL,
-            offset INTEGER NOT NULL,
-            length INTEGER NOT NULL
-        );
-        CREATE TABLE notifications (
-            id INTEGER PRIMARY KEY,
-            summary TEXT,
-            body TEXT NOT NULL
-        );
-        CREATE TABLE links (
-            id INTEGER PRIMARY KEY,
-            link TEXT NOT NULL
-        );
-        CREATE TABLE prompts (
-            id INTEGER PRIMARY KEY,
-            prompt TEXT NOT NULL
-        );
-        CREATE TABLE tags (
-            id INTEGER PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL
-        );
-        CREATE TABLE media_tags (
-            media_id INTEGER NOT NULL,
-            tag_id INTEGER NOT NULL,
-            PRIMARY KEY(media_id, tag_id),
-            FOREIGN KEY(media_id) REFERENCES media(id) ON DELETE CASCADE,
-            FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
-        );
-        CREATE TABLE wallpaper_tags (
-            wallpaper_id INTEGER NOT NULL,
-            tag_id INTEGER NOT NULL,
-            PRIMARY KEY(wallpaper_id, tag_id),
-            FOREIGN KEY(wallpaper_id) REFERENCES wallpapers(id) ON DELETE CASCADE,
-            FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
-        );
-        CREATE TABLE notification_tags (
-            notification_id INTEGER NOT NULL,
-            tag_id INTEGER NOT NULL,
-            PRIMARY KEY(notification_id, tag_id),
-            FOREIGN KEY(notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
-            FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
-        );
-        CREATE TABLE link_tags (
-            link_id INTEGER NOT NULL,
-            tag_id INTEGER NOT NULL,
-            PRIMARY KEY(link_id, tag_id),
-            FOREIGN KEY(link_id) REFERENCES links(id) ON DELETE CASCADE,
-            FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
-        );
-        CREATE TABLE prompt_tags (
-            prompt_id INTEGER NOT NULL,
-            tag_id INTEGER NOT NULL,
-            PRIMARY KEY(prompt_id, tag_id),
-            FOREIGN KEY(prompt_id) REFERENCES prompts(id) ON DELETE CASCADE,
-            FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
-        );
-        "#,
-    )?;
+
+    {
+        let db = DatabaseConnection(&mut conn);
+        migrate(db)?;
+    }
 
     let tx = conn.transaction()?;
     let mut tag_cache: HashMap<String, i64> = HashMap::new();
@@ -101,26 +29,29 @@ pub fn build_sqlite_index(
             tag_cache.insert(tag.clone(), id);
         }
 
-        let mut media_stmt = tx.prepare("INSERT INTO media (path, media_type, category, offset, length, width, height, duration) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id")?;
+        let mut media_stmt = tx.prepare("INSERT INTO media (file_name, file_type, category, offset, length, width, height, duration, audio) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id")?;
         let mut media_tag_stmt =
             tx.prepare("INSERT INTO media_tags (media_id, tag_id) VALUES (?1, ?2)")?;
 
-        for e in entries {
+        for entry in entries {
+            let parts = entry.file_info.to_parts();
+
             let media_id: i64 = media_stmt.query_row(
                 params![
-                    e.rel_path,
-                    e.media_type.as_str(),
-                    e.category.as_str(),
-                    e.offset as i64,
-                    e.length as i64,
-                    e.width,
-                    e.height,
-                    e.duration
+                    entry.file_name,
+                    parts.file_type.as_str(),
+                    entry.category.as_str(),
+                    entry.offset as i64,
+                    entry.length as i64,
+                    parts.width,
+                    parts.height,
+                    parts.duration,
+                    parts.audio
                 ],
                 |row| row.get("id"),
             )?;
 
-            for tag in &e.tags {
+            for tag in &entry.tags {
                 let tag_id = tag_cache
                     .get(tag)
                     .ok_or_else(|| anyhow!("Tag {} not found", tag))?;
@@ -186,4 +117,20 @@ pub fn build_sqlite_index(
     tx.commit()?;
 
     Ok(())
+}
+
+struct DatabaseConnection<'a>(&'a mut Connection);
+
+impl<'a> Database for DatabaseConnection<'a> {
+    fn exec(&self, sql: &str) -> Result<()> {
+        self.0.execute_batch(sql)?;
+        Ok(())
+    }
+
+    fn get_value(&self, sql: &str, field: &str) -> Result<Option<usize>> {
+        self.0
+            .query_row(sql, params![], |row| row.get(field))
+            .optional()
+            .map_err(|err| err.into())
+    }
 }

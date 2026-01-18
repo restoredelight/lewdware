@@ -197,7 +197,7 @@ fn draw_x_pattern(
     }
 }
 
-pub fn is_over_close_button(x: f64, y: f64, window_width: u32, scale_factor: f64) -> bool {
+pub fn is_over_close_button(x: f64, y: f64, window_width: u64, scale_factor: f64) -> bool {
     let button_size = to_physical_size(20, scale_factor).max(16);
     let margin = to_physical_size(6, scale_factor).max(4);
 
