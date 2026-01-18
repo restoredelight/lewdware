@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import "./menu.ts";
 import { setupEditDisplay } from "./editor.ts";
 import { PackInfo } from "./types.ts";
+import "./progress.ts";
+import "./components/progress-bar.ts";
 
 let greetInputEl: HTMLInputElement | null;
 let greetMsgEl: HTMLElement | null;
@@ -38,20 +40,6 @@ createPackButton?.addEventListener("click", () => {
     createPackDialog?.showModal();
 });
 
-submitButton?.addEventListener("click", async () => {
-    const name = nameInput?.value;
-
-    const created: boolean = await invoke("create_pack", {
-        details: {
-            name,
-        },
-    });
-
-    if (created) {
-        setupEditDisplay();
-    }
-});
-
 // Polyfill for closedby="any"
 for (const dialog of document.querySelectorAll(
     "dialog[closedby='any']",
@@ -68,12 +56,37 @@ for (const dialog of document.querySelectorAll(
 
 const selectPackButton = document.querySelector("#select-pack-button");
 
-selectPackButton?.addEventListener("click", async () => {
-    const packInfo: PackInfo | null = await invoke("open_pack");
+async function main() {
+    const mediaPort: number = await invoke("media_server_port");
+
+    submitButton?.addEventListener("click", async () => {
+        const name = nameInput?.value;
+
+        const created: boolean = await invoke("create_pack", {
+            details: {
+                name,
+            },
+        });
+
+        if (created) {
+            setupEditDisplay(null, mediaPort);
+            createPackDialog?.close();
+        }
+    });
+
+    selectPackButton?.addEventListener("click", async () => {
+        const packInfo: PackInfo | null = await invoke("open_pack");
+
+        if (packInfo !== null) {
+            setupEditDisplay(packInfo, mediaPort);
+        }
+    });
+
+    const packInfo: PackInfo | null = await invoke("get_pack_info");
 
     if (packInfo !== null) {
-        setupEditDisplay(packInfo);
+        setupEditDisplay(packInfo, mediaPort);
     }
-});
+}
 
-invoke("get_monitors");
+main();

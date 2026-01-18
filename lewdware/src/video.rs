@@ -1,17 +1,22 @@
 use std::{
     path::PathBuf,
-    sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
+    sync::{
+        Arc,
+        mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
+    },
     thread,
     time::Duration,
 };
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use ffmpeg::{codec, format, software};
-use ffmpeg_next::{self as ffmpeg, Packet, frame::Video, threading};
+use ffmpeg_next::{self as ffmpeg, Packet, frame::Video};
+use tiny_skia::{Pixmap, PixmapMut};
+use winit::window::Window;
 
 use crate::{
     audio::{AudioMessage, spawn_audio_thread},
-    media,
+    media::FileOrPath,
 };
 
 /// A video decoder using ffmpeg. Audio syncing is only done when the video loops (the audio thread
@@ -27,9 +32,9 @@ use crate::{
 pub struct VideoDecoder {
     receiver: Receiver<Option<VideoFrame>>,
     audio_message_tx: Option<SyncSender<AudioMessage>>,
-    _video: media::Video,
-    width: i64,
-    height: i64,
+    _video: FileOrPath,
+    width: u32,
+    height: u32,
 }
 
 pub struct VideoFrame {
@@ -38,18 +43,21 @@ pub struct VideoFrame {
 }
 
 impl VideoDecoder {
-    pub fn new(video: media::Video, play_audio: bool) -> Result<Self> {
-        let path = video.file.path();
+    pub fn new(
+        video: FileOrPath,
+        width: u32,
+        height: u32,
+        play_audio: bool,
+        loop_video: bool,
+    ) -> Result<Self> {
+        let path = video.path();
 
-        let width = video.width.max(1280);
-        let height = video.height.max(720);
-
-        let receiver = spawn_video_stream(path.to_path_buf(), width, height);
+        let receiver = spawn_video_stream(path.to_path_buf(), width, height, loop_video);
 
         let audio_message_tx = if play_audio {
             let (tx, rx) = sync_channel(10);
 
-            spawn_audio_thread(path.to_path_buf(), rx, true);
+            spawn_audio_thread(path.to_path_buf(), rx, loop_video);
 
             Some(tx)
         } else {
@@ -59,29 +67,29 @@ impl VideoDecoder {
         Ok(Self {
             receiver,
             width,
-            _video: video,
             height,
+            _video: video,
             audio_message_tx,
         })
     }
 
     /// Get the next frame, if it's ready.
-    pub fn next_frame(&mut self) -> Result<Option<VideoFrame>> {
-        loop {
-            match self.receiver.try_recv() {
-                Ok(message) => match message {
-                    Some(frame) => return Ok(Some(frame)),
-                    // The decoding thread sends `None` when the video ends, so we should tell the
-                    // audio thread to loop.
-                    None => {
-                        if let Some(tx) = self.audio_message_tx.as_ref() {
-                            let _ = tx.try_send(AudioMessage::Loop);
-                        }
+    pub fn next_frame(&mut self) -> NextFrame {
+        match self.receiver.try_recv() {
+            Ok(message) => match message {
+                Some(frame) => NextFrame::Ready(frame),
+                // The decoding thread sends `None` when the video ends, so we should tell the
+                // audio thread to loop.
+                None => {
+                    if let Some(tx) = self.audio_message_tx.as_ref() {
+                        let _ = tx.try_send(AudioMessage::Loop);
                     }
-                },
-                Err(TryRecvError::Empty) => return Ok(None),
-                Err(e) => return Err(e.into()),
-            }
+
+                    NextFrame::Finish
+                }
+            },
+            Err(TryRecvError::Empty) => NextFrame::None,
+            Err(e) => return NextFrame::Error(e.into()),
         }
     }
 
@@ -111,6 +119,46 @@ impl VideoDecoder {
         Ok(())
     }
 
+    pub fn create_pixmap(&self, frame: &Video) -> Result<Pixmap> {
+        let mut pixmap = Pixmap::new(self.width, self.height).unwrap();
+
+        self.copy_frame(frame, pixmap.data_mut())?;
+
+        Ok(pixmap)
+    }
+
+    pub fn copy_frame_pixmap(
+        &self,
+        frame: &Video,
+        pixmap: &mut PixmapMut<'_>,
+        y_offset: u32,
+        border_size: u32,
+    ) -> Result<()> {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let line_size = frame.stride(0); // Bytes per row
+        let data = frame.data(0);
+
+        let buf_width = pixmap.width();
+        let buf = pixmap.data_mut();
+
+        // Copy row-by-row into a contiguous Vec
+        for row_idx in 0..height {
+            let src_start = row_idx * line_size;
+            let src_end = src_start + width * 4;
+
+            let buf_start = (buf_width * (y_offset + row_idx as u32) + border_size) as usize;
+
+            if src_end <= data.len() {
+                buf[buf_start..buf_start + width].copy_from_slice(&data[src_start..src_end]);
+            } else {
+                bail!("Invalid stride");
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn pause(&self) {
         if let Some(tx) = self.audio_message_tx.as_ref() {
             let _ = tx.try_send(AudioMessage::Pause);
@@ -122,14 +170,53 @@ impl VideoDecoder {
             let _ = tx.try_send(AudioMessage::Play);
         }
     }
+
+    pub fn copy_frame_softbuffer(
+        &self,
+        frame: &Video,
+        buf: &mut softbuffer::Buffer<'_, Arc<Window>, Arc<Window>>,
+    ) -> Result<()> {
+        let width = self.width as usize;
+        let line_size = frame.stride(0); // Bytes per row
+        let data = frame.data(0);
+
+        // Copy row-by-row into a contiguous Vec
+        for (row_idx, chunk) in buf.chunks_exact_mut(width).enumerate() {
+            let src_start = row_idx * line_size;
+            let src_end = src_start + width * 4;
+
+            for (i, pixel) in data[src_start..src_end].chunks_exact(4).enumerate() {
+                let r = pixel[0] as u32;
+                let g = pixel[1] as u32;
+                let b = pixel[2] as u32;
+                let a = pixel[3] as u32;
+
+                chunk[i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub enum NextFrame {
+    Ready(VideoFrame),
+    Finish,
+    None,
+    Error(anyhow::Error),
 }
 
 /// Spawn a thread to decode frames from a video.
-fn spawn_video_stream(path: PathBuf, width: i64, height: i64) -> Receiver<Option<VideoFrame>> {
+fn spawn_video_stream(
+    path: PathBuf,
+    width: u32,
+    height: u32,
+    loop_video: bool,
+) -> Receiver<Option<VideoFrame>> {
     let (tx, rx) = sync_channel(20);
 
     thread::spawn(move || {
-        if let Err(err) = decode_video(path, tx, width, height) {
+        if let Err(err) = decode_video(path, tx, width, height, loop_video) {
             eprintln!("Error decoding video: {}", err);
         }
     });
@@ -137,33 +224,32 @@ fn spawn_video_stream(path: PathBuf, width: i64, height: i64) -> Receiver<Option
     rx
 }
 
-fn decode_video(path: PathBuf, tx: SyncSender<Option<VideoFrame>>, width: i64, height: i64) -> Result<()> {
+fn decode_video(
+    path: PathBuf,
+    tx: SyncSender<Option<VideoFrame>>,
+    width: u32,
+    height: u32,
+    loop_video: bool,
+) -> Result<()> {
     ffmpeg::init()?;
     let mut ictx = format::input(&path)?;
     let stream_index = ictx
         .streams()
         .best(ffmpeg::media::Type::Video)
-        .ok_or_else(|| anyhow!("Couldn't find video stream"))?
+        .context("Couldn't find video stream")?
         .index();
 
-    let video_stream = ictx.stream(stream_index).unwrap();
+    let video_stream = ictx.stream(stream_index).context("Invalid stream index")?;
     let context_decoder = codec::Context::from_parameters(video_stream.parameters())?;
     let mut decoder = context_decoder.decoder().video()?;
-    // Set up multi-threading
-    let mut threading = decoder.threading();
-
-    threading.count = 0;
-    threading.kind = threading::Type::Frame;
-
-    decoder.set_threading(threading);
 
     let mut scaler = software::scaling::context::Context::get(
         decoder.format(),
         decoder.width(),
         decoder.height(),
         ffmpeg::format::Pixel::RGBA,
-        width as u32,
-        height as u32,
+        width,
+        height,
         software::scaling::flag::Flags::BILINEAR,
     )?;
 
@@ -184,6 +270,11 @@ fn decode_video(path: PathBuf, tx: SyncSender<Option<VideoFrame>>, width: i64, h
         }
 
         tx.send(None)?;
+
+        if !loop_video {
+            return Ok(());
+        }
+
         ictx.seek(0, ..0)?;
         decoder.flush();
     }
@@ -207,4 +298,35 @@ fn frame_duration(packet: &Packet, stream: &ffmpeg::Stream) -> Duration {
         };
         Duration::from_secs_f64(1.0 / fps)
     }
+}
+
+pub fn copy_frame_pixmap(
+    frame: &Video,
+    pixmap: &mut PixmapMut<'_>,
+    y_offset: u32,
+    border_size: u32,
+) -> Result<()> {
+    let width = frame.width() as usize;
+    let height = frame.height() as usize;
+    let line_size = frame.stride(0); // Bytes per row
+    let data = frame.data(0);
+
+    let buf_width = pixmap.width();
+    let buf = pixmap.data_mut();
+
+    // Copy row-by-row into a contiguous Vec
+    for row_idx in 0..height {
+        let src_start = row_idx * line_size;
+        let src_end = src_start + width * 4;
+
+        let buf_start = ((buf_width * (y_offset + row_idx as u32) + border_size) * 4) as usize;
+
+        if src_end <= data.len() {
+            buf[buf_start..buf_start + width * 4].copy_from_slice(&data[src_start..src_end]);
+        } else {
+            bail!("Invalid stride");
+        }
+    }
+
+    Ok(())
 }

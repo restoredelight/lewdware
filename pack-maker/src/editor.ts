@@ -1,10 +1,14 @@
 import { PackInfo } from "./types";
 import { ImageGrid } from "./components/virtualized-grid";
+import { updateMenu } from "./menu";
 
 const openPage = document.querySelector("#open-page");
 const mainPage = document.querySelector("#main-page");
 
-export function setupEditDisplay(packInfo: PackInfo | null = null) {
+export function setupEditDisplay(
+    packInfo: PackInfo | null = null,
+    mediaPort: number,
+) {
     console.log(packInfo);
     if (openPage && mainPage) {
         openPage.classList.add("hidden");
@@ -12,11 +16,12 @@ export function setupEditDisplay(packInfo: PackInfo | null = null) {
     }
 
     if (mainPage) {
-        const grid = ImageGrid.create(packInfo?.files ?? [])
+        const grid = ImageGrid.create(packInfo?.files ?? [], mediaPort);
         console.log("Grid created");
         mainPage.appendChild(grid);
-        return;
     }
+
+    updateMenu(true);
 
     // mediaContainer?.addEventListener("mousedown", (event) => {
     //     if (!event.shiftKey && !event.ctrlKey) {

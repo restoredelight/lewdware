@@ -1,10 +1,11 @@
-use std::{fs::File, sync::Mutex, time::Duration};
+use std::{env, fs::File, sync::Mutex, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use shared::{
     read_pack::read_pack_metadata,
     user_config::{self, load_config, AppConfig, Key},
 };
+use tauri::AppHandle;
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 struct Config {
@@ -25,6 +26,7 @@ struct Config {
     moving_windows: bool,
     moving_window_chance: u32,
     panic_button: Key,
+    disabled_monitors: Vec<String>
 }
 
 impl From<AppConfig> for Config {
@@ -47,6 +49,7 @@ impl From<AppConfig> for Config {
             moving_windows: value.moving_windows,
             moving_window_chance: value.moving_window_chance,
             panic_button: value.panic_button,
+            disabled_monitors: value.disabled_monitors,
         }
     }
 }
@@ -71,6 +74,7 @@ impl From<Config> for AppConfig {
             moving_windows: value.moving_windows,
             moving_window_chance: value.moving_window_chance,
             panic_button: value.panic_button,
+            disabled_monitors: value.disabled_monitors,
         }
     }
 }
@@ -132,6 +136,61 @@ fn load_info(path: String) -> Result<PackInfo, String> {
     })
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct Monitor {
+    id: String,
+    name: String,
+    primary: bool,
+    disabled: bool,
+}
+
+#[tauri::command]
+async fn get_monitors(app_handle: AppHandle, state: State<'_>) -> Result<Vec<Monitor>, String> {
+    let primary_monitor_name = app_handle
+        .primary_monitor()
+        .map_err(|err| err.to_string())?
+        .and_then(|monitor_handle| monitor_handle.name().cloned());
+
+    let config = state.config.lock().unwrap();
+
+    let mut monitors: Vec<_> = app_handle
+        .available_monitors()
+        .map_err(|err| err.to_string())?
+        .iter()
+        .filter_map(|monitor_handle| {
+            let id = monitor_handle.name()?.to_string();
+
+            let primary = Some(&id) == primary_monitor_name.as_ref();
+
+            let disabled = config.disabled_monitors.contains(&id);
+
+            let size = monitor_handle.size();
+            let name = format!("{id} ({}x{})", size.width, size.height);
+
+            Some(Monitor { id, name, primary, disabled })
+        })
+        .collect();
+
+    // Make sure the primary monitor is always first
+    if let Some(primary_position) = monitors.iter().position(|monitor| monitor.primary) {
+        monitors.swap(0, primary_position);
+    }
+
+    Ok(monitors)
+}
+
+#[tauri::command]
+fn is_wayland() -> bool {
+    if cfg!(target_os = "linux") {
+        match env::var("XDG_SESSION_TYPE") {
+            Ok(session_type) => session_type.to_lowercase() == "wayland",
+            Err(_) => false,
+        }
+    } else {
+        false
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config = load_config().unwrap().into();
@@ -142,7 +201,13 @@ pub fn run() {
             config: Mutex::new(config),
         })
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![get_config, save_config, load_info])
+        .invoke_handler(tauri::generate_handler![
+            get_config,
+            save_config,
+            load_info,
+            get_monitors,
+            is_wayland,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

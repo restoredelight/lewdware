@@ -1,10 +1,15 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    num::NonZeroU32,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
-use anyhow::Result;
-use egui_wgpu::wgpu;
+use anyhow::{Context, Result, anyhow};
+use egui::Color32;
+use egui_software_backend::{BufferMutRef, ColorFieldOrder, EguiSoftwareRender};
+use egui_wgpu::{RendererOptions, wgpu};
 use winit::{event::WindowEvent, window::Window};
 
 /// A struct handling rendering onto a winit window using egui.
@@ -27,31 +32,41 @@ pub struct WgpuState {
     pub adapter: Arc<wgpu::Adapter>,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
+    pub error: Arc<AtomicBool>,
 }
 
 impl WgpuState {
-    pub async fn new() -> Self {
+    pub async fn new() -> Result<Self> {
         let instance = wgpu::Instance::default();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default())
-            .await
-            .unwrap();
+            .await?;
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .unwrap();
+            .request_device(&wgpu::DeviceDescriptor {
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                ..Default::default()
+            })
+            .await?;
 
-        device.on_uncaptured_error(Box::new(|err| {
+        let device = Arc::new(device);
+
+        let error = Arc::new(AtomicBool::new(false));
+        let error_clone = error.clone();
+
+        device.on_uncaptured_error(Arc::new(move |err| {
             // #[cfg(debug_assertions)]
-            eprintln!("{}", err);
+            eprintln!("wgpu error: {}", err);
+
+            error_clone.store(true, Ordering::Release);
         }));
 
-        Self {
+        Ok(Self {
             instance,
             adapter: Arc::new(adapter),
-            device: Arc::new(device),
+            device,
             queue: Arc::new(queue),
-        }
+            error,
+        })
     }
 }
 
@@ -87,7 +102,11 @@ impl<'a> EguiWindow<'a> {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&wgpu_state.device, &config);
-        let renderer = egui_wgpu::Renderer::new(&wgpu_state.device, *surface_format, None, 1, true);
+        let renderer = egui_wgpu::Renderer::new(
+            &wgpu_state.device,
+            *surface_format,
+            RendererOptions::default(),
+        );
 
         context.request_repaint();
 
@@ -123,7 +142,7 @@ impl<'a> EguiWindow<'a> {
             self.surface.configure(&self.device, &self.surface_config);
 
             self.window.request_redraw();
-            return
+            return;
         }
 
         if response.repaint {
@@ -193,6 +212,7 @@ impl<'a> EguiWindow<'a> {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                     store: wgpu::StoreOp::Store,
                 },
+                depth_slice: None,
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -217,6 +237,116 @@ impl<'a> EguiWindow<'a> {
         if self.repaint_requested.swap(false, Ordering::AcqRel) {
             self.window.request_redraw();
         }
+
+        Ok(())
+    }
+}
+
+pub struct EguiCPUWindow {
+    context: egui::Context,
+    window: Arc<Window>,
+    state: egui_winit::State,
+    renderer: EguiSoftwareRender,
+    _softbuffer_context: softbuffer::Context<Arc<Window>>,
+    surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
+}
+
+impl EguiCPUWindow {
+    pub fn new(window: Arc<Window>) -> Result<Self> {
+        let context = egui::Context::default();
+        let viewport_id = egui::ViewportId::from_hash_of(window.id());
+        let state = egui_winit::State::new(
+            context.clone(),
+            viewport_id,
+            &window,
+            Some(window.scale_factor() as f32),
+            None,
+            None,
+        );
+
+        let renderer = EguiSoftwareRender::new(ColorFieldOrder::Bgra);
+
+        let softbuffer_context =
+            softbuffer::Context::new(window.clone()).map_err(|err| anyhow!("{}", err))?;
+        let surface = softbuffer::Surface::new(&softbuffer_context, window.clone())
+            .map_err(|err| anyhow!("{}", err))?;
+
+        context.request_repaint();
+
+        let window_clone = window.clone();
+
+        context.set_request_repaint_callback(move |_| {
+            window_clone.request_redraw();
+        });
+
+        let mut visuals = egui::Visuals::light();
+
+        visuals.window_fill = Color32::TRANSPARENT;
+        visuals.panel_fill = Color32::TRANSPARENT;
+
+        context.set_visuals(visuals);
+
+        Ok(Self {
+            context,
+            window,
+            state,
+            renderer,
+            _softbuffer_context: softbuffer_context,
+            surface,
+        })
+    }
+
+    /// Handle a window event. All window events should be passed into this function, aside from
+    /// [WindowEvent::CloseRequested] and [WindowEvent::RedrawRequested].
+    pub fn handle_event(&mut self, event: &WindowEvent) {
+        let response = self.state.on_window_event(&self.window, event);
+
+        if response.repaint {
+            self.window.request_redraw();
+        }
+    }
+
+    /// Redraw the egui window. This should be called whenever the window receives the
+    /// [WindowEvent::RedrawRequested] event.
+    ///
+    /// * `run_ui`: This is where you should define the egui UI of the window.
+    pub fn redraw(&mut self, run_ui: impl FnMut(&egui::Context)) -> Result<()> {
+        let size = self.window.inner_size();
+        self.surface
+            .resize(
+                NonZeroU32::new(size.width).context("Window has 0 width")?,
+                NonZeroU32::new(size.height).context("Window has 0 height")?,
+            )
+            .map_err(|err| anyhow!("{err}"))?;
+
+        let raw_input = self.state.take_egui_input(&self.window);
+
+        let full_output = self.context.run(raw_input, run_ui);
+
+        self.state
+            .handle_platform_output(&self.window, full_output.platform_output);
+
+        let primitives = self
+            .context
+            .tessellate(full_output.shapes, full_output.pixels_per_point);
+
+        let mut buffer = self.surface.buffer_mut().map_err(|err| anyhow!("{err}"))?;
+        buffer.fill(0);
+
+        let buffer_ref = &mut BufferMutRef::new(
+            bytemuck::cast_slice_mut(&mut buffer),
+            size.width as usize,
+            size.height as usize,
+        );
+
+        self.renderer.render(
+            buffer_ref,
+            &primitives,
+            &full_output.textures_delta,
+            full_output.pixels_per_point,
+        );
+
+        buffer.present().map_err(|err| anyhow!("{err}"))?;
 
         Ok(())
     }

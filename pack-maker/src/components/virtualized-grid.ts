@@ -1,6 +1,9 @@
-import { MediaInfo } from "../types";
-import { AssetElement, HTMLAssetElement } from "./asset";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { FileInfo, MediaInfo } from "../types";
+import { AssetElement } from "./asset";
 import content from "./virtualized-grid.html?raw";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 
 const template = document.createElement("template");
 template.innerHTML = content;
@@ -27,10 +30,12 @@ export class ImageGrid extends HTMLElement {
     private maxEnd!: number;
     private selected: Selected = new Selected();
     private dialogFile: MediaInfo | null = null;
+    private mediaHost!: string;
+    private adjustRangeScheduled: boolean = false;
 
     private window!: number;
     private range!: Range;
-    private cleanupListeners!: () => void;
+    private cleanupListeners!: () => Promise<void>;
 
     constructor() {
         super();
@@ -40,17 +45,18 @@ export class ImageGrid extends HTMLElement {
         shadowRoot.appendChild(clone);
     }
 
-    static create(items: MediaInfo[]): ImageGrid {
+    static create(items: MediaInfo[], mediaPort: number): ImageGrid {
         const element: ImageGrid = document.createElement(
             "image-grid",
         ) as ImageGrid;
 
         element.items = items;
+        element.mediaHost = `http://localhost:${mediaPort}`;
 
         return element;
     }
 
-    calculateLayout() {
+    private calculateLayout() {
         const container: HTMLElement | null | undefined =
             this.shadowRoot?.querySelector("#container");
         const wrapper: HTMLElement | null | undefined =
@@ -81,6 +87,35 @@ export class ImageGrid extends HTMLElement {
         }
     }
 
+    addFile(file: MediaInfo) {
+        console.log("Adding file");
+        const items = this.shadowRoot?.querySelector("#items");
+
+        const oldLength = this.items.length;
+
+        this.items.push(file);
+
+        this.totalRows = Math.ceil(this.items.length / this.cols);
+        this.maxEnd = Math.ceil(this.items.length / this.cols) * this.cols - 1;
+
+        if (this.range.start - this.range.end < this.window - 1) {
+            this.range.end = Math.min(
+                this.range.start + this.window - 1,
+                this.maxEnd,
+            );
+        }
+
+        if (items) {
+            for (let i = oldLength; i <= this.range.end; i++) {
+                const element = this.createElement(i);
+
+                if (element) {
+                    items.appendChild(element);
+                }
+            }
+        }
+    }
+
     connectedCallback() {
         this.calculateLayout();
 
@@ -99,6 +134,8 @@ export class ImageGrid extends HTMLElement {
         }
 
         const items = this.shadowRoot?.querySelector("#items");
+        const scrollContainer =
+            this.shadowRoot?.querySelector("#scroll-container");
 
         if (items) {
             for (let i = this.range.start; i <= this.range.end; i++) {
@@ -112,75 +149,88 @@ export class ImageGrid extends HTMLElement {
 
         const startSentinel = this.shadowRoot?.querySelector("#start-sentinel");
         const endSentinel = this.shadowRoot?.querySelector("#end-sentinel");
-
-        const observer = new IntersectionObserver(
-            (entries) => {
-                console.log("Callback called");
-                console.log(entries);
-                for (const entry of entries) {
-                    if (entry.isIntersecting) {
-                        console.log("Intersecting");
-                        console.log(entry.target);
-                        if (entry.target === startSentinel) {
-                            while (this.range.start > 0) {
-                                this.shiftBackwards();
-
-                                if (
-                                    startSentinel.getBoundingClientRect()
-                                        .bottom <= -1100
-                                ) {
-                                    break;
-                                }
-                            }
-                        } else if (entry.target === endSentinel) {
-                            while (this.range.end <= this.items.length - 1) {
-                                this.shiftForwards();
-
-                                if (
-                                    endSentinel.getBoundingClientRect().top >=
-                                    window.innerHeight + 1100
-                                ) {
-                                    break;
-                                }
-                            }
-                        }
-                    } else if (entry.target === items) {
-                        console.log("Items callback");
-
-                        this.adjustRange();
-                    }
-                }
-            },
-            {
-                rootMargin: "1000px",
-            },
+        const dragDropIndicator = this.shadowRoot?.querySelector(
+            "#drag-drop-indicator",
         );
 
-        setTimeout(() => {
-            if (startSentinel) {
-                observer.observe(startSentinel);
-            }
+        // const observer = new IntersectionObserver(
+        //     (entries) => {
+        //         console.log("Callback called");
+        //         console.log(entries);
+        //         for (const entry of entries) {
+        //             if (entry.isIntersecting) {
+        //                 console.log("Intersecting");
+        //                 console.log(entry.target);
+        //                 if (entry.target === startSentinel) {
+        //                     while (this.range.start > 0) {
+        //                         this.shiftBackwards();
+        //
+        //                         if (
+        //                             startSentinel.getBoundingClientRect()
+        //                                 .bottom <= -1100
+        //                         ) {
+        //                             break;
+        //                         }
+        //                     }
+        //                 } else if (entry.target === endSentinel) {
+        //                     while (this.range.end < this.maxEnd) {
+        //                         this.shiftForwards();
+        //
+        //                         if (
+        //                             endSentinel.getBoundingClientRect().top >=
+        //                             window.innerHeight + 1100
+        //                         ) {
+        //                             break;
+        //                         }
+        //                     }
+        //                 }
+        //             } else if (entry.target === items) {
+        //                 console.log("Items callback");
+        //
+        //                 this.adjustRange();
+        //             }
+        //         }
+        //     },
+        //     {
+        //         rootMargin: "1000px",
+        //     },
+        // );
 
-            if (endSentinel) {
-                observer.observe(endSentinel);
-            }
-
-            if (items) {
-                observer.observe(items);
-            }
-        }, 100);
+        // setTimeout(() => {
+        //     if (startSentinel) {
+        //         observer.observe(startSentinel);
+        //     }
+        //
+        //     if (endSentinel) {
+        //         observer.observe(endSentinel);
+        //     }
+        //
+        //     if (items) {
+        //         observer.observe(items);
+        //     }
+        // }, 100);
 
         this.calculateMargin();
 
+        const scrollListener = () => {
+            if (!this.adjustRangeScheduled) {
+                this.adjustRangeScheduled = true;
+                requestAnimationFrame(() => {
+                    this.adjustRange();
+                    this.adjustRangeScheduled = false;
+                });
+            }
+        };
+
+        scrollContainer?.addEventListener("scroll", scrollListener, {
+            passive: true,
+        });
+
         const resizeListener = () => {
             console.log("resize");
-            for (let i = this.range.start; i <= this.range.end; i++) {
-                this.removeElement(i);
-            }
-
             this.calculateLayout();
-            this.adjustRange(false);
-        }
+            this.adjustRange();
+        };
 
         window.addEventListener("resize", resizeListener);
 
@@ -218,14 +268,14 @@ export class ImageGrid extends HTMLElement {
 
                     event.preventDefault();
 
-                    const currentElement: HTMLAssetElement | null | undefined =
+                    const currentElement: AssetElement | null | undefined =
                         this.shadowRoot?.querySelector(
                             `asset-element[id="${this.selected.primary}"]`,
                         );
 
                     if (!currentElement) return;
 
-                    let element: HTMLAssetElement | null;
+                    let element: AssetElement | null;
 
                     if (event.key === "ArrowDown") {
                         element = findVerticalNeighbour(currentElement, false);
@@ -233,10 +283,10 @@ export class ImageGrid extends HTMLElement {
                         element = findVerticalNeighbour(currentElement, true);
                     } else if (event.key === "ArrowLeft") {
                         element =
-                            currentElement.previousElementSibling as HTMLAssetElement | null;
+                            currentElement.previousElementSibling as AssetElement | null;
                     } else if (event.key === "ArrowRight") {
                         element =
-                            currentElement.nextElementSibling as HTMLAssetElement | null;
+                            currentElement.nextElementSibling as AssetElement | null;
                     } else {
                         throw new Error("Invalid key");
                     }
@@ -274,9 +324,61 @@ export class ImageGrid extends HTMLElement {
 
         document.addEventListener("keydown", keydownListener);
 
-        this.cleanupListeners = () => {
+        const removeDragDropListener = getCurrentWebview().onDragDropEvent(
+            async (event) => {
+                if (scrollContainer) {
+                    const eventData = event.payload;
+                    console.log(eventData);
+                    const scaleFactor = await getCurrentWindow().scaleFactor();
+
+                    if (eventData.type === "over") {
+                        const rect = scrollContainer.getBoundingClientRect();
+                        const position =
+                            eventData.position.toLogical(scaleFactor);
+
+                        if (
+                            position.x >= rect.left &&
+                            position.x <= rect.right &&
+                            position.y >= rect.top &&
+                            position.y <= rect.bottom
+                        ) {
+                            console.log("Hover over items");
+                            dragDropIndicator?.classList.remove("hidden");
+                        } else {
+                            console.log("Hover left items");
+                            dragDropIndicator?.classList.add("hidden");
+                        }
+                    } else if (eventData.type === "leave") {
+                        console.log("Hover left items");
+                        dragDropIndicator?.classList.add("hidden");
+                    } else if (eventData.type === "drop") {
+                        const rect = scrollContainer.getBoundingClientRect();
+                        const position =
+                            eventData.position.toLogical(scaleFactor);
+
+                        if (
+                            position.x >= rect.left &&
+                            position.x <= rect.right &&
+                            position.y >= rect.top &&
+                            position.y <= rect.bottom
+                        ) {
+                            console.log("Paths dropped:", eventData.paths);
+
+                            await invoke("drop_files", {
+                                paths: eventData.paths,
+                            });
+
+                            dragDropIndicator?.classList.add("hidden");
+                        }
+                    }
+                }
+            },
+        );
+
+        this.cleanupListeners = async () => {
             document.removeEventListener("keydown", keydownListener);
             document.removeEventListener("resize", resizeListener);
+            removeDragDropListener.then((cb) => cb());
         };
     }
 
@@ -284,40 +386,72 @@ export class ImageGrid extends HTMLElement {
         this.cleanupListeners();
     }
 
-    adjustRange(removeExisting: boolean = true) {
-        console.log("Adjusting range");
+    private adjustRange() {
+        const scrollContainer: HTMLElement | null | undefined =
+            this.shadowRoot?.querySelector("#scroll-container");
         const container: HTMLElement | null | undefined =
             this.shadowRoot?.querySelector("#container");
 
-        const startSentinel = this.shadowRoot?.querySelector("#start-sentinel");
-        const endSentinel = this.shadowRoot?.querySelector("#end-sentinel");
+        if (!scrollContainer || !container) return;
 
-        if (startSentinel && endSentinel && container) {
-            console.log(
-                "Bounding values:",
-                startSentinel.getBoundingClientRect().bottom,
-                endSentinel.getBoundingClientRect().top,
-            );
+        const scrollTop = scrollContainer.scrollTop;
+        const itemHeight = 200 + 25; // height + gap
 
-            if (
-                (this.range.start > 0 &&
-                    startSentinel.getBoundingClientRect().bottom > -1000) ||
-                (this.range.end < this.maxEnd &&
-                    endSentinel.getBoundingClientRect().top <
-                        window.innerHeight + 1000)
-            ) {
-                const top = -container.getBoundingClientRect().top;
-                console.log("Top: ", top);
-                const start = Math.ceil((top - 1500) / (200 + 25)) * this.cols;
+        // Calculate which row is at the top of the viewport
+        const firstVisibleRow = Math.max(0, Math.floor(scrollTop / itemHeight));
+        const newStart = firstVisibleRow * this.cols;
 
-                this.shiftRange(start, removeExisting);
+        // Add buffer rows above and below
+        const bufferRows = 5;
+        const start = Math.max(0, newStart - bufferRows * this.cols);
+        const end = Math.min(
+            this.maxEnd,
+            newStart +
+                (Math.ceil(scrollContainer.clientHeight / itemHeight) +
+                    bufferRows * 2) *
+                    this.cols,
+        );
 
-                setTimeout(() => this.adjustRange(), 500);
-            }
+        if (start !== this.range.start || end !== this.range.end) {
+            console.log("Shifting range");
+            this.shiftRange(start, end);
         }
     }
 
-    shiftForwards() {
+    // adjustRange() {
+    //     console.log("Adjusting range");
+    //     const container: HTMLElement | null | undefined =
+    //         this.shadowRoot?.querySelector("#container");
+    //
+    //     const startSentinel = this.shadowRoot?.querySelector("#start-sentinel");
+    //     const endSentinel = this.shadowRoot?.querySelector("#end-sentinel");
+    //
+    //     if (startSentinel && endSentinel && container) {
+    //         console.log(
+    //             "Bounding values:",
+    //             startSentinel.getBoundingClientRect().bottom,
+    //             endSentinel.getBoundingClientRect().top,
+    //         );
+    //
+    //         if (
+    //             (this.range.start > 0 &&
+    //                 startSentinel.getBoundingClientRect().bottom > -1000) ||
+    //             (this.range.end < this.maxEnd &&
+    //                 endSentinel.getBoundingClientRect().top <
+    //                     window.innerHeight + 1000)
+    //         ) {
+    //             const top = -container.getBoundingClientRect().top;
+    //             console.log("Top: ", top);
+    //             const start = Math.ceil((top - 1500) / (200 + 25)) * this.cols;
+    //
+    //             this.shiftRange(start);
+    //
+    //             setTimeout(() => this.adjustRange(), 500);
+    //         }
+    //     }
+    // }
+
+    private shiftForwards() {
         const distance = Math.min(this.cols * 5, this.maxEnd - this.range.end);
 
         const oldStart = this.range.start;
@@ -345,7 +479,7 @@ export class ImageGrid extends HTMLElement {
         }
     }
 
-    shiftBackwards() {
+    private shiftBackwards() {
         const distance = Math.min(this.cols * 5, this.range.start);
 
         const oldStart = this.range.start;
@@ -373,59 +507,66 @@ export class ImageGrid extends HTMLElement {
         }
     }
 
-    shiftRange(start: number, removeExisting: boolean) {
-        if (removeExisting) {
-            for (let i = this.range.start; i <= this.range.end; i++) {
-                this.removeElement(i);
-            }
-        }
-
-        this.range.start = Math.max(start, 0);
-        this.range.end = Math.min(
-            this.range.start + this.window - 1,
-            this.maxEnd,
-        );
-
-        console.log(this.range.start, this.range.end);
-
-        this.calculateMargin();
-
+    private shiftRange(start: number, end: number) {
         const items = this.shadowRoot?.querySelector("#items");
 
-        if (items) {
-            for (let i = this.range.start; i <= this.range.end; i++) {
-                const element = this.createElement(i);
+        if (!items) return;
 
-                if (element) {
-                    items.appendChild(element);
-                }
+        // Remove elements before the beginning of the new range
+        for (let i = this.range.start; i < Math.min(start, this.range.end + 1); i++) {
+            this.removeElement(i);
+        }
+
+        // Add elements before the beginning of the old range
+        for (let i = Math.min(end, this.range.start - 1); i >= start; i--) {
+            const element = this.createElement(i);
+
+            if (element) {
+                items.prepend(element);
             }
         }
+
+        // Add elements after the end of the old range
+        for (let i = Math.max(this.range.end + 1, start); i <= end; i++) {
+            const element = this.createElement(i);
+
+            if (element) {
+                items.appendChild(element);
+            }
+        }
+
+        // Remove elements after the end of the new range
+        for (let i = Math.max(end + 1, this.range.start); i <= this.range.end; i++) {
+            this.removeElement(i);
+        }
+
+        this.range.start = start;
+        this.range.end = end;
+
+        this.calculateMargin();
     }
 
-    calculateMargin() {
+    private calculateMargin() {
         const wrapper: HTMLElement | null | undefined =
             this.shadowRoot?.querySelector("#wrapper");
 
-        const start = Math.floor(Math.max(this.range.start, 0) / this.cols);
-
         if (wrapper) {
-            wrapper.style.top = `${25 + start * (200 + 25)}px`;
+            const topOffset =
+                25 + Math.floor(this.range.start / this.cols) * (200 + 25);
+            wrapper.style.transform = `translateY(${topOffset}px)`;
         }
     }
 
-    createElement(index: number): HTMLAssetElement | null {
+    private createElement(index: number): AssetElement | null {
         if (index < 0 || index >= this.items.length) {
             return null;
         }
 
+        console.log("Creating element");
+
         const file = this.items[index];
 
-        const element = AssetElement({
-            id: file.id,
-            file_name: file.file_name,
-            video: file.file_type === "video",
-        });
+        const element = AssetElement.create(file, this.mediaHost);
 
         if (this.selected.selected.has(file.id)) {
             element.setAttribute("selected", "");
@@ -494,8 +635,8 @@ export class ImageGrid extends HTMLElement {
         return element;
     }
 
-    setSelected(i: number, value: boolean) {
-        const assetElement: HTMLAssetElement | null | undefined =
+    private setSelected(i: number, value: boolean) {
+        const assetElement: AssetElement | null | undefined =
             this.shadowRoot?.querySelector(`asset-element[id="${i}"]`);
 
         if (value) {
@@ -513,7 +654,7 @@ export class ImageGrid extends HTMLElement {
         }
     }
 
-    clearSelected() {
+    private clearSelected() {
         for (const i of this.selected.selected) {
             this.setSelected(i, false);
         }
@@ -521,7 +662,7 @@ export class ImageGrid extends HTMLElement {
         this.setPrimary(null);
     }
 
-    updateSelected() {
+    private updateSelected() {
         const selectedText = this.shadowRoot?.querySelector("#items-selected");
         if (selectedText) {
             if (this.selected.selected.size === 0) {
@@ -532,7 +673,7 @@ export class ImageGrid extends HTMLElement {
         }
     }
 
-    async setPrimary(primary: number | null) {
+    private async setPrimary(primary: number | null) {
         const oldPrimary = this.selected.primary;
 
         this.selected.primary = primary;
@@ -547,13 +688,13 @@ export class ImageGrid extends HTMLElement {
 
             const file = this.items.find((x) => x.id === this.selected.primary);
 
-            if (file && image) {
-                image.src = `image://localhost/big-thumbnail/${file.id}`;
+            if (file && image && file.file_info.type !== "audio") {
+                image.src = `${this.mediaHost}/big-thumbnail/${file.id}`;
             }
         }
     }
 
-    removeElement(index: number) {
+    private removeElement(index: number) {
         if (index < 0 || index >= this.items.length) {
             return;
         }
@@ -569,7 +710,7 @@ export class ImageGrid extends HTMLElement {
         }
     }
 
-    async showFileDialog(file: MediaInfo) {
+    private async showFileDialog(file: MediaInfo) {
         const fileDialog: HTMLDialogElement | null | undefined =
             this.shadowRoot?.querySelector("#file-dialog");
 
@@ -580,7 +721,7 @@ export class ImageGrid extends HTMLElement {
         await this.changeFileDialog(file);
     }
 
-    async changeFileDialog(file: MediaInfo) {
+    private async changeFileDialog(file: MediaInfo) {
         // const tags: string[] = await invoke("get_file_tags", { id: file.id });
 
         const fileDialog: HTMLDialogElement | null | undefined =
@@ -593,7 +734,11 @@ export class ImageGrid extends HTMLElement {
                 fileDialog.querySelector("#file-view");
 
             if (fileViewContainer) {
-                const source = createSource(fileViewContainer, file.file_type);
+                const source = createSource(
+                    file.file_info,
+                    `${this.mediaHost}/file/${file.id}`,
+                );
+                fileViewContainer.replaceChildren(source);
 
                 fileDialog.addEventListener(
                     "close",
@@ -605,37 +750,43 @@ export class ImageGrid extends HTMLElement {
                         once: true,
                     },
                 );
-
-                source.src = `image://localhost/image/${file.id}`;
             }
         }
     }
 }
 
 function createSource(
-    container: HTMLElement,
-    fileType: "image" | "video" | "audio",
+    fileInfo: FileInfo,
+    src: string,
 ): HTMLImageElement | HTMLSourceElement | HTMLAudioElement {
-    if (fileType === "image") {
+    if (fileInfo.type === "image") {
         const image = document.createElement("img");
-        container.replaceChildren(image);
+        image.src = src;
+        image.style.aspectRatio = `${fileInfo.width} / ${fileInfo.height}`;
 
         return image;
-    } else if (fileType === "video") {
+    } else if (fileInfo.type === "video") {
         const video = document.createElement("video");
         video.setAttribute("controls", "");
+        video.setAttribute("crossorigin", "anonymous");
+        video.style.aspectRatio = `${fileInfo.width} / ${fileInfo.height}`;
 
         const source = document.createElement("source");
-        source.setAttribute("type", "video/mp4");
-        video.appendChild(source);
-        container.replaceChildren(video);
+        source.src = src;
+        source.type = 'video/webm; codecs="vp8, opus"';
 
-        return source;
-    } else if (fileType === "audio") {
-        const audio = document.createElement("video");
+        video.appendChild(source);
+
+        return video;
+    } else if (fileInfo.type === "audio") {
+        const audio = document.createElement("audio");
         audio.setAttribute("controls", "");
 
-        container.replaceChildren(audio);
+        const source = document.createElement("source");
+        source.src = src;
+        source.type = "opus";
+
+        audio.appendChild(source);
 
         return audio;
     } else {
@@ -644,16 +795,16 @@ function createSource(
 }
 
 function findVerticalNeighbour(
-    x: HTMLAssetElement,
+    x: AssetElement,
     up: boolean,
-): HTMLAssetElement | null {
+): AssetElement | null {
     const targetLeft = x.getBoundingClientRect().left;
 
-    let element: HTMLAssetElement | null = x;
+    let element: AssetElement | null = x;
 
     element = up
-        ? (element.previousElementSibling as HTMLAssetElement | null)
-        : (element.nextElementSibling as HTMLAssetElement | null);
+        ? (element.previousElementSibling as AssetElement | null)
+        : (element.nextElementSibling as AssetElement | null);
 
     while (element !== null) {
         const left = element.getBoundingClientRect().left;
@@ -663,8 +814,8 @@ function findVerticalNeighbour(
         }
 
         element = up
-            ? (element.previousElementSibling as HTMLAssetElement | null)
-            : (element.nextElementSibling as HTMLAssetElement | null);
+            ? (element.previousElementSibling as AssetElement | null)
+            : (element.nextElementSibling as AssetElement | null);
     }
 
     return null;

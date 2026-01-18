@@ -1,0 +1,421 @@
+<style>
+  p {
+    margin: 0;
+  }
+
+  button {
+    all: unset;
+  }
+
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    box-sizing: border-box;
+    border: 0 solid;
+  }
+
+  footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 4rem;
+    background: oklch(27.8% 0.033 256.848);
+    color: white;
+    box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+    border-top-style: solid;
+    border-color: oklch(37.3% 0.034 259.733);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-inline: 2rem;
+    z-index: 50;
+    transition-property: opacity;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 500ms;
+  }
+
+  footer:not(.open) {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  #status {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    flex: 2;
+    max-width: 28rem;
+  }
+
+  #status-icon {
+    margin-right: 1rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    color: oklch(70.7% 0.165 254.624);
+  }
+
+  #status-info {
+    min-width: 0;
+  }
+
+  #status-text {
+    font-size: 0.875rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #status-text.red {
+    color: oklch(70.4% 0.191 22.216);
+  }
+
+  #status-text.green {
+    color: oklch(79.2% 0.209 151.711);
+  }
+
+  #status-text.blue {
+    color: oklch(70.7% 0.165 254.624);
+  }
+
+  #subtext {
+    display: inline-flex;
+    flex-flow: row nowrap;
+    max-width: 100%;
+    font-size: 0.75rem;
+    color: oklch(70.7% 0.022 261.325);
+  }
+
+  #current-file {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: pre;
+  }
+
+  #progress-text {
+    white-space: nowrap;
+  }
+
+  #progress-bar-container {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    flex: 4;
+    margin-inline: 5rem;
+  }
+
+  .hidden {
+    display: none;
+  }
+
+  .invisible {
+    opacity: 0%;
+  }
+
+  #progress-bar {
+    width: 100%;
+    background-color: oklch(54.6% 0.245 262.881);
+    border-radius: calc(infinity * 1px);
+    height: 0.625rem;
+    margin-right: 0.5rem;
+    box-shadow:
+      0 4px 6px -1px rgb(0 0 0 / 0.1),
+      0 2px 4px -2px rgb(0 0 0 / 0.1);
+    overflow: hidden;
+  }
+
+  #progress-fill {
+    background-color: oklch(70.7% 0.165 254.624);
+    height: 0.625rem;
+    transition-property: scale;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+
+  #progress-percentage {
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-align: right;
+  }
+
+  #error-container {
+    display: flex;
+    align-items: center;
+  }
+
+  #toggle-error-details {
+    margin-right: 1rem;
+    display: flex;
+    align-items: center;
+    padding: 0.5rem;
+    border-radius: 0.5rem;
+    transition-property: background-color;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+
+  #toggle-error-details:hover {
+    background-color: oklch(50.5% 0.213 27.518);
+  }
+
+  #toggle-error-details:focus {
+    outline: none;
+    box-shadow: 0 0 0 1px oklch(70.4% 0.191 22.216);
+  }
+
+  #toggle-error-details:disabled {
+    opacity: 50%;
+  }
+
+  #error-summary-icon {
+    width: 1.5rem;
+    height: 1.5rem;
+    transition-property: opacity;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 500ms;
+    color: oklch(80.8% 0.114 19.571);
+  }
+
+  #error-count {
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  #action-button {
+    display: flex;
+    align-items: center;
+    padding-block: 0.5rem;
+    padding-inline: 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  #action-button.cancel {
+    background-color: oklch(57.7% 0.245 27.325);
+    
+  }
+
+  #action-button.cancel:hover {
+    background-color: oklch(50.5% 0.213 27.518);
+  }
+
+  #action-button.cancel:focus {
+    outline: none;
+    box-shadow: 0 0 0 1px oklch(70.4% 0.191 22.216);
+  }
+
+  #action-button:not(.cancel):hover {
+    background-color: oklch(37.3% 0.034 259.733);
+  }
+
+  #action-button:not(.cancel):focus {
+    outline: none;
+    box-shadow: 0 0 0 1px oklch(70.7% 0.022 261.325);
+  }
+
+  #action-icon {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  #action-icon {
+    margin-right: 0.25rem;
+  }
+
+  #error-detail-panel {
+    position: fixed;
+    bottom: 4rem;
+    right: 2rem;
+    width: 100%;
+    max-width: 24rem;
+    z-index: 50;
+    background-color: white;
+    border-radius: 0.5rem;
+    box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+    border-style: solid;
+    border-color: oklch(88.5% 0.062 18.334);
+    padding: 1rem;
+    transition-property: transform;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 300ms;
+  }
+
+  #error-detail-panel:not(.open) {
+    translate: 0 100%;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  #error-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+    border-bottom-style: solid;
+    border-bottom-width: 1px;
+    padding-bottom: 0.5rem;
+  }
+
+  #error-log-heading {
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: oklch(50.5% 0.213 27.518);
+  }
+
+  #close-error-panel {
+    color: oklch(55.1% 0.027 264.364);
+  }
+
+  #close-error-panel:hover {
+    color: oklch(27.8% 0.033 256.848);
+  }
+
+  #close-icon {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+
+  #error-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 8rem;
+    overflow-y: auto;
+    row-gap: 0.5rem;
+  }
+
+  #no-errors {
+    color: oklch(55.1% 0.027 264.364);
+    font-size: 0.875rem;
+  }
+</style>
+
+<footer
+  id="status-footer"
+  class="fixed bottom-0 left-0 right-0 h-16 bg-gray-800 text-white shadow-2xl border-t border-gray-700 flex items-center justify-between px-4 md:px-8 z-50 transition-all duration-500 opacity-0 pointer-events-none"
+>
+  <!-- Left Side: Status and Current File -->
+  <div
+    id="status"
+    class="flex items-center space-x-4 min-w-0 flex-grow max-w-md"
+  >
+    <!-- Icon/Status Indicator -->
+    <svg id="status-icon" class="w-6 h-6 text-blue-400" fill="currentColor">
+      <use href="icons.svg#clock"></use>
+    </svg>
+
+    <div id="status-info" class="min-w-0">
+      <p id="status-text" class="text-sm font-semibold truncate">
+        Processing...
+      </p>
+      <p id="subtext" class="text-xs text-gray-400 truncate">
+        <span id="current-file"></span>
+        <span id="progress-text"> (0/0 files)</span>
+      </p>
+    </div>
+  </div>
+
+  <!-- Center: Progress Bar -->
+  <div
+    id="progress-bar-container"
+    class="flex items-center space-x-2 w-full max-w-sm hidden md:flex"
+  >
+    <div
+      id="progress-bar"
+      class="w-full bg-blue-600 rounded-full h-2.5 shadow-md overflow-hidden"
+    >
+      <div
+        id="progress-fill"
+        class="bg-blue-400 h-2.5 transition-all duration-500 ease-in-out"
+        style="width: 0%"
+      ></div>
+    </div>
+    <span id="progress-percentage" class="text-xs font-medium w-8 text-right"
+      >0%</span
+    >
+  </div>
+
+  <!-- Right Side: Error Count and Toggle Button -->
+  <div id="error-container" class="flex items-center space-x-4">
+    <button
+      id="toggle-error-details"
+      class="flex items-center space-x-1 p-2 rounded-lg transition duration-150 ease-in-out hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-400 disabled:opacity-50"
+    >
+      <svg
+        id="error-summary-icon"
+        class="w-5 h-5 opacity-0 transition-opacity duration-500 text-red-300"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.332 16c-.77 1.333.192 3 1.732 3z"
+        ></path>
+      </svg>
+      <span id="error-count" class="text-xs font-medium">0 Errors</span>
+    </button>
+    <button
+      id="action-button"
+      class="cancel flex items-center space-x-1 py-2 px-3 rounded-lg transition duration-150 ease-in-out text-xs font-medium"
+    >
+      <svg
+        id="action-icon"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M5.47 5.47a.75.75 0 0 1 1.06 0L12 10.94l5.47-5.47a.75.75 0 1 1 1.06 1.06L13.06 12l5.47 5.47a.75.75 0 1 1-1.06 1.06L12 13.06l-5.47 5.47a.75.75 0 0 1-1.06-1.06L10.94 12 5.47 6.53a.75.75 0 0 1 0-1.06Z"
+          clip-rule="evenodd"
+        />
+      </svg>
+      <span id="action-text">Cancel</span>
+    </button>
+  </div>
+</footer>
+
+<!-- 2. ERROR DETAIL FLOATING PANEL -->
+<div
+  id="error-detail-panel"
+  class="fixed bottom-16 right-4 md:right-8 w-full max-w-sm z-50 bg-white rounded-lg shadow-2xl border border-red-200 p-4 transform translate-y-full opacity-0 pointer-events-none transition-all duration-300"
+>
+  <div
+    id="error-detail-header"
+    class="flex justify-between items-center mb-3 border-b pb-2"
+  >
+    <h3 id="error-log-heading" class="text-lg font-bold text-red-700">
+      Processing Errors Log
+    </h3>
+    <button id="close-error-panel" class="text-gray-500 hover:text-gray-800">
+      <svg
+        id="close-icon"
+        class="w-6 h-6"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M6 18L18 6M6 6l12 12"
+        ></path>
+      </svg>
+    </button>
+  </div>
+  <div id="error-list" class="max-h-64 overflow-y-auto space-y-2">
+    <p id="no-errors" class="text-gray-500 text-sm">
+      No errors reported yet. Great!
+    </p>
+  </div>
+</div>

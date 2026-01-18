@@ -1,92 +1,133 @@
-use std::{path::Path, rc::Rc, thread};
+use std::{error::Error, fmt::Display, io, path::Path, rc::Rc, thread};
 
-use anyhow::Result;
 use shared::pack_config::Metadata;
-use tokio::{sync::mpsc::{channel, Receiver, Sender}, task::LocalSet};
-use winit::event_loop::EventLoopProxy;
-
-use crate::{
-    app::UserEvent,
-    media::{pack::MediaPack, Audio, Link, Media, Notification, Prompt, Wallpaper},
+use tokio::{
+    sync::{
+        mpsc::{Sender, channel},
+        oneshot,
+    },
+    task::LocalSet,
 };
 
-/// Manages all the media (images, audio, videos). We use a message system to avoid blocking the
-/// event loop on the main thread: requests are sent to a separate thread, which handles reading
-/// and decoding, and then sends back responses.
-///
-/// The [UserEvent::MediaResponse] event will be sent to the event loop whenever a response is
-/// available.
+use crate::{
+    error::LewdwareError,
+    lua::{Media, MediaType},
+    media::{FileOrPath, pack::MediaPack, types::ImageData},
+};
+
+/// Manages all the media (images, audio, videos). Trivially clonable.
+#[derive(Clone)]
 pub struct MediaManager {
-    tx: Sender<Request>,
-    rx: Receiver<Response>,
-    id: u64,
+    tx: Sender<MediaRequest>,
 }
+
+pub type Result<T, E = MediaError> = std::result::Result<T, E>;
 
 impl MediaManager {
     /// Start up the media manager thread, opening the specified pack file. Returns the pack
     /// metadata.
-    pub fn open(
-        pack_path: &Path,
-        event_loop_proxy: EventLoopProxy<UserEvent>,
-    ) -> Result<(Self, Metadata)> {
-        let (tx, rx, metadata) = spawn_media_manager_thread(pack_path, event_loop_proxy)?;
+    pub fn open(pack_path: &Path) -> anyhow::Result<(Self, Metadata)> {
+        let (tx, metadata) = spawn_media_manager_thread(pack_path)?;
 
-        Ok((Self { tx, rx, id: 0 }, metadata))
+        Ok((Self { tx }, metadata))
     }
 
-    /// Request the media for an image or video popup. Returns the id of the request, or [None] if
-    /// the request failed to send (which can happen if the thread is processing too many messages
-    /// at once).
-    ///
-    /// * `only_images`: Whether to allow videos
-    pub fn request_media(&mut self, tags: Option<Vec<String>>, only_images: bool) -> Option<u64> {
-        self.try_send(MediaRequest::RandomMedia { only_images, tags })
-    }
+    async fn send<T>(
+        &self,
+        request_builder: impl FnOnce(oneshot::Sender<T>) -> MediaRequest,
+    ) -> Result<T> {
+        let (tx, rx) = oneshot::channel();
 
-    pub fn request_audio(&mut self, tags: Option<Vec<String>>) -> Option<u64> {
-        self.try_send(MediaRequest::RandomAudio { tags })
-    }
-
-    pub fn request_notification(&mut self, tags: Option<Vec<String>>) -> Option<u64> {
-        self.try_send(MediaRequest::RandomNotification { tags })
-    }
-
-    pub fn request_link(&mut self, tags: Option<Vec<String>>) -> Option<u64> {
-        self.try_send(MediaRequest::RandomLink { tags })
-    }
-
-    pub fn request_prompt(&mut self, tags: Option<Vec<String>>) -> Option<u64> {
-        self.try_send(MediaRequest::RandomPrompt { tags })
-    }
-
-    pub fn request_wallpaper(&mut self, tags: Option<Vec<String>>) -> Option<u64> {
-        self.try_send(MediaRequest::RandomWallpaper { tags })
-    }
-
-    fn try_send(&mut self, request: MediaRequest) -> Option<u64> {
-        let id = self.id;
-
-        match self.tx.try_send(Request { id, request }) {
-            Ok(()) => {
-                self.id = self.id.wrapping_add(1);
-                Some(id)
-            }
-            Err(_) => None,
+        if let Err(_) = self.tx.send(request_builder(tx)).await {
+            return Err(MediaError::Internal(
+                "The media manager receiver was dropped",
+            ));
         }
+
+        rx.await
+            .map_err(|_| MediaError::Internal("The response sender was dropped"))
     }
 
-    /// Returns a response if there is one.
-    pub fn try_recv(&mut self) -> Option<Response> {
-        self.rx.try_recv().ok()
+    // async fn send(&self, request: MediaRequest) {
+    //     if let Err(_) = self.tx.send(request).await {
+    //         eprintln!("Media request channel closed");
+    //     }
+    // }
+
+    pub async fn get_media(&self, name: String, types: MediaTypes) -> Result<Option<Media>> {
+        self.send(|tx| MediaRequest::GetMedia {
+            types,
+            name,
+            response_tx: tx,
+        })
+        .await?
+    }
+
+    pub async fn random_media(
+        &self,
+        types: MediaTypes,
+        tags: Option<Vec<String>>,
+    ) -> Result<Option<Media>> {
+        self.send(|tx| MediaRequest::RandomMedia {
+            types,
+            tags,
+            response_tx: tx,
+        })
+        .await?
+    }
+
+    pub async fn list_media(
+        &self,
+        types: MediaTypes,
+        tags: Option<Vec<String>>,
+    ) -> Result<Vec<Media>> {
+        self.send(|tx| MediaRequest::ListMedia {
+            types,
+            tags,
+            response_tx: tx,
+        })
+        .await?
+    }
+
+    pub async fn get_image_data(&self, id: u64, width: u32, height: u32) -> Result<ImageData> {
+        self.send(|tx| MediaRequest::GetImageData {
+            id,
+            width,
+            height,
+            response_tx: tx,
+        })
+        .await?
+    }
+
+    pub async fn get_image_file(&self, id: u64) -> Result<FileOrPath> {
+        self.send(|tx| MediaRequest::GetImageFile {
+            id,
+            response_tx: tx,
+        })
+        .await?
+    }
+
+    pub async fn get_video_data(&self, id: u64) -> Result<FileOrPath> {
+        self.send(|tx| MediaRequest::GetVideoData {
+            id,
+            response_tx: tx,
+        })
+        .await?
+    }
+
+    pub async fn get_audio_data(&self, id: u64) -> Result<FileOrPath> {
+        self.send(|tx| MediaRequest::GetAudioData {
+            id,
+            response_tx: tx,
+        })
+        .await?
     }
 }
 
 fn spawn_media_manager_thread(
     pack_path: &Path,
-    event_loop_proxy: EventLoopProxy<UserEvent>,
-) -> Result<(Sender<Request>, Receiver<Response>, Metadata)> {
+) -> anyhow::Result<(Sender<MediaRequest>, Metadata)> {
     let (req_tx, mut req_rx) = channel(20);
-    let (resp_tx, resp_rx) = channel(20);
 
     let file = MediaPack::open(pack_path)?;
     let metadata = file.metadata().clone();
@@ -103,28 +144,10 @@ fn spawn_media_manager_thread(
             let manager = Rc::new(file);
 
             while let Some(request) = req_rx.recv().await {
-                let resp_tx = resp_tx.clone();
                 let manager = manager.clone();
 
-                let event_loop_proxy = event_loop_proxy.clone();
-
                 tokio::task::spawn_local(async move {
-                    let response = handle_request(manager, request).await.unwrap();
-
-                    if let Some(response) = response {
-                        match resp_tx.send(response).await {
-                            Ok(_) => {
-                                if let Err(err) =
-                                    event_loop_proxy.send_event(UserEvent::MediaResponse)
-                                {
-                                    eprintln!("{}", err);
-                                };
-                            }
-                            Err(err) => {
-                                eprintln!("{}", err);
-                            }
-                        }
-                    }
+                    handle_request(manager, request).await;
                 });
             }
         });
@@ -132,47 +155,46 @@ fn spawn_media_manager_thread(
         rt.block_on(local);
     });
 
-    Ok((req_tx, resp_rx, metadata))
+    Ok((req_tx, metadata))
 }
 
-async fn handle_request(pack: Rc<MediaPack>, request: Request) -> Result<Option<Response>> {
-    let response = match request.request {
-        MediaRequest::RandomMedia { only_images, tags } => {
-            if only_images {
-                pack.get_random_image(tags)
-                    .await
-                    .map(|x| x.map(|image| MediaResponse::Media(Media::Image(image))))
-            } else {
-                pack.get_random_popup(tags)
-                    .await
-                    .map(|x| x.map(MediaResponse::Media))
-            }
+async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest) {
+    if !match request {
+        MediaRequest::GetMedia {
+            types,
+            name,
+            response_tx,
+        } => response_tx.send(pack.get_media(name, types)).is_ok(),
+        MediaRequest::RandomMedia {
+            types,
+            tags,
+            response_tx,
+        } => response_tx.send(pack.random_media(types, tags)).is_ok(),
+        MediaRequest::ListMedia {
+            types,
+            tags,
+            response_tx,
+        } => response_tx.send(pack.list_media(types, tags)).is_ok(),
+        MediaRequest::GetImageData {
+            id,
+            width,
+            height,
+            response_tx,
+        } => response_tx
+            .send(pack.get_image_data(id, width, height).await)
+            .is_ok(),
+        MediaRequest::GetImageFile { id, response_tx } => {
+            response_tx.send(pack.get_image_file(id).await).is_ok()
         }
-        MediaRequest::RandomAudio { tags } => pack
-            .get_random_audio(tags)
-            .await
-            .map(|x| x.map(MediaResponse::Audio)),
-        MediaRequest::RandomNotification { tags } => pack
-            .get_random_notification(tags)
-            .map(|x| x.map(MediaResponse::Notification)),
-        MediaRequest::RandomPrompt { tags } => pack
-            .get_random_prompt(tags)
-            .map(|x| x.map(MediaResponse::Prompt)),
-        MediaRequest::RandomLink { tags } => pack
-            .get_random_link(tags)
-            .map(|x| x.map(MediaResponse::Link)),
-        MediaRequest::RandomWallpaper { tags } => pack
-            .get_random_wallpaper(tags)
-            .await
-            .map(|x| x.map(MediaResponse::Wallpaper)),
-    };
-
-    response.map(|x| {
-        x.map(|response| Response {
-            id: request.id,
-            response,
-        })
-    })
+        MediaRequest::GetVideoData { id, response_tx } => {
+            response_tx.send(pack.get_video_data(id).await).is_ok()
+        }
+        MediaRequest::GetAudioData { id, response_tx } => {
+            response_tx.send(pack.get_audio_data(id).await).is_ok()
+        }
+    } {
+        eprintln!("Failed to send response");
+    }
 }
 
 struct Request {
@@ -180,39 +202,153 @@ struct Request {
     pub request: MediaRequest,
 }
 
-pub struct Response {
-    pub id: u64,
-    pub response: MediaResponse,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaTypes {
+    pub image: bool,
+    pub video: bool,
+    pub audio: bool,
 }
 
-#[derive(Debug, Clone)]
+impl MediaTypes {
+    pub const NONE: Self = Self {
+        image: false,
+        video: false,
+        audio: false,
+    };
+
+    pub const ALL: Self = Self {
+        image: true,
+        video: true,
+        audio: true,
+    };
+
+    pub const IMAGE: Self = Self {
+        image: true,
+        video: false,
+        audio: false,
+    };
+
+    pub const VIDEO: Self = Self {
+        image: false,
+        video: true,
+        audio: false,
+    };
+
+    pub const AUDIO: Self = Self {
+        image: false,
+        video: false,
+        audio: true,
+    };
+
+    pub fn from_slice(types: &[MediaType]) -> Self {
+        let mut result = Self::NONE;
+
+        for t in types {
+            match t {
+                MediaType::Image => {
+                    result.image = true;
+                }
+                MediaType::Video => {
+                    result.video = true;
+                }
+                MediaType::Audio => {
+                    result.audio = true;
+                }
+            }
+        }
+
+        result
+    }
+}
+
+#[derive(Debug)]
 enum MediaRequest {
+    GetMedia {
+        types: MediaTypes,
+        name: String,
+        response_tx: oneshot::Sender<Result<Option<Media>>>,
+    },
     RandomMedia {
-        only_images: bool,
+        types: MediaTypes,
         tags: Option<Vec<String>>,
+        response_tx: oneshot::Sender<Result<Option<Media>>>,
     },
-    RandomAudio {
+    ListMedia {
+        types: MediaTypes,
         tags: Option<Vec<String>>,
+        response_tx: oneshot::Sender<Result<Vec<Media>>>,
     },
-    RandomNotification {
-        tags: Option<Vec<String>>,
+    GetImageData {
+        id: u64,
+        width: u32,
+        height: u32,
+        response_tx: oneshot::Sender<Result<ImageData>>,
     },
-    RandomPrompt {
-        tags: Option<Vec<String>>,
+    GetImageFile {
+        id: u64,
+        response_tx: oneshot::Sender<Result<FileOrPath>>,
     },
-    RandomLink {
-        tags: Option<Vec<String>>,
+    GetVideoData {
+        id: u64,
+        response_tx: oneshot::Sender<Result<FileOrPath>>,
     },
-    RandomWallpaper {
-        tags: Option<Vec<String>>,
+    GetAudioData {
+        id: u64,
+        response_tx: oneshot::Sender<Result<FileOrPath>>,
     },
 }
 
-pub enum MediaResponse {
-    Media(Media),
-    Audio(Audio),
-    Notification(Notification),
-    Prompt(Prompt),
-    Link(Link),
-    Wallpaper(Wallpaper),
+#[derive(Debug)]
+pub enum MediaError {
+    DbError(rusqlite::Error),
+    InvalidTag(String),
+    IoError(io::Error),
+    ImageError(image::error::ImageError),
+    Internal(&'static str),
+}
+
+impl Display for MediaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MediaError::DbError(error) => {
+                writeln!(f, "Error querying database")?;
+                error.fmt(f)
+            }
+            MediaError::InvalidTag(tag) => {
+                write!(f, "Invalid tag '{tag}'")
+            }
+            MediaError::IoError(err) => err.fmt(f),
+            MediaError::ImageError(err) => err.fmt(f),
+            MediaError::Internal(err) => write!(f, "Internal error: {err}"),
+        }
+    }
+}
+
+impl Error for MediaError {}
+
+impl From<rusqlite::Error> for MediaError {
+    fn from(value: rusqlite::Error) -> Self {
+        Self::DbError(value)
+    }
+}
+
+impl From<io::Error> for MediaError {
+    fn from(value: io::Error) -> Self {
+        Self::IoError(value)
+    }
+}
+
+impl From<image::error::ImageError> for MediaError {
+    fn from(value: image::error::ImageError) -> Self {
+        Self::ImageError(value)
+    }
+}
+
+impl From<MediaError> for LewdwareError {
+    fn from(value: MediaError) -> Self {
+        match value {
+            MediaError::Internal(err) => LewdwareError::Internal(err),
+            _ => LewdwareError::MediaError(value),
+        }
+    }
 }

@@ -1,7 +1,4 @@
-use std::{
-    collections::HashSet,
-    thread,
-};
+use std::{collections::HashSet, thread};
 
 use anyhow::Result;
 use rand::{random_range, seq::IndexedRandom};
@@ -13,88 +10,36 @@ use winit::{
     window::{WindowAttributes, WindowLevel},
 };
 
-use crate::app::UserEvent;
+use crate::{
+    app::UserEvent,
+    lua::{Anchor, Coord, SpawnWindowOpts, WindowProps},
+    monitor::Monitors,
+};
 
-/// Spawn a window in a random position, on a random monitor.
-///
-/// * `logical_size`: Whether to interpret `width` and `height` as a logical or physical size.
-///   Logical sizes will be scaled using the dpi, while physical sizes will not.
-pub fn create_window(
-    event_loop: &ActiveEventLoop,
-    width: u32,
-    height: u32,
-    logical_size: bool,
-) -> Result<(winit::window::Window, PhysicalPosition<f32>)> {
-    let monitor = random_monitor(event_loop);
-
-    let position = if let Some(monitor) = monitor {
-        let size = monitor.size();
-        let monitor_position = monitor.position();
-        let scale_factor = monitor.scale_factor();
-
-        let (width, height) = if logical_size {
-            let size = LogicalSize::new(width, height).to_physical(scale_factor);
-            (size.width, size.height)
-        } else {
-            (width, height)
-        };
-
-        let position = random_window_position(width, height, size.width, size.height);
-
-        PhysicalPosition::new(
-            monitor_position.x as f32 + position.x,
-            monitor_position.y as f32 + position.y,
-        )
-    } else {
-        println!("Could not find a monitor, using default resolution");
-        random_window_position(width, height, 1920, 1080)
+#[cfg(not(target_os = "linux"))]
+pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<()> {
+    use tray_icon::{
+        TrayIconBuilder,
+        menu::{Menu, MenuEvent, MenuItem},
     };
 
-    let mut attrs = WindowAttributes::default()
-        .with_title("Chaos Window")
-        .with_position(position)
-        .with_decorations(false)
-        .with_window_level(WindowLevel::AlwaysOnTop)
-        .with_resizable(false)
-        .with_visible(false);
+    let tray_menu = Menu::with_items(&[&MenuItem::new("Panic", true, None)])?;
 
-    if logical_size {
-        attrs = attrs.with_inner_size(LogicalSize::new(width, height));
-    } else {
-        attrs = attrs.with_inner_size(PhysicalSize::new(width, height));
-    }
+    TrayIconBuilder::new()
+        .with_tooltip("Lewdware")
+        .with_menu(Box::new(tray_menu))
+        .build()?;
 
-    #[cfg(target_os = "linux")]
-    {
-        use winit::platform::x11::{WindowAttributesExtX11, WindowType};
+    MenuEvent::set_event_handler(Some(move || {
+        let _ = event_loop_proxy.send_event(UserEvent::Exit);
+    }));
 
-        attrs = attrs.with_x11_window_type(vec![WindowType::Notification]);
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        use winit::platform::windows::WindowAttributesExtWindows;
-
-        attrs = attrs.with_skip_taskbar(true);
-    }
-
-    let window = event_loop.create_window(attrs)?;
-
-    // If we don't do this, then on Windows, the window flashes on screen with decorations and the
-    // wrong size/position, before going to the correct place. I think this is because winit
-    // creates the window, then sends requests to change the size, position and borders.
-    // See https://github.com/rust-windowing/winit/issues/4116
-    window.set_visible(true);
-
-    Ok((window, position))
+    Ok(())
 }
 
 /// Spawn a thread that will listen for the panic key being pressed, and send
 /// [UserEvent::PanicButtonPressed] to the event loop.
-pub fn spawn_panic_thread(
-    event_loop_proxy: EventLoopProxy<UserEvent>,
-    target_key: Key,
-) {
+pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_key: Key) {
     println!("Spawning panic thread");
     thread::spawn(move || {
         let rdev_key = match key_to_rdev(&target_key) {
@@ -115,7 +60,7 @@ pub fn spawn_panic_thread(
                     let modifiers = rdev_keys_to_modifiers(&keys);
 
                     if modifier_matches(&modifiers, &target_key.modifiers)
-                        && let Err(err) = event_loop_proxy.send_event(UserEvent::PanicButtonPressed)
+                        && let Err(err) = event_loop_proxy.send_event(UserEvent::Exit)
                     {
                         eprintln!("Could not send panic button event: {}", err);
                     }
@@ -155,9 +100,7 @@ fn modifier_matches(x: &Modifiers, pattern: &Modifiers) -> bool {
 }
 
 /// Extract the modifiers from a set of keys
-fn rdev_keys_to_modifiers<'a>(
-    keys: impl IntoIterator<Item = &'a rdev::Key>,
-) -> Modifiers {
+fn rdev_keys_to_modifiers<'a>(keys: impl IntoIterator<Item = &'a rdev::Key>) -> Modifiers {
     let mut modifiers = Modifiers::default();
 
     for key in keys.into_iter() {
@@ -393,9 +336,60 @@ fn random_window_position(
     PhysicalPosition::new(x as f32, y as f32)
 }
 
-fn random_monitor(event_loop: &ActiveEventLoop) -> Option<MonitorHandle> {
-    let monitors: Vec<_> = event_loop.available_monitors().collect();
+pub fn calculate_media_popup_size(
+    width: Option<Coord>,
+    height: Option<Coord>,
+    media_width: u32,
+    media_height: u32,
+    monitor_width: u32,
+    monitor_height: u32,
+) -> (u32, u32) {
+    let width = width.map(|width| width.to_pixels(monitor_width));
+    let height = height.map(|height| height.to_pixels(monitor_height));
 
-    let mut rng = rand::rng();
-    monitors.choose(&mut rng).cloned()
+    match (width, height) {
+        (None, None) => default_media_popup_size(
+            media_width,
+            media_height,
+            monitor_width,
+            monitor_height,
+        ),
+        (None, Some(height)) => (
+            ((height as f64 / media_height as f64) * media_width as f64).round() as u32,
+            height,
+        ),
+        (Some(width), None) => (
+            width,
+            ((width as f64 / media_width as f64) * media_height as f64).round() as u32,
+        ),
+        (Some(width), Some(height)) => (width, height),
+    }
+}
+
+fn default_media_popup_size(
+    media_width: u32,
+    media_height: u32,
+    monitor_width: u32,
+    monitor_height: u32,
+) -> (u32, u32) {
+    let width = media_width as f64;
+    let height = media_height as f64;
+
+    let max_width_scale = (monitor_width as f64 * 0.3) / width;
+    let max_height_scale = (monitor_height as f64 * 0.5) / height;
+
+    let scale = max_width_scale.min(max_height_scale).min(1.0);
+
+    let width = (width * scale).round();
+    let height = (height * scale).round();
+
+    (width as u32, height as u32)
+}
+
+pub fn resolve_coord(x: u32, anchor: &Anchor, window_size: u32, offset_start: u32, offset_end: u32) -> u32 {
+    match anchor {
+        Anchor::TopLeft => x,
+        Anchor::Center => x + offset_start + (window_size / 2),
+        Anchor::BottomRight => x + offset_start + window_size + offset_end,
+    }
 }

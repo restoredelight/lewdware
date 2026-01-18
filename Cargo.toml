@@ -1,6 +1,13 @@
 [workspace]
+members = [
+    "lewdware",
+    "lewdware-mode",
+    "pack-maker-dioxus",
+    "shared",
+]
 resolver = "3"
-members = ["lewdware", "packer", "shared", "pack-maker/src-tauri", "config/src-tauri"]
 
 [patch.crates-io]
-pixels = { path = "./pixels" }
+pixels = { git = "https://github.com/restoredelight/pixels", branch = "with-instance" }
+dioxus = { git = "https://github.com/restoredelight/dioxus", branch = "stop-close-requested" }
+dioxus-desktop = { git = "https://github.com/restoredelight/dioxus", branch = "stop-close-requested" }

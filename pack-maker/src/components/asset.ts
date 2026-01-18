@@ -2,12 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import content from "./asset.html?raw";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { MediaInfo } from "../types";
 
 const template = document.createElement("template");
 template.innerHTML = content;
 
-export class HTMLAssetElement extends HTMLElement {
+export class AssetElement extends HTMLElement {
     static observedAttributes = ["selected"];
+
+    private mediaHost!: string;
 
     constructor() {
         super();
@@ -17,12 +20,27 @@ export class HTMLAssetElement extends HTMLElement {
         shadowRoot.appendChild(clone);
     }
 
+    static create(file: MediaInfo, mediaHost: string): AssetElement {
+        const element = document.createElement(
+            "asset-element",
+        ) as AssetElement;
+
+        element.mediaHost = mediaHost;
+
+        element.setAttribute("id", file.id.toString());
+        element.setAttribute("file_name", file.file_name);
+        element.setAttribute("file_type", file.file_info.type);
+        element.setAttribute("category", file.category);
+
+        return element;
+    }
+
     connectedCallback() {
         const file_name = this.getAttribute("file_name");
         const id = parseInt(this.getAttribute("id") ?? "0");
+        const file_type = this.getAttribute("file_type");
 
         const fileNode = this.shadowRoot?.querySelector("#file-name");
-
 
         if (file_name && fileNode) {
             fileNode.textContent = file_name;
@@ -31,8 +49,10 @@ export class HTMLAssetElement extends HTMLElement {
         const img: HTMLImageElement | undefined | null =
             this.shadowRoot?.querySelector("img");
 
-        if (img) {
-            img.src = `image://localhost/thumbnail/${id}`;
+        if (img && file_type !== "audio") {
+            setTimeout(() => {
+                img.src = `${this.mediaHost}/thumbnail/${id}`;
+            }, 100);
         }
 
         this.setupContextMenu();
@@ -79,27 +99,4 @@ export class HTMLAssetElement extends HTMLElement {
     }
 }
 
-customElements.define("asset-element", HTMLAssetElement);
-
-export interface AssetElementProps {
-    id: number;
-    video: boolean;
-    file_name: string;
-}
-
-export function AssetElement({
-    id,
-    video,
-    file_name,
-}: AssetElementProps): HTMLAssetElement {
-    const element = document.createElement("asset-element") as HTMLAssetElement;
-
-    element.setAttribute("id", id.toString());
-    element.setAttribute("file_name", file_name);
-
-    if (video) {
-        element.setAttribute("video", "");
-    }
-
-    return element;
-}
+customElements.define("asset-element", AssetElement);

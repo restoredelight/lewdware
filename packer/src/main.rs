@@ -1,22 +1,21 @@
 mod db;
-mod encode;
 
 use anyhow::Result;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use shared::pack_config::OneOrMore;
-use shared::read_config::{find_config, glob_matches, Config, MediaCategory, Resolved};
-use shared::read_pack::{Header, HEADER_SIZE};
-use shared::utils::{classify_ext, FileType};
 use rayon::prelude::*;
+use shared::encode::{FileInfo, encode_file};
+use shared::pack_config::OneOrMore;
+use shared::read_config::{Config, MediaCategory, Resolved, find_config, glob_matches};
+use shared::read_pack::{HEADER_SIZE, Header};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
+use std::process::Command;
+use tempfile::{NamedTempFile};
 use walkdir::WalkDir;
 
-use crate::db::{build_sqlite_index};
-use crate::encode::{Metadata, encode_audio, encode_image, encode_video, is_animated};
+use crate::db::build_sqlite_index;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -39,14 +38,11 @@ struct Cli {
 
 #[derive(Debug, Clone)]
 struct PackedEntry {
-    rel_path: String,
-    media_type: FileType,
+    file_name: String,
+    file_info: FileInfo,
     category: MediaCategory,
     offset: u64,
     length: u64,
-    width: Option<i64>,
-    height: Option<i64>,
-    duration: Option<f64>,
     tags: Vec<String>,
 }
 
@@ -74,12 +70,9 @@ fn main() -> Result<()> {
         .truncate(true)
         .open(&args.output)?;
 
-    Header {
-        index_length: 0,
-        total_files: 0,
-        metadata_length: 0,
-    }
-    .write_to(&mut out)?;
+    let mut header = Header::new();
+
+    out.write_all(&header.to_buf()?)?;
 
     out.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
 
@@ -92,9 +85,9 @@ fn main() -> Result<()> {
 
                 entry_path.is_ok_and(|entry_path| match ignore {
                     OneOrMore::One(path) => !glob_matches(path, entry_path),
-                    OneOrMore::More(items) => !items
-                        .iter()
-                        .any(|path| glob_matches(path, entry_path)),
+                    OneOrMore::More(items) => {
+                        !items.iter().any(|path| glob_matches(path, entry_path))
+                    }
                 })
             })
         })
@@ -157,6 +150,8 @@ fn main() -> Result<()> {
     let tmp_db = NamedTempFile::new()?;
     build_sqlite_index(tmp_db.path(), &all_entries, &config, resolved)?;
 
+    let index_offset = out.stream_position()?;
+
     let index_length = {
         let mut dbf = File::open(tmp_db.path())?;
         std::io::copy(&mut dbf, &mut out)?
@@ -168,12 +163,13 @@ fn main() -> Result<()> {
 
     out.write_all(&buf)?;
 
-    let header = Header {
-        index_length,
-        metadata_length,
-        total_files: all_entries.len() as u32,
-    };
-    header.write_to(&mut out)?;
+    header.index_offset = index_offset;
+    header.index_length = index_length;
+    header.metadata_offset = index_offset + index_length;
+    header.metadata_length = metadata_length;
+
+    out.seek(SeekFrom::Start(0))?;
+    out.write_all(&header.to_buf()?)?;
 
     println!(
         "✅ Packed {} files into '{}'.",
@@ -193,73 +189,36 @@ fn process_single_file(
     resolved: &Resolved,
 ) -> Result<Option<ProcessedFile>> {
     let path = entry.path();
-    let rel = path.strip_prefix(input_dir).unwrap().to_owned();
-    let rel_str = rel.to_string_lossy().replace('\\', "/");
-    let mut mtype = classify_ext(path);
+    let file_name = path.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "".to_string());
+    let rel = path.strip_prefix(input_dir)?.to_owned();
 
-    let mut width = None;
-    let mut height = None;
-    let mut duration = None;
+    let output_file = NamedTempFile::new()?;
 
-    let encoded_bytes = match mtype {
-        FileType::Image => {
-            if is_animated(path)? {
-                mtype = FileType::Video;
-                let encoded;
-                (
-                    encoded,
-                    Metadata {
-                        width,
-                        height,
-                        duration,
-                    },
-                ) = encode_video(path, false)?;
-                encoded
-            } else {
-                let encoded;
-                (
-                    encoded,
-                    Metadata {
-                        width,
-                        height,
-                        duration,
-                    },
-                ) = encode_image(path)?;
-                encoded
-            }
-        }
-        FileType::Video => {
-            let encoded;
-            (
-                encoded,
-                Metadata {
-                    width,
-                    height,
-                    duration,
-                },
-            ) = encode_video(path, true)?;
-            encoded
-        }
-        FileType::Audio => encode_audio(path)?,
-        FileType::Other => return Ok(None),
+    let (file_info, output_path) = match encode_file(
+        || Command::new("ffmpeg"),
+        || Command::new("ffprobe"),
+        path,
+        output_file.path(),
+    )? {
+        Some(x) => x,
+        None => return Ok(None),
     };
+
+    let data = fs::read(output_path)?;
 
     let (tags, category) = config.get_tags_and_category(&rel, resolved);
 
     let entry = PackedEntry {
-        rel_path: rel_str,
-        media_type: mtype,
+        file_name,
+        file_info,
         offset: 0,
         length: 0,
-        width,
-        height,
-        duration,
         tags,
         category,
     };
 
     Ok(Some(ProcessedFile {
         entry,
-        data: encoded_bytes,
+        data,
     }))
 }

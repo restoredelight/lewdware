@@ -23,5 +23,10 @@ setupPopupsSection(config);
 
 await getCurrentWindow().onCloseRequested(async () => {
     clearInterval(handler);
-    await saveConfig(true);
+
+    try {
+        (document.activeElement as HTMLElement).blur();
+    } finally {
+        await saveConfig(true);
+    }
 });

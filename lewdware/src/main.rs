@@ -5,7 +5,7 @@ use pollster::block_on;
 use shared::user_config::load_config;
 use winit::event_loop::EventLoop;
 
-use crate::{app::ChaosApp, egui::WgpuState, utils::spawn_panic_thread};
+use crate::{app::ChaosApp, egui::WgpuState, utils::{spawn_panic_thread}};
 
 mod app;
 mod audio;
@@ -16,11 +16,15 @@ mod transition;
 mod utils;
 mod video;
 mod window;
+mod lua;
+mod monitor;
+mod error;
+mod header;
 
 fn main() -> Result<()> {
     let config = load_config()?;
 
-    let wgpu_state = block_on(WgpuState::new());
+    let wgpu_state = block_on(WgpuState::new())?;
 
     let mut event_loop_builder = EventLoop::with_user_event();
 
@@ -37,6 +41,11 @@ fn main() -> Result<()> {
     let proxy = event_loop.create_proxy();
 
     spawn_panic_thread(proxy.clone(), config.panic_button.clone());
+    #[cfg(not(target_os = "linux"))]
+    {
+        use crate::utils::create_tray_icon;
+        create_tray_icon(proxy.clone())?;
+    }
 
     let mut app = ChaosApp::new(wgpu_state, proxy, config)?;
     event_loop.run_app(&mut app)?;

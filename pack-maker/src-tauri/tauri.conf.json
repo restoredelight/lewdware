@@ -21,7 +21,10 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": {
+        "default-src": "*",
+        "media-src": "*"
+      },
       "assetProtocol": {
         "enable": true,
         "scope": [

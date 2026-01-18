@@ -1,19 +1,19 @@
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 
 use anyhow::Result;
 use image::ImageReader;
-use shared::utils::{FileType, classify_ext};
 use rand::{random_range, rng, seq::IndexedRandom};
 use walkdir::WalkDir;
 
 use ffmpeg_next as ffmpeg;
 
-use crate::media::process::{process_path, Media, MediaType, Processed};
-use crate::media::{self, Audio, Image, Video, types::FileOrPath};
+use crate::media::process::{process_path, Audio, Media, MediaType, Processed};
+use crate::media::types::ImageData;
+use crate::media::{self, Image, Video, types::FileOrPath};
 
 pub struct MediaDir {
     media: Vec<Media>,
-    audio: Vec<PathBuf>,
+    audio: Vec<Audio>,
     image_count: usize,
     video_count: usize,
 }
@@ -36,8 +36,8 @@ impl MediaDir {
             let path = entry.path();
 
             match process_path(path) {
-                Ok(Some(Processed::Media(item))) => {
-                    if item.media_type == MediaType::Image {
+                Ok(Processed::Media(item)) => {
+                    if matches!(item.media_type, MediaType::Image { .. }) {
                         image_count += 1;
                     } else {
                         video_count += 1;
@@ -45,10 +45,9 @@ impl MediaDir {
 
                     media.push(item);
                 }
-                Ok(Some(Processed::Audio(path))) => {
+                Ok(Processed::Audio(path)) => {
                     audio.push(path);
                 }
-                Ok(None) => {}
                 Err(err) => {
                     eprintln!("Error processing {}: {}", path.display(), err);
                 }
@@ -66,47 +65,58 @@ impl MediaDir {
     pub fn get_random_image(&self) -> Result<Option<Image>> {
         let index = random_range(0..self.image_count);
 
-        let item = match self
+        let (path, width, height, transparent) = match self
             .media
             .iter()
-            .filter(|x| x.media_type == MediaType::Image)
+            .filter_map(|x| match x.media_type {
+                MediaType::Image { width, height, transparent } => Some((&x.path, width, height, transparent)),
+                _ => None
+            })
             .nth(index)
         {
             Some(x) => x,
             None => return Ok(None),
         };
 
-        Ok(Some(self.read_image(&item.path)?))
+        Ok(Some(Image {
+            width,
+            height,
+            data: self.read_image_data(path)?,
+            transparent,
+        }))
     }
 
-    pub fn read_image(&self, path: &Path) -> Result<Image> {
+    pub fn read_image_data(&self, path: &Path) -> Result<ImageData> {
         Ok(ImageReader::open(path)?.decode()?.into_rgba8())
     }
 
-    pub fn get_random_item(&self) -> Result<Option<media::Media>> {
-        let item = match self.media.choose(&mut rng()) {
-            Some(x) => x,
-            None => return Ok(None),
-        };
+    // pub fn get_random_item(&self) -> Result<Option<media::Media>> {
+    //     let item = match self.media.choose(&mut rng()) {
+    //         Some(x) => x,
+    //         None => return Ok(None),
+    //     };
+    //
+    //     match item.media_type {
+    //         MediaType::Image { width, height, transparent, } => Ok(Some(media::Media::Image(Image { width, height, transparent, data: self.read_image_data(&item.path)? }))),
+    //         MediaType::Video { width, height, audio, duration } => Ok(Some(media::Media::Video(Video {
+    //             width,
+    //             height,
+    //             audio,
+    //             duration,
+    //             file: FileOrPath::Path(item.path.clone()),
+    //         }))),
+    //     }
+    // }
 
-        match item.media_type {
-            MediaType::Image => Ok(Some(media::Media::Image(self.read_image(&item.path)?))),
-            MediaType::Video { width, height } => Ok(Some(media::Media::Video(Video {
-                width: width as i64,
-                height: height as i64,
-                file: FileOrPath::Path(item.path.clone()),
-            }))),
-        }
-    }
-
-    pub fn get_random_audio(&self) -> Result<Option<Audio>> {
+    pub fn get_random_audio(&self) -> Result<Option<media::Audio>> {
         let item = match self.audio.choose(&mut rng()) {
             Some(x) => x,
             None => return Ok(None),
         };
 
-        Ok(Some(Audio {
-            file: FileOrPath::Path(item.clone()),
+        Ok(Some(media::Audio {
+            duration: item.duration,
+            file: FileOrPath::Path(item.path.clone()),
         }))
     }
 }

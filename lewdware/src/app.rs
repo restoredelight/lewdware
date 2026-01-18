@@ -1,140 +1,59 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-use anyhow::{Result, anyhow};
-use notify_rust::Notification;
-use shared::pack_config::{MediaType, Metadata};
-use rand::random_bool;
+use anyhow::anyhow;
+use rand::random_range;
 use shared::user_config::AppConfig;
+use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::MouseButton;
 use winit::event_loop::{ControlFlow, EventLoopProxy};
+use winit::window::{WindowAttributes, WindowLevel};
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, KeyEvent, WindowEvent},
+    event::{ElementState, WindowEvent},
     event_loop::ActiveEventLoop,
-    keyboard::{Key, NamedKey},
     window::WindowId,
 };
 
 use crate::audio::AudioPlayer;
 use crate::egui::WgpuState;
-use crate::media::{self, Media, MediaManager, MediaResponse, Response, Wallpaper};
-use crate::transition::TransitionManager;
-use crate::utils::create_window;
-use crate::window::{ImageWindow, PromptWindow, VideoWindow};
+use crate::error::{LewdwareError, MonitorError, Result};
+use crate::header::HEADER_HEIGHT;
+use crate::lua::{
+    self, AudioAction, ChoiceWindowOption, LuaRequest, Notification, SpawnWindowOpts,
+    WallpaperMode, WindowAction, WindowProps, start_lua_thread,
+};
+use crate::media::{FileOrPath, ImageData};
+use crate::monitor::Monitors;
+use crate::utils::calculate_media_popup_size;
+use crate::window::{ChoiceWindow, ImageWindow, PromptWindow, VideoWindow, Window};
 
 /// The main app.
 /// * `windows`: A map containing all the windows spawned by the app. Since dropping a winit window
 ///   closes it, we can close windows by removing them from this map.
 /// * `default_wallpaper`: Stores the user's default wallpaper, so we can restore it on panic.
-/// * `wallpaper`: The current wallpaper.
 pub struct ChaosApp<'a> {
-    state: AppState,
+    running: bool,
     config: AppConfig,
-    metadata: Metadata,
-    spawners: Spawners,
-    wgpu_state: Arc<WgpuState>,
+    wgpu_state: WgpuState,
     windows: HashMap<WindowId, Window<'a>>,
-    audio_player: Option<AudioPlayer>,
-    media_manager: MediaManager,
-    tags: Option<Vec<String>>,
-    transition_manager: Option<TransitionManager>,
+    audio_players: HashMap<u64, AudioPlayer>,
+    current_audio_id: u64,
     default_wallpaper: Option<String>,
-    wallpaper: Option<Wallpaper>
+    lua_request_rx: tokio::sync::mpsc::Receiver<lua::LuaRequest>,
+    lua_event_tx: tokio::sync::mpsc::UnboundedSender<lua::Event>,
+    monitors: Monitors,
 }
 
-enum AppState {
-    Running,
-    Paused,
-    Hibernating,
-}
-
-/// Tracks the timing of all the things the app spawns (popups, notifications, etc.)
-struct Spawners {
-    media: Spawner,
-    audio: Option<Spawner>,
-    notification: Option<Spawner>,
-    link: Option<Spawner>,
-    prompt: Option<Spawner>,
-}
-
-enum Window<'a> {
-    Image(ImageWindow),
-    Video(VideoWindow<'a>),
-    Prompt(PromptWindow<'a>),
-}
-
-/// Tracks the timing and state of something the app spawns (popups, notifications, ...).
-struct Spawner {
-    last_spawn: Instant,
-    original_frequency: Option<Duration>,
-    frequency: Option<Duration>,
-    lock: bool,
-    locked: bool,
-}
-
-impl Spawner {
-    /// Create a new spawner.
-    ///
-    /// * `frequency`: How often should we spawn? If [None], always spawn no matter the time of the
-    ///   previous spawn.
-    fn new(frequency: Option<Duration>, lock: bool) -> Self {
-        Self {
-            last_spawn: Instant::now(),
-            original_frequency: frequency,
-            frequency,
-            lock,
-            locked: false,
-        }
-    }
-
-    /// Should we spawn?
-    fn should_spawn(&self) -> bool {
-        if self
-            .frequency
-            .is_some_and(|frequency| self.last_spawn.elapsed() >= frequency)
-            && !self.locked
-        {
-            return true;
-            // if let Some(frequency) = self.original_frequency {
-            //     let secs = frequency.as_secs_f64();
-            //
-            //     let distr = Normal::new(secs, secs / 3.0).unwrap();
-            //
-            //     let mut sample = distr.sample(&mut rng());
-            //
-            //     if sample < 0.0 {
-            //         sample = 0.0
-            //     }
-            //
-            //     self.frequency = Some(Duration::from_secs_f64(sample));
-            // }
-        }
-
-        false
-    }
-
-    /// Mark the spawner as "locked", which will not allow any spawns until `unlock()` is called.
-    /// This is useful for spawners which only allow one of the thing at a time.
-    fn spawn(&mut self) {
-        self.last_spawn = Instant::now();
-
-        if self.lock {
-            self.locked = true;
-        }
-    }
-
-    fn unlock(&mut self) {
-        self.locked = false;
-    }
+enum WindowSizeBehaviour {
+    ResizeWithMedia { width: u32, height: u32 },
+    UseDefaults { width: u32, height: u32 },
 }
 
 #[derive(Debug)]
 pub enum UserEvent {
-    MediaResponse,
-    PanicButtonPressed,
+    Exit,
+    LuaRequest,
 }
 
 impl<'a> ChaosApp<'a> {
@@ -143,14 +62,6 @@ impl<'a> ChaosApp<'a> {
         event_loop_proxy: EventLoopProxy<UserEvent>,
         config: AppConfig,
     ) -> Result<Self> {
-        println!("{:?}", config);
-
-        println!("{:?}", config.pack_path);
-        let (media_manager, metadata) =
-            MediaManager::open(config.pack_path.as_ref().unwrap(), event_loop_proxy)?;
-
-        let transition = metadata.transition.as_ref().cloned();
-
         let wallpaper = match wallpaper::get() {
             Ok(wallpaper) => Some(wallpaper),
             Err(err) => {
@@ -159,255 +70,559 @@ impl<'a> ChaosApp<'a> {
             }
         };
 
-        let spawners = Spawners {
-            media: Spawner::new(Some(config.popup_frequency), false),
-            audio: if config.audio {
-                Some(Spawner::new(None, true))
-            } else {
-                None
-            },
-            notification: if config.notifications {
-                Some(Spawner::new(Some(config.notification_frequency), false))
-            } else {
-                None
-            },
-            link: if config.open_links {
-                Some(Spawner::new(Some(config.link_frequency), false))
-            } else {
-                None
-            },
-            prompt: if config.prompts {
-                Some(Spawner::new(Some(config.prompt_frequency), true))
-            } else {
-                None
-            },
-        };
+        println!("{:?}", config);
+
+        let (lua_event_tx, lua_request_rx) = start_lua_thread(
+            event_loop_proxy,
+            r#"
+                lewdware.every(2000, function()
+                    local media = lewdware.media.random({ type = { "image", "video" } })
+                    if media.type == "image" then
+                        lewdware.spawn_image_popup(media)
+                    elseif media.type == "video" then
+                        lewdware.spawn_video_popup(media)
+                    end
+                end)
+                "#
+            .to_string(),
+            config.clone(),
+        );
 
         Ok(Self {
-            state: AppState::Running,
+            running: false,
             config,
-            metadata,
-            wgpu_state: Arc::new(wgpu_state),
+            wgpu_state: wgpu_state,
             windows: HashMap::new(),
-            spawners,
-            audio_player: None,
-            media_manager,
-            tags: None,
-            transition_manager: transition
-                .map(|transition| TransitionManager::new(transition.clone())),
+            audio_players: HashMap::new(),
+            current_audio_id: 0,
             default_wallpaper: wallpaper,
-            wallpaper: None,
+            lua_request_rx,
+            lua_event_tx,
+            monitors: Monitors::new(),
         })
     }
 
-    fn try_spawn(&mut self) {
-        if self.spawners.media.should_spawn() {
-            let only_images = self
-                .windows
-                .values()
-                .filter(|window| matches!(window, Window::Video(_)))
-                .count()
-                >= self.config.max_videos;
-            let tags = self.get_tags(MediaType::Popups);
+    fn create_window(
+        &mut self,
+        opts: SpawnWindowOpts,
+        size_behaviour: WindowSizeBehaviour,
+        header: bool,
+        border: bool,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<(winit::window::Window, WindowProps)> {
+        let monitor_info = match opts.monitor {
+            Some(x) => x,
+            None => self.monitors.random(event_loop)?,
+        };
 
-            if self
-                .media_manager
-                .request_media(tags, only_images)
-                .is_some()
-            {
-                self.spawners.media.spawn();
-            }
+        let monitor = self
+            .monitors
+            .get_handle(monitor_info.id, event_loop)
+            .ok_or(MonitorError::MonitorNotFound)?;
+
+        let scale_factor = monitor.scale_factor();
+        let monitor_size = monitor.size().to_logical(scale_factor);
+        let monitor_position: LogicalPosition<u32> = monitor.position().to_logical(scale_factor);
+
+        let (width, height) = match size_behaviour {
+            WindowSizeBehaviour::ResizeWithMedia { width, height } => calculate_media_popup_size(
+                opts.width,
+                opts.height,
+                width,
+                height,
+                monitor_size.width,
+                monitor_size.height,
+            ),
+            WindowSizeBehaviour::UseDefaults { width, height } => (
+                opts.width
+                    .map(|width| width.to_pixels(monitor_size.width))
+                    .unwrap_or(width),
+                opts.height
+                    .map(|height| height.to_pixels(monitor_size.height))
+                    .unwrap_or(height),
+            ),
+        };
+
+        let (mut outer_width, mut outer_height) = (width, height);
+
+        if header {
+            outer_height += HEADER_HEIGHT;
         }
 
-        if let Some(spawner) = &self.spawners.audio
-            && spawner.should_spawn()
+        if border {
+            outer_width += 2;
+            outer_height += 2;
+        }
+
+        let x = opts
+            .x
+            .map(|coord| {
+                opts.anchor
+                    .resolve(coord.to_pixels(monitor_size.width), outer_width)
+            })
+            .unwrap_or_else(|| random_position(outer_width, monitor_size.width));
+        let y = opts
+            .y
+            .map(|coord| {
+                opts.anchor
+                    .resolve(coord.to_pixels(monitor_size.height), outer_height)
+            })
+            .unwrap_or_else(|| random_position(outer_height, monitor_size.height));
+
+        let position = LogicalPosition::new(monitor_position.x + x, monitor_position.y + y);
+
+        let mut attrs = WindowAttributes::default()
+            .with_title("Chaos Window")
+            .with_position(position)
+            .with_inner_size(LogicalSize::new(outer_width, outer_height))
+            .with_decorations(false)
+            .with_window_level(WindowLevel::AlwaysOnTop)
+            .with_resizable(false)
+            .with_visible(false);
+
+        #[cfg(target_os = "linux")]
         {
-            let tags = self.get_tags(MediaType::Audio);
-            if self.media_manager.request_audio(tags).is_some() {
-                self.spawners.audio.as_mut().unwrap().spawn();
-            }
+            use winit::platform::x11::{WindowAttributesExtX11, WindowType};
+
+            attrs = attrs.with_x11_window_type(vec![WindowType::Notification]);
         }
 
-        if let Some(spawner) = &self.spawners.notification
-            && spawner.should_spawn()
+        #[cfg(target_os = "windows")]
         {
-            let tags = self.get_tags(MediaType::Notifications);
-            if self.media_manager.request_notification(tags).is_some() {
-                self.spawners.notification.as_mut().unwrap().spawn();
-            }
+            use winit::platform::windows::WindowAttributesExtWindows;
+
+            attrs = attrs.with_skip_taskbar(true);
         }
 
-        if let Some(spawner) = &self.spawners.link
-            && spawner.should_spawn()
-        {
-            let tags = self.get_tags(MediaType::Links);
-            if self.media_manager.request_link(tags).is_some() {
-                self.spawners.link.as_mut().unwrap().spawn();
-            }
-        }
+        let window = event_loop
+            .create_window(attrs)
+            .map_err(|err| LewdwareError::WindowError(err.into()))?;
 
-        if let Some(spawner) = &self.spawners.prompt
-            && spawner.should_spawn()
-        {
-            let tags = self.get_tags(MediaType::Prompts);
-            if self.media_manager.request_prompt(tags).is_some() {
-                self.spawners.prompt.as_mut().unwrap().spawn();
-            }
-        }
+        // If we don't do this, then on Windows, the window flashes on screen with decorations and the
+        // wrong size/position, before going to the correct place. I think this is because winit
+        // creates the window, then sends requests to change the size, position and borders.
+        // See https://github.com/rust-windowing/winit/issues/4116
+        window.set_visible(true);
+
+        let props = WindowProps {
+            window_id: window.id(),
+            width,
+            height,
+            x,
+            y,
+            outer_width,
+            outer_height,
+            monitor: monitor_info,
+        };
+
+        Ok((window, props))
     }
 
-    /// Process a message sent my the media manager.
-    fn process_media_message(
+    fn spawn_image(
         &mut self,
-        response: Response,
+        data: ImageData,
+        opts: SpawnWindowOpts,
+        header: bool,
+        border: bool,
         event_loop: &ActiveEventLoop,
-    ) -> Result<()> {
-        match response.response {
-            MediaResponse::Media(media) => match media {
-                Media::Image(image) => {
-                    let (window, position) =
-                        create_window(event_loop, image.width(), image.height(), false)?;
-
-                    window.request_redraw();
-
-                    let move_window = if self.config.moving_windows {
-                        random_bool(self.config.moving_window_chance as f64 / 100.0)
-                    } else {
-                        false
-                    };
-
-                    self.windows.insert(
-                        window.id(),
-                        Window::Image(ImageWindow::new(
-                            window,
-                            image,
-                            self.config.close_button,
-                            move_window,
-                            position,
-                        )?),
-                    );
-                }
-                Media::Video(video) => {
-                    let (window, position) = create_window(
-                        event_loop,
-                        video.width as u32,
-                        video.height as u32,
-                        false,
-                    )?;
-
-                    let move_window = if self.config.moving_windows {
-                        random_bool(self.config.moving_window_chance as f64 / 100.0)
-                    } else {
-                        false
-                    };
-
-                    self.windows.insert(
-                        window.id(),
-                        Window::Video(VideoWindow::new(
-                            &self.wgpu_state,
-                            window,
-                            video,
-                            self.config.close_button,
-                            self.config.video_audio,
-                            move_window,
-                            position,
-                        )?),
-                    );
-                }
+    ) -> Result<WindowProps> {
+        let (window, props) = self.create_window(
+            opts,
+            WindowSizeBehaviour::ResizeWithMedia {
+                width: data.width(),
+                height: data.height(),
             },
-            MediaResponse::Audio(audio) => {
-                self.audio_player = Some(AudioPlayer::new(audio)?);
+            header,
+            border,
+            event_loop,
+        )?;
 
-                if let Some(spawner) = self.spawners.audio.as_mut() {
-                    spawner.unlock();
-                }
-            }
-            MediaResponse::Notification(notification) => self.send_notification(notification),
-            MediaResponse::Prompt(prompt) => {
-                let (window, _) = create_window(event_loop, 400, 400, true)?;
+        window.request_redraw();
 
-                self.windows.insert(
-                    window.id(),
-                    Window::Prompt(PromptWindow::new(&self.wgpu_state, window, prompt.prompt)?),
-                );
+        let image_window = ImageWindow::new(
+            window,
+            props.position(),
+            data,
+            self.lua_event_tx.clone(),
+            header,
+            border,
+        )
+        .map_err(|err| LewdwareError::WindowError(err))?;
 
-                if let Some(spawner) = self.spawners.prompt.as_mut() {
-                    spawner.unlock();
-                }
-            }
-            MediaResponse::Link(link) => self.open_link(link.link),
-            MediaResponse::Wallpaper(wallpaper) => {
-                let path = match wallpaper.file.path().to_str() {
-                    Some(path) => path,
-                    None => {
-                        eprintln!("Could not convert tempfile to UTF-8");
-                        return Ok(());
-                    }
-                };
+        self.windows
+            .insert(props.window_id.clone(), Window::Image(image_window));
 
-                wallpaper::set_from_path(path).map_err(|err| anyhow!("{}", err))?;
-                self.wallpaper = Some(wallpaper);
-            }
+        println!("{}", self.windows.len());
+
+        Ok(props)
+    }
+
+    fn spawn_video(
+        &mut self,
+        data: FileOrPath,
+        width: u32,
+        height: u32,
+        loop_video: bool,
+        audio: bool,
+        opts: SpawnWindowOpts,
+        header: bool,
+        border: bool,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<WindowProps> {
+        let (window, props) = self.create_window(
+            opts,
+            WindowSizeBehaviour::ResizeWithMedia { width, height },
+            header,
+            border,
+            event_loop,
+        )?;
+
+        window.request_redraw();
+
+        let video_window = VideoWindow::new(
+            &self.wgpu_state,
+            window,
+            data,
+            props.width,
+            props.height,
+            audio,
+            loop_video,
+            props.position(),
+            header,
+            border,
+            self.lua_event_tx.clone(),
+        )
+        .map_err(|err| LewdwareError::WindowError(err))?;
+
+        self.windows
+            .insert(props.window_id.clone(), Window::Video(video_window));
+
+        Ok(props)
+    }
+
+    fn spawn_prompt(
+        &mut self,
+        title: Option<String>,
+        text: Option<String>,
+        placeholder: Option<String>,
+        initial_value: Option<String>,
+        window_opts: SpawnWindowOpts,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<WindowProps> {
+        let (window, props) = self.create_window(
+            window_opts,
+            WindowSizeBehaviour::UseDefaults {
+                width: 400,
+                height: 400,
+            },
+            false,
+            false,
+            event_loop,
+        )?;
+
+        let prompt_window = PromptWindow::new(
+            window,
+            props.position(),
+            title,
+            text,
+            placeholder,
+            initial_value,
+            self.lua_event_tx.clone(),
+        )
+        .map_err(|err| LewdwareError::WindowError(err))?;
+
+        self.windows
+            .insert(props.window_id.clone(), Window::Prompt(prompt_window));
+
+        Ok(props)
+    }
+
+    fn spawn_choice(
+        &mut self,
+        title: Option<String>,
+        text: Option<String>,
+        options: Vec<ChoiceWindowOption>,
+        window_opts: SpawnWindowOpts,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<WindowProps> {
+        let (window, props) = self.create_window(
+            window_opts,
+            WindowSizeBehaviour::UseDefaults {
+                width: 400,
+                height: 400,
+            },
+            false,
+            false,
+            event_loop,
+        )?;
+
+        let prompt_window = ChoiceWindow::new(
+            window,
+            props.position(),
+            title,
+            text,
+            options,
+            self.lua_event_tx.clone(),
+        )
+        .map_err(|err| LewdwareError::WindowError(err))?;
+
+        self.windows
+            .insert(props.window_id.clone(), Window::Choice(prompt_window));
+
+        Ok(props)
+    }
+
+    fn spawn_audio(&mut self, data: FileOrPath, loop_audio: bool) -> u64 {
+        let audio_player = AudioPlayer::new(data, loop_audio);
+
+        let id = self.current_audio_id;
+        self.current_audio_id += 1;
+
+        self.audio_players.insert(id, audio_player);
+
+        id
+    }
+
+    fn set_wallpaper(&mut self, file: FileOrPath, mode: Option<WallpaperMode>) -> Result<()> {
+        wallpaper::set_from_path(file.path().to_str().ok_or(LewdwareError::Internal(
+            "Tempfile does not have valid UTF-8 path",
+        ))?)
+        .map_err(|err| LewdwareError::WallpaperError(anyhow!("{err}")))?;
+
+        if let Some(mode) = mode {
+            let mode = match mode {
+                WallpaperMode::Center => wallpaper::Mode::Center,
+                WallpaperMode::Crop => wallpaper::Mode::Crop,
+                WallpaperMode::Fit => wallpaper::Mode::Fit,
+                WallpaperMode::Span => wallpaper::Mode::Span,
+                WallpaperMode::Stretch => wallpaper::Mode::Stretch,
+                WallpaperMode::Tile => wallpaper::Mode::Tile,
+            };
+
+            wallpaper::set_mode(mode)
+                .map_err(|err| LewdwareError::WallpaperError(anyhow!("{err}")))?;
         }
 
         Ok(())
     }
 
-    fn open_link(&self, link: String) {
-        match webbrowser::open(&link) {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("Could not open link in web browser: {}", err);
-            }
-        }
+    fn open_link(&self, url: String) -> Result<()> {
+        webbrowser::open(&url).map_err(|err| LewdwareError::OpenLinkError(err))
     }
 
-    fn send_notification(&self, notification_info: media::Notification) {
-        let mut notification = Notification::new();
+    fn show_notification(&self, notification: Notification) -> Result<()> {
+        let mut notification_builder = notify_rust::Notification::new();
 
-        notification.body(&notification_info.body);
+        notification_builder.body(&notification.body);
 
-        if let Some(summary) = notification_info.summary {
-            notification.summary(&summary);
+        if let Some(summary) = notification.summary {
+            notification_builder.summary(&summary);
         }
 
-        match notification.show() {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("Couldn't show notification: {}", err)
-            }
-        }
+        notification_builder.show()?;
+
+        Ok(())
     }
 
-    /// Get the relevant tags for a specific media type.
-    fn get_tags(&self, media_type: MediaType) -> Option<Vec<String>> {
-        match &self.transition_manager {
-            Some(transition_manager) => transition_manager.get_tags(media_type).map(|tags| {
-                tags.into_iter()
-                    .filter(|tag| self.tags.as_ref().is_none_or(|tags| tags.contains(tag)))
-                    .collect()
-            }),
-            None => self.tags.as_ref().cloned(),
+    // fn pause_video(window: Window) -> Result<()> {
+    //     match window {
+    //         Window::Video(video) => video
+    //     }
+    // }
+
+    fn process_lua_request(&mut self, request: LuaRequest, event_loop: &ActiveEventLoop) -> bool {
+        if !match request {
+            LuaRequest::SpawnImage {
+                data,
+                window_opts,
+                header,
+                border,
+                tx,
+            } => tx
+                .send(self.spawn_image(data, window_opts, header, border, event_loop))
+                .is_ok(),
+            LuaRequest::SpawnVideo {
+                data,
+                width,
+                height,
+                loop_video,
+                audio,
+                window_opts,
+                header,
+                border,
+                tx,
+            } => tx
+                .send(self.spawn_video(
+                    data,
+                    width,
+                    height,
+                    loop_video,
+                    audio,
+                    window_opts,
+                    header,
+                    border,
+                    event_loop,
+                ))
+                .is_ok(),
+            LuaRequest::SpawnPrompt {
+                title,
+                text,
+                placeholder,
+                initial_value,
+                window_opts,
+                tx,
+            } => tx
+                .send(self.spawn_prompt(
+                    title,
+                    text,
+                    placeholder,
+                    initial_value,
+                    window_opts,
+                    event_loop,
+                ))
+                .is_ok(),
+            LuaRequest::SpawnChoice {
+                title,
+                text,
+                options,
+                window_opts,
+                tx,
+            } => tx
+                .send(self.spawn_choice(title, text, options, window_opts, event_loop))
+                .is_ok(),
+            LuaRequest::SpawnAudio {
+                data,
+                loop_audio,
+                tx,
+            } => tx.send(self.spawn_audio(data, loop_audio)).is_ok(),
+            LuaRequest::SetWallpaper { file, mode, tx } => {
+                tx.send(self.set_wallpaper(file, mode)).is_ok()
+            }
+            LuaRequest::OpenLink { url, tx } => tx.send(self.open_link(url)).is_ok(),
+            LuaRequest::ShowNotification { notification, tx } => {
+                tx.send(self.show_notification(notification)).is_ok()
+            }
+            LuaRequest::ListMonitors { tx } => tx.send(self.monitors.list(event_loop)).is_ok(),
+            LuaRequest::PrimaryMonitor { tx } => tx
+                .send(self.monitors.primary(event_loop).map_err(|err| err.into()))
+                .is_ok(),
+            LuaRequest::GetMonitor { id, tx } => tx
+                .send(self.monitors.get(id, event_loop).map_err(|err| err.into()))
+                .is_ok(),
+            LuaRequest::RandomMonitor { tx } => tx
+                .send(self.monitors.random(event_loop).map_err(|err| err.into()))
+                .is_ok(),
+            LuaRequest::Exit { tx } => {
+                let _ = tx.send(());
+                event_loop.exit();
+                return true;
+            }
+            LuaRequest::WindowAction { id, action } => {
+                if let Entry::Occupied(mut entry) = self.windows.entry(id) {
+                    match action {
+                        WindowAction::CloseWindow { tx } => {
+                            entry.remove();
+                            tx.send(()).is_ok()
+                        }
+                        WindowAction::PauseVideo { tx } => tx
+                            .send(match entry.get_mut() {
+                                Window::Video(video_window) => {
+                                    video_window.pause();
+                                    Ok(())
+                                }
+                                _ => Err(LewdwareError::Internal("Invalid window type")),
+                            })
+                            .is_ok(),
+                        WindowAction::PlayVideo { tx } => tx
+                            .send(match entry.get_mut() {
+                                Window::Video(video_window) => {
+                                    video_window.play();
+                                    Ok(())
+                                }
+                                _ => Err(LewdwareError::Internal("Invalid window type")),
+                            })
+                            .is_ok(),
+                        WindowAction::Move { id, tx, opts } => tx
+                            .send(entry.get_mut().inner_window_mut().start_move(id, opts))
+                            .is_ok(),
+                        WindowAction::SetTitle { tx, title } => tx
+                            .send(match entry.get_mut() {
+                                Window::Prompt(prompt) => {
+                                    prompt.set_title(title);
+                                    Ok(())
+                                }
+                                Window::Choice(choice) => {
+                                    choice.set_title(title);
+                                    Ok(())
+                                }
+                                _ => Err(LewdwareError::Internal("Invalid window type")),
+                            })
+                            .is_ok(),
+                        WindowAction::SetText { tx, text } => tx
+                            .send(match entry.get_mut() {
+                                Window::Prompt(prompt) => {
+                                    prompt.set_text(text);
+                                    Ok(())
+                                }
+                                Window::Choice(choice) => {
+                                    choice.set_text(text);
+                                    Ok(())
+                                }
+                                _ => Err(LewdwareError::Internal("Invalid window type")),
+                            })
+                            .is_ok(),
+                        WindowAction::SetValue { tx, value } => tx
+                            .send(match entry.get_mut() {
+                                Window::Prompt(prompt) => {
+                                    prompt.set_value(value);
+                                    Ok(())
+                                }
+                                _ => Err(LewdwareError::Internal("Invalid window type")),
+                            })
+                            .is_ok(),
+                        WindowAction::SetOptions { tx, options } => tx
+                            .send(match entry.get_mut() {
+                                Window::Choice(choice) => {
+                                    choice.set_options(options);
+                                    Ok(())
+                                }
+                                _ => Err(LewdwareError::Internal("Invalid window type")),
+                            })
+                            .is_ok(),
+                    }
+                } else {
+                    true
+                }
+            }
+            LuaRequest::AudioAction { id, action } => {
+                if let Entry::Occupied(entry) = self.audio_players.entry(id) {
+                    match action {
+                        AudioAction::Pause { tx } => tx.send(entry.get().pause()).is_ok(),
+                        AudioAction::Play { tx } => tx.send(entry.get().play()).is_ok(),
+                    }
+                } else {
+                    true
+                }
+            }
+        } {
+            eprintln!("Couldn't send response");
+        }
+
+        false
+    }
+
+    fn process_lua_requests(&mut self, event_loop: &ActiveEventLoop) {
+        while let Ok(request) = self.lua_request_rx.try_recv() {
+            if self.process_lua_request(request, event_loop) {
+                return;
+            }
         }
     }
 }
 
 impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
     fn resumed(&mut self, _: &ActiveEventLoop) {
-        let tags = self.get_tags(MediaType::Popups);
-        if self.media_manager.request_media(tags, false).is_some() {
-            self.spawners.media.spawn();
-        }
-
-        if self.spawners.audio.is_some() {
-            let tags = self.get_tags(MediaType::Audio);
-            if self.media_manager.request_audio(tags).is_some() {
-                self.spawners.audio.as_mut().unwrap().spawn();
-            }
-        }
-
-        let tags = self.get_tags(MediaType::Wallpaper);
-        self.media_manager.request_wallpaper(tags);
+        self.running = true;
     }
 
     fn window_event(
@@ -423,14 +638,21 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                         window.handle_cursor_moved(position);
                     }
                     WindowEvent::CursorLeft { .. } => {
-                        window.handle_mouse_left_window();
+                        window.handle_cursor_left();
                     }
                     WindowEvent::MouseInput {
                         state: ElementState::Pressed,
                         button: MouseButton::Left,
                         ..
                     } => {
-                        if window.handle_click() {
+                        window.handle_mouse_down();
+                    }
+                    WindowEvent::MouseInput {
+                        state: ElementState::Released,
+                        button: MouseButton::Left,
+                        ..
+                    } => {
+                        if window.handle_mouse_up() {
                             entry.remove();
                             return;
                         }
@@ -445,26 +667,48 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                         window.handle_cursor_moved(position);
                     }
                     WindowEvent::CursorLeft { .. } => {
-                        window.handle_mouse_left_window();
+                        window.handle_cursor_left();
                     }
                     WindowEvent::MouseInput {
                         state: ElementState::Pressed,
                         button: MouseButton::Left,
                         ..
                     } => {
-                        if window.handle_click() {
+                        window.handle_mouse_down();
+                    }
+                    WindowEvent::MouseInput {
+                        state: ElementState::Released,
+                        button: MouseButton::Left,
+                        ..
+                    } => {
+                        if window.handle_mouse_up() {
                             entry.remove();
                             return;
                         }
                     }
-                    WindowEvent::RedrawRequested => {
-                        if let Err(err) = window.update() {
-                            eprintln!("Error updating video window: {}", err);
+                    WindowEvent::RedrawRequested => match window.update() {
+                        Err(err) => {
+                            eprintln!("Error updating video window: {err}");
                         }
-                    }
+                        Ok(true) => {
+                            entry.remove();
+                            return;
+                        }
+                        Ok(false) => {}
+                    },
                     _ => {}
                 },
                 Window::Prompt(window) => match &event {
+                    WindowEvent::RedrawRequested => {
+                        window.render().unwrap_or_else(|err| {
+                            eprintln!("Error rendering prompt window: {}", err);
+                        });
+                    }
+                    event => {
+                        window.handle_event(event);
+                    }
+                },
+                Window::Choice(window) => match &event {
                     WindowEvent::RedrawRequested => {
                         window.render().unwrap_or_else(|err| {
                             eprintln!("Error rendering prompt window: {}", err);
@@ -481,17 +725,6 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                 WindowEvent::CloseRequested => {
                     entry.remove();
                 }
-                WindowEvent::KeyboardInput {
-                    event:
-                        KeyEvent {
-                            state: ElementState::Pressed,
-                            logical_key: Key::Named(NamedKey::Escape),
-                            ..
-                        },
-                    ..
-                } => {
-                    event_loop.exit();
-                }
                 _ => {}
             }
         }
@@ -501,87 +734,28 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
     /// main event loop (e.g. on another thread).
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::MediaResponse => {
-                while let Some(response) = self.media_manager.try_recv() {
-                    self.process_media_message(response, event_loop)
-                        .unwrap_or_else(|err| {
-                            eprintln!("Error: {}", err);
-                        });
-                }
-            }
-            UserEvent::PanicButtonPressed => {
+            UserEvent::Exit => {
                 event_loop.exit();
+            }
+            UserEvent::LuaRequest => {
+                self.process_lua_requests(event_loop);
             }
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(duration) = self.config.max_popup_duration {
-            self.windows.retain(|_, window| match window {
-                Window::Image(window) => window.created.elapsed() <= duration,
-                Window::Video(window) => window.created.elapsed() <= duration,
-                Window::Prompt(window) => !window.closed(),
-            });
-        }
-
         for window in self.windows.values_mut() {
             match window {
-                Window::Video(window) => {
-                    window.window.request_redraw();
-
-                    if window.moving()
-                        && let Err(err) = window.update_position()
-                    {
-                        eprintln!("Error moving window: {}", err);
-                    }
-                }
-                Window::Prompt(_) => {}
-                Window::Image(window) => {
-                    if window.moving()
-                        && let Err(err) = window.update_position()
-                    {
-                        eprintln!("Error moving window: {}", err);
-                    }
-                }
+                Window::Video(_) => {
+                    window.inner_window().request_redraw();
+                },
+                _ => {},
             }
+
+            window.inner_window_mut().update_position();
         }
 
         event_loop.set_control_flow(ControlFlow::Poll);
-
-        if self.audio_player.as_ref().is_some_and(|x| x.is_finished())
-            && let Some(spawner) = self.spawners.audio.as_mut()
-        {
-            spawner.unlock();
-        }
-
-        // The transition has switched from one stage to another
-        if self
-            .transition_manager
-            .as_mut()
-            .is_some_and(|manager| manager.try_switch())
-        {
-            if self
-                .transition_manager
-                .as_ref()
-                .unwrap()
-                .applies_to(&MediaType::Wallpaper)
-            {
-                let tags = self.get_tags(MediaType::Wallpaper);
-                self.media_manager.request_wallpaper(tags);
-            }
-
-            if self
-                .transition_manager
-                .as_ref()
-                .unwrap()
-                .applies_to(&MediaType::Audio)
-            {
-                let tags = self.get_tags(MediaType::Audio);
-                self.media_manager.request_audio(tags);
-            }
-        }
-
-        self.try_spawn();
     }
 }
 
@@ -594,5 +768,27 @@ impl Drop for ChaosApp<'_> {
         } else {
             eprintln!("No default wallpaper found; leaving wallpaper as is");
         }
+    }
+}
+
+// fn window_props(window: &winit::window::Window) -> Result<WindowProps> {
+//     let scale_factor = window.scale_factor();
+//     let size = window.inner_size().to_logical(scale_factor);
+//     let position = window.inner_position()?.to_logical(scale_factor);
+//
+//     Ok(WindowProps {
+//         width: size.width,
+//         height: size.height,
+//         x: position.x,
+//         y: position.y,
+//         window_id: window.id(),
+//     })
+// }
+
+fn random_position(window_size: u32, total_size: u32) -> u32 {
+    if window_size > total_size {
+        0
+    } else {
+        random_range(0..=(total_size - window_size))
     }
 }
