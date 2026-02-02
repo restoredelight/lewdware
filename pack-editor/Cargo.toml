@@ -1,5 +1,5 @@
 [package]
-name = "pack-maker-dioxus"
+name = "pack-editor"
 version = "0.1.0"
 authors = ["restoredelight <restoreddelight@proton.me>"]
 edition = "2021"
