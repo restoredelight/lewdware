@@ -23,10 +23,12 @@ use crate::lua::{
     self, AudioAction, ChoiceWindowOption, LuaRequest, Notification, SpawnWindowOpts,
     WallpaperMode, WindowAction, WindowProps, start_lua_thread,
 };
-use crate::media::{FileOrPath, ImageData};
+use crate::media::{FileOrPath, ImageData, VideoData};
 use crate::monitor::Monitors;
 use crate::utils::calculate_media_popup_size;
-use crate::window::{ChoiceWindow, ImageWindow, PromptWindow, VideoWindow, Window};
+use crate::window::{
+    ChoiceWindow, ImageWindow, InnerWindow, PromptWindow, VideoWindow, WindowType,
+};
 
 /// The main app.
 /// * `windows`: A map containing all the windows spawned by the app. Since dropping a winit window
@@ -36,7 +38,7 @@ pub struct ChaosApp<'a> {
     running: bool,
     config: AppConfig,
     wgpu_state: WgpuState,
-    windows: HashMap<WindowId, Window<'a>>,
+    windows: HashMap<WindowId, WindowType<'a>>,
     audio_players: HashMap<u64, AudioPlayer>,
     current_audio_id: u64,
     default_wallpaper: Option<String>,
@@ -76,6 +78,7 @@ impl<'a> ChaosApp<'a> {
             event_loop_proxy,
             r#"
                 lewdware.every(2000, function()
+                    print("Spawning")
                     local media = lewdware.media.random({ type = { "image", "video" } })
                     if media.type == "image" then
                         lewdware.spawn_image_popup(media)
@@ -83,7 +86,7 @@ impl<'a> ChaosApp<'a> {
                         lewdware.spawn_video_popup(media)
                     end
                 end)
-                "#
+            "#
             .to_string(),
             config.clone(),
         );
@@ -106,10 +109,9 @@ impl<'a> ChaosApp<'a> {
         &mut self,
         opts: SpawnWindowOpts,
         size_behaviour: WindowSizeBehaviour,
-        header: bool,
-        border: bool,
+        gpu: bool,
         event_loop: &ActiveEventLoop,
-    ) -> Result<(winit::window::Window, WindowProps)> {
+    ) -> Result<(InnerWindow<'a>, WindowProps)> {
         let monitor_info = match opts.monitor {
             Some(x) => x,
             None => self.monitors.random(event_loop)?,
@@ -145,13 +147,9 @@ impl<'a> ChaosApp<'a> {
 
         let (mut outer_width, mut outer_height) = (width, height);
 
-        if header {
-            outer_height += HEADER_HEIGHT;
-        }
-
-        if border {
+        if opts.decorations {
             outer_width += 2;
-            outer_height += 2;
+            outer_height += HEADER_HEIGHT + 2;
         }
 
         let x = opts
@@ -215,15 +213,23 @@ impl<'a> ChaosApp<'a> {
             monitor: monitor_info,
         };
 
-        Ok((window, props))
+        let inner_window = InnerWindow::new(
+            window,
+            &self.wgpu_state,
+            opts.decorations,
+            gpu,
+            LogicalPosition::new(x, y),
+            self.lua_event_tx.clone(),
+        )
+        .map_err(|err| LewdwareError::WindowError(err))?;
+
+        Ok((inner_window, props))
     }
 
     fn spawn_image(
         &mut self,
         data: ImageData,
         opts: SpawnWindowOpts,
-        header: bool,
-        border: bool,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
         let (window, props) = self.create_window(
@@ -232,70 +238,50 @@ impl<'a> ChaosApp<'a> {
                 width: data.width(),
                 height: data.height(),
             },
-            header,
-            border,
+            false,
             event_loop,
         )?;
 
         window.request_redraw();
 
-        let image_window = ImageWindow::new(
-            window,
-            props.position(),
-            data,
-            self.lua_event_tx.clone(),
-            header,
-            border,
-        )
-        .map_err(|err| LewdwareError::WindowError(err))?;
+        let image_window =
+            ImageWindow::new(window, data).map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
-            .insert(props.window_id.clone(), Window::Image(image_window));
-
-        println!("{}", self.windows.len());
+            .insert(props.window_id.clone(), WindowType::Image(image_window));
 
         Ok(props)
     }
 
     fn spawn_video(
         &mut self,
-        data: FileOrPath,
-        width: u32,
-        height: u32,
+        data: VideoData,
         loop_video: bool,
         audio: bool,
         opts: SpawnWindowOpts,
-        header: bool,
-        border: bool,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
         let (window, props) = self.create_window(
             opts,
-            WindowSizeBehaviour::ResizeWithMedia { width, height },
-            header,
-            border,
+            WindowSizeBehaviour::ResizeWithMedia { width: data.width, height: data.height },
+            true,
             event_loop,
         )?;
 
         window.request_redraw();
 
         let video_window = VideoWindow::new(
-            &self.wgpu_state,
             window,
             data,
             props.width,
             props.height,
             audio,
-            loop_video,
-            props.position(),
-            header,
-            border,
-            self.lua_event_tx.clone(),
+            loop_video
         )
         .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
-            .insert(props.window_id.clone(), Window::Video(video_window));
+            .insert(props.window_id.clone(), WindowType::Video(video_window));
 
         Ok(props)
     }
@@ -316,23 +302,20 @@ impl<'a> ChaosApp<'a> {
                 height: 400,
             },
             false,
-            false,
             event_loop,
         )?;
 
         let prompt_window = PromptWindow::new(
             window,
-            props.position(),
             title,
             text,
             placeholder,
             initial_value,
-            self.lua_event_tx.clone(),
         )
         .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
-            .insert(props.window_id.clone(), Window::Prompt(prompt_window));
+            .insert(props.window_id.clone(), WindowType::Prompt(prompt_window));
 
         Ok(props)
     }
@@ -352,22 +335,19 @@ impl<'a> ChaosApp<'a> {
                 height: 400,
             },
             false,
-            false,
             event_loop,
         )?;
 
         let prompt_window = ChoiceWindow::new(
             window,
-            props.position(),
             title,
             text,
             options,
-            self.lua_event_tx.clone(),
         )
         .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
-            .insert(props.window_id.clone(), Window::Choice(prompt_window));
+            .insert(props.window_id.clone(), WindowType::Choice(prompt_window));
 
         Ok(props)
     }
@@ -435,32 +415,22 @@ impl<'a> ChaosApp<'a> {
             LuaRequest::SpawnImage {
                 data,
                 window_opts,
-                header,
-                border,
                 tx,
             } => tx
-                .send(self.spawn_image(data, window_opts, header, border, event_loop))
+                .send(self.spawn_image(data, window_opts, event_loop))
                 .is_ok(),
             LuaRequest::SpawnVideo {
                 data,
-                width,
-                height,
                 loop_video,
                 audio,
                 window_opts,
-                header,
-                border,
                 tx,
             } => tx
                 .send(self.spawn_video(
                     data,
-                    width,
-                    height,
                     loop_video,
                     audio,
                     window_opts,
-                    header,
-                    border,
                     event_loop,
                 ))
                 .is_ok(),
@@ -526,7 +496,7 @@ impl<'a> ChaosApp<'a> {
                         }
                         WindowAction::PauseVideo { tx } => tx
                             .send(match entry.get_mut() {
-                                Window::Video(video_window) => {
+                                WindowType::Video(video_window) => {
                                     video_window.pause();
                                     Ok(())
                                 }
@@ -535,7 +505,7 @@ impl<'a> ChaosApp<'a> {
                             .is_ok(),
                         WindowAction::PlayVideo { tx } => tx
                             .send(match entry.get_mut() {
-                                Window::Video(video_window) => {
+                                WindowType::Video(video_window) => {
                                     video_window.play();
                                     Ok(())
                                 }
@@ -547,11 +517,11 @@ impl<'a> ChaosApp<'a> {
                             .is_ok(),
                         WindowAction::SetTitle { tx, title } => tx
                             .send(match entry.get_mut() {
-                                Window::Prompt(prompt) => {
+                                WindowType::Prompt(prompt) => {
                                     prompt.set_title(title);
                                     Ok(())
                                 }
-                                Window::Choice(choice) => {
+                                WindowType::Choice(choice) => {
                                     choice.set_title(title);
                                     Ok(())
                                 }
@@ -560,11 +530,11 @@ impl<'a> ChaosApp<'a> {
                             .is_ok(),
                         WindowAction::SetText { tx, text } => tx
                             .send(match entry.get_mut() {
-                                Window::Prompt(prompt) => {
+                                WindowType::Prompt(prompt) => {
                                     prompt.set_text(text);
                                     Ok(())
                                 }
-                                Window::Choice(choice) => {
+                                WindowType::Choice(choice) => {
                                     choice.set_text(text);
                                     Ok(())
                                 }
@@ -573,7 +543,7 @@ impl<'a> ChaosApp<'a> {
                             .is_ok(),
                         WindowAction::SetValue { tx, value } => tx
                             .send(match entry.get_mut() {
-                                Window::Prompt(prompt) => {
+                                WindowType::Prompt(prompt) => {
                                     prompt.set_value(value);
                                     Ok(())
                                 }
@@ -582,7 +552,7 @@ impl<'a> ChaosApp<'a> {
                             .is_ok(),
                         WindowAction::SetOptions { tx, options } => tx
                             .send(match entry.get_mut() {
-                                Window::Choice(choice) => {
+                                WindowType::Choice(choice) => {
                                     choice.set_options(options);
                                     Ok(())
                                 }
@@ -627,65 +597,19 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         window_id: WindowId,
         event: WindowEvent,
     ) {
         if let Entry::Occupied(mut entry) = self.windows.entry(window_id) {
             match entry.get_mut() {
-                Window::Image(window) => match event {
-                    WindowEvent::CursorMoved { position, .. } => {
-                        window.handle_cursor_moved(position);
-                    }
-                    WindowEvent::CursorLeft { .. } => {
-                        window.handle_cursor_left();
-                    }
-                    WindowEvent::MouseInput {
-                        state: ElementState::Pressed,
-                        button: MouseButton::Left,
-                        ..
-                    } => {
-                        window.handle_mouse_down();
-                    }
-                    WindowEvent::MouseInput {
-                        state: ElementState::Released,
-                        button: MouseButton::Left,
-                        ..
-                    } => {
-                        if window.handle_mouse_up() {
-                            entry.remove();
-                            return;
-                        }
-                    }
+                WindowType::Image(window) => match event {
                     WindowEvent::RedrawRequested => window.draw().unwrap_or_else(|err| {
                         eprintln!("Error drawing image window: {}", err);
                     }),
                     _ => {}
                 },
-                Window::Video(window) => match event {
-                    WindowEvent::CursorMoved { position, .. } => {
-                        window.handle_cursor_moved(position);
-                    }
-                    WindowEvent::CursorLeft { .. } => {
-                        window.handle_cursor_left();
-                    }
-                    WindowEvent::MouseInput {
-                        state: ElementState::Pressed,
-                        button: MouseButton::Left,
-                        ..
-                    } => {
-                        window.handle_mouse_down();
-                    }
-                    WindowEvent::MouseInput {
-                        state: ElementState::Released,
-                        button: MouseButton::Left,
-                        ..
-                    } => {
-                        if window.handle_mouse_up() {
-                            entry.remove();
-                            return;
-                        }
-                    }
+                WindowType::Video(window) => match event {
                     WindowEvent::RedrawRequested => match window.update() {
                         Err(err) => {
                             eprintln!("Error updating video window: {err}");
@@ -698,7 +622,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                     },
                     _ => {}
                 },
-                Window::Prompt(window) => match &event {
+                WindowType::Prompt(window) => match &event {
                     WindowEvent::RedrawRequested => {
                         window.render().unwrap_or_else(|err| {
                             eprintln!("Error rendering prompt window: {}", err);
@@ -708,7 +632,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                         window.handle_event(event);
                     }
                 },
-                Window::Choice(window) => match &event {
+                WindowType::Choice(window) => match &event {
                     WindowEvent::RedrawRequested => {
                         window.render().unwrap_or_else(|err| {
                             eprintln!("Error rendering prompt window: {}", err);
@@ -724,6 +648,29 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             match event {
                 WindowEvent::CloseRequested => {
                     entry.remove();
+                },
+                WindowEvent::CursorMoved { position, .. } => {
+                    entry.get_mut().inner_window_mut().handle_cursor_moved(position);
+                }
+                WindowEvent::CursorLeft { .. } => {
+                    entry.get_mut().inner_window_mut().handle_cursor_left();
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    entry.get_mut().inner_window_mut().handle_mouse_down();
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    if entry.get_mut().inner_window_mut().handle_mouse_up() {
+                        entry.remove();
+                        return;
+                    }
                 }
                 _ => {}
             }
@@ -746,10 +693,10 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         for window in self.windows.values_mut() {
             match window {
-                Window::Video(_) => {
+                WindowType::Video(_) => {
                     window.inner_window().request_redraw();
-                },
-                _ => {},
+                }
+                _ => {}
             }
 
             window.inner_window_mut().update_position();

@@ -5,7 +5,6 @@
 //! videos for smooth playback.
 
 use std::{
-    cell::{LazyCell, OnceCell},
     num::NonZeroU32,
     sync::{
         Arc,
@@ -14,17 +13,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use egui::{RichText, TextEdit};
+use egui_software_backend::BufferMutRef;
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
-use tiny_skia::{
-    BlendMode, Color, IntSize, Paint, Path, PathBuilder, Pixmap, PixmapMut, PixmapPaint, Rect,
-    Stroke, Transform,
-};
+use tiny_skia::{Color, IntSize, Paint, PathBuilder, Pixmap, PixmapMut, Rect, Stroke, Transform};
 use tokio::sync::mpsc;
 use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, PhysicalUnit},
-    event::WindowEvent,
+    event::{Touch, WindowEvent},
     window::Window as WinitWindow,
 };
 
@@ -33,20 +30,19 @@ use crate::{
     error::{LewdwareError, MonitorError},
     header::{HEADER_HEIGHT, Header},
     lua::{self, ChoiceWindowOption, Coord, Easing, MoveOpts},
-    media::{FileOrPath, ImageData, Video},
-    utils::resolve_coord,
-    video::{NextFrame, VideoDecoder, VideoFrame, copy_frame_pixmap},
+    media::{ImageData, VideoData},
+    video::{NextFrame, VideoDecoder, VideoFrame},
 };
 
-pub enum Window<'a> {
-    Image(ImageWindow),
+pub enum WindowType<'a> {
+    Image(ImageWindow<'a>),
     Video(VideoWindow<'a>),
-    Prompt(PromptWindow),
-    Choice(ChoiceWindow),
+    Prompt(PromptWindow<'a>),
+    Choice(ChoiceWindow<'a>),
 }
 
-impl Window<'_> {
-    pub fn inner_window(&self) -> &InnerWindow {
+impl<'a> WindowType<'a> {
+    pub fn inner_window(&self) -> &InnerWindow<'_> {
         match self {
             Self::Image(image_window) => &image_window.inner_window,
             Self::Video(video_window) => &video_window.inner_window,
@@ -55,7 +51,7 @@ impl Window<'_> {
         }
     }
 
-    pub fn inner_window_mut(&mut self) -> &mut InnerWindow {
+    pub fn inner_window_mut(&mut self) -> &mut InnerWindow<'a> {
         match self {
             Self::Image(image_window) => &mut image_window.inner_window,
             Self::Video(video_window) => &mut video_window.inner_window,
@@ -63,123 +59,192 @@ impl Window<'_> {
             Self::Choice(choice_window) => &mut choice_window.inner_window,
         }
     }
+}
 
-    pub fn window_type(&self) -> &'static str {
+enum Surface<'a> {
+    Pixels {
+        pixels: Pixels<'a>,
+        error: Arc<AtomicBool>,
+    },
+    Softbuffer {
+        _context: softbuffer::Context<Arc<WinitWindow>>,
+        surface: softbuffer::Surface<Arc<WinitWindow>, Arc<WinitWindow>>,
+    },
+}
+
+impl<'a> Surface<'a> {
+    fn buffer(&mut self) -> Result<Buffer<'_>> {
         match self {
-            Self::Image(image_window) => "image",
-            Self::Video(video_window) => "video",
-            Self::Prompt(prompt_window) => "prompt",
-            Self::Choice(choice_window) => "choice",
+            Surface::Pixels { pixels, .. } => {
+                let width = pixels.texture().width();
+                let height = pixels.texture().height();
+
+                let dest = PixmapMut::from_bytes(pixels.frame_mut(), width, height)
+                    .context("Invalid pixmap size")?;
+
+                Ok(Buffer::Pixmap(dest))
+            }
+            Surface::Softbuffer { _context, surface } => {
+                let buffer = surface.buffer_mut().map_err(|err| anyhow!("{err}"))?;
+
+                Ok(Buffer::Softbuffer(buffer))
+            }
+        }
+    }
+}
+
+enum Buffer<'a> {
+    Pixmap(PixmapMut<'a>),
+    Softbuffer(softbuffer::Buffer<'a, Arc<WinitWindow>, Arc<WinitWindow>>),
+}
+
+impl<'a> Buffer<'a> {
+    fn copy_from_slice(&mut self, start: usize, src: &[u8]) {
+        match self {
+            Buffer::Pixmap(pixmap) => {
+                let start = start * 4;
+                pixmap.data_mut()[start..(start + src.len())].copy_from_slice(src);
+            }
+            Buffer::Softbuffer(buffer) => {
+                for (index, pixel) in src.chunks_exact(4).enumerate() {
+                    let r = pixel[0] as u32;
+                    let g = pixel[1] as u32;
+                    let b = pixel[2] as u32;
+                    let a = pixel[3] as u32;
+
+                    buffer[start + index] = (a << 24) | (r << 16) | (g << 8) | b;
+                }
+            }
+        }
+    }
+
+    fn copy_from_pixmap(&mut self, source: &Pixmap, x: u32, y: u32) {
+        let dst_width = self.width();
+        let offset = (y * dst_width) as usize;
+        let src_data = source.data();
+
+        if x == 0 && dst_width == source.width() {
+            self.copy_from_slice(offset, src_data);
+        } else {
+            for (i, row) in src_data
+                .chunks_exact(source.width() as usize * 4)
+                .enumerate()
+            {
+                let index = offset + (dst_width * i as u32 + x) as usize;
+
+                self.copy_from_slice(index, row);
+            }
+        }
+    }
+
+    fn copy_from_frame(&mut self, frame: &VideoFrame, x: u32, y: u32) {
+        let offset = (y * self.width()) as usize;
+        let width = frame.frame.width() as usize;
+        let height = frame.frame.height() as usize;
+        let line_size = frame.frame.stride(0); // Bytes per row
+        let data = frame.frame.data(0);
+
+        for row_index in 0..height {
+            let src_start = row_index * line_size;
+            let src_end = src_start + width * 4;
+
+            let index = offset + (self.width() * row_index as u32 + x) as usize;
+
+            self.copy_from_slice(index, &data[src_start..src_end]);
+        }
+    }
+
+    fn copy_from_u32_buf(&mut self, src: &[u32], width: u32, x: u32, y: u32) {
+        let offset = (y * self.width()) as usize;
+        let dst_width = self.width();
+
+        let buffer = match self {
+            Buffer::Pixmap(_) => panic!("Buffer must be a softbuffer buffer"),
+            Buffer::Softbuffer(buffer) => buffer,
+        };
+
+        for (i, row) in src.chunks_exact(width as usize).enumerate() {
+            let index = offset + (dst_width * i as u32 + x) as usize;
+
+            buffer[index..(index + row.len())].copy_from_slice(row);
+        }
+    }
+
+    fn draw_border(&mut self) {
+        match self {
+            Buffer::Pixmap(pixmap) => {
+                let border = PathBuilder::from_rect(
+                    Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32)
+                        .unwrap(),
+                );
+                let mut paint = Paint::default();
+                paint.set_color(Color::BLACK);
+                pixmap.stroke_path(
+                    &border,
+                    &paint,
+                    &Stroke::default(),
+                    Transform::default(),
+                    None,
+                );
+            }
+            Buffer::Softbuffer(buffer) => {
+                let black = Color::BLACK.to_color_u8();
+                let color = ((black.alpha() as u32) << 24)
+                    | ((black.red() as u32) << 16)
+                    | ((black.green() as u32) << 8)
+                    | (black.blue() as u32);
+                let width = buffer.width().get() as usize;
+                let height = buffer.height().get() as usize;
+
+                for i in 0..width {
+                    buffer[i] = color;
+                    buffer[width * (height - 1) + i] = color;
+                }
+
+                for i in 0..height {
+                    buffer[i * width] = color;
+                    buffer[i * width + (width - 1)] = color;
+                }
+            }
+        }
+    }
+
+    fn width(&self) -> u32 {
+        match self {
+            Buffer::Pixmap(pixmap) => pixmap.width(),
+            Buffer::Softbuffer(buffer) => buffer.width().get(),
+        }
+    }
+
+    fn height(&self) -> u32 {
+        match self {
+            Buffer::Pixmap(pixmap) => pixmap.height(),
+            Buffer::Softbuffer(buffer) => buffer.height().get(),
         }
     }
 }
 
 /// A window displaying an image. Image windows are rendered using softbuffer.
-pub struct ImageWindow {
-    inner_window: InnerWindow,
+pub struct ImageWindow<'a> {
+    inner_window: InnerWindow<'a>,
     image: Option<ImageData>,
-    _context: softbuffer::Context<Arc<WinitWindow>>,
-    surface: softbuffer::Surface<Arc<WinitWindow>, Arc<WinitWindow>>,
-    pixmap: Pixmap,
-    border: bool,
-    header: Option<Header>,
-    inner_size: PhysicalSize<u32>,
-    outer_size: PhysicalSize<u32>,
 }
 
-struct MovementState {
-    x: i32,
-    y: i32,
-    dx: i32,
-    dy: i32,
-    last_moved: Instant,
-}
-
-#[derive(Clone, Copy)]
-enum Direction {
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
-}
-
-impl ImageWindow {
+impl<'a> ImageWindow<'a> {
     /// Create a new image window.
     ///
     /// * `close_button`: Whether to display a close button on the window.
     /// * `moving`: Whether to move the window around the screen.
-    pub fn new(
-        window: WinitWindow,
-        initial_position: LogicalPosition<u32>,
-        image: ImageData,
-        lua_event_tx: mpsc::UnboundedSender<lua::Event>,
-        header: bool,
-        border: bool,
-    ) -> Result<Self> {
-        let window = Arc::new(window);
-
-        let inner_window = InnerWindow::new(window.clone(), initial_position, lua_event_tx);
-
-        let context = softbuffer::Context::new(window.clone()).map_err(|err| anyhow!("{}", err))?;
-        let surface =
-            softbuffer::Surface::new(&context, window.clone()).map_err(|err| anyhow!("{}", err))?;
-
-        let (outer_size, inner_size) = calculate_size(window.clone(), border);
-
-        let scale_factor = window.scale_factor();
-
-        let header = header.then(|| Header::new(window.clone(), inner_size.clone(), scale_factor));
-
-        let mut pixmap = Pixmap::new(outer_size.width, outer_size.height).unwrap();
-
-        if border {
-            draw_border(&mut pixmap.as_mut(), &outer_size);
-        }
-
+    pub fn new(inner_window: InnerWindow<'a>, image: ImageData) -> Result<Self> {
         Ok(Self {
             inner_window,
             image: Some(image),
-            border: true,
-            _context: context,
-            header,
-            surface,
-            pixmap,
-            inner_size,
-            outer_size,
         })
     }
 
     pub fn draw(&mut self) -> Result<()> {
-        self.surface
-            .resize(
-                NonZeroU32::new(self.outer_size.width).context("Window has 0 width")?,
-                NonZeroU32::new(self.outer_size.height).context("Window has 0 height")?,
-            )
-            .map_err(|err| anyhow!("{}", err))?;
-
-        let mut buffer = self
-            .surface
-            .buffer_mut()
-            .map_err(|err| anyhow!("{}", err))?;
-
-        let scale_factor = self.inner_window.window.scale_factor();
-
-        let border_offset = if self.border {
-            PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0
-        } else {
-            0
-        };
-
-        if let Some(header) = &mut self.header {
-            let header_pixmap = header.draw();
-
-            copy_pixmap(
-                &mut self.pixmap.as_mut(),
-                &header_pixmap,
-                border_offset,
-                border_offset,
-            );
-        }
+        self.inner_window.start_render()?;
+        self.inner_window.render_decorations()?;
 
         if let Some(image) = self.image.take() {
             let width = image.width();
@@ -189,118 +254,46 @@ impl ImageWindow {
                 Pixmap::from_vec(image.into_vec(), IntSize::from_wh(width, height).unwrap())
                     .unwrap();
 
-            let physical_header_height: u32 = if self.header.is_some() {
-                PhysicalUnit::from_logical::<_, u32>(HEADER_HEIGHT, scale_factor).0
-            } else {
-                0
-            };
-
-            copy_pixmap(
-                &mut self.pixmap.as_mut(),
-                &image_pixmap,
-                border_offset,
-                physical_header_height + border_offset,
-            );
+            self.inner_window.render_pixmap(&image_pixmap)?;
         }
 
-        render_pixmap_softbuffer(&mut buffer, &self.pixmap);
-
-        buffer.present().map_err(|err| anyhow!("{}", err))?;
+        self.inner_window.present()?;
 
         Ok(())
     }
-
-    pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        if let Some(header) = &mut self.header {
-            header.handle_cursor_moved(position);
-        }
-    }
-
-    pub fn handle_cursor_left(&mut self) {
-        if let Some(header) = &mut self.header {
-            header.handle_cursor_left();
-        }
-    }
-
-    pub fn handle_mouse_down(&mut self) {
-        if let Some(header) = &mut self.header {
-            header.handle_mouse_down();
-        }
-    }
-
-    pub fn handle_mouse_up(&mut self) -> bool {
-        if let Some(header) = &mut self.header {
-            header.handle_mouse_up()
-        } else {
-            false
-        }
-    }
-}
-
-fn draw_border(pixmap: &mut PixmapMut, outer_size: &PhysicalSize<u32>) {
-    let border = PathBuilder::from_rect(
-        Rect::from_xywh(
-            1.0,
-            1.0,
-            (outer_size.width + 2) as f32,
-            (outer_size.height + 2) as f32,
-        )
-        .unwrap(),
-    );
-    let mut paint = Paint::default();
-    paint.set_color(Color::BLACK);
-    pixmap.stroke_path(
-        &border,
-        &paint,
-        &Stroke::default(),
-        Transform::default(),
-        None,
-    );
 }
 
 fn calculate_size(
-    window: Arc<WinitWindow>,
-    border: bool,
+    window: &Arc<WinitWindow>,
+    decorations: bool,
 ) -> (PhysicalSize<u32>, PhysicalSize<u32>) {
     let outer_size = window.inner_size();
 
-    let inner_size = if border {
+    let inner_size = if decorations {
         let logical_size = outer_size.to_logical::<u32>(window.scale_factor());
-        LogicalSize::new(logical_size.width - 2, logical_size.height - 2)
-            .to_physical(window.scale_factor())
+        LogicalSize::new(
+            logical_size.width - 2,
+            logical_size.height - 2 - HEADER_HEIGHT,
+        )
+        .to_physical(window.scale_factor())
     } else {
         outer_size.clone()
     };
 
-    (outer_size, inner_size)
+    (inner_size, outer_size)
 }
 
 /// A video popup, rendered using pixels.
 pub struct VideoWindow<'a> {
-    inner_window: InnerWindow,
-    buffer: Buffer<'a>,
+    inner_window: InnerWindow<'a>,
     decoder: VideoDecoder,
     last_frame_time: Instant,
     duration: Option<Duration>,
-    border: bool,
-    header: Option<Header>,
-    wgpu_error: Arc<AtomicBool>,
     loop_video: bool,
-    inner_size: PhysicalSize<u32>,
-    outer_size: PhysicalSize<u32>,
     paused: bool,
 }
 
-enum Buffer<'a> {
-    Pixels(Pixels<'a>),
-    Softbuffer {
-        _context: softbuffer::Context<Arc<WinitWindow>>,
-        surface: softbuffer::Surface<Arc<WinitWindow>, Arc<WinitWindow>>,
-        pixmap: Pixmap,
-    },
-}
-
-fn make_softbuffer(
+fn init_softbuffer(
     window: Arc<WinitWindow>,
 ) -> Result<(
     softbuffer::Context<Arc<WinitWindow>>,
@@ -313,136 +306,44 @@ fn make_softbuffer(
     Ok((context, surface))
 }
 
-impl VideoWindow<'_> {
+impl<'a> VideoWindow<'a> {
     /// Create a new video popup.
     ///
     /// * `close_button`: Whether to display a close button on the window.
     /// * `play_audio`: Whether to play the video's audio.
     pub fn new(
-        wgpu_state: &WgpuState,
-        window: WinitWindow,
-        video: FileOrPath,
+        inner_window: InnerWindow<'a>,
+        video: VideoData,
         width: u32,
         height: u32,
         play_audio: bool,
         loop_video: bool,
-        initial_position: LogicalPosition<u32>,
-        header: bool,
-        border: bool,
-        lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     ) -> anyhow::Result<Self> {
-        let window = Arc::new(window);
-
-        let (outer_size, inner_size) = calculate_size(window.clone(), border);
-
-        let scale_factor = window.scale_factor();
-
-        let inner_window = InnerWindow::new(window.clone(), initial_position, lua_event_tx);
+        let scale_factor = inner_window.window.scale_factor();
 
         let video_size = LogicalSize::new(width, height).to_physical(scale_factor);
 
         let decoder = VideoDecoder::new(
-            video,
+            video.file,
             video_size.width,
             video_size.height,
             play_audio,
             loop_video,
         )?;
 
-        let buffer = if wgpu_state.error.load(Ordering::Acquire) {
-            let (context, surface) = make_softbuffer(window.clone())?;
-
-            let mut pixmap = Pixmap::new(outer_size.width, outer_size.height).unwrap();
-
-            if border {
-                draw_border(&mut pixmap.as_mut(), &outer_size);
-            }
-
-            Buffer::Softbuffer {
-                _context: context,
-                surface,
-                pixmap,
-            }
-        } else {
-            let surface_texture =
-                SurfaceTexture::new(outer_size.width, outer_size.height, window.clone());
-
-            let mut pixels =
-                PixelsBuilder::new(outer_size.width, outer_size.height, surface_texture)
-                    .build_with_instance(
-                        &wgpu_state.instance,
-                        &wgpu_state.adapter,
-                        &wgpu_state.device,
-                        &wgpu_state.queue,
-                    )?;
-
-            let mut pixmap =
-                PixmapMut::from_bytes(pixels.frame_mut(), outer_size.width, outer_size.height)
-                    .unwrap();
-
-            if border {
-                draw_border(&mut pixmap, &outer_size);
-            }
-
-            Buffer::Pixels(pixels)
-        };
-
-        let header = header.then(|| Header::new(window.clone(), inner_size.clone(), scale_factor));
-
         Ok(Self {
             inner_window,
-            buffer,
             decoder,
             last_frame_time: Instant::now(),
             duration: None,
-            wgpu_error: wgpu_state.error.clone(),
             loop_video,
-            border,
-            header,
-            inner_size,
-            outer_size,
             paused: false,
         })
     }
 
-    pub fn update(&mut self) -> anyhow::Result<bool> {
-        match &self.buffer {
-            Buffer::Pixels(pixels) => {
-                if self.wgpu_error.load(Ordering::Acquire) {
-                    let (context, surface) = make_softbuffer(self.inner_window.window.clone())?;
-
-                    let mut pixmap =
-                        Pixmap::new(self.outer_size.width, self.outer_size.height).unwrap();
-
-                    if self.border {
-                        draw_border(&mut pixmap.as_mut(), &self.outer_size);
-                    }
-
-                    self.buffer = Buffer::Softbuffer {
-                        _context: context,
-                        surface,
-                        pixmap,
-                    };
-
-                    return self.update();
-                }
-            }
-            _ => {}
-        }
-
-        let scale_factor = self.inner_window.window.scale_factor();
-
-        let border_offset = if self.border {
-            PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0
-        } else {
-            0
-        };
-
-        if let Some(header_pixmap) = self.header.as_ref().map(|header| header.draw()) {
-            let mut pixmap = self.get_pixmap();
-
-            copy_pixmap(&mut pixmap, &header_pixmap, border_offset, border_offset);
-        }
+    pub fn update(&mut self) -> Result<bool> {
+        self.inner_window.start_render()?;
+        self.inner_window.render_decorations()?;
 
         let (close, frame) = self.get_next_frame()?;
 
@@ -451,75 +352,12 @@ impl VideoWindow<'_> {
         }
 
         if let Some(frame) = frame {
-            let scale_factor = self.inner_window.window.scale_factor();
-
-            let border_offset = if self.border {
-                PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0
-            } else {
-                0
-            };
-
-            let physical_header_height: u32 = if self.header.is_some() {
-                PhysicalUnit::from_logical::<_, u32>(HEADER_HEIGHT, scale_factor).0
-            } else {
-                0
-            };
-
-            copy_frame_pixmap(
-                &frame.frame,
-                &mut self.get_pixmap(),
-                physical_header_height + border_offset,
-                border_offset,
-            )?;
+            self.inner_window.render_frame(&frame)?;
         }
 
-        self.present()?;
+        self.inner_window.present()?;
 
         Ok(false)
-    }
-
-    fn get_pixmap(&'_ mut self) -> PixmapMut<'_> {
-        match &mut self.buffer {
-            Buffer::Pixels(pixels) => PixmapMut::from_bytes(
-                pixels.frame_mut(),
-                self.outer_size.width,
-                self.outer_size.height,
-            )
-            .unwrap(),
-            Buffer::Softbuffer {
-                _context,
-                surface: _,
-                pixmap,
-            } => pixmap.as_mut(),
-        }
-    }
-
-    fn present(&mut self) -> anyhow::Result<()> {
-        match &mut self.buffer {
-            Buffer::Pixels(pixels) => {
-                pixels.render()?;
-            }
-            Buffer::Softbuffer {
-                _context,
-                surface,
-                pixmap,
-            } => {
-                surface
-                    .resize(
-                        NonZeroU32::new(self.outer_size.width).unwrap(),
-                        NonZeroU32::new(self.outer_size.height).unwrap(),
-                    )
-                    .unwrap();
-
-                let mut buffer = surface.buffer_mut().map_err(|err| anyhow!("{err}"))?;
-
-                render_pixmap_softbuffer(&mut buffer, &pixmap);
-
-                buffer.present().map_err(|err| anyhow!("{err}"))?;
-            }
-        }
-
-        Ok(())
     }
 
     fn get_next_frame(&mut self) -> anyhow::Result<(bool, Option<VideoFrame>)> {
@@ -557,32 +395,6 @@ impl VideoWindow<'_> {
         Ok((false, Some(frame)))
     }
 
-    pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        if let Some(header) = &mut self.header {
-            header.handle_cursor_moved(position);
-        }
-    }
-
-    pub fn handle_cursor_left(&mut self) {
-        if let Some(header) = &mut self.header {
-            header.handle_cursor_left();
-        }
-    }
-
-    pub fn handle_mouse_down(&mut self) {
-        if let Some(header) = &mut self.header {
-            header.handle_mouse_down();
-        }
-    }
-
-    pub fn handle_mouse_up(&mut self) -> bool {
-        if let Some(header) = &mut self.header {
-            header.handle_mouse_up()
-        } else {
-            false
-        }
-    }
-
     pub fn pause(&mut self) {
         self.decoder.pause();
         self.paused = true;
@@ -601,8 +413,8 @@ impl VideoWindow<'_> {
 }
 
 /// A prompt window, rendered using `egui`.
-pub struct PromptWindow {
-    inner_window: InnerWindow,
+pub struct PromptWindow<'a> {
+    inner_window: InnerWindow<'a>,
     egui_window: EguiCPUWindow,
     title: Option<String>,
     text: Option<String>,
@@ -610,22 +422,19 @@ pub struct PromptWindow {
     value: String,
 }
 
-impl PromptWindow {
+impl<'a> PromptWindow<'a> {
     pub fn new(
-        window: WinitWindow,
-        position: LogicalPosition<u32>,
+        inner_window: InnerWindow<'a>,
         title: Option<String>,
         text: Option<String>,
         placeholder: Option<String>,
         initial_value: Option<String>,
-        lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     ) -> Result<Self> {
-        let window = Arc::new(window);
-        let inner_window = InnerWindow::new(window.clone(), position, lua_event_tx);
+        let egui_window = EguiCPUWindow::new(inner_window.window.clone())?;
 
         Ok(Self {
             inner_window,
-            egui_window: EguiCPUWindow::new(window)?,
+            egui_window,
             title,
             text,
             placeholder,
@@ -634,52 +443,64 @@ impl PromptWindow {
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) {
+        let event = if self.inner_window.decorations {
+            &translate_event_position(event.clone(), self.inner_window.window.scale_factor())
+        } else {
+            event
+        };
+
         self.egui_window.handle_event(event);
     }
 
     pub fn render(&mut self) -> Result<()> {
-        self.egui_window.redraw(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                    ui.heading("Repeat after me");
-                    ui.add_space(20.0);
+        self.inner_window.start_render()?;
+        self.inner_window.render_decorations()?;
 
-                    if let Some(title) = &self.title {
-                        ui.label(RichText::new(title).heading());
-                    }
+        let id = self.inner_window.window.id();
+        let lua_event_tx = self.inner_window.lua_event_tx.clone();
 
-                    if let Some(text) = &self.text {
-                        ui.label(text);
-                    }
-
-                    let mut prompt = TextEdit::singleline(&mut self.value);
-
-                    if let Some(placeholder) = &self.placeholder {
-                        prompt = prompt.hint_text(placeholder);
-                    };
-
-                    let response = ui.add(prompt);
-                    response.request_focus();
-
-                    ui.add_space(ui.available_height() - 50.0);
-
+        self.inner_window.render_with_softbuffer_buffer(|buffer| {
+            self.egui_window.redraw(buffer, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
                     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new("Submit")).clicked() {
-                            if let Err(err) =
-                                self.inner_window
-                                    .lua_event_tx
-                                    .send(lua::Event::PromptSubmit {
-                                        id: self.inner_window.window.id(),
-                                        text: self.value.clone(),
-                                    })
-                            {
-                                eprintln!("{err}");
-                            }
+                        ui.heading("Repeat after me");
+                        ui.add_space(20.0);
+
+                        if let Some(title) = &self.title {
+                            ui.label(RichText::new(title).heading());
                         }
+
+                        if let Some(text) = &self.text {
+                            ui.label(text);
+                        }
+
+                        let mut prompt = TextEdit::singleline(&mut self.value);
+
+                        if let Some(placeholder) = &self.placeholder {
+                            prompt = prompt.hint_text(placeholder);
+                        };
+
+                        let response = ui.add(prompt);
+                        response.request_focus();
+
+                        ui.add_space(ui.available_height() - 50.0);
+
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                            if ui.add(egui::Button::new("Submit")).clicked() {
+                                if let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
+                                    id,
+                                    text: self.value.clone(),
+                                }) {
+                                    eprintln!("{err}");
+                                }
+                            }
+                        })
                     })
-                })
-            });
+                });
+            })
         })?;
+
+        self.inner_window.present()?;
 
         Ok(())
     }
@@ -700,29 +521,60 @@ impl PromptWindow {
     }
 }
 
-pub struct ChoiceWindow {
-    inner_window: InnerWindow,
+fn translate_event_position(event: WindowEvent, scale_factor: f64) -> WindowEvent {
+    match event {
+        WindowEvent::CursorMoved {
+            device_id,
+            position,
+        } => WindowEvent::CursorMoved {
+            device_id,
+            position: translate_position(position, scale_factor),
+        },
+        WindowEvent::Touch(Touch {
+            device_id,
+            phase,
+            location,
+            force,
+            id,
+        }) => WindowEvent::Touch(Touch {
+            device_id,
+            phase,
+            location: translate_position(location, scale_factor),
+            force,
+            id,
+        }),
+        event => event,
+    }
+}
+
+fn translate_position(position: PhysicalPosition<f64>, scale_factor: f64) -> PhysicalPosition<f64> {
+    let mut logical_position: LogicalPosition<f64> = position.to_logical(scale_factor);
+    logical_position.x -= 1.0;
+    logical_position.y -= 1.0 + HEADER_HEIGHT as f64;
+
+    return logical_position.to_physical(scale_factor);
+}
+
+pub struct ChoiceWindow<'a> {
+    inner_window: InnerWindow<'a>,
     egui_window: EguiCPUWindow,
     title: Option<String>,
     text: Option<String>,
     options: Vec<ChoiceWindowOption>,
 }
 
-impl ChoiceWindow {
+impl<'a> ChoiceWindow<'a> {
     pub fn new(
-        window: WinitWindow,
-        position: LogicalPosition<u32>,
+        inner_window: InnerWindow<'a>,
         title: Option<String>,
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
-        lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     ) -> Result<Self> {
-        let window = Arc::new(window);
-        let inner_window = InnerWindow::new(window.clone(), position, lua_event_tx);
+        let egui_window = EguiCPUWindow::new(inner_window.window.clone())?;
 
         Ok(Self {
             inner_window,
-            egui_window: EguiCPUWindow::new(window)?,
+            egui_window,
             title,
             text,
             options,
@@ -730,42 +582,61 @@ impl ChoiceWindow {
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) {
+        let event = if self.inner_window.decorations {
+            &translate_event_position(event.clone(), self.inner_window.window.scale_factor())
+        } else {
+            event
+        };
+
         self.egui_window.handle_event(event);
     }
 
     pub fn render(&mut self) -> Result<()> {
-        self.egui_window.redraw(|ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                    ui.heading("Repeat after me");
-                    ui.add_space(20.0);
+        self.inner_window.start_render()?;
+        self.inner_window.render_decorations()?;
 
-                    if let Some(title) = &self.title {
-                        ui.label(RichText::new(title).heading());
-                    }
+        let id = self.inner_window.window.id();
+        let lua_event_tx = self.inner_window.lua_event_tx.clone();
 
-                    if let Some(text) = &self.text {
-                        ui.label(text);
-                    }
-
-                    ui.add_space(ui.available_height() - 50.0);
-
+        self.inner_window.render_with_softbuffer_buffer(|buffer| {
+            self.egui_window.redraw(buffer, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
                     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        for option in &self.options {
-                            if ui.button(&option.label).clicked() {
-                                let _ =
-                                    self.inner_window
-                                        .lua_event_tx
-                                        .send(lua::Event::ChoiceSelect {
-                                            id: self.inner_window.window.id(),
+                        // ui.heading("Repeat after me");
+                        ui.add_space(20.0);
+
+                        if let Some(title) = &self.title {
+                            ui.label(RichText::new(title).heading());
+                        }
+
+                        if let Some(text) = &self.text {
+                            ui.label(text);
+                        }
+
+                        ui.add_space(ui.available_height() - 100.0);
+
+                        ui.with_layout(
+                            egui::Layout::left_to_right(egui::Align::Center)
+                                .with_main_wrap(true)
+                                .with_main_align(egui::Align::Center)
+                                .with_main_justify(true),
+                            |ui| {
+                                for option in &self.options {
+                                    if ui.button(&option.label).clicked() {
+                                        let _ = lua_event_tx.send(lua::Event::ChoiceSelect {
+                                            id,
                                             option_id: option.id.clone(),
                                         });
-                            }
-                        }
+                                    }
+                                }
+                            },
+                        )
                     })
-                })
-            });
+                });
+            })
         })?;
+
+        self.inner_window.present()?;
 
         Ok(())
     }
@@ -786,8 +657,14 @@ impl ChoiceWindow {
     }
 }
 
-pub struct InnerWindow {
+pub struct InnerWindow<'a> {
     window: Arc<WinitWindow>,
+    surface: Surface<'a>,
+    decorations: bool,
+    border_rendered: bool,
+    header: Option<Header>,
+    inner_size: PhysicalSize<u32>,
+    outer_size: PhysicalSize<u32>,
     position: LogicalPosition<u32>,
     lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     current_move: Option<Move>,
@@ -802,18 +679,199 @@ struct Move {
     easing: Easing,
 }
 
-impl InnerWindow {
-    fn new(
-        window: Arc<WinitWindow>,
+impl<'a> InnerWindow<'a> {
+    pub fn new(
+        window: WinitWindow,
+        wgpu_state: &WgpuState,
+        decorations: bool,
+        gpu: bool,
         position: LogicalPosition<u32>,
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let window = Arc::new(window);
+        let (inner_size, outer_size) = calculate_size(&window, decorations);
+
+        let surface = if gpu {
+            let surface_texture =
+                SurfaceTexture::new(outer_size.width, outer_size.height, window.clone());
+
+            Surface::Pixels {
+                pixels: PixelsBuilder::new(outer_size.width, outer_size.height, surface_texture)
+                    .build_with_instance(
+                        &wgpu_state.instance,
+                        &wgpu_state.adapter,
+                        &wgpu_state.device,
+                        &wgpu_state.queue,
+                    )?,
+                error: wgpu_state.error.clone(),
+            }
+        } else {
+            let (context, surface) = init_softbuffer(window.clone())?;
+
+            Surface::Softbuffer {
+                _context: context,
+                surface,
+            }
+        };
+
+        let scale_factor = window.scale_factor();
+        let header =
+            decorations.then(|| Header::new(window.clone(), inner_size.clone(), scale_factor));
+
+        Ok(Self {
             window,
+            surface,
+            decorations,
+            border_rendered: false,
+            header,
+            inner_size,
+            outer_size,
             position,
             lua_event_tx,
             current_move: None,
+        })
+    }
+
+    fn start_render(&mut self) -> Result<()> {
+        match &mut self.surface {
+            Surface::Pixels { pixels: _, error } => {
+                if error.load(Ordering::Acquire) {
+                    let (context, surface) = init_softbuffer(self.window.clone())?;
+
+                    self.surface = Surface::Softbuffer {
+                        _context: context,
+                        surface,
+                    };
+
+                    return self.start_render();
+                }
+            }
+            Surface::Softbuffer { _context, surface } => {
+                surface
+                    .resize(
+                        NonZeroU32::new(self.outer_size.width).context("Window has 0 width")?,
+                        NonZeroU32::new(self.outer_size.height).context("Window has 0 height")?,
+                    )
+                    .map_err(|err| anyhow!("{}", err))?;
+            }
         }
+
+        Ok(())
+    }
+
+    fn present(&mut self) -> Result<()> {
+        match &mut self.surface {
+            Surface::Pixels { pixels, error: _ } => pixels.render()?,
+            Surface::Softbuffer { _context, surface } => surface
+                .buffer_mut()
+                .map_err(|err| anyhow!("{err}"))?
+                .present()
+                .map_err(|err| anyhow!("{err}"))?,
+        }
+
+        Ok(())
+    }
+
+    fn render_border(&mut self) -> Result<()> {
+        if !self.border_rendered {
+            self.surface.buffer()?.draw_border();
+
+            self.border_rendered = true;
+        }
+
+        Ok(())
+    }
+
+    fn render_header(&mut self) -> Result<()> {
+        if let Some(header) = &self.header {
+            let scale_factor = self.window.scale_factor();
+            let border_offset = PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0;
+
+            let pixmap = header.draw();
+
+            self.surface
+                .buffer()?
+                .copy_from_pixmap(&pixmap, border_offset, border_offset);
+        }
+
+        Ok(())
+    }
+
+    fn inner_offset(&self) -> (u32, u32) {
+        if self.decorations {
+            let scale_factor = self.window.scale_factor();
+            let border_offset = PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0;
+            let header_height: u32 =
+                PhysicalUnit::from_logical::<_, u32>(HEADER_HEIGHT, scale_factor).0;
+
+            (border_offset, border_offset + header_height)
+        } else {
+            (0, 0)
+        }
+    }
+
+    fn render_pixmap(&mut self, pixmap: &Pixmap) -> Result<()> {
+        let (x, y) = self.inner_offset();
+
+        self.surface.buffer()?.copy_from_pixmap(pixmap, x, y);
+
+        Ok(())
+    }
+
+    fn render_frame(&mut self, frame: &VideoFrame) -> Result<()> {
+        let (x, y) = self.inner_offset();
+
+        self.surface.buffer()?.copy_from_frame(frame, x, y);
+
+        Ok(())
+    }
+
+    fn render_with_softbuffer_buffer(
+        &mut self,
+        f: impl FnOnce(&mut BufferMutRef) -> Result<()>,
+    ) -> Result<()> {
+        if self.decorations {
+            let mut buffer = vec![0; (self.inner_size.width * self.inner_size.height) as usize];
+
+            let buffer_ref = &mut BufferMutRef::new(
+                bytemuck::cast_slice_mut(&mut buffer),
+                self.inner_size.width as usize,
+                self.inner_size.height as usize,
+            );
+
+            f(buffer_ref)?;
+
+            let (x, y) = self.inner_offset();
+            self.surface
+                .buffer()?
+                .copy_from_u32_buf(&mut buffer, self.inner_size.width, x, y);
+        } else {
+            let mut buffer = match self.surface.buffer()? {
+                Buffer::Pixmap(_) => panic!("Buffer must be a softbuffer buffer"),
+                Buffer::Softbuffer(buffer) => buffer,
+            };
+
+            buffer.fill(0);
+
+            let buffer_ref = &mut BufferMutRef::new(
+                bytemuck::cast_slice_mut(&mut buffer),
+                self.inner_size.width as usize,
+                self.inner_size.height as usize,
+            );
+
+            f(buffer_ref)?;
+        }
+
+        Ok(())
+    }
+
+    fn render_decorations(&mut self) -> Result<()> {
+        if self.decorations {
+            self.render_border()?;
+            self.render_header()?;
+        }
+
+        Ok(())
     }
 
     pub fn request_redraw(&self) {
@@ -828,7 +886,9 @@ impl InnerWindow {
         let monitor_size = self
             .window
             .current_monitor()
-            .ok_or(LewdwareError::MonitorError(MonitorError::WindowMonitorNotFound))?
+            .ok_or(LewdwareError::MonitorError(
+                MonitorError::WindowMonitorNotFound,
+            ))?
             .size()
             .to_logical::<u32>(scale_factor);
 
@@ -913,48 +973,40 @@ impl InnerWindow {
             }
         }
     }
+
+    pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
+        if let Some(header) = &mut self.header {
+            header.handle_cursor_moved(position);
+        }
+    }
+
+    pub fn handle_cursor_left(&mut self) {
+        if let Some(header) = &mut self.header {
+            header.handle_cursor_left();
+        }
+    }
+
+    pub fn handle_mouse_down(&mut self) {
+        if let Some(header) = &mut self.header {
+            header.handle_mouse_down();
+        }
+    }
+
+    pub fn handle_mouse_up(&mut self) -> bool {
+        if let Some(header) = &mut self.header {
+            header.handle_mouse_up()
+        } else {
+            false
+        }
+    }
 }
 
-impl Drop for InnerWindow {
+impl Drop for InnerWindow<'_> {
     fn drop(&mut self) {
         if let Err(_) = self.lua_event_tx.send(lua::Event::WindowClosed {
             id: self.window.id(),
         }) {
             eprintln!("Event receiver closed");
-        }
-    }
-}
-
-fn render_pixmap_softbuffer(buffer: &mut [u32], pixmap: &Pixmap) {
-    let data = pixmap.data();
-
-    for index in 0..(pixmap.width() * pixmap.height()) as usize {
-        let r = data[index * 4] as u32;
-        let g = data[index * 4 + 1] as u32;
-        let b = data[index * 4 + 2] as u32;
-        let a = data[index * 4 + 3] as u32;
-
-        buffer[index] = (a << 24) | (r << 16) | (g << 8) | b;
-    }
-}
-
-fn copy_pixmap(destination: &mut PixmapMut<'_>, source: &Pixmap, x: u32, y: u32) {
-    let offset = (y * destination.width()) as usize * 4;
-    let dst_width = destination.width();
-    let dst_data = &mut destination.data_mut()[offset..];
-
-    if x == 0 && dst_width == source.width() {
-        dst_data[..source.data().len()].copy_from_slice(source.data());
-    } else {
-        let src_data = source.data();
-
-        for (i, row) in src_data
-            .chunks_exact(source.width() as usize * 4)
-            .enumerate()
-        {
-            let index = (dst_width * i as u32 + x) as usize * 4;
-
-            dst_data[index..index + row.len()].copy_from_slice(row);
         }
     }
 }

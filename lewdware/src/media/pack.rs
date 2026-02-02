@@ -1,12 +1,15 @@
 use std::{
-    collections::HashMap, fmt::Display, fs, io::{Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}
+    collections::HashMap,
+    fmt::Display,
+    fs,
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
 };
 
-use anyhow::{bail, Context};
 use image::{ImageFormat, ImageReader};
 use rusqlite::{Connection, Row, params, params_from_iter};
 use shared::{
-    encode::{FileInfo, FileInfoParts},
+    encode::{FileInfo},
     pack_config::Metadata,
     read_pack::{Header, read_pack_metadata},
 };
@@ -18,9 +21,10 @@ use tokio::{
 };
 
 use crate::{
-    lua::{Media, MediaData, PopupType},
+    lua::{Media, MediaData},
     media::{
-        manager::{MediaTypes, MediaError, Result},
+        VideoData,
+        manager::{MediaError, MediaTypes, Result},
         types::{FileOrPath, ImageData},
     },
 };
@@ -279,12 +283,25 @@ impl MediaPack {
         ))
     }
 
-    pub async fn get_video_data(&self, id: u64) -> Result<FileOrPath> {
-        let (offset, length) = self.get_offset_length(id)?;
+    pub async fn get_video_data(&self, id: u64) -> Result<VideoData> {
+        let (offset, length, width, height) = self.db.query_row(
+            "SELECT offset, length, width, height FROM media WHERE id = ?",
+            params![id],
+            |row| {
+                Ok((
+                    row.get("offset")?,
+                    row.get("Length")?,
+                    row.get("width")?,
+                    row.get("height")?,
+                ))
+            },
+        )?;
 
-        Ok(FileOrPath::File(
-            self.write_to_temp_file(offset, length, ".webm").await?,
-        ))
+        Ok(VideoData {
+            file: FileOrPath::File(self.write_to_temp_file(offset, length, ".webm").await?),
+            width,
+            height,
+        })
     }
 
     pub async fn get_audio_data(&self, id: u64) -> Result<FileOrPath> {
@@ -296,7 +313,9 @@ impl MediaPack {
     }
 
     fn get_offset_length(&self, id: u64) -> Result<(u64, u64)> {
-        let mut stmt = self.db.prepare("SELECT offset, length FROM media WHERE id = ?")?;
+        let mut stmt = self
+            .db
+            .prepare("SELECT offset, length FROM media WHERE id = ?")?;
 
         stmt.query_row(params![id], |row| {
             Ok((row.get("offset")?, row.get("length")?))
@@ -824,7 +843,8 @@ impl MediaPack {
                 );
             });
 
-            rx.await.map_err(|_| MediaError::Internal("Image resizing sender dropped"))
+            rx.await
+                .map_err(|_| MediaError::Internal("Image resizing sender dropped"))
         } else {
             Ok(image.into_rgba8())
         };

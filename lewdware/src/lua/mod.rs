@@ -5,22 +5,16 @@ mod media;
 mod request;
 mod window;
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    rc::{Rc, Weak},
-    thread,
-};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, thread};
 
 use anyhow::bail;
 use mlua::Lua;
-use serde::{Deserialize, Serialize};
 use shared::user_config::AppConfig;
 use tokio::{
-    sync::mpsc::{Receiver, Sender, UnboundedSender, channel, unbounded_channel},
+    sync::mpsc::{Receiver, UnboundedSender, channel, unbounded_channel},
     task::LocalSet,
 };
-use winit::{dpi::{LogicalPosition, LogicalSize}, event_loop::EventLoopProxy, window::WindowId};
+use winit::{dpi::LogicalPosition, event_loop::EventLoopProxy, window::WindowId};
 
 use crate::{
     app::UserEvent,
@@ -29,16 +23,10 @@ use crate::{
     monitor::Monitor,
 };
 
-pub use api::{Coord, Notification, SpawnWindowOpts, WallpaperMode, Anchor};
+pub use api::{Anchor, Coord, Notification, SpawnWindowOpts, WallpaperMode};
 pub use media::{Media, MediaData, MediaType};
-pub use request::{LuaRequest, WindowAction, AudioAction};
-pub use window::{ChoiceWindowOption, MoveOpts, Easing};
-
-pub enum SpawnType {
-    Image,
-    Video,
-    Prompt { text: String },
-}
+pub use request::{AudioAction, LuaRequest, WindowAction};
+pub use window::{ChoiceWindowOption, Easing, MoveOpts};
 
 pub enum Event {
     WindowClosed { id: WindowId },
@@ -192,48 +180,10 @@ pub fn start_lua_thread(
 
 struct LuaRuntime {
     request_sender: RequestSender,
-    callbacks: Callbacks,
     media_manager: MediaManager,
     windows: Windows,
     audio_handles: AudioHandles,
     lua: Lua,
-}
-
-struct Callbacks {
-    on_spawn: Rc<RefCell<Vec<mlua::Function>>>,
-}
-
-#[derive(Default, Debug, Serialize, Deserialize, Clone)]
-pub enum PopupType {
-    #[default]
-    #[serde(rename = "media")]
-    Media,
-    #[serde(rename = "image")]
-    Image,
-    #[serde(rename = "video")]
-    Video,
-}
-
-#[derive(Debug)]
-pub enum PopupResultType {
-    Image,
-    Video,
-}
-
-#[derive(Debug)]
-pub enum SpawnerType {
-    Media,
-    Audio,
-    Notification,
-    Link,
-    Prompt,
-}
-
-#[derive(Serialize, Deserialize)]
-struct RandomPopupOpts {
-    #[serde(default)]
-    popup_type: PopupType,
-    tags: Option<Vec<String>>,
 }
 
 impl LuaRuntime {
@@ -245,7 +195,6 @@ impl LuaRuntime {
         let mut runtime = Self {
             request_sender: request_tx,
             media_manager,
-            callbacks: Callbacks::new(),
             windows: Rc::new(RefCell::new(HashMap::new())),
             audio_handles: Rc::new(RefCell::new(HashMap::new())),
             lua,
@@ -343,12 +292,4 @@ fn print(_: &Lua, args: mlua::Variadic<mlua::Value>) -> std::result::Result<(), 
     println!("{}", args_str.join("\t"));
 
     Ok(())
-}
-
-impl Callbacks {
-    fn new() -> Self {
-        Self {
-            on_spawn: Rc::new(RefCell::new(Vec::new())),
-        }
-    }
 }

@@ -14,11 +14,11 @@ use std::{
 
 use rodio::{OutputStreamBuilder, Sink, buffer::SamplesBuffer};
 
-use crate::media::{Audio, FileOrPath};
+use crate::media::FileOrPath;
 
 /// An audio player using ffmpeg and rodio.
 pub struct AudioPlayer {
-    audio: FileOrPath,
+    _audio: FileOrPath,
     thread: JoinHandle<()>,
     message_tx: SyncSender<AudioMessage>,
 }
@@ -30,7 +30,7 @@ impl AudioPlayer {
         let thread = spawn_audio_thread(audio.path().to_path_buf(), message_rx, loop_audio);
 
         Self {
-            audio,
+            _audio: audio,
             thread,
             message_tx,
         }
