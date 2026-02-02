@@ -11,7 +11,7 @@ use crate::{
         api::{Notification, SpawnWindowOpts, WallpaperMode},
         window::{ChoiceWindowOption, MoveOpts},
     },
-    media::{FileOrPath, ImageData},
+    media::{FileOrPath, ImageData, VideoData},
     monitor::Monitor,
 };
 
@@ -78,14 +78,10 @@ impl RequestSender {
         &self,
         data: ImageData,
         window_opts: SpawnWindowOpts,
-        header: bool,
-        border: bool,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnImage {
             data,
             window_opts,
-            header,
-            border,
             tx,
         })
         .await?
@@ -93,24 +89,16 @@ impl RequestSender {
 
     pub async fn spawn_video(
         &self,
-        data: FileOrPath,
-        width: u32,
-        height: u32,
+        data: VideoData,
         loop_video: bool,
         audio: bool,
         window_opts: SpawnWindowOpts,
-        header: bool,
-        border: bool,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnVideo {
             data,
-            width,
-            height,
             loop_video,
             audio,
             window_opts,
-            header,
-            border,
             tx,
         })
         .await?
@@ -323,19 +311,13 @@ pub enum LuaRequest {
     SpawnImage {
         data: ImageData,
         window_opts: SpawnWindowOpts,
-        header: bool,
-        border: bool,
         tx: oneshot::Sender<Result<WindowProps>>,
     },
     SpawnVideo {
-        data: FileOrPath,
-        width: u32,
-        height: u32,
+        data: VideoData,
         loop_video: bool,
         audio: bool,
         window_opts: SpawnWindowOpts,
-        header: bool,
-        border: bool,
         tx: oneshot::Sender<Result<WindowProps>>,
     },
     SpawnPrompt {

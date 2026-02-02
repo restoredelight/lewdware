@@ -9,7 +9,7 @@ use ffmpeg_next as ffmpeg;
 
 use crate::media::process::{process_path, Audio, Media, MediaType, Processed};
 use crate::media::types::ImageData;
-use crate::media::{self, Image, Video, types::FileOrPath};
+use crate::media::{self, Image, types::FileOrPath};
 
 pub struct MediaDir {
     media: Vec<Media>,

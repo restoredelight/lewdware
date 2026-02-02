@@ -266,11 +266,11 @@ struct ChoiceWindowState {
 }
 
 impl ChoiceWindowState {
-    fn new(title: Option<String>, text: Option<String>, choices: Vec<ChoiceWindowOption>) -> Self {
+    fn new(title: Option<String>, text: Option<String>, options: Vec<ChoiceWindowOption>) -> Self {
         Self {
             title,
             text,
-            options: choices,
+            options,
             select_callbacks: Vec::new(),
         }
     }
@@ -338,12 +338,12 @@ impl ChoiceWindow {
         props: WindowProps,
         title: Option<String>,
         text: Option<String>,
-        choices: Vec<ChoiceWindowOption>,
+        options: Vec<ChoiceWindowOption>,
         request_sender: WindowRequestSender,
     ) -> Self {
         Self {
             inner_window: InnerWindow::new(props, request_sender),
-            state: RefCell::new(ChoiceWindowState::new(title, text, choices)),
+            state: RefCell::new(ChoiceWindowState::new(title, text, options)),
         }
     }
 

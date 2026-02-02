@@ -12,7 +12,7 @@ use tokio::{
 use crate::{
     error::LewdwareError,
     lua::{Media, MediaType},
-    media::{FileOrPath, pack::MediaPack, types::ImageData},
+    media::{FileOrPath, VideoData, pack::MediaPack, types::ImageData},
 };
 
 /// Manages all the media (images, audio, videos). Trivially clonable.
@@ -107,7 +107,7 @@ impl MediaManager {
         .await?
     }
 
-    pub async fn get_video_data(&self, id: u64) -> Result<FileOrPath> {
+    pub async fn get_video_data(&self, id: u64) -> Result<VideoData> {
         self.send(|tx| MediaRequest::GetVideoData {
             id,
             response_tx: tx,
@@ -290,7 +290,7 @@ enum MediaRequest {
     },
     GetVideoData {
         id: u64,
-        response_tx: oneshot::Sender<Result<FileOrPath>>,
+        response_tx: oneshot::Sender<Result<VideoData>>,
     },
     GetAudioData {
         id: u64,

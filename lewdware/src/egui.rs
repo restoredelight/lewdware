@@ -1,13 +1,9 @@
-use std::{
-    num::NonZeroU32,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{Context, Result, anyhow};
-use egui::Color32;
+use anyhow::Result;
 use egui_software_backend::{BufferMutRef, ColorFieldOrder, EguiSoftwareRender};
 use egui_wgpu::{RendererOptions, wgpu};
 use winit::{event::WindowEvent, window::Window};
@@ -247,8 +243,6 @@ pub struct EguiCPUWindow {
     window: Arc<Window>,
     state: egui_winit::State,
     renderer: EguiSoftwareRender,
-    _softbuffer_context: softbuffer::Context<Arc<Window>>,
-    surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
 }
 
 impl EguiCPUWindow {
@@ -266,11 +260,6 @@ impl EguiCPUWindow {
 
         let renderer = EguiSoftwareRender::new(ColorFieldOrder::Bgra);
 
-        let softbuffer_context =
-            softbuffer::Context::new(window.clone()).map_err(|err| anyhow!("{}", err))?;
-        let surface = softbuffer::Surface::new(&softbuffer_context, window.clone())
-            .map_err(|err| anyhow!("{}", err))?;
-
         context.request_repaint();
 
         let window_clone = window.clone();
@@ -281,8 +270,8 @@ impl EguiCPUWindow {
 
         let mut visuals = egui::Visuals::light();
 
-        visuals.window_fill = Color32::TRANSPARENT;
-        visuals.panel_fill = Color32::TRANSPARENT;
+        // visuals.window_fill = Color32::TRANSPARENT;
+        // visuals.panel_fill = Color32::TRANSPARENT;
 
         context.set_visuals(visuals);
 
@@ -291,8 +280,6 @@ impl EguiCPUWindow {
             window,
             state,
             renderer,
-            _softbuffer_context: softbuffer_context,
-            surface,
         })
     }
 
@@ -310,15 +297,11 @@ impl EguiCPUWindow {
     /// [WindowEvent::RedrawRequested] event.
     ///
     /// * `run_ui`: This is where you should define the egui UI of the window.
-    pub fn redraw(&mut self, run_ui: impl FnMut(&egui::Context)) -> Result<()> {
-        let size = self.window.inner_size();
-        self.surface
-            .resize(
-                NonZeroU32::new(size.width).context("Window has 0 width")?,
-                NonZeroU32::new(size.height).context("Window has 0 height")?,
-            )
-            .map_err(|err| anyhow!("{err}"))?;
-
+    pub fn redraw(
+        &mut self,
+        buffer: &mut BufferMutRef,
+        run_ui: impl FnMut(&egui::Context),
+    ) -> Result<()> {
         let raw_input = self.state.take_egui_input(&self.window);
 
         let full_output = self.context.run(raw_input, run_ui);
@@ -330,23 +313,12 @@ impl EguiCPUWindow {
             .context
             .tessellate(full_output.shapes, full_output.pixels_per_point);
 
-        let mut buffer = self.surface.buffer_mut().map_err(|err| anyhow!("{err}"))?;
-        buffer.fill(0);
-
-        let buffer_ref = &mut BufferMutRef::new(
-            bytemuck::cast_slice_mut(&mut buffer),
-            size.width as usize,
-            size.height as usize,
-        );
-
         self.renderer.render(
-            buffer_ref,
+            buffer,
             &primitives,
             &full_output.textures_delta,
             full_output.pixels_per_point,
         );
-
-        buffer.present().map_err(|err| anyhow!("{err}"))?;
 
         Ok(())
     }

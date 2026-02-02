@@ -531,13 +531,6 @@ impl Coord {
             Coord::Percent { percent } => ((percent * total_size as f64) / 100.0).round() as u32,
         }
     }
-
-    pub fn to_pixels_with<E>(&self, total_size: impl FnOnce() -> Result<u32, E>) -> Result<u32, E> {
-        match self {
-            Coord::Pixel(x) => Ok(*x),
-            Coord::Percent { percent } => Ok(((percent * total_size()? as f64) / 100.0).round() as u32),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -561,7 +554,7 @@ impl Anchor {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct SpawnWindowOpts {
     pub x: Option<Coord>,
     pub y: Option<Coord>,
@@ -570,26 +563,28 @@ pub struct SpawnWindowOpts {
     #[serde(default)]
     pub anchor: Anchor,
     pub monitor: Option<Monitor>,
+    #[serde(default = "return_true")]
+    pub decorations: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+impl Default for SpawnWindowOpts {
+    fn default() -> Self {
+        Self {
+            x: Default::default(),
+            y: Default::default(),
+            width: Default::default(),
+            height: Default::default(),
+            anchor: Default::default(),
+            monitor: Default::default(),
+            decorations: true,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Default)]
 pub struct SpawnImageOpts {
     #[serde(flatten)]
     window_opts: SpawnWindowOpts,
-    #[serde(default = "return_true")]
-    header: bool,
-    #[serde(default = "return_true")]
-    border: bool,
-}
-
-impl Default for SpawnImageOpts {
-    fn default() -> Self {
-        Self {
-            window_opts: Default::default(),
-            header: true,
-            border: true,
-        }
-    }
 }
 
 impl FromLua for SpawnImageOpts {
@@ -639,9 +634,7 @@ async fn spawn_image_popup(
     opts.window_opts.width = Some(Coord::Pixel(width));
     opts.window_opts.height = Some(Coord::Pixel(height));
 
-    let props = request_sender
-        .spawn_image(data, opts.window_opts, opts.header, opts.border)
-        .await?;
+    let props = request_sender.spawn_image(data, opts.window_opts).await?;
 
     let id = props.window_id;
 
@@ -667,10 +660,6 @@ pub struct SpawnVideoOpts {
     audio: bool,
     #[serde(flatten)]
     window_opts: SpawnWindowOpts,
-    #[serde(default = "return_true")]
-    header: bool,
-    #[serde(default = "return_true")]
-    border: bool,
 }
 
 impl Default for SpawnVideoOpts {
@@ -679,8 +668,6 @@ impl Default for SpawnVideoOpts {
             loop_video: true,
             audio: true,
             window_opts: Default::default(),
-            header: true,
-            border: true,
         }
     }
 }
@@ -704,11 +691,6 @@ async fn spawn_video_popup(
 ) -> mlua::Result<Rc<VideoWindow>> {
     let opts = opts.unwrap_or_default();
 
-    let (width, height) = match video.media_data {
-        MediaData::Video { width, height, .. } => (width, height),
-        _ => return Err("`image` is not an image".into_lua_err()),
-    };
-
     if !matches!(video.media_data, MediaData::Video { .. }) {
         return Err("`video` is not a video".into_lua_err());
     }
@@ -719,16 +701,7 @@ async fn spawn_video_popup(
         .into_lua_err()?;
 
     let props = request_sender
-        .spawn_video(
-            data,
-            width,
-            height,
-            opts.loop_video,
-            opts.audio,
-            opts.window_opts,
-            opts.header,
-            opts.border,
-        )
+        .spawn_video(data, opts.loop_video, opts.audio, opts.window_opts)
         .await?;
 
     let id = props.window_id;

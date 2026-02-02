@@ -29,6 +29,13 @@ pub struct Video {
 }
 
 #[derive(Debug)]
+pub struct VideoData {
+    pub width: u32,
+    pub height: u32,
+    pub file: FileOrPath,
+}
+
+#[derive(Debug)]
 pub enum FileOrPath {
     File(NamedTempFile),
     Path(PathBuf),

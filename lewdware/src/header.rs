@@ -10,7 +10,6 @@ pub struct Header {
     size: LogicalSize<u32>,
     physical_size: PhysicalSize<u32>,
     scale_factor: f64,
-    pixmap: Pixmap,
 }
 
 pub const HEADER_HEIGHT: u32 = 24;
@@ -19,7 +18,6 @@ impl Header {
     pub fn new(window: Arc<Window>, window_size: PhysicalSize<u32>, scale_factor: f64) -> Self {
         let header_size = LogicalSize::new(window_size.to_logical(scale_factor).width, HEADER_HEIGHT);
         let physical_size = header_size.to_physical(scale_factor);
-        let pixmap = Pixmap::new(physical_size.width, physical_size.height).unwrap();
 
         Self {
             window,
@@ -28,7 +26,6 @@ impl Header {
             physical_size,
             size: header_size,
             scale_factor,
-            pixmap,
         }
     }
 
