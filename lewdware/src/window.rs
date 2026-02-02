@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use egui::{RichText, TextEdit};
 use egui_software_backend::BufferMutRef;
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
@@ -345,14 +345,18 @@ impl<'a> VideoWindow<'a> {
         self.inner_window.start_render()?;
         self.inner_window.render_decorations()?;
 
-        let (close, frame) = self.get_next_frame()?;
-
-        if close {
-            return Ok(true);
-        }
-
-        if let Some(frame) = frame {
-            self.inner_window.render_frame(&frame)?;
+        match self.get_next_frame() {
+            NextFrame::Ready(frame) => {
+                self.inner_window.render_frame(&frame)?;
+            },
+            NextFrame::Finish => {
+                return Ok(true);
+            },
+            NextFrame::None => {},
+            NextFrame::Disconnected => {
+                eprintln!("Video decoder dropped channel; closing window");
+                return Ok(true);
+            },
         }
 
         self.inner_window.present()?;
@@ -360,13 +364,13 @@ impl<'a> VideoWindow<'a> {
         Ok(false)
     }
 
-    fn get_next_frame(&mut self) -> anyhow::Result<(bool, Option<VideoFrame>)> {
+    fn get_next_frame(&mut self) -> NextFrame {
         if self.paused
             || self
                 .duration
                 .is_some_and(|duration| self.last_frame_time.elapsed() < duration)
         {
-            return Ok((false, None));
+            return NextFrame::None;
         }
 
         let frame = loop {
@@ -381,18 +385,18 @@ impl<'a> VideoWindow<'a> {
                         });
 
                     if !self.loop_video {
-                        return Ok((true, None));
+                        return NextFrame::Finish;
                     }
                 }
-                NextFrame::None => return Ok((false, None)),
-                NextFrame::Error(err) => return Err(err),
+                NextFrame::None => return NextFrame::None,
+                NextFrame::Disconnected => return NextFrame::Disconnected,
             }
         };
 
         self.duration = Some(frame.duration);
         self.last_frame_time = Instant::now();
 
-        Ok((false, Some(frame)))
+        NextFrame::Ready(frame)
     }
 
     pub fn pause(&mut self) {
@@ -628,6 +632,7 @@ impl<'a> ChoiceWindow<'a> {
                                             option_id: option.id.clone(),
                                         });
                                     }
+                                    ui.add_space(5.0);
                                 }
                             },
                         )
@@ -691,7 +696,7 @@ impl<'a> InnerWindow<'a> {
         let window = Arc::new(window);
         let (inner_size, outer_size) = calculate_size(&window, decorations);
 
-        let surface = if gpu {
+        let surface = if gpu && !wgpu_state.error.load(Ordering::Acquire) {
             let surface_texture =
                 SurfaceTexture::new(outer_size.width, outer_size.height, window.clone());
 
@@ -761,7 +766,12 @@ impl<'a> InnerWindow<'a> {
 
     fn present(&mut self) -> Result<()> {
         match &mut self.surface {
-            Surface::Pixels { pixels, error: _ } => pixels.render()?,
+            Surface::Pixels { pixels, error } => {
+                if error.load(Ordering::Acquire) {
+                    bail!("wgpu error; stopping rendering");
+                }
+                pixels.render()?
+            },
             Surface::Softbuffer { _context, surface } => surface
                 .buffer_mut()
                 .map_err(|err| anyhow!("{err}"))?
@@ -931,6 +941,10 @@ impl<'a> InnerWindow<'a> {
         self.current_move = Some(move_obj);
 
         Ok(())
+    }
+
+    pub fn is_moving(&self) -> bool {
+        self.current_move.is_some()
     }
 
     pub fn update_position(&mut self) {

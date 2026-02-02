@@ -9,7 +9,7 @@ use std::{
 use image::{ImageFormat, ImageReader};
 use rusqlite::{Connection, Row, params, params_from_iter};
 use shared::{
-    encode::{FileInfo},
+    encode::FileInfo,
     pack_config::Metadata,
     read_pack::{Header, read_pack_metadata},
 };
