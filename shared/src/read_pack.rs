@@ -57,6 +57,12 @@ impl Header {
         }
     }
 
+    pub fn make_clone(&self) -> Header {
+        let mut header = self.clone();
+        header.id = Uuid::new_v4();
+        header
+    }
+
     pub fn to_buf(&self) -> Result<[u8; HEADER_SIZE], io::Error> {
         let mut buffer = [0u8; HEADER_SIZE];
         let mut cursor = Cursor::new(&mut buffer as &mut [u8]);
@@ -120,6 +126,10 @@ impl Header {
             metadata_length,
             id,
         })
+    }
+
+    pub fn is_default(&self) -> bool {
+        return self.index_offset == 0 && self.index_length == 0 && self.metadata_offset == 0 && self.metadata_length == 0;
     }
 }
 
