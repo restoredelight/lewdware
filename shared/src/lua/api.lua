@@ -2,55 +2,63 @@
 app = {}
 
 ---@alias MediaType "image" | "video" | "audio"
----@alias Coord number | { percent: number }
+---@alias Coord number | { percent: number } Either a coordinate in pixels, or a percentage of the
+---  screen width/height.
 ---@alias Anchor "top-left" | "center" | "bottom-right"
 
 ---@class Media
----@field id number
----@field name string
----@field type string
+---@field id number A unique identifier for the file.
+---@field name string The name of the file.
+---@field type "image" | "video" | "audio" The type of media.
 
 ---@class Image : Media
 ---@field type '"image"'
----@field width number
----@field height number
+---@field width number The width of the image, in pixels.
+---@field height number The height of the image, in pixels.
 
 ---@class Video : Media
 ---@field type '"video"'
----@field width number
----@field height number
----@field duration number
+---@field width number The width of the video, in pixels.
+---@field height number The height of the video, in pixels.
+---@field duration number The duration of the video, in seconds.
 
 ---@class Audio : Media
 ---@field type '"audio"'
----@field duration number
+---@field duration number The duration of the audio file, in seconds.
 
 ---@class Window
----@field id number
----@field width number
----@field height number
----@field outer_width number
----@field outer_height number
----@field x number
----@field y number
----@field type string
----@field monitor Monitor
+---@field id number A unique identifier for the window.
+---@field width number The width of the window, in pixels.
+---@field height number The height of the window, in pixels.
+---@field outer_width number The width of the window, including the border and decorations, if
+---  present.
+---@field outer_height number The height of the window, including the border and decorations, if
+---  present.
+---@field x number The x coordinate (in pixels) of the top left coordinate of the window.
+---@field y number The y coordinate (in pixels) of the top left coordinate of the window.
+---@field type "image" | "video" | "prompt" | "choice"
+---@field monitor Monitor The monitor that the window is located on.
 Window = {}
 
 ---Close the window
 function Window:close() end
 
----Execute a function when a window is closed
+---Execute a function when the window is closed.
 ---@param cb fun()
 function Window:on_close(cb) end
 
 ---@class MoveOpts
----@field x? Coord
----@field y? Coord
----@field anchor? Anchor
----@field duration? number
----@field easing? Easing
----@field relative? boolean
+---@field x? Coord The horizontal coordinate to move the window to (by default, the window will not
+---  be moved horizontally).
+---@field y? Coord The vertical coordinate to move the window to.
+---@field anchor? Anchor Where to place the window relative to the specified coordinates. By
+---  default, "top-left" is used, meaning that the top-left corner of the window is placed at the
+---  specified coordinates.
+---@field relative? boolean If true, then `x` and `y` are considered to be relative to the current
+---  position of the window. By default, this is false.
+---@field duration? number How long the movement should take. By default, the move happens
+---  instantly.
+---@field easing? Easing How the movement is animated.
 
 ---@alias Easing
 ---| "linear"
@@ -60,44 +68,53 @@ function Window:on_close(cb) end
 
 ---Move a window to a specific position.
 ---@param opts? MoveOpts
----@param cb? fun() Called when the move operation is completed.
+---@param cb? fun() Called when the window finished moving.
 ---
----Calling this function will cancel any ongoing move operations (you can't stack move calls). This
----means you can call this function with no arguments to stop a moving window.
+---Calling this function will cancel any existing move operations.
+---This means you can call this function with no arguments to stop moving a window.
 function Window:move(opts, cb) end
 
 ---@class ImageWindow : Window
 ---@field type "'image'"
----@field image Image
+---@field image Image The image being shown on the window.
 
 ---@class VideoWindow : Window
 ---@field type "'video'"
----@field video Video
+---@field video Video The video being played on the window.
 VideoWindow = {}
 
+---Call a function every time a video finishes/loops. If the video window was spawned with `loop`
+---disabled, then this is essentially identical to `on_close()`.
 ---@param cb fun()
 function VideoWindow:on_finish(cb) end
 
+---Pause the video being played on the window.
 function VideoWindow:pause() end
 
+---Resume playback of the video on the window.
 function VideoWindow:play() end
 
 ---@class PromptWindow : Window
 ---@field type "'prompt'"
 ---@field title? string
 ---@field text? string
----@field value string
+---@field value string The value that the user has typed. This is only updated when the user
+---  submits the text, so it's better to use `on_submit()` to get this value.
 PromptWindow = {}
 
----@param cb fun(text: string)
+---Call a function every time the user submits a value.
+---@param cb fun(text: string) A function that takes the value that the user has submitted.
 function PromptWindow:on_submit(cb) end
 
+---Set the title of the window.
 ---@param title? string
 function PromptWindow:set_title(title) end
 
+---Set the text/subtitle of the window.
 ---@param text? string
 function PromptWindow:set_text(text) end
 
+---Change the value in the text box of the window.
 ---@param value? string
 function PromptWindow:set_value(value) end
 
@@ -108,83 +125,83 @@ function PromptWindow:set_value(value) end
 ---@field options { id: string, label: string }[]
 ChoiceWindow = {}
 
----Called when the user clicks on one of the choice buttons.
----@param cb fun(id: string)
+---Call a function when the user clicks on one of the choice buttons.
+---@param cb fun(id: string) A function taking the id of the choice that the user submitted.
 function ChoiceWindow:on_select(cb) end
 
+---Set the title of the window.
 ---@param title? string
 function ChoiceWindow:set_title(title) end
 
+---Set the text/subtitle of the window.
 ---@param text? string
 function ChoiceWindow:set_text(text) end
 
+---Set the choices that the user has to choose from.
 ---@param options? { id: string, label: string }[]
 function ChoiceWindow:set_options(options) end
 
 ---@class AppMedia
 app.media = {}
 
----Get a specific file
----@param name string The name of the file
+---Get a specific file.
+---@param name string The name of the file.
 ---@return Image | Video | Audio | nil
 function app.media.get(name) end
 
----Get a specific image file
----@param name string The name of the file
+---Get a specific image file.
+---@param name string The name of the file.
 ---@return Image | nil
 function app.media.get_image(name) end
 
----Get a specific video file
----@param name string The name of the file
+---Get a specific video file.
+---@param name string The name of the file.
 ---@return Video | nil
 function app.media.get_video(name) end
 
----Get a specific audio file
----@param name string The name of the file
+---Get a specific audio file.
+---@param name string The name of the file.
 ---@return Audio | nil
 function app.media.get_audio(name) end
 
----List all files in the pack
----@param opts? {
----   type?: MediaType | (MediaType)[],
----   tags?: string[],
----}
+---@class QueryMediaOpts
+---@field type? MediaType | (MediaType)[] The type of media to include in the result. By default,
+---  all media will be included (including audio).
+---@field tags? string[] If specified, only media with these tags will be included in the result.
+
+---List all files in the pack.
+---@param opts? QueryMediaOpts
 ---@return (Image | Video | Audio)[]
 function app.media.list(opts) end
 
----List all image files in the pack
+---List all image files in the pack.
 ---@param opts? {
 ---   tags?: string[],
 ---}
 ---@return Image[]
 function app.media.list_images(opts) end
 
----List all video files in the pack
+---List all video files in the pack.
 ---@param opts? {
 ---   tags?: string[],
 ---}
 ---@return Video[]
 function app.media.list_videos(opts) end
 
----List all audio files in the pack
+---List all audio files in the pack.
 ---@param opts? {
 ---   tags?: string[],
 ---}
 ---@return Audio[]
 function app.media.list_audio(opts) end
 
----Get a random media file
----@param opts? {
----   type?: MediaType | (MediaType)[],
----   tags?: string[],
----}
+---Get a random media file.
+---@param opts? QueryMediaOpts
 ---@return Image | Video | Audio | nil
 function app.media.random(opts) end
 
 ---Get a random image file
----@param opts? {
----   tags?: string[],
----}
+---@param opts? QueryMediaOpts
 ---@return Image | nil
 function app.media.random_image(opts) end
 
@@ -202,58 +219,76 @@ function app.media.random_video(opts) end
 ---@return Audio | nil
 function app.media.random_audio(opts) end
 
----Spawn a popup containing an image
+---Spawn a popup displaying an image.
 ---@param image Image
 ---@param opts? SpawnImageOpts
 ---@return ImageWindow
 function app.spawn_image_popup(image, opts) end
 
 ---@class SpawnImageOpts
----@field x? Coord
----@field y? Coord
----@field width? Coord
----@field height? Coord
----@field anchor? Anchor
----@field monitor? Monitor
+---@field x? Coord The horizontal coordinate to spawn the window at. By default, the coordinates
+---  of the window will be chosen at random, ensuring that the window remains entirely visible.
+---@field y? Coord The vertical coordinate to spawn the window at.
+---@field anchor? Anchor Where to place the window relative to the specified coordinates. By
+---  default, "top-left" is used, meaning that the top-left corner of the window is placed at the
+---  specified coordinates.
+---@field width? Coord The width of the window. Defaults to the width of the image, or a third of
+---  the monitor width if the image is too big.
+---@field height? Coord The height of the window. Defaults to the height of the image, or a third
+---  of the monitor height if the image is too big.
+---@field monitor? Monitor The monitor to spawn the window on. By default, chooses a monitor at
+---  random.
 
----Spawn a popup containing a video
+---Spawn a popup containing a video.
 ---@param video Video
 ---@param opts? SpawnVideoOpts
 ---@return VideoWindow
 function app.spawn_video_popup(video, opts) end
 
 ---@class SpawnVideoOpts
----@field loop boolean
----@field audio boolean
----@field x? Coord
----@field y? Coord
----@field width? Coord
----@field height? Coord
----@field anchor? Anchor
----@field monitor? Monitor
+---@field loop? boolean Whether to loop the video (defaults to true). If false, the window will be
+---  closed when the video ends.
+---@field audio? boolean Whether to play the video's audio (if there is any). Defaults to true.
+---@field x? Coord The horizontal coordinate to spawn the window at. By default, the coordinates
+---  of the window will be chosen at random, ensuring that the window remains entirely visible.
+---@field y? Coord The vertical coordinate to spawn the window at.
+---@field anchor? Anchor Where to place the window relative to the specified coordinates. By
+---  default, "top-left" is used, meaning that the top-left corner of the window is placed at the
+---  specified coordinates.
+---@field width? Coord The width of the window. Defaults to the width of the image, or a third of
+---  the monitor width if the image is too big.
+---@field height? Coord The height of the window. Defaults to the height of the image, or a third
+---  of the monitor height if the image is too big.
+---@field monitor? Monitor The monitor to spawn the window on. By default, chooses a monitor at
+---  random.
 
----Play an audio file
+---Play an audio file.
 ---@param audio Audio
 ---@param opts? PlayAudioOpts
 ---@return AudioHandle
 function app.play_audio(audio, opts) end
 
 ---@class PlayAudioOpts
----@field loop boolean
+---@field loop boolean Whether to loop the audio. If true, the audio will loop forever until you
+---  stop it.
 
 ---@class AudioHandle
----@field id number
----@field audio Audio
+---@field id number A unique identifier for the audio handle.
+---@field audio Audio The audio file that is being played.
 AudioHandle = {}
 
+---Run a function when an audio track finishes. If the audio file is set to loop, this will be
+---called every time the audio file loops.
 ---@param cb fun()
 function AudioHandle:on_finish(cb) end
 
+---Pause the audio track.
 function AudioHandle:pause() end
 
+---Resume the audio track.
 function AudioHandle:play() end
 
----Set the current wallpaper
+---Set the current wallpaper.
 ---@param image Image
 ---@param opts? SetWallpaperOpts
 function app.set_wallpaper(image, opts) end
@@ -261,24 +296,31 @@ function app.set_wallpaper(image, opts) end
 ---@class SetWallpaperOpts
 ---@field mode? "center" | "crop" | "fit" | "span" | "stretch" | "tile"
 
----Spawn a prompt popup
+---Spawn a prompt popup. This will allow the user to submit text via a text input.
 ---@param opts? SpawnPromptOpts
 ---@return PromptWindow
 function app.spawn_prompt(opts) end
 
 ---@class SpawnPromptOpts
 ---@field title? string
----@field text? string
----@field placeholder? string
----@field initial_value? string
----@field x? Coord
----@field y? Coord
----@field width? Coord
----@field height? Coord
----@field anchor? Anchor
----@field monitor? Monitor
+---@field text? string Text that is displayed at the top of the prompt.
+---@field placeholder? string A placeholder value that is shown in the text input before the user
+---  has typed anything.
+---@field initial_value? string An initial value for the text input.
+---@field x? Coord The horizontal coordinate to spawn the window at. By default, the coordinates
+---  of the window will be chosen at random, ensuring that the window remains entirely visible.
+---@field y? Coord The vertical coordinate to spawn the window at.
+---@field anchor? Anchor Where to place the window relative to the specified coordinates. By
+---  default, "top-left" is used, meaning that the top-left corner of the window is placed at the
+---  specified coordinates.
+---@field width? Coord The width of the window. Defaults to the width of the image, or a third of
+---  the monitor width if the image is too big.
+---@field height? Coord The height of the window. Defaults to the height of the image, or a third
+---  of the monitor height if the image is too big.
+---@field monitor? Monitor The monitor to spawn the window on. By default, chooses a monitor at
+---  random.
 
----Spawn a choice popup
+---Spawn a choice popup. This will present the user with one or more options to click.
 ---@param opts? SpawnChoiceOpts
 ---@return ChoiceWindow
 function app.spawn_choice(opts) end
@@ -286,7 +328,8 @@ function app.spawn_choice(opts) end
 ---@class SpawnChoiceOpts
 ---@field title? string
 ---@field text? string
----@field options { id: string, label: string }[]
+---@field options { id: string, label: string }[] The list of options, which determine the buttons
+---  to present to the user. Only the label is displayed, the id is used in `on_select()`.
 ---@field x? Coord
 ---@field y? Coord
 ---@field width? Coord
@@ -350,13 +393,13 @@ app.monitors = {}
 ---Get all available monitors
 ---@return Monitor[]
 ---
----The available monitors may change while a mode is running. You should prefer repeatedly calling
----this function to storing its return value.
+---The available monitors may change while a mode is running. Try not to store this value for too
+---long.
 function app.monitors.list() end
 
 ---Get the user's primary monitor
 ---@return Monitor
 ---
----The primary monitor may change while a mode is running. You should prefer repeatedly calling
----this function to storing its return value.
+---The primary monitor may change while a mode is running. Try not to store this value for too
+---long.
 function app.monitors.primary() end

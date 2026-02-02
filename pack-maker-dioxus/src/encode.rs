@@ -1,84 +1,170 @@
 use std::{
     fs::File,
+    io,
     path::{Path, PathBuf},
     process::{self, Command},
-    thread::available_parallelism,
+    thread::{self, available_parallelism},
 };
 
 use anyhow::{anyhow, bail, Result};
-use dioxus::signals::{ReadSignal, ReadableExt, Signal, SyncSignal, WritableExt};
-use dioxus_stores::Store;
+use dioxus::{
+    signals::{ReadSignal, ReadableExt, Signal, SyncSignal, WritableExt, WritableVecExt},
+    stores::Store,
+};
 use futures::{stream, StreamExt};
 use image::{imageops::FilterType, ImageFormat, ImageReader};
+use infer::MatcherType;
 use shared::encode::FileInfo;
 use tokio::sync::oneshot;
 use uuid::Uuid;
+use walkdir::WalkDir;
 
-use crate::{image_list::Media, pack::MediaPack, utils::file_name};
+use crate::{image_list::{Media, UploadFilesContext}, pack::MediaPack, utils::file_name};
 
-async fn process_files(
-    media_pack: ReadSignal<MediaPack>,
-    paths: Vec<PathBuf>,
-    processing: SyncSignal<String>,
-    mut files: Store<Vec<Media>>,
-    mut errors: Store<Vec<anyhow::Error>>,
-    mut processed: Signal<usize>,
-) -> Result<()> {
-    let media_ref = media_pack.read();
-    let dir = media_ref.dir();
-    let id = media_ref.id();
+pub fn explore_folder(path: &Path, recursive: bool) -> Vec<PathBuf> {
+    let mut walkdir = WalkDir::new(&path);
 
-    stream::iter(paths)
-        .for_each_concurrent(Some(available_parallelism()?.get()), |path| async move {
-            match process_file(media_pack, &path, dir.to_path_buf(), processing).await {
-                Ok(Some((encoded_file, hash))) => {
-                    match media_pack.read().add_file(encoded_file, &path, hash).await {
-                        Ok(media) => {
-                            files.push(media);
-                        },
-                        Err(err) => {
-                            errors.push(err);
-                        },
-                    };
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    errors.push(err);
-                }
+    if !recursive {
+        walkdir = walkdir.max_depth(1);
+    }
+
+    walkdir
+        .into_iter()
+        .filter_map(|x| x.ok())
+        .filter(|e| {
+            let path = e.path();
+
+            if !path.is_file() {
+                return false;
             }
 
-            processed += 1;
+            match is_media(path) {
+                Ok(x) => x,
+                Err(err) => {
+                    eprintln!("{err}");
+                    false
+                }
+            }
         })
-        .await;
+        .map(|x| x.path().to_path_buf())
+        .collect()
+}
 
-    Ok(())
+pub struct ProcessFilesError {
+    pub path: PathBuf,
+    pub error_type: ProcessFilesErrorType,
+}
+
+pub enum ProcessFilesErrorType {
+    Skipped,
+    EncodeError(anyhow::Error),
+    PackError(anyhow::Error),
+    OpenError(io::Error),
+    HashError(io::Error),
+    QueryHashError(anyhow::Error),
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for ProcessFilesErrorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Skipped => write!(f, "Skipped"),
+            Self::EncodeError(err) => write!(f, "Error encoding file: {err}"),
+            Self::PackError(err) => write!(f, "Error adding file to pack: {err}"),
+            Self::OpenError(err) => write!(f, "Error opening file: {err}"),
+            Self::HashError(err) => write!(f, "Error computing file hash: {err}"),
+            Self::QueryHashError(err) => write!(f, "Error checking file hash: {err}"),
+            Self::Other(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+pub async fn process_files(
+    media_pack: ReadSignal<MediaPack>,
+    paths: Vec<PathBuf>,
+    mut context: UploadFilesContext,
+    mut files: Store<Vec<Media>>,
+    skip_duplicates: bool,
+) {
+    let media_ref = media_pack.read();
+    let dir = &media_ref.dir();
+
+    let limit = available_parallelism().map(|x| x.get()).ok();
+
+    stream::iter(paths)
+        .for_each_concurrent(
+            limit,
+            |path| async move {
+                context.set_currently_processing(file_name(&path));
+                match process_file(
+                    media_pack,
+                    &path,
+                    dir.to_path_buf(),
+                    skip_duplicates,
+                )
+                .await
+                {
+                    Ok(Some(media)) => {
+                        files.push(media);
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        context.handle_error(ProcessFilesError {
+                            path: path.to_path_buf(),
+                            error_type: err
+                        });
+                    }
+                }
+
+                context.increment_processed();
+            },
+        )
+        .await;
 }
 
 async fn process_file(
-    media_view: ReadSignal<MediaPack>,
+    media_pack: ReadSignal<MediaPack>,
     path: &Path,
     dir: PathBuf,
-    mut processing: SyncSignal<String>,
-) -> Result<Option<(EncodedFile, blake3::Hash)>> {
+    skip_duplicates: bool,
+) -> Result<Option<Media>, ProcessFilesErrorType> {
+    println!("Hashing file");
+
     let hash = {
         let path = path.to_path_buf();
-        tokio::task::spawn_blocking(move || hash_file(&path)).await??
+        match tokio::task::spawn_blocking(move || hash_file(&path)).await {
+            Ok(x) => x?,
+            Err(err) => {
+                if err.is_cancelled() {
+                    return Ok(None);
+                } else {
+                    return Err(ProcessFilesErrorType::HashError(err.into()));
+                }
+            }
+        }
     };
 
-    if media_view.read().check_hash(&hash).await? {
-        bail!("Duplicate file (skipped)");
+    println!("Hashed");
+
+    if skip_duplicates
+        && media_pack
+            .read()
+            .check_hash(&hash)
+            .await
+            .map_err(|err| ProcessFilesErrorType::QueryHashError(err))?
+    {
+        return Err(ProcessFilesErrorType::Skipped);
     }
+
     let (tx, rx) = oneshot::channel();
 
-    let path = path.to_path_buf();
+    let path_clone = path.to_path_buf();
 
-    let mut fun = move || -> anyhow::Result<_> {
-        *processing.write() = file_name(&path);
-        let id = Uuid::new_v4();
+    let id = Uuid::new_v4();
+    let output_path = dir.join("media").join(id.to_string());
 
-        let output_path = dir.join("media").join(id.to_string());
-
-        encode_file(&path, &output_path)
+    let fun = move || -> anyhow::Result<_> {
+        encode_file(&path_clone, &output_path)
     };
 
     rayon::spawn(move || {
@@ -89,36 +175,61 @@ async fn process_file(
         let _ = tx.send(fun());
     });
 
-    Ok(rx.await??.map(|encoded| (encoded, hash)))
+    match rx
+        .await
+        .map_err(|err| ProcessFilesErrorType::Other(err.into()))?
+        .map_err(|err| ProcessFilesErrorType::EncodeError(err))?
+    {
+        Some(encoded_file) => Ok(Some(
+            media_pack
+                .read()
+                .add_file(encoded_file, path, hash)
+                .await
+                .map_err(|err| ProcessFilesErrorType::PackError(err))?,
+        )),
+        None => Ok(None),
+    }
 }
 
-fn hash_file(path: &Path) -> anyhow::Result<blake3::Hash> {
-    let file = File::open(path)?;
+fn hash_file(path: &Path) -> Result<blake3::Hash, ProcessFilesErrorType> {
+    let file = File::open(path).map_err(|err| ProcessFilesErrorType::OpenError(err))?;
     let mut hasher = blake3::Hasher::new();
 
-    hasher.update_reader(file)?;
+    hasher
+        .update_reader(file)
+        .map_err(|err| ProcessFilesErrorType::HashError(err))?;
 
     Ok(hasher.finalize())
 }
 
-pub fn is_media(ffprobe_command: impl Fn() -> Command, path: &Path) -> Result<bool> {
-    #[rustfmt::skip]
-    let args = [
-        "-v", "error",
-        "-show_entries", "format=nb_streams",
-        "-output_format", "default=noprint_wrappers=1:nokey=1",
-    ];
+fn is_media(path: &Path) -> anyhow::Result<bool> {
+    let guess = mime_guess::from_path(path);
 
-    let output = ffprobe_command().args(args).arg(path).output()?;
+    if guess.iter().any(|mime| {
+        let mime_type = mime.type_();
 
-    if !output.status.success() {
-        println!("{}", String::from_utf8_lossy(&output.stderr));
+        mime_type == mime::IMAGE || mime_type == mime::VIDEO || mime_type == mime::AUDIO
+    }) {
+        return Ok(true);
+    }
+
+    if guess.first().is_some() {
         return Ok(false);
     }
 
-    let streams: u32 = String::from_utf8_lossy(&output.stdout).trim().parse()?;
+    let better_guess = infer::get_from_path(path)?;
+    if let Some(guess) = better_guess {
+        let file_type = guess.matcher_type();
 
-    Ok(streams > 0)
+        if file_type == MatcherType::Image
+            || file_type == MatcherType::Audio
+            || file_type == MatcherType::Video
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 fn file_info(path: &Path) -> Result<Option<FileInfo>> {
@@ -146,6 +257,7 @@ fn file_info(path: &Path) -> Result<Option<FileInfo>> {
 pub struct EncodedFile {
     pub info: FileInfo,
     pub thumbnail: Option<Vec<u8>>,
+    pub path: PathBuf,
 }
 
 pub fn encode_file(input: &Path, output: &Path) -> Result<Option<EncodedFile>> {
@@ -163,7 +275,7 @@ pub fn encode_file(input: &Path, output: &Path) -> Result<Option<EncodedFile>> {
     let mut thumbnail = None;
     let file_info = match file_info {
         FileInfo::Image { width, height, .. } => {
-            let (thumb, width, height) = encode_image_(input, &output, width, height)?;
+            let (thumb, width, height) = encode_image(input, &output, width, height)?;
             thumbnail = Some(thumb);
 
             FileInfo::Image {
@@ -197,6 +309,7 @@ pub fn encode_file(input: &Path, output: &Path) -> Result<Option<EncodedFile>> {
     Ok(Some(EncodedFile {
         info: file_info,
         thumbnail,
+        path: output,
     }))
 }
 
@@ -267,30 +380,34 @@ pub fn encode_image_(
 ) -> Result<(Vec<u8>, u64, u64)> {
     let (width, height) = resize_dimensions(width, height, MAX_IMAGE_SIZE, false);
 
+    println!("Decoding file");
     let image = ImageReader::open(path)?.with_guessed_format()?.decode()?;
 
+    println!("Making thumbnail");
     let thumbnail = image.thumbnail(100, 100);
     let webp_encoder = webp::Encoder::from_image(&thumbnail).map_err(|err| anyhow!("{err}"))?;
     let thumbnail_webp = webp_encoder.encode(75.0).to_vec();
 
+    println!("Resizing");
     let image = if image.width() != width as u32 || image.height() != height as u32 {
         image.resize_exact(width as u32, height as u32, FilterType::Lanczos3)
     } else {
         image
     };
 
+    println!("Saving");
     image.save_with_format(output, ImageFormat::Avif)?;
 
+    println!("Done");
     Ok((thumbnail_webp, width, height))
 }
 
 fn encode_image(
-    ffmpeg_command: impl Fn() -> Command,
     input: &Path,
     output: &Path,
     width: u64,
     height: u64,
-) -> anyhow::Result<(u64, u64)> {
+) -> Result<(Vec<u8>, u64, u64)> {
     println!("{}", input.display());
     println!("{}", output.display());
 
@@ -309,14 +426,13 @@ fn encode_image(
         // output
     ];
 
-    let result = ffmpeg_command()
+    let result = Command::new("ffmpeg")
         .arg("-i")
         .arg(input)
         .arg("-vf")
         .arg(format!("scale=w='{width}':h='{height}',format=yuv420p"))
         .args(args)
         .arg(output)
-        // .stderr(process::Stdo::null())
         .output()?;
 
     if !result.status.success() {
@@ -329,7 +445,9 @@ fn encode_image(
         bail!("ffmpeg failed for {}", input.display());
     }
 
-    Ok((width, height))
+    let thumbnail = encode_image_thumbnail(input)?;
+
+    Ok((thumbnail, width, height))
 }
 
 fn encode_image_transparent(
@@ -440,6 +558,30 @@ fn encode_video(
     let thumbnail = encode_video_thumbnail(input)?;
 
     Ok((thumbnail, width, height))
+}
+
+fn encode_image_thumbnail(path: &Path) -> Result<Vec<u8>> {
+    let mut command = Command::new("ffmpeg");
+    command.args(["-y"]);
+
+    command.arg("-i").arg(path);
+
+    command.args([
+        "-vf",
+        "scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease",
+        "-f",
+        "webp",
+        "pipe:1",
+    ]);
+
+    let output = command.output()?;
+
+    if !output.status.success() {
+        eprintln!("{:?}", String::from_utf8_lossy(&output.stderr));
+        bail!("ffmpeg command failed");
+    }
+
+    Ok(output.stdout)
 }
 
 fn encode_video_thumbnail(path: &Path) -> Result<Vec<u8>> {

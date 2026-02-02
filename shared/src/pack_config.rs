@@ -1,6 +1,8 @@
 use std::{collections::HashMap, io};
 
 use ciborium::{from_reader, into_writer};
+use dioxus::stores::Store;
+use dioxus::prelude::*;
 use merge::Merge;
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +22,7 @@ pub struct PackOpts {
     pub ignore: Option<OneOrMore<String>>,
 }
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone, Store)]
 pub struct Metadata {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]

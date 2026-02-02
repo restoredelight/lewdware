@@ -45,44 +45,54 @@ async fn media_server(media_pack: MediaPackView, port_tx: oneshot::Sender<u16>) 
         .send(port)
         .map_err(|_| anyhow!("Port sender closed"))?;
 
+    println!("Started listener on {port}");
+
     let media_pack = Rc::new(media_pack);
 
     let local_set = LocalSet::new();
 
-    loop {
-        let (stream, _) = listener.accept().await?;
+    local_set.run_until(async move {
+        loop {
+            let (stream, _) = listener.accept().await?;
 
-        let io = TokioIo::new(stream);
+            println!("Received connection");
 
-        let media_pack = media_pack.clone();
+            let io = TokioIo::new(stream);
 
-        local_set.spawn_local(async move {
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(
-                    io,
-                    service_fn(move |request| {
-                        let media_pack = media_pack.clone();
-                        async move {
-                            match media_protocol_handler(media_pack, request).await {
-                                Ok(response) => Ok(response),
-                                Err(err) => {
-                                    let response = Response::builder()
-                                        .status(500)
-                                        .header(CONTENT_TYPE, "text/plain")
-                                        .body(Full::new(Bytes::from(err.to_string().into_bytes())));
+            let media_pack = media_pack.clone();
 
-                                    response
+            tokio::task::spawn_local(async move {
+                if let Err(err) = http1::Builder::new()
+                    .serve_connection(
+                        io,
+                        service_fn(move |request| {
+                            println!("Received request: {:?}", request);
+                            let media_pack = media_pack.clone();
+                            async move {
+                                match media_protocol_handler(media_pack, request).await {
+                                    Ok(response) => Ok(response),
+                                    Err(err) => {
+                                        eprintln!("{err}");
+
+                                        let response = Response::builder()
+                                            .status(500)
+                                            .header(CONTENT_TYPE, "text/plain")
+                                            .body(Full::new(Bytes::from(err.to_string().into_bytes())));
+
+                                        response
+                                    }
                                 }
                             }
-                        }
-                    }),
-                )
+                        }),
+                    )
                 .await
-            {
-                eprintln!("Error serving connection: {:?}", err);
-            }
-        });
-    }
+                {
+                    eprintln!("Error serving connection: {:?}", err);
+                }
+            });
+        }
+    }).await
+
 }
 
 pub async fn media_protocol_handler(
@@ -182,7 +192,7 @@ pub struct Range {
 fn get_content_type(file_type: FileType) -> Result<&'static str> {
     match file_type {
         FileType::Image => Ok("image/avif"),
-        FileType::Video => Ok("video/webm; codecs=\"vp8,opus\""),
+        FileType::Video => Ok("video/webm"),
         FileType::Audio => Ok("audio/opus"),
     }
 }

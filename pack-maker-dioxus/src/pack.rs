@@ -1,12 +1,18 @@
 use std::{
-    cell::{Cell, RefCell}, collections::HashMap, fs::{self, create_dir_all}, io::{self, Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}, str::FromStr, sync::Arc, thread::available_parallelism
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    fs::{self, create_dir_all},
+    io::{self, Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+    sync::Arc,
+    thread::available_parallelism,
 };
 
-use anyhow::{bail, Context, Result};
-use dioxus::{html::annotationXml::encoding, stores::Store};
+use anyhow::{anyhow, bail, Context, Result};
+use dioxus::{core::consume_context, stores::Store};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{OptionalExtension, named_params, params};
+use rusqlite::{named_params, params, params_from_iter, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use shared::{
     db::{migrate, Database},
@@ -17,12 +23,15 @@ use shared::{pack_config::Metadata, read_config::MediaCategory, read_pack::Heade
 use tokio::{
     fs::{remove_file, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    sync::{oneshot, RwLock},
+    sync::RwLock,
     task::spawn_blocking,
 };
 use uuid::Uuid;
 
-use crate::{encode::EncodedFile, image_list::Media, media_server::Range, thumbnail::generate_preview, utils::file_name};
+use crate::{
+    encode::EncodedFile, image_list::Media, media_server::Range, thumbnail::generate_preview,
+    utils::file_name, SaveProgress,
+};
 
 struct Lock {
     file: fs::File,
@@ -56,7 +65,7 @@ pub struct MediaPack {
     lock: Lock,
     header: RefCell<Header>,
     dir: PathBuf,
-    metadata: Metadata,
+    metadata: RefCell<Metadata>,
     db_pool: Pool<SqliteConnectionManager>,
     tag_to_id: HashMap<String, u64>,
     id_to_tag: HashMap<u64, String>,
@@ -169,7 +178,7 @@ impl MediaPack {
             lock,
             header: RefCell::new(header),
             dir,
-            metadata,
+            metadata: RefCell::new(metadata),
             db_pool,
             tag_to_id,
             id_to_tag,
@@ -205,15 +214,10 @@ impl MediaPack {
         let lock_path = path.with_added_extension("lock");
         let lock = Lock::new(lock_path)?;
 
-        println!("Getting metadata");
-        // let (header, metadata) = read_pack_metadata(&mut file)?;
-
         let mut buf = [0u8; HEADER_SIZE];
         file.read_exact(&mut buf).await?;
 
         let header = Header::from_buf(buf)?;
-
-        println!("Read metadata");
 
         let data_dir = dirs::data_dir().context("Couldn't find data dir")?;
 
@@ -234,9 +238,10 @@ impl MediaPack {
 
         let metadata = if has_unsaved {
             let metadata_path = dir.join("Metadata");
-            let buf = fs::read(metadata_path)?;
-
-            Metadata::from_buf(&buf)?
+            fs::read(metadata_path)
+                .map_err(|err| anyhow!(err))
+                .and_then(|buf| Metadata::from_buf(&buf).map_err(|err| err.into()))
+                .unwrap_or_default()
         } else {
             file.seek(SeekFrom::Start(header.metadata_offset)).await?;
 
@@ -306,7 +311,7 @@ impl MediaPack {
             lock,
             header: RefCell::new(header),
             dir,
-            metadata,
+            metadata: RefCell::new(metadata),
             db_pool,
             saved: Cell::new(!has_unsaved),
             tag_to_id,
@@ -323,7 +328,13 @@ impl MediaPack {
         self.header.borrow().id.clone()
     }
 
-    async fn mark_unsaved(&self) -> Result<()> {
+    pub async fn is_saved(&self) -> bool {
+        let _handle = self.saving.write().await;
+
+        self.saved.get()
+    }
+
+    pub async fn mark_unsaved(&self) -> Result<()> {
         if self.saved.get() {
             File::create(self.dir.join("UNSAVED")).await?;
             self.saved.set(false);
@@ -369,22 +380,14 @@ impl MediaPack {
         OpenOptions::new().write(true).open(&self.path).await
     }
 
-    async fn open_read_write(&self) -> io::Result<File> {
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&self.path)
-            .await
-    }
-
-    pub async fn save(&mut self) -> Result<()> {
+    pub async fn save(&self) -> Result<()> {
         if self.saved.get() {
             return Ok(());
         }
 
         let _handle = self.saving.write().await;
 
-        let offset = self.write_files().await?;
+        let offset = self.write_files(None).await?;
 
         // Compress database
         self.db_execute(|conn| conn.execute("VACUUM", []).map_err(|err| err.into()))
@@ -399,7 +402,7 @@ impl MediaPack {
             tokio::io::copy(&mut dbf, &mut file).await?
         };
 
-        let buf = self.metadata.to_buf()?;
+        let buf = self.metadata.borrow().to_buf()?;
         let metadata_length = buf.len() as u64;
 
         file.write_all(&buf).await?;
@@ -422,62 +425,85 @@ impl MediaPack {
         *self.header.borrow_mut() = header;
         file.sync_data().await?;
 
-        self.mark_saved().await?;
         self.clean_media()?;
+        self.mark_saved().await?;
 
         Ok(())
     }
 
-    async fn write_files(&self) -> Result<u64> {
+    async fn write_files(&self, to_path: Option<PathBuf>) -> Result<u64> {
         println!("Writing files");
         let dir = self.dir.clone();
         let path = self.path.clone();
+        let mut progress = consume_context::<SaveProgress>();
 
-        self.db_execute(move |conn| {
-            let mut file = fs::OpenOptions::new()
-                .read(true)
+        let result = self.db_execute(move |conn| {
+            let mut in_file = fs::File::open(&path)?;
+            let mut out_file = fs::OpenOptions::new()
                 .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&path)?;
+                .open(to_path.as_ref().unwrap_or(&path))?;
+
+            let mut num_files: usize =
+                conn.query_row_and_then("SELECT COUNT(*) as files FROM media", params![], |row| {
+                    row.get("files")
+                })?;
 
             let mut offset = HEADER_SIZE as u64;
-
-            file.seek(SeekFrom::Start(offset))?;
 
             let mut get_stmt = conn.prepare(
                 "SELECT id, offset, length FROM media WHERE offset IS NOT NULL ORDER BY offset",
             )?;
-            let mut edit_offset_stmt =
-                conn.prepare_cached("UPDATE media SET offset = ? WHERE id = ?")?;
+            let mut edit_offset_stmt = conn.prepare("UPDATE media SET offset = ? WHERE id = ?")?;
 
-            let media = get_stmt.query_map(params![], |row| {
-                Ok(MediaData {
-                    id: row.get("id")?,
-                    offset: row.get("offset")?,
-                    length: row.get("length")?,
-                })
-            })?;
+            let mut media = get_stmt
+                .query_map(params![], |row| {
+                    Ok(MediaData {
+                        id: row.get("id")?,
+                        offset: row.get("offset")?,
+                        length: row.get("length")?,
+                    })
+                })?
+                .peekable();
+
+            // If we are writing to the same file, skip all entries which are already in the
+            // correct place.
+            if to_path.is_none() {
+                while media
+                    .next_if(|x| {
+                        x.as_ref().is_ok_and(|media_data| {
+                            if media_data.offset == offset {
+                                offset += media_data.length;
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                    })
+                    .is_some()
+                {
+                    num_files -= 1;
+                }
+            }
+
+            progress.start_saving(num_files);
+
+            out_file.seek(SeekFrom::Start(offset))?;
 
             for media_result in media {
                 let media_data = media_result?;
 
-                println!("{:?}", media_data);
-                println!("{}", offset);
+                in_file.seek(SeekFrom::Start(media_data.offset))?;
+                let mut file = in_file.take(media_data.length);
 
-                if media_data.offset != offset {
-                    println!("Moving file");
-                    let mut buf = vec![0u8; media_data.length as usize];
-                    file.seek(SeekFrom::Start(media_data.offset))?;
-                    file.read_exact(&mut buf)?;
+                io::copy(&mut file, &mut out_file)?;
 
-                    file.seek(SeekFrom::Start(offset))?;
-                    file.write_all(&buf)?;
+                in_file = file.into_inner();
 
-                    edit_offset_stmt.execute(params![offset, media_data.id])?;
-                }
+                edit_offset_stmt.execute(params![offset, media_data.id])?;
 
                 offset += media_data.length;
+
+                progress.increment_saved();
 
                 println!("File saved");
             }
@@ -490,35 +516,168 @@ impl MediaPack {
                 Ok((row.get("id")?, row.get("path")?))
             })?;
 
-            // We only need to do this here, since every file from here on will be written
-            file.seek(SeekFrom::Start(offset))?;
-
             for media_result in media {
-                println!("Saving media result");
-                println!("{}", offset);
+                println!("Saving media");
                 let (id, path) = media_result?;
-                println!("{:?}", path);
 
                 let full_path = dir.join("media").join(path);
 
-                let mut media_file = fs::File::open(&full_path)?;
+                let size = {
+                    let mut media_file = fs::File::open(&full_path)?;
 
-                let size = io::copy(&mut media_file, &mut file)?;
+                    io::copy(&mut media_file, &mut out_file)?
+                };
 
                 set_offset_len.execute(params![offset, size, id])?;
 
-                offset += size as u64;
+                offset += size;
 
                 if let Err(err) = fs::remove_file(&full_path) {
                     eprintln!("{err}");
                 }
+
+                progress.increment_saved();
 
                 println!("File saved");
             }
 
             Ok(offset)
         })
-        .await
+        .await;
+
+        progress.reset();
+
+        result
+    }
+
+    pub async fn save_as(&self, path: &Path) -> Result<Option<Self>> {
+        if path == &self.path {
+            self.save().await?;
+            return Ok(None);
+        }
+
+        let _handle = self.saving.write().await;
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(path)
+            .await?;
+
+        if self.saved.get() {
+            tokio::fs::copy(&self.path, path).await?;
+
+            let header = self.header.borrow().make_clone();
+            file.write_all(&header.to_buf()?).await?;
+            file.sync_data().await?;
+        } else {
+            println!("Writing files");
+            let offset = self.write_files(Some(path.to_path_buf())).await?;
+
+            println!("Compressing db");
+            // Compress database
+            self.db_execute(|conn| conn.execute("VACUUM", []).map_err(|err| err.into()))
+                .await?;
+
+            println!("Seeking");
+            file.seek(SeekFrom::Start(offset)).await?;
+
+            println!("Copying db");
+            let index_length = {
+                let mut dbf = File::open(&self.db_path).await?;
+                println!("Performing copy");
+                tokio::io::copy(&mut dbf, &mut file).await?
+            };
+
+            println!("Writing metadata");
+            let buf = self.metadata.borrow().to_buf()?;
+            let metadata_length = buf.len() as u64;
+
+            file.write_all(&buf).await?;
+
+            println!("Truncating");
+            file.set_len(offset + metadata_length + index_length)
+                .await?;
+
+            let header = Header {
+                id: Uuid::new_v4(),
+                index_offset: offset,
+                index_length,
+                metadata_offset: offset + index_length,
+                metadata_length,
+            };
+
+            println!("{:?}", self.header);
+
+            println!("Writing header");
+            file.seek(SeekFrom::Start(0)).await?;
+            file.write_all(&header.to_buf()?).await?;
+            file.sync_data().await?;
+
+            println!("Marking as saved");
+            self.mark_saved().await?;
+        }
+
+        Ok(Some(Self::open(path.to_path_buf()).await?))
+    }
+
+    pub async fn discard_changes(&self) -> Result<()> {
+        if self.saved.get() {
+            return Ok(());
+        }
+
+        let _handle = self.saving.write().await;
+
+        let mut file = self.open_read().await?;
+
+        let not_saved_yet = self.header.borrow().is_default();
+
+        let metadata = if not_saved_yet {
+            None
+        } else {
+            file.seek(SeekFrom::Start(self.header.borrow().metadata_offset))
+                .await?;
+
+            let mut buf = vec![0u8; self.header.borrow().metadata_length as usize];
+            file.read_exact(&mut buf).await?;
+
+            Some(Metadata::from_buf(&buf)?)
+        };
+
+        file.seek(SeekFrom::Start(self.header.borrow().index_offset))
+            .await?;
+        let mut db_data = vec![0u8; self.header.borrow().index_length as usize];
+        file.read_exact(&mut db_data).await?;
+
+        println!("Read db data");
+        println!("{}", db_data.len());
+
+        let mut db_file = File::create(&self.db_path).await?;
+
+        db_file.write_all(&db_data).await?;
+
+        db_file.flush().await?;
+
+        self.clean_media()?;
+        if let Some(metadata) = metadata {
+            *self.metadata.borrow_mut() = metadata;
+        }
+        self.mark_saved().await?;
+
+        Ok(())
+    }
+
+    pub fn metadata(&self) -> Metadata {
+        self.metadata.borrow().clone()
+    }
+
+    pub async fn set_metadata(&self, metadata: &Metadata) -> Result<()> {
+        let _handle = self.saving.read().await;
+
+        *self.metadata.borrow_mut() = metadata.clone();
+
+        self.mark_unsaved().await
     }
 
     fn clean_media(&self) -> Result<()> {
@@ -535,7 +694,7 @@ impl MediaPack {
         let temp_path = self.dir.join("Metadata.copy");
         let final_path = self.dir.join("Metadata");
 
-        let data = self.metadata.to_buf()?;
+        let data = self.metadata.borrow().to_buf()?;
 
         tokio::fs::File::create(&temp_path)
             .await?
@@ -546,70 +705,6 @@ impl MediaPack {
 
         Ok(())
     }
-
-    // async fn add(
-    //     &mut self,
-    //     table_name: &'static str,
-    //     data: &[(String, Box<dyn ToSql + Send>)],
-    // ) -> Result<u64> {
-    //     let (names, values): (Vec<_>, Vec<_>) = data.into_iter().unzip();
-    //
-    //     self.db_execute(move |conn| {
-    //         conn.query_row(
-    //             &format!(
-    //                 "INSERT INTO {table} ({names}) VALUES ({vars}) RETURNING ID",
-    //                 table = table_name,
-    //                 names = names.join(", "),
-    //                 vars = repeat_vars(names.len())
-    //             ),
-    //             params_from_iter(values.iter()),
-    //             |row| row.get("id"),
-    //         )
-    //         .map_err(|err| err.into())
-    //     })
-    //     .await
-    // }
-    //
-    // async fn delete(&mut self, table_name: &'static str, id: u64) -> Result<()> {
-    //     self.db_execute(move |conn| {
-    //         conn.execute(
-    //             &format!("DELETE FROM {} WHERE id = ?", table_name),
-    //             params![id],
-    //         )?;
-    //
-    //         Ok(())
-    //     })
-    //     .await
-    // }
-    //
-    // async fn edit(
-    //     &mut self,
-    //     table_name: &'static str,
-    //     id: u64,
-    //     data: Vec<(String, Box<(dyn ToSql + Send)>)>,
-    // ) -> Result<()> {
-    //     let (names, mut values): (Vec<_>, Vec<_>) = data.into_iter().unzip();
-    //
-    //     values.push(Box::new(id));
-    //
-    //     self.db_execute(move |conn| {
-    //         conn.execute(
-    //             &format!(
-    //                 "UPDATE {table} SET {set_query} WHERE id = ?",
-    //                 table = table_name,
-    //                 set_query = names
-    //                     .iter()
-    //                     .map(|x| format!("{} = ?", x))
-    //                     .collect::<Vec<_>>()
-    //                     .join(", "),
-    //             ),
-    //             params_from_iter(values.iter()),
-    //         )?;
-    //
-    //         Ok(())
-    //     })
-    //     .await
-    // }
 
     async fn edit_tags_of(&self, name: &str, id: u64, tags: &[String]) -> Result<()> {
         let _handle = self.saving.read().await;
@@ -649,7 +744,12 @@ impl MediaPack {
         Ok(())
     }
 
-    pub async fn add_file(&self, encoded_file: EncodedFile, path: &Path, hash: blake3::Hash) -> Result<Media> {
+    pub async fn add_file(
+        &self,
+        encoded_file: EncodedFile,
+        path: &Path,
+        hash: blake3::Hash,
+    ) -> Result<Media> {
         let _handle = self.saving.read().await;
 
         let FileInfoParts {
@@ -661,10 +761,11 @@ impl MediaPack {
             audio,
         } = encoded_file.info.to_parts();
 
-        let file_name = file_name(&path);
-        let path_str = path.to_string_lossy().to_string();
+        let file_name = file_name(path);
+        let path = encoded_file.path.to_string_lossy().to_string();
 
         let file_name_clone = file_name.clone();
+        let hash_clone = hash.clone();
         let id = self.db_execute(move |conn| {
             conn.query_row(
                 "INSERT INTO media (file_name, file_type, path, width, height, transparent, duration, audio, hash, thumbnail)
@@ -672,7 +773,7 @@ impl MediaPack {
                 named_params! {
                     ":file_name": file_name_clone,
                     ":file_type": file_type.as_str(),
-                    ":path": path_str,
+                    ":path": path,
                     ":width": width,
                     ":height": height,
                     ":transparent": transparent,
@@ -690,6 +791,7 @@ impl MediaPack {
             file_name,
             file_info: encoded_file.info,
             selected: false,
+            hash: hash.to_string(),
         };
 
         self.mark_unsaved().await?;
@@ -697,11 +799,14 @@ impl MediaPack {
         Ok(media)
     }
 
-    pub async fn delete_file(&self, id: u64) -> Result<()> {
+    pub async fn remove_files(&self, ids: Vec<u64>) -> Result<()> {
         let _handle = self.saving.read().await;
 
         self.db_execute(move |conn| {
-            conn.execute("DELETE FROM media WHERE id = ?", params![id])?;
+            conn.execute(
+                &format!("DELETE FROM media WHERE id IN ({})", repeat_vars(ids.len())),
+                params_from_iter(&ids),
+            )?;
 
             Ok(())
         })
@@ -791,7 +896,7 @@ impl MediaPack {
 
         self.db_execute(move |conn| {
             let mut stmt = conn
-                .prepare("SELECT id, file_type, file_name, file_type, width, height, transparent, duration, audio FROM media")?;
+                .prepare("SELECT id, file_type, file_name, file_type, width, height, transparent, duration, audio, hash FROM media")?;
 
             let result = stmt
                 .query_and_then([], |row| -> Result<_> {
@@ -807,6 +912,7 @@ impl MediaPack {
                             audio: row.get("audio")?,
                         })?,
                         selected: false,
+                        hash: blake3::Hash::from_bytes(row.get("hash")?).to_string()
                     })
                 })?
                 .collect();
@@ -855,6 +961,18 @@ impl MediaPack {
                 .is_some())
         })
         .await
+    }
+}
+
+impl Drop for MediaPack {
+    fn drop(&mut self) {
+        if self.saved.get() {
+            if let Err(err) = fs::remove_dir_all(&self.dir) {
+                eprintln!("{err}");
+            }
+        } else {
+            eprintln!("Dropping an unsaved pack");
+        }
     }
 }
 

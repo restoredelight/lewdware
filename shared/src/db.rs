@@ -49,7 +49,7 @@ const MIGRATIONS: [&str; 1] = [r#"
         transparent INTEGER,
         duration REAL,
         audio INTEGER,
-        hash BLOB NOT NULL UNIQUE,
+        hash BLOB NOT NULL,
         thumbnail BLOB
     );
     CREATE INDEX media_hash_index ON media (hash);

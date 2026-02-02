@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.100"
 ciborium = "0.2.2"
+dioxus = "0.7.3"
+dioxus-stores = "0.7.3"
 dirs = "6.0.0"
 glob = "0.3.3"
 itertools = "0.14.0"

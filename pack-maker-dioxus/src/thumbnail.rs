@@ -13,6 +13,7 @@ pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec
     let path = match file_data {
         FileData::Path(path) => path,
         FileData::Data(data) => {
+            println!("Data length: {}", data.len());
             let mut tempfile =
                 NamedTempFile::with_suffix(if is_image { ".avif" } else { ".webm" })?;
             tempfile.write_all(&data)?;
@@ -53,7 +54,7 @@ pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec
         "mjpeg",
         "-q:v",
         "4",
-        "-",
+        "pipe:1",
     ]);
 
     let output = command.output().await?;
@@ -62,6 +63,8 @@ pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec
         eprintln!("{:?}", String::from_utf8_lossy(&output.stderr));
         bail!("ffmpeg command failed");
     }
+
+    println!("{}", output.stdout.len());
 
     Ok(output.stdout)
 }
