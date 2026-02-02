@@ -89,7 +89,7 @@ impl VideoDecoder {
                 }
             },
             Err(TryRecvError::Empty) => NextFrame::None,
-            Err(e) => return NextFrame::Error(e.into()),
+            Err(TryRecvError::Disconnected) => return NextFrame::Disconnected,
         }
     }
 
@@ -203,7 +203,7 @@ pub enum NextFrame {
     Ready(VideoFrame),
     Finish,
     None,
-    Error(anyhow::Error),
+    Disconnected,
 }
 
 /// Spawn a thread to decode frames from a video.
@@ -213,7 +213,7 @@ fn spawn_video_stream(
     height: u32,
     loop_video: bool,
 ) -> Receiver<Option<VideoFrame>> {
-    let (tx, rx) = sync_channel(20);
+    let (tx, rx) = sync_channel(10);
 
     thread::spawn(move || {
         if let Err(err) = decode_video(path, tx, width, height, loop_video) {

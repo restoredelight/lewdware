@@ -77,14 +77,27 @@ impl<'a> ChaosApp<'a> {
         let (lua_event_tx, lua_request_rx) = start_lua_thread(
             event_loop_proxy,
             r#"
-                lewdware.every(2000, function()
-                    print("Spawning")
+                x = {}
+                while true do
+                    table.insert(x, 1)
+                end
+                local windows = {}
+                local interval
+                interval = lewdware.every(1000, function()
+                    print("Spawning window", #windows + 1)
+
                     local media = lewdware.media.random({ type = { "image", "video" } })
+                    local window
                     if media.type == "image" then
-                        lewdware.spawn_image_popup(media)
+                        window = lewdware.spawn_image_popup(media)
                     elseif media.type == "video" then
-                        lewdware.spawn_video_popup(media)
+                        window = lewdware.spawn_video_popup(media)
                     end
+
+                    table.insert(windows, window)
+                    interval:set_duration(0)
+                    interval:set_duration(interval.duration * 0.99)
+                    print(interval.duration)
                 end)
             "#
             .to_string(),
@@ -691,6 +704,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let mut moving_windows = false;
         for window in self.windows.values_mut() {
             match window {
                 WindowType::Video(_) => {
@@ -699,10 +713,17 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                 _ => {}
             }
 
-            window.inner_window_mut().update_position();
+            if window.inner_window().is_moving() {
+                window.inner_window_mut().update_position();
+                moving_windows = true;
+            }
         }
 
-        event_loop.set_control_flow(ControlFlow::Poll);
+        if moving_windows {
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
     }
 }
 

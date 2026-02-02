@@ -106,6 +106,10 @@ impl UserData for Interval {
         });
 
         methods.add_method_mut("set_duration", |_, this, duration: u64| {
+            if duration == 0 {
+                return Err(mlua::Error::runtime("`duration` must be non-zero"));
+            }
+
             this.duration = tokio::time::Duration::from_millis(duration);
             this.interval_tx
                 .send(this.duration)
