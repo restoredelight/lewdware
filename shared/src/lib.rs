@@ -6,4 +6,6 @@ pub mod target;
 pub mod utils;
 pub mod encode;
 pub mod db;
+pub mod components;
 
+pub const VERSION: &'static str = env!("CARGO_PKG_VERSION");

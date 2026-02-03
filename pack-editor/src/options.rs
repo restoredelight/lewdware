@@ -1,8 +1,6 @@
-use crate::{
-    components::{input::Input, label::Label, textarea::Textarea},
-    MetadataStore, Pack,
-};
+use crate::{MetadataStore, Pack};
 use dioxus::prelude::*;
+use shared::components::{input::Input, label::Label, textarea::Textarea};
 use shared::pack_config::{Metadata, MetadataStoreExt};
 
 #[component]
@@ -20,7 +18,7 @@ pub fn Options() -> Element {
     };
 
     let mark_unsaved = move || async move {
-        if let Err(err) = pack.read().mark_unsaved().await  {
+        if let Err(err) = pack.read().mark_unsaved().await {
             eprintln!("{err}");
         }
     };

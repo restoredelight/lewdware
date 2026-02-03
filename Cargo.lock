@@ -799,9 +799,9 @@ checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 
 [[package]]
 name = "bytes"
-version = "1.11.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
+checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 dependencies = [
  "serde",
 ]
@@ -1002,18 +1002,18 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.56"
+version = "4.5.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75ca66430e33a14957acc24c5077b503e7d374151b2b4b3a10c83b4ceb4be0e"
+checksum = "6899ea499e3fb9305a65d5ebf6e3d2248c5fab291f300ad0a704fbe142eae31a"
 dependencies = [
  "clap_builder",
 ]
 
 [[package]]
 name = "clap_builder"
-version = "4.5.56"
+version = "4.5.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "793207c7fa6300a0608d1080b858e5fdbe713cdc1c8db9fb17777d8a13e63df0"
+checksum = "7b12c8b680195a62a8364d16b8447b01b6c2c8f9aaf68bee653be34d4245e238"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1123,6 +1123,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dioxus",
+ "dioxus-heroicons",
+ "dioxus-stores",
+ "shared",
+ "tokio",
+]
+
+[[package]]
 name = "const-serialize"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1203,7 +1215,7 @@ checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 [[package]]
 name = "constify"
 version = "0.0.1"
-source = "git+https://github.com/DGriffin91/egui_software_backend.git#4b53871032f53da143463c7945b4cc8eab681336"
+source = "git+https://github.com/DGriffin91/egui_software_backend.git#365e27fae1d4079c97cb75cb3109a35c0c55fb7c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1674,7 +1686,7 @@ dependencies = [
  "dioxus-cli-config",
  "dioxus-config-macro",
  "dioxus-config-macros",
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "dioxus-core-macro",
  "dioxus-desktop",
  "dioxus-devtools",
@@ -1685,11 +1697,11 @@ dependencies = [
  "dioxus-html",
  "dioxus-logger",
  "dioxus-router",
- "dioxus-signals 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
- "dioxus-stores 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-signals",
+ "dioxus-stores",
  "dioxus-web",
  "manganis",
- "subsecond 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "subsecond",
  "warnings",
 ]
 
@@ -1738,42 +1750,21 @@ source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-request
 [[package]]
 name = "dioxus-core"
 version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b389b0e3cc01c7da292ad9b884b088835fdd1671d45fbd2f737506152b22eef0"
-dependencies = [
- "anyhow",
- "const_format",
- "dioxus-core-types 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "futures-channel",
- "futures-util",
- "generational-box 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "longest-increasing-subsequence",
- "rustc-hash 2.1.1",
- "rustversion",
- "slab",
- "slotmap",
- "subsecond 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "tracing",
-]
-
-[[package]]
-name = "dioxus-core"
-version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
  "anyhow",
  "const_format",
- "dioxus-core-types 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core-types",
  "futures-channel",
  "futures-util",
- "generational-box 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "generational-box",
  "longest-increasing-subsequence",
  "rustc-hash 2.1.1",
  "rustversion",
  "serde",
  "slab",
  "slotmap",
- "subsecond 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "subsecond",
  "tracing",
 ]
 
@@ -1792,12 +1783,6 @@ dependencies = [
 [[package]]
 name = "dioxus-core-types"
 version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfc4b8cdc440a55c17355542fc2089d97949bba674255d84cac77805e1db8c9f"
-
-[[package]]
-name = "dioxus-core-types"
-version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 
 [[package]]
@@ -1812,18 +1797,18 @@ dependencies = [
  "core-foundation 0.10.1",
  "dioxus-asset-resolver",
  "dioxus-cli-config",
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "dioxus-devtools",
  "dioxus-document",
  "dioxus-history",
  "dioxus-hooks",
  "dioxus-html",
  "dioxus-interpreter-js",
- "dioxus-signals 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-signals",
  "dunce",
  "futures-channel",
  "futures-util",
- "generational-box 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "generational-box",
  "global-hotkey",
  "infer",
  "jni",
@@ -1860,12 +1845,12 @@ version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
  "dioxus-cli-config",
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "dioxus-devtools-types",
- "dioxus-signals 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-signals",
  "serde",
  "serde_json",
- "subsecond 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "subsecond",
  "thiserror 2.0.18",
  "tracing",
  "tungstenite",
@@ -1876,9 +1861,9 @@ name = "dioxus-devtools-types"
 version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "serde",
- "subsecond-types 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "subsecond-types",
 ]
 
 [[package]]
@@ -1886,13 +1871,13 @@ name = "dioxus-document"
 version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "dioxus-core-macro",
- "dioxus-core-types 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core-types",
  "dioxus-html",
  "futures-channel",
  "futures-util",
- "generational-box 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "generational-box",
  "lazy-js-bundle 0.7.3",
  "serde",
  "serde_json",
@@ -1918,12 +1903,12 @@ dependencies = [
  "derive_more 2.1.1",
  "dioxus-asset-resolver",
  "dioxus-cli-config",
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "dioxus-fullstack-core",
  "dioxus-fullstack-macro",
  "dioxus-hooks",
  "dioxus-html",
- "dioxus-signals 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-signals",
  "form_urlencoded",
  "futures",
  "futures-channel",
@@ -1964,14 +1949,14 @@ dependencies = [
  "axum-core",
  "base64 0.22.1",
  "ciborium",
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "dioxus-document",
  "dioxus-history",
  "dioxus-hooks",
- "dioxus-signals 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-signals",
  "futures-channel",
  "futures-util",
- "generational-box 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "generational-box",
  "http",
  "inventory",
  "parking_lot",
@@ -2009,7 +1994,7 @@ name = "dioxus-history"
 version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "tracing",
 ]
 
@@ -2018,11 +2003,11 @@ name = "dioxus-hooks"
 version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
- "dioxus-signals 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
+ "dioxus-signals",
  "futures-channel",
  "futures-util",
- "generational-box 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "generational-box",
  "rustversion",
  "slab",
  "tracing",
@@ -2035,16 +2020,16 @@ source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-request
 dependencies = [
  "async-trait",
  "bytes",
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "dioxus-core-macro",
- "dioxus-core-types 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core-types",
  "dioxus-hooks",
  "dioxus-html-internal-macro",
  "enumset",
  "euclid",
  "futures-channel",
  "futures-util",
- "generational-box 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "generational-box",
  "keyboard-types",
  "lazy-js-bundle 0.7.3",
  "rustversion",
@@ -2070,8 +2055,8 @@ name = "dioxus-interpreter-js"
 version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
- "dioxus-core-types 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
+ "dioxus-core-types",
  "dioxus-html",
  "js-sys",
  "lazy-js-bundle 0.7.3",
@@ -2114,13 +2099,13 @@ version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
  "dioxus-cli-config",
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "dioxus-core-macro",
  "dioxus-history",
  "dioxus-hooks",
  "dioxus-html",
  "dioxus-router-macro",
- "dioxus-signals 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-signals",
  "percent-encoding",
  "rustversion",
  "tracing",
@@ -2168,28 +2153,12 @@ dependencies = [
 [[package]]
 name = "dioxus-signals"
 version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f48020bc23bc9766e7cce986c0fd6de9af0b8cbfd432652ec6b1094439c1ec6"
-dependencies = [
- "dioxus-core 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "futures-channel",
- "futures-util",
- "generational-box 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "parking_lot",
- "rustc-hash 2.1.1",
- "tracing",
- "warnings",
-]
-
-[[package]]
-name = "dioxus-signals"
-version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
  "futures-channel",
  "futures-util",
- "generational-box 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "generational-box",
  "parking_lot",
  "rustc-hash 2.1.1",
  "tracing",
@@ -2199,36 +2168,12 @@ dependencies = [
 [[package]]
 name = "dioxus-stores"
 version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77aaa9ac56d781bb506cf3c0d23bea96b768064b89fe50d3b4d4659cc6bd8058"
-dependencies = [
- "dioxus-core 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "dioxus-signals 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "dioxus-stores-macro 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "generational-box 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "dioxus-stores"
-version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
- "dioxus-signals 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
- "dioxus-stores-macro 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
- "generational-box 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
-]
-
-[[package]]
-name = "dioxus-stores-macro"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b1a728622e7b63db45774f75e71504335dd4e6115b235bbcff272980499493a"
-dependencies = [
- "convert_case 0.8.0",
- "proc-macro2",
- "quote",
- "syn 2.0.114",
+ "dioxus-core",
+ "dioxus-signals",
+ "dioxus-stores-macro",
+ "generational-box",
 ]
 
 [[package]]
@@ -2248,17 +2193,17 @@ version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
  "dioxus-cli-config",
- "dioxus-core 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
- "dioxus-core-types 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core",
+ "dioxus-core-types",
  "dioxus-devtools",
  "dioxus-document",
  "dioxus-history",
  "dioxus-html",
  "dioxus-interpreter-js",
- "dioxus-signals 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-signals",
  "futures-channel",
  "futures-util",
- "generational-box 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "generational-box",
  "gloo-timers",
  "js-sys",
  "lazy-js-bundle 0.7.3",
@@ -2522,7 +2467,7 @@ dependencies = [
 [[package]]
 name = "egui_software_backend"
 version = "0.0.1"
-source = "git+https://github.com/DGriffin91/egui_software_backend.git#4b53871032f53da143463c7945b4cc8eab681336"
+source = "git+https://github.com/DGriffin91/egui_software_backend.git#365e27fae1d4079c97cb75cb3109a35c0c55fb7c"
 dependencies = [
  "bytemuck",
  "constify",
@@ -2856,9 +2801,9 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flate2"
-version = "1.1.8"
+version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b375d6465b98090a5f25b1c7703f3859783755aa9a80433b36e0379a3ec2f369"
+checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -3137,16 +3082,6 @@ dependencies = [
  "libc",
  "system-deps 6.2.2",
  "x11",
-]
-
-[[package]]
-name = "generational-box"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc4ed190b9de8e734d47a70be59b1e7588b9e8e0d0036e332f4c014e8aed1bc5"
-dependencies = [
- "parking_lot",
- "tracing",
 ]
 
 [[package]]
@@ -3720,14 +3655,13 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.19"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "727805d60e7938b76b826a6ef209eb70eaa1812794f9424d4a4e2d740662df5f"
+checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-channel",
- "futures-core",
  "futures-util",
  "http",
  "http-body",
@@ -4150,6 +4084,7 @@ dependencies = [
  "tiny-skia",
  "tokio",
  "tray-icon",
+ "url",
  "walkdir",
  "wallpaper",
  "webbrowser",
@@ -4430,7 +4365,7 @@ dependencies = [
  "const-serialize 0.7.2",
  "const-serialize 0.8.0-alpha.0",
  "dioxus-cli-config",
- "dioxus-core-types 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "dioxus-core-types",
  "serde",
  "winnow 0.7.14",
 ]
@@ -4880,9 +4815,9 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
 name = "notify-rust"
-version = "4.11.7"
+version = "4.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6442248665a5aa2514e794af3b39661a8e73033b1cc5e59899e1276117ee4400"
+checksum = "21af20a1b50be5ac5861f74af1a863da53a11c38684d9818d82f1c42f7fdc6c2"
 dependencies = [
  "futures-lite",
  "log",
@@ -5477,7 +5412,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pack-maker-dioxus"
+name = "pack-editor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5486,7 +5421,7 @@ dependencies = [
  "dioxus-desktop",
  "dioxus-heroicons",
  "dioxus-primitives",
- "dioxus-stores 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-stores",
  "dirs 6.0.0",
  "futures",
  "http-body-util",
@@ -6466,9 +6401,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.12.2"
+version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "843bc0191f75f3e22651ae5f1e72939ab2f72a4bc30fa80a066bd66edefc24d4"
+checksum = "e10754a14b9137dd7b1e3e5b0493cc9171fdd105e0ab477f51b72e7f3ac0e276"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -6478,9 +6413,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.13"
+version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5276caf25ac86c8d810222b3dbb938e512c55c6831a10f3e6ed1c93b84041f1c"
+checksum = "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -6489,9 +6424,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.8.8"
+version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
+checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
 
 [[package]]
 name = "renderdoc-sys"
@@ -7031,7 +6966,9 @@ dependencies = [
  "anyhow",
  "ciborium",
  "dioxus",
- "dioxus-stores 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-heroicons",
+ "dioxus-primitives",
+ "dioxus-stores",
  "dirs 6.0.0",
  "glob",
  "itertools 0.14.0",
@@ -7396,25 +7333,6 @@ dependencies = [
 [[package]]
 name = "subsecond"
 version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8438668e545834d795d04c4335aafc332ce046106521a29f0a5c6501de34187c"
-dependencies = [
- "js-sys",
- "libc",
- "libloading 0.8.9",
- "memfd",
- "memmap2",
- "serde",
- "subsecond-types 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "thiserror 2.0.18",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "subsecond"
-version = "0.7.3"
 source = "git+https://github.com/restoredelight/dioxus?branch=stop-close-requested#e08e277bdfc25281f83403f41b905c03673c3c97"
 dependencies = [
  "js-sys",
@@ -7423,20 +7341,11 @@ dependencies = [
  "memfd",
  "memmap2",
  "serde",
- "subsecond-types 0.7.3 (git+https://github.com/restoredelight/dioxus?branch=stop-close-requested)",
+ "subsecond-types",
  "thiserror 2.0.18",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "subsecond-types"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e72f747606fc19fe81d6c59e491af93ed7dcbcb6aad9d1d18b05129914ec298"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -10001,9 +9910,9 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.18"
+version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1966f8ac2c1f76987d69a74d0e0f929241c10e78136434e3be70ff7f58f64214"
+checksum = "3ff05f8caa9038894637571ae6b9e29466c1f4f829d26c9b28f869a29cbe3445"
 
 [[package]]
 name = "zune-core"

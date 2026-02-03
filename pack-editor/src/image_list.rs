@@ -8,8 +8,7 @@ use dioxus_heroicons::{solid::Shape, Icon};
 use dioxus_primitives::{checkbox::CheckboxState, ContentSide};
 use shared::encode::FileInfo;
 use tempfile::NamedTempFile;
-
-use crate::{
+use shared::{
     components::{
         button::{Button, ButtonVariant},
         checkbox::Checkbox,
@@ -23,6 +22,9 @@ use crate::{
         select::{Select, SelectItemIndicator, SelectList, SelectOption, SelectTrigger},
         separator::Separator,
     },
+};
+
+use crate::{
     encode::{explore_folder, process_files, ProcessFilesError, ProcessFilesErrorType},
     pack::{FileData, MediaPack},
     use_port,
@@ -756,7 +758,7 @@ fn Header(pack: ReadSignal<MediaPack>, files: Store<Vec<Media>>) -> Element {
     let mut context = use_context::<ImageListContext>();
 
     rsx! {
-        div { class: "flex justify-between items-center py-2 px-5 bg-gray-50 border-b border-gray-300",
+        div { class: "@container flex justify-between items-center py-2 px-5 bg-gray-50 border-b border-gray-300",
             AddFilesButton { pack, files }
             p { class: "flex", "{files.len()} items" }
             Input {
@@ -782,7 +784,10 @@ fn AddFilesButton(pack: ReadSignal<MediaPack>, files: Store<Vec<Media>>) -> Elem
             DropdownMenuTrigger {
                 div { class: "flex items-center gap-2",
                     Icon { icon: Shape::Plus, size: 20, class: "my-auto" }
-                    "Add files"
+                    span {
+                        class: "@max-xl:hidden",
+                        "Add files"
+                    }
                 }
             }
             DropdownMenuContent {
@@ -986,7 +991,13 @@ pub fn SelectMediaType() -> Element {
                 }
             },
             SelectTrigger {
-                div { "File type: {context.media_type()}" }
+                div {
+                    span {
+                        class: "@max-xl:hidden",
+                        "File type: "
+                    }
+                    "{context.media_type()}"
+                }
             }
             SelectList { {options} }
         }

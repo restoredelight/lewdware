@@ -200,6 +200,9 @@
   }
 }
 @layer utilities {
+  .\@container {
+    container-type: inline-size;
+  }
   .visible {
     visibility: visible;
   }
@@ -770,6 +773,21 @@
   .md\:block {
     @media (width >= 48rem) {
       display: block;
+    }
+  }
+  .\@max-xl\:hidden {
+    @container (width < 36rem) {
+      display: none;
+    }
+  }
+  .\@max-lg\:hidden {
+    @container (width < 32rem) {
+      display: none;
+    }
+  }
+  .\@max-sm\:hidden {
+    @container (width < 24rem) {
+      display: none;
     }
   }
 }
