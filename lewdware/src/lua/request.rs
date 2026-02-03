@@ -271,6 +271,11 @@ impl WindowRequestSender {
             .await
             .flatten()
     }
+
+    pub async fn set_visible(&self, visible: bool) -> Result<()> {
+        self.send(|tx| WindowAction::SetVisible { tx, visible })
+            .await
+    }
 }
 
 #[derive(Clone)]
@@ -451,6 +456,10 @@ pub enum WindowAction {
         tx: oneshot::Sender<Result<()>>,
         options: Vec<ChoiceWindowOption>,
     },
+    SetVisible {
+        tx: oneshot::Sender<()>,
+        visible: bool,
+    }
 }
 
 #[derive(Debug)]

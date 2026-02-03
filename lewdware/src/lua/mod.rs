@@ -47,6 +47,7 @@ pub struct WindowProps {
     pub x: u32,
     pub y: u32,
     pub monitor: Monitor,
+    pub visible: bool,
 }
 
 impl WindowProps {

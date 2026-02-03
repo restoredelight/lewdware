@@ -1,7 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use mlua::{
-    ExternalResult, FromLua, IntoLua, LuaSerdeExt, SerializeOptions, UserData, UserDataFields, UserDataMethods
+    ExternalResult, FromLua, IntoLua, LuaSerdeExt, SerializeOptions, UserData, UserDataFields,
+    UserDataMethods,
 };
 use serde::{Deserialize, Serialize};
 use winit::window::WindowId;
@@ -318,18 +319,21 @@ impl UserData for ChoiceWindow {
             Ok(())
         });
 
-        methods.add_async_method("set_options", async |_, this, options: Option<Vec<ChoiceWindowOption>>| {
-            let options = options.unwrap_or_default();
+        methods.add_async_method(
+            "set_options",
+            async |_, this, options: Option<Vec<ChoiceWindowOption>>| {
+                let options = options.unwrap_or_default();
 
-            this.inner_window
-                .request_sender
-                .set_options(options.clone())
-                .await?;
+                this.inner_window
+                    .request_sender
+                    .set_options(options.clone())
+                    .await?;
 
-            this.state.borrow_mut().options = options;
+                this.state.borrow_mut().options = options;
 
-            Ok(())
-        });
+                Ok(())
+            },
+        );
     }
 }
 
@@ -397,6 +401,8 @@ pub struct InnerWindow {
 struct InnerWindowState {
     x: u32,
     y: u32,
+    visible: bool,
+    closed: bool,
     close_callbacks: Vec<mlua::Function>,
     move_callback: Option<(u64, mlua::Function)>,
     current_move_id: u64,
@@ -438,7 +444,7 @@ impl InnerWindow {
             height: props.height,
             outer_width: props.outer_width,
             outer_height: props.outer_height,
-            state: RefCell::new(InnerWindowState::new(props.x, props.y)),
+            state: RefCell::new(InnerWindowState::new(props.x, props.y, props.visible)),
             monitor: props.monitor,
             request_sender: request_tx,
         }
@@ -449,10 +455,16 @@ impl InnerWindow {
         fields.add_field_method_get("width", |_, this| Ok(this.inner_window().width));
         fields.add_field_method_get("height", |_, this| Ok(this.inner_window().height));
         fields.add_field_method_get("outer_width", |_, this| Ok(this.inner_window().outer_width));
-        fields.add_field_method_get("outer_height", |_, this| Ok(this.inner_window().outer_height));
+        fields.add_field_method_get("outer_height", |_, this| {
+            Ok(this.inner_window().outer_height)
+        });
         fields.add_field_method_get("x", |_, this| Ok(this.inner_window().state.borrow().x));
         fields.add_field_method_get("y", |_, this| Ok(this.inner_window().state.borrow().y));
         fields.add_field_method_get("monitor", |_, this| Ok(this.inner_window().monitor.clone()));
+        fields.add_field_method_get("closed", |_, this| Ok(this.inner_window().state.borrow().closed));
+        fields.add_field_method_get("visible", |_, this| {
+            Ok(this.inner_window().state.borrow().visible)
+        });
     }
 
     fn add_methods<T: HasInnerWindow + 'static, M: UserDataMethods<T>>(methods: &mut M) {
@@ -504,9 +516,23 @@ impl InnerWindow {
                 Ok(())
             },
         );
+
+        methods.add_async_method("set_visible", async |_, this, visible: bool| {
+            this.inner_window()
+                .request_sender
+                .set_visible(visible)
+                .await
+                .into_lua_err()?;
+
+            this.inner_window().state.borrow_mut().visible = visible;
+
+            Ok(())
+        });
     }
 
     pub fn on_close(&self) {
+        self.state.borrow_mut().closed = true;
+
         let callbacks = {
             let state = self.state.borrow();
             state.close_callbacks.clone()
@@ -542,10 +568,12 @@ impl InnerWindow {
 }
 
 impl InnerWindowState {
-    fn new(x: u32, y: u32) -> Self {
+    fn new(x: u32, y: u32, visible: bool) -> Self {
         Self {
             x,
             y,
+            visible,
+            closed: false,
             close_callbacks: Vec::new(),
             move_callback: None,
             current_move_id: 0,

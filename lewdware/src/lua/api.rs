@@ -565,6 +565,8 @@ pub struct SpawnWindowOpts {
     pub monitor: Option<Monitor>,
     #[serde(default = "return_true")]
     pub decorations: bool,
+    #[serde(default = "return_true")]
+    pub visible: bool,
 }
 
 impl Default for SpawnWindowOpts {
@@ -577,6 +579,7 @@ impl Default for SpawnWindowOpts {
             anchor: Default::default(),
             monitor: Default::default(),
             decorations: true,
+            visible: true,
         }
     }
 }
