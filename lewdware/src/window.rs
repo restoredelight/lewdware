@@ -348,15 +348,15 @@ impl<'a> VideoWindow<'a> {
         match self.get_next_frame() {
             NextFrame::Ready(frame) => {
                 self.inner_window.render_frame(&frame)?;
-            },
+            }
             NextFrame::Finish => {
                 return Ok(true);
-            },
-            NextFrame::None => {},
+            }
+            NextFrame::None => {}
             NextFrame::Disconnected => {
                 eprintln!("Video decoder dropped channel; closing window");
                 return Ok(true);
-            },
+            }
         }
 
         self.inner_window.present()?;
@@ -771,7 +771,7 @@ impl<'a> InnerWindow<'a> {
                     bail!("wgpu error; stopping rendering");
                 }
                 pixels.render()?
-            },
+            }
             Surface::Softbuffer { _context, surface } => surface
                 .buffer_mut()
                 .map_err(|err| anyhow!("{err}"))?
@@ -1012,6 +1012,10 @@ impl<'a> InnerWindow<'a> {
         } else {
             false
         }
+    }
+
+    pub fn set_visible(&self, visible: bool) {
+        self.window.set_visible(visible);
     }
 }
 

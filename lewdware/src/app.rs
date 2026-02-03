@@ -78,11 +78,22 @@ impl<'a> ChaosApp<'a> {
         let (lua_event_tx, lua_request_rx) = start_lua_thread(
             event_loop_proxy,
             r#"
-                x = {}
-                while true do
-                    table.insert(x, 1)
-                end
                 local windows = {}
+
+                local video = lewdware.media.random_video()
+                local video_window = lewdware.spawn_video_popup(video, {
+                    width = { percent = 100 },
+                    height = { percent = 100 },
+                    decorations = false,
+                    visible = false,
+                })
+                lewdware.every(10000, function()
+                    video_window:set_visible(true)
+                    lewdware.after(500, function()
+                        video_window:set_visible(false)
+                    end)
+                end)
+
                 local interval
                 interval = lewdware.every(1000, function()
                     print("Spawning window", #windows + 1)
@@ -96,9 +107,6 @@ impl<'a> ChaosApp<'a> {
                     end
 
                     table.insert(windows, window)
-                    interval:set_duration(0)
-                    interval:set_duration(interval.duration * 0.99)
-                    print(interval.duration)
                 end)
             "#
             .to_string(),
@@ -210,11 +218,14 @@ impl<'a> ChaosApp<'a> {
             .create_window(attrs)
             .map_err(|err| LewdwareError::WindowError(err.into()))?;
 
-        // If we don't do this, then on Windows, the window flashes on screen with decorations and the
-        // wrong size/position, before going to the correct place. I think this is because winit
-        // creates the window, then sends requests to change the size, position and borders.
+        // If we call `with_visible(true)` in `WindowAttributes`, then on Windows, the window
+        // flashes on screen with decorations and the wrong size/position, before going to the
+        // correct place. I think this is because winit creates the window, then sends requests to
+        // change the size, position and borders.
         // See https://github.com/rust-windowing/winit/issues/4116
-        window.set_visible(true);
+        if opts.visible {
+            window.set_visible(true);
+        }
 
         let props = WindowProps {
             window_id: window.id(),
@@ -225,6 +236,7 @@ impl<'a> ChaosApp<'a> {
             outer_width,
             outer_height,
             monitor: monitor_info,
+            visible: opts.visible,
         };
 
         let inner_window = InnerWindow::new(
@@ -277,22 +289,19 @@ impl<'a> ChaosApp<'a> {
     ) -> Result<WindowProps> {
         let (window, props) = self.create_window(
             opts,
-            WindowSizeBehaviour::ResizeWithMedia { width: data.width, height: data.height },
+            WindowSizeBehaviour::ResizeWithMedia {
+                width: data.width,
+                height: data.height,
+            },
             true,
             event_loop,
         )?;
 
         window.request_redraw();
 
-        let video_window = VideoWindow::new(
-            window,
-            data,
-            props.width,
-            props.height,
-            audio,
-            loop_video
-        )
-        .map_err(|err| LewdwareError::WindowError(err))?;
+        let video_window =
+            VideoWindow::new(window, data, props.width, props.height, audio, loop_video)
+                .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
             .insert(props.window_id.clone(), WindowType::Video(video_window));
@@ -319,14 +328,8 @@ impl<'a> ChaosApp<'a> {
             event_loop,
         )?;
 
-        let prompt_window = PromptWindow::new(
-            window,
-            title,
-            text,
-            placeholder,
-            initial_value,
-        )
-        .map_err(|err| LewdwareError::WindowError(err))?;
+        let prompt_window = PromptWindow::new(window, title, text, placeholder, initial_value)
+            .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
             .insert(props.window_id.clone(), WindowType::Prompt(prompt_window));
@@ -352,13 +355,8 @@ impl<'a> ChaosApp<'a> {
             event_loop,
         )?;
 
-        let prompt_window = ChoiceWindow::new(
-            window,
-            title,
-            text,
-            options,
-        )
-        .map_err(|err| LewdwareError::WindowError(err))?;
+        let prompt_window = ChoiceWindow::new(window, title, text, options)
+            .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
             .insert(props.window_id.clone(), WindowType::Choice(prompt_window));
@@ -454,13 +452,7 @@ impl<'a> ChaosApp<'a> {
                 window_opts,
                 tx,
             } => tx
-                .send(self.spawn_video(
-                    data,
-                    loop_video,
-                    audio,
-                    window_opts,
-                    event_loop,
-                ))
+                .send(self.spawn_video(data, loop_video, audio, window_opts, event_loop))
                 .is_ok(),
             LuaRequest::SpawnPrompt {
                 title,
@@ -587,6 +579,9 @@ impl<'a> ChaosApp<'a> {
                                 _ => Err(LewdwareError::Internal("Invalid window type")),
                             })
                             .is_ok(),
+                        WindowAction::SetVisible { tx, visible } => tx
+                            .send(entry.get().inner_window().set_visible(visible))
+                            .is_ok(),
                     }
                 } else {
                     true
@@ -676,9 +671,12 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             match event {
                 WindowEvent::CloseRequested => {
                     entry.remove();
-                },
+                }
                 WindowEvent::CursorMoved { position, .. } => {
-                    entry.get_mut().inner_window_mut().handle_cursor_moved(position);
+                    entry
+                        .get_mut()
+                        .inner_window_mut()
+                        .handle_cursor_moved(position);
                 }
                 WindowEvent::CursorLeft { .. } => {
                     entry.get_mut().inner_window_mut().handle_cursor_left();
