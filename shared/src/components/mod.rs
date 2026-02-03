@@ -1,15 +1,14 @@
-// AUTOGENERTED Components module
 pub mod button;
 pub mod dialog;
 pub mod input;
 pub mod label;
 pub mod context_menu;
+pub mod menu;
 pub mod select;
 pub mod dropdown_menu;
 pub mod separator;
 pub mod checkbox;
 pub mod progress;
 pub mod popover;
-pub mod select_multiple;
 pub mod toast;
 pub mod textarea;

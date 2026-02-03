@@ -1,9 +1,10 @@
 use std::{fs, path::PathBuf, time::Duration};
 
 use anyhow::{Result, anyhow};
+use dioxus_stores::Store;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, Store)]
 pub struct AppConfig {
     pub pack_path: Option<PathBuf>,
     pub tags: Option<Vec<String>>,
@@ -87,6 +88,16 @@ pub fn save_config(config: &AppConfig) -> Result<()> {
 
     fs::write(&temp_config_path, serde_json::to_string(config)?)?;
     fs::rename(temp_config_path, path)?;
+
+    Ok(())
+}
+
+pub async fn save_config_async(config: &AppConfig) -> Result<()> {
+    let path = config_path()?;
+    let temp_config_path = path.with_added_extension("tmp");
+
+    tokio::fs::write(&temp_config_path, serde_json::to_string(config)?).await?;
+    tokio::fs::rename(temp_config_path, path).await?;
 
     Ok(())
 }

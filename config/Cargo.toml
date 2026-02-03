@@ -1,0 +1,21 @@
+[package]
+name = "config"
+version = "0.1.0"
+authors = ["restoredelight <restoreddelight@proton.me>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.100"
+dioxus = { version = "0.7.3", features = [] }
+dioxus-heroicons = "0.4.1"
+dioxus-stores = "0.7.3"
+shared = { version = "0.1.0", path = "../shared" }
+tokio = "1.49.0"
+
+[features]
+default = ["desktop"]
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+mobile = ["dioxus/mobile"]

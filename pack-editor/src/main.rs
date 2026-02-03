@@ -1,27 +1,35 @@
-mod components;
 mod encode;
 mod image_list;
 mod media_server;
 mod menu;
+mod options;
 mod pack;
 mod thumbnail;
 mod utils;
-mod options;
 
 use dioxus::prelude::*;
 use dioxus_desktop::{tao, use_muda_event_handler, use_window, use_wry_event_handler, Config};
 use dioxus_heroicons::{solid::Shape, Icon};
-use dioxus_primitives::toast::{use_toast, ToastOptions};
-use shared::pack_config::Metadata;
+use dioxus_primitives::toast::use_toast;
+use shared::{
+    components::menu::{Menu, MenuItem},
+    pack_config::Metadata,
+};
+
+use shared::components::{
+    button::Button,
+    dialog::{DialogContent, DialogRoot, DialogTitle},
+    input::Input,
+    label::Label,
+    toast::ToastProvider,
+};
 
 use crate::{
-    components::{
-        button::Button,
-        dialog::{DialogContent, DialogRoot, DialogTitle},
-        input::Input,
-        label::Label,
-        toast::ToastProvider,
-    }, image_list::ImageList, media_server::start_media_server, menu::{MenuAction, create_menu}, options::Options, pack::MediaPack
+    image_list::ImageList,
+    media_server::start_media_server,
+    menu::{create_menu, MenuAction},
+    options::Options,
+    pack::MediaPack,
 };
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -463,27 +471,27 @@ pub fn Editor(pack: ReadSignal<MediaPack>, metadata: Store<Metadata>) -> Element
     use_context_provider(|| Pack(pack));
     use_context_provider(|| MetadataStore(metadata));
 
-    let selected_menu_item = use_signal(|| MenuItem::MediaView);
+    let selected_menu_item = use_signal(|| EditorMenuItem::MediaView);
 
     rsx! {
         div {
             class: "h-screen flex overflow-hidden",
-            Menu { selected: selected_menu_item }
+            Menu { selected: selected_menu_item, initially_open: false }
             match selected_menu_item() {
-                MenuItem::Options => rsx!{ Options {} },
-                MenuItem::MediaView => rsx! {ImageList {}}
+                EditorMenuItem::Options => rsx!{ Options {} },
+                EditorMenuItem::MediaView => rsx! {ImageList {}}
             }
         }
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum MenuItem {
+enum EditorMenuItem {
     Options,
     MediaView,
 }
 
-impl std::fmt::Display for MenuItem {
+impl std::fmt::Display for EditorMenuItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Options => write!(f, "Options"),
@@ -492,7 +500,9 @@ impl std::fmt::Display for MenuItem {
     }
 }
 
-impl MenuItem {
+impl MenuItem for EditorMenuItem {
+    const VARIANTS: &'static [Self] = &[Self::Options, Self::MediaView];
+
     fn icon(&self) -> Shape {
         match self {
             Self::Options => Shape::Squares2x2,
@@ -501,55 +511,55 @@ impl MenuItem {
     }
 }
 
-#[component]
-fn Menu(selected: Signal<MenuItem>) -> Element {
-    let mut open = use_signal(|| false);
-
-    let options = 
-        [MenuItem::Options, MenuItem::MediaView].iter().map(|&option| {
-            rsx! {
-                button {
-                    class: "flex items-center p-1 rounded-sm w-full nowrap transition-[width]",
-                    class: if selected() == option { "bg-sky-400 text-white" } else { "hover:bg-sky-200" },
-                    onclick: move |_| {
-                        selected.set(option);
-                    },
-                    Icon {
-                        class: "mx-1",
-                        icon: option.icon(),
-                        size: 20,
-                    }
-                    "{option}"
-                }
-            }
-        });
-
-    rsx! {
-        div {
-            class: "p-[5px] transition-[width] border-r border-gray-300 bg-gray-50 overflow-hidden",
-            width: if open() {"16rem"} else {"40px"},
-            div {
-                class: "w-full h-[35px] border-b border-gray-300",
-                button {
-                    class: "float-right rounded-sm hover:text-gray-800 hover:bg-gray-200 size-[30px] flex justify-center items-center",
-                    onclick: move |_| {
-                        open.toggle();
-                    },
-                    Icon {
-                        icon: Shape::Bars3,
-                        size: 25,
-                    }
-                }
-            }
-            if open() {
-                div {
-                    class: "flex flex-col gap-1 pt-2",
-                    {options}
-                }
-            }
-        }
-    }
-}
+// #[component]
+// fn Menu(selected: Signal<EditorMenuItem>) -> Element {
+//     let mut open = use_signal(|| false);
+//
+//     let options =
+//         [EditorMenuItem::Options, EditorMenuItem::MediaView].iter().map(|&option| {
+//             rsx! {
+//                 button {
+//                     class: "flex items-center p-1 rounded-sm w-full nowrap transition-[width]",
+//                     class: if selected() == option { "bg-sky-400 text-white" } else { "hover:bg-sky-200" },
+//                     onclick: move |_| {
+//                         selected.set(option);
+//                     },
+//                     Icon {
+//                         class: "mx-1",
+//                         icon: option.icon(),
+//                         size: 20,
+//                     }
+//                     "{option}"
+//                 }
+//             }
+//         });
+//
+//     rsx! {
+//         div {
+//             class: "p-[5px] transition-[width] border-r border-gray-300 bg-gray-50 overflow-hidden",
+//             width: if open() {"16rem"} else {"40px"},
+//             div {
+//                 class: "w-full h-[35px] border-b border-gray-300",
+//                 button {
+//                     class: "float-right rounded-sm hover:text-gray-800 hover:bg-gray-200 size-[30px] flex justify-center items-center",
+//                     onclick: move |_| {
+//                         open.toggle();
+//                     },
+//                     Icon {
+//                         icon: Shape::Bars3,
+//                         size: 25,
+//                     }
+//                 }
+//             }
+//             if open() {
+//                 div {
+//                     class: "flex flex-col gap-1 pt-2",
+//                     {options}
+//                 }
+//             }
+//         }
+//     }
+// }
 
 #[component]
 fn OpenPack(pack: Store<Option<MediaPack>>) -> Element {

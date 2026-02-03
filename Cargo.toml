@@ -1,13 +1,25 @@
 [workspace]
 members = [
+    "config",
     "lewdware",
     "lewdware-mode",
-    "pack-maker-dioxus",
-    "shared",
+    "pack-editor",
+    "shared", "config",
 ]
 resolver = "3"
 
-[patch.crates-io]
-pixels = { git = "https://github.com/restoredelight/pixels", branch = "with-instance" }
-dioxus = { git = "https://github.com/restoredelight/dioxus", branch = "stop-close-requested" }
-dioxus-desktop = { git = "https://github.com/restoredelight/dioxus", branch = "stop-close-requested" }
+[patch.crates-io.dioxus]
+git = "https://github.com/restoredelight/dioxus"
+branch = "stop-close-requested"
+
+[patch.crates-io.dioxus-desktop]
+git = "https://github.com/restoredelight/dioxus"
+branch = "stop-close-requested"
+
+[patch.crates-io.dioxus-stores]
+git = "https://github.com/restoredelight/dioxus"
+branch = "stop-close-requested"
+
+[patch.crates-io.pixels]
+git = "https://github.com/restoredelight/pixels"
+branch = "with-instance"
