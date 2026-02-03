@@ -7,7 +7,7 @@ pub enum LewdwareError {
     MonitorError(MonitorError),
     WindowError(anyhow::Error),
     WallpaperError(anyhow::Error),
-    OpenLinkError(io::Error),
+    OpenLinkError(anyhow::Error),
     NotifyError(notify_rust::error::Error),
     MainThreadConnection,
     WindowNotFound,
