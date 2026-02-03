@@ -38,6 +38,7 @@ r2d2 = "0.8.10"
 r2d2_sqlite = "0.32.0"
 rayon = "1.11.0"
 tiny-skia = "0.11.4"
+url = "2.5.8"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 tray-icon = "0.21.2"

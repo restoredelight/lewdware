@@ -4,6 +4,7 @@ use std::collections::hash_map::Entry;
 use anyhow::anyhow;
 use rand::random_range;
 use shared::user_config::AppConfig;
+use url::{Host, Url};
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::MouseButton;
 use winit::event_loop::{ControlFlow, EventLoopProxy};
@@ -400,7 +401,21 @@ impl<'a> ChaosApp<'a> {
     }
 
     fn open_link(&self, url: String) -> Result<()> {
-        webbrowser::open(&url).map_err(|err| LewdwareError::OpenLinkError(err))
+        let url = Url::parse(&url).map_err(|err| LewdwareError::OpenLinkError(err.into()))?;
+
+        if url.scheme() != "https" {
+            return Err(LewdwareError::OpenLinkError(anyhow!("Only https:// links are permitted")));
+        }
+
+        if !matches!(url.host(), Some(Host::Domain(_))) {
+            return Err(LewdwareError::OpenLinkError(anyhow!("IP addresses are not allowed")));
+        }
+
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(LewdwareError::OpenLinkError(anyhow!("URLs cannot contain a username or password")));
+        }
+
+        webbrowser::open(url.as_str()).map_err(|err| LewdwareError::OpenLinkError(err.into()))
     }
 
     fn show_notification(&self, notification: Notification) -> Result<()> {
