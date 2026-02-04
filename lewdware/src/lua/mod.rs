@@ -220,12 +220,12 @@ impl LuaRuntime {
                 }
             }
             Event::MoveFinish { id, move_id } => {
-                if let Some(window) = self.windows.borrow().get(&id) {
+                if let Some(window) = self.windows.borrow().get(&id).cloned() {
                     window.inner_window().on_move_finished(move_id);
                 }
             }
             Event::VideoFinish { id } => {
-                if let Some(window) = self.windows.borrow().get(&id) {
+                if let Some(window) = self.windows.borrow().get(&id).cloned() {
                     match window {
                         Window::Video(video_window) => {
                             video_window.on_finish();
@@ -235,12 +235,12 @@ impl LuaRuntime {
                 }
             }
             Event::AudioFinish { id } => {
-                if let Some(audio) = self.audio_handles.borrow().get(&id) {
+                if let Some(audio) = self.audio_handles.borrow().get(&id).cloned() {
                     audio.on_finish();
                 }
             }
             Event::PromptSubmit { id, text } => {
-                if let Some(window) = self.windows.borrow().get(&id) {
+                if let Some(window) = self.windows.borrow().get(&id).cloned() {
                     match window {
                         Window::Prompt(prompt) => {
                             prompt.on_submit(text);
@@ -253,7 +253,7 @@ impl LuaRuntime {
                 id,
                 option_id: choice_id,
             } => {
-                if let Some(window) = self.windows.borrow().get(&id) {
+                if let Some(window) = self.windows.borrow().get(&id).cloned() {
                     match window {
                         Window::Choice(prompt) => {
                             prompt.on_select(choice_id);

@@ -10,9 +10,11 @@ use tokio::{
 };
 
 use crate::{
+    audio::AudioPlayer,
     error::LewdwareError,
     lua::{Media, MediaType},
-    media::{FileOrPath, VideoData, pack::MediaPack, types::ImageData},
+    media::{FileOrPath, pack::MediaPack, types::ImageData},
+    video::VideoDecoder,
 };
 
 /// Manages all the media (images, audio, videos). Trivially clonable.
@@ -107,17 +109,29 @@ impl MediaManager {
         .await?
     }
 
-    pub async fn get_video_data(&self, id: u64) -> Result<VideoData> {
+    pub async fn get_video_data(
+        &self,
+        id: u64,
+        width: u32,
+        height: u32,
+        loop_video: bool,
+        play_audio: bool,
+    ) -> Result<VideoDecoder> {
         self.send(|tx| MediaRequest::GetVideoData {
             id,
             response_tx: tx,
+            width,
+            height,
+            loop_video,
+            play_audio,
         })
         .await?
     }
 
-    pub async fn get_audio_data(&self, id: u64) -> Result<FileOrPath> {
+    pub async fn get_audio_data(&self, id: u64, loop_audio: bool) -> Result<AudioPlayer> {
         self.send(|tx| MediaRequest::GetAudioData {
             id,
+            loop_audio,
             response_tx: tx,
         })
         .await?
@@ -186,12 +200,29 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest) {
         MediaRequest::GetImageFile { id, response_tx } => {
             response_tx.send(pack.get_image_file(id).await).is_ok()
         }
-        MediaRequest::GetVideoData { id, response_tx } => {
-            response_tx.send(pack.get_video_data(id).await).is_ok()
-        }
-        MediaRequest::GetAudioData { id, response_tx } => {
-            response_tx.send(pack.get_audio_data(id).await).is_ok()
-        }
+        MediaRequest::GetVideoData {
+            id,
+            width,
+            height,
+            play_audio,
+            loop_video,
+            response_tx,
+        } => response_tx
+            .send(pack.get_video_data(id).await.and_then(|data| {
+                VideoDecoder::new(data.file, width, height, play_audio, loop_video)
+                    .map_err(|err| MediaError::VideoError(err))
+            }))
+            .is_ok(),
+        MediaRequest::GetAudioData {
+            id,
+            loop_audio,
+            response_tx,
+        } => response_tx
+            .send(pack.get_audio_data(id).await.and_then(|file| {
+                AudioPlayer::new(file.path().to_path_buf(), loop_audio)
+                    .map_err(|err| MediaError::AudioError(err))
+            }))
+            .is_ok(),
     } {
         eprintln!("Failed to send response");
     }
@@ -261,7 +292,6 @@ impl MediaTypes {
     }
 }
 
-#[derive(Debug)]
 enum MediaRequest {
     GetMedia {
         types: MediaTypes,
@@ -290,11 +320,16 @@ enum MediaRequest {
     },
     GetVideoData {
         id: u64,
-        response_tx: oneshot::Sender<Result<VideoData>>,
+        width: u32,
+        height: u32,
+        play_audio: bool,
+        loop_video: bool,
+        response_tx: oneshot::Sender<Result<VideoDecoder>>,
     },
     GetAudioData {
         id: u64,
-        response_tx: oneshot::Sender<Result<FileOrPath>>,
+        loop_audio: bool,
+        response_tx: oneshot::Sender<Result<AudioPlayer>>,
     },
 }
 
@@ -304,6 +339,8 @@ pub enum MediaError {
     InvalidTag(String),
     IoError(io::Error),
     ImageError(image::error::ImageError),
+    VideoError(anyhow::Error),
+    AudioError(anyhow::Error),
     Internal(&'static str),
 }
 
@@ -319,6 +356,8 @@ impl Display for MediaError {
             }
             MediaError::IoError(err) => err.fmt(f),
             MediaError::ImageError(err) => err.fmt(f),
+            MediaError::VideoError(err) => write!(f, "Error decoding video: {err}"),
+            MediaError::AudioError(err) => write!(f, "Error decoding audio: {err}"),
             MediaError::Internal(err) => write!(f, "Internal error: {err}"),
         }
     }

@@ -2,20 +2,20 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
+        atomic::AtomicU64,
         mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result};
 use ffmpeg::{codec, format, software};
 use ffmpeg_next::{self as ffmpeg, Packet, frame::Video};
-use tiny_skia::{Pixmap, PixmapMut};
-use winit::window::Window;
+use rusqlite::fallible_iterator::FallibleIterator;
 
 use crate::{
-    audio::{AudioMessage, spawn_audio_thread},
+    audio::{AudioMessage, AudioPlayer},
     media::FileOrPath,
 };
 
@@ -31,10 +31,16 @@ use crate::{
 /// * `audio_message_tx`: Sends messages to the audio thread.
 pub struct VideoDecoder {
     receiver: Receiver<Option<VideoFrame>>,
-    audio_message_tx: Option<SyncSender<AudioMessage>>,
     _video: FileOrPath,
+    audio_player: Option<AudioPlayer>,
+    tolerance: Duration,
+    last_frame_time: Instant,
+    frame_duration: Duration,
+    position: Duration,
     width: u32,
     height: u32,
+    paused: bool,
+    on_finish: Option<Box<dyn FnMut() + Send>>
 }
 
 pub struct VideoFrame {
@@ -54,12 +60,14 @@ impl VideoDecoder {
 
         let receiver = spawn_video_stream(path.to_path_buf(), width, height, loop_video);
 
-        let audio_message_tx = if play_audio {
-            let (tx, rx) = sync_channel(10);
-
-            spawn_audio_thread(path.to_path_buf(), rx, loop_video);
-
-            Some(tx)
+        let audio_player = if play_audio {
+            match AudioPlayer::new(path.to_path_buf(), loop_video) {
+                Ok(audio_player) => Some(audio_player),
+                Err(err) => {
+                    eprintln!("{err}");
+                    None
+                }
+            }
         } else {
             None
         };
@@ -68,134 +76,82 @@ impl VideoDecoder {
             receiver,
             width,
             height,
+            audio_player,
+            last_frame_time: Instant::now(),
+            frame_duration: Duration::ZERO,
+            position: Duration::ZERO,
+            tolerance: Duration::from_millis(200),
             _video: video,
-            audio_message_tx,
+            paused: true,
+            on_finish: None,
         })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn on_finish(&mut self, f: impl FnMut() + Send + 'static) {
+        self.on_finish = Some(Box::new(f));
     }
 
     /// Get the next frame, if it's ready.
     pub fn next_frame(&mut self) -> NextFrame {
-        match self.receiver.try_recv() {
-            Ok(message) => match message {
-                Some(frame) => NextFrame::Ready(frame),
-                // The decoding thread sends `None` when the video ends, so we should tell the
-                // audio thread to loop.
-                None => {
-                    if let Some(tx) = self.audio_message_tx.as_ref() {
-                        let _ = tx.try_send(AudioMessage::Loop);
+        if self.paused || !self.needs_next_frame() {
+            return NextFrame::None;
+        }
+
+        let frame = loop {
+            match self.receiver.try_recv() {
+                Ok(Some(frame)) => {
+                    if self.audio_player.as_ref().is_none_or(|audio_player| {
+                        self.position + frame.duration + self.tolerance >= audio_player.position()
+                    }) {
+                        break frame;
+                    } else {
+                        self.position += frame.duration;
                     }
-
-                    NextFrame::Finish
                 }
-            },
-            Err(TryRecvError::Empty) => NextFrame::None,
-            Err(TryRecvError::Disconnected) => return NextFrame::Disconnected,
-        }
-    }
-
-    /// Utility method to copy a video frame into a buffer.
-    pub fn copy_frame(&self, frame: &Video, buf: &mut [u8]) -> Result<()> {
-        let width = self.width as usize;
-        let height = self.height as usize;
-        let line_size = frame.stride(0); // Bytes per row
-        let data = frame.data(0);
-
-        // Copy row-by-row into a contiguous Vec
-        for (row_idx, chunk) in buf.chunks_exact_mut(width * 4).enumerate() {
-            if row_idx >= height {
-                break;
+                Ok(None) => {
+                    if let Some(on_finish) = &mut self.on_finish {
+                        on_finish();
+                    }
+                }
+                Err(TryRecvError::Empty) => return NextFrame::None,
+                Err(TryRecvError::Disconnected) => return NextFrame::Finish,
             }
+        };
 
-            let src_start = row_idx * line_size;
-            let src_end = src_start + width * 4;
+        self.position += frame.duration;
+        self.last_frame_time = Instant::now();
+        self.frame_duration = frame.duration;
 
-            if src_end <= data.len() {
-                chunk.copy_from_slice(&data[src_start..src_end]);
-            } else {
-                bail!("Invalid stride");
-            }
-        }
-
-        Ok(())
+        NextFrame::Ready(frame)
     }
 
-    pub fn create_pixmap(&self, frame: &Video) -> Result<Pixmap> {
-        let mut pixmap = Pixmap::new(self.width, self.height).unwrap();
-
-        self.copy_frame(frame, pixmap.data_mut())?;
-
-        Ok(pixmap)
-    }
-
-    pub fn copy_frame_pixmap(
-        &self,
-        frame: &Video,
-        pixmap: &mut PixmapMut<'_>,
-        y_offset: u32,
-        border_size: u32,
-    ) -> Result<()> {
-        let width = self.width as usize;
-        let height = self.height as usize;
-        let line_size = frame.stride(0); // Bytes per row
-        let data = frame.data(0);
-
-        let buf_width = pixmap.width();
-        let buf = pixmap.data_mut();
-
-        // Copy row-by-row into a contiguous Vec
-        for row_idx in 0..height {
-            let src_start = row_idx * line_size;
-            let src_end = src_start + width * 4;
-
-            let buf_start = (buf_width * (y_offset + row_idx as u32) + border_size) as usize;
-
-            if src_end <= data.len() {
-                buf[buf_start..buf_start + width].copy_from_slice(&data[src_start..src_end]);
-            } else {
-                bail!("Invalid stride");
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn pause(&self) {
-        if let Some(tx) = self.audio_message_tx.as_ref() {
-            let _ = tx.try_send(AudioMessage::Pause);
+    fn needs_next_frame(&self) -> bool {
+        match &self.audio_player {
+            Some(audio_player) => audio_player.position() > self.position,
+            None => self.last_frame_time.elapsed() >= self.frame_duration,
         }
     }
 
-    pub fn play(&self) {
-        if let Some(tx) = self.audio_message_tx.as_ref() {
-            let _ = tx.try_send(AudioMessage::Play);
+    pub fn pause(&mut self) {
+        if let Some(audio_player) = &self.audio_player {
+            audio_player.pause();
         }
+        self.paused = true;
     }
 
-    pub fn copy_frame_softbuffer(
-        &self,
-        frame: &Video,
-        buf: &mut softbuffer::Buffer<'_, Arc<Window>, Arc<Window>>,
-    ) -> Result<()> {
-        let width = self.width as usize;
-        let line_size = frame.stride(0); // Bytes per row
-        let data = frame.data(0);
-
-        // Copy row-by-row into a contiguous Vec
-        for (row_idx, chunk) in buf.chunks_exact_mut(width).enumerate() {
-            let src_start = row_idx * line_size;
-            let src_end = src_start + width * 4;
-
-            for (i, pixel) in data[src_start..src_end].chunks_exact(4).enumerate() {
-                let r = pixel[0] as u32;
-                let g = pixel[1] as u32;
-                let b = pixel[2] as u32;
-                let a = pixel[3] as u32;
-
-                chunk[i] = (a << 24) | (r << 16) | (g << 8) | b;
-            }
+    pub fn play(&mut self) {
+        if let Some(audio_player) = &self.audio_player {
+            audio_player.play();
         }
-
-        Ok(())
+        self.paused = false;
     }
 }
 
@@ -203,7 +159,6 @@ pub enum NextFrame {
     Ready(VideoFrame),
     Finish,
     None,
-    Disconnected,
 }
 
 /// Spawn a thread to decode frames from a video.
@@ -253,11 +208,12 @@ fn decode_video(
         software::scaling::flag::Flags::BILINEAR,
     )?;
 
+    let mut decoded = Video::empty();
+
     loop {
         for (stream, packet) in ictx.packets() {
             if stream.index() == stream_index {
                 decoder.send_packet(&packet)?;
-                let mut decoded = Video::empty();
                 if decoder.receive_frame(&mut decoded).is_ok() {
                     let mut frame = Video::empty();
                     scaler.run(&decoded, &mut frame)?;
@@ -267,6 +223,18 @@ fn decode_video(
                     tx.send(Some(VideoFrame { frame, duration }))?;
                 }
             }
+        }
+
+        decoder.flush();
+
+        while decoder.receive_frame(&mut decoded).is_ok() {
+            println!("??");
+            let mut frame = Video::empty();
+            scaler.run(&decoded, &mut frame)?;
+
+            // let duration = frame_duration(&frame.packet(), &video_stream);
+
+            // tx.send(Some(VideoFrame { frame, duration }))?;
         }
 
         tx.send(None)?;
@@ -298,35 +266,4 @@ fn frame_duration(packet: &Packet, stream: &ffmpeg::Stream) -> Duration {
         };
         Duration::from_secs_f64(1.0 / fps)
     }
-}
-
-pub fn copy_frame_pixmap(
-    frame: &Video,
-    pixmap: &mut PixmapMut<'_>,
-    y_offset: u32,
-    border_size: u32,
-) -> Result<()> {
-    let width = frame.width() as usize;
-    let height = frame.height() as usize;
-    let line_size = frame.stride(0); // Bytes per row
-    let data = frame.data(0);
-
-    let buf_width = pixmap.width();
-    let buf = pixmap.data_mut();
-
-    // Copy row-by-row into a contiguous Vec
-    for row_idx in 0..height {
-        let src_start = row_idx * line_size;
-        let src_end = src_start + width * 4;
-
-        let buf_start = ((buf_width * (y_offset + row_idx as u32) + border_size) * 4) as usize;
-
-        if src_end <= data.len() {
-            buf[buf_start..buf_start + width * 4].copy_from_slice(&data[src_start..src_end]);
-        } else {
-            bail!("Invalid stride");
-        }
-    }
-
-    Ok(())
 }

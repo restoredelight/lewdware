@@ -38,6 +38,8 @@ app = {}
 ---@field y number The y coordinate (in pixels) of the top left coordinate of the window.
 ---@field type "image" | "video" | "prompt" | "choice"
 ---@field monitor Monitor The monitor that the window is located on.
+---@field closed boolean Whether the window is currently closed.
+---@field visible boolean Whether the window is currently visible.
 Window = {}
 
 ---Close the window
@@ -73,6 +75,17 @@ function Window:on_close(cb) end
 ---Calling this function will cancel any existing move operations.
 ---This means you can call this function with no arguments to stop moving a window.
 function Window:move(opts, cb) end
+
+---Set the visibility of a window.
+---@param visible boolean
+---
+---Making a window invisible instead of closing it can be a good idea if you want to use it again,
+---or you want to avoid the fade-out animation that occurs when a window is closed normally.
+---
+---Making a window invisible will stop the user from interacting with it, but e.g. video windows
+---will continue to play, so you should consider calling [VideoWindow:pause()]. Always remember
+---to close windows that you are no longer using.
+function Window:set_visible(visible) end
 
 ---@class ImageWindow : Window
 ---@field type "'image'"
@@ -225,7 +238,10 @@ function app.media.random_audio(opts) end
 ---@return ImageWindow
 function app.spawn_image_popup(image, opts) end
 
----@class SpawnImageOpts
+---@class SpawnWindowOpts
+---Options that can be passed into any of [spawn_image()], [spawn_video()], [spawn_prompt()] and
+---[spawn_choice()].
+---
 ---@field x? Coord The horizontal coordinate to spawn the window at. By default, the coordinates
 ---  of the window will be chosen at random, ensuring that the window remains entirely visible.
 ---@field y? Coord The vertical coordinate to spawn the window at.
@@ -238,6 +254,13 @@ function app.spawn_image_popup(image, opts) end
 ---  of the monitor height if the image is too big.
 ---@field monitor? Monitor The monitor to spawn the window on. By default, chooses a monitor at
 ---  random.
+---@field decorations? boolean Whether to spawn the window with a header and border (defaults to
+---  true). Note that windows without a header will not be able to be closed manually by the user.
+---@field visible? boolean Whether to make the window start off visible (defaults to true). See
+---  `Window:set_visible()`.
+
+---@class SpawnImageOpts : SpawnWindowOpts
+---Options for `spawn_image()`.
 
 ---Spawn a popup containing a video.
 ---@param video Video
@@ -245,22 +268,12 @@ function app.spawn_image_popup(image, opts) end
 ---@return VideoWindow
 function app.spawn_video_popup(video, opts) end
 
----@class SpawnVideoOpts
+---@class SpawnVideoOpts : SpawnWindowOpts
+---Options for `spawn_video()`.
+---
 ---@field loop? boolean Whether to loop the video (defaults to true). If false, the window will be
 ---  closed when the video ends.
 ---@field audio? boolean Whether to play the video's audio (if there is any). Defaults to true.
----@field x? Coord The horizontal coordinate to spawn the window at. By default, the coordinates
----  of the window will be chosen at random, ensuring that the window remains entirely visible.
----@field y? Coord The vertical coordinate to spawn the window at.
----@field anchor? Anchor Where to place the window relative to the specified coordinates. By
----  default, "top-left" is used, meaning that the top-left corner of the window is placed at the
----  specified coordinates.
----@field width? Coord The width of the window. Defaults to the width of the image, or a third of
----  the monitor width if the image is too big.
----@field height? Coord The height of the window. Defaults to the height of the image, or a third
----  of the monitor height if the image is too big.
----@field monitor? Monitor The monitor to spawn the window on. By default, chooses a monitor at
----  random.
 
 ---Play an audio file.
 ---@param audio Audio
@@ -301,41 +314,27 @@ function app.set_wallpaper(image, opts) end
 ---@return PromptWindow
 function app.spawn_prompt(opts) end
 
----@class SpawnPromptOpts
+---@class SpawnPromptOpts : SpawnWindowOpts
+---Options that can be passed into `spawn_prompt()`.
+---
 ---@field title? string
 ---@field text? string Text that is displayed at the top of the prompt.
 ---@field placeholder? string A placeholder value that is shown in the text input before the user
 ---  has typed anything.
 ---@field initial_value? string An initial value for the text input.
----@field x? Coord The horizontal coordinate to spawn the window at. By default, the coordinates
----  of the window will be chosen at random, ensuring that the window remains entirely visible.
----@field y? Coord The vertical coordinate to spawn the window at.
----@field anchor? Anchor Where to place the window relative to the specified coordinates. By
----  default, "top-left" is used, meaning that the top-left corner of the window is placed at the
----  specified coordinates.
----@field width? Coord The width of the window. Defaults to the width of the image, or a third of
----  the monitor width if the image is too big.
----@field height? Coord The height of the window. Defaults to the height of the image, or a third
----  of the monitor height if the image is too big.
----@field monitor? Monitor The monitor to spawn the window on. By default, chooses a monitor at
----  random.
 
 ---Spawn a choice popup. This will present the user with one or more options to click.
 ---@param opts? SpawnChoiceOpts
 ---@return ChoiceWindow
 function app.spawn_choice(opts) end
 
----@class SpawnChoiceOpts
+---@class SpawnChoiceOpts : SpawnWindowOpts
+---Options that can be passed into `spawn_choice()`.
+---
 ---@field title? string
 ---@field text? string
 ---@field options { id: string, label: string }[] The list of options, which determine the buttons
 ---  to present to the user. Only the label is displayed, the id is used in `on_select()`.
----@field x? Coord
----@field y? Coord
----@field width? Coord
----@field height? Coord
----@field anchor? Anchor
----@field monitor? Monitor
 
 ---Open a URL in the browser
 ---@param url string

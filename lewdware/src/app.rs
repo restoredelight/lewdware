@@ -16,7 +16,7 @@ use winit::{
     window::WindowId,
 };
 
-use crate::audio::AudioPlayer;
+use crate::audio::{AudioHandle, AudioPlayer};
 use crate::egui::WgpuState;
 use crate::error::{LewdwareError, MonitorError, Result};
 use crate::header::HEADER_HEIGHT;
@@ -27,6 +27,7 @@ use crate::lua::{
 use crate::media::{FileOrPath, ImageData, VideoData};
 use crate::monitor::Monitors;
 use crate::utils::calculate_media_popup_size;
+use crate::video::VideoDecoder;
 use crate::window::{
     ChoiceWindow, ImageWindow, InnerWindow, PromptWindow, VideoWindow, WindowType,
 };
@@ -57,6 +58,7 @@ enum WindowSizeBehaviour {
 pub enum UserEvent {
     Exit,
     LuaRequest,
+    AudioFinish,
 }
 
 impl<'a> ChaosApp<'a> {
@@ -74,31 +76,26 @@ impl<'a> ChaosApp<'a> {
         };
 
         println!("{:?}", config);
+                // local video = lewdware.media.random_video()
+                // local video_window = lewdware.spawn_video_popup(video, {
+                //     width = { percent = 100 },
+                //     height = { percent = 100 },
+                //     decorations = false,
+                //     visible = false,
+                // })
+                // lewdware.every(10000, function()
+                //     video_window:set_visible(true)
+                //     lewdware.after(500, function()
+                //         video_window:set_visible(false)
+                //     end)
+                // end)
+
 
         let (lua_event_tx, lua_request_rx) = start_lua_thread(
             event_loop_proxy,
             r#"
                 local windows = {}
-
-                local video = lewdware.media.random_video()
-                local video_window = lewdware.spawn_video_popup(video, {
-                    width = { percent = 100 },
-                    height = { percent = 100 },
-                    decorations = false,
-                    visible = false,
-                })
-                lewdware.every(10000, function()
-                    video_window:set_visible(true)
-                    lewdware.after(500, function()
-                        video_window:set_visible(false)
-                    end)
-                end)
-
-                local interval
-                interval = lewdware.every(1000, function()
-                    print("Spawning window", #windows + 1)
-
-                    local media = lewdware.media.random({ type = { "image", "video" } })
+                    local media = lewdware.media.random({ type = { "video" } })
                     local window
                     if media.type == "image" then
                         window = lewdware.spawn_image_popup(media)
@@ -106,8 +103,7 @@ impl<'a> ChaosApp<'a> {
                         window = lewdware.spawn_video_popup(media)
                     end
 
-                    table.insert(windows, window)
-                end)
+                local interval
             "#
             .to_string(),
             config.clone(),
@@ -281,7 +277,7 @@ impl<'a> ChaosApp<'a> {
 
     fn spawn_video(
         &mut self,
-        data: VideoData,
+        video_player: VideoDecoder,
         loop_video: bool,
         audio: bool,
         opts: SpawnWindowOpts,
@@ -290,8 +286,8 @@ impl<'a> ChaosApp<'a> {
         let (window, props) = self.create_window(
             opts,
             WindowSizeBehaviour::ResizeWithMedia {
-                width: data.width,
-                height: data.height,
+                width: video_player.width() as u32,
+                height: video_player.height() as u32,
             },
             true,
             event_loop,
@@ -300,7 +296,7 @@ impl<'a> ChaosApp<'a> {
         window.request_redraw();
 
         let video_window =
-            VideoWindow::new(window, data, props.width, props.height, audio, loop_video)
+            VideoWindow::new(window, video_player, props.width, props.height, audio, loop_video)
                 .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
@@ -364,12 +360,13 @@ impl<'a> ChaosApp<'a> {
         Ok(props)
     }
 
-    fn spawn_audio(&mut self, data: FileOrPath, loop_audio: bool) -> u64 {
-        let audio_player = AudioPlayer::new(data, loop_audio);
-
+    fn spawn_audio(&mut self, audio_player: AudioPlayer, loop_audio: bool) -> u64 {
         let id = self.current_audio_id;
         self.current_audio_id += 1;
 
+        // TODO: Handle messages etc.
+
+        audio_player.play();
         self.audio_players.insert(id, audio_player);
 
         id
@@ -446,7 +443,7 @@ impl<'a> ChaosApp<'a> {
                 .send(self.spawn_image(data, window_opts, event_loop))
                 .is_ok(),
             LuaRequest::SpawnVideo {
-                data,
+                video_player: data,
                 loop_video,
                 audio,
                 window_opts,
@@ -481,7 +478,7 @@ impl<'a> ChaosApp<'a> {
                 .send(self.spawn_choice(title, text, options, window_opts, event_loop))
                 .is_ok(),
             LuaRequest::SpawnAudio {
-                data,
+                audio_player: data,
                 loop_audio,
                 tx,
             } => tx.send(self.spawn_audio(data, loop_audio)).is_ok(),
@@ -712,7 +709,8 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             }
             UserEvent::LuaRequest => {
                 self.process_lua_requests(event_loop);
-            }
+            },
+            UserEvent::AudioFinish => {}
         }
     }
 
