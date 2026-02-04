@@ -4,15 +4,11 @@ use tokio::sync::{mpsc::Sender, oneshot};
 use winit::{event_loop::EventLoopProxy, window::WindowId};
 
 use crate::{
-    app::UserEvent,
-    error::{LewdwareError, Result},
-    lua::{
+    app::UserEvent, audio::AudioPlayer, error::{LewdwareError, Result}, lua::{
         WindowProps,
         api::{Notification, SpawnWindowOpts, WallpaperMode},
         window::{ChoiceWindowOption, MoveOpts},
-    },
-    media::{FileOrPath, ImageData, VideoData},
-    monitor::Monitor,
+    }, media::{FileOrPath, ImageData}, monitor::Monitor, video::VideoDecoder
 };
 
 #[derive(Clone)]
@@ -89,13 +85,13 @@ impl RequestSender {
 
     pub async fn spawn_video(
         &self,
-        data: VideoData,
+        video_player: VideoDecoder,
         loop_video: bool,
         audio: bool,
         window_opts: SpawnWindowOpts,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnVideo {
-            data,
+            video_player,
             loop_video,
             audio,
             window_opts,
@@ -145,10 +141,10 @@ impl RequestSender {
             .await?
     }
 
-    pub async fn spawn_audio(&self, data: FileOrPath, loop_audio: bool) -> Result<u64> {
+    pub async fn spawn_audio(&self, audio_player: AudioPlayer, loop_audio: bool) -> Result<u64> {
         Ok(self
             .send(|tx| LuaRequest::SpawnAudio {
-                data,
+                audio_player,
                 loop_audio,
                 tx,
             })
@@ -311,7 +307,6 @@ impl AudioRequestSender {
     }
 }
 
-#[derive(Debug)]
 pub enum LuaRequest {
     SpawnImage {
         data: ImageData,
@@ -319,7 +314,7 @@ pub enum LuaRequest {
         tx: oneshot::Sender<Result<WindowProps>>,
     },
     SpawnVideo {
-        data: VideoData,
+        video_player: VideoDecoder,
         loop_video: bool,
         audio: bool,
         window_opts: SpawnWindowOpts,
@@ -341,7 +336,7 @@ pub enum LuaRequest {
         tx: oneshot::Sender<Result<WindowProps>>,
     },
     SpawnAudio {
-        data: FileOrPath,
+        audio_player: AudioPlayer,
         loop_audio: bool,
         tx: oneshot::Sender<u64>,
     },

@@ -286,7 +286,7 @@ fn calculate_size(
 /// A video popup, rendered using pixels.
 pub struct VideoWindow<'a> {
     inner_window: InnerWindow<'a>,
-    decoder: VideoDecoder,
+    video_player: VideoDecoder,
     last_frame_time: Instant,
     duration: Option<Duration>,
     loop_video: bool,
@@ -313,27 +313,18 @@ impl<'a> VideoWindow<'a> {
     /// * `play_audio`: Whether to play the video's audio.
     pub fn new(
         inner_window: InnerWindow<'a>,
-        video: VideoData,
+        mut video_player: VideoDecoder,
         width: u32,
         height: u32,
         play_audio: bool,
         loop_video: bool,
     ) -> anyhow::Result<Self> {
         let scale_factor = inner_window.window.scale_factor();
-
-        let video_size = LogicalSize::new(width, height).to_physical(scale_factor);
-
-        let decoder = VideoDecoder::new(
-            video.file,
-            video_size.width,
-            video_size.height,
-            play_audio,
-            loop_video,
-        )?;
+        video_player.play();
 
         Ok(Self {
             inner_window,
-            decoder,
+            video_player,
             last_frame_time: Instant::now(),
             duration: None,
             loop_video,
@@ -345,7 +336,7 @@ impl<'a> VideoWindow<'a> {
         self.inner_window.start_render()?;
         self.inner_window.render_decorations()?;
 
-        match self.get_next_frame() {
+        match self.video_player.next_frame() {
             NextFrame::Ready(frame) => {
                 self.inner_window.render_frame(&frame)?;
             }
@@ -353,10 +344,6 @@ impl<'a> VideoWindow<'a> {
                 return Ok(true);
             }
             NextFrame::None => {}
-            NextFrame::Disconnected => {
-                eprintln!("Video decoder dropped channel; closing window");
-                return Ok(true);
-            }
         }
 
         self.inner_window.present()?;
@@ -364,43 +351,8 @@ impl<'a> VideoWindow<'a> {
         Ok(false)
     }
 
-    fn get_next_frame(&mut self) -> NextFrame {
-        if self.paused
-            || self
-                .duration
-                .is_some_and(|duration| self.last_frame_time.elapsed() < duration)
-        {
-            return NextFrame::None;
-        }
-
-        let frame = loop {
-            match self.decoder.next_frame() {
-                NextFrame::Ready(frame) => break frame,
-                NextFrame::Finish => {
-                    let _ = self
-                        .inner_window
-                        .lua_event_tx
-                        .send(lua::Event::VideoFinish {
-                            id: self.inner_window.window.id(),
-                        });
-
-                    if !self.loop_video {
-                        return NextFrame::Finish;
-                    }
-                }
-                NextFrame::None => return NextFrame::None,
-                NextFrame::Disconnected => return NextFrame::Disconnected,
-            }
-        };
-
-        self.duration = Some(frame.duration);
-        self.last_frame_time = Instant::now();
-
-        NextFrame::Ready(frame)
-    }
-
     pub fn pause(&mut self) {
-        self.decoder.pause();
+        self.video_player.pause();
         self.paused = true;
 
         if let Some(duration) = self.duration.take() {
@@ -412,7 +364,7 @@ impl<'a> VideoWindow<'a> {
         self.paused = false;
         self.last_frame_time = Instant::now();
 
-        self.decoder.play();
+        self.video_player.play();
     }
 }
 

@@ -151,7 +151,7 @@ impl MediaPack {
         let mut where_queries = Vec::new();
 
         if let Some(name) = &opts.name {
-            where_queries.push("WHERE name = ?".to_string());
+            where_queries.push("file_name = ?".to_string());
             params.push(Box::new(name.clone()));
         }
 
