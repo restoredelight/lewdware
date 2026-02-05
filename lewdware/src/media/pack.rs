@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    fmt::Display,
     fs,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},

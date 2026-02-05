@@ -47,6 +47,7 @@ pub struct ChaosApp<'a> {
     lua_request_rx: tokio::sync::mpsc::Receiver<lua::LuaRequest>,
     lua_event_tx: tokio::sync::mpsc::UnboundedSender<lua::Event>,
     monitors: Monitors,
+    event_loop_proxy: EventLoopProxy<UserEvent>,
 }
 
 enum WindowSizeBehaviour {
@@ -58,7 +59,7 @@ enum WindowSizeBehaviour {
 pub enum UserEvent {
     Exit,
     LuaRequest,
-    AudioFinish,
+    AudioFinish { id: u64 },
 }
 
 impl<'a> ChaosApp<'a> {
@@ -92,18 +93,16 @@ impl<'a> ChaosApp<'a> {
 
 
         let (lua_event_tx, lua_request_rx) = start_lua_thread(
-            event_loop_proxy,
+            event_loop_proxy.clone(),
             r#"
-                local windows = {}
-                    local media = lewdware.media.random({ type = { "video" } })
-                    local window
+                lewdware.every(1000, function()
+                    local media = lewdware.media.random({ type = {"image", "video"} });
                     if media.type == "image" then
-                        window = lewdware.spawn_image_popup(media)
+                        lewdware.spawn_image_popup(media)
                     elseif media.type == "video" then
-                        window = lewdware.spawn_video_popup(media)
+                        lewdware.spawn_video_popup(media)
                     end
-
-                local interval
+                end)
             "#
             .to_string(),
             config.clone(),
@@ -120,6 +119,7 @@ impl<'a> ChaosApp<'a> {
             lua_request_rx,
             lua_event_tx,
             monitors: Monitors::new(),
+            event_loop_proxy,
         })
     }
 
@@ -367,6 +367,7 @@ impl<'a> ChaosApp<'a> {
         // TODO: Handle messages etc.
 
         audio_player.play();
+        audio_player.monitor(id, self.event_loop_proxy.clone());
         self.audio_players.insert(id, audio_player);
 
         id
@@ -710,7 +711,13 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             UserEvent::LuaRequest => {
                 self.process_lua_requests(event_loop);
             },
-            UserEvent::AudioFinish => {}
+            UserEvent::AudioFinish { id } => {
+                if self.audio_players.remove(&id).is_some() {
+                    if let Err(err) = self.lua_event_tx.send(lua::Event::AudioFinish { id }) {
+                        eprintln!("{err}");
+                    }
+                }
+            }
         }
     }
 

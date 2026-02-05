@@ -61,10 +61,187 @@ impl<'a> WindowType<'a> {
     }
 }
 
+struct VideoRenderer {
+    texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+    pipeline: wgpu::RenderPipeline,
+    width: u32,
+    height: u32,
+    ui_texture: wgpu::Texture,
+    ui_bind_group: wgpu::BindGroup,
+}
+
+impl VideoRenderer {
+    fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        ui_width: u32,
+        ui_height: u32,
+    ) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Video Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let ui_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("UI Texture"),
+            size: wgpu::Extent3d {
+                width: ui_width,
+                height: ui_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb, // Pixels usually uses this
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let ui_texture_view = ui_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Video Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Video Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+
+        let ui_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("UI Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&ui_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Video Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Video Shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("shader.wgsl"))),
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Video Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Self {
+            texture,
+            bind_group,
+            pipeline,
+            width,
+            height,
+            ui_texture,
+            ui_bind_group,
+        }
+    }
+
+    fn update_ui(&self, queue: &wgpu::Queue, data: &[u8], width: u32, height: u32) {
+        upload_texture_data(queue, &self.ui_texture, data, width, height, width * 4);
+    }
+}
+
 enum Surface<'a> {
     Pixels {
         pixels: Pixels<'a>,
         error: Arc<AtomicBool>,
+        video_renderer: Option<VideoRenderer>,
     },
     Softbuffer {
         _context: softbuffer::Context<Arc<WinitWindow>>,
@@ -312,7 +489,7 @@ impl<'a> VideoWindow<'a> {
     /// * `close_button`: Whether to display a close button on the window.
     /// * `play_audio`: Whether to play the video's audio.
     pub fn new(
-        inner_window: InnerWindow<'a>,
+        mut inner_window: InnerWindow<'a>,
         mut video_player: VideoDecoder,
         width: u32,
         height: u32,
@@ -320,7 +497,14 @@ impl<'a> VideoWindow<'a> {
         loop_video: bool,
     ) -> anyhow::Result<Self> {
         let scale_factor = inner_window.window.scale_factor();
+
+        // Initialize the GPU texture for the video
+        inner_window
+            .init_video_texture(video_player.native_width(), video_player.native_height())?;
+
         video_player.play();
+
+        inner_window.mark_ui_dirty();
 
         Ok(Self {
             inner_window,
@@ -334,17 +518,21 @@ impl<'a> VideoWindow<'a> {
 
     pub fn update(&mut self) -> Result<bool> {
         self.inner_window.start_render()?;
-        self.inner_window.render_decorations()?;
 
         match self.video_player.next_frame() {
             NextFrame::Ready(frame) => {
+                // println!("Rendering frame");
                 self.inner_window.render_frame(&frame)?;
             }
             NextFrame::Finish => {
                 return Ok(true);
             }
-            NextFrame::None => {}
+            NextFrame::None => {
+                // println!("No frame received");
+            }
         }
+
+        self.inner_window.render_decorations()?;
 
         self.inner_window.present()?;
 
@@ -625,6 +813,9 @@ pub struct InnerWindow<'a> {
     position: LogicalPosition<u32>,
     lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     current_move: Option<Move>,
+    // Store the wgpu context to allow creating resources later
+    wgpu_ctx: Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)>,
+    ui_dirty: bool,
 }
 
 struct Move {
@@ -648,27 +839,39 @@ impl<'a> InnerWindow<'a> {
         let window = Arc::new(window);
         let (inner_size, outer_size) = calculate_size(&window, decorations);
 
-        let surface = if gpu && !wgpu_state.error.load(Ordering::Acquire) {
+        let (surface, wgpu_ctx) = if gpu && !wgpu_state.error.load(Ordering::Acquire) {
             let surface_texture =
                 SurfaceTexture::new(outer_size.width, outer_size.height, window.clone());
 
-            Surface::Pixels {
-                pixels: PixelsBuilder::new(outer_size.width, outer_size.height, surface_texture)
+            (
+                Surface::Pixels {
+                    pixels: PixelsBuilder::new(
+                        outer_size.width,
+                        outer_size.height,
+                        surface_texture,
+                    )
+                    .blend_state(wgpu::BlendState::ALPHA_BLENDING) // Enable blending for UI over Video
                     .build_with_instance(
                         &wgpu_state.instance,
                         &wgpu_state.adapter,
                         &wgpu_state.device,
                         &wgpu_state.queue,
                     )?,
-                error: wgpu_state.error.clone(),
-            }
+                    error: wgpu_state.error.clone(),
+                    video_renderer: None,
+                },
+                Some((&wgpu_state.device, &wgpu_state.queue)),
+            )
         } else {
             let (context, surface) = init_softbuffer(window.clone())?;
 
-            Surface::Softbuffer {
-                _context: context,
-                surface,
-            }
+            (
+                Surface::Softbuffer {
+                    _context: context,
+                    surface,
+                },
+                None,
+            )
         };
 
         let scale_factor = window.scale_factor();
@@ -686,12 +889,41 @@ impl<'a> InnerWindow<'a> {
             position,
             lua_event_tx,
             current_move: None,
+            wgpu_ctx: wgpu_ctx.map(|(device, queue)| (device.clone(), queue.clone())),
+            ui_dirty: true,
         })
+    }
+
+    pub fn mark_ui_dirty(&mut self) {
+        self.ui_dirty = true;
+    }
+
+    pub fn init_video_texture(&mut self, width: u32, height: u32) -> Result<()> {
+        if let Surface::Pixels {
+            video_renderer,
+            pixels,
+            ..
+        } = &mut self.surface
+        {
+            if let Some((device, _queue)) = &self.wgpu_ctx {
+                *video_renderer = Some(VideoRenderer::new(
+                    device,
+                    pixels.render_texture_format(),
+                    width,
+                    height,
+                    pixels.texture().width(),
+                    pixels.texture().height(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn start_render(&mut self) -> Result<()> {
         match &mut self.surface {
-            Surface::Pixels { pixels: _, error } => {
+            Surface::Pixels {
+                pixels: _, error, ..
+            } => {
                 if error.load(Ordering::Acquire) {
                     let (context, surface) = init_softbuffer(self.window.clone())?;
 
@@ -717,18 +949,87 @@ impl<'a> InnerWindow<'a> {
     }
 
     fn present(&mut self) -> Result<()> {
+        let (x, y) = self.inner_offset();
+
         match &mut self.surface {
-            Surface::Pixels { pixels, error } => {
+            Surface::Pixels {
+                pixels,
+                error,
+                video_renderer,
+            } => {
                 if error.load(Ordering::Acquire) {
                     bail!("wgpu error; stopping rendering");
                 }
-                pixels.render()?
+
+                let width = self.inner_size.width;
+                let height = self.inner_size.height;
+
+                if let Some(video) = video_renderer {
+                    if self.ui_dirty {
+                        if let Some((_, queue)) = &self.wgpu_ctx {
+                            video.update_ui(queue, pixels.frame(), pixels.texture().width(), pixels.texture().height());
+                        }
+                        self.ui_dirty = false;
+                    }
+                }
+
+                pixels.render_with(|encoder, render_target, _context| {
+                    if let Some(video) = video_renderer {
+                        // Render the video first
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Video Render Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: render_target,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load, // Or Clear if this is the very first thing
+                                    store: wgpu::StoreOp::Store,
+                                },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+
+                        rpass.set_pipeline(&video.pipeline);
+                        rpass.set_bind_group(0, &video.bind_group, &[]);
+                        // Set viewport to the inner window area
+                        rpass.set_viewport(
+                            x as f32,
+                            y as f32,
+                            width as f32,
+                            height as f32,
+                            0.0,
+                            1.0,
+                        );
+                        rpass.draw(0..4, 0..1);
+
+                        // Draw UI on top
+                        rpass.set_bind_group(0, &video.ui_bind_group, &[]);
+                        // Reset viewport to full screen
+                        rpass.set_viewport(
+                            0.0,
+                            0.0,
+                            render_target.texture().width() as f32,
+                            render_target.texture().height() as f32,
+                            0.0,
+                            1.0,
+                        );
+                        rpass.draw(0..4, 0..1);
+                    }
+                    Ok(())
+                })?;
             }
-            Surface::Softbuffer { _context, surface } => surface
-                .buffer_mut()
-                .map_err(|err| anyhow!("{err}"))?
-                .present()
-                .map_err(|err| anyhow!("{err}"))?,
+            Surface::Softbuffer { _context, surface } => {
+                surface
+                    .buffer_mut()
+                    .map_err(|err| anyhow!("{err}"))?
+                    .present()
+                    .map_err(|err| anyhow!("{err}"))?;
+
+                self.ui_dirty = false;
+            }
         }
 
         Ok(())
@@ -781,8 +1082,28 @@ impl<'a> InnerWindow<'a> {
     }
 
     fn render_frame(&mut self, frame: &VideoFrame) -> Result<()> {
-        let (x, y) = self.inner_offset();
+        // If we have a hardware video renderer, update its texture
+        if let Surface::Pixels {
+            video_renderer: Some(video),
+            ..
+        } = &self.surface
+        {
+            if let Some((_, queue)) = &self.wgpu_ctx {
+                let data = frame.frame.data(0);
+                upload_texture_data(
+                    queue,
+                    &video.texture,
+                    data,
+                    video.width,
+                    video.height,
+                    frame.frame.stride(0) as u32,
+                );
+            }
 
+            return Ok(());
+        }
+
+        let (x, y) = self.inner_offset();
         self.surface.buffer()?.copy_from_frame(frame, x, y);
 
         Ok(())
@@ -829,8 +1150,10 @@ impl<'a> InnerWindow<'a> {
 
     fn render_decorations(&mut self) -> Result<()> {
         if self.decorations {
-            self.render_border()?;
-            self.render_header()?;
+            if self.ui_dirty {
+                self.render_border()?;
+                self.render_header()?;
+            }
         }
 
         Ok(())
@@ -942,25 +1265,39 @@ impl<'a> InnerWindow<'a> {
 
     pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         if let Some(header) = &mut self.header {
-            header.handle_cursor_moved(position);
+            if header.handle_cursor_moved(position) {
+                self.ui_dirty = true;
+                self.request_redraw();
+            }
         }
     }
 
     pub fn handle_cursor_left(&mut self) {
         if let Some(header) = &mut self.header {
-            header.handle_cursor_left();
+            if header.handle_cursor_left() {
+                self.ui_dirty = true;
+                self.request_redraw();
+            }
         }
     }
 
     pub fn handle_mouse_down(&mut self) {
         if let Some(header) = &mut self.header {
-            header.handle_mouse_down();
+            if header.handle_mouse_down() {
+                self.ui_dirty = true;
+                self.request_redraw();
+            }
         }
     }
 
     pub fn handle_mouse_up(&mut self) -> bool {
         if let Some(header) = &mut self.header {
-            header.handle_mouse_up()
+            let (changed, close) = header.handle_mouse_up();
+            if changed {
+                self.ui_dirty = true;
+                self.request_redraw();
+            }
+            close
         } else {
             false
         }
@@ -978,5 +1315,70 @@ impl Drop for InnerWindow<'_> {
         }) {
             eprintln!("Event receiver closed");
         }
+    }
+}
+
+fn upload_texture_data(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    data: &[u8],
+    width: u32,
+    height: u32,
+    source_stride: u32,
+) {
+    let bytes_per_pixel = 4;
+    let unpadded_bytes_per_row = width * bytes_per_pixel;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
+    let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
+
+    if source_stride == padded_bytes_per_row {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bytes_per_row),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    } else {
+        let mut padded_data = Vec::with_capacity((padded_bytes_per_row * height) as usize);
+        for i in 0..height {
+            let src_start = (i * source_stride) as usize;
+            let src_end = src_start + unpadded_bytes_per_row as usize;
+            padded_data.extend_from_slice(&data[src_start..src_end]);
+            padded_data.extend(std::iter::repeat(0).take(padded_bytes_per_row_padding as usize));
+        }
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &padded_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bytes_per_row),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 }

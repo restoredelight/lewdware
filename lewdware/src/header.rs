@@ -105,46 +105,51 @@ impl Header {
         position.x + button_size as u32 >= self.size.width && position.y <= self.size.height
     }
 
-    pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
+    pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) -> bool {
         let over_close_button = self.over_close_button(position);
 
         if !self.hover && over_close_button {
             self.hover = true;
-            self.window.request_redraw();
+            true
         } else if self.hover && !over_close_button {
             self.hover = false;
-            self.window.request_redraw();
+            true
+        } else {
+            false
         }
     }
 
-    pub fn handle_cursor_left(&mut self) {
+    pub fn handle_cursor_left(&mut self) -> bool {
         if self.hover || self.clicked {
             self.hover = false;
             self.clicked = false;
-            self.window.request_redraw();
+            true
+        } else {
+            false
         }
     }
 
-    pub fn handle_mouse_down(&mut self) {
+    pub fn handle_mouse_down(&mut self) -> bool {
         if self.hover {
             if !self.clicked {
                 self.clicked = true;
-                self.window.request_redraw();
+                return true;
             }
         }
+        false
     }
 
-    pub fn handle_mouse_up(&mut self) -> bool {
+    pub fn handle_mouse_up(&mut self) -> (bool, bool) {
         if self.hover && self.clicked {
-            return true;
+            return (false, true);
         }
 
         if self.clicked {
             self.clicked = false;
-            self.window.request_redraw();
+            return (true, false);
         }
 
-        false
+        (false, false)
     }
 
     // pub fn render_softbuffer(&self, buffer: &mut softbuffer::Buffer<'_, Arc<Window>, Arc<Window>>) {
