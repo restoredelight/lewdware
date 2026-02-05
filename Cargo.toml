@@ -4,7 +4,7 @@ members = [
     "lewdware",
     "lewdware-mode",
     "pack-editor",
-    "shared", "config",
+    "shared",
 ]
 resolver = "3"
 

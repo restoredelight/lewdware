@@ -33,12 +33,21 @@ impl AudioPlayer {
     pub fn new(
         path: PathBuf,
         loop_audio: bool,
+        id: u64,
+        event_loop_proxy: EventLoopProxy<UserEvent>,
     ) -> Result<Self> {
         let (stream, sink) = setup_decoder(path, loop_audio)?;
+        let sink = Arc::new(sink);
+
+        let sink_clone = sink.clone();
+        thread::spawn(move || {
+            sink_clone.sleep_until_end();
+            let _ = event_loop_proxy.send_event(UserEvent::AudioFinish { id });
+        });
 
         Ok(Self {
             _stream: stream,
-            sink: Arc::new(sink),
+            sink,
         })
     }
 
