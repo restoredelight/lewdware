@@ -184,7 +184,9 @@ impl VideoRenderer {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Video Shader"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("shader.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "shader.wgsl"
+            ))),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -315,17 +317,22 @@ impl<'a> Buffer<'a> {
     }
 
     fn copy_from_frame(&mut self, frame: &VideoFrame, x: u32, y: u32) {
-        let offset = (y * self.width()) as usize;
-        let width = frame.frame.width() as usize;
-        let height = frame.frame.height() as usize;
+        let frame_width = frame.frame.width() as usize;
+        let frame_height = frame.frame.height() as usize;
         let line_size = frame.frame.stride(0); // Bytes per row
         let data = frame.frame.data(0);
 
-        for row_index in 0..height {
-            let src_start = row_index * line_size;
-            let src_end = src_start + width * 4;
+        let copy_width = frame_width.min(self.width().saturating_sub(x) as usize);
+        let copy_height = frame_height.min(self.height().saturating_sub(y) as usize);
 
-            let index = offset + (self.width() * row_index as u32 + x) as usize;
+        let dst_width = self.width();
+        let offset = (y * dst_width) as usize;
+
+        for row_index in 0..copy_height {
+            let src_start = row_index * line_size;
+            let src_end = src_start + copy_width * 4;
+
+            let index = offset + (dst_width * row_index as u32 + x) as usize;
 
             self.copy_from_slice(index, &data[src_start..src_end]);
         }
@@ -420,8 +427,10 @@ impl<'a> ImageWindow<'a> {
     }
 
     pub fn draw(&mut self) -> Result<()> {
+        let mut render = false;
+
         self.inner_window.start_render()?;
-        self.inner_window.render_decorations()?;
+        render = render || self.inner_window.render_decorations()?;
 
         if let Some(image) = self.image.take() {
             let width = image.width();
@@ -432,9 +441,13 @@ impl<'a> ImageWindow<'a> {
                     .unwrap();
 
             self.inner_window.render_pixmap(&image_pixmap)?;
+
+            render = true;
         }
 
-        self.inner_window.present()?;
+        if render {
+            self.inner_window.present()?;
+        }
 
         Ok(())
     }
@@ -491,20 +504,21 @@ impl<'a> VideoWindow<'a> {
     pub fn new(
         mut inner_window: InnerWindow<'a>,
         mut video_player: VideoDecoder,
-        width: u32,
-        height: u32,
-        play_audio: bool,
         loop_video: bool,
     ) -> anyhow::Result<Self> {
-        let scale_factor = inner_window.window.scale_factor();
-
         // Initialize the GPU texture for the video
         inner_window
             .init_video_texture(video_player.native_width(), video_player.native_height())?;
 
+        // If we are already on softbuffer (e.g. wgpu initialization failed), tell the decoder to resize
+        if let Surface::Softbuffer { .. } = &inner_window.surface {
+            video_player
+                .set_output_size(inner_window.inner_size.width, inner_window.inner_size.width);
+        }
+
         video_player.play();
 
-        inner_window.mark_ui_dirty();
+        inner_window.window.request_redraw();
 
         Ok(Self {
             inner_window,
@@ -517,12 +531,17 @@ impl<'a> VideoWindow<'a> {
     }
 
     pub fn update(&mut self) -> Result<bool> {
+        let mut render = false;
+
         self.inner_window.start_render()?;
+
+        render = render || self.inner_window.render_decorations()?;
 
         match self.video_player.next_frame() {
             NextFrame::Ready(frame) => {
                 // println!("Rendering frame");
                 self.inner_window.render_frame(&frame)?;
+                render = true;
             }
             NextFrame::Finish => {
                 return Ok(true);
@@ -532,9 +551,9 @@ impl<'a> VideoWindow<'a> {
             }
         }
 
-        self.inner_window.render_decorations()?;
-
-        self.inner_window.present()?;
+        if render {
+            self.inner_window.present()?;
+        }
 
         Ok(false)
     }
@@ -560,7 +579,6 @@ impl<'a> VideoWindow<'a> {
 pub struct PromptWindow<'a> {
     inner_window: InnerWindow<'a>,
     egui_window: EguiCPUWindow,
-    title: Option<String>,
     text: Option<String>,
     placeholder: Option<String>,
     value: String,
@@ -569,7 +587,6 @@ pub struct PromptWindow<'a> {
 impl<'a> PromptWindow<'a> {
     pub fn new(
         inner_window: InnerWindow<'a>,
-        title: Option<String>,
         text: Option<String>,
         placeholder: Option<String>,
         initial_value: Option<String>,
@@ -579,7 +596,6 @@ impl<'a> PromptWindow<'a> {
         Ok(Self {
             inner_window,
             egui_window,
-            title,
             text,
             placeholder,
             value: initial_value.unwrap_or_default(),
@@ -598,7 +614,6 @@ impl<'a> PromptWindow<'a> {
 
     pub fn render(&mut self) -> Result<()> {
         self.inner_window.start_render()?;
-        self.inner_window.render_decorations()?;
 
         let id = self.inner_window.window.id();
         let lua_event_tx = self.inner_window.lua_event_tx.clone();
@@ -610,12 +625,8 @@ impl<'a> PromptWindow<'a> {
                         ui.heading("Repeat after me");
                         ui.add_space(20.0);
 
-                        if let Some(title) = &self.title {
-                            ui.label(RichText::new(title).heading());
-                        }
-
                         if let Some(text) = &self.text {
-                            ui.label(text);
+                            ui.label(RichText::new(text).heading());
                         }
 
                         let mut prompt = TextEdit::singleline(&mut self.value);
@@ -647,11 +658,6 @@ impl<'a> PromptWindow<'a> {
         self.inner_window.present()?;
 
         Ok(())
-    }
-
-    pub fn set_title(&mut self, title: Option<String>) {
-        self.title = title;
-        self.inner_window.window.request_redraw();
     }
 
     pub fn set_text(&mut self, text: Option<String>) {
@@ -702,7 +708,6 @@ fn translate_position(position: PhysicalPosition<f64>, scale_factor: f64) -> Phy
 pub struct ChoiceWindow<'a> {
     inner_window: InnerWindow<'a>,
     egui_window: EguiCPUWindow,
-    title: Option<String>,
     text: Option<String>,
     options: Vec<ChoiceWindowOption>,
 }
@@ -710,7 +715,6 @@ pub struct ChoiceWindow<'a> {
 impl<'a> ChoiceWindow<'a> {
     pub fn new(
         inner_window: InnerWindow<'a>,
-        title: Option<String>,
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
     ) -> Result<Self> {
@@ -719,7 +723,6 @@ impl<'a> ChoiceWindow<'a> {
         Ok(Self {
             inner_window,
             egui_window,
-            title,
             text,
             options,
         })
@@ -749,12 +752,8 @@ impl<'a> ChoiceWindow<'a> {
                         // ui.heading("Repeat after me");
                         ui.add_space(20.0);
 
-                        if let Some(title) = &self.title {
-                            ui.label(RichText::new(title).heading());
-                        }
-
                         if let Some(text) = &self.text {
-                            ui.label(text);
+                            ui.label(RichText::new(text).heading());
                         }
 
                         ui.add_space(ui.available_height() - 100.0);
@@ -786,11 +785,6 @@ impl<'a> ChoiceWindow<'a> {
         Ok(())
     }
 
-    pub fn set_title(&mut self, title: Option<String>) {
-        self.title = title;
-        self.inner_window.window.request_redraw();
-    }
-
     pub fn set_text(&mut self, text: Option<String>) {
         self.text = text;
         self.inner_window.window.request_redraw();
@@ -815,7 +809,6 @@ pub struct InnerWindow<'a> {
     current_move: Option<Move>,
     // Store the wgpu context to allow creating resources later
     wgpu_ctx: Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)>,
-    ui_dirty: bool,
 }
 
 struct Move {
@@ -832,6 +825,8 @@ impl<'a> InnerWindow<'a> {
         window: WinitWindow,
         wgpu_state: &WgpuState,
         decorations: bool,
+        title: Option<String>,
+        closeable: bool,
         gpu: bool,
         position: LogicalPosition<u32>,
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
@@ -875,8 +870,15 @@ impl<'a> InnerWindow<'a> {
         };
 
         let scale_factor = window.scale_factor();
-        let header =
-            decorations.then(|| Header::new(window.clone(), inner_size.clone(), scale_factor));
+        let header = decorations.then(|| {
+            Header::new(
+                window.clone(),
+                inner_size.clone(),
+                scale_factor,
+                title,
+                closeable,
+            )
+        });
 
         Ok(Self {
             window,
@@ -890,12 +892,7 @@ impl<'a> InnerWindow<'a> {
             lua_event_tx,
             current_move: None,
             wgpu_ctx: wgpu_ctx.map(|(device, queue)| (device.clone(), queue.clone())),
-            ui_dirty: true,
         })
-    }
-
-    pub fn mark_ui_dirty(&mut self) {
-        self.ui_dirty = true;
     }
 
     pub fn init_video_texture(&mut self, width: u32, height: u32) -> Result<()> {
@@ -925,6 +922,7 @@ impl<'a> InnerWindow<'a> {
                 pixels: _, error, ..
             } => {
                 if error.load(Ordering::Acquire) {
+                    println!("wgpu error; switching to softbuffer");
                     let (context, surface) = init_softbuffer(self.window.clone())?;
 
                     self.surface = Surface::Softbuffer {
@@ -965,11 +963,13 @@ impl<'a> InnerWindow<'a> {
                 let height = self.inner_size.height;
 
                 if let Some(video) = video_renderer {
-                    if self.ui_dirty {
-                        if let Some((_, queue)) = &self.wgpu_ctx {
-                            video.update_ui(queue, pixels.frame(), pixels.texture().width(), pixels.texture().height());
-                        }
-                        self.ui_dirty = false;
+                    if let Some((_, queue)) = &self.wgpu_ctx {
+                        video.update_ui(
+                            queue,
+                            pixels.frame(),
+                            pixels.texture().width(),
+                            pixels.texture().height(),
+                        );
                     }
                 }
 
@@ -1027,37 +1027,41 @@ impl<'a> InnerWindow<'a> {
                     .map_err(|err| anyhow!("{err}"))?
                     .present()
                     .map_err(|err| anyhow!("{err}"))?;
-
-                self.ui_dirty = false;
             }
         }
 
         Ok(())
     }
 
-    fn render_border(&mut self) -> Result<()> {
+    fn render_border(&mut self) -> Result<bool> {
         if !self.border_rendered {
             self.surface.buffer()?.draw_border();
 
             self.border_rendered = true;
-        }
 
-        Ok(())
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
-    fn render_header(&mut self) -> Result<()> {
-        if let Some(header) = &self.header {
+    fn render_header(&mut self) -> Result<bool> {
+        if let Some(header) = &mut self.header {
             let scale_factor = self.window.scale_factor();
             let border_offset = PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0;
 
-            let pixmap = header.draw();
+            if let Some(pixmap) = header.draw() {
+                self.surface
+                    .buffer()?
+                    .copy_from_pixmap(pixmap, border_offset, border_offset);
 
-            self.surface
-                .buffer()?
-                .copy_from_pixmap(&pixmap, border_offset, border_offset);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        } else {
+            Ok(false)
         }
-
-        Ok(())
     }
 
     fn inner_offset(&self) -> (u32, u32) {
@@ -1148,15 +1152,12 @@ impl<'a> InnerWindow<'a> {
         Ok(())
     }
 
-    fn render_decorations(&mut self) -> Result<()> {
+    fn render_decorations(&mut self) -> Result<bool> {
         if self.decorations {
-            if self.ui_dirty {
-                self.render_border()?;
-                self.render_header()?;
-            }
+            Ok(self.render_border()? || self.render_header()?)
+        } else {
+            Ok(false)
         }
-
-        Ok(())
     }
 
     pub fn request_redraw(&self) {
@@ -1204,6 +1205,8 @@ impl<'a> InnerWindow<'a> {
             LogicalPosition::new(x.unwrap_or(self.position.x), y.unwrap_or(self.position.y))
         };
 
+        println!("{:?}", self.position);
+
         let move_obj = Move {
             id: id,
             from: self.position.clone(),
@@ -1231,8 +1234,8 @@ impl<'a> InnerWindow<'a> {
                 .min(1.0);
 
             let new_position = LogicalPosition::new(
-                ((current_move.to.x - current_move.from.x) as f64 * percent).round() as u32,
-                ((current_move.to.y - current_move.from.y) as f64 * percent).round() as u32,
+                current_move.from.x + ((current_move.to.x - current_move.from.x) as f64 * percent).round() as u32,
+                current_move.from.y + ((current_move.to.y - current_move.from.y) as f64 * percent).round() as u32,
             );
 
             if new_position != self.position {
@@ -1265,39 +1268,25 @@ impl<'a> InnerWindow<'a> {
 
     pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         if let Some(header) = &mut self.header {
-            if header.handle_cursor_moved(position) {
-                self.ui_dirty = true;
-                self.request_redraw();
-            }
+            header.handle_cursor_moved(position);
         }
     }
 
     pub fn handle_cursor_left(&mut self) {
         if let Some(header) = &mut self.header {
-            if header.handle_cursor_left() {
-                self.ui_dirty = true;
-                self.request_redraw();
-            }
+            header.handle_cursor_left();
         }
     }
 
     pub fn handle_mouse_down(&mut self) {
         if let Some(header) = &mut self.header {
-            if header.handle_mouse_down() {
-                self.ui_dirty = true;
-                self.request_redraw();
-            }
+            header.handle_mouse_down();
         }
     }
 
     pub fn handle_mouse_up(&mut self) -> bool {
         if let Some(header) = &mut self.header {
-            let (changed, close) = header.handle_mouse_up();
-            if changed {
-                self.ui_dirty = true;
-                self.request_redraw();
-            }
-            close
+            header.handle_mouse_up()
         } else {
             false
         }
@@ -1305,6 +1294,12 @@ impl<'a> InnerWindow<'a> {
 
     pub fn set_visible(&self, visible: bool) {
         self.window.set_visible(visible);
+    }
+
+    pub fn set_title(&mut self, text: Option<String>) {
+        if let Some(header) = &mut self.header {
+            header.set_title(text);
+        }
     }
 }
 

@@ -2,7 +2,7 @@
 members = [
     "config",
     "lewdware",
-    "lewdware-mode",
+    "lw",
     "pack-editor",
     "shared",
 ]

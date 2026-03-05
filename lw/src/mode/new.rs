@@ -32,9 +32,7 @@ pub fn create_new_mode(name: &str) -> Result<()> {
     );
     fs::write(base_path.join("config.jsonc"), config_content)?;
 
-    let lua_content = r#"-- Default lewdware mode entrypoint
-
-lewdware.every(1000, function()
+    let lua_content = r#"lewdware.every(1000, function()
     local media = lewdware.media.random({ type = {"image", "video"} });
     if media then
         if media.type == "image" then
@@ -58,8 +56,7 @@ end)
 }"#;
     fs::write(base_path.join(".luarc.json"), luarc_content)?;
 
-    let gitingore_content = r#"
-build
+    let gitingore_content = r#"build
 "#;
     fs::write(base_path.join(".gitignore"), gitingore_content)?;
 

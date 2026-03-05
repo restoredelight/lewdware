@@ -8,11 +8,11 @@ use uuid::Uuid;
 
 use crate::pack_config::Metadata;
 
-pub const MAGIC: &[u8; 5] = b"MPACK";
-pub const VERSION: u8 = 1;
+pub const MAGIC: &[u8; 6] = b"LWPACK";
+pub const VERSION: u8 = 0;
 pub const HEADER_SIZE: usize = 64;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     pub index_offset: u64,
     pub index_length: u64,
@@ -67,15 +67,15 @@ impl Header {
         let mut buffer = [0u8; HEADER_SIZE];
         let mut cursor = Cursor::new(&mut buffer as &mut [u8]);
 
-        cursor.write_all(MAGIC)?; // 5 bits
-        cursor.write_all(&[VERSION])?; // 1 bits
-        cursor.write_all(&[0u8; 2])?; // 2 bits
-        cursor.write_all(&self.index_offset.to_le_bytes())?; // 8 bits
-        cursor.write_all(&self.index_length.to_le_bytes())?; // 8 bits
-        cursor.write_all(&self.metadata_offset.to_le_bytes())?; // 8 bits
-        cursor.write_all(&self.metadata_length.to_le_bytes())?; // 8 bits
-        cursor.write_all(self.id.as_bytes())?; // 16 bits
-        cursor.write_all(&[0u8; 8])?; // 16 bits
+        cursor.write_all(MAGIC)?; // 6 bytes
+        cursor.write_all(&VERSION.to_le_bytes())?; // 1 byte
+        cursor.write_all(&[0u8])?; // 1 byte
+        cursor.write_all(&self.index_offset.to_le_bytes())?; // 8 bytes
+        cursor.write_all(&self.index_length.to_le_bytes())?; // 8 bytes
+        cursor.write_all(&self.metadata_offset.to_le_bytes())?; // 8 bytes
+        cursor.write_all(&self.metadata_length.to_le_bytes())?; // 8 bytes
+        cursor.write_all(self.id.as_bytes())?; // 16 bytes
+        // 8 bytes leftover
 
         Ok(buffer)
     }
@@ -83,7 +83,7 @@ impl Header {
     pub fn from_buf(buffer: [u8; HEADER_SIZE]) -> Result<Self, ReadError> {
         let mut cursor = Cursor::new(buffer);
 
-        let mut magic = [0u8; 5];
+        let mut magic = [0u8; 6];
         cursor.read_exact(&mut magic)?;
         if magic != *MAGIC {
             return Err(ReadError::InvalidMagic);
@@ -91,12 +91,12 @@ impl Header {
 
         let mut buf = [0u8; 1];
         cursor.read_exact(&mut buf)?;
-        let version = buf[0];
-        if version != VERSION {
+        let version = u8::from_le_bytes(buf);
+        if version > VERSION {
             return Err(ReadError::UnsupportedVersion);
         }
 
-        let mut buf2 = [0u8; 2];
+        let mut buf2 = [0u8];
         cursor.read_exact(&mut buf2)?;
 
         let mut buf8 = [0u8; 8];
@@ -119,7 +119,7 @@ impl Header {
         cursor.read_exact(&mut buf16)?;
         let id = Uuid::from_bytes(buf16);
 
-        Ok(Header {
+        Ok(Self {
             index_offset,
             index_length,
             metadata_offset,

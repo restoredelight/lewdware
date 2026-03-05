@@ -1,8 +1,9 @@
 use std::{
     fs::File,
-    io,
+    io::{self, Read},
     path::{Path, PathBuf},
     process::{self, Command},
+    sync::OnceLock,
     thread::{self, available_parallelism},
 };
 
@@ -15,11 +16,12 @@ use futures::{stream, StreamExt};
 use image::{imageops::FilterType, ImageFormat, ImageReader};
 use infer::MatcherType;
 use shared::encode::FileInfo;
-use tokio::sync::oneshot;
+use tempfile::NamedTempFile;
+use tokio::sync::{oneshot, Semaphore};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
-use crate::{image_list::{Media, UploadFilesContext}, pack::MediaPack, utils::file_name};
+use crate::{image_list::Media, pack::MediaPack, upload_files::UploadFilesContext, utils::file_name};
 
 pub fn explore_folder(path: &Path, recursive: bool) -> Vec<PathBuf> {
     let mut walkdir = WalkDir::new(&path);
@@ -79,6 +81,17 @@ impl std::fmt::Display for ProcessFilesErrorType {
     }
 }
 
+static ENCODE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+
+fn get_encode_semaphore() -> &'static Semaphore {
+    ENCODE_SEMAPHORE.get_or_init(|| {
+        let permits = available_parallelism()
+            .map(|x| (x.get() / 4).max(2))
+            .unwrap_or(2);
+        Semaphore::new(permits)
+    })
+}
+
 pub async fn process_files(
     media_pack: ReadSignal<MediaPack>,
     paths: Vec<PathBuf>,
@@ -89,6 +102,8 @@ pub async fn process_files(
     let media_ref = media_pack.read();
     let dir = &media_ref.dir();
 
+    // Bound the orchestration (hashing/DB queries) to available parallelism,
+    // while the heavy encoding will be further limited by the global semaphore.
     let limit = available_parallelism().map(|x| x.get()).ok();
 
     stream::iter(paths)
@@ -155,6 +170,11 @@ async fn process_file(
     {
         return Err(ProcessFilesErrorType::Skipped);
     }
+
+    // Acquire global semaphore permit before encoding
+    let _permit = get_encode_semaphore().acquire().await.map_err(|err| {
+        ProcessFilesErrorType::Other(anyhow!("Failed to acquire encode semaphore: {err}"))
+    })?;
 
     let (tx, rx) = oneshot::channel();
 
@@ -411,11 +431,13 @@ fn encode_image(
     println!("{}", input.display());
     println!("{}", output.display());
 
-    let (width, height) = resize_dimensions(width, height, MAX_IMAGE_SIZE, false);
+    let (width, height) = resize_dimensions(width, height, MAX_IMAGE_SIZE, true);
+
+    let thumb_temp = NamedTempFile::new()?;
+    let thumb_path = thumb_temp.path();
 
     #[rustfmt::skip]
     let args = [
-        // -i input
         "-y",
         "-c:v", "libaom-av1",
         "-cpu-used", "6",
@@ -423,29 +445,39 @@ fn encode_image(
         "-b:v", "0",
         "-still-picture", "1",
         "-f", "avif",
-        // output
     ];
+
+    let filter = format!(
+        "[0:v]scale=w='{width}':h='{height}',format=yuv420p[main]; \
+         [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]"
+    );
 
     let result = Command::new("ffmpeg")
         .arg("-i")
         .arg(input)
-        .arg("-vf")
-        .arg(format!("scale=w='{width}':h='{height}',format=yuv420p"))
+        .arg("-filter_complex")
+        .arg(filter)
+        .arg("-map")
+        .arg("[main]")
         .args(args)
         .arg(output)
+        .arg("-map")
+        .arg("[thumb]")
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("webp")
+        .arg(thumb_path)
         .output()?;
 
     if !result.status.success() {
         eprintln!("{}", String::from_utf8_lossy(&result.stderr));
-
         eprintln!("Encoding image failed");
-
-        eprintln!("{}", std::fs::read_to_string(input)?);
-
         bail!("ffmpeg failed for {}", input.display());
     }
 
-    let thumbnail = encode_image_thumbnail(input)?;
+    let mut thumbnail = Vec::new();
+    File::open(thumb_path)?.read_to_end(&mut thumbnail)?;
 
     Ok((thumbnail, width, height))
 }
@@ -509,37 +541,62 @@ fn encode_video(
     audio: bool,
     fixed_frame_rate: bool,
 ) -> anyhow::Result<(Vec<u8>, u64, u64)> {
+    println!("Audio: {audio}");
+
     #[rustfmt::skip]
     let args = [
         "-y",
-        "-crf", "30",
-        "-b:v", "0",
-        "-c:v", "libvpx-vp9",
-        "-f", "webm",
+        "-c:v", "libsvtav1",
+        "-preset", "8",
+        "-svtav1-params", "fast-decode=1"
     ];
 
     let (width, height) = resize_dimensions(width, height, MAX_VIDEO_SIZE, true);
 
+    let thumb_temp = NamedTempFile::new()?;
+    let thumb_path = thumb_temp.path();
+
     let mut command = Command::new("ffmpeg");
+
+    let filter = format!(
+        "[0:v]scale=w='{width}':h='{height}'[main]; \
+         [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]"
+    );
 
     command
         .arg("-i")
         .arg(input)
-        .arg("-vf")
-        .arg(format!("scale=w='{width}':h='{height}'"))
-        .args(args);
+        .arg("-filter_complex")
+        .arg(filter)
+        .arg("-map")
+        .arg("[main]");
+
+    if audio {
+        command.args(["-map", "0:a?", "-c:a", "libopus", "-b:a", "64k"]);
+    } else {
+        command.arg("-an");
+    }
+
+    command.args(args);
 
     if fixed_frame_rate {
         command.arg("-r").arg("30");
     }
 
-    if audio {
-        command.args(["-c:a", "libopus", "-b:a", "64k"]);
-    } else {
-        command.arg("-an");
-    }
+    command
+        .arg(output)
+        .arg("-map")
+        .arg("[thumb]")
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("webp")
+        .arg(thumb_path);
 
-    let result = command.arg(output).output()?;
+    let result = command.output()?;
+
+    eprintln!("{}", String::from_utf8_lossy(&result.stdout));
+    eprintln!("{}", String::from_utf8_lossy(&result.stderr));
 
     if !result.status.success() {
         eprintln!("{}", String::from_utf8_lossy(&result.stderr));
@@ -555,59 +612,10 @@ fn encode_video(
         bail!("ffmpeg failed for {}", input.display());
     }
 
-    let thumbnail = encode_video_thumbnail(input)?;
+    let mut thumbnail = Vec::new();
+    File::open(thumb_path)?.read_to_end(&mut thumbnail)?;
 
     Ok((thumbnail, width, height))
-}
-
-fn encode_image_thumbnail(path: &Path) -> Result<Vec<u8>> {
-    let mut command = Command::new("ffmpeg");
-    command.args(["-y"]);
-
-    command.arg("-i").arg(path);
-
-    command.args([
-        "-vf",
-        "scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease",
-        "-f",
-        "webp",
-        "pipe:1",
-    ]);
-
-    let output = command.output()?;
-
-    if !output.status.success() {
-        eprintln!("{:?}", String::from_utf8_lossy(&output.stderr));
-        bail!("ffmpeg command failed");
-    }
-
-    Ok(output.stdout)
-}
-
-fn encode_video_thumbnail(path: &Path) -> Result<Vec<u8>> {
-    let mut command = Command::new("ffmpeg");
-    command.args(["-y"]);
-
-    command.arg("-i").arg(path);
-
-    command.args([
-        "-frames:v",
-        "1",
-        "-vf",
-        "scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease",
-        "-f",
-        "webp",
-        "pipe:1",
-    ]);
-
-    let output = command.output()?;
-
-    if !output.status.success() {
-        eprintln!("{:?}", String::from_utf8_lossy(&output.stderr));
-        bail!("ffmpeg command failed");
-    }
-
-    Ok(output.stdout)
 }
 
 fn encode_audio(input: &Path, output: &Path) -> anyhow::Result<()> {

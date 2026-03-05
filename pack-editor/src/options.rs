@@ -1,7 +1,8 @@
-use crate::{MetadataStore, Pack};
 use dioxus::prelude::*;
 use shared::components::{input::Input, label::Label, textarea::Textarea};
 use shared::pack_config::{Metadata, MetadataStoreExt};
+
+use crate::editor::{MetadataStore, Pack};
 
 #[component]
 pub fn Options() -> Element {
@@ -24,12 +25,8 @@ pub fn Options() -> Element {
     };
 
     rsx! {
-        div {
-            class: "flex-1 p-4 flex flex-col gap-4",
-            Label {
-                html_for: "name",
-                "Name"
-            }
+        div { class: "flex-1 p-4 flex flex-col gap-4",
+            Label { html_for: "name", "Name" }
             Input {
                 id: "name",
                 initial_value: metadata.name(),
@@ -37,12 +34,9 @@ pub fn Options() -> Element {
                     metadata.name().set(event.value());
                     mark_unsaved()
                 },
-                onchange: move |_| save()
+                onchange: move |_| save(),
             }
-            Label {
-                html_for: "creator",
-                "Creator"
-            }
+            Label { html_for: "creator", "Creator" }
             Input {
                 id: "creator",
                 initial_value: metadata.creator(),
@@ -55,12 +49,9 @@ pub fn Options() -> Element {
                     }
                     mark_unsaved()
                 },
-                onchange: move |_| save()
+                onchange: move |_| save(),
             }
-            Label {
-                html_for: "description",
-                "Description"
-            }
+            Label { html_for: "description", "Description" }
             Textarea {
                 id: "description",
                 placeholder: "Enter description",
@@ -74,12 +65,9 @@ pub fn Options() -> Element {
                     }
                     mark_unsaved()
                 },
-                onchange: move |_| save()
+                onchange: move |_| save(),
             }
-            Label {
-                html_for: "version",
-                "Version"
-            }
+            Label { html_for: "version", "Version" }
             Input {
                 id: "version",
                 placeholder: "Enter version (e.g. 0.0.1)",
@@ -93,7 +81,7 @@ pub fn Options() -> Element {
                     }
                     mark_unsaved()
                 },
-                onchange: move |_| save()
+                onchange: move |_| save(),
             }
         }
     }

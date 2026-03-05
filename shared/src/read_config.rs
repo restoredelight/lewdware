@@ -88,15 +88,11 @@ impl Display for ConfigError {
                 file,
                 string,
                 error,
-            } => match error {
-                json5::Error::Message { msg, location } => {
-                    if let Some(location) = location
-                        && let Some(line) = string.lines().nth(location.line - 1)
-                    {
-                        writeln!(f, "Error in {}: {}", file.display(), msg)?;
-                        writeln!(f, "{}", line)?;
-                        write!(f, "{}^", " ".repeat(location.column - 1))?;
-                    }
+            } => {
+                writeln!(f, "Error in {}: {}", file.display(), error)?;
+                if let Some(position) = error.position() && let Some(line) = string.lines().nth(position.line) {
+                    writeln!(f, "{}", line)?;
+                    write!(f, "{}^", " ".repeat(position.column - 1))?;
                 }
             },
             ConfigError::PackOptsError { file, error } => {

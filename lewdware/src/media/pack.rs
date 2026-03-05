@@ -8,9 +8,7 @@ use std::{
 use image::{ImageFormat, ImageReader};
 use rusqlite::{Connection, Row, params, params_from_iter};
 use shared::{
-    encode::FileInfo,
-    pack_config::Metadata,
-    read_pack::{Header, read_pack_metadata},
+    db::migrate, encode::FileInfo, pack_config::Metadata, read_pack::{Header, read_pack_metadata}
 };
 use tempfile::NamedTempFile;
 use tokio::{
@@ -111,6 +109,8 @@ impl MediaPack {
         db_file.write_all(&db_data)?;
 
         let connection = Connection::open(db_file.path())?;
+
+        migrate(&connection)?;
 
         let mut tag_map: HashMap<String, u64> = HashMap::new();
 
@@ -320,6 +320,14 @@ impl MediaPack {
             Ok((row.get("offset")?, row.get("length")?))
         })
         .map_err(|err| err.into())
+    }
+
+    pub fn get_mode(&self, id: u64) -> anyhow::Result<Vec<u8>> {
+        let mut stmt = self.db.prepare("SELECT file FROM modes WHERE id = ?")?;
+
+        stmt.query_row(params![id], |row| {
+            row.get("file")
+        }).map_err(|err| err.into())
     }
 
     // pub async fn get_image(&self, name: String) -> Result<Option<Image>> {
@@ -837,7 +845,7 @@ impl MediaPack {
             rayon::spawn(move || {
                 let _ = tx.send(
                     image
-                        .resize_exact(width, height, image::imageops::FilterType::Lanczos3)
+                        .resize_exact(width, height, image::imageops::FilterType::Triangle)
                         .into_rgba8(),
                 );
             });
