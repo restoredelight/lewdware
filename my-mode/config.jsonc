@@ -1,0 +1,13 @@
+{
+  "$schema": "https://lewdware.github.com/mode.schema.json",
+  "name": "my-mode",
+  "version": "0.1.0",
+  "author": "",
+  "modes": {
+    "default": {
+      "name": "my-mode",
+      "entrypoint": "src/main.lua",
+      "options": {}
+    }
+  }
+}

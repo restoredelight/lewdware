@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <!-- 
+      The Directory="INSTALLDIR" refers to the folder where your apps are installed.
+      The Environment tag appends that folder to the system-wide PATH.
+    -->
+    <ComponentGroup Id="PathExtension">
+      <Component Id="PathEnv" Guid="70085e46-b9fb-4653-a319-a2095d0363bf" Directory="INSTALLDIR">
+        <Environment 
+          Id="PATH"
+          Name="PATH"
+          Value="[INSTALLDIR]"
+          Permanent="no"
+          Part="last"
+          Action="set"
+          System="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>
