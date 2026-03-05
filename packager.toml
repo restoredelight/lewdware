@@ -1,0 +1,32 @@
+[workspace.metadata.packager]
+name = "Lewdware"
+identifier = "com.lewdware.app"
+version = "0.1.0"
+
+# Define the 4 binaries to be included in the MSI
+[[workspace.metadata.packager.binaries]]
+path = "lewdware" # The main media player
+main = true
+
+[[workspace.metadata.packager.binaries]]
+path = "config" # Dioxus Config app
+
+[[workspace.metadata.packager.binaries]]
+path = "pack-editor" # Dioxus Pack Editor
+
+[[workspace.metadata.packager.binaries]]
+path = "lw" # CLI Tool
+
+[workspace.metadata.packager.windows]
+# Add shortcuts for the GUI apps only
+shortcuts = [
+    { name = "Lewdware", path = "lewdware" },
+    { name = "Lewdware Config", path = "config" },
+    { name = "Lewdware Pack Editor", path = "pack-editor" }
+]
+
+[workspace.metadata.packager.windows.wix]
+# Include our fragment to handle the PATH setup
+fragments = ["wix/path.wxs"]
+# Link the component group defined in the fragment
+component_group_refs = ["PathExtension"]
