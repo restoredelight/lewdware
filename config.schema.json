@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lewdware.github.com/mode.schema.json",
+  "title": "Mode Config",
+  "description": "Configuration file for a mode",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "The name of the mode file",
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "author": {
+      "type": "string"
+    },
+    "include": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "modes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/mode"
+      }
+    }
+  },
+  "required": ["name", "modes"],
+
+  "$defs": {
+    "mode": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "entrypoint": {
+          "type": "string",
+          "description": "The path to the main lua file for the mode"
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/option"
+          }
+        }
+      },
+      "required": ["name", "entrypoint"]
+    },
+
+    "option": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "The label shown to the user"
+        },
+        "description": {
+          "type": "string",
+          "description": "An optional description shown below the label"
+        },
+        "type": {
+          "enum": ["integer", "number", "string", "boolean", "enum"]
+        }
+      },
+      "required": ["label", "type"],
+      "oneOf": [
+        {
+          "properties": {
+            "type": { "const": "integer" },
+            "default": {
+              "type": "integer"
+            },
+            "min": {
+              "type": "integer"
+            },
+            "max": {
+              "type": "integer"
+            },
+            "step": {
+              "type": "integer"
+            },
+            "clamp": {
+              "type": "boolean"
+            },
+            "slider": {
+              "type": "boolean"
+            }
+          },
+          "required": ["default"]
+        },
+        {
+          "properties": {
+            "type": { "const": "number" },
+            "default": {
+              "type": "number"
+            },
+            "min": {
+              "type": "number"
+            },
+            "max": {
+              "type": "number"
+            },
+            "step": {
+              "type": "number"
+            },
+            "clamp": {
+              "type": "boolean"
+            },
+            "slider": {
+              "type": "boolean"
+            }
+          },
+          "required": ["default"]
+        },
+        {
+          "properties": {
+            "type": { "const": "string" },
+            "default": {
+              "type": "string"
+            }
+          },
+          "required": ["default"]
+        },
+        {
+          "properties": {
+            "type": { "const": "boolean" },
+            "default": {
+              "type": "boolean"
+            }
+          },
+          "required": ["default"]
+        },
+        {
+          "properties": {
+            "type": { "const": "enum" },
+            "values": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "description": "The label shown to the user"
+              },
+              "minProperties": 1
+            },
+            "default": {
+              "type": "string"
+            }
+          },
+          "required": ["values", "default"]
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

@@ -375,8 +375,8 @@ fn default_media_popup_size(
     let width = media_width as f64;
     let height = media_height as f64;
 
-    let max_width_scale = (monitor_width as f64 * 0.3) / width;
-    let max_height_scale = (monitor_height as f64 * 0.5) / height;
+    let max_width_scale = (monitor_width as f64 / 3.0) / width;
+    let max_height_scale = (monitor_height as f64 / 2.0) / height;
 
     let scale = max_width_scale.min(max_height_scale).min(1.0);
 

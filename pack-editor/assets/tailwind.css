@@ -266,6 +266,9 @@
   .mb-1 {
     margin-bottom: calc(var(--spacing) * 1);
   }
+  .ml-2 {
+    margin-left: calc(var(--spacing) * 2);
+  }
   .block {
     display: block;
   }
@@ -425,6 +428,9 @@
   .rounded {
     border-radius: 0.25rem;
   }
+  .rounded-full {
+    border-radius: calc(infinity * 1px);
+  }
   .rounded-lg {
     border-radius: var(--radius-lg);
   }
@@ -459,10 +465,6 @@
   .border-l {
     border-left-style: var(--tw-border-style);
     border-left-width: 1px;
-  }
-  .border-dashed {
-    --tw-border-style: dashed;
-    border-style: dashed;
   }
   .border-blue-100 {
     border-color: var(--color-blue-100);
@@ -700,13 +702,6 @@
       }
     }
   }
-  .hover\:border-gray-400 {
-    &:hover {
-      @media (hover: hover) {
-        border-color: var(--color-gray-400);
-      }
-    }
-  }
   .hover\:bg-gray-200 {
     &:hover {
       @media (hover: hover) {
@@ -728,13 +723,6 @@
     &:hover {
       @media (hover: hover) {
         background-color: var(--color-sky-200);
-      }
-    }
-  }
-  .hover\:text-gray-500 {
-    &:hover {
-      @media (hover: hover) {
-        color: var(--color-gray-500);
       }
     }
   }
@@ -777,16 +765,6 @@
   }
   .\@max-xl\:hidden {
     @container (width < 36rem) {
-      display: none;
-    }
-  }
-  .\@max-lg\:hidden {
-    @container (width < 32rem) {
-      display: none;
-    }
-  }
-  .\@max-sm\:hidden {
-    @container (width < 24rem) {
       display: none;
     }
   }

@@ -3,10 +3,11 @@ use std::{collections::HashMap, io};
 use ciborium::{from_reader, into_writer};
 use dioxus::stores::Store;
 use dioxus::prelude::*;
+use indexmap::IndexMap;
 use merge::Merge;
 use serde::{Deserialize, Serialize};
 
-use crate::{create_arg, target::Target};
+use crate::{create_arg, target::Target, mode::{Mode, SourceFile}};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct PackOpts {
@@ -22,7 +23,7 @@ pub struct PackOpts {
     pub ignore: Option<OneOrMore<String>>,
 }
 
-#[derive(Serialize, Deserialize, Default, Clone, Store)]
+#[derive(Serialize, Deserialize, Default, Clone, Store, PartialEq, Debug)]
 pub struct Metadata {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -31,8 +32,9 @@ pub struct Metadata {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // pub transition: Option<Transition>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub files: HashMap<String, SourceFile>,
 }
 
 impl Metadata {

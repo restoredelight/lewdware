@@ -12,3 +12,6 @@ pub mod progress;
 pub mod popover;
 pub mod toast;
 pub mod textarea;
+pub mod switch;
+pub mod slider;
+pub mod tooltip;

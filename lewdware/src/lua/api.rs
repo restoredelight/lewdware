@@ -1,7 +1,8 @@
-use std::{rc::Rc, time::Duration};
+use std::{cell::Cell, collections::HashMap, rc::Rc, time::Duration};
 
-use mlua::{ExternalError, ExternalResult, FromLua, Lua, LuaSerdeExt};
+use mlua::{ExternalError, ExternalResult, FromLua, IntoLua, Lua, LuaSerdeExt};
 use serde::{Deserialize, Serialize};
+use shared::mode::OptionValue;
 use winit::dpi::LogicalSize;
 
 use crate::{
@@ -23,8 +24,11 @@ pub fn create_api(
     media_manager: MediaManager,
     windows: Windows,
     audio_handles: AudioHandles,
+    config: HashMap<String, OptionValue>,
 ) -> mlua::Result<()> {
     let api_table = lua.create_table()?;
+
+    api_table.set("config", config.into_lua(lua)?)?;
 
     let media_table = lua.create_table()?;
 
@@ -241,12 +245,17 @@ pub fn create_api(
         let request_sender = request_sender.clone();
         let audio_handles = audio_handles.clone();
 
+        let audio_id: Cell<u64> = Cell::new(0);
+
         api_table.set(
             "play_audio",
             lua.create_async_function(move |lua, args| {
+                let id = audio_id.get();
+                audio_id.set(id + 1);
                 play_audio(
                     lua,
                     args,
+                    id,
                     media_manager.clone(),
                     request_sender.clone(),
                     audio_handles.clone(),
@@ -565,6 +574,10 @@ pub struct SpawnWindowOpts {
     pub monitor: Option<Monitor>,
     #[serde(default = "return_true")]
     pub decorations: bool,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default = "return_true")]
+    pub closeable: bool,
     #[serde(default = "return_true")]
     pub visible: bool,
 }
@@ -572,13 +585,15 @@ pub struct SpawnWindowOpts {
 impl Default for SpawnWindowOpts {
     fn default() -> Self {
         Self {
-            x: Default::default(),
-            y: Default::default(),
-            width: Default::default(),
-            height: Default::default(),
-            anchor: Default::default(),
-            monitor: Default::default(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            anchor: Anchor::default(),
+            monitor: None,
             decorations: true,
+            title: None,
+            closeable: true,
             visible: true,
         }
     }
@@ -723,7 +738,7 @@ async fn spawn_video_popup(
         .into_lua_err()?;
 
     let props = request_sender
-        .spawn_video(data, opts.loop_video, opts.audio, opts.window_opts)
+        .spawn_video(data, opts.loop_video, opts.window_opts)
         .await?;
 
     let id = props.window_id;
@@ -743,7 +758,6 @@ async fn spawn_video_popup(
 
 #[derive(Serialize, Deserialize, Default)]
 struct SpawnPromptOpts {
-    title: Option<String>,
     text: Option<String>,
     placeholder: Option<String>,
     initial_value: Option<String>,
@@ -767,7 +781,6 @@ async fn spawn_prompt(
 
     let props = request_sender
         .spawn_prompt(
-            opts.title.clone(),
             opts.text.clone(),
             opts.placeholder,
             opts.initial_value.clone(),
@@ -779,7 +792,6 @@ async fn spawn_prompt(
 
     let window = Rc::new(PromptWindow::new(
         props,
-        opts.title,
         opts.text,
         opts.initial_value.unwrap_or_default(),
         request_sender.window_sender(id),
@@ -794,7 +806,6 @@ async fn spawn_prompt(
 
 #[derive(Serialize, Deserialize, Default)]
 struct SpawnChoiceOpts {
-    title: Option<String>,
     text: Option<String>,
     #[serde(default)]
     options: Vec<ChoiceWindowOption>,
@@ -818,7 +829,6 @@ async fn spawn_choice(
 
     let props = request_sender
         .spawn_choice(
-            opts.title.clone(),
             opts.text.clone(),
             opts.options.clone(),
             opts.window_opts,
@@ -829,7 +839,6 @@ async fn spawn_choice(
 
     let window = Rc::new(ChoiceWindow::new(
         props,
-        opts.title,
         opts.text,
         opts.options.clone(),
         request_sender.window_sender(id),
@@ -907,6 +916,7 @@ impl FromLua for PlayAudioOpts {
 async fn play_audio(
     _: Lua,
     (audio, opts): (Media, Option<PlayAudioOpts>),
+    id: u64,
     media_manager: MediaManager,
     request_sender: RequestSender,
     audio_handles: AudioHandles,
@@ -918,7 +928,7 @@ async fn play_audio(
     }
 
     let data = media_manager
-        .get_audio_data(audio.id, opts.loop_audio)
+        .get_audio_data(audio.id, id, opts.loop_audio)
         .await
         .into_lua_err()?;
 

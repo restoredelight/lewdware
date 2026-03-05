@@ -2,14 +2,18 @@ mod api;
 mod audio;
 mod interval;
 mod media;
+mod mode;
 mod request;
 mod window;
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, thread};
+use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, thread};
 
 use anyhow::bail;
-use mlua::Lua;
-use shared::user_config::AppConfig;
+use mlua::{ExternalResult, Lua};
+use shared::{
+    mode::{Metadata, OptionValue, read_mode_metadata},
+    user_config::AppConfig,
+};
 use tokio::{
     sync::mpsc::{Receiver, UnboundedSender, channel, unbounded_channel},
     task::LocalSet,
@@ -18,7 +22,9 @@ use winit::{dpi::LogicalPosition, event_loop::EventLoopProxy, window::WindowId};
 
 use crate::{
     app::UserEvent,
-    lua::{api::create_api, audio::AudioHandle, request::RequestSender, window::Window},
+    lua::{
+        api::create_api, audio::AudioHandle, mode::{Mode, ReadSeek}, request::RequestSender, window::Window,
+    },
     media::MediaManager,
     monitor::Monitor,
 };
@@ -116,8 +122,7 @@ pub type AudioHandles = Rc<RefCell<HashMap<u64, Rc<AudioHandle>>>>;
 
 pub fn start_lua_thread(
     event_loop_proxy: EventLoopProxy<UserEvent>,
-    code: String,
-    config: AppConfig,
+    mut config: AppConfig,
 ) -> (UnboundedSender<Event>, Receiver<LuaRequest>) {
     let (event_tx, mut event_rx) = unbounded_channel();
     let (request_tx, request_rx) = channel(20);
@@ -128,19 +133,80 @@ pub fn start_lua_thread(
             .build()
             .expect("Failed to build tokio runtime");
 
-        let local = LocalSet::new();
+        let (media_manager, _) =
+            match MediaManager::open(&config.pack_path.unwrap(), event_loop_proxy.clone()) {
+                Ok(x) => x,
+                Err(err) => {
+                    eprintln!("{err}");
+                    return;
+                }
+            };
 
-        let (media_manager, _) = match MediaManager::open(&config.pack_path.unwrap()) {
+        let (mut file, mode): (Box<dyn ReadSeek>, _) = match config.mode.clone() {
+            shared::user_config::Mode::Default(default_mode) => {
+                let mode_data = include_bytes!("../../../default-modes/build/Default Modes.lwmode");
+
+                (Box::new(Cursor::new(mode_data)), default_mode)
+            },
+            shared::user_config::Mode::Pack { id, mode } => {
+                let mode_data = match rt.block_on(media_manager.get_mode(id)) {
+                    Ok(data) => data,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        return;
+                    }
+                };
+
+                (Box::new(Cursor::new(mode_data)), mode)
+            },
+            shared::user_config::Mode::File { path, mode } => {
+                let file = match File::open(path) {
+                    Ok(file) => file,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        return;
+                    }
+                };
+
+                (Box::new(file), mode)
+            },
+        };
+
+        // TODO: Use header to decide API version
+        let (header, Metadata { modes, files, .. }) = match read_mode_metadata(&mut file) {
             Ok(x) => x,
             Err(err) => {
                 eprintln!("{err}");
                 return;
             }
         };
+        println!("Read header and metadata");
+
+        let mode_obj = modes.get(&mode).unwrap();
+
+        let entrypoint = mode_obj.entrypoint.clone();
+
+        let mut mode_config = config
+            .mode_options
+            .remove(&config.mode)
+            .unwrap_or_else(HashMap::new);
+
+        // Make sure the config contains all the correct options
+        for (key, option) in mode_obj.options.iter() {
+            if mode_config.get(key).is_none_or(|value| !option.matches_value(value)) {
+                mode_config.insert(key.clone(), option.default_value());
+            }
+        }
+
+        let mode = Mode::new(file, files);
+
+        let local = LocalSet::new();
 
         let runtime = match LuaRuntime::new(
+            mode,
             RequestSender::new(request_tx, event_loop_proxy),
             media_manager,
+            mode_config,
         ) {
             Ok(x) => Rc::new(x),
             Err(err) => {
@@ -152,7 +218,7 @@ pub fn start_lua_thread(
         let runtime_clone = runtime.clone();
 
         local.spawn_local(async move {
-            if let Err(err) = runtime_clone.exec_code(&code).await {
+            if let Err(err) = runtime_clone.run_entrypoint(entrypoint).await {
                 eprintln!("{err}");
             }
 
@@ -180,6 +246,7 @@ pub fn start_lua_thread(
 }
 
 struct LuaRuntime {
+    mode: Rc<Mode>,
     request_sender: RequestSender,
     media_manager: MediaManager,
     windows: Windows,
@@ -188,12 +255,18 @@ struct LuaRuntime {
 }
 
 impl LuaRuntime {
-    fn new(request_tx: RequestSender, media_manager: MediaManager) -> anyhow::Result<Self> {
+    fn new(
+        mode: Mode,
+        request_tx: RequestSender,
+        media_manager: MediaManager,
+        config: HashMap<String, OptionValue>,
+    ) -> anyhow::Result<Self> {
         let lua = Lua::new();
 
         lua.sandbox(true)?;
 
         let mut runtime = Self {
+            mode: Rc::new(mode),
             request_sender: request_tx,
             media_manager,
             windows: Rc::new(RefCell::new(HashMap::new())),
@@ -201,15 +274,17 @@ impl LuaRuntime {
             lua,
         };
 
-        runtime.create_api()?;
+        runtime.create_api(config)?;
 
         Ok(runtime)
     }
 
-    async fn exec_code(&self, code: &str) -> mlua::Result<()> {
-        self.lua.load(code).exec_async().await?;
-
-        Ok(())
+    async fn run_entrypoint(&self, entrypoint: String) -> mlua::Result<()> {
+        self.mode
+            .load(&self.lua, entrypoint)
+            .into_lua_err()?
+            .eval_async()
+            .await
     }
 
     async fn handle_event(&self, event: Event) -> anyhow::Result<()> {
@@ -267,18 +342,29 @@ impl LuaRuntime {
         Ok(())
     }
 
-    fn create_api(&mut self) -> mlua::Result<()> {
+    fn create_api(&mut self, config: HashMap<String, OptionValue>) -> mlua::Result<()> {
         create_api(
             &self.lua,
             self.request_sender.clone(),
             self.media_manager.clone(),
             self.windows.clone(),
             self.audio_handles.clone(),
+            config,
         )?;
 
         self.lua
             .globals()
             .set("print", self.lua.create_function(print)?)?;
+
+        let mode = self.mode.clone();
+        self.lua.globals().set(
+            "require",
+            self.lua.create_async_function(move |lua, module| {
+                let mode = mode.clone();
+
+                async move { mode.require(lua, module).await.into_lua_err() }
+            })?,
+        )?;
 
         Ok(())
     }

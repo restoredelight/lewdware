@@ -1,6 +1,5 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     fs::{self, create_dir_all},
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -15,7 +14,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{named_params, params, params_from_iter, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use shared::{
-    db::{migrate, Database},
+    db::migrate,
     encode::{FileInfo, FileInfoParts, FileType},
     read_pack::HEADER_SIZE,
 };
@@ -67,8 +66,6 @@ pub struct MediaPack {
     dir: PathBuf,
     metadata: RefCell<Metadata>,
     db_pool: Pool<SqliteConnectionManager>,
-    tag_to_id: HashMap<String, u64>,
-    id_to_tag: HashMap<u64, String>,
     db_path: PathBuf,
     saved: Cell<bool>,
 }
@@ -159,16 +156,17 @@ impl MediaPack {
 
         let pool = db_pool.clone();
 
+        println!("Migrating");
         spawn_blocking(move || -> Result<_> {
             let conn = pool.get()?;
 
-            let db = DatabasePool(&conn);
-            migrate(db)
+            println!("Got connection");
+
+            migrate(&conn)
         })
         .await??;
 
-        let tag_to_id = HashMap::new();
-        let id_to_tag = HashMap::new();
+        println!("Migrated");
 
         File::create(dir.join("UNSAVED")).await?;
 
@@ -180,8 +178,6 @@ impl MediaPack {
             dir,
             metadata: RefCell::new(metadata),
             db_pool,
-            tag_to_id,
-            id_to_tag,
             saved: Cell::new(false),
             db_path,
         })
@@ -279,31 +275,12 @@ impl MediaPack {
 
         let pool = db_pool.clone();
 
-        let (tag_to_id, id_to_tag) = spawn_blocking(move || -> Result<_> {
-            println!("Thread spawned");
-            let mut tag_to_id = HashMap::new();
-            let mut id_to_tag = HashMap::new();
-
+        spawn_blocking(move || -> Result<_> {
             let conn = pool.get()?;
 
-            let db = DatabasePool(&conn);
-            migrate(db)?;
-
-            let mut stmt = conn.prepare("SELECT id, name FROM tags")?;
-
-            stmt.query_map(params![], |row| {
-                tag_to_id.insert(row.get("name")?, row.get("id")?);
-                id_to_tag.insert(row.get("id")?, row.get("name")?);
-
-                Ok(())
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-            Ok((tag_to_id, id_to_tag))
+            migrate(&conn)
         })
         .await??;
-
-        println!("Built tag map");
 
         Ok(Self {
             path,
@@ -314,8 +291,6 @@ impl MediaPack {
             metadata: RefCell::new(metadata),
             db_pool,
             saved: Cell::new(!has_unsaved),
-            tag_to_id,
-            id_to_tag,
             db_path,
         })
     }
@@ -437,113 +412,117 @@ impl MediaPack {
         let path = self.path.clone();
         let mut progress = consume_context::<SaveProgress>();
 
-        let result = self.db_execute(move |conn| {
-            let mut in_file = fs::File::open(&path)?;
-            let mut out_file = fs::OpenOptions::new()
-                .write(true)
-                .open(to_path.as_ref().unwrap_or(&path))?;
+        let result = self
+            .db_execute(move |conn| {
+                let mut in_file = fs::File::open(&path)?;
+                let mut out_file = fs::OpenOptions::new()
+                    .write(true)
+                    .open(to_path.as_ref().unwrap_or(&path))?;
 
-            let mut num_files: usize =
-                conn.query_row_and_then("SELECT COUNT(*) as files FROM media", params![], |row| {
-                    row.get("files")
+                let mut num_files: usize = conn.query_row_and_then(
+                    "SELECT COUNT(*) as files FROM media",
+                    params![],
+                    |row| row.get("files"),
+                )?;
+
+                let mut offset = HEADER_SIZE as u64;
+
+                let mut get_stmt = conn.prepare(
+                    "SELECT id, offset, length FROM media WHERE offset IS NOT NULL ORDER BY offset",
+                )?;
+                let mut edit_offset_stmt =
+                    conn.prepare("UPDATE media SET offset = ? WHERE id = ?")?;
+
+                let mut media = get_stmt
+                    .query_map(params![], |row| {
+                        Ok(MediaData {
+                            id: row.get("id")?,
+                            offset: row.get("offset")?,
+                            length: row.get("length")?,
+                        })
+                    })?
+                    .peekable();
+
+                // If we are writing to the same file, skip all entries which are already in the
+                // correct place.
+                if to_path.is_none() {
+                    while media
+                        .next_if(|x| {
+                            x.as_ref().is_ok_and(|media_data| {
+                                if media_data.offset == offset {
+                                    offset += media_data.length;
+                                    true
+                                } else {
+                                    false
+                                }
+                            })
+                        })
+                        .is_some()
+                    {
+                        num_files -= 1;
+                    }
+                }
+
+                progress.start_saving(num_files);
+
+                out_file.seek(SeekFrom::Start(offset))?;
+
+                for media_result in media {
+                    let media_data = media_result?;
+
+                    in_file.seek(SeekFrom::Start(media_data.offset))?;
+                    let mut file = in_file.take(media_data.length);
+
+                    io::copy(&mut file, &mut out_file)?;
+
+                    in_file = file.into_inner();
+
+                    edit_offset_stmt.execute(params![offset, media_data.id])?;
+
+                    offset += media_data.length;
+
+                    progress.increment_saved();
+
+                    println!("File saved");
+                }
+
+                let mut get_stmt =
+                    conn.prepare("SELECT id, path FROM media WHERE path IS NOT NULL")?;
+                let mut set_offset_len = conn
+                    .prepare("UPDATE media SET offset = ?, length = ?, path = NULL WHERE id = ?")?;
+
+                let media = get_stmt.query_map::<(i64, String), _, _>(params![], |row| {
+                    Ok((row.get("id")?, row.get("path")?))
                 })?;
 
-            let mut offset = HEADER_SIZE as u64;
+                for media_result in media {
+                    println!("Saving media");
+                    let (id, path) = media_result?;
 
-            let mut get_stmt = conn.prepare(
-                "SELECT id, offset, length FROM media WHERE offset IS NOT NULL ORDER BY offset",
-            )?;
-            let mut edit_offset_stmt = conn.prepare("UPDATE media SET offset = ? WHERE id = ?")?;
+                    let full_path = dir.join("media").join(path);
 
-            let mut media = get_stmt
-                .query_map(params![], |row| {
-                    Ok(MediaData {
-                        id: row.get("id")?,
-                        offset: row.get("offset")?,
-                        length: row.get("length")?,
-                    })
-                })?
-                .peekable();
+                    let size = {
+                        let mut media_file = fs::File::open(&full_path)?;
 
-            // If we are writing to the same file, skip all entries which are already in the
-            // correct place.
-            if to_path.is_none() {
-                while media
-                    .next_if(|x| {
-                        x.as_ref().is_ok_and(|media_data| {
-                            if media_data.offset == offset {
-                                offset += media_data.length;
-                                true
-                            } else {
-                                false
-                            }
-                        })
-                    })
-                    .is_some()
-                {
-                    num_files -= 1;
-                }
-            }
+                        io::copy(&mut media_file, &mut out_file)?
+                    };
 
-            progress.start_saving(num_files);
+                    set_offset_len.execute(params![offset, size, id])?;
 
-            out_file.seek(SeekFrom::Start(offset))?;
+                    offset += size;
 
-            for media_result in media {
-                let media_data = media_result?;
+                    if let Err(err) = fs::remove_file(&full_path) {
+                        eprintln!("{err}");
+                    }
 
-                in_file.seek(SeekFrom::Start(media_data.offset))?;
-                let mut file = in_file.take(media_data.length);
+                    progress.increment_saved();
 
-                io::copy(&mut file, &mut out_file)?;
-
-                in_file = file.into_inner();
-
-                edit_offset_stmt.execute(params![offset, media_data.id])?;
-
-                offset += media_data.length;
-
-                progress.increment_saved();
-
-                println!("File saved");
-            }
-
-            let mut get_stmt = conn.prepare("SELECT id, path FROM media WHERE path IS NOT NULL")?;
-            let mut set_offset_len =
-                conn.prepare("UPDATE media SET offset = ?, length = ?, path = NULL WHERE id = ?")?;
-
-            let media = get_stmt.query_map::<(i64, String), _, _>(params![], |row| {
-                Ok((row.get("id")?, row.get("path")?))
-            })?;
-
-            for media_result in media {
-                println!("Saving media");
-                let (id, path) = media_result?;
-
-                let full_path = dir.join("media").join(path);
-
-                let size = {
-                    let mut media_file = fs::File::open(&full_path)?;
-
-                    io::copy(&mut media_file, &mut out_file)?
-                };
-
-                set_offset_len.execute(params![offset, size, id])?;
-
-                offset += size;
-
-                if let Err(err) = fs::remove_file(&full_path) {
-                    eprintln!("{err}");
+                    println!("File saved");
                 }
 
-                progress.increment_saved();
-
-                println!("File saved");
-            }
-
-            Ok(offset)
-        })
-        .await;
+                Ok(offset)
+            })
+            .await;
 
         progress.reset();
 
@@ -706,44 +685,6 @@ impl MediaPack {
         Ok(())
     }
 
-    async fn edit_tags_of(&self, name: &str, id: u64, tags: &[String]) -> Result<()> {
-        let _handle = self.saving.read().await;
-
-        let tag_ids: Vec<_> = tags
-            .iter()
-            .filter_map(|x| self.tag_to_id.get(x))
-            .cloned()
-            .collect();
-
-        let table_name = format!("{}_tags", name);
-        let id_name = format!("{}_id", name);
-
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-
-            tx.execute(
-                &format!("DELETE FROM {table_name} WHERE {id_name} = ?"),
-                params![id],
-            )?;
-
-            for tag_id in &tag_ids {
-                tx.execute(
-                    &format!("INSERT INTO {table_name} ({id_name}, tag_id) VALUES (?1, ?2)"),
-                    params![id, tag_id],
-                )?;
-            }
-
-            tx.commit()?;
-
-            Ok(())
-        })
-        .await?;
-
-        self.mark_unsaved().await?;
-
-        Ok(())
-    }
-
     pub async fn add_file(
         &self,
         encoded_file: EncodedFile,
@@ -765,7 +706,6 @@ impl MediaPack {
         let path = encoded_file.path.to_string_lossy().to_string();
 
         let file_name_clone = file_name.clone();
-        let hash_clone = hash.clone();
         let id = self.db_execute(move |conn| {
             conn.query_row(
                 "INSERT INTO media (file_name, file_type, path, width, height, transparent, duration, audio, hash, thumbnail)
@@ -922,30 +862,118 @@ impl MediaPack {
         .await
     }
 
+    pub async fn get_all_tags(&self) -> Result<Vec<String>> {
+        let _handle = self.saving.read().await;
+
+        self.db_execute(move |conn| {
+            let mut stmt = conn.prepare("SELECT name FROM tags")?;
+
+            let result = stmt
+                .query_map([], |row| row.get::<_, String>("name"))?
+                .collect::<rusqlite::Result<_>>()?;
+
+            Ok(result)
+        })
+        .await
+    }
+
     pub async fn get_tags(&self, id: u64) -> Result<Vec<String>> {
         let _handle = self.saving.read().await;
 
-        let ids: Vec<u64> = self
-            .db_execute(move |conn| {
-                let mut stmt = conn.prepare("SELECT tag_id FROM media_tags WHERE media_id = ?")?;
+        self.db_execute(move |conn| {
+            let mut stmt = conn.prepare(
+                r#"
+                    SELECT tags.name
+                    FROM media_tags
+                    LEFT JOIN tags ON media_tags.tag_id = tags.id
+                    WHERE media_tags.media_id = ?
+                "#,
+            )?;
 
-                let result = stmt
-                    .query_map(params![id], |row| row.get("tag_id"))?
-                    .collect::<rusqlite::Result<Vec<u64>>>()
-                    .map_err(|err| err.into());
+            let result = stmt
+                .query_map(params![id], |row| row.get("name"))?
+                .collect::<rusqlite::Result<_>>()
+                .map_err(|err| err.into());
 
-                result
-            })
-            .await?;
-
-        Ok(ids
-            .iter()
-            .filter_map(|x| self.id_to_tag.get(x).cloned())
-            .collect())
+            result
+        })
+        .await
     }
 
-    async fn edit_file_tags(&self, id: u64, tags: &Vec<String>) -> Result<()> {
-        self.edit_tags_of("media", id, tags).await
+    pub async fn add_tag(&self, id: u64, tag: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+
+        self.db_execute(move |conn| {
+            let tag_id: u64 =
+                conn.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
+                    row.get("id")
+                })?;
+
+            conn.execute(
+                "INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+                params![id, tag_id],
+            )?;
+
+            Ok(())
+        })
+        .await?;
+
+        self.mark_unsaved().await?;
+
+        Ok(())
+    }
+
+    pub async fn create_and_add_tag(&self, id: u64, tag: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+
+            let tag_id: u64 = tx.query_row(
+                "INSERT INTO tags (name) VALUES (?) RETURNING id",
+                params![tag],
+                |row| row.get("id"),
+            )?;
+
+            tx.execute(
+                "INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+                params![id, tag_id],
+            )?;
+
+            tx.commit()?;
+
+            Ok(())
+        })
+        .await?;
+
+        self.mark_unsaved().await?;
+
+        Ok(())
+    }
+
+    pub async fn remove_tag(&self, id: u64, tag: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+
+        self.db_execute(move |conn| {
+            let result = conn.execute(
+                r#"
+                DELETE FROM media_tags
+                WHERE media_id = ? AND tag_id IN (
+                    SELECT id FROM tags WHERE name = ?
+                )
+            "#,
+                params![id, tag],
+            )?;
+
+            println!("{}", result);
+
+            Ok(())
+        })
+        .await?;
+
+        self.mark_unsaved().await?;
+
+        Ok(())
     }
 
     pub async fn check_hash(&self, hash: &blake3::Hash) -> anyhow::Result<bool> {
@@ -961,6 +989,20 @@ impl MediaPack {
                 .is_some())
         })
         .await
+    }
+
+    pub async fn set_title(&self, id: u64, name: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+
+        self.db_execute(move |conn| {
+            conn.execute("UPDATE media SET name = ? WHERE id = ?", params![name, id])?;
+            Ok(())
+        })
+        .await?;
+
+        self.mark_unsaved().await?;
+
+        Ok(())
     }
 }
 
@@ -1162,22 +1204,6 @@ pub struct DataRange {
     pub start: u64,
     pub end: u64,
     pub total_size: u64,
-}
-
-struct DatabasePool<'a>(&'a PooledConnection<SqliteConnectionManager>);
-
-impl<'a> Database for DatabasePool<'a> {
-    fn exec(&self, sql: &str) -> Result<()> {
-        self.0.execute_batch(sql)?;
-        Ok(())
-    }
-
-    fn get_value(&self, sql: &str, field: &str) -> Result<Option<usize>> {
-        self.0
-            .query_row(sql, params![], |row| row.get(field))
-            .optional()
-            .map_err(|err| err.into())
-    }
 }
 
 fn resolve_range(range: Range, size: u64) -> Result<(u64, u64)> {

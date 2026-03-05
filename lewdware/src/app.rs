@@ -16,7 +16,7 @@ use winit::{
     window::WindowId,
 };
 
-use crate::audio::{AudioHandle, AudioPlayer};
+use crate::audio::AudioPlayer;
 use crate::egui::WgpuState;
 use crate::error::{LewdwareError, MonitorError, Result};
 use crate::header::HEADER_HEIGHT;
@@ -24,7 +24,7 @@ use crate::lua::{
     self, AudioAction, ChoiceWindowOption, LuaRequest, Notification, SpawnWindowOpts,
     WallpaperMode, WindowAction, WindowProps, start_lua_thread,
 };
-use crate::media::{FileOrPath, ImageData, VideoData};
+use crate::media::{FileOrPath, ImageData};
 use crate::monitor::Monitors;
 use crate::utils::calculate_media_popup_size;
 use crate::video::VideoDecoder;
@@ -77,36 +77,26 @@ impl<'a> ChaosApp<'a> {
         };
 
         println!("{:?}", config);
-                // local video = lewdware.media.random_video()
-                // local video_window = lewdware.spawn_video_popup(video, {
-                //     width = { percent = 100 },
-                //     height = { percent = 100 },
-                //     decorations = false,
-                //     visible = false,
-                // })
-                // lewdware.every(10000, function()
-                //     video_window:set_visible(true)
-                //     lewdware.after(500, function()
-                //         video_window:set_visible(false)
-                //     end)
-                // end)
-
+        // local video = lewdware.media.random_video()
+        // local video_window = lewdware.spawn_video_popup(video, {
+        //     width = { percent = 100 },
+        //     height = { percent = 100 },
+        //     decorations = false,
+        //     visible = false,
+        // })
+        // lewdware.every(10000, function()
+        //     video_window:set_visible(true)
+        //     lewdware.after(500, function()
+        //         video_window:set_visible(false)
+        //     end)
+        // end)
 
         let (lua_event_tx, lua_request_rx) = start_lua_thread(
             event_loop_proxy.clone(),
-            r#"
-                lewdware.every(1000, function()
-                    local media = lewdware.media.random({ type = {"image", "video"} });
-                    if media.type == "image" then
-                        lewdware.spawn_image_popup(media)
-                    elseif media.type == "video" then
-                        lewdware.spawn_video_popup(media)
-                    end
-                end)
-            "#
-            .to_string(),
             config.clone(),
         );
+
+        let monitors = Monitors::new(config.disabled_monitors.clone());
 
         Ok(Self {
             running: false,
@@ -118,7 +108,7 @@ impl<'a> ChaosApp<'a> {
             default_wallpaper: wallpaper,
             lua_request_rx,
             lua_event_tx,
-            monitors: Monitors::new(),
+            monitors,
             event_loop_proxy,
         })
     }
@@ -239,6 +229,8 @@ impl<'a> ChaosApp<'a> {
             window,
             &self.wgpu_state,
             opts.decorations,
+            opts.title,
+            opts.closeable,
             gpu,
             LogicalPosition::new(x, y),
             self.lua_event_tx.clone(),
@@ -279,7 +271,6 @@ impl<'a> ChaosApp<'a> {
         &mut self,
         video_player: VideoDecoder,
         loop_video: bool,
-        audio: bool,
         opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
@@ -295,19 +286,23 @@ impl<'a> ChaosApp<'a> {
 
         window.request_redraw();
 
-        let video_window =
-            VideoWindow::new(window, video_player, props.width, props.height, audio, loop_video)
-                .map_err(|err| LewdwareError::WindowError(err))?;
+        let video_window = VideoWindow::new(
+            window,
+            video_player,
+            loop_video,
+        )
+        .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
             .insert(props.window_id.clone(), WindowType::Video(video_window));
+
+        println!("{}", self.windows.len());
 
         Ok(props)
     }
 
     fn spawn_prompt(
         &mut self,
-        title: Option<String>,
         text: Option<String>,
         placeholder: Option<String>,
         initial_value: Option<String>,
@@ -324,7 +319,7 @@ impl<'a> ChaosApp<'a> {
             event_loop,
         )?;
 
-        let prompt_window = PromptWindow::new(window, title, text, placeholder, initial_value)
+        let prompt_window = PromptWindow::new(window, text, placeholder, initial_value)
             .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
@@ -335,7 +330,6 @@ impl<'a> ChaosApp<'a> {
 
     fn spawn_choice(
         &mut self,
-        title: Option<String>,
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
         window_opts: SpawnWindowOpts,
@@ -351,7 +345,7 @@ impl<'a> ChaosApp<'a> {
             event_loop,
         )?;
 
-        let prompt_window = ChoiceWindow::new(window, title, text, options)
+        let prompt_window = ChoiceWindow::new(window, text, options)
             .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
@@ -367,7 +361,7 @@ impl<'a> ChaosApp<'a> {
         // TODO: Handle messages etc.
 
         audio_player.play();
-        audio_player.monitor(id, self.event_loop_proxy.clone());
+        // audio_player.monitor(id, self.event_loop_proxy.clone());
         self.audio_players.insert(id, audio_player);
 
         id
@@ -400,15 +394,21 @@ impl<'a> ChaosApp<'a> {
         let url = Url::parse(&url).map_err(|err| LewdwareError::OpenLinkError(err.into()))?;
 
         if url.scheme() != "https" {
-            return Err(LewdwareError::OpenLinkError(anyhow!("Only https:// links are permitted")));
+            return Err(LewdwareError::OpenLinkError(anyhow!(
+                "Only https:// links are permitted"
+            )));
         }
 
         if !matches!(url.host(), Some(Host::Domain(_))) {
-            return Err(LewdwareError::OpenLinkError(anyhow!("IP addresses are not allowed")));
+            return Err(LewdwareError::OpenLinkError(anyhow!(
+                "IP addresses are not allowed"
+            )));
         }
 
         if !url.username().is_empty() || url.password().is_some() {
-            return Err(LewdwareError::OpenLinkError(anyhow!("URLs cannot contain a username or password")));
+            return Err(LewdwareError::OpenLinkError(anyhow!(
+                "URLs cannot contain a username or password"
+            )));
         }
 
         webbrowser::open(url.as_str()).map_err(|err| LewdwareError::OpenLinkError(err.into()))
@@ -446,14 +446,12 @@ impl<'a> ChaosApp<'a> {
             LuaRequest::SpawnVideo {
                 video_player: data,
                 loop_video,
-                audio,
                 window_opts,
                 tx,
             } => tx
-                .send(self.spawn_video(data, loop_video, audio, window_opts, event_loop))
+                .send(self.spawn_video(data, loop_video, window_opts, event_loop))
                 .is_ok(),
             LuaRequest::SpawnPrompt {
-                title,
                 text,
                 placeholder,
                 initial_value,
@@ -461,7 +459,6 @@ impl<'a> ChaosApp<'a> {
                 tx,
             } => tx
                 .send(self.spawn_prompt(
-                    title,
                     text,
                     placeholder,
                     initial_value,
@@ -470,13 +467,12 @@ impl<'a> ChaosApp<'a> {
                 ))
                 .is_ok(),
             LuaRequest::SpawnChoice {
-                title,
                 text,
                 options,
                 window_opts,
                 tx,
             } => tx
-                .send(self.spawn_choice(title, text, options, window_opts, event_loop))
+                .send(self.spawn_choice(text, options, window_opts, event_loop))
                 .is_ok(),
             LuaRequest::SpawnAudio {
                 audio_player: data,
@@ -533,19 +529,6 @@ impl<'a> ChaosApp<'a> {
                         WindowAction::Move { id, tx, opts } => tx
                             .send(entry.get_mut().inner_window_mut().start_move(id, opts))
                             .is_ok(),
-                        WindowAction::SetTitle { tx, title } => tx
-                            .send(match entry.get_mut() {
-                                WindowType::Prompt(prompt) => {
-                                    prompt.set_title(title);
-                                    Ok(())
-                                }
-                                WindowType::Choice(choice) => {
-                                    choice.set_title(title);
-                                    Ok(())
-                                }
-                                _ => Err(LewdwareError::Internal("Invalid window type")),
-                            })
-                            .is_ok(),
                         WindowAction::SetText { tx, text } => tx
                             .send(match entry.get_mut() {
                                 WindowType::Prompt(prompt) => {
@@ -579,6 +562,9 @@ impl<'a> ChaosApp<'a> {
                             .is_ok(),
                         WindowAction::SetVisible { tx, visible } => tx
                             .send(entry.get().inner_window().set_visible(visible))
+                            .is_ok(),
+                        WindowAction::SetTitle { tx, title } => tx
+                            .send(entry.get_mut().inner_window_mut().set_title(title))
                             .is_ok(),
                     }
                 } else {
@@ -710,7 +696,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             }
             UserEvent::LuaRequest => {
                 self.process_lua_requests(event_loop);
-            },
+            }
             UserEvent::AudioFinish { id } => {
                 if self.audio_players.remove(&id).is_some() {
                     if let Err(err) = self.lua_event_tx.send(lua::Event::AudioFinish { id }) {

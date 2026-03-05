@@ -1,63 +1,176 @@
-use dioxus::{core::{Task, spawn_forever}, prelude::*};
-use shared::read_pack::read_pack_metadata_async;
+use dioxus::{
+    desktop::{use_window, wry::dpi::PhysicalSize},
+    prelude::*,
+};
+use dioxus_primitives::checkbox::CheckboxState;
+use shared::{
+    components::{checkbox::Checkbox, label::Label},
+    user_config::{AppConfigStoreExt, Key},
+};
 
-use crate::{Config, MediaPack, Pack};
-use shared::user_config::{AppConfig, AppConfigStoreExt};
+use crate::Config;
 
 #[component]
 pub fn General() -> Element {
     rsx! {
-        div {
-            class: "flex-1 p-5 flex flex-col gap-4"
+        div { class: "flex-1 p-10 flex flex-col gap-8 overflow-y-auto",
+            PanicKeyInput {  }
+            MonitorPicker {  }
         }
     }
 }
 
 #[component]
-pub fn PackPicker() -> Element {
-    let config: Store<AppConfig> = use_context::<Config>().0;
-    let mut pack = use_context::<Pack>().0;
-    let mut task: Signal<Option<Task>> = use_signal(|| None);
+pub fn PanicKeyInput() -> Element {
+    let config = use_context::<Config>().0;
+
+    let mut recording = use_signal(|| false);
+
+    let display_text = match (recording(), &*config.panic_button().read()) {
+        (true, _) => "Press a key…".to_string(),
+        (false, kb) => kb.to_string(),
+    };
+
+    let capture_classes = if recording() {
+        "bg-blue-50 border-2 border-blue-500 text-blue-700 italic"
+    } else {
+        "bg-gray-50 border-2 border-gray-300 text-gray-900 hover:border-gray-400"
+    };
 
     rsx! {
-        input {
-            class: "rounded-md hover:bg-gray-200",
-            type: "file",
-            accept: ".md",
-            onchange: move |event: FormEvent| {
-                if let Some(file) = event.files().first() {
-                    let path = file.path();
+        div {
+            class: "inline-flex flex-col gap-1 font-sans",
 
-                    if let Some(task) = task.take() {
-                        task.cancel();
-                    }
+            label {
+                class: "text-sm font-semibold text-gray-700",
+                "Panic key"
+            }
 
-                    *task.write() = Some(spawn_forever(async move {
-                        let file = match tokio::fs::File::open(&path).await {
-                            Ok(file) => file,
-                            Err(err) => {
-                                eprintln!("{err}");
-                                return;
-                            },
-                        };
+            div {
+                tabindex: 0,
+                class: "px-4 py-2 rounded-md cursor-pointer min-w-40 text-center text-sm \
+                        outline-none select-none transition-all duration-150 {capture_classes}",
 
-                        match read_pack_metadata_async(file).await {
-                            Ok((header, metadata)) => {
-                                *config.pack_path().write() = Some(path);
-                                *pack.write() = Some(MediaPack { header, metadata });
-                            },
-                            Err(err) => {
-                                eprintln!("{err}");
-                                return;
-                            },
-                        }
-                    }));
-                }
-            },
-            if let Some(pack) = pack.read() {
-            } else {
-                ""
+                onclick: move |_| {
+                    recording.set(true);
+                },
+
+                onkeydown: move |evt| {
+                    if !recording() { return; }
+
+                    let key_name = evt.key().to_string();
+                    if is_modifier_key(&key_name) { return; }
+
+                    evt.prevent_default();
+
+                    let key_modifiers = evt.modifiers();
+                    let modifiers = shared::user_config::Modifiers {
+                        ctrl:  key_modifiers.ctrl(),
+                        alt:   key_modifiers.alt(),
+                        shift: key_modifiers.shift(),
+                        meta:  key_modifiers.meta(),
+                    };
+
+                    let key = Key {
+                        name: if key_name == " " { "Space".to_string() } else { key_name },
+                        code: evt.code().to_string(),
+                        modifiers,
+                    };
+
+                    config.panic_button().set(key);
+                    recording.set(false);
+                },
+
+                onblur: move |_| {
+                    recording.set(false);
+                },
+
+                "{display_text}"
             }
         }
     }
+}
+
+#[derive(Clone, PartialEq)]
+struct Monitor {
+    name: String,
+    size: PhysicalSize<u32>,
+}
+
+#[component]
+pub fn MonitorPicker() -> Element {
+    let window = use_window();
+
+    let monitors = use_memo(move || {
+        window
+            .available_monitors()
+            .filter_map(|monitor| {
+                monitor.name().map(|name| Monitor {
+                    name,
+                    size: monitor.size(),
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+
+    rsx! {
+        div {
+            class: "flex flex-col gap-1",
+            Label {
+                html_for: "",
+                "Monitors"
+            }
+
+            div {
+                class: "flex flex-col",
+                for monitor in monitors.read().iter() {
+                    MonitorOption { monitor: monitor.clone() }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MonitorOption(monitor: ReadSignal<Monitor>) -> Element {
+    let config = use_context::<Config>().0;
+
+    let enabled = use_memo(move || {
+        !config
+            .disabled_monitors()
+            .read()
+            .contains(&monitor.read().name)
+    });
+
+    let set_enabled = move |val: bool| {
+        println!("{}", monitor.read().name);
+        if val {
+            config
+                .disabled_monitors()
+                .retain(|name| name != &monitor.read().name);
+        } else if enabled() {
+            config.disabled_monitors().push(monitor.read().name.clone());
+        }
+    };
+
+    rsx! {
+        div {
+            class: "rounded-sm hover:bg-sky-200 p-1 flex items-center gap-2",
+            onclick: move |_| {
+                set_enabled(!enabled());
+                println!("Click");
+            },
+            Checkbox {
+                checked: if enabled() { CheckboxState::Checked } else { CheckboxState::Unchecked },
+            }
+            "{monitor.read().name} ({monitor.read().size.width}x{monitor.read().size.height})"
+        }
+    }
+}
+
+fn is_modifier_key(key: &str) -> bool {
+    matches!(
+        key,
+        "Control" | "Alt" | "Shift" | "Meta" | "Super" | "Hyper"
+    )
 }

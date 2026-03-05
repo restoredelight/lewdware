@@ -20,6 +20,7 @@ use crate::{audio::AudioPlayer, media::FileOrPath};
 /// * If the video is behind the audio, frames will be skipped until the video is back in sync.
 pub struct VideoDecoder {
     receiver: Receiver<Option<VideoFrame>>,
+    resize_tx: SyncSender<(u32, u32)>,
     _video: FileOrPath,
     audio_player: Option<AudioPlayer>,
     tolerance: Duration,
@@ -31,7 +32,6 @@ pub struct VideoDecoder {
     native_width: u32,
     native_height: u32,
     paused: bool,
-    on_finish: Option<Box<dyn FnMut() + Send>>,
     video_duration: Duration,
 }
 
@@ -50,11 +50,11 @@ impl VideoDecoder {
     ) -> Result<Self> {
         let path = video.path();
 
-        let (receiver, video_duration, native_width, native_height) =
+        let (receiver, resize_tx, video_duration, native_width, native_height) =
             spawn_video_stream(path.to_path_buf(), loop_video)?;
 
         let audio_player = if play_audio {
-            match AudioPlayer::new(path.to_path_buf(), loop_video) {
+            match AudioPlayer::new(path.to_path_buf(), loop_video, None, None) {
                 Ok(audio_player) => Some(audio_player),
                 Err(err) => {
                     eprintln!("{err}");
@@ -67,6 +67,7 @@ impl VideoDecoder {
 
         Ok(Self {
             receiver,
+            resize_tx,
             width,
             height,
             native_width,
@@ -78,9 +79,12 @@ impl VideoDecoder {
             tolerance: Duration::from_millis(200),
             _video: video,
             paused: true,
-            on_finish: None,
             video_duration,
         })
+    }
+
+    pub fn set_output_size(&self, width: u32, height: u32) {
+        let _ = self.resize_tx.send((width, height));
     }
 
     pub fn width(&self) -> u32 {
@@ -97,10 +101,6 @@ impl VideoDecoder {
 
     pub fn native_height(&self) -> u32 {
         self.native_height
-    }
-
-    pub fn on_finish(&mut self, f: impl FnMut() + Send + 'static) {
-        self.on_finish = Some(Box::new(f));
     }
 
     /// Get the next frame, if it's ready.
@@ -140,13 +140,11 @@ impl VideoDecoder {
                     break frame;
                 }
                 Ok(None) => {
-                    if let Some(on_finish) = &mut self.on_finish {
-                        on_finish();
-                    }
                     // End of stream from decoder. If looping, it will start again.
                     return NextFrame::None;
                 }
                 Err(TryRecvError::Empty) => {
+                    println!("No frame recieved from decoder");
                     // The decoder is lagging behind the audio, so we pause the audio to wait for it.
                     if let Some(audio_player) = &self.audio_player {
                         audio_player.pause();
@@ -214,9 +212,16 @@ struct VideoMetadata {
 fn spawn_video_stream(
     path: PathBuf,
     loop_video: bool,
-) -> Result<(Receiver<Option<VideoFrame>>, Duration, u32, u32)> {
+) -> Result<(
+    Receiver<Option<VideoFrame>>,
+    SyncSender<(u32, u32)>,
+    Duration,
+    u32,
+    u32,
+)> {
     // Now returns Result
     let (tx, rx) = sync_channel(10);
+    let (resize_tx, resize_rx) = sync_channel(1);
     let (meta_tx, meta_rx) = sync_channel(1);
 
     thread::spawn(move || {
@@ -230,7 +235,14 @@ fn spawn_video_stream(
             }
         };
 
-        if let Err(err) = decode_video(path, tx, loop_video, video_duration_inner, meta_tx) {
+        if let Err(err) = decode_video(
+            path,
+            tx,
+            resize_rx,
+            loop_video,
+            video_duration_inner,
+            meta_tx,
+        ) {
             eprintln!("Error decoding video: {}", err);
         }
     });
@@ -240,7 +252,7 @@ fn spawn_video_stream(
         .recv()
         .context("Failed to receive video metadata from spawn thread")?;
 
-    Ok((rx, meta.duration, meta.width, meta.height))
+    Ok((rx, resize_tx, meta.duration, meta.width, meta.height))
 }
 
 // New helper function to get video duration
@@ -257,6 +269,7 @@ fn get_video_duration(path: &PathBuf) -> Result<Duration> {
 fn decode_video(
     path: PathBuf,
     tx: SyncSender<Option<VideoFrame>>,
+    resize_rx: Receiver<(u32, u32)>,
     loop_video: bool,
     video_duration: Duration, // New parameter
     meta_tx: SyncSender<VideoMetadata>,
@@ -273,7 +286,9 @@ fn decode_video(
     let time_base = video_stream.time_base();
     let avg_frame_rate = video_stream.avg_frame_rate();
     let frame_duration = if avg_frame_rate.numerator() > 0 {
-        Duration::from_secs_f64(avg_frame_rate.denominator() as f64 / avg_frame_rate.numerator() as f64)
+        Duration::from_secs_f64(
+            avg_frame_rate.denominator() as f64 / avg_frame_rate.numerator() as f64,
+        )
     } else {
         Duration::from_millis(33)
     };
@@ -289,13 +304,16 @@ fn decode_video(
             .unwrap_or(0),
     });
 
+    let mut current_width = decoder.width();
+    let mut current_height = decoder.height();
+
     let mut scaler = software::scaling::context::Context::get(
         decoder.format(),
         decoder.width(),
         decoder.height(),
         ffmpeg::format::Pixel::RGBA,
-        decoder.width(),
-        decoder.height(),
+        current_width,
+        current_height,
         software::scaling::flag::Flags::FAST_BILINEAR,
     )?;
 
@@ -318,6 +336,27 @@ fn decode_video(
     let mut last_pts_duration = Duration::ZERO;
 
     'main: loop {
+        // Check for resize requests
+        match resize_rx.try_recv() {
+            Ok((w, h)) => {
+                if w != current_width || h != current_height {
+                    scaler = software::scaling::context::Context::get(
+                        decoder.format(),
+                        decoder.width(),
+                        decoder.height(),
+                        ffmpeg::format::Pixel::RGBA,
+                        w,
+                        h,
+                        software::scaling::flag::Flags::FAST_BILINEAR,
+                    )?;
+                    current_width = w;
+                    current_height = h;
+                }
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => break 'main,
+        }
+
         for (stream, packet) in ictx.packets() {
             if stream.index() == stream_index {
                 decoder.send_packet(&packet)?;
@@ -341,6 +380,26 @@ fn decode_video(
                         break 'main;
                     }
                 }
+            }
+
+            match resize_rx.try_recv() {
+                Ok((w, h)) => {
+                    if w != current_width || h != current_height {
+                        scaler = software::scaling::context::Context::get(
+                            decoder.format(),
+                            decoder.width(),
+                            decoder.height(),
+                            ffmpeg::format::Pixel::RGBA,
+                            w,
+                            h,
+                            software::scaling::flag::Flags::FAST_BILINEAR,
+                        )?;
+                        current_width = w;
+                        current_height = h;
+                    }
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => break 'main,
             }
         }
 

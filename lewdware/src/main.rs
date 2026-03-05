@@ -1,28 +1,54 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use anyhow::Result;
+use std::{env::args_os, path::PathBuf};
+
+use anyhow::{Context, Result};
 use pollster::block_on;
-use shared::user_config::load_config;
+use shared::user_config::{Mode, load_config};
 use winit::event_loop::EventLoop;
 
-use crate::{app::ChaosApp, egui::WgpuState, utils::{spawn_panic_thread}};
+use crate::{app::ChaosApp, egui::WgpuState, utils::spawn_panic_thread};
 
 mod app;
 mod audio;
 mod buffer;
 mod egui;
+mod error;
+mod header;
+mod lua;
 mod media;
+mod monitor;
 mod transition;
 mod utils;
 mod video;
 mod window;
-mod lua;
-mod monitor;
-mod error;
-mod header;
 
 fn main() -> Result<()> {
-    let config = load_config()?;
+    let mut args = args_os();
+
+    let mut mode_path = None;
+    let mut mode = None;
+    while let Some(arg) = args.next() {
+        if &arg == "--mode-path" {
+            mode_path = Some(PathBuf::from(args.next().context("No mode path provided")?));
+        }
+
+        if &arg == "--mode" {
+            mode = Some(
+                args.next()
+                    .context("No mode provided")?
+                    .to_str()
+                    .context("Invalid UTF-8")?
+                    .to_string(),
+            )
+        }
+    }
+
+    let mut config = load_config()?;
+
+    if let (Some(mode_path), Some(mode)) = (mode_path, mode) {
+        config.mode = Mode::File { path: mode_path, mode };
+    }
 
     let wgpu_state = block_on(WgpuState::new())?;
 

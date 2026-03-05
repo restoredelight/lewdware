@@ -1,5 +1,8 @@
----@meta app
-app = {}
+---@meta lewdware
+lewdware = {}
+
+---@type { [string]: number | string | boolean }
+lewdware.config = {}
 
 ---@alias MediaType "image" | "video" | "audio"
 ---@alias Coord number | { percent: number } Either a coordinate in pixels, or a percentage of the
@@ -9,7 +12,6 @@ app = {}
 ---@class Media
 ---@field id number A unique identifier for the file.
 ---@field name string The name of the file.
----@field type "image" | "video" | "audio" The type of media.
 
 ---@class Image : Media
 ---@field type '"image"'
@@ -36,7 +38,6 @@ app = {}
 ---  present.
 ---@field x number The x coordinate (in pixels) of the top left coordinate of the window.
 ---@field y number The y coordinate (in pixels) of the top left coordinate of the window.
----@field type "image" | "video" | "prompt" | "choice"
 ---@field monitor Monitor The monitor that the window is located on.
 ---@field closed boolean Whether the window is currently closed.
 ---@field visible boolean Whether the window is currently visible.
@@ -87,6 +88,10 @@ function Window:move(opts, cb) end
 ---to close windows that you are no longer using.
 function Window:set_visible(visible) end
 
+---Set the text displayed in the header.
+---@param title string?
+function Window:set_title(title) end
+
 ---@class ImageWindow : Window
 ---@field type "'image'"
 ---@field image Image The image being shown on the window.
@@ -96,16 +101,16 @@ function Window:set_visible(visible) end
 ---@field video Video The video being played on the window.
 VideoWindow = {}
 
----Call a function every time a video finishes/loops. If the video window was spawned with `loop`
----disabled, then this is essentially identical to `on_close()`.
----@param cb fun()
-function VideoWindow:on_finish(cb) end
-
 ---Pause the video being played on the window.
 function VideoWindow:pause() end
 
 ---Resume playback of the video on the window.
 function VideoWindow:play() end
+
+---Set whether a video window should loop when the video ends (see also the `loop` option in
+---`spawn_video_popup()`). Non-looping videos close when they end.
+---@param loop any
+function VideoWindow:set_loop(loop) end
 
 ---@class PromptWindow : Window
 ---@field type "'prompt'"
@@ -118,10 +123,6 @@ PromptWindow = {}
 ---Call a function every time the user submits a value.
 ---@param cb fun(text: string) A function that takes the value that the user has submitted.
 function PromptWindow:on_submit(cb) end
-
----Set the title of the window.
----@param title? string
-function PromptWindow:set_title(title) end
 
 ---Set the text/subtitle of the window.
 ---@param text? string
@@ -142,10 +143,6 @@ ChoiceWindow = {}
 ---@param cb fun(id: string) A function taking the id of the choice that the user submitted.
 function ChoiceWindow:on_select(cb) end
 
----Set the title of the window.
----@param title? string
-function ChoiceWindow:set_title(title) end
-
 ---Set the text/subtitle of the window.
 ---@param text? string
 function ChoiceWindow:set_text(text) end
@@ -154,28 +151,28 @@ function ChoiceWindow:set_text(text) end
 ---@param options? { id: string, label: string }[]
 function ChoiceWindow:set_options(options) end
 
----@class AppMedia
-app.media = {}
+---@class LewdwareMedia
+lewdware.media = {}
 
 ---Get a specific file.
 ---@param name string The name of the file.
 ---@return Image | Video | Audio | nil
-function app.media.get(name) end
+function lewdware.media.get(name) end
 
 ---Get a specific image file.
 ---@param name string The name of the file.
 ---@return Image | nil
-function app.media.get_image(name) end
+function lewdware.media.get_image(name) end
 
 ---Get a specific video file.
 ---@param name string The name of the file.
 ---@return Video | nil
-function app.media.get_video(name) end
+function lewdware.media.get_video(name) end
 
 ---Get a specific audio file.
 ---@param name string The name of the file.
 ---@return Audio | nil
-function app.media.get_audio(name) end
+function lewdware.media.get_audio(name) end
 
 ---@class QueryMediaOpts
 ---@field type? MediaType | (MediaType)[] The type of media to include in the result. By default,
@@ -185,58 +182,58 @@ function app.media.get_audio(name) end
 ---List all files in the pack.
 ---@param opts? QueryMediaOpts
 ---@return (Image | Video | Audio)[]
-function app.media.list(opts) end
+function lewdware.media.list(opts) end
 
 ---List all image files in the pack.
 ---@param opts? {
 ---   tags?: string[],
 ---}
 ---@return Image[]
-function app.media.list_images(opts) end
+function lewdware.media.list_images(opts) end
 
 ---List all video files in the pack.
 ---@param opts? {
 ---   tags?: string[],
 ---}
 ---@return Video[]
-function app.media.list_videos(opts) end
+function lewdware.media.list_videos(opts) end
 
 ---List all audio files in the pack.
 ---@param opts? {
 ---   tags?: string[],
 ---}
 ---@return Audio[]
-function app.media.list_audio(opts) end
+function lewdware.media.list_audio(opts) end
 
 ---Get a random media file.
 ---@param opts? QueryMediaOpts
 ---@return Image | Video | Audio | nil
-function app.media.random(opts) end
+function lewdware.media.random(opts) end
 
 ---Get a random image file
 ---@param opts? QueryMediaOpts
 ---@return Image | nil
-function app.media.random_image(opts) end
+function lewdware.media.random_image(opts) end
 
 ---Get a random video file
 ---@param opts? {
 ---   tags?: string[],
 ---}
 ---@return Video | nil
-function app.media.random_video(opts) end
+function lewdware.media.random_video(opts) end
 
 ---Get a random audio file
 ---@param opts? {
 ---   tags?: string[],
 ---}
 ---@return Audio | nil
-function app.media.random_audio(opts) end
+function lewdware.media.random_audio(opts) end
 
 ---Spawn a popup displaying an image.
 ---@param image Image
 ---@param opts? SpawnImageOpts
 ---@return ImageWindow
-function app.spawn_image_popup(image, opts) end
+function lewdware.spawn_image_popup(image, opts) end
 
 ---@class SpawnWindowOpts
 ---Options that can be passed into any of [spawn_image()], [spawn_video()], [spawn_prompt()] and
@@ -256,6 +253,11 @@ function app.spawn_image_popup(image, opts) end
 ---  random.
 ---@field decorations? boolean Whether to spawn the window with a header and border (defaults to
 ---  true). Note that windows without a header will not be able to be closed manually by the user.
+---@field title? string The text displayed in the header. Can be set dynamically using
+---  `Window:set_title()`. If `decorations` is false, this will be ignored.
+---@field closeable? boolean Whether the header should include a close button. Defaults to true.
+---  If this is false, then the user will not be able to close the window manually. If
+---  `decorations` is false, this will be ignored.
 ---@field visible? boolean Whether to make the window start off visible (defaults to true). See
 ---  `Window:set_visible()`.
 
@@ -266,7 +268,7 @@ function app.spawn_image_popup(image, opts) end
 ---@param video Video
 ---@param opts? SpawnVideoOpts
 ---@return VideoWindow
-function app.spawn_video_popup(video, opts) end
+function lewdware.spawn_video_popup(video, opts) end
 
 ---@class SpawnVideoOpts : SpawnWindowOpts
 ---Options for `spawn_video()`.
@@ -279,7 +281,7 @@ function app.spawn_video_popup(video, opts) end
 ---@param audio Audio
 ---@param opts? PlayAudioOpts
 ---@return AudioHandle
-function app.play_audio(audio, opts) end
+function lewdware.play_audio(audio, opts) end
 
 ---@class PlayAudioOpts
 ---@field loop boolean Whether to loop the audio. If true, the audio will loop forever until you
@@ -304,7 +306,7 @@ function AudioHandle:play() end
 ---Set the current wallpaper.
 ---@param image Image
 ---@param opts? SetWallpaperOpts
-function app.set_wallpaper(image, opts) end
+function lewdware.set_wallpaper(image, opts) end
 
 ---@class SetWallpaperOpts
 ---@field mode? "center" | "crop" | "fit" | "span" | "stretch" | "tile"
@@ -312,12 +314,11 @@ function app.set_wallpaper(image, opts) end
 ---Spawn a prompt popup. This will allow the user to submit text via a text input.
 ---@param opts? SpawnPromptOpts
 ---@return PromptWindow
-function app.spawn_prompt(opts) end
+function lewdware.spawn_prompt(opts) end
 
 ---@class SpawnPromptOpts : SpawnWindowOpts
 ---Options that can be passed into `spawn_prompt()`.
 ---
----@field title? string
 ---@field text? string Text that is displayed at the top of the prompt.
 ---@field placeholder? string A placeholder value that is shown in the text input before the user
 ---  has typed anything.
@@ -326,19 +327,18 @@ function app.spawn_prompt(opts) end
 ---Spawn a choice popup. This will present the user with one or more options to click.
 ---@param opts? SpawnChoiceOpts
 ---@return ChoiceWindow
-function app.spawn_choice(opts) end
+function lewdware.spawn_choice(opts) end
 
 ---@class SpawnChoiceOpts : SpawnWindowOpts
 ---Options that can be passed into `spawn_choice()`.
 ---
----@field title? string
 ---@field text? string
 ---@field options { id: string, label: string }[] The list of options, which determine the buttons
 ---  to present to the user. Only the label is displayed, the id is used in `on_select()`.
 
 ---Open a URL in the browser
 ---@param url string
-function app.open_link(url) end
+function lewdware.open_link(url) end
 
 ---@class Notification
 ---@field summary? string
@@ -346,13 +346,13 @@ function app.open_link(url) end
 
 ---Show a notification
 ---@param notification Notification
-function app.show_notification(notification) end
+function lewdware.show_notification(notification) end
 
 ---Call a function after a certain period of time.
 ---@param duration number The amount of time to wait for, in milliseconds.
 ---@param fun fun() The function to run.
 ---@return Timer
-function app.after(duration, fun) end
+function lewdware.after(duration, fun) end
 
 ---@class Timer
 ---@field duration number
@@ -365,9 +365,9 @@ function Timer:stop() end
 ---@param duration number The function will be run every `duration` milliseconds.
 ---@param fun fun() The function to run.
 ---@return Interval
-function app.every(duration, fun) end
+function lewdware.every(duration, fun) end
 
----@class Interval An object that runs a function periodically - created by `app.every`
+---@class Interval An object that runs a function periodically - created by `lewdware.every`
 ---@field duration number How often (in milliseconds) the function is executed.
 Interval = {}
 
@@ -380,25 +380,25 @@ function Interval:stop() end
 function Interval:set_duration(duration) end
 
 ---Stop completely.
-function app.exit() end
+function lewdware.exit() end
 
 ---@class Monitor
 ---@field id number
 ---@field primary boolean
 
----@class AppMonitors
-app.monitors = {}
+---@class LewdwareMonitors
+lewdware.monitors = {}
 
 ---Get all available monitors
 ---@return Monitor[]
 ---
 ---The available monitors may change while a mode is running. Try not to store this value for too
 ---long.
-function app.monitors.list() end
+function lewdware.monitors.list() end
 
 ---Get the user's primary monitor
 ---@return Monitor
 ---
 ---The primary monitor may change while a mode is running. Try not to store this value for too
 ---long.
-function app.monitors.primary() end
+function lewdware.monitors.primary() end

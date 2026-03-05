@@ -1,29 +1,49 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{collections::HashMap, fs, path::PathBuf};
 
 use anyhow::{Result, anyhow};
 use dioxus_stores::Store;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, Store)]
+use crate::mode::OptionValue;
+
+#[serde_as]
+#[derive(Serialize, Deserialize, Debug, Store, Clone)]
 pub struct AppConfig {
     pub pack_path: Option<PathBuf>,
+    pub uploaded_modes: Vec<PathBuf>,
+    pub mode: Mode,
+    #[serde_as(as = "Vec<(_, _)>")]
+    pub mode_options: HashMap<Mode, HashMap<String, OptionValue>>,
     pub tags: Option<Vec<String>>,
-    pub popup_frequency: Duration,
-    pub max_popup_duration: Option<Duration>,
-    pub close_button: bool,
-    pub max_videos: usize,
-    pub video_audio: bool,
-    pub audio: bool,
-    pub open_links: bool,
-    pub link_frequency: Duration,
-    pub notifications: bool,
-    pub notification_frequency: Duration,
-    pub prompts: bool,
-    pub prompt_frequency: Duration,
-    pub moving_windows: bool,
-    pub moving_window_chance: u32,
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+pub enum DefaultMode {
+    Main,
+}
+
+impl DefaultMode {
+    pub fn mode(&self) -> &'static str {
+        match self {
+            DefaultMode::Main => "default",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+pub enum Mode {
+    Default(String),
+    Pack { id: u64, mode: String },
+    File { path: PathBuf, mode: String },
+}
+
+impl Default for Mode {
+    fn default() -> Self {
+        Mode::Default("default".to_string())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -31,6 +51,18 @@ pub struct Key {
     pub name: String,
     pub code: String,
     pub modifiers: Modifiers,
+}
+
+impl std::fmt::Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut parts = Vec::new();
+        if self.modifiers.ctrl  { parts.push("Ctrl");  }
+        if self.modifiers.alt   { parts.push("Alt");   }
+        if self.modifiers.shift { parts.push("Shift"); }
+        if self.modifiers.meta  { parts.push("Meta");  }
+        parts.push(&self.name);
+        write!(f, "{}", parts.join(" + "))
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
@@ -45,21 +77,10 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             pack_path: None,
+            uploaded_modes: Vec::new(),
+            mode: Mode::default(),
+            mode_options: HashMap::new(),
             tags: None,
-            popup_frequency: Duration::from_millis(500),
-            max_popup_duration: Some(Duration::from_secs(60)),
-            close_button: true,
-            max_videos: 50,
-            video_audio: true,
-            audio: true,
-            open_links: true,
-            link_frequency: Duration::from_secs(10),
-            notifications: true,
-            notification_frequency: Duration::from_secs(2),
-            prompts: true,
-            prompt_frequency: Duration::from_secs(60),
-            moving_windows: false,
-            moving_window_chance: 5,
             panic_button: Key {
                 name: "Escape".to_string(),
                 code: "Escape".to_string(),
@@ -92,11 +113,17 @@ pub fn save_config(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-pub async fn save_config_async(config: &AppConfig) -> Result<()> {
+pub async fn save_config_async(config: AppConfig) -> Result<()> {
     let path = config_path()?;
     let temp_config_path = path.with_added_extension("tmp");
 
-    tokio::fs::write(&temp_config_path, serde_json::to_string(config)?).await?;
+    println!("{}", temp_config_path.display());
+
+    tokio::fs::write(
+        &temp_config_path,
+        tokio::task::spawn_blocking(move || serde_json::to_string(&config)).await??,
+    )
+    .await?;
     tokio::fs::rename(temp_config_path, path).await?;
 
     Ok(())

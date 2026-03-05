@@ -20,11 +20,7 @@ pub fn Menu<T: MenuItem>(initially_open: bool, selected: Signal<T>) -> Element {
                     onclick: move |_| {
                         selected.set(option);
                     },
-                    Icon {
-                        class: "mx-1",
-                        icon: option.icon(),
-                        size: 20,
-                    }
+                    Icon { class: "mx-1", icon: option.icon(), size: 20 }
                     "{option}"
                 }
             }
@@ -33,25 +29,18 @@ pub fn Menu<T: MenuItem>(initially_open: bool, selected: Signal<T>) -> Element {
     rsx! {
         div {
             class: "p-[5px] transition-[width] border-r border-gray-300 bg-gray-50 overflow-hidden",
-            width: if open() {"16rem"} else {"40px"},
-            div {
-                class: "w-full h-[35px] border-b border-gray-300",
+            width: if open() { "16rem" } else { "40px" },
+            div { class: "w-full h-[35px] border-b border-gray-300",
                 button {
                     class: "float-right rounded-sm hover:text-gray-800 hover:bg-gray-200 size-[30px] flex justify-center items-center",
                     onclick: move |_| {
                         open.toggle();
                     },
-                    Icon {
-                        icon: Shape::Bars3,
-                        size: 25,
-                    }
+                    Icon { icon: Shape::Bars3, size: 25 }
                 }
             }
             if open() {
-                div {
-                    class: "flex flex-col gap-1 pt-2",
-                    {options}
-                }
+                div { class: "flex flex-col gap-1 pt-2", {options} }
             }
         }
     }

@@ -8,6 +8,7 @@ use winit::{event_loop::ActiveEventLoop, monitor::MonitorHandle};
 use crate::error::MonitorError;
 
 pub struct Monitors {
+    disabled: Vec<String>,
     by_platform: HashMap<MonitorId, Monitor>,
     by_id: HashMap<u64, MonitorId>,
     primary_monitor: Option<(MonitorId, Monitor)>,
@@ -38,8 +39,9 @@ type Result<T, E = MonitorError> = std::result::Result<T, E>;
 // }
 
 impl Monitors {
-    pub fn new() -> Self {
+    pub fn new(disabled: Vec<String>) -> Self {
         Self {
+            disabled,
             by_platform: HashMap::new(),
             by_id: HashMap::new(),
             primary_monitor: None,
@@ -95,12 +97,23 @@ impl Monitors {
     fn refresh(&mut self, event_loop: &ActiveEventLoop) {
         let monitors: Vec<_> = event_loop.available_monitors().collect();
 
-        let primary_monitor = event_loop.primary_monitor();
+        let primary_monitor = event_loop.primary_monitor().filter(|monitor| {
+            monitor
+                .name()
+                .is_some_and(|name| !self.disabled.contains(&name))
+        });
 
         let mut by_platform = HashMap::new();
         let mut by_id = HashMap::new();
 
         for monitor in monitors {
+            if monitor
+                .name()
+                .is_some_and(|name| self.disabled.contains(&name))
+            {
+                continue;
+            }
+
             let platform_id = platform_id(&monitor);
 
             let id = match self.by_platform.get(&platform_id) {

@@ -87,13 +87,11 @@ impl RequestSender {
         &self,
         video_player: VideoDecoder,
         loop_video: bool,
-        audio: bool,
         window_opts: SpawnWindowOpts,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnVideo {
             video_player,
             loop_video,
-            audio,
             window_opts,
             tx,
         })
@@ -102,14 +100,12 @@ impl RequestSender {
 
     pub async fn spawn_prompt(
         &self,
-        title: Option<String>,
         text: Option<String>,
         placeholder: Option<String>,
         initial_value: Option<String>,
         window_opts: SpawnWindowOpts,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnPrompt {
-            title,
             text,
             placeholder,
             initial_value,
@@ -121,13 +117,11 @@ impl RequestSender {
 
     pub async fn spawn_choice(
         &self,
-        title: Option<String>,
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
         window_opts: SpawnWindowOpts,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnChoice {
-            title,
             text,
             options,
             window_opts,
@@ -244,12 +238,6 @@ impl WindowRequestSender {
             .flatten()
     }
 
-    pub async fn set_title(&self, title: Option<String>) -> Result<()> {
-        self.send(|tx| WindowAction::SetTitle { tx, title })
-            .await
-            .flatten()
-    }
-
     pub async fn set_text(&self, text: Option<String>) -> Result<()> {
         self.send(|tx| WindowAction::SetText { tx, text })
             .await
@@ -270,6 +258,11 @@ impl WindowRequestSender {
 
     pub async fn set_visible(&self, visible: bool) -> Result<()> {
         self.send(|tx| WindowAction::SetVisible { tx, visible })
+            .await
+    }
+
+    pub async fn set_title(&self, title: Option<String>) -> Result<()> {
+        self.send(|tx| WindowAction::SetTitle { tx, title })
             .await
     }
 }
@@ -316,12 +309,10 @@ pub enum LuaRequest {
     SpawnVideo {
         video_player: VideoDecoder,
         loop_video: bool,
-        audio: bool,
         window_opts: SpawnWindowOpts,
         tx: oneshot::Sender<Result<WindowProps>>,
     },
     SpawnPrompt {
-        title: Option<String>,
         text: Option<String>,
         placeholder: Option<String>,
         initial_value: Option<String>,
@@ -329,7 +320,6 @@ pub enum LuaRequest {
         tx: oneshot::Sender<Result<WindowProps>>,
     },
     SpawnChoice {
-        title: Option<String>,
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
         window_opts: SpawnWindowOpts,
@@ -435,10 +425,6 @@ pub enum WindowAction {
         tx: oneshot::Sender<Result<()>>,
         opts: MoveOpts,
     },
-    SetTitle {
-        tx: oneshot::Sender<Result<()>>,
-        title: Option<String>,
-    },
     SetText {
         tx: oneshot::Sender<Result<()>>,
         text: Option<String>,
@@ -454,6 +440,10 @@ pub enum WindowAction {
     SetVisible {
         tx: oneshot::Sender<()>,
         visible: bool,
+    },
+    SetTitle {
+        tx: oneshot::Sender<()>,
+        title: Option<String>,
     }
 }
 

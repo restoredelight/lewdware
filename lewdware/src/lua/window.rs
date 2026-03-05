@@ -150,16 +150,14 @@ pub struct PromptWindow {
 }
 
 struct PromptWindowState {
-    title: Option<String>,
     text: Option<String>,
     value: String,
     submit_callbacks: Vec<mlua::Function>,
 }
 
 impl PromptWindowState {
-    fn new(title: Option<String>, text: Option<String>, value: String) -> Self {
+    fn new(text: Option<String>, value: String) -> Self {
         Self {
-            title,
             text,
             value,
             submit_callbacks: Vec::new(),
@@ -173,7 +171,6 @@ impl UserData for PromptWindow {
 
         fields.add_field("type", "prompt");
 
-        fields.add_field_method_get("title", |_, this| Ok(this.state.borrow().title.clone()));
         fields.add_field_method_get("text", |_, this| Ok(this.state.borrow().text.clone()));
         fields.add_field_method_get("value", |_, this| Ok(this.state.borrow().value.clone()));
     }
@@ -183,17 +180,6 @@ impl UserData for PromptWindow {
 
         methods.add_method("on_submit", |_, this, cb: mlua::Function| {
             this.state.borrow_mut().submit_callbacks.push(cb);
-
-            Ok(())
-        });
-
-        methods.add_async_method("set_title", async |_, this, title: Option<String>| {
-            this.inner_window
-                .request_sender
-                .set_title(title.clone())
-                .await?;
-
-            this.state.borrow_mut().title = title;
 
             Ok(())
         });
@@ -225,14 +211,13 @@ impl UserData for PromptWindow {
 impl PromptWindow {
     pub fn new(
         props: WindowProps,
-        title: Option<String>,
         text: Option<String>,
         value: String,
         request_sender: WindowRequestSender,
     ) -> Self {
         Self {
             inner_window: InnerWindow::new(props, request_sender),
-            state: RefCell::new(PromptWindowState::new(title, text, value)),
+            state: RefCell::new(PromptWindowState::new(text, value)),
         }
     }
 
@@ -260,16 +245,14 @@ pub struct ChoiceWindow {
 }
 
 struct ChoiceWindowState {
-    title: Option<String>,
     text: Option<String>,
     options: Vec<ChoiceWindowOption>,
     select_callbacks: Vec<mlua::Function>,
 }
 
 impl ChoiceWindowState {
-    fn new(title: Option<String>, text: Option<String>, options: Vec<ChoiceWindowOption>) -> Self {
+    fn new(text: Option<String>, options: Vec<ChoiceWindowOption>) -> Self {
         Self {
-            title,
             text,
             options,
             select_callbacks: Vec::new(),
@@ -283,7 +266,6 @@ impl UserData for ChoiceWindow {
 
         fields.add_field("type", "choice");
 
-        fields.add_field_method_get("title", |_, this| Ok(this.state.borrow().title.clone()));
         fields.add_field_method_get("text", |_, this| Ok(this.state.borrow().text.clone()));
         fields.add_field_method_get("options", |_, this| Ok(this.state.borrow().options.clone()));
     }
@@ -293,17 +275,6 @@ impl UserData for ChoiceWindow {
 
         methods.add_method("on_select", |_, this, cb: mlua::Function| {
             this.state.borrow_mut().select_callbacks.push(cb);
-
-            Ok(())
-        });
-
-        methods.add_async_method("set_title", async |_, this, title: Option<String>| {
-            this.inner_window
-                .request_sender
-                .set_title(title.clone())
-                .await?;
-
-            this.state.borrow_mut().title = title;
 
             Ok(())
         });
@@ -340,14 +311,13 @@ impl UserData for ChoiceWindow {
 impl ChoiceWindow {
     pub fn new(
         props: WindowProps,
-        title: Option<String>,
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
         request_sender: WindowRequestSender,
     ) -> Self {
         Self {
             inner_window: InnerWindow::new(props, request_sender),
-            state: RefCell::new(ChoiceWindowState::new(title, text, options)),
+            state: RefCell::new(ChoiceWindowState::new(text, options)),
         }
     }
 
@@ -525,6 +495,16 @@ impl InnerWindow {
                 .into_lua_err()?;
 
             this.inner_window().state.borrow_mut().visible = visible;
+
+            Ok(())
+        });
+
+        methods.add_async_method("set_title", async |_, this, title: Option<String>| {
+            this.inner_window()
+                .request_sender
+                .set_title(title)
+                .await
+                .into_lua_err()?;
 
             Ok(())
         });

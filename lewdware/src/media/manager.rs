@@ -1,4 +1,6 @@
+use crate::app::UserEvent;
 use std::{error::Error, fmt::Display, io, path::Path, rc::Rc, thread};
+use winit::event_loop::EventLoopProxy;
 
 use shared::pack_config::Metadata;
 use tokio::{
@@ -28,8 +30,11 @@ pub type Result<T, E = MediaError> = std::result::Result<T, E>;
 impl MediaManager {
     /// Start up the media manager thread, opening the specified pack file. Returns the pack
     /// metadata.
-    pub fn open(pack_path: &Path) -> anyhow::Result<(Self, Metadata)> {
-        let (tx, metadata) = spawn_media_manager_thread(pack_path)?;
+    pub fn open(
+        pack_path: &Path,
+        event_loop_proxy: EventLoopProxy<UserEvent>,
+    ) -> anyhow::Result<(Self, Metadata)> {
+        let (tx, metadata) = spawn_media_manager_thread(pack_path, event_loop_proxy)?;
 
         Ok((Self { tx }, metadata))
     }
@@ -128,18 +133,29 @@ impl MediaManager {
         .await?
     }
 
-    pub async fn get_audio_data(&self, id: u64, loop_audio: bool) -> Result<AudioPlayer> {
+    pub async fn get_audio_data(
+        &self,
+        id: u64,
+        audio_id: u64,
+        loop_audio: bool,
+    ) -> Result<AudioPlayer> {
         self.send(|tx| MediaRequest::GetAudioData {
             id,
+            audio_id,
             loop_audio,
             response_tx: tx,
         })
         .await?
     }
+
+    pub async fn get_mode(&self, id: u64) -> anyhow::Result<Vec<u8>> {
+        self.send(|tx| MediaRequest::GetModeData { id, response_tx: tx }).await?
+    }
 }
 
 fn spawn_media_manager_thread(
     pack_path: &Path,
+    event_loop_proxy: EventLoopProxy<UserEvent>,
 ) -> anyhow::Result<(Sender<MediaRequest>, Metadata)> {
     let (req_tx, mut req_rx) = channel(20);
 
@@ -153,15 +169,15 @@ fn spawn_media_manager_thread(
             .expect("Failed to build tokio runtime");
 
         let local = LocalSet::new();
-
         local.spawn_local(async move {
             let manager = Rc::new(file);
 
             while let Some(request) = req_rx.recv().await {
                 let manager = manager.clone();
+                let event_loop_proxy = event_loop_proxy.clone();
 
                 tokio::task::spawn_local(async move {
-                    handle_request(manager, request).await;
+                    handle_request(manager, request, event_loop_proxy).await;
                 });
             }
         });
@@ -172,7 +188,11 @@ fn spawn_media_manager_thread(
     Ok((req_tx, metadata))
 }
 
-async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest) {
+async fn handle_request(
+    pack: Rc<MediaPack>,
+    request: MediaRequest,
+    event_loop_proxy: EventLoopProxy<UserEvent>,
+) {
     if !match request {
         MediaRequest::GetMedia {
             types,
@@ -215,14 +235,23 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest) {
             .is_ok(),
         MediaRequest::GetAudioData {
             id,
+            audio_id,
             loop_audio,
             response_tx,
         } => response_tx
             .send(pack.get_audio_data(id).await.and_then(|file| {
-                AudioPlayer::new(file.path().to_path_buf(), loop_audio)
-                    .map_err(|err| MediaError::AudioError(err))
+                AudioPlayer::new(
+                    file.path().to_path_buf(),
+                    loop_audio,
+                    Some(audio_id),
+                    Some(event_loop_proxy),
+                )
+                .map_err(|err| MediaError::AudioError(err))
             }))
             .is_ok(),
+        MediaRequest::GetModeData { id, response_tx } => {
+            response_tx.send(pack.get_mode(id)).is_ok()
+        }
     } {
         eprintln!("Failed to send response");
     }
@@ -328,8 +357,13 @@ enum MediaRequest {
     },
     GetAudioData {
         id: u64,
+        audio_id: u64,
         loop_audio: bool,
         response_tx: oneshot::Sender<Result<AudioPlayer>>,
+    },
+    GetModeData {
+        id: u64,
+        response_tx: oneshot::Sender<anyhow::Result<Vec<u8>>>,
     },
 }
 

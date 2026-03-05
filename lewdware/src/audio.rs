@@ -6,14 +6,18 @@ use ffmpeg_next::{
     frame,
 };
 use std::{
+    num::NonZero,
     path::PathBuf,
-    sync::{Arc, mpsc::{Receiver, SyncSender, TryRecvError, sync_channel}},
+    sync::{
+        Arc,
+        mpsc::{Receiver, SyncSender, TryRecvError},
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
 use winit::event_loop::EventLoopProxy;
 
-use rodio::{OutputStream, OutputStreamBuilder, Sink, Source, buffer::SamplesBuffer};
+use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source, buffer::SamplesBuffer};
 
 use crate::{app::UserEvent, media::FileOrPath};
 
@@ -25,25 +29,27 @@ pub struct AudioHandle {
 }
 
 pub struct AudioPlayer {
-    _stream: OutputStream,
-    sink: Arc<Sink>,
+    _stream: MixerDeviceSink,
+    sink: Arc<Player>,
 }
 
 impl AudioPlayer {
     pub fn new(
         path: PathBuf,
         loop_audio: bool,
-        id: u64,
-        event_loop_proxy: EventLoopProxy<UserEvent>,
+        id: Option<u64>,
+        event_loop_proxy: Option<EventLoopProxy<UserEvent>>,
     ) -> Result<Self> {
         let (stream, sink) = setup_decoder(path, loop_audio)?;
         let sink = Arc::new(sink);
 
-        let sink_clone = sink.clone();
-        thread::spawn(move || {
-            sink_clone.sleep_until_end();
-            let _ = event_loop_proxy.send_event(UserEvent::AudioFinish { id });
-        });
+        if let (Some(id), Some(event_loop_proxy)) = (id, event_loop_proxy) {
+            let sink_clone = sink.clone();
+            thread::spawn(move || {
+                sink_clone.sleep_until_end();
+                let _ = event_loop_proxy.send_event(UserEvent::AudioFinish { id });
+            });
+        }
 
         Ok(Self {
             _stream: stream,
@@ -84,10 +90,7 @@ pub enum AudioMessage {
     Pause,
 }
 
-pub fn setup_decoder(
-    path: PathBuf,
-    loop_audio: bool,
-) -> Result<(OutputStream, Sink)> {
+pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink, Player)> {
     ffmpeg::init()?;
     let mut ictx = ffmpeg::format::input(&path)?;
     let audio_stream_index = match ictx.streams().best(ffmpeg::media::Type::Audio) {
@@ -103,9 +106,9 @@ pub fn setup_decoder(
     .decoder()
     .audio()?;
 
-    let stream = OutputStreamBuilder::open_default_stream()?;
+    let stream = DeviceSinkBuilder::open_default_sink()?;
 
-    let sink = Sink::connect_new(stream.mixer());
+    let sink = Player::connect_new(stream.mixer());
 
     sink.pause();
 
@@ -123,11 +126,15 @@ pub fn setup_decoder(
                         match convert_audio_frame(&frame) {
                             Ok(samples) => {
                                 if !samples.is_empty() {
-                                    return Some(SamplesBuffer::new(
-                                        frame.channels(),
-                                        frame.rate(),
-                                        samples,
-                                    ));
+                                    if let (Some(channels), Some(frame_rate)) =
+                                        (NonZero::new(frame.channels()), NonZero::new(frame.rate()))
+                                    {
+                                        return Some(SamplesBuffer::new(
+                                            channels, frame_rate, samples,
+                                        ));
+                                    } else {
+                                        eprintln!("Channels or frame rate is 0");
+                                    }
                                 }
                             }
                             Err(err) => {
@@ -143,7 +150,15 @@ pub fn setup_decoder(
             while decoder.receive_frame(&mut frame).is_ok() {
                 match convert_audio_frame(&frame) {
                     Ok(samples) => {
-                        return Some(SamplesBuffer::new(frame.channels(), frame.rate(), samples));
+                        if !samples.is_empty() {
+                            if let (Some(channels), Some(frame_rate)) =
+                                (NonZero::new(frame.channels()), NonZero::new(frame.rate()))
+                            {
+                                return Some(SamplesBuffer::new(channels, frame_rate, samples));
+                            } else {
+                                eprintln!("Channels or frame rate is 0");
+                            }
+                        }
                     }
                     Err(err) => {
                         eprintln!("{err}");
@@ -171,7 +186,7 @@ pub fn setup_decoder(
 
 /// Process all messages sent to the audio thread. Returns two booleans indicating whether to stop
 /// the audio thread, and whether a `Loop` message was received.
-fn process_audio_messages(sink: &Sink, message_rx: &Receiver<AudioMessage>) -> bool {
+fn process_audio_messages(sink: &Player, message_rx: &Receiver<AudioMessage>) -> bool {
     loop {
         match message_rx.try_recv() {
             Ok(message) => match message {
