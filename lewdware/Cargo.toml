@@ -9,7 +9,7 @@ anyhow = "1.0.99"
 egui = { version = "0.33.3", features = ["serde"] }
 egui-wgpu = "0.33.3"
 egui-winit = "0.33.3"
-ffmpeg-next = "8.0.0"
+ffmpeg-next = "8.1.0"
 image = { version = "0.25.6", default-features = false, features = ["avif-native"] }
 wgpu = { version = "27.0.1", features = ["static-dxc"] }
 notify-rust = "4.11.7"

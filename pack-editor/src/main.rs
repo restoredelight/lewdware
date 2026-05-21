@@ -456,7 +456,7 @@ fn OpenPack(pack: Store<Option<MediaPack>>) -> Element {
                 }
             },
             Icon { icon: Shape::Plus, size: 30, class: "m-auto" }
-            "Kill yourself"
+            "Open pack"
         }
     }
 }
