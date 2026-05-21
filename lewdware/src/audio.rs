@@ -98,15 +98,19 @@ pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink
         None => bail!("No audio stream available"),
     };
 
-    let mut decoder = ffmpeg::codec::Context::from_parameters(
-        ictx.stream(audio_stream_index)
-            .context("Invalid stream index")?
-            .parameters(),
-    )?
-    .decoder()
-    .audio()?;
+    let media = ictx
+        .stream(audio_stream_index)
+        .context("Invalid stream index")?;
 
-    let stream = DeviceSinkBuilder::open_default_sink()?;
+    let context = ffmpeg::codec::Context::from_parameters(media.parameters())?;
+
+    let mut decoder = context.decoder().audio()?;
+
+    decoder.set_packet_time_base(media.time_base());
+
+    let mut stream = DeviceSinkBuilder::open_default_sink()?;
+
+    stream.log_on_drop(false);
 
     let sink = Player::connect_new(stream.mixer());
 
