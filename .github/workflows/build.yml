@@ -10,7 +10,7 @@ on:
 jobs:
   build-linux:
     name: Build Linux Packages
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
@@ -203,11 +203,11 @@ jobs:
             pack-editor-tauri/pnpm-lock.yaml
 
       - name: Build Installer A (Main Suite)
-        shell: powershell
+        shell: pwsh
         run: ./deploy/windows/build_installer_a.ps1
 
       - name: Build Installer B (Pack Editor)
-        shell: powershell
+        shell: pwsh
         run: ./deploy/windows/build_installer_b.ps1
 
       - name: Upload Windows Artifacts

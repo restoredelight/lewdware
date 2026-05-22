@@ -187,7 +187,7 @@ fn platform_id(monitor: &MonitorHandle) -> MonitorId {
     }
     #[cfg(target_os = "macos")]
     {
-        use winit::platform::MonitorHandleExtMacOS;
+        use winit::platform::macos::MonitorHandleExtMacOS;
 
         monitor.native_id()
     }

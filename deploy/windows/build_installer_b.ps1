@@ -23,7 +23,7 @@ $FFPROBE_SIDECAR = Join-Path $BINARIES_DIR "ffprobe-$TRIPLE.exe"
 
 # 1. Stage FFmpeg & ffprobe if not already present
 if (!(Test-Path $FFMPEG_SIDECAR) -or !(Test-Path $FFPROBE_SIDECAR)) {
-    Write-Host "📥 Downloading static FFmpeg and ffprobe for Windows..."
+    Write-Host "Downloading static FFmpeg and ffprobe for Windows..."
     
     $TEMP_DIR = [System.IO.Path]::GetTempPath()
     $ZIP_PATH = Join-Path $TEMP_DIR "ffmpeg-release-essentials.zip"
@@ -35,7 +35,7 @@ if (!(Test-Path $FFMPEG_SIDECAR) -or !(Test-Path $FFPROBE_SIDECAR)) {
     $BTBN_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
     Invoke-WebRequest -Uri $BTBN_URL -OutFile $ZIP_PATH -UseBasicParsing
 
-    Write-Host "📦 Extracting FFmpeg archive..."
+    Write-Host "Extracting FFmpeg archive..."
     Expand-Archive -Path $ZIP_PATH -DestinationPath $EXTRACT_DIR
 
     $FFMPEG_EXE = Get-ChildItem -Path $EXTRACT_DIR -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
@@ -44,7 +44,7 @@ if (!(Test-Path $FFMPEG_SIDECAR) -or !(Test-Path $FFPROBE_SIDECAR)) {
     if ($FFMPEG_EXE -and $FFPROBE_EXE) {
         Copy-Item $FFMPEG_EXE.FullName -Destination $FFMPEG_SIDECAR -Force
         Copy-Item $FFPROBE_EXE.FullName -Destination $FFPROBE_SIDECAR -Force
-        Write-Host "✓ Stage successful: FFmpeg & ffprobe sidecars created."
+        Write-Host "Stage successful: FFmpeg and ffprobe sidecars created."
     } else {
         Write-Error "Could not find ffmpeg.exe/ffprobe.exe in the extracted BtbN package."
     }
@@ -53,11 +53,11 @@ if (!(Test-Path $FFMPEG_SIDECAR) -or !(Test-Path $FFPROBE_SIDECAR)) {
     Remove-Item $ZIP_PATH -Force -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $EXTRACT_DIR -ErrorAction SilentlyContinue
 } else {
-    Write-Host "✓ FFmpeg & ffprobe sidecars already present."
+    Write-Host "FFmpeg and ffprobe sidecars already present."
 }
 
 # 2. Build the Tauri app
-Write-Host "🔨 Building pack-editor-tauri GUI..."
+Write-Host "Building pack-editor-tauri GUI..."
 Push-Location pack-editor-tauri
 pnpm install
 Check-LastExitCode
@@ -66,14 +66,14 @@ Check-LastExitCode
 Pop-Location
 
 # 3. Stage outputs
-Write-Host "📦 Staging outputs..."
+Write-Host "Staging outputs..."
 if (!(Test-Path "dist")) { New-Item -ItemType Directory -Path "dist" }
 
 # Find generated MSI or EXE installer
 $INSTALLER = Get-ChildItem -Path "target\release\bundle" -Filter "pack-editor-tauri*.msi" -Recurse | Select-Object -First 1
 if ($INSTALLER) {
     Copy-Item $INSTALLER.FullName -Destination "dist\" -Force
-    Write-Host "🎉 SUCCESS: Generated $($INSTALLER.Name) in dist/"
+    Write-Host "SUCCESS: Generated $($INSTALLER.Name) in dist/"
 } else {
     Write-Error "Could not find generated MSI package under target/release/bundle/"
 }

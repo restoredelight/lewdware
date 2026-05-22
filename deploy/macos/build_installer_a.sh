@@ -19,6 +19,10 @@ mkdir -p "$OUTPUT_DIR"
 # 1. Compile all applications dynamically
 echo "🔨 Compiling applications..."
 cargo build -p lw --release
+
+echo "🔨 Building default mode..."
+(cd default-modes && ../target/release/lw mode build)
+
 cargo build -p lewdware --release
 
 # Compile Tauri GUI

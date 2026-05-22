@@ -21,6 +21,9 @@ mkdir -p "$OUTPUT_DIR"
 echo "🔨 Compiling applications..."
 cargo build -p lw --release
 
+echo "🔨 Building default mode..."
+(cd default-modes && ../target/release/lw mode build)
+
 # Compile lewdware with a relative rpath targeting the bundled libs
 echo "   Compiling lewdware with relative rpath..."
 cargo rustc -p lewdware --release -- -C link-args="-Wl,-rpath,\$ORIGIN/../lib/lewdware"

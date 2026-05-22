@@ -30,7 +30,7 @@ pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<(
         .with_menu(Box::new(tray_menu))
         .build()?;
 
-    MenuEvent::set_event_handler(Some(move || {
+    MenuEvent::set_event_handler(Some(move |_| {
         let _ = event_loop_proxy.send_event(UserEvent::Exit);
     }));
 

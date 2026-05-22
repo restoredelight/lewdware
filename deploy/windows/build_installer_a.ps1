@@ -7,7 +7,7 @@ $VERSION = "0.1.0"
 $STAGE_DIR = "build/win-stage"
 $OUTPUT_DIR = "dist"
 
-Write-Host "🧹 Preparing staging area..."
+Write-Host "Preparing staging area..."
 if (Test-Path $STAGE_DIR) { Remove-Item -Recurse -Force $STAGE_DIR }
 New-Item -ItemType Directory -Force -Path $STAGE_DIR
 New-Item -ItemType Directory -Force -Path $OUTPUT_DIR
@@ -21,14 +21,21 @@ function Check-LastExitCode {
 }
 
 # 1. Compile all applications
-Write-Host "🔨 Compiling applications..."
+Write-Host "Compiling applications..."
 cargo build -p lw --release
 Check-LastExitCode
+
+Write-Host "Building default mode..."
+Push-Location default-modes
+& "..\target\release\lw.exe" mode build
+Check-LastExitCode
+Pop-Location
+
 cargo build -p lewdware --release
 Check-LastExitCode
 
 # Compile Tauri GUI
-Write-Host "🔨 Building config-tauri GUI..."
+Write-Host "Building config-tauri GUI..."
 Push-Location config-tauri
 pnpm install
 Check-LastExitCode
@@ -37,7 +44,7 @@ Check-LastExitCode
 Pop-Location
 
 # 2. Dynamic Library Copying (vcpkg integration)
-Write-Host "🔗 Locating and copying dynamic library dependencies (FFmpeg & dav1d)..."
+Write-Host "Locating and copying dynamic library dependencies (FFmpeg and dav1d)..."
 $VCPKG_BIN_PATH = ""
 if ($env:VCPKG_ROOT) {
     $VCPKG_BIN_PATH = Join-Path $env:VCPKG_ROOT "installed\x64-windows\bin"
@@ -67,7 +74,7 @@ foreach ($dllName in $requiredDlls) {
 }
 
 # 3. Build the Installer using Inno Setup
-Write-Host "📦 Compiling Inno Setup installer..."
+Write-Host "Compiling Inno Setup installer..."
 $ISCC = "iscc"
 if (!(Get-Command $ISCC -ErrorAction SilentlyContinue)) {
     # Try default Inno Setup path
@@ -77,7 +84,7 @@ if (!(Get-Command $ISCC -ErrorAction SilentlyContinue)) {
 if (Test-Path $ISCC) {
     & $ISCC deploy\windows\installer_a.iss
     Check-LastExitCode
-    Write-Host "🎉 SUCCESS: Installer created in dist/"
+    Write-Host "SUCCESS: Installer created in dist/"
 } else {
     Write-Error "Inno Setup compiler (iscc) not found! Installer package could not be built."
 }
