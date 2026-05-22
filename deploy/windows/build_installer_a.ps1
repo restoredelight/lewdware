@@ -75,16 +75,16 @@ foreach ($dllName in $requiredDlls) {
 
 # 3. Build the Installer using Inno Setup
 Write-Host "Compiling Inno Setup installer..."
-$ISCC = "iscc"
-if (!(Get-Command $ISCC -ErrorAction SilentlyContinue)) {
-    # Try default Inno Setup path
+$isccCmd = Get-Command "iscc" -ErrorAction SilentlyContinue
+if ($isccCmd) {
+    $ISCC = $isccCmd.Source
+} elseif (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
     $ISCC = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-}
-
-if (Test-Path $ISCC) {
-    & $ISCC deploy\windows\installer_a.iss
-    Check-LastExitCode
-    Write-Host "SUCCESS: Installer created in dist/"
 } else {
     Write-Error "Inno Setup compiler (iscc) not found! Installer package could not be built."
+    exit 1
 }
+
+& $ISCC deploy\windows\installer_a.iss
+Check-LastExitCode
+Write-Host "SUCCESS: Installer created in dist/"
