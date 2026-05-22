@@ -1,212 +1,643 @@
-use std::{env, fs::File, sync::Mutex, time::Duration};
+use std::{
+    collections::HashMap,
+    io::{Cursor, Read, Seek, SeekFrom},
+    path::PathBuf,
+    sync::Mutex,
+};
 
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use serde::{Deserialize, Serialize};
 use shared::{
+    db::migrate,
+    mode::{self, Metadata, OptionType, OptionValue},
     read_pack::read_pack_metadata,
-    user_config::{self, load_config, AppConfig, Key},
+    user_config::{self, AppConfig, Key, Mode},
 };
+use serde_json::Value as JsonValue;
 use tauri::AppHandle;
+use tempfile::NamedTempFile;
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
-struct Config {
-    pack_path: Option<String>,
-    tags: Option<Vec<String>>,
-    popup_frequency: f64,
-    max_popup_duration: Option<f64>,
-    close_button: bool,
-    max_videos: usize,
-    video_audio: bool,
-    audio: bool,
-    open_links: bool,
-    link_frequency: f64,
-    notifications: bool,
-    notification_frequency: f64,
-    prompts: bool,
-    prompt_frequency: f64,
-    moving_windows: bool,
-    moving_window_chance: u32,
-    panic_button: Key,
-    disabled_monitors: Vec<String>
+// ─── DTOs ────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[serde(tag = "type")]
+pub enum ModeIdDto {
+    Default { mode: String },
+    Pack { id: u64, mode: String },
+    File { path: String, mode: String },
 }
 
-impl From<AppConfig> for Config {
-    fn from(value: AppConfig) -> Self {
-        Config {
-            pack_path: value.pack_path.map(|x| x.to_str().unwrap().to_string()),
-            tags: value.tags,
-            popup_frequency: value.popup_frequency.as_secs_f64(),
-            max_popup_duration: value.max_popup_duration.map(|x| x.as_secs_f64()),
-            close_button: value.close_button,
-            max_videos: value.max_videos,
-            video_audio: value.video_audio,
-            audio: value.audio,
-            open_links: value.open_links,
-            link_frequency: value.link_frequency.as_secs_f64(),
-            notifications: value.notifications,
-            notification_frequency: value.notification_frequency.as_secs_f64(),
-            prompts: value.prompts,
-            prompt_frequency: value.prompt_frequency.as_secs_f64(),
-            moving_windows: value.moving_windows,
-            moving_window_chance: value.moving_window_chance,
-            panic_button: value.panic_button,
-            disabled_monitors: value.disabled_monitors,
+impl From<Mode> for ModeIdDto {
+    fn from(m: Mode) -> Self {
+        match m {
+            Mode::Default(mode) => ModeIdDto::Default { mode },
+            Mode::Pack { id, mode } => ModeIdDto::Pack { id, mode },
+            Mode::File { path, mode } => ModeIdDto::File {
+                path: path.to_string_lossy().into_owned(),
+                mode,
+            },
         }
     }
 }
 
-impl From<Config> for AppConfig {
-    fn from(value: Config) -> Self {
+impl From<ModeIdDto> for Mode {
+    fn from(dto: ModeIdDto) -> Self {
+        match dto {
+            ModeIdDto::Default { mode } => Mode::Default(mode),
+            ModeIdDto::Pack { id, mode } => Mode::Pack { id, mode },
+            ModeIdDto::File { path, mode } => Mode::File {
+                path: PathBuf::from(path),
+                mode,
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ModeOptionsEntry {
+    pub mode: ModeIdDto,
+    pub options: HashMap<String, OptionValue>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ConfigDto {
+    pub pack_path: Option<String>,
+    pub mode: ModeIdDto,
+    pub mode_options: Vec<ModeOptionsEntry>,
+    pub panic_button: Key,
+    pub disabled_monitors: Vec<String>,
+}
+
+impl From<AppConfig> for ConfigDto {
+    fn from(c: AppConfig) -> Self {
+        let mode_options = c
+            .mode_options
+            .into_iter()
+            .map(|(k, v)| ModeOptionsEntry {
+                mode: k.into(),
+                options: v,
+            })
+            .collect();
+
+        ConfigDto {
+            pack_path: c.pack_path.and_then(|p| p.to_str().map(str::to_string)),
+            mode: c.mode.into(),
+            mode_options,
+            panic_button: c.panic_button,
+            disabled_monitors: c.disabled_monitors,
+        }
+    }
+}
+
+impl From<ConfigDto> for AppConfig {
+    fn from(dto: ConfigDto) -> Self {
+        let mode_options = dto
+            .mode_options
+            .into_iter()
+            .map(|e| (Mode::from(e.mode), e.options))
+            .collect();
+
         AppConfig {
-            pack_path: value.pack_path.map(|x| x.into()),
-            tags: value.tags,
-            popup_frequency: Duration::from_secs_f64(value.popup_frequency),
-            max_popup_duration: value.max_popup_duration.map(Duration::from_secs_f64),
-            close_button: value.close_button,
-            max_videos: value.max_videos,
-            video_audio: value.video_audio,
-            audio: value.audio,
-            open_links: value.open_links,
-            link_frequency: Duration::from_secs_f64(value.link_frequency),
-            notifications: value.notifications,
-            notification_frequency: Duration::from_secs_f64(value.notification_frequency),
-            prompts: value.prompts,
-            prompt_frequency: Duration::from_secs_f64(value.prompt_frequency),
-            moving_windows: value.moving_windows,
-            moving_window_chance: value.moving_window_chance,
-            panic_button: value.panic_button,
-            disabled_monitors: value.disabled_monitors,
+            pack_path: dto.pack_path.map(PathBuf::from),
+            uploaded_modes: Vec::new(),
+            mode: dto.mode.into(),
+            mode_options,
+            tags: None,
+            panic_button: dto.panic_button,
+            disabled_monitors: dto.disabled_monitors,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MonitorDto {
+    pub id: String,
+    pub name: String,
+    pub primary: bool,
+    pub disabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ModeEntryDto {
+    pub id: ModeIdDto,
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ModeGroupDto {
+    pub label: String,
+    pub source: String,
+    pub entries: Vec<ModeEntryDto>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ModeOptionDto {
+    pub key: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub option_type: OptionType,
+    pub value: OptionValue,
+}
+
+// ─── State ───────────────────────────────────────────────────────────────────
+
+struct PackModeEntry {
+    id: u64,
+    metadata: Metadata,
+}
+
+struct UploadedModeEntry {
+    path: PathBuf,
+    metadata: Metadata,
+}
+
+struct LoadedPack {
+    _db_file: NamedTempFile,
+    modes: Vec<PackModeEntry>,
 }
 
 pub struct AppState {
-    config: Mutex<Config>,
+    config: Mutex<AppConfig>,
+    pack: Mutex<Option<LoadedPack>>,
+    uploaded: Mutex<Vec<UploadedModeEntry>>,
+    default_modes: Metadata,
 }
 
 pub type State<'a> = tauri::State<'a, AppState>;
 
-#[tauri::command]
-fn save_config(state: State<'_>, config: Config, force: Option<bool>) -> Result<(), String> {
-    let force = force.unwrap_or(false);
+// ─── Pack / mode loading ──────────────────────────────────────────────────────
 
-    let mut current_config = if force {
-        state.config.lock().unwrap()
-    } else {
-        match state.config.try_lock() {
-            Ok(config) => config,
-            Err(_) => return Ok(()),
-        }
-    };
+fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
+    let mut file = std::fs::File::open(&path)?;
+    let (header, _) = read_pack_metadata(&mut file)?;
 
-    println!("{:?}", config);
+    let mut db_file = NamedTempFile::new()?;
+    file.seek(SeekFrom::Start(header.index_offset))?;
+    let mut db_data = (&mut file).take(header.index_length);
+    std::io::copy(&mut db_data, db_file.as_file_mut())?;
 
-    if *current_config != config {
-        user_config::save_config(&config.clone().into()).map_err(|err| err.to_string())?;
+    let manager = SqliteConnectionManager::file(db_file.path());
+    let pool = Pool::builder().build(manager)?;
+    let conn = pool.get()?;
+    migrate(&conn)?;
 
-        *current_config = config;
+    let mut stmt = conn.prepare("SELECT id, file FROM modes")?;
+    let rows: Vec<(u64, Vec<u8>)> = stmt
+        .query_map([], |row| Ok((row.get("id")?, row.get("file")?)))?
+        .collect::<rusqlite::Result<_>>()?;
+
+    let mut modes = Vec::new();
+    for (id, data) in rows {
+        let mut cursor = Cursor::new(data);
+        let (_, metadata) = mode::read_mode_metadata(&mut cursor)?;
+        modes.push(PackModeEntry { id, metadata });
     }
 
-    Ok(())
+    Ok(LoadedPack { _db_file: db_file, modes })
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackInfo {
-    name: String,
-    creator: Option<String>,
-    description: Option<String>,
-    version: Option<String>,
+fn load_mode_file(path: PathBuf) -> anyhow::Result<UploadedModeEntry> {
+    let mut file = std::fs::File::open(&path)?;
+    let (_, metadata) = mode::read_mode_metadata(&mut file)?;
+    Ok(UploadedModeEntry { path, metadata })
 }
 
-#[tauri::command]
-fn get_config(state: State<'_>) -> Config {
-    state.config.lock().unwrap().clone()
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-#[tauri::command]
-fn load_info(path: String) -> Result<PackInfo, String> {
-    let file = File::open(path).map_err(|err| err.to_string())?;
+fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
+    let mut groups = Vec::new();
 
-    let (_, metadata) = read_pack_metadata(file).map_err(|err| err.to_string())?;
+    if let Some(pack) = state.pack.lock().unwrap().as_ref() {
+        let label = pack
+            .modes
+            .first()
+            .map(|m| m.metadata.name.clone())
+            .unwrap_or_default();
 
-    Ok(PackInfo {
-        name: metadata.name,
-        creator: metadata.creator,
-        description: metadata.description,
-        version: metadata.version,
-    })
-}
+        let entries: Vec<_> = pack
+            .modes
+            .iter()
+            .flat_map(|m| {
+                m.metadata.modes.iter().map(|(key, mode)| ModeEntryDto {
+                    id: ModeIdDto::Pack { id: m.id, mode: key.clone() },
+                    name: mode.name.clone(),
+                })
+            })
+            .collect();
 
-#[derive(Serialize, Deserialize)]
-pub struct Monitor {
-    id: String,
-    name: String,
-    primary: bool,
-    disabled: bool,
-}
+        if !entries.is_empty() {
+            groups.push(ModeGroupDto { label, source: "pack".into(), entries });
+        }
+    }
 
-#[tauri::command]
-async fn get_monitors(app_handle: AppHandle, state: State<'_>) -> Result<Vec<Monitor>, String> {
-    let primary_monitor_name = app_handle
-        .primary_monitor()
-        .map_err(|err| err.to_string())?
-        .and_then(|monitor_handle| monitor_handle.name().cloned());
+    let uploaded = state.uploaded.lock().unwrap();
+    for entry in uploaded.iter() {
+        let file_name = entry
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let label = format!("{} ({})", entry.metadata.name, file_name);
+        let path_str = entry.path.to_string_lossy().into_owned();
 
-    let config = state.config.lock().unwrap();
+        let entries: Vec<_> = entry
+            .metadata
+            .modes
+            .iter()
+            .map(|(key, mode)| ModeEntryDto {
+                id: ModeIdDto::File { path: path_str.clone(), mode: key.clone() },
+                name: mode.name.clone(),
+            })
+            .collect();
 
-    let mut monitors: Vec<_> = app_handle
-        .available_monitors()
-        .map_err(|err| err.to_string())?
+        groups.push(ModeGroupDto { label, source: "uploaded".into(), entries });
+    }
+
+    let entries: Vec<_> = state
+        .default_modes
+        .modes
         .iter()
-        .filter_map(|monitor_handle| {
-            let id = monitor_handle.name()?.to_string();
-
-            let primary = Some(&id) == primary_monitor_name.as_ref();
-
-            let disabled = config.disabled_monitors.contains(&id);
-
-            let size = monitor_handle.size();
-            let name = format!("{id} ({}x{})", size.width, size.height);
-
-            Some(Monitor { id, name, primary, disabled })
+        .map(|(key, mode)| ModeEntryDto {
+            id: ModeIdDto::Default { mode: key.clone() },
+            name: mode.name.clone(),
         })
         .collect();
 
-    // Make sure the primary monitor is always first
-    if let Some(primary_position) = monitors.iter().position(|monitor| monitor.primary) {
-        monitors.swap(0, primary_position);
+    groups.push(ModeGroupDto {
+        label: state.default_modes.name.clone(),
+        source: "builtin".into(),
+        entries,
+    });
+
+    groups
+}
+
+fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<ModeOptionDto> {
+    let mode_meta = match &config.mode {
+        Mode::Default(key) => state.default_modes.modes.get(key).cloned(),
+        Mode::Pack { id, mode } => {
+            let pack = state.pack.lock().unwrap();
+            pack.as_ref().and_then(|p| {
+                p.modes
+                    .iter()
+                    .find(|m| m.id == *id)
+                    .and_then(|m| m.metadata.modes.get(mode).cloned())
+            })
+        }
+        Mode::File { path, mode } => {
+            let uploaded = state.uploaded.lock().unwrap();
+            uploaded
+                .iter()
+                .find(|u| &u.path == path)
+                .and_then(|u| u.metadata.modes.get(mode).cloned())
+        }
+    };
+
+    let Some(mode_meta) = mode_meta else {
+        return Vec::new();
+    };
+
+    let stored = config.mode_options.get(&config.mode).cloned().unwrap_or_default();
+
+    mode_meta
+        .options
+        .into_iter()
+        .map(|(key, opt)| {
+            let value = stored
+                .get(&key)
+                .filter(|v| opt.matches_value(v))
+                .cloned()
+                .unwrap_or_else(|| opt.default_value());
+
+            ModeOptionDto {
+                key,
+                label: opt.label,
+                description: opt.description,
+                option_type: opt.option_type,
+                value,
+            }
+        })
+        .collect()
+}
+
+fn save_to_disk(config: &AppConfig, uploaded: &[UploadedModeEntry]) -> anyhow::Result<()> {
+    let mut c = config.clone();
+    c.uploaded_modes = uploaded.iter().map(|u| u.path.clone()).collect();
+    user_config::save_config(&c)
+}
+
+// ─── Commands ─────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_config(state: State<'_>) -> ConfigDto {
+    state.config.lock().unwrap().clone().into()
+}
+
+#[tauri::command]
+fn save_config(state: State<'_>, config: ConfigDto) -> Result<(), String> {
+    let mut current = state.config.lock().unwrap();
+    let mut new_config: AppConfig = config.into();
+
+    // Preserve fields managed separately from the DTO
+    new_config.uploaded_modes = current.uploaded_modes.clone();
+    new_config.tags = current.tags.clone();
+
+    let uploaded = state.uploaded.lock().unwrap();
+    save_to_disk(&new_config, &uploaded).map_err(|e| e.to_string())?;
+    *current = new_config;
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_monitors(app_handle: AppHandle, state: State<'_>) -> Result<Vec<MonitorDto>, String> {
+    let primary_name = app_handle
+        .primary_monitor()
+        .map_err(|e| e.to_string())?
+        .and_then(|m| m.name().cloned());
+
+    let disabled = state.config.lock().unwrap().disabled_monitors.clone();
+
+    let mut monitors: Vec<_> = app_handle
+        .available_monitors()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .filter_map(|m| {
+            let id = m.name()?.to_string();
+            let primary = Some(&id) == primary_name.as_ref();
+            let size = m.size();
+            let name = format!("{id} ({}x{})", size.width, size.height);
+            let is_disabled = disabled.contains(&id);
+            Some(MonitorDto { id, name, primary, disabled: is_disabled })
+        })
+        .collect();
+
+    if let Some(pos) = monitors.iter().position(|m| m.primary) {
+        monitors.swap(0, pos);
     }
 
     Ok(monitors)
 }
 
 #[tauri::command]
-fn is_wayland() -> bool {
-    if cfg!(target_os = "linux") {
-        match env::var("XDG_SESSION_TYPE") {
-            Ok(session_type) => session_type.to_lowercase() == "wayland",
-            Err(_) => false,
+fn get_mode_groups(state: State<'_>) -> Vec<ModeGroupDto> {
+    build_mode_groups(&state)
+}
+
+#[tauri::command]
+fn get_mode_options(state: State<'_>) -> Vec<ModeOptionDto> {
+    let config = state.config.lock().unwrap();
+    get_mode_options_for(&config, &state)
+}
+
+#[tauri::command]
+fn set_mode_option(state: State<'_>, key: String, value: JsonValue) -> Result<(), String> {
+    let mut config = state.config.lock().unwrap();
+    let mode = config.mode.clone();
+
+    // Find the option type so we can coerce the value to the right variant
+    let opt_type = get_option_type_for_key(&config, &mode, &key, &state);
+
+    let typed_value = coerce_option_value(value, opt_type.as_ref())
+        .ok_or_else(|| "invalid option value".to_string())?;
+
+    config.mode_options.entry(mode).or_default().insert(key, typed_value);
+    let uploaded = state.uploaded.lock().unwrap();
+    save_to_disk(&config, &uploaded).map_err(|e| e.to_string())
+}
+
+fn get_option_type_for_key(
+    _config: &AppConfig,
+    mode: &Mode,
+    key: &str,
+    state: &AppState,
+) -> Option<OptionType> {
+    let mode_meta = match mode {
+        Mode::Default(k) => state.default_modes.modes.get(k).cloned(),
+        Mode::Pack { id, mode } => {
+            let pack = state.pack.lock().unwrap();
+            pack.as_ref().and_then(|p| {
+                p.modes.iter().find(|m| m.id == *id)?.metadata.modes.get(mode).cloned()
+            })
         }
-    } else {
-        false
+        Mode::File { path, mode } => {
+            let uploaded = state.uploaded.lock().unwrap();
+            uploaded
+                .iter()
+                .find(|u| &u.path == path)?
+                .metadata
+                .modes
+                .get(mode)
+                .cloned()
+        }
+    }?;
+
+    mode_meta.options.get(key).map(|o| o.option_type.clone())
+}
+
+fn coerce_option_value(value: JsonValue, opt_type: Option<&OptionType>) -> Option<OptionValue> {
+    match (opt_type, &value) {
+        (Some(OptionType::Enum { .. }), JsonValue::String(s)) => {
+            Some(OptionValue::Enum(s.clone()))
+        }
+        (Some(OptionType::Integer { .. }), JsonValue::Number(n)) => {
+            Some(OptionValue::Integer(n.as_i64()?))
+        }
+        (Some(OptionType::Number { .. }), JsonValue::Number(n)) => {
+            Some(OptionValue::Number(n.as_f64()?))
+        }
+        (Some(OptionType::String { .. }), JsonValue::String(s)) => {
+            Some(OptionValue::String(s.clone()))
+        }
+        (Some(OptionType::Boolean { .. }), JsonValue::Bool(b)) => {
+            Some(OptionValue::Boolean(*b))
+        }
+        // fallback: untagged deserialize
+        _ => serde_json::from_value(value).ok(),
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PickPackResult {
+    pub pack_path: String,
+    pub mode_groups: Vec<ModeGroupDto>,
+    pub first_mode: Option<ModeIdDto>,
+}
+
+#[tauri::command]
+async fn pick_pack(app_handle: AppHandle, state: State<'_>) -> Result<Option<PickPackResult>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let path = app_handle
+        .dialog()
+        .file()
+        .add_filter("Pack", &["lwpack"])
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok());
+
+    let Some(path) = path else {
+        return Ok(None);
+    };
+
+    let loaded = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || load_pack(path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    let first_mode = loaded.modes.first().and_then(|m| {
+        m.metadata.modes.first().map(|(key, _)| ModeIdDto::Pack {
+            id: m.id,
+            mode: key.clone(),
+        })
+    });
+
+    let pack_path_str = path.to_string_lossy().into_owned();
+    *state.pack.lock().unwrap() = Some(loaded);
+
+    let mut config = state.config.lock().unwrap();
+    config.pack_path = Some(path);
+    if let Some(ref m) = first_mode {
+        config.mode = m.clone().into();
+    }
+
+    let groups = build_mode_groups(&state);
+    let uploaded = state.uploaded.lock().unwrap();
+    save_to_disk(&config, &uploaded).map_err(|e| e.to_string())?;
+
+    Ok(Some(PickPackResult {
+        pack_path: pack_path_str,
+        mode_groups: groups,
+        first_mode,
+    }))
+}
+
+#[tauri::command]
+fn remove_pack(state: State<'_>) -> Result<(), String> {
+    *state.pack.lock().unwrap() = None;
+    let mut config = state.config.lock().unwrap();
+    config.pack_path = None;
+    if matches!(config.mode, Mode::Pack { .. }) {
+        config.mode = Mode::default();
+    }
+    let uploaded = state.uploaded.lock().unwrap();
+    save_to_disk(&config, &uploaded).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct UploadModeResult {
+    pub mode_groups: Vec<ModeGroupDto>,
+}
+
+#[tauri::command]
+async fn upload_mode(app_handle: AppHandle, state: State<'_>) -> Result<Option<UploadModeResult>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let path = app_handle
+        .dialog()
+        .file()
+        .add_filter("Mode", &["lwmode"])
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok());
+
+    let Some(path) = path else {
+        return Ok(None);
+    };
+
+    {
+        let uploaded = state.uploaded.lock().unwrap();
+        if uploaded.iter().any(|u| u.path == path) {
+            return Ok(Some(UploadModeResult { mode_groups: build_mode_groups(&state) }));
+        }
+    }
+
+    let entry = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || load_mode_file(path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    state.uploaded.lock().unwrap().push(entry);
+
+    let mut config = state.config.lock().unwrap();
+    config.uploaded_modes.push(path);
+    let uploaded = state.uploaded.lock().unwrap();
+    save_to_disk(&config, &uploaded).map_err(|e| e.to_string())?;
+
+    Ok(Some(UploadModeResult { mode_groups: build_mode_groups(&state) }))
+}
+
+#[tauri::command]
+fn remove_uploaded_mode(state: State<'_>, path: String) -> Result<Vec<ModeGroupDto>, String> {
+    let path = PathBuf::from(&path);
+
+    state.uploaded.lock().unwrap().retain(|u| u.path != path);
+
+    let mut config = state.config.lock().unwrap();
+    config.uploaded_modes.retain(|p| p != &path);
+    if let Mode::File { path: ref mp, .. } = config.mode.clone() {
+        if mp == &path {
+            config.mode = Mode::default();
+        }
+    }
+    let uploaded = state.uploaded.lock().unwrap();
+    save_to_disk(&config, &uploaded).map_err(|e| e.to_string())?;
+
+    Ok(build_mode_groups(&state))
+}
+
+// ─── Entry ────────────────────────────────────────────────────────────────────
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let config = load_config().unwrap().into();
+    let default_modes_bytes =
+        include_bytes!("../../../default-modes/build/Default Modes.lwmode");
+    let default_modes = mode::read_mode_metadata(&mut Cursor::new(default_modes_bytes))
+        .expect("failed to load embedded default modes")
+        .1;
+
+    let config = user_config::load_config().unwrap_or_default();
+
+    let pack = config.pack_path.as_ref().and_then(|p| {
+        load_pack(p.clone())
+            .inspect_err(|e| eprintln!("failed to load pack: {e}"))
+            .ok()
+    });
+
+    let uploaded: Vec<UploadedModeEntry> = config
+        .uploaded_modes
+        .iter()
+        .filter_map(|p| {
+            load_mode_file(p.clone())
+                .inspect_err(|e| eprintln!("failed to load mode {}: {e}", p.display()))
+                .ok()
+        })
+        .collect();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             config: Mutex::new(config),
+            pack: Mutex::new(pack),
+            uploaded: Mutex::new(uploaded),
+            default_modes,
         })
-        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
-            load_info,
             get_monitors,
-            is_wayland,
+            get_mode_groups,
+            get_mode_options,
+            set_mode_option,
+            pick_pack,
+            remove_pack,
+            upload_mode,
+            remove_uploaded_mode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

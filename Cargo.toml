@@ -1,24 +1,12 @@
 [workspace]
 members = [
-    "config",
     "lewdware",
     "lw",
-    "pack-editor",
+    "pack-editor-tauri/src-tauri",
     "shared",
+    "config-tauri/src-tauri"
 ]
 resolver = "3"
-
-[patch.crates-io.dioxus]
-git = "https://github.com/restoredelight/dioxus"
-branch = "stop-close-requested"
-
-[patch.crates-io.dioxus-desktop]
-git = "https://github.com/restoredelight/dioxus"
-branch = "stop-close-requested"
-
-[patch.crates-io.dioxus-stores]
-git = "https://github.com/restoredelight/dioxus"
-branch = "stop-close-requested"
 
 [patch.crates-io.pixels]
 git = "https://github.com/restoredelight/pixels"
