@@ -26,8 +26,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "appimage": {
-      "bundleMediaFramework": true
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      }
     },
     "externalBin": [
       "binaries/ffmpeg",
