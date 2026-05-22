@@ -12,6 +12,13 @@ if (Test-Path $STAGE_DIR) { Remove-Item -Recurse -Force $STAGE_DIR }
 New-Item -ItemType Directory -Force -Path $STAGE_DIR
 New-Item -ItemType Directory -Force -Path $OUTPUT_DIR
 
+# Download Visual C++ Redistributable for bundling into the installer
+$vcRedistDest = "$STAGE_DIR\vc_redist.x64.exe"
+if (-not (Test-Path $vcRedistDest)) {
+    Write-Host "Downloading Visual C++ Redistributable..."
+    Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vcRedistDest
+}
+
 # Helper to check exit code of native commands
 function Check-LastExitCode {
     if ($LASTEXITCODE -ne 0) {

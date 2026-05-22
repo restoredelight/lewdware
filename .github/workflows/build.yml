@@ -8,123 +8,138 @@ on:
   workflow_dispatch:
 
 jobs:
-  # build-linux:
-  #   name: Build Linux Packages
-  #   runs-on: ubuntu-24.04
-  #
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
-  #       with:
-  #         submodules: true
-  #
-  #     - name: Install system dependencies
-  #       run: |
-  #         sudo apt-get update
-  #         sudo apt-get install -y \
-  #           build-essential \
-  #           curl \
-  #           wget \
-  #           file \
-  #           rpm \
-  #           libssl-dev \
-  #           libgtk-3-dev \
-  #           libwebkit2gtk-4.1-dev \
-  #           libayatana-appindicator3-dev \
-  #           librsvg2-dev \
-  #           libasound2-dev \
-  #           libx11-dev \
-  #           libxi-dev \
-  #           libxtst-dev \
-  #           libxrandr-dev \
-  #           libxcursor-dev \
-  #           libavcodec-dev \
-  #           libavformat-dev \
-  #           libavutil-dev \
-  #           libswscale-dev \
-  #           libswresample-dev \
-  #           libavfilter-dev \
-  #           libavdevice-dev \
-  #           libdav1d-dev
-  #
-  #     - name: Install Rust stable
-  #       uses: dtolnay/rust-toolchain@stable
-  #
-  #     - name: Cache Rust
-  #       uses: Swatinem/rust-cache@v2
-  #
-  #     - name: Setup pnpm
-  #       uses: pnpm/action-setup@v3
-  #       with:
-  #         version: 9
-  #
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 20
-  #         cache: 'pnpm'
-  #         cache-dependency-path: |
-  #           config-tauri/pnpm-lock.yaml
-  #           pack-editor-tauri/pnpm-lock.yaml
-  #
-  #     - name: Build Installer A (Main Suite)
-  #       run: ./deploy/linux/build_installer_a.sh
-  #
-  #     - name: Build Installer B (Pack Editor)
-  #       run: ./deploy/linux/build_installer_b.sh
-  #
-  #     - name: Upload Linux Artifacts
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: linux-installers
-  #         path: dist/*
-  #
-  # build-macos:
-  #   name: Build macOS Packages
-  #   runs-on: macos-latest
-  #
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
-  #       with:
-  #         submodules: true
-  #
-  #     - name: Install brew dependencies
-  #       run: |
-  #         brew update
-  #         brew install ffmpeg dav1d
-  #
-  #     - name: Install Rust stable
-  #       uses: dtolnay/rust-toolchain@stable
-  #
-  #     - name: Cache Rust
-  #       uses: Swatinem/rust-cache@v2
-  #
-  #     - name: Setup pnpm
-  #       uses: pnpm/action-setup@v3
-  #       with:
-  #         version: 9
-  #
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 20
-  #         cache: 'pnpm'
-  #         cache-dependency-path: |
-  #           config-tauri/pnpm-lock.yaml
-  #           pack-editor-tauri/pnpm-lock.yaml
-  #
-  #     - name: Build Installer A (Main Suite)
-  #       run: ./deploy/macos/build_installer_a.sh
-  #
-  #     - name: Build Installer B (Pack Editor)
-  #       run: ./deploy/macos/build_installer_b.sh
-  #
-  #     - name: Upload macOS Artifacts
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: macos-installers
-  #         path: dist/*
+  build-linux:
+    name: Build Linux Packages (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            wget \
+            file \
+            rpm \
+            libssl-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            libx11-dev \
+            libxi-dev \
+            libxtst-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libdav1d-dev \
+            patchelf
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: |
+            config-tauri/pnpm-lock.yaml
+            pack-editor-tauri/pnpm-lock.yaml
+
+      - name: Build Installer A (Main Suite)
+        run: ./deploy/linux/build_installer_a.sh
+
+      - name: Build Installer B (Pack Editor)
+        run: ./deploy/linux/build_installer_b.sh
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}-installers
+          path: dist/*
+
+  build-macos:
+    name: Build macOS Packages (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-13
+            arch: x64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install brew dependencies
+        run: |
+          brew update
+          brew install ffmpeg dav1d
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: |
+            config-tauri/pnpm-lock.yaml
+            pack-editor-tauri/pnpm-lock.yaml
+
+      - name: Build Installer A (Main Suite)
+        run: ./deploy/macos/build_installer_a.sh
+
+      - name: Build Installer B (Pack Editor)
+        run: ./deploy/macos/build_installer_b.sh
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-installers
+          path: dist/*
 
   build-windows:
     name: Build Windows Packages

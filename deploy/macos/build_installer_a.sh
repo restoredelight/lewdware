@@ -36,6 +36,12 @@ cd ..
 echo "📦 Staging config.app bundle..."
 cp -R "target/release/bundle/macos/config-tauri.app" "$BUILD_DIR/root/Applications/Lewdware.app"
 
+# Fix the bundle display name — productName in tauri.conf.json is still "config-tauri"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName Lewdware" \
+  "$BUILD_DIR/root/Applications/Lewdware.app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Lewdware" \
+  "$BUILD_DIR/root/Applications/Lewdware.app/Contents/Info.plist"
+
 # Rename internal binary to config-tauri if needed, ensuring the plist matches
 # Tauri usually handles this. Let's make sure our CLI and Engine live in the same directory.
 MAC_BIN_DIR="$BUILD_DIR/root/Applications/Lewdware.app/Contents/MacOS"

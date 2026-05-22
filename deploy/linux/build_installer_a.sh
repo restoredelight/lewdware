@@ -4,7 +4,7 @@
 set -e
 
 VERSION="0.1.0"
-DEB_ARCH="amd64" # We can parameterize this or use `dpkg --print-architecture`
+DEB_ARCH=$(dpkg --print-architecture)
 STAGE_DIR="build/deb-stage"
 OUTPUT_DIR="dist"
 
@@ -44,31 +44,60 @@ cp "target/release/lw" "$STAGE_DIR/usr/bin/lw"
 cp "target/release/lewdware" "$STAGE_DIR/usr/bin/lewdware"
 chmod +x "$STAGE_DIR/usr/bin/"*
 
-# 3. Dynamic Library Copying (avoiding cross-distro package mismatches)
-echo "🔗 Copying and staging dynamic library dependencies (FFmpeg & dav1d)..."
+# 3. Dynamic Library Bundling (FFmpeg, dav1d, and all transitive deps)
+echo "🔗 Bundling dynamic library dependencies..."
 
-# Locate and copy a shared library from the system; aborts if not found.
-copy_so() {
-  local lib_name="$1"
-  local lib_path
-  lib_path=$(/sbin/ldconfig -p | grep -m 1 "$lib_name" | awk '{print $NF}')
-
-  if [ -z "$lib_path" ]; then
-    echo "❌ Required shared library $lib_name not found via ldconfig!" >&2
-    exit 1
-  fi
-  echo "   Copying $lib_path -> usr/lib/lewdware/"
-  cp "$lib_path" "$STAGE_DIR/usr/lib/lewdware/"
+# System libraries that must remain as host deps (UI, audio, core runtime).
+is_system_lib() {
+  local lib="$1"
+  case "$lib" in
+    libc.so* | libm.so* | libdl.so* | libpthread.so* | librt.so* | \
+    libgcc_s.so* | libstdc++.so* | ld-linux* | libz.so* | \
+    libGL.so* | libGLX.so* | libEGL.so* | libvulkan.so* | \
+    libX11.so* | libXext.so* | libXrender.so* | libXi.so* | libXtst.so* | \
+    libXrandr.so* | libXcursor.so* | libXdamage.so* | libXfixes.so* | \
+    libXcomposite.so* | libXau.so* | libXdmcp.so* | libxcb*.so* | \
+    libwayland-*.so* | libxkbcommon*.so* | \
+    libgtk-3.so* | libgdk-3.so* | libgtk-4.so* | libgdk-4.so* | \
+    libglib-2.0.so* | libgobject-2.0.so* | libgio-2.0.so* | libgmodule-2.0.so* | \
+    libpango*.so* | libcairo*.so* | libatk*.so* | libepoxy.so* | \
+    libharfbuzz.so* | libfontconfig.so* | libfreetype.so* | libpixman-1.so* | \
+    libasound.so* | libpulse*.so* | libpipewire*.so* | \
+    libwebkit2gtk*.so* | libjavascriptcoregtk*.so* | libsoup*.so* | \
+    libdbus-1.so* | libsystemd.so* | libudev.so* | \
+    libmount.so* | libblkid.so* | libuuid.so* | libpcre2*.so* | libffi.so* | \
+    libexpat.so* | libselinux.so* | libssl.so* | libcrypto.so*)
+      return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
-copy_so "libavcodec.so"
-copy_so "libavformat.so"
-copy_so "libavutil.so"
-copy_so "libswscale.so"
-copy_so "libswresample.so"
-copy_so "libdav1d.so"
-copy_so "libavfilter.so"
-copy_so "libavdevice.so"
+# Recursively copy all non-system deps of $1 into usr/lib/lewdware/.
+bundle_lib() {
+  local target="$1"
+  while IFS= read -r dep_path; do
+    [[ -z "$dep_path" || ! -f "$dep_path" ]] && continue
+    local lib_name
+    lib_name=$(basename "$dep_path")
+    is_system_lib "$lib_name" && continue
+    local staged="$STAGE_DIR/usr/lib/lewdware/$lib_name"
+    [[ -f "$staged" ]] && continue
+    echo "   Bundling: $dep_path"
+    cp "$dep_path" "$staged"
+    chmod 755 "$staged"
+    bundle_lib "$staged"
+  done < <(ldd "$target" 2>/dev/null | awk '/=>/ { print $3 }')
+}
+
+bundle_lib "target/release/lewdware"
+bundle_lib "target/release/lw"
+bundle_lib "target/release/config-tauri"
+
+echo "🔗 Patching bundled library rpaths..."
+for lib in "$STAGE_DIR/usr/lib/lewdware/"*; do
+  [ -f "$lib" ] || continue
+  patchelf --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
+done
 
 # 4. Create Desktop File and Icon
 echo "📝 Creating desktop entries..."
@@ -114,8 +143,9 @@ if command -v rpmbuild &> /dev/null; then
   mkdir -p "$RPM_STAGE_DIR"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
   cat <<EOF > "$RPM_STAGE_DIR/SPECS/lewdware-suite.spec"
+%global __requires_exclude_from /usr/lib/lewdware/
 %global __requires_exclude ^lib(avcodec|avformat|avutil|swscale|swresample|dav1d|avfilter|avdevice)\\.so
-%global __provides_exclude ^lib(avcodec|avformat|avutil|swscale|swresample|dav1d|avfilter|avdevice)\\.so
+%global __provides_exclude_from /usr/lib/lewdware/
 
 Name:           lewdware-suite
 Version:        ${VERSION}
@@ -172,7 +202,7 @@ cp "$STAGE_DIR/usr/bin/lewdware" "$TAR_ROOT/bin/"
 cp "$STAGE_DIR/usr/bin/lw" "$TAR_ROOT/bin/"
 
 # Copy config-tauri AppImage as lewdware-config binary
-APPIMAGE_PATH="target/release/bundle/appimage/config-tauri_${VERSION}_amd64.AppImage"
+APPIMAGE_PATH=$(find "target/release/bundle/appimage/" -name "config-tauri_${VERSION}_*.AppImage" 2>/dev/null | head -1)
 if [ -f "$APPIMAGE_PATH" ]; then
   cp "$APPIMAGE_PATH" "$TAR_ROOT/bin/lewdware-config"
   chmod +x "$TAR_ROOT/bin/lewdware-config"
@@ -204,7 +234,7 @@ Simply run the binaries from the `bin` directory:
 EOF
 
 # Pack archive
-tar -czf "$OUTPUT_DIR/lewdware-suite_${VERSION}_amd64.tar.gz" -C "$TAR_STAGE" "lewdware-suite-${VERSION}"
+tar -czf "$OUTPUT_DIR/lewdware-suite_${VERSION}_${DEB_ARCH}.tar.gz" -C "$TAR_STAGE" "lewdware-suite-${VERSION}"
 echo "✓ Portable tar.gz package created!"
 
 echo "🎉 SUCCESS: All Linux target packages staged/created in $OUTPUT_DIR!"
