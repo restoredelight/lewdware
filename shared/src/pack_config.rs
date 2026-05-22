@@ -1,7 +1,9 @@
 use std::{collections::HashMap, io};
 
 use ciborium::{from_reader, into_writer};
+#[cfg(feature = "dioxus")]
 use dioxus::stores::Store;
+#[cfg(feature = "dioxus")]
 use dioxus::prelude::*;
 use indexmap::IndexMap;
 use merge::Merge;
@@ -23,7 +25,8 @@ pub struct PackOpts {
     pub ignore: Option<OneOrMore<String>>,
 }
 
-#[derive(Serialize, Deserialize, Default, Clone, Store, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+#[cfg_attr(feature = "dioxus", derive(Store))]
 pub struct Metadata {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]

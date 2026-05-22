@@ -1,0 +1,53 @@
+use std::io::Write;
+
+use anyhow::{bail, Result};
+use tempfile::NamedTempFile;
+use tokio::process::Command;
+
+use crate::pack::FileData;
+
+pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec<u8>> {
+    let mut _temp_file = None;
+
+    let path = match file_data {
+        FileData::Path(path) => path,
+        FileData::Data(data) => {
+            let mut tempfile =
+                NamedTempFile::with_suffix(if is_image { ".avif" } else { ".webm" })?;
+            tempfile.write_all(&data)?;
+            let path = tempfile.path().to_path_buf();
+            _temp_file = Some(tempfile);
+            path
+        }
+    };
+
+    let mut cmd = Command::new(crate::encode::get_ffmpeg_path());
+    cmd.args(["-y"]);
+
+    if !is_image {
+        cmd.args(["-ss", "0"]);
+    }
+
+    cmd.arg("-i").arg(&path);
+
+    if !is_image {
+        cmd.args(["-frames:v", "1"]);
+    }
+
+    cmd.args([
+        "-vf",
+        "scale='min(iw,300)':'min(ih,200)':force_original_aspect_ratio=decrease",
+        "-pix_fmt", "yuv420p",
+        "-f", "mjpeg",
+        "-q:v", "4",
+        "pipe:1",
+    ]);
+
+    let output = cmd.output().await?;
+
+    if !output.status.success() {
+        bail!("ffmpeg preview generation failed");
+    }
+
+    Ok(output.stdout)
+}

@@ -6,6 +6,7 @@ pub mod target;
 pub mod utils;
 pub mod encode;
 pub mod db;
+#[cfg(feature = "dioxus")]
 pub mod components;
 pub mod mode;
 

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fs, path::PathBuf};
 
 use anyhow::{Result, anyhow};
+#[cfg(feature = "dioxus")]
 use dioxus_stores::Store;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -8,7 +9,8 @@ use serde_with::serde_as;
 use crate::mode::OptionValue;
 
 #[serde_as]
-#[derive(Serialize, Deserialize, Debug, Store, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[cfg_attr(feature = "dioxus", derive(Store))]
 pub struct AppConfig {
     pub pack_path: Option<PathBuf>,
     pub uploaded_modes: Vec<PathBuf>,
