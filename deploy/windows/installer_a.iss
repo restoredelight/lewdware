@@ -42,15 +42,73 @@ Name: "addtopath"; Description: "Add 'lw' CLI to the user PATH environment varia
 
 [Registry]
 ; Update the User PATH variable to expose 'lw' CLI
-Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Flags: preservestringtype; Tasks: addtopath
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Flags: preservestringtype; Tasks: addtopath; Check: NeedsAddPath
 
 [Code]
+const
+  WM_SETTINGCHANGE = $1A;
+  SMTO_ABORTIFHUNG = 2;
+
+function SendMessageTimeoutA(hWnd: HWND; Msg: UINT; wParam: WPARAM; lParam: AnsiString;
+  fuFlags: UINT; uTimeout: UINT; var lpdwResult: DWORD): LRESULT;
+  external 'SendMessageTimeoutA@user32.dll stdcall';
+
 procedure BroadcastEnvironmentChange();
 var
-  Temp: Longint;
+  Dummy: DWORD;
 begin
-  SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
-    CastStringToInteger('Environment'), SMTO_ABORTIFHUNG, 5000, Temp);
+  SendMessageTimeoutA(HWND($FFFF), WM_SETTINGCHANGE, 0, 'Environment',
+    SMTO_ABORTIFHUNG, 5000, Dummy);
+end;
+
+function NeedsAddPath(): Boolean;
+var
+  OrigPath: string;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', OrigPath) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  // Look for the expanded constant {app} in OrigPath (case-insensitive)
+  Result := Pos(';' + UpperCase(ExpandConstant('{app}')) + ';', ';' + UpperCase(OrigPath) + ';') = 0;
+end;
+
+procedure RemovePath();
+var
+  Paths: string;
+  AppPath: string;
+  PosApp: Integer;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Paths) then
+    Exit;
+
+  AppPath := ExpandConstant('{app}');
+  
+  // Loop to remove all instances of the application path
+  repeat
+    PosApp := Pos(';' + UpperCase(AppPath), UpperCase(Paths));
+    if PosApp > 0 then
+    begin
+      Delete(Paths, PosApp, Length(AppPath) + 1);
+    end
+    else
+    begin
+      PosApp := Pos(UpperCase(AppPath) + ';', UpperCase(Paths));
+      if PosApp > 0 then
+      begin
+        Delete(Paths, PosApp, Length(AppPath) + 1);
+      end
+      else
+      begin
+        if UpperCase(Paths) = UpperCase(AppPath) then
+          Paths := '';
+        Break;
+      end;
+    end;
+  until False;
+
+  RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Paths);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -61,6 +119,10 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
+  if CurUninstallStep = usUninstall then
+  begin
+    RemovePath();
+  end;
   if CurUninstallStep = usPostUninstall then
     BroadcastEnvironmentChange();
 end;
