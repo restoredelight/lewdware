@@ -94,7 +94,7 @@ fn is_media_path(path: &Path) -> anyhow::Result<bool> {
 }
 
 fn get_ffmpeg_name() -> String {
-    let base = "ffmpeg";
+    let base = "lewdware-ffmpeg";
     let arch = if cfg!(target_arch = "x86_64") {
         "x86_64"
     } else if cfg!(target_arch = "aarch64") {
@@ -118,7 +118,7 @@ fn get_ffmpeg_name() -> String {
 }
 
 fn get_ffprobe_name() -> String {
-    let base = "ffprobe";
+    let base = "lewdware-ffprobe";
     let arch = if cfg!(target_arch = "x86_64") {
         "x86_64"
     } else if cfg!(target_arch = "aarch64") {
@@ -143,7 +143,7 @@ fn get_ffprobe_name() -> String {
 
 pub fn get_ffmpeg_path() -> PathBuf {
     let sidecar_name = get_ffmpeg_name();
-    let direct_name = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
+    let direct_name = if cfg!(target_os = "windows") { "lewdware-ffmpeg.exe" } else { "lewdware-ffmpeg" };
 
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
@@ -178,7 +178,7 @@ pub fn get_ffmpeg_path() -> PathBuf {
 
 pub fn get_ffprobe_path() -> PathBuf {
     let sidecar_name = get_ffprobe_name();
-    let direct_name = if cfg!(target_os = "windows") { "ffprobe.exe" } else { "ffprobe" };
+    let direct_name = if cfg!(target_os = "windows") { "lewdware-ffprobe.exe" } else { "lewdware-ffprobe" };
 
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {

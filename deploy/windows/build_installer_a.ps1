@@ -76,13 +76,15 @@ if ($VCPKG_BIN_PATH -and (Test-Path $VCPKG_BIN_PATH)) {
     Copy-Item "$VCPKG_BIN_PATH\avutil-*.dll" -Destination "target/release/"
     Copy-Item "$VCPKG_BIN_PATH\swscale-*.dll" -Destination "target/release/"
     Copy-Item "$VCPKG_BIN_PATH\swresample-*.dll" -Destination "target/release/"
+    Copy-Item "$VCPKG_BIN_PATH\avdevice-*.dll" -Destination "target/release/"
+    Copy-Item "$VCPKG_BIN_PATH\avfilter-*.dll" -Destination "target/release/"
     Copy-Item "$VCPKG_BIN_PATH\dav1d.dll" -Destination "target/release/"
 } else {
     Write-Error "Vcpkg bin directory not found. Please make sure FFmpeg and dav1d DLLs are present."
 }
 
 # Verify that all DLL dependencies are present in target/release
-$requiredDlls = @("avcodec", "avformat", "avutil", "swscale", "swresample", "dav1d")
+$requiredDlls = @("avcodec", "avformat", "avutil", "swscale", "swresample", "avdevice", "avfilter", "dav1d")
 foreach ($dllName in $requiredDlls) {
     $found = Get-ChildItem "target/release/" -Filter "*$dllName*.dll"
     if (-not $found) {

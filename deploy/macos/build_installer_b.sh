@@ -21,8 +21,8 @@ fi
 BINARIES_DIR="pack-editor-tauri/src-tauri/binaries"
 mkdir -p "$BINARIES_DIR"
 
-FFMPEG_SIDECAR="$BINARIES_DIR/ffmpeg-$TRIPLE"
-FFPROBE_SIDECAR="$BINARIES_DIR/ffprobe-$TRIPLE"
+FFMPEG_SIDECAR="$BINARIES_DIR/lewdware-ffmpeg-$TRIPLE"
+FFPROBE_SIDECAR="$BINARIES_DIR/lewdware-ffprobe-$TRIPLE"
 
 # 1. stage FFmpeg and ffprobe if not already present
 if [ ! -f "$FFMPEG_SIDECAR" ] || [ ! -f "$FFPROBE_SIDECAR" ]; then
