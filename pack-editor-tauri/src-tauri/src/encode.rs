@@ -7,6 +7,17 @@ use std::{
     thread::available_parallelism,
 };
 
+fn new_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    cmd
+}
+
 use anyhow::{anyhow, bail, Result};
 use futures::{stream, StreamExt};
 use infer::MatcherType;
@@ -220,7 +231,7 @@ fn file_info(path: &Path) -> Result<Option<FileInfo>> {
         "-output_format", "json",
     ];
 
-    let output = Command::new(get_ffprobe_path()).args(args).arg(path).output()?;
+    let output = new_command(get_ffprobe_path()).args(args).arg(path).output()?;
 
     if !output.status.success() {
         return Ok(None);
@@ -274,7 +285,7 @@ fn encode_image(input: &Path, output: &Path, width: u64, height: u64) -> Result<
          [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]"
     );
 
-    let result = Command::new(get_ffmpeg_path())
+    let result = new_command(get_ffmpeg_path())
         .arg("-i").arg(input)
         .arg("-filter_complex").arg(filter)
         .arg("-map").arg("[main]")
@@ -312,7 +323,7 @@ fn encode_video(
          [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]"
     );
 
-    let mut cmd = Command::new(get_ffmpeg_path());
+    let mut cmd = new_command(get_ffmpeg_path());
     cmd.arg("-i").arg(input)
         .arg("-filter_complex").arg(filter)
         .arg("-map").arg("[main]");
@@ -351,7 +362,7 @@ fn encode_video(
 }
 
 fn encode_audio(input: &Path, output: &Path) -> Result<()> {
-    let status = Command::new(get_ffmpeg_path())
+    let status = new_command(get_ffmpeg_path())
         .arg("-i").arg(input)
         .args(["-y", "-c:a", "libopus", "-b:a", "64k"])
         .arg(output)

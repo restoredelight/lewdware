@@ -21,7 +21,14 @@ pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec
         }
     };
 
-    let mut cmd = Command::new(crate::encode::get_ffmpeg_path());
+    #[allow(unused_mut)]
+    let mut std_cmd = std::process::Command::new(crate::encode::get_ffmpeg_path());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        std_cmd.creation_flags(0x08000000);
+    }
+    let mut cmd = Command::from(std_cmd);
     cmd.args(["-y"]);
 
     if !is_image {
