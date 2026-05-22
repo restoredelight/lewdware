@@ -44,6 +44,7 @@ jobs:
             libswscale-dev \
             libswresample-dev \
             libavfilter-dev \
+            libavdevice-dev \
             libdav1d-dev
 
       - name: Install Rust stable
@@ -164,9 +165,9 @@ jobs:
       - name: Install FFmpeg and dav1d via vcpkg
         shell: pwsh
         run: |
-          & "$env:VCPKG_ROOT\vcpkg.exe" install pkgconf:x64-windows
-          & "$env:VCPKG_ROOT\vcpkg.exe" install dav1d:x64-windows
-          & "$env:VCPKG_ROOT\vcpkg.exe" install ffmpeg:x64-windows
+          & "$env:VCPKG_ROOT\vcpkg.exe" install pkgconf:x64-windows-rel
+          & "$env:VCPKG_ROOT\vcpkg.exe" install dav1d:x64-windows-rel
+          & "$env:VCPKG_ROOT\vcpkg.exe" install ffmpeg:x64-windows-rel
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -179,10 +180,10 @@ jobs:
       - name: Setup environment
         shell: pwsh
         run: |
-          echo "FFMPEG_DIR=${{ github.workspace }}\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
-          echo "PKG_CONFIG_PATH=${{ github.workspace }}\vcpkg\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
-          echo "${{ github.workspace }}\vcpkg\installed\x64-windows\tools\pkgconf" >> $env:GITHUB_PATH
-          echo "PKG_CONFIG=${{ github.workspace }}\vcpkg\installed\x64-windows\tools\pkgconf\pkgconf.exe" >> $env:GITHUB_ENV
+          echo "FFMPEG_DIR=${{ github.workspace }}\vcpkg\installed\x64-windows-rel" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=${{ github.workspace }}\vcpkg\installed\x64-windows-rel\lib\pkgconfig" >> $env:GITHUB_ENV
+          echo "${{ github.workspace }}\vcpkg\installed\x64-windows-rel\tools\pkgconf" >> $env:GITHUB_PATH
+          echo "PKG_CONFIG=${{ github.workspace }}\vcpkg\installed\x64-windows-rel\tools\pkgconf\pkgconf.exe" >> $env:GITHUB_ENV
 
       - name: Install Inno Setup
         run: choco install innosetup -y
