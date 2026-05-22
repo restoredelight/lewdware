@@ -85,7 +85,8 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
             }
         }
 
-        process.kill()?;
+        terminate(&mut process);
+        process.wait().ok();
 
         let config = read_config(&root)?;
 
@@ -138,6 +139,17 @@ impl Drop for BuildFile {
             eprintln!("{err}");
         }
     }
+}
+
+fn terminate(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{self, Signal};
+        use nix::unistd::Pid;
+        let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
 }
 
 fn find_lewdware_binary() -> Option<Command> {

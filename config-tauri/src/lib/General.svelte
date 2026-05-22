@@ -1,6 +1,30 @@
 <script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import { api } from "./api";
   import { store } from "./store.svelte";
   import type { Key } from "./types";
+
+  let running = $state(false);
+  let pollInterval: ReturnType<typeof setInterval>;
+
+  onMount(async () => {
+    running = await api.lewdwareRunning();
+    pollInterval = setInterval(async () => {
+      running = await api.lewdwareRunning();
+    }, 1000);
+  });
+
+  onDestroy(() => clearInterval(pollInterval));
+
+  async function launch() {
+    await api.launchLewdware();
+    running = true;
+  }
+
+  async function stop() {
+    await api.stopLewdware();
+    running = false;
+  }
 
   let recording = $state(false);
 
@@ -52,6 +76,31 @@
 </script>
 
 <div class="flex flex-col gap-8 p-8 overflow-y-auto flex-1">
+  <!-- Launch / Stop -->
+  <div class="flex flex-col gap-2">
+    <span class="text-sm font-semibold text-[#232629]">Lewdware</span>
+    <div class="flex items-center gap-3">
+      {#if running}
+        <button
+          onclick={stop}
+          class="px-4 py-2 rounded-md text-sm font-medium text-white
+                 bg-[#e74c3c] hover:bg-[#c0392b] transition-colors"
+        >
+          Stop
+        </button>
+        <span class="text-xs text-[#27ae60] font-medium">Running</span>
+      {:else}
+        <button
+          onclick={launch}
+          class="px-4 py-2 rounded-md text-sm font-medium text-white
+                 bg-[#27ae60] hover:bg-[#219a52] transition-colors"
+        >
+          Launch
+        </button>
+      {/if}
+    </div>
+  </div>
+
   <!-- Panic Key -->
   <div class="flex flex-col gap-2">
     <span class="text-sm font-semibold text-[#232629]">Panic key</span>

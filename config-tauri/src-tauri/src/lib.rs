@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     io::{Cursor, Read, Seek, SeekFrom},
     path::PathBuf,
+    process::{Child, Command},
     sync::Mutex,
 };
 
@@ -162,6 +163,7 @@ pub struct AppState {
     pack: Mutex<Option<LoadedPack>>,
     uploaded: Mutex<Vec<UploadedModeEntry>>,
     default_modes: Metadata,
+    lewdware_process: Mutex<Option<Child>>,
 }
 
 pub type State<'a> = tauri::State<'a, AppState>;
@@ -590,6 +592,70 @@ fn remove_uploaded_mode(state: State<'_>, path: String) -> Result<Vec<ModeGroupD
     Ok(build_mode_groups(&state))
 }
 
+// ─── Process management ───────────────────────────────────────────────────────
+
+fn find_lewdware() -> Option<Command> {
+    let bin_name = if cfg!(windows) { "lewdware.exe" } else { "lewdware" };
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.canonicalize().ok().and_then(|p| p.parent().map(|p| p.to_owned())) {
+            let neighbor = dir.join(bin_name);
+            if neighbor.exists() {
+                return Some(Command::new(neighbor));
+            }
+        }
+    }
+
+    None
+}
+
+#[tauri::command]
+fn launch_lewdware(state: State<'_>) -> Result<(), String> {
+    let mut guard = state.lewdware_process.lock().unwrap();
+
+    // No-op if already running.
+    if let Some(child) = guard.as_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            return Ok(());
+        }
+    }
+
+    let mut cmd = find_lewdware().ok_or("Could not find lewdware binary")?;
+    let child = cmd.spawn().map_err(|e| e.to_string())?;
+    *guard = Some(child);
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_lewdware(state: State<'_>) -> Result<(), String> {
+    let child = state.lewdware_process.lock().unwrap().take();
+
+    if let Some(mut child) = child {
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{self, Signal};
+            use nix::unistd::Pid;
+            let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
+        }
+        #[cfg(not(unix))]
+        let _ = child.kill();
+
+        // Reap without blocking the command thread.
+        std::thread::spawn(move || { let _ = child.wait(); });
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn lewdware_running(state: State<'_>) -> bool {
+    let mut guard = state.lewdware_process.lock().unwrap();
+    match guard.as_mut() {
+        Some(child) => matches!(child.try_wait(), Ok(None)),
+        None => false,
+    }
+}
+
 // ─── Entry ────────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -626,6 +692,7 @@ pub fn run() {
             pack: Mutex::new(pack),
             uploaded: Mutex::new(uploaded),
             default_modes,
+            lewdware_process: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -638,6 +705,9 @@ pub fn run() {
             remove_pack,
             upload_mode,
             remove_uploaded_mode,
+            launch_lewdware,
+            stop_lewdware,
+            lewdware_running,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

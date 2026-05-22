@@ -33,4 +33,10 @@ export const api = {
 
   removeUploadedMode: (path: string) =>
     invoke<ModeGroupDto[]>("remove_uploaded_mode", { path }),
+
+  launchLewdware: () => invoke<void>("launch_lewdware"),
+
+  stopLewdware: () => invoke<void>("stop_lewdware"),
+
+  lewdwareRunning: () => invoke<boolean>("lewdware_running"),
 };

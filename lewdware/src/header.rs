@@ -235,6 +235,8 @@ impl Header {
             self.draw_close_button();
         }
 
+        self.needs_redraw = false;
+
         Some(&self.pixmap)
     }
 

@@ -1154,7 +1154,9 @@ impl<'a> InnerWindow<'a> {
 
     fn render_decorations(&mut self) -> Result<bool> {
         if self.decorations {
-            Ok(self.render_border()? || self.render_header()?)
+            let border = self.render_border()?;
+            let header = self.render_header()?;
+            Ok(border || header)
         } else {
             Ok(false)
         }

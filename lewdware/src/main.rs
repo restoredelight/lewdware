@@ -7,7 +7,7 @@ use pollster::block_on;
 use shared::user_config::{Mode, load_config};
 use winit::event_loop::EventLoop;
 
-use crate::{app::ChaosApp, egui::WgpuState, utils::spawn_panic_thread};
+use crate::{app::{ChaosApp, UserEvent}, egui::WgpuState, utils::spawn_panic_thread};
 
 mod app;
 mod audio;
@@ -65,6 +65,24 @@ fn main() -> Result<()> {
 
     let event_loop = event_loop_builder.build()?;
     let proxy = event_loop.create_proxy();
+
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let proxy = proxy.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build signal listener runtime");
+            rt.block_on(async move {
+                if let Ok(mut stream) = signal(SignalKind::terminate()) {
+                    stream.recv().await;
+                    let _ = proxy.send_event(UserEvent::Exit);
+                }
+            });
+        });
+    }
 
     spawn_panic_thread(proxy.clone(), config.panic_button.clone());
     #[cfg(not(target_os = "linux"))]
