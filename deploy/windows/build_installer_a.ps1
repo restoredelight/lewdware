@@ -47,9 +47,9 @@ Pop-Location
 Write-Host "Locating and copying dynamic library dependencies (FFmpeg and dav1d)..."
 $VCPKG_BIN_PATH = ""
 if ($env:VCPKG_ROOT) {
-    $VCPKG_BIN_PATH = Join-Path $env:VCPKG_ROOT "installed\x64-windows-rel\bin"
+    $VCPKG_BIN_PATH = Join-Path $env:VCPKG_ROOT "installed\x64-windows-release\bin"
 } elseif (Test-Path "vcpkg") {
-    $VCPKG_BIN_PATH = "vcpkg\installed\x64-windows-rel\bin"
+    $VCPKG_BIN_PATH = "vcpkg\installed\x64-windows-release\bin"
 }
 
 if ($VCPKG_BIN_PATH -and (Test-Path $VCPKG_BIN_PATH)) {
