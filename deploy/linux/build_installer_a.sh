@@ -146,6 +146,8 @@ if command -v rpmbuild &> /dev/null; then
 %global __requires_exclude_from /usr/lib/lewdware/
 %global __requires_exclude ^lib(avcodec|avformat|avutil|swscale|swresample|dav1d|avfilter|avdevice)\\.so
 %global __provides_exclude_from /usr/lib/lewdware/
+%global debug_package %{nil}
+%global __strip /bin/true
 
 Name:           lewdware-suite
 Version:        ${VERSION}

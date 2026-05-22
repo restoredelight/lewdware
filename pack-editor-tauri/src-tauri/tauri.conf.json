@@ -29,6 +29,12 @@
     "linux": {
       "appimage": {
         "bundleMediaFramework": true
+      },
+      "rpm": {
+        "compression": {
+          "type": "zstd",
+          "level": 3
+        }
       }
     },
     "externalBin": [

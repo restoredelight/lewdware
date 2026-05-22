@@ -49,15 +49,15 @@ const
   WM_SETTINGCHANGE = $1A;
   SMTO_ABORTIFHUNG = 2;
 
-function SendMessageTimeoutA(hWnd: HWND; Msg: UINT; wParam: WPARAM; lParam: AnsiString;
-  fuFlags: UINT; uTimeout: UINT; var lpdwResult: DWORD): LRESULT;
-  external 'SendMessageTimeoutA@user32.dll stdcall';
+function SendMessageTimeoutW(hWnd: HWND; Msg: Cardinal; wParam: Longint; lParam: String;
+  fuFlags: Cardinal; uTimeout: Cardinal; var lpdwResult: Longint): Longint;
+  external 'SendMessageTimeoutW@user32.dll stdcall';
 
 procedure BroadcastEnvironmentChange();
 var
-  Dummy: DWORD;
+  Dummy: Longint;
 begin
-  SendMessageTimeoutA(HWND($FFFF), WM_SETTINGCHANGE, 0, 'Environment',
+  SendMessageTimeoutW(HWND($FFFF), WM_SETTINGCHANGE, 0, 'Environment',
     SMTO_ABORTIFHUNG, 5000, Dummy);
 end;
 

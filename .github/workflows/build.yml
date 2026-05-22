@@ -56,11 +56,6 @@ jobs:
             patchelf \
             xdg-utils
 
-      - name: Optimize rpmbuild performance
-        run: |
-          echo "%debug_package %{nil}" > ~/.rpmmacros
-          echo "%__strip /bin/true" >> ~/.rpmmacros
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -164,7 +159,6 @@ jobs:
           key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-
-          save-always: true
 
       - name: Install vcpkg
         shell: pwsh
