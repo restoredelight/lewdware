@@ -7,6 +7,7 @@ set -e
 APP_NAME="Lewdware"
 BUNDLE_ID="com.lewdware.suite"
 VERSION="0.1.0"
+ARCH=$(uname -m)
 BUILD_DIR="build/stage"
 OUTPUT_DIR="dist"
 
@@ -111,6 +112,6 @@ pkgbuild --root "$BUILD_DIR/root" \
 # 6. Build the Final Installer
 echo "📦 Wrapping into final installer..."
 productbuild --package "$BUILD_DIR/LewdwareComponents.pkg" \
-             "$OUTPUT_DIR/Lewdware-Installer-macOS.pkg"
+             "$OUTPUT_DIR/Lewdware-Installer-macOS-${ARCH}.pkg"
 
-echo "🎉 SUCCESS: $OUTPUT_DIR/Lewdware-Installer-macOS.pkg created!"
+echo "🎉 SUCCESS: $OUTPUT_DIR/Lewdware-Installer-macOS-${ARCH}.pkg created!"
