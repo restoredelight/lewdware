@@ -49,7 +49,7 @@ fi
 echo "Building pack-editor-tauri GUI..."
 cd pack-editor
 pnpm install
-pnpm tauri build
+pnpm tauri build --bundles dmg
 cd ..
 
 # 3. Move output to dist

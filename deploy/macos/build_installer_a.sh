@@ -30,7 +30,7 @@ cargo build -p lewdware --release
 echo "Building config GUI..."
 cd config
 pnpm install
-pnpm tauri build
+pnpm tauri build --bundles app
 cd ..
 
 # 2. Copy config.app package to our staging area
