@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "pack-editor-tauri",
+  "productName": "lewdware-pack-editor",
   "version": "0.1.0",
-  "identifier": "com..pack-editor-tauri",
+  "identifier": "com..lewdware-pack-editor",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",

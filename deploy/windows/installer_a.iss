@@ -13,7 +13,7 @@ SolidCompression=yes
 ChangesEnvironment=yes
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
-SetupIconFile=..\..\config-tauri\src-tauri\icons\icon.ico
+SetupIconFile=..\..\config\src-tauri\icons\icon.ico
 
 [Files]
 ; Main config GUI app
