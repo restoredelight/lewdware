@@ -1,5 +1,20 @@
 #[cfg(target_os = "linux")]
 pub fn apply_wayland_preload_safeguards() {
+    // Restore original LD_LIBRARY_PATH if running inside an AppImage to prevent
+    // bundled library leakage into child processes (like WebKitWebProcess and ffmpeg)
+    let is_appimage = std::env::var("APPIMAGE").is_ok() || std::env::var("APPDIR").is_ok();
+    if is_appimage {
+        if let Ok(old_path) = std::env::var("LD_LIBRARY_PATH_OLD") {
+            unsafe {
+                std::env::set_var("LD_LIBRARY_PATH", old_path);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("LD_LIBRARY_PATH");
+            }
+        }
+    }
+
     // 1. Disable DMA-BUF and Compositing Mode rendering paths on Wayland/AppImage
     if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
         unsafe {
@@ -13,7 +28,6 @@ pub fn apply_wayland_preload_safeguards() {
     }
 
     // 2. Preload host's libwayland-client.so.0 if running as an AppImage under Wayland
-    let is_appimage = std::env::var("APPIMAGE").is_ok() || std::env::var("APPDIR").is_ok();
     let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok()
         || std::env::var("XDG_SESSION_TYPE")
             .is_ok_and(|val| val.trim().eq_ignore_ascii_case("wayland"));
