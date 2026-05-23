@@ -5,7 +5,7 @@ set -e
 
 # Configuration
 APP_NAME="Lewdware"
-BUNDLE_ID="com.lewdware.suite"
+BUNDLE_ID="com.lewdware"
 VERSION="0.1.0"
 ARCH=$(uname -m)
 BUILD_DIR="build/stage"
@@ -18,24 +18,24 @@ mkdir -p "$BUILD_DIR/scripts"
 mkdir -p "$OUTPUT_DIR"
 
 # 1. Compile all applications dynamically
-echo "🔨 Compiling applications..."
+echo "Compiling applications..."
 cargo build -p lw --release
 
-echo "🔨 Building default mode..."
+echo "Building default mode..."
 (cd default-modes && ../target/release/lw mode build)
 
 cargo build -p lewdware --release
 
 # Compile Tauri GUI
-echo "🔨 Building config-tauri GUI..."
-cd config-tauri
+echo "Building config GUI..."
+cd config
 pnpm install
 pnpm tauri build
 cd ..
 
 # 2. Copy config.app package to our staging area
 echo "📦 Staging config.app bundle..."
-cp -R "target/release/bundle/macos/config-tauri.app" "$BUILD_DIR/root/Applications/Lewdware.app"
+cp -R "target/release/bundle/macos/lewdware-config.app" "$BUILD_DIR/root/Applications/Lewdware.app"
 
 # Fix the bundle display name — productName in tauri.conf.json is still "config-tauri"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName Lewdware" \
@@ -55,7 +55,7 @@ cp "target/release/lewdware" "$MAC_BIN_DIR/lewdware"
 chmod +x "$MAC_BIN_DIR/lw" "$MAC_BIN_DIR/lewdware"
 
 # 3. Dynamic Library Bundling and Relinking (dylib)
-echo "🔗 Resolving dynamic library dependencies (FFmpeg & dav1d)..."
+echo "Resolving dynamic library dependencies (FFmpeg & dav1d)..."
 
 # Recursively copy all non-system dylib deps of $1 into Frameworks/ and relink.
 # Handles transitive deps (libvpx, libopus, libaom, etc.) automatically.
@@ -81,7 +81,7 @@ bundle_dylib() {
 
 bundle_dylib "$MAC_BIN_DIR/lewdware"
 bundle_dylib "$MAC_BIN_DIR/lw"
-bundle_dylib "$MAC_BIN_DIR/config-tauri"
+bundle_dylib "$MAC_BIN_DIR/lewdware-config"
 
 # 4. Create the postinstall script for PATH integration
 echo "📝 Creating installer postinstall script..."

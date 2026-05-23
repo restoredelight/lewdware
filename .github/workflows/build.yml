@@ -73,8 +73,8 @@ jobs:
   #         node-version: 20
   #         cache: 'pnpm'
   #         cache-dependency-path: |
-  #           config-tauri/pnpm-lock.yaml
-  #           pack-editor-tauri/pnpm-lock.yaml
+  #           config/pnpm-lock.yaml
+  #           pack-editor/pnpm-lock.yaml
   #
   #     - name: Build Installer A (Main Suite)
   #       run: ./deploy/linux/build_installer_a.sh
@@ -120,8 +120,8 @@ jobs:
   #         node-version: 20
   #         cache: 'pnpm'
   #         cache-dependency-path: |
-  #           config-tauri/pnpm-lock.yaml
-  #           pack-editor-tauri/pnpm-lock.yaml
+  #           config/pnpm-lock.yaml
+  #           pack-editor/pnpm-lock.yaml
   #
   #     - name: Build Installer A (Main Suite)
   #       run: ./deploy/macos/build_installer_a.sh
@@ -209,8 +209,8 @@ jobs:
           node-version: 20
           cache: 'pnpm'
           cache-dependency-path: |
-            config-tauri/pnpm-lock.yaml
-            pack-editor-tauri/pnpm-lock.yaml
+            config/pnpm-lock.yaml
+            pack-editor/pnpm-lock.yaml
 
       - name: Build Installer A (Main Suite)
         shell: pwsh

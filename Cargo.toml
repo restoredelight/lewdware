@@ -2,9 +2,9 @@
 members = [
     "lewdware",
     "lw",
-    "pack-editor-tauri/src-tauri",
+    "pack-editor/src-tauri",
     "shared",
-    "config-tauri/src-tauri"
+    "config/src-tauri"
 ]
 resolver = "3"
 

@@ -52,8 +52,8 @@ cargo build -p lewdware --release
 Check-LastExitCode
 
 # Compile Tauri GUI
-Write-Host "Building config-tauri GUI..."
-Push-Location config-tauri
+Write-Host "Building config GUI..."
+Push-Location config
 pnpm install
 Check-LastExitCode
 pnpm tauri build

@@ -2,7 +2,7 @@
 ; Inno Setup Script for Lewdware Main Suite (Installer A)
 
 [Setup]
-AppName=Lewdware Main Suite
+AppName=Lewdware
 AppVersion=0.1.0
 DefaultDirName={localappdata}\Programs\Lewdware
 DefaultGroupName=Lewdware
@@ -17,7 +17,7 @@ SetupIconFile=..\..\config-tauri\src-tauri\icons\icon.ico
 
 [Files]
 ; Main config GUI app
-Source: "..\..\target\release\config-tauri.exe"; DestDir: "{app}"; DestName: "config.exe"; Flags: ignoreversion
+Source: "..\..\target\release\lewdware-config.exe"; DestDir: "{app}"; DestName: "lewdware-config.exe"; Flags: ignoreversion
 ; Engine
 Source: "..\..\target\release\lewdware.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; CLI
@@ -29,9 +29,9 @@ Source: "..\..\build\win-stage\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: dele
 
 [Icons]
 Name: "{group}\Lewdware"; Filename: "{app}\lewdware.exe"
-Name: "{group}\Lewdware Configurator"; Filename: "{app}\config.exe"
+Name: "{group}\Lewdware Config"; Filename: "{app}\lewdware-config.exe"
 Name: "{userdesktop}\Lewdware"; Filename: "{app}\lewdware.exe"; Tasks: desktopicon
-Name: "{userdesktop}\Lewdware Configurator"; Filename: "{app}\config.exe"; Tasks: desktopicon
+Name: "{userdesktop}\Lewdware Config"; Filename: "{app}\lewdware-config.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Visual C++ Redistributable..."

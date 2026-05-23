@@ -29,8 +29,8 @@ echo "   Compiling lewdware with relative rpath..."
 cargo rustc -p lewdware --release -- -C link-args="-Wl,-rpath,\$ORIGIN/../lib/lewdware"
 
 # Compile Tauri GUI
-echo "🔨 Building config-tauri GUI..."
-cd config-tauri
+echo "🔨 Building config GUI..."
+cd config
 pnpm install
 export APPIMAGE_EXTRACT_AND_RUN=1
 export NO_STRIP=1
@@ -38,14 +38,14 @@ pnpm tauri build
 cd ..
 
 # 2. Stage binaries
-echo "📦 Staging binaries..."
-cp "target/release/config-tauri" "$STAGE_DIR/usr/bin/lewdware-config"
+echo "Staging binaries..."
+cp "target/release/lewdware-config" "$STAGE_DIR/usr/bin/lewdware-config"
 cp "target/release/lw" "$STAGE_DIR/usr/bin/lw"
 cp "target/release/lewdware" "$STAGE_DIR/usr/bin/lewdware"
 chmod +x "$STAGE_DIR/usr/bin/"*
 
 # 3. Dynamic Library Bundling (FFmpeg, dav1d, and all transitive deps)
-echo "🔗 Bundling dynamic library dependencies..."
+echo "Bundling dynamic library dependencies..."
 
 # System libraries that must remain as host deps (UI, audio, core runtime).
 is_system_lib() {
@@ -91,20 +91,20 @@ bundle_lib() {
 
 bundle_lib "target/release/lewdware"
 bundle_lib "target/release/lw"
-bundle_lib "target/release/config-tauri"
+bundle_lib "target/release/lewdware-config"
 
-echo "🔗 Patching bundled library rpaths..."
+echo "Patching bundled library rpaths..."
 for lib in "$STAGE_DIR/usr/lib/lewdware/"*; do
   [ -f "$lib" ] || continue
   patchelf --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
 done
 
 # 4. Create Desktop File and Icon
-echo "📝 Creating desktop entries..."
+echo "Creating desktop entries..."
 cat <<EOF > "$STAGE_DIR/usr/share/applications/lewdware-config.desktop"
 [Desktop Entry]
-Name=Lewdware Configurator
-Comment=Configure your Lewdware malware experience
+Name=Lewdware Config
+Comment=Configure Lewdware
 Exec=lewdware-config
 Icon=lewdware-config
 Terminal=false
@@ -113,51 +113,51 @@ Categories=Utility;Development;
 EOF
 
 # Copy app icon if exists (use a placeholder if not)
-if [ -f "config-tauri/src-tauri/icons/128x128.png" ]; then
-  cp "config-tauri/src-tauri/icons/128x128.png" "$STAGE_DIR/usr/share/icons/hicolor/128x128/apps/lewdware-config.png"
+if [ -f "config/src-tauri/icons/128x128.png" ]; then
+  cp "config/src-tauri/icons/128x128.png" "$STAGE_DIR/usr/share/icons/hicolor/128x128/apps/lewdware-config.png"
 fi
 
 # 5. Create Debian Package control file
-echo "📝 Creating Debian control file..."
+echo "Creating Debian control file..."
 cat <<EOF > "$STAGE_DIR/DEBIAN/control"
-Package: lewdware-suite
+Package: lewdware
 Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${DEB_ARCH}
 Depends: libasound2, libx11-6, libxi6, libxtst6, libxrandr2, libxcursor1
 Maintainer: restoredelight <restoreddelight@proton.me>
-Description: Lewdware Main Suite (Client Engine, CLI tool and Config GUI)
+Description: Lewdware (Main App, Config GUI, and lw CLI tool)
 EOF
 
 # 6. Build the Debian Package
-echo "📦 Building Debian package..."
-dpkg-deb --build "$STAGE_DIR" "$OUTPUT_DIR/lewdware-suite_${VERSION}_${DEB_ARCH}.deb"
-echo "✓ Debian package created!"
+echo "Building Debian package..."
+dpkg-deb --build "$STAGE_DIR" "$OUTPUT_DIR/lewdware_${VERSION}_${DEB_ARCH}.deb"
+echo "Debian package created!"
 
 # 7. Build the RPM Package
 if command -v rpmbuild &> /dev/null; then
-  echo "📦 Building RPM package..."
+  echo "Building RPM package..."
   RPM_STAGE_DIR="build/rpm-stage"
   rm -rf "$RPM_STAGE_DIR"
   mkdir -p "$RPM_STAGE_DIR"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
-  cat <<EOF > "$RPM_STAGE_DIR/SPECS/lewdware-suite.spec"
+  cat <<EOF > "$RPM_STAGE_DIR/SPECS/lewdware.spec"
 %global __requires_exclude_from /usr/lib/lewdware/
 %global __requires_exclude ^lib(avcodec|avformat|avutil|swscale|swresample|dav1d|avfilter|avdevice)\\.so
 %global __provides_exclude_from /usr/lib/lewdware/
 %global debug_package %{nil}
 %global __strip /bin/true
 
-Name:           lewdware-suite
+Name:           lewdware
 Version:        ${VERSION}
 Release:        1
-Summary:        Lewdware Main Suite (Client Engine, CLI tool and Config GUI)
+Summary:        Lewdware (Main App, Config GUI, and lw CLI tool)
 License:        MIT
 Requires:       alsa-lib, libX11, libXi, libXtst, libXrandr, libXcursor
 
 %description
-Lewdware Main Suite containing the client engine, config GUI, and CLI tool.
+Lewdware, containing the main app, config GUI, and lw CLI tool.
 
 %install
 mkdir -p %{buildroot}/usr/bin
@@ -182,19 +182,19 @@ EOF
   rpmbuild -bb \
     --define "_topdir $(pwd)/$RPM_STAGE_DIR" \
     --define "staged_dir $(pwd)/$STAGE_DIR" \
-    "$RPM_STAGE_DIR/SPECS/lewdware-suite.spec"
+    "$RPM_STAGE_DIR/SPECS/lewdware.spec"
 
   # Find generated RPM and copy to dist
   find "$RPM_STAGE_DIR/RPMS" -type f -name "*.rpm" -exec cp {} "$OUTPUT_DIR/" \;
-  echo "✓ RPM package created!"
+  echo "RPM package created!"
 else
-  echo "⚠️ Warning: rpmbuild not found, skipping RPM packaging."
+  echo "Warning: rpmbuild not found, skipping RPM packaging."
 fi
 
 # 8. Build the portable tar.gz package
-echo "📦 Building portable tar.gz package..."
+echo "Building portable tar.gz package..."
 TAR_STAGE="build/tar-stage"
-TAR_ROOT="$TAR_STAGE/lewdware-suite-${VERSION}"
+TAR_ROOT="$TAR_STAGE/lewdware-${VERSION}"
 rm -rf "$TAR_STAGE"
 mkdir -p "$TAR_ROOT/bin"
 mkdir -p "$TAR_ROOT/lib/lewdware"
@@ -204,12 +204,12 @@ cp "$STAGE_DIR/usr/bin/lewdware" "$TAR_ROOT/bin/"
 cp "$STAGE_DIR/usr/bin/lw" "$TAR_ROOT/bin/"
 
 # Copy config-tauri AppImage as lewdware-config binary
-APPIMAGE_PATH=$(find "target/release/bundle/appimage/" -name "config-tauri_${VERSION}_*.AppImage" 2>/dev/null | head -1)
+APPIMAGE_PATH=$(find "target/release/bundle/appimage/" -name "lewdware-config_${VERSION}_*.AppImage" 2>/dev/null | head -1)
 if [ -f "$APPIMAGE_PATH" ]; then
   cp "$APPIMAGE_PATH" "$TAR_ROOT/bin/lewdware-config"
   chmod +x "$TAR_ROOT/bin/lewdware-config"
 else
-  echo "⚠️ Warning: config-tauri AppImage not found! Skipping config GUI in tar.gz."
+  echo "Warning: config AppImage not found! Skipping config GUI in tar.gz."
 fi
 
 # Copy dynamic libraries
@@ -217,9 +217,9 @@ cp "$STAGE_DIR/usr/lib/lewdware/"* "$TAR_ROOT/lib/lewdware/"
 
 # Create a simple setup/run README
 cat << 'EOF' > "$TAR_ROOT/README.md"
-# Lewdware Main Suite (Portable)
+# Lewdware (and tools)
 
-This portable distribution contains the Lewdware Engine, Config GUI, and helper CLI.
+This portable distribution contains the Lewdware App, Config GUI, and lw CLI.
 
 ## Structure
 * `bin/lewdware`: Lewdware Engine
@@ -236,7 +236,7 @@ Simply run the binaries from the `bin` directory:
 EOF
 
 # Pack archive
-tar -czf "$OUTPUT_DIR/lewdware-suite_${VERSION}_${DEB_ARCH}.tar.gz" -C "$TAR_STAGE" "lewdware-suite-${VERSION}"
-echo "✓ Portable tar.gz package created!"
+tar -czf "$OUTPUT_DIR/lewdware_${VERSION}_${DEB_ARCH}.tar.gz" -C "$TAR_STAGE" "lewdware-${VERSION}"
+echo "Portable tar.gz package created!"
 
-echo "🎉 SUCCESS: All Linux target packages staged/created in $OUTPUT_DIR!"
+echo "SUCCESS: All Linux target packages staged/created in $OUTPUT_DIR!"

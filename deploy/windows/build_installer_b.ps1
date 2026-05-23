@@ -12,7 +12,7 @@ function Check-LastExitCode {
 }
 
 $TRIPLE = "x86_64-pc-windows-msvc"
-$BINARIES_DIR = "pack-editor-tauri\src-tauri\binaries"
+$BINARIES_DIR = "pack-editor\src-tauri\binaries"
 
 if (!(Test-Path $BINARIES_DIR)) {
     New-Item -ItemType Directory -Force -Path $BINARIES_DIR
@@ -24,13 +24,13 @@ $FFPROBE_SIDECAR = Join-Path $BINARIES_DIR "lewdware-ffprobe-$TRIPLE.exe"
 # 1. Stage FFmpeg & ffprobe if not already present
 if (!(Test-Path $FFMPEG_SIDECAR) -or !(Test-Path $FFPROBE_SIDECAR)) {
     Write-Host "Downloading static FFmpeg and ffprobe for Windows..."
-    
+
     $TEMP_DIR = [System.IO.Path]::GetTempPath()
     $ZIP_PATH = Join-Path $TEMP_DIR "ffmpeg-release-essentials.zip"
     $EXTRACT_DIR = Join-Path $TEMP_DIR "ffmpeg-extract"
-    
+
     if (Test-Path $EXTRACT_DIR) { Remove-Item -Recurse -Force $EXTRACT_DIR }
-    
+
     # Download BtbN static build
     $BTBN_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
     Invoke-WebRequest -Uri $BTBN_URL -OutFile $ZIP_PATH -UseBasicParsing
@@ -48,7 +48,7 @@ if (!(Test-Path $FFMPEG_SIDECAR) -or !(Test-Path $FFPROBE_SIDECAR)) {
     } else {
         Write-Error "Could not find ffmpeg.exe/ffprobe.exe in the extracted BtbN package."
     }
-    
+
     # Clean up
     Remove-Item $ZIP_PATH -Force -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $EXTRACT_DIR -ErrorAction SilentlyContinue
@@ -57,8 +57,8 @@ if (!(Test-Path $FFMPEG_SIDECAR) -or !(Test-Path $FFPROBE_SIDECAR)) {
 }
 
 # 2. Build the Tauri app
-Write-Host "Building pack-editor-tauri GUI..."
-Push-Location pack-editor-tauri
+Write-Host "Building pack-editor GUI..."
+Push-Location pack-editor
 pnpm install
 Check-LastExitCode
 pnpm tauri build
@@ -70,7 +70,7 @@ Write-Host "Staging outputs..."
 if (!(Test-Path "dist")) { New-Item -ItemType Directory -Path "dist" }
 
 # Find generated MSI or EXE installer
-$INSTALLER = Get-ChildItem -Path "target\release\bundle" -Filter "pack-editor-tauri*.msi" -Recurse | Select-Object -First 1
+$INSTALLER = Get-ChildItem -Path "target\release\bundle" -Filter "lewdware-pack-editor*.msi" -Recurse | Select-Object -First 1
 if ($INSTALLER) {
     Copy-Item $INSTALLER.FullName -Destination "dist\" -Force
     Write-Host "SUCCESS: Generated $($INSTALLER.Name) in dist/"
