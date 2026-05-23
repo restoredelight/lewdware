@@ -5,6 +5,8 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  release:
+    types: [published, prereleased]
   workflow_dispatch:
 
 jobs:
@@ -225,3 +227,30 @@ jobs:
         with:
           name: windows-installers
           path: dist/*
+
+  release-assets:
+    name: Upload Assets to GitHub Release
+    needs: [build-linux, build-macos, build-windows]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage files for release
+        run: |
+          mkdir -p release-files
+          find artifacts -type f -exec cp {} release-files/ \;
+          echo "=== Staged files for release ==="
+          ls -R release-files
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
