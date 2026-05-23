@@ -9,7 +9,6 @@
   const ITEM_W = 150;
   const ITEM_H = 180; // 150 thumb + 30 label
   const GAP = 8;
-  const COL_W = ITEM_W + GAP;
   const ROW_H = ITEM_H + GAP;
   const BUFFER = 2; // extra rows to render outside viewport
 
@@ -22,7 +21,7 @@
   let anchorId = $state<number | null>(null);
 
   const files = $derived(store.filteredFiles);
-  const cols = $derived(Math.max(1, Math.floor((viewW + GAP) / COL_W)));
+  const cols = $derived(Math.max(1, Math.floor((viewW + GAP) / (ITEM_W + GAP))));
   const rows = $derived(Math.ceil(files.length / cols));
   const totalH = $derived(rows * ROW_H);
 
@@ -31,17 +30,18 @@
     Math.min(rows - 1, Math.ceil((scrollTop + viewH) / ROW_H) - 1 + BUFFER)
   );
 
-  const visibleItems = $derived.by(() => {
-    const start = firstRow * cols;
-    const end = Math.min(files.length, (lastRow + 1) * cols);
-    return files.slice(start, end).map((file, i) => {
-      const absIdx = start + i;
-      return {
-        file,
-        row: Math.floor(absIdx / cols),
-        col: absIdx % cols,
-      };
-    });
+  // Each visible row as an array of (file | null), null = sentinel for partial last row.
+  const visibleRows = $derived.by(() => {
+    const result: { row: number; items: (typeof files[number] | null)[] }[] = [];
+    for (let r = firstRow; r <= lastRow; r++) {
+      const items: (typeof files[number] | null)[] = [];
+      for (let c = 0; c < cols; c++) {
+        const idx = r * cols + c;
+        items.push(idx < files.length ? files[idx] : null);
+      }
+      result.push({ row: r, items });
+    }
+    return result;
   });
 
   function handleClick(file: MediaFile, e: MouseEvent) {
@@ -179,49 +179,60 @@
   onclick={() => store.clearSelection()}
 >
   <div style="height: {totalH}px; position: relative;">
-    {#each visibleItems as { file, row, col } (file.id)}
-      {@const selected = store.selectedIds.has(file.id)}
-      {@const primary = store.primaryId === file.id}
+    {#each visibleRows as { row, items } (row)}
       <div
-        role="listitem"
-        tabindex="-1"
-        style="position: absolute; top: {row * ROW_H}px; left: {col * COL_W}px; width: {ITEM_W}px;"
-        onclick={(e) => handleClick(file, e)}
-        ondblclick={() => handleDblClick(file)}
-        oncontextmenu={(e) => showContextMenu(e, file)}
-        onkeydown={() => {}}
-        class="flex flex-col rounded cursor-pointer select-none group
-          {selected ? 'bg-accent/15 ring-1 ring-accent' : 'hover:bg-accent/8'}
-          {primary ? 'ring-2 ring-accent' : ''}"
+        style="position: absolute; top: {row * ROW_H}px; left: 0; right: 0; height: {ITEM_H}px; display: flex; justify-content: space-between;"
       >
-        <!-- Thumbnail -->
-        <div
-          class="flex items-center justify-center bg-bg rounded-t overflow-hidden shrink-0"
-          style="height: {ITEM_W}px"
-        >
-          {#if file.file_info.type === "audio"}
-            <svg class="text-muted" width="40" height="40" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6zm-2 16a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" />
-            </svg>
-          {:else}
-            <img
-              src="{store.mediaBase}/thumbnail/{file.id}"
-              alt={file.file_name}
-              loading="lazy"
-              class="max-w-full max-h-full object-contain"
-            />
-          {/if}
-          {#if file.file_info.type === "video"}
-            <div class="absolute bottom-6 left-1 bg-black/60 rounded px-1 py-px text-white text-[10px] leading-none">
-              ▶
-            </div>
-          {/if}
-        </div>
+        {#each items as file}
+          {#if file != null}
+            {@const selected = store.selectedIds.has(file.id)}
+            {@const primary = store.primaryId === file.id}
+            <div
+              role="listitem"
+              tabindex="-1"
+              style="width: {ITEM_W}px;"
+              onclick={(e) => handleClick(file, e)}
+              ondblclick={() => handleDblClick(file)}
+              oncontextmenu={(e) => showContextMenu(e, file)}
+              onkeydown={() => {}}
+              class="relative flex flex-col rounded cursor-pointer select-none shrink-0 group
+                {selected ? 'bg-accent/15 ring-1 ring-accent' : 'hover:bg-accent/8'}
+                {primary ? 'ring-2 ring-accent' : ''}"
+            >
+              <!-- Thumbnail -->
+              <div
+                class="flex items-center justify-center bg-bg rounded-t overflow-hidden shrink-0"
+                style="height: {ITEM_W}px"
+              >
+                {#if file.file_info.type === "audio"}
+                  <svg class="text-muted" width="40" height="40" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6zm-2 16a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" />
+                  </svg>
+                {:else}
+                  <img
+                    src="{store.mediaBase}/thumbnail/{file.id}"
+                    alt={file.file_name}
+                    loading="lazy"
+                    class="max-w-full max-h-full object-contain"
+                  />
+                {/if}
+                {#if file.file_info.type === "video"}
+                  <div class="absolute bottom-6 left-1 bg-black/60 rounded px-1 py-px text-white text-[10px] leading-none">
+                    ▶
+                  </div>
+                {/if}
+              </div>
 
-        <!-- Label -->
-        <div class="px-1 py-1 text-center" style="height: 30px">
-          <span class="text-[11px] text-text leading-tight line-clamp-2 break-all">{file.file_name}</span>
-        </div>
+              <!-- Label -->
+              <div class="px-1 py-1 text-center" style="height: 30px">
+                <span class="text-[11px] text-text leading-tight line-clamp-2 break-all">{file.file_name}</span>
+              </div>
+            </div>
+          {:else}
+            <!-- Sentinel: keeps space-between spacing consistent on the last row -->
+            <div style="width: {ITEM_W}px;" aria-hidden="true"></div>
+          {/if}
+        {/each}
       </div>
     {/each}
   </div>
