@@ -10,4 +10,4 @@ resolver = "3"
 
 [patch.crates-io.pixels]
 git = "https://github.com/restoredelight/pixels"
-branch = "with-instance"
+branch = "with-instance-2"

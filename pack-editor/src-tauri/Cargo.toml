@@ -27,9 +27,9 @@ futures = "0.3"
 infer = "0.19"
 mime_guess = "2"
 r2d2 = "0.8"
-r2d2_sqlite = { version = "0.32", features = ["bundled"] }
+r2d2_sqlite = { version = "0.34.0", features = ["bundled"] }
 rayon = "1"
-rusqlite = { version = "0.38", features = ["bundled", "fallible_uint"] }
+rusqlite = { version = "0.39.0", features = ["bundled", "fallible_uint"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.29", features = ["signal"] }
+nix = { version = "0.31.3", features = ["signal"] }
 
 [dependencies]
 anyhow = "1.0.100"

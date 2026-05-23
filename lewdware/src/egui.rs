@@ -3,7 +3,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
+use egui::Ui;
 use egui_software_backend::{BufferMutRef, ColorFieldOrder, EguiSoftwareRender};
 use egui_wgpu::{RendererOptions, wgpu};
 use winit::{event::WindowEvent, window::Window};
@@ -150,10 +151,10 @@ impl<'a> EguiWindow<'a> {
     /// [WindowEvent::RedrawRequested] event.
     ///
     /// * `run_ui`: This is where you should define the egui UI of the window.
-    pub fn redraw(&mut self, run_ui: impl FnMut(&egui::Context)) -> Result<()> {
+    pub fn redraw(&mut self, run_ui: impl FnMut(&mut Ui)) -> Result<()> {
         let raw_input = self.state.take_egui_input(&self.window);
 
-        let full_output = self.context.run(raw_input, run_ui);
+        let full_output = self.context.run_ui(raw_input, run_ui);
 
         self.state
             .handle_platform_output(&self.window, full_output.platform_output);
@@ -193,7 +194,10 @@ impl<'a> EguiWindow<'a> {
             &screen_descriptor,
         );
 
-        let output = self.surface.get_current_texture()?;
+        let output = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+            _ => bail!("Getting texture failed"),
+        };
 
         let view = output
             .texture
@@ -213,6 +217,7 @@ impl<'a> EguiWindow<'a> {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         // This is safe as long as we don't use the encoder again
