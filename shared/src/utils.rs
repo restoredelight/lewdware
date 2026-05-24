@@ -1,19 +1,22 @@
 #[cfg(target_os = "linux")]
-pub fn apply_wayland_preload_safeguards() {
-    // Restore original LD_LIBRARY_PATH if running inside an AppImage to prevent
-    // bundled library leakage into child processes (like WebKitWebProcess and ffmpeg)
+pub fn sanitize_child_env(cmd: &mut std::process::Command) {
     let is_appimage = std::env::var("APPIMAGE").is_ok() || std::env::var("APPDIR").is_ok();
     if is_appimage {
         if let Ok(old_path) = std::env::var("LD_LIBRARY_PATH_OLD") {
-            unsafe {
-                std::env::set_var("LD_LIBRARY_PATH", old_path);
-            }
+            cmd.env("LD_LIBRARY_PATH", old_path);
         } else {
-            unsafe {
-                std::env::remove_var("LD_LIBRARY_PATH");
-            }
+            cmd.env_remove("LD_LIBRARY_PATH");
         }
+        cmd.env_remove("LD_PRELOAD");
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn sanitize_child_env(_cmd: &mut std::process::Command) {}
+
+#[cfg(target_os = "linux")]
+pub fn apply_wayland_preload_safeguards() {
+    let is_appimage = std::env::var("APPIMAGE").is_ok() || std::env::var("APPDIR").is_ok();
 
     // 1. Disable DMA-BUF and Compositing Mode rendering paths on Wayland/AppImage
     if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {

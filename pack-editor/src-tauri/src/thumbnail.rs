@@ -28,6 +28,7 @@ pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec
         use std::os::windows::process::CommandExt;
         std_cmd.creation_flags(0x08000000);
     }
+    shared::utils::sanitize_child_env(&mut std_cmd);
     let mut cmd = Command::from(std_cmd);
     cmd.args(["-y"]);
 

@@ -15,6 +15,7 @@ fn new_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
     }
+    shared::utils::sanitize_child_env(&mut cmd);
     cmd
 }
 

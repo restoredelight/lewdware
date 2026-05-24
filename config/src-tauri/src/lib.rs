@@ -601,7 +601,9 @@ fn find_lewdware() -> Option<Command> {
         if let Some(dir) = exe.canonicalize().ok().and_then(|p| p.parent().map(|p| p.to_owned())) {
             let neighbor = dir.join(bin_name);
             if neighbor.exists() {
-                return Some(Command::new(neighbor));
+                let mut cmd = Command::new(neighbor);
+                shared::utils::sanitize_child_env(&mut cmd);
+                return Some(cmd);
             }
         }
     }
