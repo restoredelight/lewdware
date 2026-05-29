@@ -150,7 +150,7 @@ jobs:
           submodules: true
 
       - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: step-security/msvc-dev-cmd@v1
         with:
           arch: x64
 
