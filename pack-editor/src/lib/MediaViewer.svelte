@@ -102,7 +102,7 @@
     {#if file}
       {#if file.file_info.type === "image"}
         <img
-          src="{store.mediaBase}/file/{file.id}"
+          src="{store.mediaBase}/display/{file.id}"
           alt={file.file_name}
           class="max-w-full max-h-full object-contain pointer-events-auto"
           style="max-height: calc(100vh - 32px)"

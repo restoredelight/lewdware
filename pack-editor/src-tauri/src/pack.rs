@@ -880,6 +880,12 @@ impl MediaPackView {
         crate::thumbnail::generate_preview(file_data, file_type == FileType::Image).await
     }
 
+    pub async fn get_display(&self, id: u64) -> Result<Vec<u8>> {
+        let _handle = self.saving.read().await;
+        let (file_data, _) = self.get_raw_file(id).await?;
+        crate::thumbnail::generate_display_image(file_data).await
+    }
+
     pub async fn get_file_data(&self, id: u64) -> Result<(Vec<u8>, FileType)> {
         let _handle = self.saving.read().await;
         let (file_data, file_type) = self.get_raw_file(id).await?;

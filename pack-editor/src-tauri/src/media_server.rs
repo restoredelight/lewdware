@@ -16,6 +16,7 @@ pub async fn start(pack_state: PackState) -> anyhow::Result<u16> {
     let router = Router::new()
         .route("/thumbnail/{id}", get(thumbnail_handler))
         .route("/preview/{id}", get(preview_handler))
+        .route("/display/{id}", get(display_handler))
         .route("/file/{id}", get(file_handler))
         .with_state(pack_state);
 
@@ -66,6 +67,31 @@ async fn preview_handler(
         }
     };
     match view.get_preview(id).await {
+        Ok(data) => Response::builder()
+            .status(200)
+            .header("Content-Type", "image/jpeg")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(axum::body::Body::from(data))
+            .unwrap(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn display_handler(
+    State(pack_state): State<PackState>,
+    Path(id): Path<u64>,
+) -> Response {
+    let view = {
+        let lock = pack_state.lock().await;
+        match lock.as_ref() {
+            Some(pack) => match pack.get_view() {
+                Ok(v) => v,
+                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            },
+            None => return (StatusCode::NOT_FOUND, "No pack open").into_response(),
+        }
+    };
+    match view.get_display(id).await {
         Ok(data) => Response::builder()
             .status(200)
             .header("Content-Type", "image/jpeg")
