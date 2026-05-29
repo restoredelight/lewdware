@@ -27,9 +27,6 @@
     "active": true,
     "targets": "all",
     "linux": {
-      "appimage": {
-        "bundleMediaFramework": true
-      },
       "rpm": {
         "compression": {
           "type": "zstd",
