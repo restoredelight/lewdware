@@ -48,55 +48,7 @@ impl<'a> ColorBuffer for SoftBufferWrapper<'a> {
     }
 }
 
-pub struct PixelsWrapper<'a, 'b> {
-    pixels: &'a mut pixels::Pixels<'b>,
-}
 
-impl<'a, 'b> PixelsWrapper<'a, 'b> {
-    pub fn new(pixels: &'a mut pixels::Pixels<'b>) -> Self {
-        Self { pixels }
-    }
-}
-
-impl<'a, 'b> ColorBuffer for PixelsWrapper<'a, 'b> {
-    fn set_pixel(&mut self, x: usize, y: usize, color: u32) -> bool {
-        let width = self.pixels.texture().width() as usize;
-        let height = self.pixels.texture().height() as usize;
-
-        if x < width && y < height {
-            let frame = self.pixels.frame_mut();
-            let idx = (y * width + x) * 4; // RGBA format
-
-            if idx + 3 < frame.len() {
-                frame[idx] = ((color >> 16) & 0xFF) as u8; // R
-                frame[idx + 1] = ((color >> 8) & 0xFF) as u8; // G
-                frame[idx + 2] = (color & 0xFF) as u8; // B
-                frame[idx + 3] = ((color >> 24) & 0xFF) as u8; // A
-                return true;
-            }
-        }
-        false
-    }
-
-    fn get_pixel(&self, x: usize, y: usize) -> u32 {
-        let width = self.pixels.texture().width() as usize;
-
-        let frame = self.pixels.frame();
-        let idx = (y * width + x) * 4;
-
-        ((frame[idx + 3] as u32) << 24)
-            | ((frame[idx] as u32) << 16)
-            | ((frame[idx + 1] as u32) << 8)
-            | (frame[idx + 2] as u32)
-    }
-
-    fn width(&self) -> usize {
-        self.pixels.texture().width() as usize
-    }
-    fn height(&self) -> usize {
-        self.pixels.texture().height() as usize
-    }
-}
 
 /// Draw a close button on a buffer. This is done by manually editing the pixels.
 pub fn draw_close_button(

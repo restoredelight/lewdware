@@ -39,7 +39,7 @@ use crate::window::{
 pub struct ChaosApp<'a> {
     running: bool,
     config: AppConfig,
-    wgpu_state: WgpuState,
+    wgpu_state: std::sync::Arc<WgpuState>,
     windows: HashMap<WindowId, WindowType<'a>>,
     audio_players: HashMap<u64, AudioPlayer>,
     current_audio_id: u64,
@@ -64,7 +64,7 @@ pub enum UserEvent {
 
 impl<'a> ChaosApp<'a> {
     pub fn new(
-        wgpu_state: WgpuState,
+        wgpu_state: std::sync::Arc<WgpuState>,
         event_loop_proxy: EventLoopProxy<UserEvent>,
         config: AppConfig,
     ) -> Result<Self> {
@@ -184,7 +184,8 @@ impl<'a> ChaosApp<'a> {
             .with_decorations(false)
             .with_window_level(WindowLevel::AlwaysOnTop)
             .with_resizable(false)
-            .with_visible(false);
+            .with_visible(false)
+            .with_transparent(opts.transparent);
 
         #[cfg(target_os = "linux")]
         {
@@ -203,6 +204,10 @@ impl<'a> ChaosApp<'a> {
         let window = event_loop
             .create_window(attrs)
             .map_err(|err| LewdwareError::WindowError(err.into()))?;
+
+        if opts.click_through {
+            let _ = window.set_cursor_hittest(false);
+        }
 
         // If we call `with_visible(true)` in `WindowAttributes`, then on Windows, the window
         // flashes on screen with decorations and the wrong size/position, before going to the
@@ -227,11 +232,12 @@ impl<'a> ChaosApp<'a> {
 
         let inner_window = InnerWindow::new(
             window,
-            &self.wgpu_state,
+            self.wgpu_state.clone(),
             opts.decorations,
             opts.title,
             opts.closeable,
             gpu,
+            opts.transparent,
             LogicalPosition::new(x, y),
             self.lua_event_tx.clone(),
         )
@@ -243,16 +249,18 @@ impl<'a> ChaosApp<'a> {
     fn spawn_image(
         &mut self,
         data: ImageData,
-        opts: SpawnWindowOpts,
+        mut opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
+        println!("{}", self.windows.len());
+        opts.transparent = true;
         let (window, props) = self.create_window(
-            opts,
+            opts.clone(),
             WindowSizeBehaviour::ResizeWithMedia {
                 width: data.width(),
                 height: data.height(),
             },
-            false,
+            opts.transparent,
             event_loop,
         )?;
 
@@ -309,13 +317,14 @@ impl<'a> ChaosApp<'a> {
         window_opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
+        let gpu = window_opts.transparent;
         let (window, props) = self.create_window(
             window_opts,
             WindowSizeBehaviour::UseDefaults {
                 width: 400,
                 height: 400,
             },
-            false,
+            gpu,
             event_loop,
         )?;
 
@@ -335,13 +344,14 @@ impl<'a> ChaosApp<'a> {
         window_opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
+        let gpu = window_opts.transparent;
         let (window, props) = self.create_window(
             window_opts,
             WindowSizeBehaviour::UseDefaults {
                 width: 400,
                 height: 400,
             },
-            false,
+            gpu,
             event_loop,
         )?;
 

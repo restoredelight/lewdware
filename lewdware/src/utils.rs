@@ -393,3 +393,25 @@ pub fn resolve_coord(x: u32, anchor: &Anchor, window_size: u32, offset_start: u3
         Anchor::BottomRight => x + offset_start + window_size + offset_end,
     }
 }
+
+#[cfg(unix)]
+pub fn raise_fd_limit() {
+    unsafe {
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) == 0 {
+            let target_limit = 65535;
+            if rlim.rlim_cur < target_limit {
+                rlim.rlim_cur = std::cmp::min(target_limit, rlim.rlim_max);
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) != 0 {
+                    eprintln!("Failed to raise file descriptor limit");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn raise_fd_limit() {}

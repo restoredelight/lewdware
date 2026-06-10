@@ -16,7 +16,6 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use egui::{RichText, TextEdit};
 use egui_software_backend::BufferMutRef;
-use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use tiny_skia::{Color, IntSize, Paint, PathBuilder, Pixmap, PixmapMut, Rect, Stroke, Transform};
 use tokio::sync::mpsc;
 use winit::{
@@ -64,7 +63,7 @@ impl<'a> WindowType<'a> {
 struct VideoRenderer {
     texture: wgpu::Texture,
     bind_group: wgpu::BindGroup,
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Arc<wgpu::RenderPipeline>,
     width: u32,
     height: u32,
     ui_texture: wgpu::Texture,
@@ -73,13 +72,15 @@ struct VideoRenderer {
 
 impl VideoRenderer {
     fn new(
-        device: &wgpu::Device,
+        wgpu_state: &WgpuState,
         format: wgpu::TextureFormat,
         width: u32,
         height: u32,
         ui_width: u32,
         ui_height: u32,
     ) -> Self {
+        let device = &wgpu_state.device;
+
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Video Texture"),
             size: wgpu::Extent3d {
@@ -114,41 +115,9 @@ impl VideoRenderer {
 
         let ui_texture_view = ui_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Video Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Video Bind Group"),
-            layout: &bind_group_layout,
+            layout: &wgpu_state.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -156,14 +125,14 @@ impl VideoRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(&wgpu_state.sampler),
                 },
             ],
         });
 
         let ui_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("UI Bind Group"),
-            layout: &bind_group_layout,
+            layout: &wgpu_state.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -171,57 +140,12 @@ impl VideoRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(&wgpu_state.sampler),
                 },
             ],
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Video Pipeline Layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Video Shader"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "shader.wgsl"
-            ))),
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Video Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = wgpu_state.get_pipeline(format);
 
         Self {
             texture,
@@ -240,9 +164,12 @@ impl VideoRenderer {
 }
 
 enum Surface<'a> {
-    Pixels {
-        pixels: Pixels<'a>,
-        error: Arc<AtomicBool>,
+    Wgpu {
+        surface: wgpu::Surface<'a>,
+        surface_config: wgpu::SurfaceConfiguration,
+        frame_buffer: Vec<u8>,
+        texture: wgpu::Texture,
+        bind_group: wgpu::BindGroup,
         video_renderer: Option<VideoRenderer>,
     },
     Softbuffer {
@@ -252,13 +179,14 @@ enum Surface<'a> {
 }
 
 impl<'a> Surface<'a> {
+    pub fn is_gpu(&self) -> bool {
+        matches!(self, Self::Wgpu { .. })
+    }
+
     fn buffer(&mut self) -> Result<Buffer<'_>> {
         match self {
-            Surface::Pixels { pixels, .. } => {
-                let width = pixels.texture().width();
-                let height = pixels.texture().height();
-
-                let dest = PixmapMut::from_bytes(pixels.frame_mut(), width, height)
+            Surface::Wgpu { frame_buffer, surface_config, .. } => {
+                let dest = PixmapMut::from_bytes(frame_buffer, surface_config.width, surface_config.height)
                     .context("Invalid pixmap size")?;
 
                 Ok(Buffer::Pixmap(dest))
@@ -342,15 +270,24 @@ impl<'a> Buffer<'a> {
         let offset = (y * self.width()) as usize;
         let dst_width = self.width();
 
-        let buffer = match self {
-            Buffer::Pixmap(_) => panic!("Buffer must be a softbuffer buffer"),
-            Buffer::Softbuffer(buffer) => buffer,
-        };
+        match self {
+            Buffer::Pixmap(pixmap) => {
+                let data = pixmap.data_mut();
+                let src_bytes = bytemuck::cast_slice::<u32, u8>(src);
+                let row_bytes = width as usize * 4;
+                for (i, row) in src_bytes.chunks_exact(row_bytes).enumerate() {
+                    let index = offset + (dst_width * i as u32 + x) as usize;
+                    let byte_index = index * 4;
+                    data[byte_index..(byte_index + row.len())].copy_from_slice(row);
+                }
+            }
+            Buffer::Softbuffer(buffer) => {
+                for (i, row) in src.chunks_exact(width as usize).enumerate() {
+                    let index = offset + (dst_width * i as u32 + x) as usize;
 
-        for (i, row) in src.chunks_exact(width as usize).enumerate() {
-            let index = offset + (dst_width * i as u32 + x) as usize;
-
-            buffer[index..(index + row.len())].copy_from_slice(row);
+                    buffer[index..(index + row.len())].copy_from_slice(row);
+                }
+            }
         }
     }
 
@@ -591,7 +528,11 @@ impl<'a> PromptWindow<'a> {
         placeholder: Option<String>,
         initial_value: Option<String>,
     ) -> Result<Self> {
-        let egui_window = EguiCPUWindow::new(inner_window.window.clone())?;
+        let egui_window = EguiCPUWindow::new(
+            inner_window.window.clone(),
+            inner_window.is_gpu(),
+            inner_window.transparent,
+        )?;
 
         Ok(Self {
             inner_window,
@@ -718,7 +659,11 @@ impl<'a> ChoiceWindow<'a> {
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
     ) -> Result<Self> {
-        let egui_window = EguiCPUWindow::new(inner_window.window.clone())?;
+        let egui_window = EguiCPUWindow::new(
+            inner_window.window.clone(),
+            inner_window.is_gpu(),
+            inner_window.transparent,
+        )?;
 
         Ok(Self {
             inner_window,
@@ -807,8 +752,8 @@ pub struct InnerWindow<'a> {
     position: LogicalPosition<u32>,
     lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     current_move: Option<Move>,
-    // Store the wgpu context to allow creating resources later
-    wgpu_ctx: Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)>,
+    wgpu_state: Arc<WgpuState>,
+    transparent: bool,
 }
 
 struct Move {
@@ -823,50 +768,100 @@ struct Move {
 impl<'a> InnerWindow<'a> {
     pub fn new(
         window: WinitWindow,
-        wgpu_state: &WgpuState,
+        wgpu_state: Arc<WgpuState>,
         decorations: bool,
         title: Option<String>,
         closeable: bool,
         gpu: bool,
+        transparent: bool,
         position: LogicalPosition<u32>,
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     ) -> Result<Self> {
         let window = Arc::new(window);
         let (inner_size, outer_size) = calculate_size(&window, decorations);
 
-        let (surface, wgpu_ctx) = if gpu && !wgpu_state.error.load(Ordering::Acquire) {
-            let surface_texture =
-                SurfaceTexture::new(outer_size.width, outer_size.height, window.clone());
+        let surface = if gpu && !wgpu_state.error.load(Ordering::Acquire) {
+            let surface = wgpu_state.instance.create_surface(window.clone())?;
+            let surface_caps = surface.get_capabilities(&wgpu_state.adapter);
+            let surface_format = surface_caps
+                .formats
+                .iter()
+                .find(|f| f.is_srgb())
+                .unwrap_or(&surface_caps.formats[0]);
 
-            (
-                Surface::Pixels {
-                    pixels: PixelsBuilder::new(
-                        outer_size.width,
-                        outer_size.height,
-                        surface_texture,
-                    )
-                    .blend_state(wgpu::BlendState::ALPHA_BLENDING) // Enable blending for UI over Video
-                    .build_with_instance(
-                        &wgpu_state.instance,
-                        &wgpu_state.adapter,
-                        wgpu_state.device.clone(),
-                        wgpu_state.queue.clone(),
-                    )?,
-                    error: wgpu_state.error.clone(),
-                    video_renderer: None,
+            let alpha_mode = if transparent {
+                if surface_caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+                    wgpu::CompositeAlphaMode::PreMultiplied
+                } else if surface_caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PostMultiplied) {
+                    wgpu::CompositeAlphaMode::PostMultiplied
+                } else {
+                    wgpu::CompositeAlphaMode::Auto
+                }
+            } else {
+                wgpu::CompositeAlphaMode::Opaque
+            };
+
+            let surface_config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: *surface_format,
+                width: outer_size.width,
+                height: outer_size.height,
+                present_mode: wgpu::PresentMode::Fifo,
+                alpha_mode,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            };
+            surface.configure(&wgpu_state.device, &surface_config);
+
+            let frame_buffer = vec![0; (outer_size.width * outer_size.height * 4) as usize];
+
+            let texture = wgpu_state.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Wgpu Surface Frame Texture"),
+                size: wgpu::Extent3d {
+                    width: outer_size.width,
+                    height: outer_size.height,
+                    depth_or_array_layers: 1,
                 },
-                Some((&wgpu_state.device, &wgpu_state.queue)),
-            )
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+
+            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            let bind_group = wgpu_state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Wgpu Surface Frame Bind Group"),
+                layout: &wgpu_state.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&texture_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&wgpu_state.sampler),
+                    },
+                ],
+            });
+
+            Surface::Wgpu {
+                surface,
+                surface_config,
+                frame_buffer,
+                texture,
+                bind_group,
+                video_renderer: None,
+            }
         } else {
             let (context, surface) = init_softbuffer(window.clone())?;
 
-            (
-                Surface::Softbuffer {
-                    _context: context,
-                    surface,
-                },
-                None,
-            )
+            Surface::Softbuffer {
+                _context: context,
+                surface,
+            }
         };
 
         let scale_factor = window.scale_factor();
@@ -891,37 +886,34 @@ impl<'a> InnerWindow<'a> {
             position,
             lua_event_tx,
             current_move: None,
-            wgpu_ctx: wgpu_ctx.map(|(device, queue)| (device.clone(), queue.clone())),
+            wgpu_state,
+            transparent,
         })
     }
 
     pub fn init_video_texture(&mut self, width: u32, height: u32) -> Result<()> {
-        if let Surface::Pixels {
+        if let Surface::Wgpu {
             video_renderer,
-            pixels,
+            surface_config,
             ..
         } = &mut self.surface
         {
-            if let Some((device, _queue)) = &self.wgpu_ctx {
-                *video_renderer = Some(VideoRenderer::new(
-                    device,
-                    pixels.render_texture_format(),
-                    width,
-                    height,
-                    pixels.texture().width(),
-                    pixels.texture().height(),
-                ));
-            }
+            *video_renderer = Some(VideoRenderer::new(
+                &self.wgpu_state,
+                surface_config.format,
+                width,
+                height,
+                surface_config.width,
+                surface_config.height,
+            ));
         }
         Ok(())
     }
 
     fn start_render(&mut self) -> Result<()> {
         match &mut self.surface {
-            Surface::Pixels {
-                pixels: _, error, ..
-            } => {
-                if error.load(Ordering::Acquire) {
+            Surface::Wgpu { .. } => {
+                if self.wgpu_state.error.load(Ordering::Acquire) {
                     println!("wgpu error; switching to softbuffer");
                     let (context, surface) = init_softbuffer(self.window.clone())?;
 
@@ -950,39 +942,74 @@ impl<'a> InnerWindow<'a> {
         let (x, y) = self.inner_offset();
 
         match &mut self.surface {
-            Surface::Pixels {
-                pixels,
-                error,
+            Surface::Wgpu {
+                surface,
+                surface_config,
+                frame_buffer,
+                texture,
+                bind_group,
                 video_renderer,
             } => {
-                if error.load(Ordering::Acquire) {
+                if self.wgpu_state.error.load(Ordering::Acquire) {
                     bail!("wgpu error; stopping rendering");
                 }
 
                 let width = self.inner_size.width;
                 let height = self.inner_size.height;
 
+                upload_texture_data(
+                    &self.wgpu_state.queue,
+                    texture,
+                    frame_buffer,
+                    surface_config.width,
+                    surface_config.height,
+                    surface_config.width * 4,
+                );
+
                 if let Some(video) = video_renderer {
-                    if let Some((_, queue)) = &self.wgpu_ctx {
-                        video.update_ui(
-                            queue,
-                            pixels.frame(),
-                            pixels.texture().width(),
-                            pixels.texture().height(),
-                        );
-                    }
+                    video.update_ui(
+                        &self.wgpu_state.queue,
+                        frame_buffer,
+                        surface_config.width,
+                        surface_config.height,
+                    );
                 }
 
-                pixels.render_with(|encoder, render_target, _context| {
+                let output = match surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+                    wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => surface_texture,
+                    wgpu::CurrentSurfaceTexture::Timeout => return Ok(()),
+                    wgpu::CurrentSurfaceTexture::Outdated => {
+                        surface.configure(&self.wgpu_state.device, surface_config);
+                        return Ok(());
+                    }
+                    wgpu::CurrentSurfaceTexture::Lost => {
+                        surface.configure(&self.wgpu_state.device, surface_config);
+                        return Ok(());
+                    }
+                    _ => return Ok(()),
+                };
+
+                let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                let mut encoder = self.wgpu_state.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Wgpu Surface Render Encoder"),
+                });
+
+                {
                     if let Some(video) = video_renderer {
                         // Render the video first
                         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("Video Render Pass"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: render_target,
+                                view: &view,
                                 resolve_target: None,
                                 ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load, // Or Clear if this is the very first thing
+                                    load: wgpu::LoadOp::Clear(if self.transparent {
+                                        wgpu::Color::TRANSPARENT
+                                    } else {
+                                        wgpu::Color::BLACK
+                                    }),
                                     store: wgpu::StoreOp::Store,
                                 },
                                 depth_slice: None,
@@ -1012,15 +1039,52 @@ impl<'a> InnerWindow<'a> {
                         rpass.set_viewport(
                             0.0,
                             0.0,
-                            render_target.texture().width() as f32,
-                            render_target.texture().height() as f32,
+                            surface_config.width as f32,
+                            surface_config.height as f32,
+                            0.0,
+                            1.0,
+                        );
+                        rpass.draw(0..4, 0..1);
+                    } else {
+                        // Render the CPU frame buffer texture
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Frame Render Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(if self.transparent {
+                                        wgpu::Color::TRANSPARENT
+                                    } else {
+                                        wgpu::Color::BLACK
+                                    }),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+
+                        let pipeline = self.wgpu_state.get_pipeline(surface_config.format);
+                        rpass.set_pipeline(&pipeline);
+                        rpass.set_bind_group(0, &*bind_group, &[]);
+                        rpass.set_viewport(
+                            0.0,
+                            0.0,
+                            surface_config.width as f32,
+                            surface_config.height as f32,
                             0.0,
                             1.0,
                         );
                         rpass.draw(0..4, 0..1);
                     }
-                    Ok(())
-                })?;
+                }
+
+                self.wgpu_state.queue.submit(Some(encoder.finish()));
+                output.present();
             }
             Surface::Softbuffer { _context, surface } => {
                 surface
@@ -1088,22 +1152,20 @@ impl<'a> InnerWindow<'a> {
 
     fn render_frame(&mut self, frame: &VideoFrame) -> Result<()> {
         // If we have a hardware video renderer, update its texture
-        if let Surface::Pixels {
+        if let Surface::Wgpu {
             video_renderer: Some(video),
             ..
         } = &self.surface
         {
-            if let Some((_, queue)) = &self.wgpu_ctx {
-                let data = frame.frame.data(0);
-                upload_texture_data(
-                    queue,
-                    &video.texture,
-                    data,
-                    video.width,
-                    video.height,
-                    frame.frame.stride(0) as u32,
-                );
-            }
+            let data = frame.frame.data(0);
+            upload_texture_data(
+                &self.wgpu_state.queue,
+                &video.texture,
+                data,
+                video.width,
+                video.height,
+                frame.frame.stride(0) as u32,
+            );
 
             return Ok(());
         }
@@ -1134,20 +1196,30 @@ impl<'a> InnerWindow<'a> {
                 .buffer()?
                 .copy_from_u32_buf(&mut buffer, self.inner_size.width, x, y);
         } else {
-            let mut buffer = match self.surface.buffer()? {
-                Buffer::Pixmap(_) => panic!("Buffer must be a softbuffer buffer"),
-                Buffer::Softbuffer(buffer) => buffer,
-            };
+            match self.surface.buffer()? {
+                Buffer::Pixmap(mut pixmap) => {
+                    pixmap.data_mut().fill(0);
 
-            buffer.fill(0);
+                    let buffer_ref = &mut BufferMutRef::new(
+                        bytemuck::cast_slice_mut(pixmap.data_mut()),
+                        self.inner_size.width as usize,
+                        self.inner_size.height as usize,
+                    );
 
-            let buffer_ref = &mut BufferMutRef::new(
-                bytemuck::cast_slice_mut(&mut buffer),
-                self.inner_size.width as usize,
-                self.inner_size.height as usize,
-            );
+                    f(buffer_ref)?;
+                }
+                Buffer::Softbuffer(mut buffer) => {
+                    buffer.fill(0);
 
-            f(buffer_ref)?;
+                    let buffer_ref = &mut BufferMutRef::new(
+                        bytemuck::cast_slice_mut(&mut buffer),
+                        self.inner_size.width as usize,
+                        self.inner_size.height as usize,
+                    );
+
+                    f(buffer_ref)?;
+                }
+            }
         }
 
         Ok(())
@@ -1161,6 +1233,10 @@ impl<'a> InnerWindow<'a> {
         } else {
             Ok(false)
         }
+    }
+
+    pub fn is_gpu(&self) -> bool {
+        self.surface.is_gpu()
     }
 
     pub fn request_redraw(&self) {

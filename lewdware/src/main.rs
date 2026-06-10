@@ -24,6 +24,7 @@ mod video;
 mod window;
 
 fn main() -> Result<()> {
+    utils::raise_fd_limit();
     let mut args = args_os();
 
     let mut mode_path = None;
@@ -50,7 +51,7 @@ fn main() -> Result<()> {
         config.mode = Mode::File { path: mode_path, mode };
     }
 
-    let wgpu_state = block_on(WgpuState::new())?;
+    let wgpu_state = std::sync::Arc::new(block_on(WgpuState::new())?);
 
     let mut event_loop_builder = EventLoop::with_user_event();
 

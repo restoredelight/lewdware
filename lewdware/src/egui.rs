@@ -30,6 +30,13 @@ pub struct WgpuState {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     pub error: Arc<AtomicBool>,
+
+    // Shared quad renderer resources
+    pub sampler: wgpu::Sampler,
+    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub shader: wgpu::ShaderModule,
+    pub pipeline_layout: wgpu::PipelineLayout,
+    pub pipelines: std::sync::Mutex<std::collections::HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
 }
 
 impl WgpuState {
@@ -57,13 +64,108 @@ impl WgpuState {
             error_clone.store(true, Ordering::Release);
         }));
 
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Shared Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Shared Pipeline Layout"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shared Quad Shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "shader.wgsl"
+            ))),
+        });
+
+        let pipelines = std::sync::Mutex::new(std::collections::HashMap::new());
+
         Ok(Self {
             instance,
             adapter: Arc::new(adapter),
             device,
             queue: Arc::new(queue),
             error,
+            sampler,
+            bind_group_layout,
+            shader,
+            pipeline_layout,
+            pipelines,
         })
+    }
+
+    pub fn get_pipeline(&self, format: wgpu::TextureFormat) -> Arc<wgpu::RenderPipeline> {
+        let mut pipelines = self.pipelines.lock().unwrap();
+        pipelines
+            .entry(format)
+            .or_insert_with(|| {
+                let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("Shared Quad Render Pipeline"),
+                    layout: Some(&self.pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &self.shader,
+                        entry_point: Some("vs_main"),
+                        buffers: &[],
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &self.shader,
+                        entry_point: Some("fs_main"),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleStrip,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: None,
+                        unclipped_depth: false,
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        conservative: false,
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview_mask: None,
+                    cache: None,
+                });
+                Arc::new(pipeline)
+            })
+            .clone()
     }
 }
 
@@ -196,7 +298,17 @@ impl<'a> EguiWindow<'a> {
 
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
-            _ => bail!("Getting texture failed"),
+            wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => surface_texture,
+            wgpu::CurrentSurfaceTexture::Timeout => return Ok(()),
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&self.device, &self.surface_config);
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.surface_config);
+                return Ok(());
+            }
+            _ => return Ok(()),
         };
 
         let view = output
@@ -251,7 +363,7 @@ pub struct EguiCPUWindow {
 }
 
 impl EguiCPUWindow {
-    pub fn new(window: Arc<Window>) -> Result<Self> {
+    pub fn new(window: Arc<Window>, gpu: bool, transparent: bool) -> Result<Self> {
         let context = egui::Context::default();
         let viewport_id = egui::ViewportId::from_hash_of(window.id());
         let state = egui_winit::State::new(
@@ -263,7 +375,12 @@ impl EguiCPUWindow {
             None,
         );
 
-        let renderer = EguiSoftwareRender::new(ColorFieldOrder::Bgra);
+        let color_order = if gpu {
+            ColorFieldOrder::Rgba
+        } else {
+            ColorFieldOrder::Bgra
+        };
+        let renderer = EguiSoftwareRender::new(color_order);
 
         context.request_repaint();
 
@@ -274,9 +391,10 @@ impl EguiCPUWindow {
         });
 
         let mut visuals = egui::Visuals::light();
-
-        // visuals.window_fill = Color32::TRANSPARENT;
-        // visuals.panel_fill = Color32::TRANSPARENT;
+        if transparent {
+            visuals.window_fill = egui::Color32::TRANSPARENT;
+            visuals.panel_fill = egui::Color32::TRANSPARENT;
+        }
 
         context.set_visuals(visuals);
 

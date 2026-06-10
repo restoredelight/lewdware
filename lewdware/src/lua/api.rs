@@ -542,7 +542,7 @@ impl Coord {
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
 pub enum Anchor {
     #[serde(rename = "top-left")]
     #[default]
@@ -563,7 +563,7 @@ impl Anchor {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SpawnWindowOpts {
     pub x: Option<Coord>,
     pub y: Option<Coord>,
@@ -580,6 +580,10 @@ pub struct SpawnWindowOpts {
     pub closeable: bool,
     #[serde(default = "return_true")]
     pub visible: bool,
+    #[serde(default)]
+    pub transparent: bool,
+    #[serde(default)]
+    pub click_through: bool,
 }
 
 impl Default for SpawnWindowOpts {
@@ -595,6 +599,8 @@ impl Default for SpawnWindowOpts {
             title: None,
             closeable: true,
             visible: true,
+            transparent: false,
+            click_through: false,
         }
     }
 }
