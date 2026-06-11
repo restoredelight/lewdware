@@ -715,31 +715,13 @@ async fn spawn_video_popup(
 ) -> mlua::Result<Rc<VideoWindow>> {
     let opts = opts.unwrap_or_default();
 
-    let (image_width, image_height) = match video.media_data {
-        MediaData::Video { width, height, .. } => (width, height),
+    match video.media_data {
+        MediaData::Video { .. } => {}
         _ => return Err("`video` is not an video".into_lua_err()),
     };
 
-    let monitor = match &opts.window_opts.monitor {
-        Some(monitor) => request_sender
-            .get_monitor(monitor.id)
-            .await
-            .into_lua_err()?,
-        None => request_sender.random_monitor().await.into_lua_err()?,
-    };
-
-    let (width, height) = calculate_media_popup_size(
-        opts.window_opts.width.clone(),
-        opts.window_opts.height.clone(),
-        image_width,
-        image_height,
-        monitor.width,
-        monitor.height,
-    );
-    let physical_size = LogicalSize::new(width, height).to_physical(monitor.scale_factor);
-
     let data = media_manager
-        .get_video_data(video.id, physical_size.width, physical_size.height, opts.loop_video, opts.audio)
+        .get_video_data(video.id, opts.loop_video, opts.audio)
         .await
         .into_lua_err()?;
 

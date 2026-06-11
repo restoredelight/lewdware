@@ -297,7 +297,7 @@ impl MediaPack {
         )?;
 
         Ok(VideoData {
-            file: FileOrPath::File(self.write_to_temp_file(offset, length, ".webm").await?),
+            file: FileOrPath::File(self.write_to_temp_file(offset, length, ".mp4").await?),
             width,
             height,
         })

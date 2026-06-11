@@ -55,7 +55,7 @@ pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec
         FileData::Path(path) => path,
         FileData::Data(data) => {
             let mut tempfile =
-                NamedTempFile::with_suffix(if is_image { ".avif" } else { ".webm" })?;
+                NamedTempFile::with_suffix(if is_image { ".avif" } else { ".mp4" })?;
             tempfile.write_all(&data)?;
             let path = tempfile.path().to_path_buf();
             _temp_file = Some(tempfile);

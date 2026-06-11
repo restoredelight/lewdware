@@ -23,6 +23,8 @@ use crate::{
 #[derive(Clone)]
 pub struct MediaManager {
     tx: Sender<MediaRequest>,
+    #[cfg(target_os = "windows")]
+    wgpu_device: Option<std::sync::Arc<wgpu::Device>>,
 }
 
 pub type Result<T, E = MediaError> = std::result::Result<T, E>;
@@ -33,10 +35,16 @@ impl MediaManager {
     pub fn open(
         pack_path: &Path,
         event_loop_proxy: EventLoopProxy<UserEvent>,
+        #[cfg(target_os = "windows")]
+        wgpu_device: std::sync::Arc<wgpu::Device>,
     ) -> anyhow::Result<(Self, Metadata)> {
         let (tx, metadata) = spawn_media_manager_thread(pack_path, event_loop_proxy)?;
 
-        Ok((Self { tx }, metadata))
+        Ok((Self {
+            tx,
+            #[cfg(target_os = "windows")]
+            wgpu_device: Some(wgpu_device),
+        }, metadata))
     }
 
     async fn send<T>(
@@ -117,18 +125,18 @@ impl MediaManager {
     pub async fn get_video_data(
         &self,
         id: u64,
-        width: u32,
-        height: u32,
         loop_video: bool,
         play_audio: bool,
     ) -> Result<VideoDecoder> {
+        #[cfg(target_os = "windows")]
+        let wgpu_device = self.wgpu_device.clone();
         self.send(|tx| MediaRequest::GetVideoData {
             id,
             response_tx: tx,
-            width,
-            height,
             loop_video,
             play_audio,
+            #[cfg(target_os = "windows")]
+            wgpu_device,
         })
         .await?
     }
@@ -222,15 +230,21 @@ async fn handle_request(
         }
         MediaRequest::GetVideoData {
             id,
-            width,
-            height,
             play_audio,
             loop_video,
+            #[cfg(target_os = "windows")]
+            wgpu_device,
             response_tx,
         } => response_tx
             .send(pack.get_video_data(id).await.and_then(|data| {
-                VideoDecoder::new(data.file, width, height, play_audio, loop_video)
-                    .map_err(|err| MediaError::VideoError(err))
+                VideoDecoder::new(
+                    data.file,
+                    play_audio,
+                    loop_video,
+                    #[cfg(target_os = "windows")]
+                    wgpu_device,
+                )
+                .map_err(|err| MediaError::VideoError(err))
             }))
             .is_ok(),
         MediaRequest::GetAudioData {
@@ -349,10 +363,10 @@ enum MediaRequest {
     },
     GetVideoData {
         id: u64,
-        width: u32,
-        height: u32,
         play_audio: bool,
         loop_video: bool,
+        #[cfg(target_os = "windows")]
+        wgpu_device: Option<std::sync::Arc<wgpu::Device>>,
         response_tx: oneshot::Sender<Result<VideoDecoder>>,
     },
     GetAudioData {

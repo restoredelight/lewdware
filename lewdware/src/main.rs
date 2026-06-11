@@ -22,6 +22,12 @@ mod transition;
 mod utils;
 mod video;
 mod window;
+#[cfg(target_os = "linux")]
+mod drm_import;
+#[cfg(target_os = "macos")]
+mod vtb_import;
+#[cfg(target_os = "windows")]
+mod d3d12_import;
 
 fn main() -> Result<()> {
     utils::raise_fd_limit();

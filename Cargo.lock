@@ -3955,6 +3955,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "ash",
  "bytemuck",
  "dirs 6.0.0",
  "egui",
@@ -3963,9 +3964,12 @@ dependencies = [
  "egui_software_backend",
  "ffmpeg-next",
  "image",
+ "libc",
  "mlua",
  "notify-rust",
- "pixels",
+ "objc2 0.6.4",
+ "objc2-io-surface",
+ "objc2-metal 0.3.2",
  "pollster",
  "r2d2",
  "r2d2_sqlite",
@@ -3987,6 +3991,7 @@ dependencies = [
  "wallpaper",
  "webbrowser",
  "wgpu",
+ "windows 0.62.2",
  "winit",
 ]
 
@@ -5089,7 +5094,9 @@ checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
 dependencies = [
  "bitflags 2.11.1",
  "block2 0.6.2",
+ "dispatch2",
  "objc2 0.6.4",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
 ]
 
@@ -5529,19 +5536,6 @@ dependencies = [
  "atomic-waker",
  "fastrand",
  "futures-io",
-]
-
-[[package]]
-name = "pixels"
-version = "0.17.1"
-source = "git+https://github.com/restoredelight/pixels?branch=with-instance-2#39fec475c7384703e2c8c58a34b42f6003a50108"
-dependencies = [
- "bytemuck",
- "pollster",
- "raw-window-handle",
- "thiserror 2.0.18",
- "ultraviolet",
- "wgpu",
 ]
 
 [[package]]
@@ -6292,15 +6286,6 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
-
-[[package]]
-name = "safe_arch"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323"
-dependencies = [
- "bytemuck",
-]
 
 [[package]]
 name = "same-file"
@@ -8238,15 +8223,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ultraviolet"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea519dad475ee0446b8172793c3c327e4fc81dafdaf05aaac510e630000b6296"
-dependencies = [
- "wide",
-]
-
-[[package]]
 name = "unic-char-property"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9091,16 +9067,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81995fafaaaf6ae47a7d0cc83c67caf92aeb7e5331650ae6ff856f7c0c60c459"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "wide"
-version = "0.7.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
-dependencies = [
- "bytemuck",
- "safe_arch",
 ]
 
 [[package]]

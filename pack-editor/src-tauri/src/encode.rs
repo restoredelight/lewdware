@@ -78,9 +78,7 @@ pub fn explore_folder(path: &Path, recursive: bool) -> Vec<PathBuf> {
     walkdir
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path().is_file() && is_media_path(e.path()).unwrap_or(false)
-        })
+        .filter(|e| e.path().is_file() && is_media_path(e.path()).unwrap_or(false))
         .map(|e| e.path().to_path_buf())
         .collect()
 }
@@ -125,7 +123,11 @@ fn get_ffmpeg_name() -> String {
         return base.to_string();
     };
 
-    let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let ext = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
     format!("{}-{}-{}{}", base, arch, os, ext)
 }
 
@@ -149,13 +151,21 @@ fn get_ffprobe_name() -> String {
         return base.to_string();
     };
 
-    let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let ext = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
     format!("{}-{}-{}{}", base, arch, os, ext)
 }
 
 pub fn get_ffmpeg_path() -> PathBuf {
     let sidecar_name = get_ffmpeg_name();
-    let direct_name = if cfg!(target_os = "windows") { "lewdware-ffmpeg.exe" } else { "lewdware-ffmpeg" };
+    let direct_name = if cfg!(target_os = "windows") {
+        "lewdware-ffmpeg.exe"
+    } else {
+        "lewdware-ffmpeg"
+    };
 
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
@@ -190,7 +200,11 @@ pub fn get_ffmpeg_path() -> PathBuf {
 
 pub fn get_ffprobe_path() -> PathBuf {
     let sidecar_name = get_ffprobe_name();
-    let direct_name = if cfg!(target_os = "windows") { "lewdware-ffprobe.exe" } else { "lewdware-ffprobe" };
+    let direct_name = if cfg!(target_os = "windows") {
+        "lewdware-ffprobe.exe"
+    } else {
+        "lewdware-ffprobe"
+    };
 
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
@@ -225,14 +239,19 @@ pub fn get_ffprobe_path() -> PathBuf {
 
 fn file_info(path: &Path) -> Result<Option<FileInfo>> {
     let args = [
-        "-v", "error",
+        "-v",
+        "error",
         "-count_packets",
         "-show_entries",
         "stream=codec_type,nb_read_packets,width,height,pix_fmt:format=duration",
-        "-output_format", "json",
+        "-output_format",
+        "json",
     ];
 
-    let output = new_command(get_ffprobe_path()).args(args).arg(path).output()?;
+    let output = new_command(get_ffprobe_path())
+        .args(args)
+        .arg(path)
+        .output()?;
 
     if !output.status.success() {
         return Ok(None);
@@ -250,7 +269,7 @@ pub fn encode_file(input: &Path, output: &Path) -> Result<Option<EncodedFile>> {
 
     let output = match info {
         FileInfo::Image { .. } => output.with_extension("avif"),
-        FileInfo::Video { .. } => output.with_extension("webm"),
+        FileInfo::Video { .. } => output.with_extension("mp4"),
         FileInfo::Audio { .. } => output.with_extension("opus"),
     };
 
@@ -259,12 +278,26 @@ pub fn encode_file(input: &Path, output: &Path) -> Result<Option<EncodedFile>> {
         FileInfo::Image { width, height, .. } => {
             let (thumb, w, h) = encode_image(input, &output, width, height)?;
             thumbnail = Some(thumb);
-            FileInfo::Image { width: w, height: h, transparent: false }
+            FileInfo::Image {
+                width: w,
+                height: h,
+                transparent: false,
+            }
         }
-        FileInfo::Video { width, height, duration, audio } => {
+        FileInfo::Video {
+            width,
+            height,
+            duration,
+            audio,
+        } => {
             let (thumb, w, h) = encode_video(input, &output, width, height, audio, false)?;
             thumbnail = Some(thumb);
-            FileInfo::Video { width: w, height: h, duration, audio }
+            FileInfo::Video {
+                width: w,
+                height: h,
+                duration,
+                audio,
+            }
         }
         FileInfo::Audio { .. } => {
             encode_audio(input, &output)?;
@@ -272,10 +305,19 @@ pub fn encode_file(input: &Path, output: &Path) -> Result<Option<EncodedFile>> {
         }
     };
 
-    Ok(Some(EncodedFile { info, thumbnail, path: output }))
+    Ok(Some(EncodedFile {
+        info,
+        thumbnail,
+        path: output,
+    }))
 }
 
-fn encode_image(input: &Path, output: &Path, width: u64, height: u64) -> Result<(Vec<u8>, u64, u64)> {
+fn encode_image(
+    input: &Path,
+    output: &Path,
+    width: u64,
+    height: u64,
+) -> Result<(Vec<u8>, u64, u64)> {
     let (width, height) = resize_dimensions(width, height, 2560, true);
 
     let thumb_temp = NamedTempFile::new()?;
@@ -287,12 +329,30 @@ fn encode_image(input: &Path, output: &Path, width: u64, height: u64) -> Result<
     );
 
     let result = new_command(get_ffmpeg_path())
-        .arg("-i").arg(input)
-        .arg("-filter_complex").arg(filter)
-        .arg("-map").arg("[main]")
-        .args(["-y", "-c:v", "libaom-av1", "-cpu-used", "6", "-crf", "32", "-b:v", "0", "-still-picture", "1", "-f", "avif"])
+        .arg("-i")
+        .arg(input)
+        .arg("-filter_complex")
+        .arg(filter)
+        .arg("-map")
+        .arg("[main]")
+        .args([
+            "-y",
+            "-c:v",
+            "libaom-av1",
+            "-cpu-used",
+            "6",
+            "-crf",
+            "32",
+            "-b:v",
+            "0",
+            "-still-picture",
+            "1",
+            "-f",
+            "avif",
+        ])
         .arg(output)
-        .arg("-map").arg("[thumb]")
+        .arg("-map")
+        .arg("[thumb]")
         .args(["-frames:v", "1", "-f", "webp"])
         .arg(thumb_path)
         .output()?;
@@ -314,20 +374,23 @@ fn encode_video(
     audio: bool,
     fixed_fps: bool,
 ) -> Result<(Vec<u8>, u64, u64)> {
-    let (width, height) = resize_dimensions(width, height, 1920, true);
+    let (width, height) = resize_dimensions(width, height, 1280, true);
 
     let thumb_temp = NamedTempFile::new()?;
     let thumb_path = thumb_temp.path();
 
     let filter = format!(
-        "[0:v]scale=w='{width}':h='{height}'[main]; \
+        "[0:v]scale=w='{width}':h='{height}',format=yuv420p[main]; \
          [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]"
     );
 
     let mut cmd = new_command(get_ffmpeg_path());
-    cmd.arg("-i").arg(input)
-        .arg("-filter_complex").arg(filter)
-        .arg("-map").arg("[main]");
+    cmd.arg("-i")
+        .arg(input)
+        .arg("-filter_complex")
+        .arg(filter)
+        .arg("-map")
+        .arg("[main]");
 
     if audio {
         cmd.args(["-map", "0:a?", "-c:a", "libopus", "-b:a", "64k"]);
@@ -335,25 +398,37 @@ fn encode_video(
         cmd.arg("-an");
     }
 
-    cmd.args(["-y", "-crf", "30", "-b:v", "0", "-c:v", "libvpx-vp9", "-f", "webm"]);
+    cmd.args([
+        "-y",
+        "-crf",
+        "23",
+        "-c:v",
+        "libx264",
+        "-f",
+        "mp4",
+    ]);
 
     if fixed_fps {
         cmd.arg("-r").arg("30");
     }
 
     cmd.arg(output)
-        .arg("-map").arg("[thumb]")
+        .arg("-map")
+        .arg("[thumb]")
         .args(["-frames:v", "1", "-f", "webp"])
         .arg(thumb_path);
 
     let result = cmd.output()?;
 
     if !result.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+
         if !fixed_fps {
             if let Ok(r) = encode_video(input, output, width, height, audio, true) {
                 return Ok(r);
             }
         }
+
         bail!("ffmpeg failed for {}", input.display());
     }
 
@@ -364,7 +439,8 @@ fn encode_video(
 
 fn encode_audio(input: &Path, output: &Path) -> Result<()> {
     let status = new_command(get_ffmpeg_path())
-        .arg("-i").arg(input)
+        .arg("-i")
+        .arg(input)
         .args(["-y", "-c:a", "libopus", "-b:a", "64k"])
         .arg(output)
         .status()?;
@@ -397,18 +473,30 @@ fn parse_media_info(json: serde_json::Value) -> Option<FileInfo> {
     Some(match video_stream {
         Some(vs) => {
             if has_audio
-                || vs.get("nb_read_packets")?
+                || vs
+                    .get("nb_read_packets")?
                     .as_str()
                     .and_then(|x| x.parse::<u32>().ok())
                     != Some(1)
             {
-                FileInfo::Video { width: width?, height: height?, duration: duration?, audio: has_audio }
+                FileInfo::Video {
+                    width: width?,
+                    height: height?,
+                    duration: duration?,
+                    audio: has_audio,
+                }
             } else {
                 let transparent = vs.get("pix_fmt")?.as_str()?.contains('a');
-                FileInfo::Image { width: width?, height: height?, transparent }
+                FileInfo::Image {
+                    width: width?,
+                    height: height?,
+                    transparent,
+                }
             }
         }
-        None if has_audio => FileInfo::Audio { duration: duration? },
+        None if has_audio => FileInfo::Audio {
+            duration: duration?,
+        },
         None => return None,
     })
 }
@@ -465,10 +553,7 @@ pub async fn process_files(
                     }
                     Ok(None) => {}
                     Err(ProcessErrorKind::Skipped) => {
-                        let _ = app.emit(
-                            "upload:skipped",
-                            path.to_string_lossy().as_ref(),
-                        );
+                        let _ = app.emit("upload:skipped", path.to_string_lossy().as_ref());
                     }
                     Err(err) => {
                         let _ = app.emit(
@@ -503,7 +588,11 @@ async fn process_one_file(
     if skip_duplicates {
         let lock = pack_state.lock().await;
         if let Some(pack) = lock.as_ref() {
-            if pack.check_hash(&hash).await.map_err(|e| ProcessErrorKind::Other(e))? {
+            if pack
+                .check_hash(&hash)
+                .await
+                .map_err(|e| ProcessErrorKind::Other(e))?
+            {
                 return Err(ProcessErrorKind::Skipped);
             }
         }
@@ -535,7 +624,10 @@ async fn process_one_file(
 
     let mut lock = pack_state.lock().await;
     if let Some(pack) = lock.as_mut() {
-        let media = pack.add_file(encoded, path, hash).await.map_err(ProcessErrorKind::PackError)?;
+        let media = pack
+            .add_file(encoded, path, hash)
+            .await
+            .map_err(ProcessErrorKind::PackError)?;
         Ok(Some(media))
     } else {
         Err(ProcessErrorKind::Other(anyhow!("Pack was closed")))

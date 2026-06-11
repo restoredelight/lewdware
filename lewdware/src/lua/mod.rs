@@ -123,6 +123,8 @@ pub type AudioHandles = Rc<RefCell<HashMap<u64, Rc<AudioHandle>>>>;
 pub fn start_lua_thread(
     event_loop_proxy: EventLoopProxy<UserEvent>,
     mut config: AppConfig,
+    #[cfg(target_os = "windows")]
+    wgpu_device: std::sync::Arc<wgpu::Device>,
 ) -> (UnboundedSender<Event>, Receiver<LuaRequest>) {
     let (event_tx, mut event_rx) = unbounded_channel();
     let (request_tx, request_rx) = channel(20);
@@ -134,7 +136,12 @@ pub fn start_lua_thread(
             .expect("Failed to build tokio runtime");
 
         let (media_manager, _) =
-            match MediaManager::open(&config.pack_path.unwrap(), event_loop_proxy.clone()) {
+            match MediaManager::open(
+                &config.pack_path.unwrap(),
+                event_loop_proxy.clone(),
+                #[cfg(target_os = "windows")]
+                wgpu_device,
+            ) {
                 Ok(x) => x,
                 Err(err) => {
                     eprintln!("{err}");

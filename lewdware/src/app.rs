@@ -94,6 +94,8 @@ impl<'a> ChaosApp<'a> {
         let (lua_event_tx, lua_request_rx) = start_lua_thread(
             event_loop_proxy.clone(),
             config.clone(),
+            #[cfg(target_os = "windows")]
+            wgpu_state.device.clone(),
         );
 
         let monitors = Monitors::new(config.disabled_monitors.clone());

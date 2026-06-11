@@ -168,7 +168,7 @@ async fn file_handler(
 fn file_type_mime(ft: shared::encode::FileType) -> &'static str {
     match ft {
         shared::encode::FileType::Image => "image/avif",
-        shared::encode::FileType::Video => "video/webm",
+        shared::encode::FileType::Video => "video/mp4",
         shared::encode::FileType::Audio => "audio/ogg",
     }
 }
