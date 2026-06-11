@@ -25,7 +25,7 @@ pub struct VtbImportedTextures {
 }
 
 #[link(name = "CoreVideo", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CVPixelBufferGetIOSurface(buffer: *const std::ffi::c_void) -> *mut IOSurfaceRef;
 }
 

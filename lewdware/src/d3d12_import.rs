@@ -3,6 +3,7 @@ use std::{ffi::c_void, sync::Arc};
 use ffmpeg_next::ffi;
 use wgpu::hal::dx12 as dx12_hal;
 use windows::Win32::Graphics::Direct3D12 as d3d12;
+use windows::core::Interface; // as_raw(), from_raw_borrowed(), from_raw()
 
 /// Mirror of `AVD3D12VAFrame` from ffmpeg's hwcontext_d3d12va.h (Windows x64 repr C).
 #[repr(C)]
@@ -39,9 +40,8 @@ pub unsafe fn alloc_d3d12va_device_ctx(
 ) -> Option<*mut ffi::AVBufferRef> {
     // Get the raw ID3D12Device pointer without AddRef — lifetime is covered by Arc.
     let raw_d3d12_device: *mut c_void = unsafe {
-        wgpu_device.as_hal::<dx12_hal::Api, _, Option<*mut c_void>>(|hal_device| {
-            hal_device.map(|d| d.raw_device().as_raw())
-        })?
+        let hal = wgpu_device.as_hal::<dx12_hal::Api>()?;
+        hal.raw_device().as_raw()
     };
 
     let ctx_buf = unsafe { ffi::av_hwdevice_ctx_alloc(hw_type) };
@@ -91,15 +91,11 @@ pub fn try_import_d3d12va_frame(
     // GPU-side fence wait: same device as wgpu so a direct ID3D12CommandQueue::Wait works.
     if !frame.fence_raw.is_null() {
         unsafe {
-            device.as_hal::<dx12_hal::Api, _, ()>(|hal| {
-                if let Some(hal_dev) = hal {
-                    if let Some(fence) = unsafe {
-                        d3d12::ID3D12Fence::from_raw_borrowed(&frame.fence_raw)
-                    } {
-                        unsafe { let _ = hal_dev.raw_queue().Wait(fence, frame.fence_value); }
-                    }
+            if let Some(hal_dev) = device.as_hal::<dx12_hal::Api>() {
+                if let Some(fence) = d3d12::ID3D12Fence::from_raw_borrowed(&frame.fence_raw) {
+                    let _ = hal_dev.raw_queue().Wait(fence, frame.fence_value);
                 }
-            });
+            }
         }
     }
 
@@ -109,7 +105,7 @@ pub fn try_import_d3d12va_frame(
         let borrowed = d3d12::ID3D12Resource::from_raw_borrowed(&frame.texture_raw)?;
         let array_size = borrowed.GetDesc().DepthOrArraySize as u32;
         (borrowed.clone(), array_size)
-        // `borrowed` drops here as a plain borrow — no Release.
+        // `borrowed` drops here as a plain reference — no Release.
     };
 
     let hal_texture = unsafe {

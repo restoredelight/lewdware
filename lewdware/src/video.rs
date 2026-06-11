@@ -180,7 +180,7 @@ unsafe impl Sync for VtbFrame {}
 
 #[cfg(target_os = "macos")]
 #[link(name = "CoreVideo", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CVPixelBufferRetain(buffer: *const std::ffi::c_void) -> *const std::ffi::c_void;
     fn CVPixelBufferRelease(buffer: *const std::ffi::c_void);
 }
