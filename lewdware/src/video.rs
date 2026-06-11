@@ -103,7 +103,7 @@ unsafe fn try_hw_setup(
     #[cfg(target_os = "windows")]
     if let Some(device) = wgpu_device {
         if let Some(ctx_buf) =
-            unsafe { crate::d3d12_import::alloc_d3d12va_device_ctx(device, hw_type) }
+            unsafe { crate::zero_copy::windows::alloc_d3d12va_device_ctx(device, hw_type) }
         {
             hw_device_ctx = ctx_buf;
         }
@@ -543,7 +543,7 @@ fn hw_frame_to_video_frame(
     {
         // D3D12VA: data[0] is a pointer to AVD3D12VAFrame containing the texture + fence.
         let d3d12_frame_ptr =
-            unsafe { (*decoded.as_ptr()).data[0] } as *const crate::d3d12_import::AvD3d12VaFrame;
+            unsafe { (*decoded.as_ptr()).data[0] } as *const crate::zero_copy::windows::AvD3d12VaFrame;
         if !d3d12_frame_ptr.is_null() {
             let (texture_raw, index, fence_raw, fence_value) = unsafe {
                 let f = &*d3d12_frame_ptr;

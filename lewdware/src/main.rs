@@ -16,10 +16,6 @@ use crate::{
 mod app;
 mod audio;
 mod buffer;
-#[cfg(target_os = "windows")]
-mod d3d12_import;
-#[cfg(target_os = "linux")]
-mod drm_import;
 mod egui;
 mod error;
 mod inner_window;
@@ -29,10 +25,9 @@ mod monitor;
 mod transition;
 mod utils;
 mod video;
-#[cfg(target_os = "macos")]
-mod vtb_import;
 mod window;
 mod wgpu;
+mod zero_copy;
 
 fn main() -> Result<()> {
     utils::raise_fd_limit();

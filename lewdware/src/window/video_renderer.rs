@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 #[cfg(target_os = "windows")]
-use crate::d3d12_import::D3d12ImportedTextures;
+use crate::zero_copy::windows::D3d12ImportedTextures;
 #[cfg(target_os = "linux")]
-use crate::drm_import::DrmImportedTextures;
+use crate::zero_copy::linux::DrmImportedTextures;
 #[cfg(target_os = "macos")]
-use crate::vtb_import::VtbImportedTextures;
+use crate::zero_copy::macos::VtbImportedTextures;
 use crate::{
     wgpu::WgpuState,
     video::{VideoFrame, VideoPixelFormat},
@@ -235,7 +235,7 @@ impl VideoRenderer {
         #[cfg(target_os = "linux")]
         if let Some(drm_prime) = &frame.drm_prime {
             if let VideoFrameTextures::Nv12 { .. } = &self.frame_textures {
-                if let Some(imported) = crate::drm_import::try_import_drm_prime(
+                if let Some(imported) = crate::zero_copy::linux::try_import_drm_prime(
                     &wgpu_state.device,
                     drm_prime,
                     self.video_width,
@@ -261,7 +261,7 @@ impl VideoRenderer {
         #[cfg(target_os = "macos")]
         if let Some(vtb_frame) = &frame.vtb_frame {
             if let VideoFrameTextures::Nv12 { .. } = &self.frame_textures {
-                if let Some(imported) = crate::vtb_import::try_import_vtb_frame(
+                if let Some(imported) = crate::zero_copy::macos::try_import_vtb_frame(
                     &wgpu_state.device,
                     vtb_frame,
                     self.video_width,
@@ -285,7 +285,7 @@ impl VideoRenderer {
         #[cfg(target_os = "windows")]
         if let Some(d3d12_frame) = &frame.d3d12va_frame {
             if let VideoFrameTextures::Nv12 { .. } = &self.frame_textures {
-                if let Some(imported) = crate::d3d12_import::try_import_d3d12va_frame(
+                if let Some(imported) = crate::zero_copy::windows::try_import_d3d12va_frame(
                     &wgpu_state.device,
                     d3d12_frame.clone(),
                     self.video_width,
