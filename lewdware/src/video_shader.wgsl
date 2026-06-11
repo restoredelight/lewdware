@@ -36,7 +36,7 @@ fn gamma_decode(c: f32) -> f32 {
     return pow((c + 0.055) / 1.055, 2.4);
 }
 
-// BT.709 limited range: Y ∈ [16/255, 235/255], Cb/Cr ∈ [16/255, 240/255]
+// BT.709 limited range: Y in [16/255, 235/255], Cb/Cr in [16/255, 240/255]
 @fragment
 fn fs_yuv_limited(in: VertexOutput) -> @location(0) vec4<f32> {
     let y_raw  = textureSample(t_y,  s_yuv, in.uv).r;
@@ -59,7 +59,7 @@ fn fs_yuv_limited(in: VertexOutput) -> @location(0) vec4<f32> {
     );
 }
 
-// BT.709 full range: Y ∈ [0, 1], Cb/Cr ∈ [0, 1] centred at 0.5
+// BT.709 full range: Y in [0, 1], Cb/Cr in [0, 1] centred at 0.5
 @fragment
 fn fs_yuv_full(in: VertexOutput) -> @location(0) vec4<f32> {
     let y_raw  = textureSample(t_y,  s_yuv, in.uv).r;

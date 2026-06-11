@@ -1,5 +1,5 @@
 /// VideoToolbox + IOSurface zero-copy: imports CVPixelBuffer-backed frames
-/// directly as Metal textures, eliminating the GPU→CPU→GPU round-trip.
+/// directly as Metal textures, eliminating the GPU->CPU->GPU round-trip.
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -149,7 +149,7 @@ pub fn try_import_vtb_frame(
 
     static LOGGED: AtomicBool = AtomicBool::new(false);
     if !LOGGED.swap(true, Ordering::Relaxed) {
-        eprintln!("[vtb_import] VideoToolbox IOSurface zero-copy active — GPU→CPU→GPU round-trip eliminated");
+        eprintln!("[vtb_import] VideoToolbox IOSurface zero-copy active");
     }
 
     Some(VtbImportedTextures {

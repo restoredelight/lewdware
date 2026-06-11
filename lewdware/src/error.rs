@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display, io, result};
+use std::{error::Error, fmt::Display, result};
 
 use crate::media::MediaError;
 

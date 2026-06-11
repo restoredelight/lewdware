@@ -135,11 +135,10 @@ impl RequestSender {
             .await?
     }
 
-    pub async fn spawn_audio(&self, audio_player: AudioPlayer, loop_audio: bool) -> Result<u64> {
+    pub async fn spawn_audio(&self, audio_player: AudioPlayer) -> Result<u64> {
         Ok(self
             .send(|tx| LuaRequest::SpawnAudio {
                 audio_player,
-                loop_audio,
                 tx,
             })
             .await?)
@@ -327,7 +326,6 @@ pub enum LuaRequest {
     },
     SpawnAudio {
         audio_player: AudioPlayer,
-        loop_audio: bool,
         tx: oneshot::Sender<u64>,
     },
     SetWallpaper {

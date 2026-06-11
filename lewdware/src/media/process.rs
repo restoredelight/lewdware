@@ -47,6 +47,7 @@ pub fn classify_file(path: &Path) -> Result<FileInfo> {
                 height: height as u64,
                 duration: video_stream.duration() as f64 * f64::from(video_stream.time_base()),
                 audio: audio_stream.is_some(),
+                transparent: false,
             })
         } else {
             Ok(FileInfo::Image {
@@ -105,7 +106,7 @@ pub fn process_path(path: &Path) -> Result<Processed> {
                 path: path.to_path_buf(),
             }))
         }
-        FileInfo::Video { width, height, duration, audio } => {
+        FileInfo::Video { width, height, duration, audio, .. } => {
             Ok(Processed::Media(Media {
                 media_type: MediaType::Video { width, height, duration, audio },
                 path: path.to_path_buf(),

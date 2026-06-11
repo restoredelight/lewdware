@@ -920,7 +920,7 @@ async fn play_audio(
         .await
         .into_lua_err()?;
 
-    let id = request_sender.spawn_audio(data, opts.loop_audio).await?;
+    let id = request_sender.spawn_audio(data).await?;
 
     let audio_handle = Rc::new(AudioHandle::new(
         id,

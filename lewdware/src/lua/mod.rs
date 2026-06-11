@@ -6,7 +6,7 @@ mod mode;
 mod request;
 mod window;
 
-use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, thread};
+use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, sync::Arc, thread};
 
 use anyhow::bail;
 use mlua::{ExternalResult, Lua};
@@ -122,7 +122,7 @@ pub type AudioHandles = Rc<RefCell<HashMap<u64, Rc<AudioHandle>>>>;
 
 pub fn start_lua_thread(
     event_loop_proxy: EventLoopProxy<UserEvent>,
-    mut config: AppConfig,
+    config: Arc<AppConfig>,
     #[cfg(target_os = "windows")]
     wgpu_device: std::sync::Arc<wgpu::Device>,
 ) -> (UnboundedSender<Event>, Receiver<LuaRequest>) {
@@ -137,7 +137,7 @@ pub fn start_lua_thread(
 
         let (media_manager, _) =
             match MediaManager::open(
-                &config.pack_path.unwrap(),
+                &config.pack_path.clone().unwrap(),
                 event_loop_proxy.clone(),
                 #[cfg(target_os = "windows")]
                 wgpu_device,
@@ -195,8 +195,9 @@ pub fn start_lua_thread(
 
         let mut mode_config = config
             .mode_options
-            .remove(&config.mode)
-            .unwrap_or_else(HashMap::new);
+            .get(&config.mode)
+            .cloned()
+            .unwrap_or_default();
 
         // Make sure the config contains all the correct options
         for (key, option) in mode_obj.options.iter() {

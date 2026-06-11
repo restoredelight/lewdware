@@ -7,27 +7,32 @@ use pollster::block_on;
 use shared::user_config::{Mode, load_config};
 use winit::event_loop::EventLoop;
 
-use crate::{app::{ChaosApp, UserEvent}, egui::WgpuState, utils::spawn_panic_thread};
+use crate::{
+    app::ChaosApp,
+    wgpu::WgpuState,
+    utils::{create_tray_icon, handle_sigterm, spawn_panic_thread},
+};
 
 mod app;
 mod audio;
 mod buffer;
+#[cfg(target_os = "windows")]
+mod d3d12_import;
+#[cfg(target_os = "linux")]
+mod drm_import;
 mod egui;
 mod error;
-mod header;
+mod inner_window;
 mod lua;
 mod media;
 mod monitor;
 mod transition;
 mod utils;
 mod video;
-mod window;
-#[cfg(target_os = "linux")]
-mod drm_import;
 #[cfg(target_os = "macos")]
 mod vtb_import;
-#[cfg(target_os = "windows")]
-mod d3d12_import;
+mod window;
+mod wgpu;
 
 fn main() -> Result<()> {
     utils::raise_fd_limit();
@@ -54,10 +59,11 @@ fn main() -> Result<()> {
     let mut config = load_config()?;
 
     if let (Some(mode_path), Some(mode)) = (mode_path, mode) {
-        config.mode = Mode::File { path: mode_path, mode };
+        config.mode = Mode::File {
+            path: mode_path,
+            mode,
+        };
     }
-
-    let wgpu_state = std::sync::Arc::new(block_on(WgpuState::new())?);
 
     let mut event_loop_builder = EventLoop::with_user_event();
 
@@ -73,30 +79,12 @@ fn main() -> Result<()> {
     let event_loop = event_loop_builder.build()?;
     let proxy = event_loop.create_proxy();
 
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let proxy = proxy.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to build signal listener runtime");
-            rt.block_on(async move {
-                if let Ok(mut stream) = signal(SignalKind::terminate()) {
-                    stream.recv().await;
-                    let _ = proxy.send_event(UserEvent::Exit);
-                }
-            });
-        });
-    }
+    let wgpu_state =
+        std::sync::Arc::new(block_on(WgpuState::new(event_loop.owned_display_handle()))?);
 
+    handle_sigterm(proxy.clone());
     spawn_panic_thread(proxy.clone(), config.panic_button.clone());
-    #[cfg(not(target_os = "linux"))]
-    {
-        use crate::utils::create_tray_icon;
-        create_tray_icon(proxy.clone())?;
-    }
+    create_tray_icon(proxy.clone())?;
 
     let mut app = ChaosApp::new(wgpu_state, proxy, config)?;
     event_loop.run_app(&mut app)?;

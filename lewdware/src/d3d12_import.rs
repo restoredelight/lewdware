@@ -5,20 +5,22 @@ use wgpu::hal::dx12 as dx12_hal;
 use windows::Win32::Graphics::Direct3D12 as d3d12;
 use windows::core::Interface; // as_raw(), from_raw_borrowed(), from_raw()
 
+/// Mirror of `AVD3D12VASyncContext` from ffmpeg's hwcontext_d3d12va.h.
+#[repr(C)]
+pub struct AvD3d12VaSyncContext {
+    pub fence: *mut c_void,       // ID3D12Fence*
+    pub fence_event: *mut c_void, // HANDLE — must not be omitted; shifts fence_value
+    pub fence_value: u64,
+}
+
 /// Mirror of `AVD3D12VAFrame` from ffmpeg's hwcontext_d3d12va.h (Windows x64 repr C).
 #[repr(C)]
 pub struct AvD3d12VaFrame {
-    pub texture: *mut c_void,         // ID3D12Resource*
-    pub index: u32,                   // array slice
-    _pad: u32,
-    pub event_handle: *mut c_void,
-    pub sync_ctx: *mut AvD3d12VaSyncContext,
-}
-
-#[repr(C)]
-pub struct AvD3d12VaSyncContext {
-    pub fence: *mut c_void, // ID3D12Fence*
-    pub fence_value: u64,
+    pub texture: *mut c_void,           // ID3D12Resource*
+    pub subresource_index: i32,
+    _pad: u32,                          // align sync_ctx.fence to 8 bytes
+    pub sync_ctx: AvD3d12VaSyncContext, // embedded, NOT a pointer
+    pub flags: u32,                     // AVD3D12VAFrameFlags
 }
 
 /// First field of `AVD3D12VADeviceContext` (the only one we need to set).

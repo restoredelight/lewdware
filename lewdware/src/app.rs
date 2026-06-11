@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use rand::random_range;
@@ -17,9 +18,8 @@ use winit::{
 };
 
 use crate::audio::AudioPlayer;
-use crate::egui::WgpuState;
+use crate::wgpu::WgpuState;
 use crate::error::{LewdwareError, MonitorError, Result};
-use crate::header::HEADER_HEIGHT;
 use crate::lua::{
     self, AudioAction, ChoiceWindowOption, LuaRequest, Notification, SpawnWindowOpts,
     WallpaperMode, WindowAction, WindowProps, start_lua_thread,
@@ -28,9 +28,7 @@ use crate::media::{FileOrPath, ImageData};
 use crate::monitor::Monitors;
 use crate::utils::calculate_media_popup_size;
 use crate::video::VideoDecoder;
-use crate::window::{
-    ChoiceWindow, ImageWindow, InnerWindow, PromptWindow, VideoWindow, WindowType,
-};
+use crate::window::{ChoiceWindow, ImageWindow, InnerWindow, PromptWindow, VideoWindow, WindowType, HEADER_HEIGHT};
 
 /// The main app.
 /// * `windows`: A map containing all the windows spawned by the app. Since dropping a winit window
@@ -38,8 +36,8 @@ use crate::window::{
 /// * `default_wallpaper`: Stores the user's default wallpaper, so we can restore it on panic.
 pub struct ChaosApp<'a> {
     running: bool,
-    config: AppConfig,
-    wgpu_state: std::sync::Arc<WgpuState>,
+    config: Arc<AppConfig>,
+    wgpu_state: Arc<WgpuState>,
     windows: HashMap<WindowId, WindowType<'a>>,
     audio_players: HashMap<u64, AudioPlayer>,
     current_audio_id: u64,
@@ -68,6 +66,8 @@ impl<'a> ChaosApp<'a> {
         event_loop_proxy: EventLoopProxy<UserEvent>,
         config: AppConfig,
     ) -> Result<Self> {
+        let config = Arc::new(config);
+
         let wallpaper = match wallpaper::get() {
             Ok(wallpaper) => Some(wallpaper),
             Err(err) => {
@@ -251,11 +251,10 @@ impl<'a> ChaosApp<'a> {
     fn spawn_image(
         &mut self,
         data: ImageData,
-        mut opts: SpawnWindowOpts,
+        opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
-        println!("{}", self.windows.len());
-        opts.transparent = true;
+        println!("Windows: {}", self.windows.len());
         let (window, props) = self.create_window(
             opts.clone(),
             WindowSizeBehaviour::ResizeWithMedia {
@@ -296,12 +295,8 @@ impl<'a> ChaosApp<'a> {
 
         window.request_redraw();
 
-        let video_window = VideoWindow::new(
-            window,
-            video_player,
-            loop_video,
-        )
-        .map_err(|err| LewdwareError::WindowError(err))?;
+        let video_window = VideoWindow::new(window, video_player, loop_video)
+            .map_err(|err| LewdwareError::WindowError(err))?;
 
         self.windows
             .insert(props.window_id.clone(), WindowType::Video(video_window));
@@ -366,14 +361,11 @@ impl<'a> ChaosApp<'a> {
         Ok(props)
     }
 
-    fn spawn_audio(&mut self, audio_player: AudioPlayer, loop_audio: bool) -> u64 {
+    fn spawn_audio(&mut self, audio_player: AudioPlayer) -> u64 {
         let id = self.current_audio_id;
         self.current_audio_id += 1;
 
-        // TODO: Handle messages etc.
-
         audio_player.play();
-        // audio_player.monitor(id, self.event_loop_proxy.clone());
         self.audio_players.insert(id, audio_player);
 
         id
@@ -440,12 +432,6 @@ impl<'a> ChaosApp<'a> {
         Ok(())
     }
 
-    // fn pause_video(window: Window) -> Result<()> {
-    //     match window {
-    //         Window::Video(video) => video
-    //     }
-    // }
-
     fn process_lua_request(&mut self, request: LuaRequest, event_loop: &ActiveEventLoop) -> bool {
         if !match request {
             LuaRequest::SpawnImage {
@@ -470,13 +456,7 @@ impl<'a> ChaosApp<'a> {
                 window_opts,
                 tx,
             } => tx
-                .send(self.spawn_prompt(
-                    text,
-                    placeholder,
-                    initial_value,
-                    window_opts,
-                    event_loop,
-                ))
+                .send(self.spawn_prompt(text, placeholder, initial_value, window_opts, event_loop))
                 .is_ok(),
             LuaRequest::SpawnChoice {
                 text,
@@ -488,9 +468,8 @@ impl<'a> ChaosApp<'a> {
                 .is_ok(),
             LuaRequest::SpawnAudio {
                 audio_player: data,
-                loop_audio,
                 tx,
-            } => tx.send(self.spawn_audio(data, loop_audio)).is_ok(),
+            } => tx.send(self.spawn_audio(data)).is_ok(),
             LuaRequest::SetWallpaper { file, mode, tx } => {
                 tx.send(self.set_wallpaper(file, mode)).is_ok()
             }
@@ -754,20 +733,6 @@ impl Drop for ChaosApp<'_> {
         }
     }
 }
-
-// fn window_props(window: &winit::window::Window) -> Result<WindowProps> {
-//     let scale_factor = window.scale_factor();
-//     let size = window.inner_size().to_logical(scale_factor);
-//     let position = window.inner_position()?.to_logical(scale_factor);
-//
-//     Ok(WindowProps {
-//         width: size.width,
-//         height: size.height,
-//         x: position.x,
-//         y: position.y,
-//         window_id: window.id(),
-//     })
-// }
 
 fn random_position(window_size: u32, total_size: u32) -> u32 {
     if window_size > total_size {

@@ -53,6 +53,9 @@ windows = { version = "0.62", features = ["Win32_Graphics_Direct3D12", "Win32_Gr
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 tray-icon = "0.24.0"
 
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.4.4"
+
 [features]
 static-ffmpeg = ["ffmpeg-next/static"]
 build-ffmpeg = ["ffmpeg-next/build"]

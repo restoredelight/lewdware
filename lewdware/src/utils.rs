@@ -1,21 +1,16 @@
 use std::{collections::HashSet, thread};
 
 use anyhow::Result;
-use rand::{random_range, seq::IndexedRandom};
+use rand::random_range;
 use shared::user_config::{Key, Modifiers};
-use winit::{
-    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
-    event_loop::{ActiveEventLoop, EventLoopProxy},
-    monitor::MonitorHandle,
-    window::{WindowAttributes, WindowLevel},
-};
+use winit::{dpi::PhysicalPosition, event_loop::EventLoopProxy};
 
 use crate::{
     app::UserEvent,
-    lua::{Anchor, Coord, SpawnWindowOpts, WindowProps},
-    monitor::Monitors,
+    lua::{Anchor, Coord},
 };
 
+// Create a tray icon that can be used to close the program
 #[cfg(not(target_os = "linux"))]
 pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<()> {
     use tray_icon::{
@@ -34,6 +29,11 @@ pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<(
         let _ = event_loop_proxy.send_event(UserEvent::Exit);
     }));
 
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn create_tray_icon(_: EventLoopProxy<UserEvent>) -> Result<()> {
     Ok(())
 }
 
@@ -348,12 +348,9 @@ pub fn calculate_media_popup_size(
     let height = height.map(|height| height.to_pixels(monitor_height));
 
     match (width, height) {
-        (None, None) => default_media_popup_size(
-            media_width,
-            media_height,
-            monitor_width,
-            monitor_height,
-        ),
+        (None, None) => {
+            default_media_popup_size(media_width, media_height, monitor_width, monitor_height)
+        }
         (None, Some(height)) => (
             ((height as f64 / media_height as f64) * media_width as f64).round() as u32,
             height,
@@ -386,7 +383,13 @@ fn default_media_popup_size(
     (width as u32, height as u32)
 }
 
-pub fn resolve_coord(x: u32, anchor: &Anchor, window_size: u32, offset_start: u32, offset_end: u32) -> u32 {
+pub fn resolve_coord(
+    x: u32,
+    anchor: &Anchor,
+    window_size: u32,
+    offset_start: u32,
+    offset_end: u32,
+) -> u32 {
     match anchor {
         Anchor::TopLeft => x,
         Anchor::Center => x + offset_start + (window_size / 2),
@@ -394,6 +397,26 @@ pub fn resolve_coord(x: u32, anchor: &Anchor, window_size: u32, offset_start: u3
     }
 }
 
+// Makes sure we gracefully shut down on SIGTERM
+#[cfg(unix)]
+pub fn handle_sigterm(event_loop_proxy: EventLoopProxy<UserEvent>) {
+    std::thread::spawn(move || {
+        if let Ok(mut signals) =
+            signal_hook::iterator::Signals::new(&[signal_hook::consts::signal::SIGTERM])
+        {
+            for _sig in signals.forever() {
+                let _ = event_loop_proxy.send_event(UserEvent::Exit);
+                break;
+            }
+        }
+    });
+}
+
+#[cfg(not(unix))]
+pub fn handle_sigterm(_: EventLoopProxy<UserEvent>) {}
+
+// lewdware opens lots of file descriptors on Unix systems (Windows, media files, GPU stuff),
+// so increase the file descriptor limit so we don't crash with lots of windows open.
 #[cfg(unix)]
 pub fn raise_fd_limit() {
     unsafe {

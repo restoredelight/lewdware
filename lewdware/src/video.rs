@@ -25,6 +25,8 @@ thread_local! {
     static HW_PIX_FMT: Cell<i32> = Cell::new(ffi::AVPixelFormat::AV_PIX_FMT_NONE as i32);
 }
 
+// fmts is a list terminated by AV_PIX_FMT_NONE. Loop through and try to find our desired format
+// (HW_PIX_FMT), otherwise return AV_PIX_FMT_NONE.
 unsafe extern "C" fn get_hw_format(
     _ctx: *mut ffi::AVCodecContext,
     fmts: *const ffi::AVPixelFormat,
@@ -63,8 +65,7 @@ fn preferred_hw_type() -> ffi::AVHWDeviceType {
 unsafe fn try_hw_setup(
     ctx: *mut ffi::AVCodecContext,
     hw_type: ffi::AVHWDeviceType,
-    #[cfg(target_os = "windows")]
-    wgpu_device: Option<&std::sync::Arc<wgpu::Device>>,
+    #[cfg(target_os = "windows")] wgpu_device: Option<&std::sync::Arc<wgpu::Device>>,
 ) -> Option<ffi::AVPixelFormat> {
     // ctx->codec is NULL before avcodec_open2; find the decoder via codec_id instead.
     let codec_id = unsafe { (*ctx).codec_id };
@@ -75,11 +76,13 @@ unsafe fn try_hw_setup(
 
     let mut hw_pix_fmt = ffi::AVPixelFormat::AV_PIX_FMT_NONE;
     let mut i = 0;
+    // Loop through hardware configurations
     loop {
         let hw_config = unsafe { ffi::avcodec_get_hw_config(codec, i) };
         if hw_config.is_null() {
             break;
         }
+
         unsafe {
             if ((*hw_config).methods & ffi::AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) != 0
                 && (*hw_config).device_type == hw_type
@@ -99,7 +102,9 @@ unsafe fn try_hw_setup(
     // On Windows with D3D12VA: inject wgpu's D3D12 device so textures are on the same device.
     #[cfg(target_os = "windows")]
     if let Some(device) = wgpu_device {
-        if let Some(ctx_buf) = unsafe { crate::d3d12_import::alloc_d3d12va_device_ctx(device, hw_type) } {
+        if let Some(ctx_buf) =
+            unsafe { crate::d3d12_import::alloc_d3d12va_device_ctx(device, hw_type) }
+        {
             hw_device_ctx = ctx_buf;
         }
     }
@@ -229,9 +234,11 @@ pub struct VideoFrame {
 
 impl Drop for VideoFrame {
     fn drop(&mut self) {
-        let dummy = Video::empty();
-        let frame = std::mem::replace(&mut self.frame, dummy);
-        let _ = self.recycle_tx.try_send(frame);
+        if unsafe { !self.frame.is_empty() } {
+            let dummy = Video::empty();
+            let frame = std::mem::replace(&mut self.frame, dummy);
+            let _ = self.recycle_tx.try_send(frame);
+        }
     }
 }
 
@@ -240,8 +247,7 @@ impl VideoDecoder {
         video: FileOrPath,
         play_audio: bool,
         loop_video: bool,
-        #[cfg(target_os = "windows")]
-        wgpu_device: Option<Arc<wgpu::Device>>,
+        #[cfg(target_os = "windows")] wgpu_device: Option<Arc<wgpu::Device>>,
     ) -> Result<Self> {
         let path = video.path();
 
@@ -418,9 +424,15 @@ struct VideoMetadata {
 fn spawn_video_stream(
     path: PathBuf,
     loop_video: bool,
-    #[cfg(target_os = "windows")]
-    wgpu_device: Option<Arc<wgpu::Device>>,
-) -> Result<(Receiver<Option<VideoFrame>>, Duration, u32, u32, bool, VideoPixelFormat)> {
+    #[cfg(target_os = "windows")] wgpu_device: Option<Arc<wgpu::Device>>,
+) -> Result<(
+    Receiver<Option<VideoFrame>>,
+    Duration,
+    u32,
+    u32,
+    bool,
+    VideoPixelFormat,
+)> {
     let (tx, rx) = sync_channel(2);
     let (meta_tx, meta_rx) = sync_channel(1);
     let (recycle_tx, recycle_rx) = sync_channel::<Video>(5);
@@ -453,7 +465,14 @@ fn spawn_video_stream(
         .recv()
         .context("Failed to receive video metadata from spawn thread")?;
 
-    Ok((rx, meta.duration, meta.native_width, meta.native_height, meta.full_range, meta.pixel_format))
+    Ok((
+        rx,
+        meta.duration,
+        meta.native_width,
+        meta.native_height,
+        meta.full_range,
+        meta.pixel_format,
+    ))
 }
 
 // New helper function to get video duration
@@ -472,7 +491,6 @@ fn get_video_duration(path: &PathBuf) -> Result<Duration> {
 /// Returns `Err(())` if the frame should be skipped (transfer error).
 fn hw_frame_to_video_frame(
     decoded: &mut Video,
-    recycle_rx: &Receiver<Video>,
     recycle_tx: &SyncSender<Video>,
     pts: Duration,
 ) -> Result<VideoFrame, ()> {
@@ -489,9 +507,10 @@ fn hw_frame_to_video_frame(
                 ffi::AV_HWFRAME_MAP_READ as i32,
             )
         };
-        if ret >= 0 && unsafe { (*drm.as_ptr()).format } == ffi::AVPixelFormat::AV_PIX_FMT_DRM_PRIME as i32 {
-            let next = recycle_rx.try_recv().unwrap_or_else(|_| Video::empty());
-            *decoded = next;
+        if ret >= 0
+            && unsafe { (*drm.as_ptr()).format } == ffi::AVPixelFormat::AV_PIX_FMT_DRM_PRIME as i32
+        {
+            *decoded = Video::empty();
             return Ok(VideoFrame {
                 frame: Video::empty(),
                 drm_prime: Some(Arc::new(DrmPrimeFrame { frame: drm })),
@@ -509,8 +528,7 @@ fn hw_frame_to_video_frame(
         let pixel_buf = unsafe { (*decoded.as_ptr()).data[3] } as *const std::ffi::c_void;
         if !pixel_buf.is_null() {
             unsafe { CVPixelBufferRetain(pixel_buf) };
-            let next = recycle_rx.try_recv().unwrap_or_else(|_| Video::empty());
-            *decoded = next;
+            *decoded = Video::empty();
             return Ok(VideoFrame {
                 frame: Video::empty(),
                 vtb_frame: Some(Arc::new(VtbFrame { pixel_buf })),
@@ -524,21 +542,15 @@ fn hw_frame_to_video_frame(
     #[cfg(target_os = "windows")]
     {
         // D3D12VA: data[0] is a pointer to AVD3D12VAFrame containing the texture + fence.
-        let d3d12_frame_ptr = unsafe { (*decoded.as_ptr()).data[0] } as *const crate::d3d12_import::AvD3d12VaFrame;
+        let d3d12_frame_ptr =
+            unsafe { (*decoded.as_ptr()).data[0] } as *const crate::d3d12_import::AvD3d12VaFrame;
         if !d3d12_frame_ptr.is_null() {
             let (texture_raw, index, fence_raw, fence_value) = unsafe {
                 let f = &*d3d12_frame_ptr;
-                let (fence_raw, fence_value) = if !f.sync_ctx.is_null() {
-                    ((*f.sync_ctx).fence, (*f.sync_ctx).fence_value)
-                } else {
-                    (std::ptr::null_mut(), 0u64)
-                };
-                (f.texture, f.index, fence_raw, fence_value)
+                (f.texture, f.subresource_index as u32, f.sync_ctx.fence, f.sync_ctx.fence_value)
             };
             if !texture_raw.is_null() {
-                // Swap decoded frame out so ffmpeg can reuse the buffer slot.
-                let next = recycle_rx.try_recv().unwrap_or_else(|_| Video::empty());
-                let d3d12_holding_frame = std::mem::replace(decoded, next);
+                let d3d12_holding_frame = std::mem::take(decoded);
                 return Ok(VideoFrame {
                     frame: Video::empty(),
                     d3d12va_frame: Some(Arc::new(D3d12Frame {
@@ -584,8 +596,7 @@ fn decode_video(
     meta_tx: SyncSender<VideoMetadata>,
     recycle_rx: Receiver<Video>,
     recycle_tx: SyncSender<Video>,
-    #[cfg(target_os = "windows")]
-    wgpu_device: Option<Arc<wgpu::Device>>,
+    #[cfg(target_os = "windows")] wgpu_device: Option<Arc<wgpu::Device>>,
 ) -> Result<()> {
     ffmpeg::init()?;
     let mut ictx = format::input(&path)?;
@@ -678,7 +689,6 @@ fn decode_video(
                         if unsafe { (*decoded.as_ptr()).format } == hw_fmt as i32 {
                             hw_frame_to_video_frame(
                                 &mut decoded,
-                                &recycle_rx,
                                 &recycle_tx,
                                 pts_duration + current_loop_offset,
                             )
@@ -738,7 +748,6 @@ fn decode_video(
                 if unsafe { (*decoded.as_ptr()).format } == hw_fmt as i32 {
                     hw_frame_to_video_frame(
                         &mut decoded,
-                        &recycle_rx,
                         &recycle_tx,
                         pts_duration + current_loop_offset,
                     )
@@ -798,4 +807,3 @@ fn decode_video(
 
     Ok(())
 }
-
