@@ -11,18 +11,22 @@ use shared::pack_config::Metadata;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
+use crate::encode::HardwareEncoder;
+
 pub type PackState = Arc<Mutex<Option<MediaPack>>>;
 
 pub struct AppState {
     pub pack: PackState,
     pub media_port: std::sync::OnceLock<u16>,
+    pub hardware_encoder: HardwareEncoder,
 }
 
 impl AppState {
-    fn new() -> Self {
+    fn new(hardware_encoder: HardwareEncoder) -> Self {
         Self {
             pack: Arc::new(Mutex::new(None)),
             media_port: std::sync::OnceLock::new(),
+            hardware_encoder,
         }
     }
 }
@@ -375,7 +379,7 @@ async fn add_files_dialog(
     }
 
     let pack_state = state.pack.clone();
-    tauri::async_runtime::spawn(encode::process_files(pack_state, paths, skip_duplicates, app));
+    tauri::async_runtime::spawn(encode::process_files(pack_state, paths, skip_duplicates, app, state.hardware_encoder.clone()));
     Ok(())
 }
 
@@ -406,7 +410,7 @@ async fn add_folder_dialog(
     }
 
     let pack_state = state.pack.clone();
-    tauri::async_runtime::spawn(encode::process_files(pack_state, paths, skip_duplicates, app));
+    tauri::async_runtime::spawn(encode::process_files(pack_state, paths, skip_duplicates, app, state.hardware_encoder.clone()));
     Ok(())
 }
 
@@ -421,10 +425,12 @@ fn get_media_port(state: State<'_, AppState>) -> u16 {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let hardware_encoder = HardwareEncoder::detect_and_test();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::new())
+        .manage(AppState::new(hardware_encoder))
         .setup(|app| {
             let state = app.state::<AppState>();
             let pack = state.pack.clone();

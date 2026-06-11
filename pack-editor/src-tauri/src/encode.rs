@@ -1,8 +1,8 @@
 use std::{
     fs::File,
-    io::{self, Read},
+    io::{self, BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::OnceLock,
     thread::available_parallelism,
 };
@@ -19,7 +19,7 @@ fn new_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
     cmd
 }
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use futures::{stream, StreamExt};
 use infer::MatcherType;
 use shared::encode::FileInfo;
@@ -45,6 +45,99 @@ pub enum ProcessErrorKind {
     PackError(anyhow::Error),
     HashError(io::Error),
     Other(anyhow::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HardwareEncoder {
+    Nvidia,
+    Amd,
+    Intel,
+    Apple,
+    SoftwareFallback,
+}
+
+impl HardwareEncoder {
+    pub fn detect_and_test() -> Self {
+        Self::detect().test()
+    }
+
+    fn detect() -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(output) = new_command("powershell")
+                .args(["-Command", "(Get-CimInstance Win32_VideoController).Name"])
+                .output()
+            {
+                let gpu_name = String::from_utf8_lossy(&output.stdout).to_lowercase();
+                if gpu_name.contains("nvidia") {
+                    return Self::Nvidia;
+                }
+                if gpu_name.contains("amd") || gpu_name.contains("radeon") {
+                    return Self::Amd;
+                }
+                if gpu_name.contains("intel") {
+                    return Self::Intel;
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            return Self::Apple;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(output) = new_command("lspci").output() {
+                let pci_info = String::from_utf8_lossy(&output.stdout).to_lowercase();
+                if pci_info.contains("nvidia") {
+                    return Self::Nvidia;
+                }
+                if pci_info.contains("amd") || pci_info.contains("radeon") {
+                    return Self::Amd;
+                }
+                if pci_info.contains("intel") {
+                    return Self::Intel;
+                }
+            }
+        }
+
+        // If all checks fail, fallback to safe CPU encoding
+        Self::SoftwareFallback
+    }
+
+    pub fn ffmpeg_args(&self) -> &[&'static str] {
+        match self {
+            Self::Nvidia => &["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"],
+            Self::Apple => &["-c:v", "h264_videotoolbox", "-q:v", "60"],
+            Self::Intel => &["-c:v", "h264_qsv", "-global_quality", "23"],
+            Self::Amd => &["-c:v", "h264_amf", "-quality", "quality"],
+            Self::SoftwareFallback => &["-c:v", "libx264", "-crf", "23"],
+        }
+    }
+
+    pub fn test(self) -> Self {
+        if self != Self::SoftwareFallback {
+            if new_command(get_ffmpeg_path())
+                .args([
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=128x128",
+                    "-vframes",
+                    "1",
+                ])
+                .args(self.ffmpeg_args())
+                .args(["-f", "null", "-"])
+                .status()
+                .is_ok_and(|status| status.success())
+            {
+                return self;
+            }
+        }
+
+        Self::SoftwareFallback
+    }
 }
 
 impl std::fmt::Display for ProcessErrorKind {
@@ -261,7 +354,11 @@ fn file_info(path: &Path) -> Result<Option<FileInfo>> {
     Ok(parse_media_info(json))
 }
 
-pub fn encode_file(input: &Path, output: &Path) -> Result<Option<EncodedFile>> {
+pub fn encode_file(
+    input: &Path,
+    output: &Path,
+    encoder: HardwareEncoder,
+) -> Result<Option<EncodedFile>> {
     let info = match file_info(input)? {
         Some(x) => x,
         None => return Ok(None),
@@ -276,12 +373,12 @@ pub fn encode_file(input: &Path, output: &Path) -> Result<Option<EncodedFile>> {
     let mut thumbnail = None;
     let info = match info {
         FileInfo::Image { width, height, .. } => {
-            let (thumb, w, h) = encode_image(input, &output, width, height)?;
+            let (thumb, w, h, transparent) = encode_image(input, &output, width, height)?;
             thumbnail = Some(thumb);
             FileInfo::Image {
                 width: w,
                 height: h,
-                transparent: false,
+                transparent,
             }
         }
         FileInfo::Video {
@@ -289,14 +386,17 @@ pub fn encode_file(input: &Path, output: &Path) -> Result<Option<EncodedFile>> {
             height,
             duration,
             audio,
+            ..
         } => {
-            let (thumb, w, h) = encode_video(input, &output, width, height, audio, false)?;
+            let (thumb, w, h, transparent) =
+                encode_video(input, &output, width, height, audio, encoder, false)?;
             thumbnail = Some(thumb);
             FileInfo::Video {
                 width: w,
                 height: h,
                 duration,
                 audio,
+                transparent,
             }
         }
         FileInfo::Audio { .. } => {
@@ -317,53 +417,80 @@ fn encode_image(
     output: &Path,
     width: u64,
     height: u64,
-) -> Result<(Vec<u8>, u64, u64)> {
+) -> Result<(Vec<u8>, u64, u64, bool)> {
     let (width, height) = resize_dimensions(width, height, 2560, true);
 
     let thumb_temp = NamedTempFile::new()?;
     let thumb_path = thumb_temp.path();
 
     let filter = format!(
-        "[0:v]scale=w='{width}':h='{height}',format=yuv420p[main]; \
-         [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]"
+        "[0:v]scale=w='{width}':h='{height}',format=yuva420p[main]; \
+         [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]; \
+         [0:v]alphaextract,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YMIN[alpha]"
     );
 
-    let result = new_command(get_ffmpeg_path())
+    let mut cmd = new_command(get_ffmpeg_path());
+    cmd.arg("-y")
         .arg("-i")
         .arg(input)
         .arg("-filter_complex")
-        .arg(filter)
-        .arg("-map")
-        .arg("[main]")
-        .args([
-            "-y",
-            "-c:v",
-            "libaom-av1",
-            "-cpu-used",
-            "6",
-            "-crf",
-            "32",
-            "-b:v",
-            "0",
-            "-still-picture",
-            "1",
-            "-f",
-            "avif",
-        ])
-        .arg(output)
-        .arg("-map")
-        .arg("[thumb]")
-        .args(["-frames:v", "1", "-f", "webp"])
-        .arg(thumb_path)
-        .output()?;
+        .arg(&filter);
 
-    if !result.status.success() {
+    cmd.args([
+        "-map",
+        "[main]",
+        "-c:v",
+        "libaom-av1",
+        "-cpu-used",
+        "6",
+        "-crf",
+        "32",
+        "-b:v",
+        "0",
+        "-still-picture",
+        "1",
+        "-f",
+        "avif",
+    ])
+    .arg(output);
+
+    cmd.args(["-map", "[thumb]", "-frames:v", "1", "-f", "webp"])
+        .arg(thumb_path);
+
+    cmd.args(["-map", "[alpha]", "-f", "null", "-"]);
+
+    let mut child = cmd.stderr(Stdio::piped()).spawn()?;
+    let stderr = child.stderr.take().context("Failed to take stderr")?;
+    let reader = BufReader::new(stderr);
+
+    let mut transparent = false;
+    let mut stderr_buf = String::new();
+    for line in reader.lines() {
+        let line = line?;
+        stderr_buf.push_str(&line);
+        stderr_buf.push('\n');
+
+        if line.contains("lavfi.signalstats.YMIN=") {
+            if let Some(val_str) = line.split('=').last() {
+                if let Ok(y_min) = val_str.trim().parse::<u32>() {
+                    if y_min < 255 {
+                        transparent = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let result = child.wait()?;
+
+    if !result.success() {
+        eprintln!("{stderr_buf}");
         bail!("ffmpeg failed for {}", input.display());
     }
 
     let mut thumbnail = Vec::new();
     File::open(thumb_path)?.read_to_end(&mut thumbnail)?;
-    Ok((thumbnail, width, height))
+    Ok((thumbnail, width, height, transparent))
 }
 
 fn encode_video(
@@ -372,8 +499,9 @@ fn encode_video(
     width: u64,
     height: u64,
     audio: bool,
+    encoder: HardwareEncoder,
     fixed_fps: bool,
-) -> Result<(Vec<u8>, u64, u64)> {
+) -> Result<(Vec<u8>, u64, u64, bool)> {
     let (width, height) = resize_dimensions(width, height, 1280, true);
 
     let thumb_temp = NamedTempFile::new()?;
@@ -381,73 +509,183 @@ fn encode_video(
 
     let filter = format!(
         "[0:v]scale=w='{width}':h='{height}',format=yuv420p[main]; \
-         [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]"
+         [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]; \
+         [0:v]alphaextract,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YMIN[alpha]"
     );
 
     let mut cmd = new_command(get_ffmpeg_path());
-    cmd.arg("-i")
+    cmd.arg("-y")
+        .arg("-i")
         .arg(input)
         .arg("-filter_complex")
-        .arg(filter)
-        .arg("-map")
-        .arg("[main]");
+        .arg(filter);
 
+    cmd.args(["-map", "[main]"]);
     if audio {
         cmd.args(["-map", "0:a?", "-c:a", "libopus", "-b:a", "64k"]);
     } else {
         cmd.arg("-an");
     }
 
-    cmd.args([
-        "-y",
-        "-crf",
-        "23",
-        "-c:v",
-        "libx264",
-        "-f",
-        "mp4",
-    ]);
+    cmd.args(encoder.ffmpeg_args()).args(["-f", "mp4"]);
 
     if fixed_fps {
         cmd.arg("-r").arg("30");
     }
 
-    cmd.arg(output)
-        .arg("-map")
-        .arg("[thumb]")
-        .args(["-frames:v", "1", "-f", "webp"])
+    cmd.arg(output);
+
+    cmd.args(["-map", "[thumb]", "-frames:v", "1", "-f", "webp"])
         .arg(thumb_path);
 
-    let result = cmd.output()?;
+    cmd.args(["-map", "[alpha]", "-f", "null", "-"]);
 
-    if !result.status.success() {
-        eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+    let mut child = cmd.stderr(Stdio::piped()).spawn()?;
+    let stderr = child.stderr.take().context("Failed to take stderr")?;
+    let reader = BufReader::new(stderr);
 
+    let mut stderr_buf = String::new();
+    for line in reader.lines() {
+        let line = line?;
+        stderr_buf.push_str(&line);
+        stderr_buf.push('\n');
+
+        if line.contains("lavfi.signalstats.YMIN=") {
+            if let Some(val_str) = line.split('=').last() {
+                if let Ok(y_min) = val_str.trim().parse::<u32>() {
+                    if y_min < 255 {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return encode_video_with_transparency(
+                            input, output, width, height, audio, false,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let result = child.wait()?;
+
+    if !result.success() {
         if !fixed_fps {
-            if let Ok(r) = encode_video(input, output, width, height, audio, true) {
+            eprintln!("Encoding with non-fixed FPS failed; trying fixed FPS");
+
+            if let Ok(r) = encode_video(
+                input,
+                output,
+                width,
+                height,
+                audio,
+                HardwareEncoder::SoftwareFallback,
+                true,
+            ) {
                 return Ok(r);
             }
         }
+
+        eprintln!("{stderr_buf}");
+        bail!("ffmpeg failed for {}", input.display());
+    }
+
+    let mut thumbnail = Vec::new();
+    File::open(thumb_path)?.read_to_end(&mut thumbnail)?;
+    Ok((thumbnail, width, height, false))
+}
+
+fn encode_video_with_transparency(
+    input: &Path,
+    output: &Path,
+    width: u64,
+    height: u64,
+    audio: bool,
+    fixed_fps: bool,
+) -> anyhow::Result<(Vec<u8>, u64, u64, bool)> {
+    let (width, height) = resize_dimensions(width, height, 1280, true);
+
+    let thumb_temp = NamedTempFile::new()?;
+    let thumb_path = thumb_temp.path();
+
+    let mut command = new_command(get_ffmpeg_path());
+
+    let filter = format!(
+        "[0:v]scale=w='{width}':h='{height}'[main],format=yuva420p[main]; \
+         [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]"
+    );
+
+    command
+        .arg("-y")
+        .arg("-i")
+        .arg(input)
+        .arg("-filter_complex")
+        .arg(filter);
+
+    command.arg("-map").arg("[main]");
+
+    if audio {
+        command.args(["-map", "0:a?", "-c:a", "libopus", "-b:a", "64k"]);
+    } else {
+        command.arg("-an");
+    }
+
+    command.args([
+        "-c:v",
+        "libsvtav1",
+        "-preset",
+        "8",
+        "-svtav1-params",
+        "fast-decode=1",
+    ]);
+
+    if fixed_fps {
+        command.arg("-r").arg("30");
+    }
+
+    command
+        .arg(output)
+        .args(["-map", "[thumb]", "-frames:v", "1", "-f", "webp"])
+        .arg(thumb_path);
+
+    let result = command.output()?;
+
+    if !result.status.success() {
+        if !fixed_fps {
+            eprintln!("Encoding with non-fixed FPS failed; trying fixed FPS");
+
+            if let Ok(res) =
+                encode_video_with_transparency(input, output, width, height, audio, true)
+            {
+                return Ok(res);
+            }
+        }
+
+        eprintln!("{}", String::from_utf8_lossy(&result.stderr));
 
         bail!("ffmpeg failed for {}", input.display());
     }
 
     let mut thumbnail = Vec::new();
     File::open(thumb_path)?.read_to_end(&mut thumbnail)?;
-    Ok((thumbnail, width, height))
+
+    Ok((thumbnail, width, height, true))
 }
 
 fn encode_audio(input: &Path, output: &Path) -> Result<()> {
-    let status = new_command(get_ffmpeg_path())
+    let mut command = new_command(get_ffmpeg_path());
+    command
+        .arg("-y")
         .arg("-i")
         .arg(input)
-        .args(["-y", "-c:a", "libopus", "-b:a", "64k"])
-        .arg(output)
-        .status()?;
+        .args(["-c:a", "libopus", "-b:a", "64k"])
+        .arg(output);
 
-    if !status.success() {
+    let output = command.output()?;
+
+    if !output.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
         bail!("ffmpeg failed for {}", input.display());
     }
+
     Ok(())
 }
 
@@ -484,6 +722,7 @@ fn parse_media_info(json: serde_json::Value) -> Option<FileInfo> {
                     height: height?,
                     duration: duration?,
                     audio: has_audio,
+                    transparent: false,
                 }
             } else {
                 let transparent = vs.get("pix_fmt")?.as_str()?.contains('a');
@@ -529,6 +768,7 @@ pub async fn process_files(
     paths: Vec<PathBuf>,
     skip_duplicates: bool,
     app: tauri::AppHandle,
+    encoder: HardwareEncoder,
 ) {
     let dir = {
         let lock = pack_state.lock().await;
@@ -545,9 +785,10 @@ pub async fn process_files(
             let pack_state = pack_state.clone();
             let app = app.clone();
             let dir = dir.clone();
+            let encoder = encoder.clone();
             async move {
                 let _ = app.emit("upload:processing", path.to_string_lossy().as_ref());
-                match process_one_file(&pack_state, &path, &dir, skip_duplicates).await {
+                match process_one_file(&pack_state, &path, &dir, skip_duplicates, encoder).await {
                     Ok(Some(media_file)) => {
                         let _ = app.emit("upload:added", &media_file);
                     }
@@ -578,6 +819,7 @@ async fn process_one_file(
     path: &Path,
     dir: &Path,
     skip_duplicates: bool,
+    encoder: HardwareEncoder,
 ) -> Result<Option<MediaFile>, ProcessErrorKind> {
     let path_owned = path.to_path_buf();
     let hash = tokio::task::spawn_blocking(move || hash_file(&path_owned))
@@ -609,7 +851,7 @@ async fn process_one_file(
 
     let (tx, rx) = oneshot::channel();
     rayon::spawn(move || {
-        let _ = tx.send(encode_file(&path_owned, &output_path));
+        let _ = tx.send(encode_file(&path_owned, &output_path, encoder));
     });
 
     let encoded = rx

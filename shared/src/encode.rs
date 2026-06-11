@@ -21,6 +21,7 @@ pub enum FileInfo {
         height: u64,
         duration: f64,
         audio: bool,
+        transparent: bool,
     },
     #[serde(rename = "audio")]
     Audio { duration: f64 },
@@ -107,13 +108,14 @@ impl FileInfo {
                 height,
                 duration,
                 audio,
+                transparent,
             } => FileInfoParts {
                 file_type: FileType::Video,
                 width: Some(*width),
                 height: Some(*height),
                 duration: Some(*duration),
                 audio: Some(*audio),
-                transparent: None,
+                transparent: Some(*transparent),
             },
             FileInfo::Audio { duration } => FileInfoParts {
                 file_type: FileType::Audio,
@@ -142,6 +144,7 @@ impl FileInfo {
                 height: value.height?,
                 duration: value.duration?,
                 audio: value.audio?,
+                transparent: value.transparent?,
             },
             FileType::Audio => FileInfo::Audio {
                 duration: value.duration?,
@@ -170,139 +173,139 @@ pub fn is_media(ffprobe_command: impl Fn() -> Command, path: &Path) -> Result<bo
     Ok(streams > 0)
 }
 
-fn file_info(ffprobe_command: impl Fn() -> Command, path: &Path) -> Result<Option<FileInfo>> {
-    #[rustfmt::skip]
-    let args = [
-        "-v", "error",
-        "-count_packets",
-        "-show_entries",
-        "stream=codec_type,nb_read_packets,width,height,pix_fmt:format=duration",
-        "-output_format", "json",
-    ];
+// fn file_info(ffprobe_command: impl Fn() -> Command, path: &Path) -> Result<Option<FileInfo>> {
+//     #[rustfmt::skip]
+//     let args = [
+//         "-v", "error",
+//         "-count_packets",
+//         "-show_entries",
+//         "stream=codec_type,nb_read_packets,width,height,pix_fmt:format=duration",
+//         "-output_format", "json",
+//     ];
+//
+//     let output = ffprobe_command().args(args).arg(path).output()?;
+//
+//     if !output.status.success() {
+//         println!("{}", String::from_utf8_lossy(&output.stderr));
+//         return Ok(None);
+//     }
+//
+//     let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+//
+//     Ok(parse_media_info(json))
+// }
 
-    let output = ffprobe_command().args(args).arg(path).output()?;
+// pub fn encode_file(
+//     ffmpeg_command: impl Fn() -> Command,
+//     ffprobe_command: impl Fn() -> Command,
+//     input: &Path,
+//     output: &Path,
+// ) -> Result<Option<(FileInfo, PathBuf)>> {
+//     let file_info = match file_info(ffprobe_command, input)? {
+//         Some(x) => x,
+//         None => return Ok(None),
+//     };
+//
+//     let output = match file_info {
+//         FileInfo::Image { .. } => output.with_extension("avif"),
+//         FileInfo::Video { .. } => output.with_extension("webm"),
+//         FileInfo::Audio { .. } => output.with_extension("opus"),
+//     };
+//
+//     let file_info = match file_info {
+//         FileInfo::Image { width, height, transparent: false } => {
+//             let (width, height) = encode_image(ffmpeg_command, input, &output, width, height)?;
+//
+//             FileInfo::Image { width, height, transparent: false }
+//         }
+//         FileInfo::Image { width, height, transparent: true } => {
+//             let (width, height) = encode_image_transparent(ffmpeg_command, input, &output, width, height)?;
+//
+//             FileInfo::Image { width, height, transparent: true }
+//         }
+//         FileInfo::Video {
+//             width,
+//             height,
+//             duration,
+//             audio,
+//         } => {
+//             let (width, height) =
+//                 encode_video(ffmpeg_command, input, &output, width, height, audio, false)?;
+//
+//             FileInfo::Video {
+//                 width,
+//                 height,
+//                 duration,
+//                 audio,
+//             }
+//         }
+//         FileInfo::Audio { .. } => {
+//             encode_audio(ffmpeg_command, input, &output)?;
+//             file_info
+//         }
+//     };
+//
+//     Ok(Some((file_info, output)))
+// }
 
-    if !output.status.success() {
-        println!("{}", String::from_utf8_lossy(&output.stderr));
-        return Ok(None);
-    }
-
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-
-    Ok(parse_media_info(json))
-}
-
-pub fn encode_file(
-    ffmpeg_command: impl Fn() -> Command,
-    ffprobe_command: impl Fn() -> Command,
-    input: &Path,
-    output: &Path,
-) -> Result<Option<(FileInfo, PathBuf)>> {
-    let file_info = match file_info(ffprobe_command, input)? {
-        Some(x) => x,
-        None => return Ok(None),
-    };
-
-    let output = match file_info {
-        FileInfo::Image { .. } => output.with_extension("avif"),
-        FileInfo::Video { .. } => output.with_extension("webm"),
-        FileInfo::Audio { .. } => output.with_extension("opus"),
-    };
-
-    let file_info = match file_info {
-        FileInfo::Image { width, height, transparent: false } => {
-            let (width, height) = encode_image(ffmpeg_command, input, &output, width, height)?;
-
-            FileInfo::Image { width, height, transparent: false }
-        }
-        FileInfo::Image { width, height, transparent: true } => {
-            let (width, height) = encode_image_transparent(ffmpeg_command, input, &output, width, height)?;
-
-            FileInfo::Image { width, height, transparent: true }
-        }
-        FileInfo::Video {
-            width,
-            height,
-            duration,
-            audio,
-        } => {
-            let (width, height) =
-                encode_video(ffmpeg_command, input, &output, width, height, audio, false)?;
-
-            FileInfo::Video {
-                width,
-                height,
-                duration,
-                audio,
-            }
-        }
-        FileInfo::Audio { .. } => {
-            encode_audio(ffmpeg_command, input, &output)?;
-            file_info
-        }
-    };
-
-    Ok(Some((file_info, output)))
-}
-
-fn parse_media_info(json: serde_json::Value) -> Option<FileInfo> {
-    let streams = json.get("streams")?.as_array()?;
-
-    let video_stream = streams
-        .iter()
-        .find(|stream| stream.get("codec_type").and_then(|x| x.as_str()) == Some("video"));
-
-    let has_audio = streams
-        .iter()
-        .any(|stream| stream.get("codec_type").and_then(|x| x.as_str()) == Some("audio"));
-
-    let width = video_stream
-        .and_then(|stream| stream.get("width"))
-        .and_then(|x| x.as_number())
-        .and_then(|x| x.as_u64());
-
-    let height = video_stream
-        .and_then(|stream| stream.get("height"))
-        .and_then(|x| x.as_number())
-        .and_then(|x| x.as_u64());
-
-    let duration = json
-        .get("format")?
-        .get("duration")
-        .and_then(|x| x.as_str())
-        .and_then(|x| x.parse().ok());
-
-    Some(match video_stream {
-        Some(video_stream) => {
-            if has_audio
-                || video_stream
-                    .get("nb_read_packets")?
-                    .as_str()
-                    .and_then(|x| x.parse().ok())
-                    != Some(1)
-            {
-                FileInfo::Video {
-                    width: width?,
-                    height: height?,
-                    duration: duration?,
-                    audio: has_audio,
-                }
-            } else {
-                let transparent = video_stream.get("pix_fmt")?.as_str()?.contains("a");
-
-                FileInfo::Image {
-                    width: width?,
-                    height: height?,
-                    transparent,
-                }
-            }
-        }
-        None if has_audio => FileInfo::Audio {
-            duration: duration?,
-        },
-        None => return None,
-    })
-}
+// fn parse_media_info(json: serde_json::Value) -> Option<FileInfo> {
+//     let streams = json.get("streams")?.as_array()?;
+//
+//     let video_stream = streams
+//         .iter()
+//         .find(|stream| stream.get("codec_type").and_then(|x| x.as_str()) == Some("video"));
+//
+//     let has_audio = streams
+//         .iter()
+//         .any(|stream| stream.get("codec_type").and_then(|x| x.as_str()) == Some("audio"));
+//
+//     let width = video_stream
+//         .and_then(|stream| stream.get("width"))
+//         .and_then(|x| x.as_number())
+//         .and_then(|x| x.as_u64());
+//
+//     let height = video_stream
+//         .and_then(|stream| stream.get("height"))
+//         .and_then(|x| x.as_number())
+//         .and_then(|x| x.as_u64());
+//
+//     let duration = json
+//         .get("format")?
+//         .get("duration")
+//         .and_then(|x| x.as_str())
+//         .and_then(|x| x.parse().ok());
+//
+//     Some(match video_stream {
+//         Some(video_stream) => {
+//             if has_audio
+//                 || video_stream
+//                     .get("nb_read_packets")?
+//                     .as_str()
+//                     .and_then(|x| x.parse().ok())
+//                     != Some(1)
+//             {
+//                 FileInfo::Video {
+//                     width: width?,
+//                     height: height?,
+//                     duration: duration?,
+//                     audio: has_audio,
+//                 }
+//             } else {
+//                 let transparent = video_stream.get("pix_fmt")?.as_str()?.contains("a");
+//
+//                 FileInfo::Image {
+//                     width: width?,
+//                     height: height?,
+//                     transparent,
+//                 }
+//             }
+//         }
+//         None if has_audio => FileInfo::Audio {
+//             duration: duration?,
+//         },
+//         None => return None,
+//     })
+// }
 
 fn encode_image(
     ffmpeg_command: impl Fn() -> Command,
