@@ -7,7 +7,7 @@ use crate::{
     app::UserEvent, audio::AudioPlayer, error::{LewdwareError, Result}, lua::{
         WindowProps,
         api::{Notification, SpawnWindowOpts, WallpaperMode},
-        window::{ChoiceWindowOption, MoveOpts},
+        window::{ChoiceWindowOption, MoveOpts, FadeOpts},
     }, media::{FileOrPath, ImageData}, monitor::Monitor, video::VideoDecoder
 };
 
@@ -225,6 +225,16 @@ impl WindowRequestSender {
         .flatten()
     }
 
+    pub async fn fade_window(&self, fade_id: u64, opts: FadeOpts) -> Result<()> {
+        self.send(|tx| WindowAction::Fade {
+            id: fade_id,
+            tx,
+            opts,
+        })
+        .await
+        .flatten()
+    }
+
     pub async fn pause_video(&self) -> Result<()> {
         self.send(|tx| WindowAction::PauseVideo { tx })
             .await
@@ -261,8 +271,11 @@ impl WindowRequestSender {
     }
 
     pub async fn set_title(&self, title: Option<String>) -> Result<()> {
-        self.send(|tx| WindowAction::SetTitle { tx, title })
-            .await
+        self.send(|tx| WindowAction::SetTitle { tx, title }).await
+    }
+
+    pub async fn set_opacity(&self, opacity: f32) -> Result<()> {
+        self.send(|tx| WindowAction::SetOpacity { tx, opacity }).await
     }
 }
 
@@ -423,6 +436,11 @@ pub enum WindowAction {
         tx: oneshot::Sender<Result<()>>,
         opts: MoveOpts,
     },
+    Fade {
+        id: u64,
+        tx: oneshot::Sender<Result<()>>,
+        opts: FadeOpts,
+    },
     SetText {
         tx: oneshot::Sender<Result<()>>,
         text: Option<String>,
@@ -442,6 +460,10 @@ pub enum WindowAction {
     SetTitle {
         tx: oneshot::Sender<()>,
         title: Option<String>,
+    },
+    SetOpacity {
+        tx: oneshot::Sender<()>,
+        opacity: f32,
     }
 }
 

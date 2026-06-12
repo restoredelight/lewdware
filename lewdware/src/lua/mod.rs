@@ -32,7 +32,7 @@ use crate::{
 pub use api::{Anchor, Coord, Notification, SpawnWindowOpts, WallpaperMode};
 pub use media::{Media, MediaData, MediaType};
 pub use request::{AudioAction, LuaRequest, WindowAction};
-pub use window::{ChoiceWindowOption, Easing, MoveOpts};
+pub use window::{ChoiceWindowOption, Easing, MoveOpts, FadeOpts};
 
 pub enum Event {
     WindowClosed { id: WindowId },
@@ -41,6 +41,7 @@ pub enum Event {
     AudioFinish { id: u64 },
     PromptSubmit { id: WindowId, text: String },
     ChoiceSelect { id: WindowId, option_id: String },
+    FadeFinish { id: WindowId, fade_id: u64 },
 }
 
 #[derive(Debug, Clone)]
@@ -305,6 +306,11 @@ impl LuaRuntime {
             Event::MoveFinish { id, move_id } => {
                 if let Some(window) = self.windows.borrow().get(&id).cloned() {
                     window.inner_window().on_move_finished(move_id);
+                }
+            }
+            Event::FadeFinish { id, fade_id } => {
+                if let Some(window) = self.windows.borrow().get(&id).cloned() {
+                    window.inner_window().on_fade_finished(fade_id);
                 }
             }
             Event::VideoFinish { id } => {

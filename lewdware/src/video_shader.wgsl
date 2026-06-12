@@ -28,6 +28,11 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 @group(0) @binding(2) var t_cr: texture_2d<f32>;
 @group(0) @binding(3) var s_yuv: sampler;
 
+struct WindowOptions {
+    opacity: f32,
+}
+@group(1) @binding(0) var<uniform> options: WindowOptions;
+
 // Undo sRGB/BT.709 gamma so the sRGB surface can re-apply it correctly.
 fn gamma_decode(c: f32) -> f32 {
     if c <= 0.04045 {
@@ -55,7 +60,7 @@ fn fs_yuv_limited(in: VertexOutput) -> @location(0) vec4<f32> {
         gamma_decode(clamp(r, 0.0, 1.0)),
         gamma_decode(clamp(g, 0.0, 1.0)),
         gamma_decode(clamp(b, 0.0, 1.0)),
-        1.0,
+        options.opacity,
     );
 }
 
@@ -78,6 +83,6 @@ fn fs_yuv_full(in: VertexOutput) -> @location(0) vec4<f32> {
         gamma_decode(clamp(r, 0.0, 1.0)),
         gamma_decode(clamp(g, 0.0, 1.0)),
         gamma_decode(clamp(b, 0.0, 1.0)),
-        1.0,
+        options.opacity,
     );
 }

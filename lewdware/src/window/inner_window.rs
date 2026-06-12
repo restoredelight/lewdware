@@ -12,7 +12,7 @@ use winit::window::Window;
 
 use crate::wgpu::WgpuState;
 use crate::error::{LewdwareError, MonitorError};
-use crate::lua::{self, Coord, Easing, MoveOpts};
+use crate::lua::{self, Coord, Easing, MoveOpts, FadeOpts};
 use crate::video::{VideoFrame, VideoPixelFormat};
 use crate::window::header::HEADER_HEIGHT;
 use crate::window::surface::Buffer;
@@ -32,12 +32,23 @@ pub struct InnerWindow<'a> {
     current_move: Option<Move>,
     wgpu_state: Arc<WgpuState>,
     transparent: bool,
+    current_fade: Option<Fade>,
+    opacity: f32,
 }
 
 struct Move {
     id: u64,
     from: LogicalPosition<u32>,
     to: LogicalPosition<u32>,
+    duration: Duration,
+    start: Instant,
+    easing: Easing,
+}
+
+struct Fade {
+    id: u64,
+    from: f32,
+    to: f32,
     duration: Duration,
     start: Instant,
     easing: Easing,
@@ -52,6 +63,7 @@ impl<'a> InnerWindow<'a> {
         closeable: bool,
         gpu: bool,
         transparent: bool,
+        opacity: Option<f32>,
         position: LogicalPosition<u32>,
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     ) -> Result<Self> {
@@ -133,12 +145,33 @@ impl<'a> InnerWindow<'a> {
                     ],
                 });
 
+            use wgpu::util::DeviceExt;
+            let opacity_val = opacity.unwrap_or(1.0);
+            let opacity_buffer = wgpu_state.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Opacity Buffer"),
+                contents: bytemuck::cast_slice(&[opacity_val]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+            let window_bind_group = wgpu_state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Window Bind Group"),
+                layout: &wgpu_state.window_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: opacity_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+
             Surface::Wgpu {
                 surface,
                 surface_config,
                 frame_buffer,
                 texture,
                 bind_group,
+                opacity_buffer,
+                window_bind_group,
                 video_renderer: None,
             }
         } else {
@@ -174,6 +207,8 @@ impl<'a> InnerWindow<'a> {
             current_move: None,
             wgpu_state,
             transparent,
+            current_fade: None,
+            opacity: opacity.unwrap_or(1.0),
         })
     }
 
@@ -202,6 +237,14 @@ impl<'a> InnerWindow<'a> {
             ));
         }
         Ok(())
+    }
+
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity;
+        if let Surface::Wgpu { opacity_buffer, .. } = &self.surface {
+            self.wgpu_state.queue.write_buffer(opacity_buffer, 0, bytemuck::cast_slice(&[opacity]));
+            self.request_redraw();
+        }
     }
 
     pub fn start_render(&mut self) -> Result<()> {
@@ -242,7 +285,9 @@ impl<'a> InnerWindow<'a> {
                 frame_buffer,
                 texture,
                 bind_group,
+                window_bind_group,
                 video_renderer,
+                ..
             } => {
                 if self.wgpu_state.error.load(Ordering::Acquire) {
                     bail!("wgpu error; stopping rendering");
@@ -332,12 +377,14 @@ impl<'a> InnerWindow<'a> {
                     let (vid_pipeline, vid_bind_group) = video.video_pipeline_and_bind_group();
                     rpass.set_pipeline(vid_pipeline);
                     rpass.set_bind_group(0, vid_bind_group, &[]);
+                    rpass.set_bind_group(1, &*window_bind_group, &[]);
                     rpass.set_viewport(x as f32, y as f32, width as f32, height as f32, 0.0, 1.0);
                     rpass.draw(0..4, 0..1);
 
                     // UI overlay: RGBA pipeline, full surface
                     rpass.set_pipeline(video.ui_pipeline());
                     rpass.set_bind_group(0, video.ui_bind_group(), &[]);
+                    rpass.set_bind_group(1, &*window_bind_group, &[]);
                     rpass.set_viewport(
                         0.0,
                         0.0,
@@ -373,6 +420,7 @@ impl<'a> InnerWindow<'a> {
                     let pipeline = self.wgpu_state.get_pipeline(surface_config.format);
                     rpass.set_pipeline(&pipeline);
                     rpass.set_bind_group(0, &*bind_group, &[]);
+                    rpass.set_bind_group(1, &*window_bind_group, &[]);
                     rpass.set_viewport(
                         0.0,
                         0.0,
@@ -591,7 +639,6 @@ impl<'a> InnerWindow<'a> {
 
         Ok(())
     }
-
     pub fn is_moving(&self) -> bool {
         self.current_move.is_some()
     }
@@ -604,11 +651,13 @@ impl<'a> InnerWindow<'a> {
                 .div_duration_f64(current_move.duration)
                 .min(1.0);
 
+            let eased_percent = current_move.easing.apply(percent);
+
             let new_position = LogicalPosition::new(
                 current_move.from.x
-                    + ((current_move.to.x - current_move.from.x) as f64 * percent).round() as u32,
+                    + ((current_move.to.x as f64 - current_move.from.x as f64) * eased_percent).round() as u32,
                 current_move.from.y
-                    + ((current_move.to.y - current_move.from.y) as f64 * percent).round() as u32,
+                    + ((current_move.to.y as f64 - current_move.from.y as f64) * eased_percent).round() as u32,
             );
 
             if new_position != self.position {
@@ -636,6 +685,65 @@ impl<'a> InnerWindow<'a> {
 
                 self.current_move = None;
             }
+        }
+    }
+
+    pub fn start_fade(&mut self, id: u64, opts: FadeOpts) -> Result<(), LewdwareError> {
+        let to = if opts.relative {
+            self.opacity + opts.opacity
+        } else {
+            opts.opacity
+        };
+
+        let fade_obj = Fade {
+            id,
+            from: self.opacity,
+            to,
+            duration: Duration::from_millis(opts.duration),
+            start: Instant::now(),
+            easing: opts.easing,
+        };
+
+        self.current_fade = Some(fade_obj);
+
+        Ok(())
+    }
+
+    pub fn is_fading(&self) -> bool {
+        self.current_fade.is_some()
+    }
+
+    pub fn update_fade(&mut self) {
+        let (new_opacity, percent, is_finished, fade_id) = if let Some(current_fade) = &self.current_fade {
+            let percent = current_fade
+                .start
+                .elapsed()
+                .div_duration_f64(current_fade.duration)
+                .min(1.0);
+
+            let eased_percent = current_fade.easing.apply(percent);
+
+            let new_opacity = current_fade.from
+                + ((current_fade.to - current_fade.from) as f64 * eased_percent) as f32;
+
+            (new_opacity, percent, percent >= 1.0, current_fade.id)
+        } else {
+            return;
+        };
+
+        if new_opacity != self.opacity {
+            self.set_opacity(new_opacity);
+        }
+
+        if is_finished {
+            if let Err(err) = self.lua_event_tx.send(lua::Event::FadeFinish {
+                id: self.window.id(),
+                fade_id,
+            }) {
+                eprintln!("{err}");
+            }
+
+            self.current_fade = None;
         }
     }
 

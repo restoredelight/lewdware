@@ -16,6 +16,7 @@ pub struct WgpuState {
     // Shared quad renderer resources (RGBA)
     pub sampler: wgpu::Sampler,
     pub bind_group_layout: wgpu::BindGroupLayout,
+    pub window_bind_group_layout: wgpu::BindGroupLayout,
     pub shader: wgpu::ShaderModule,
     pub pipeline_layout: wgpu::PipelineLayout,
     pub pipelines:
@@ -184,9 +185,25 @@ impl WgpuState {
             ],
         });
 
+        let window_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Window Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Shared Pipeline Layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
+            bind_group_layouts: &[Some(&bind_group_layout), Some(&window_bind_group_layout)],
             immediate_size: 0,
         });
 
@@ -245,7 +262,7 @@ impl WgpuState {
 
         let yuv_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("YUV Pipeline Layout"),
-            bind_group_layouts: &[Some(&yuv_bind_group_layout)],
+            bind_group_layouts: &[Some(&yuv_bind_group_layout), Some(&window_bind_group_layout)],
             immediate_size: 0,
         });
 
@@ -294,7 +311,7 @@ impl WgpuState {
 
         let nv12_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("NV12 Pipeline Layout"),
-            bind_group_layouts: &[Some(&nv12_bind_group_layout)],
+            bind_group_layouts: &[Some(&nv12_bind_group_layout), Some(&window_bind_group_layout)],
             immediate_size: 0,
         });
 
@@ -315,6 +332,7 @@ impl WgpuState {
             error,
             sampler,
             bind_group_layout,
+            window_bind_group_layout,
             shader,
             pipeline_layout,
             pipelines,

@@ -240,6 +240,7 @@ impl<'a> ChaosApp<'a> {
             opts.closeable,
             gpu,
             opts.transparent,
+            opts.opacity,
             LogicalPosition::new(x, y),
             self.lua_event_tx.clone(),
         )
@@ -557,6 +558,13 @@ impl<'a> ChaosApp<'a> {
                         WindowAction::SetTitle { tx, title } => tx
                             .send(entry.get_mut().inner_window_mut().set_title(title))
                             .is_ok(),
+                        WindowAction::SetOpacity { tx, opacity } => {
+                            entry.get_mut().inner_window_mut().set_opacity(opacity);
+                            tx.send(()).is_ok()
+                        }
+                        WindowAction::Fade { id, tx, opts } => tx
+                            .send(entry.get_mut().inner_window_mut().start_fade(id, opts))
+                            .is_ok(),
                     }
                 } else {
                     true
@@ -711,6 +719,10 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             if window.inner_window().is_moving() {
                 window.inner_window_mut().update_position();
                 moving_windows = true;
+            }
+            if window.inner_window().is_fading() {
+                window.inner_window_mut().update_fade();
+                moving_windows = true; // reusing `moving_windows` to mean "animating windows"
             }
         }
 

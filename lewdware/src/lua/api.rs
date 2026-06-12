@@ -581,6 +581,8 @@ pub struct SpawnWindowOpts {
     #[serde(default = "return_true")]
     pub visible: bool,
     #[serde(default)]
+    pub opacity: Option<f32>,
+    #[serde(default)]
     pub transparent: bool,
     #[serde(default)]
     pub click_through: bool,
@@ -599,6 +601,7 @@ impl Default for SpawnWindowOpts {
             title: None,
             closeable: true,
             visible: true,
+            opacity: None,
             transparent: false,
             click_through: false,
         }

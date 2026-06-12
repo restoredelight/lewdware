@@ -27,7 +27,14 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 @group(0) @binding(0) var t_diffuse: texture_2d<f32>;
 @group(0) @binding(1) var s_diffuse: sampler;
 
+struct WindowOptions {
+    opacity: f32,
+}
+@group(1) @binding(0) var<uniform> options: WindowOptions;
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_diffuse, s_diffuse, in.uv);
+    var color = textureSample(t_diffuse, s_diffuse, in.uv);
+    color.a = color.a * options.opacity;
+    return color;
 }

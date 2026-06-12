@@ -376,6 +376,8 @@ struct InnerWindowState {
     close_callbacks: Vec<mlua::Function>,
     move_callback: Option<(u64, mlua::Function)>,
     current_move_id: u64,
+    fade_callback: Option<(u64, mlua::Function)>,
+    current_fade_id: u64,
 }
 
 trait HasInnerWindow {
@@ -487,6 +489,37 @@ impl InnerWindow {
             },
         );
 
+        methods.add_async_method(
+            "fade",
+            async |_, this, (opts, cb): (Option<FadeOpts>, Option<mlua::Function>)| {
+                let inner_window = this.inner_window();
+                let opts = opts.unwrap_or_default();
+
+                let id = {
+                    let mut state = inner_window.state.borrow_mut();
+
+                    let id = state.current_fade_id;
+                    state.current_fade_id += 1;
+
+                    if let Some(callback) = cb {
+                        state.fade_callback = Some((id, callback));
+                    } else {
+                        state.fade_callback = None;
+                    }
+
+                    id
+                };
+
+                inner_window
+                    .request_sender
+                    .fade_window(id, opts)
+                    .await
+                    .into_lua_err()?;
+
+                Ok(())
+            },
+        );
+
         methods.add_async_method("set_visible", async |_, this, visible: bool| {
             this.inner_window()
                 .request_sender
@@ -503,6 +536,16 @@ impl InnerWindow {
             this.inner_window()
                 .request_sender
                 .set_title(title)
+                .await
+                .into_lua_err()?;
+
+            Ok(())
+        });
+
+        methods.add_async_method("set_opacity", async |_, this, opacity: f32| {
+            this.inner_window()
+                .request_sender
+                .set_opacity(opacity)
                 .await
                 .into_lua_err()?;
 
@@ -545,6 +588,25 @@ impl InnerWindow {
             });
         }
     }
+
+    pub fn on_fade_finished(&self, fade_id: u64) {
+        let cb = {
+            let mut state = self.state.borrow_mut();
+
+            match state.fade_callback.take() {
+                Some((id, cb)) if fade_id == id => Some(cb),
+                _ => None,
+            }
+        };
+
+        if let Some(cb) = cb {
+            tokio::task::spawn_local(async move {
+                if let Err(err) = cb.call_async::<()>(()).await {
+                    eprintln!("{err}");
+                }
+            });
+        }
+    }
 }
 
 impl InnerWindowState {
@@ -557,11 +619,13 @@ impl InnerWindowState {
             close_callbacks: Vec::new(),
             move_callback: None,
             current_move_id: 0,
+            fade_callback: None,
+            current_fade_id: 0,
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy)]
 pub enum Easing {
     #[serde(rename = "linear")]
     #[default]
@@ -572,6 +636,30 @@ pub enum Easing {
     EaseOut,
     #[serde(rename = "ease-in-out")]
     EaseInOut,
+}
+
+impl Easing {
+    pub fn apply(&self, t: f64) -> f64 {
+        match self {
+            Self::Linear => t,
+            // Cubic ease-in
+            Self::EaseIn => t * t * t,
+            // Cubic ease-out
+            Self::EaseOut => {
+                let f = t - 1.0;
+                f * f * f + 1.0
+            }
+            // Cubic ease-in-out
+            Self::EaseInOut => {
+                if t < 0.5 {
+                    4.0 * t * t * t
+                } else {
+                    let f = 2.0 * t - 2.0;
+                    0.5 * f * f * f + 1.0
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -589,6 +677,23 @@ pub struct MoveOpts {
 }
 
 impl FromLua for MoveOpts {
+    fn from_lua(value: mlua::Value, lua: &mlua::Lua) -> mlua::Result<Self> {
+        lua.from_value(value)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct FadeOpts {
+    pub opacity: f32,
+    #[serde(default)]
+    pub duration: u64,
+    #[serde(default)]
+    pub easing: Easing,
+    #[serde(default)]
+    pub relative: bool,
+}
+
+impl FromLua for FadeOpts {
     fn from_lua(value: mlua::Value, lua: &mlua::Lua) -> mlua::Result<Self> {
         lua.from_value(value)
     }

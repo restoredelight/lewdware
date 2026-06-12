@@ -13,6 +13,8 @@ pub enum Surface<'a> {
         frame_buffer: Vec<u8>,
         texture: wgpu::Texture,
         bind_group: wgpu::BindGroup,
+        opacity_buffer: wgpu::Buffer,
+        window_bind_group: wgpu::BindGroup,
         video_renderer: Option<VideoRenderer>,
     },
     Softbuffer {
