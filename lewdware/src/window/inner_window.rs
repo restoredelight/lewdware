@@ -218,6 +218,7 @@ impl<'a> InnerWindow<'a> {
         height: u32,
         full_range: bool,
         pixel_format: VideoPixelFormat,
+        packed_alpha: bool,
     ) -> Result<()> {
         if let Surface::Wgpu {
             video_renderer,
@@ -232,6 +233,7 @@ impl<'a> InnerWindow<'a> {
                 height,
                 full_range,
                 pixel_format,
+                packed_alpha,
                 surface_config.width,
                 surface_config.height,
             ));

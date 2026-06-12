@@ -30,6 +30,10 @@ pub struct WgpuState {
     pub yuv_pipelines: std::sync::Mutex<
         std::collections::HashMap<(wgpu::TextureFormat, bool), Arc<wgpu::RenderPipeline>>,
     >,
+    // Packed-alpha YUV420p (always full-range). Key: surface format.
+    pub yuv_packed_alpha_pipelines: std::sync::Mutex<
+        std::collections::HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>,
+    >,
 
     // NV12 video renderer resources (3 bindings: Y, UV, sampler)
     pub nv12_bind_group_layout: wgpu::BindGroupLayout,
@@ -38,6 +42,10 @@ pub struct WgpuState {
     // Key: (surface format, full_range)
     pub nv12_pipelines: std::sync::Mutex<
         std::collections::HashMap<(wgpu::TextureFormat, bool), Arc<wgpu::RenderPipeline>>,
+    >,
+    // Packed-alpha NV12: top half = color, bottom half = alpha (always full-range). Key: surface format.
+    pub nv12_packed_alpha_pipelines: std::sync::Mutex<
+        std::collections::HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>,
     >,
 }
 
@@ -274,6 +282,7 @@ impl WgpuState {
         });
 
         let yuv_pipelines = std::sync::Mutex::new(std::collections::HashMap::new());
+        let yuv_packed_alpha_pipelines = std::sync::Mutex::new(std::collections::HashMap::new());
 
         // NV12 resources: Y (R8Unorm) + UV (Rg8Unorm) + sampler
         let nv12_bind_group_layout =
@@ -323,6 +332,7 @@ impl WgpuState {
         });
 
         let nv12_pipelines = std::sync::Mutex::new(std::collections::HashMap::new());
+        let nv12_packed_alpha_pipelines = std::sync::Mutex::new(std::collections::HashMap::new());
 
         Ok(Self {
             instance,
@@ -340,10 +350,12 @@ impl WgpuState {
             yuv_shader,
             yuv_pipeline_layout,
             yuv_pipelines,
+            yuv_packed_alpha_pipelines,
             nv12_bind_group_layout,
             nv12_shader,
             nv12_pipeline_layout,
             nv12_pipelines,
+            nv12_packed_alpha_pipelines,
         })
     }
 
@@ -429,6 +441,102 @@ impl WgpuState {
                             fragment: Some(wgpu::FragmentState {
                                 module: &self.nv12_shader,
                                 entry_point: Some(entry_point),
+                                targets: &[Some(wgpu::ColorTargetState {
+                                    format,
+                                    blend: None,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                })],
+                                compilation_options: Default::default(),
+                            }),
+                            primitive: wgpu::PrimitiveState {
+                                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                                strip_index_format: None,
+                                front_face: wgpu::FrontFace::Ccw,
+                                cull_mode: None,
+                                unclipped_depth: false,
+                                polygon_mode: wgpu::PolygonMode::Fill,
+                                conservative: false,
+                            },
+                            depth_stencil: None,
+                            multisample: wgpu::MultisampleState::default(),
+                            multiview_mask: None,
+                            cache: None,
+                        });
+                Arc::new(pipeline)
+            })
+            .clone()
+    }
+
+    pub fn get_yuv_packed_alpha_pipeline(
+        &self,
+        format: wgpu::TextureFormat,
+    ) -> Arc<wgpu::RenderPipeline> {
+        let mut pipelines = self.yuv_packed_alpha_pipelines.lock().unwrap();
+        pipelines
+            .entry(format)
+            .or_insert_with(|| {
+                let pipeline =
+                    self.device
+                        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                            label: Some("YUV Packed Alpha Render Pipeline"),
+                            layout: Some(&self.yuv_pipeline_layout),
+                            vertex: wgpu::VertexState {
+                                module: &self.yuv_shader,
+                                entry_point: Some("vs_main"),
+                                buffers: &[],
+                                compilation_options: Default::default(),
+                            },
+                            fragment: Some(wgpu::FragmentState {
+                                module: &self.yuv_shader,
+                                entry_point: Some("fs_yuv_packed_alpha"),
+                                targets: &[Some(wgpu::ColorTargetState {
+                                    format,
+                                    blend: None,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                })],
+                                compilation_options: Default::default(),
+                            }),
+                            primitive: wgpu::PrimitiveState {
+                                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                                strip_index_format: None,
+                                front_face: wgpu::FrontFace::Ccw,
+                                cull_mode: None,
+                                unclipped_depth: false,
+                                polygon_mode: wgpu::PolygonMode::Fill,
+                                conservative: false,
+                            },
+                            depth_stencil: None,
+                            multisample: wgpu::MultisampleState::default(),
+                            multiview_mask: None,
+                            cache: None,
+                        });
+                Arc::new(pipeline)
+            })
+            .clone()
+    }
+
+    pub fn get_nv12_packed_alpha_pipeline(
+        &self,
+        format: wgpu::TextureFormat,
+    ) -> Arc<wgpu::RenderPipeline> {
+        let mut pipelines = self.nv12_packed_alpha_pipelines.lock().unwrap();
+        pipelines
+            .entry(format)
+            .or_insert_with(|| {
+                let pipeline =
+                    self.device
+                        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                            label: Some("NV12 Packed Alpha Render Pipeline"),
+                            layout: Some(&self.nv12_pipeline_layout),
+                            vertex: wgpu::VertexState {
+                                module: &self.nv12_shader,
+                                entry_point: Some("vs_main"),
+                                buffers: &[],
+                                compilation_options: Default::default(),
+                            },
+                            fragment: Some(wgpu::FragmentState {
+                                module: &self.nv12_shader,
+                                entry_point: Some("fs_nv12_packed_alpha"),
                                 targets: &[Some(wgpu::ColorTargetState {
                                     format,
                                     blend: None,

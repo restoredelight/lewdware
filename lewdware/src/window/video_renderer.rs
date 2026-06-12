@@ -79,16 +79,21 @@ impl VideoRenderer {
         video_height: u32,
         full_range: bool,
         pixel_format: VideoPixelFormat,
+        packed_alpha: bool,
         ui_width: u32,
         ui_height: u32,
     ) -> Self {
         let device = &wgpu_state.device;
+        // When packed_alpha, the decoded frame is twice the display height.
+        let decoded_height = if packed_alpha { video_height * 2 } else { video_height };
         let chroma_w = (video_width + 1) / 2;
-        let chroma_h = (video_height + 1) / 2;
+        let chroma_h = (decoded_height + 1) / 2;
 
         let frame_textures = match pixel_format {
             VideoPixelFormat::Yuv420p => {
-                let y_texture = make_r8_texture(device, "Y Plane", video_width, video_height);
+                // Y texture covers the full decoded height (2x display height when packed).
+                let y_texture = make_r8_texture(device, "Y Plane", video_width, decoded_height);
+                // Cb/Cr chroma height = decoded_height / 2 = display height when packed.
                 let cb_texture = make_r8_texture(device, "Cb Plane", chroma_w, chroma_h);
                 let cr_texture = make_r8_texture(device, "Cr Plane", chroma_w, chroma_h);
 
@@ -119,7 +124,11 @@ impl VideoRenderer {
                     ],
                 });
 
-                let pipeline = wgpu_state.get_yuv_pipeline(format, full_range);
+                let pipeline = if packed_alpha {
+                    wgpu_state.get_yuv_packed_alpha_pipeline(format)
+                } else {
+                    wgpu_state.get_yuv_pipeline(format, full_range)
+                };
                 VideoFrameTextures::Yuv420p {
                     y_texture,
                     cb_texture,
@@ -129,7 +138,9 @@ impl VideoRenderer {
                 }
             }
             VideoPixelFormat::Nv12 => {
-                let y_texture = make_r8_texture(device, "Y Plane", video_width, video_height);
+                // Y texture covers the full decoded height (2x display height when packed).
+                let y_texture = make_r8_texture(device, "Y Plane", video_width, decoded_height);
+                // UV chroma height = decoded_height / 2 = display height when packed.
                 let uv_texture = make_rg8_texture(device, "UV Plane", chroma_w, chroma_h);
 
                 let y_view = y_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -154,7 +165,11 @@ impl VideoRenderer {
                     ],
                 });
 
-                let pipeline = wgpu_state.get_nv12_pipeline(format, full_range);
+                let pipeline = if packed_alpha {
+                    wgpu_state.get_nv12_packed_alpha_pipeline(format)
+                } else {
+                    wgpu_state.get_nv12_pipeline(format, full_range)
+                };
                 VideoFrameTextures::Nv12 {
                     y_texture,
                     uv_texture,
@@ -201,7 +216,7 @@ impl VideoRenderer {
         Self {
             frame_textures,
             video_width,
-            video_height,
+            video_height: decoded_height,
             ui_texture,
             ui_bind_group,
             ui_pipeline,

@@ -97,6 +97,7 @@ impl<'a> VideoWindow<'a> {
             video_player.native_height(),
             video_player.full_range(),
             video_player.pixel_format(),
+            video_player.packed_alpha(),
         )?;
 
         video_player.play();

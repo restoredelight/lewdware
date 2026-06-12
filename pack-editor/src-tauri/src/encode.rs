@@ -472,8 +472,8 @@ fn encode_image(
 
         if line.contains("lavfi.signalstats.YMIN=") {
             if let Some(val_str) = line.split('=').last() {
-                if let Ok(y_min) = val_str.trim().parse::<u32>() {
-                    if y_min < 255 {
+                if let Ok(y_min) = val_str.trim().parse::<f64>() {
+                    if y_min < 255.0 {
                         transparent = true;
                     }
                 }
@@ -552,10 +552,11 @@ fn encode_video(
 
         if line.contains("lavfi.signalstats.YMIN=") {
             if let Some(val_str) = line.split('=').last() {
-                if let Ok(y_min) = val_str.trim().parse::<u32>() {
-                    if y_min < 255 {
+                if let Ok(y_min) = val_str.trim().parse::<f64>() {
+                    if y_min < 255.0 {
                         let _ = child.kill();
                         let _ = child.wait();
+                        let _ = std::fs::remove_file(output);
                         return encode_video_with_transparency(
                             input, output, width, height, audio, false,
                         );
@@ -608,9 +609,13 @@ fn encode_video_with_transparency(
 
     let mut command = new_command(get_ffmpeg_path());
 
+    // Pack color (top) and alpha-as-luma (bottom) into a single 2H-tall NV12 video.
+    // Both parts are encoded full-range so the shader can read alpha directly (0→transparent, 1→opaque).
     let filter = format!(
-        "[0:v]scale=w='{width}':h='{height}'[main],format=yuva420p[main]; \
-         [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]"
+        "[0:v]scale=w='{width}':h='{height}':out_range=pc,format=yuv420p[color]; \
+         [0:v]scale=w='{width}':h='{height}',alphaextract,scale=out_range=pc,format=yuv420p[alpha_yuv]; \
+         [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]; \
+         [color][alpha_yuv]vstack=inputs=2[out]"
     );
 
     command
@@ -618,9 +623,9 @@ fn encode_video_with_transparency(
         .arg("-i")
         .arg(input)
         .arg("-filter_complex")
-        .arg(filter);
-
-    command.arg("-map").arg("[main]");
+        .arg(filter)
+        .arg("-map")
+        .arg("[out]");
 
     if audio {
         command.args(["-map", "0:a?", "-c:a", "libopus", "-b:a", "64k"]);
@@ -628,14 +633,7 @@ fn encode_video_with_transparency(
         command.arg("-an");
     }
 
-    command.args([
-        "-c:v",
-        "libsvtav1",
-        "-preset",
-        "8",
-        "-svtav1-params",
-        "fast-decode=1",
-    ]);
+    command.args(["-c:v", "libx264", "-crf", "23", "-color_range", "pc", "-pix_fmt", "yuv420p"]);
 
     if fixed_fps {
         command.arg("-r").arg("30");
@@ -725,11 +723,10 @@ fn parse_media_info(json: serde_json::Value) -> Option<FileInfo> {
                     transparent: false,
                 }
             } else {
-                let transparent = vs.get("pix_fmt")?.as_str()?.contains('a');
                 FileInfo::Image {
                     width: width?,
                     height: height?,
-                    transparent,
+                    transparent: false,
                 }
             }
         }

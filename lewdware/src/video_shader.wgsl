@@ -86,3 +86,31 @@ fn fs_yuv_full(in: VertexOutput) -> @location(0) vec4<f32> {
         options.opacity,
     );
 }
+
+// Packed-alpha YUV420p: top half = color, bottom half = alpha-as-luma.
+// Always encoded full-range; Cb/Cr sampled from top half only.
+@fragment
+fn fs_yuv_packed_alpha(in: VertexOutput) -> @location(0) vec4<f32> {
+    let color_uv = vec2<f32>(in.uv.x, in.uv.y * 0.5);
+    let alpha_uv = vec2<f32>(in.uv.x, in.uv.y * 0.5 + 0.5);
+
+    let y_raw     = textureSample(t_y,  s_yuv, color_uv).r;
+    let cb_raw    = textureSample(t_cb, s_yuv, color_uv).r;
+    let cr_raw    = textureSample(t_cr, s_yuv, color_uv).r;
+    let alpha_raw = textureSample(t_y,  s_yuv, alpha_uv).r;
+
+    let y  = y_raw;
+    let cb = cb_raw - 0.5;
+    let cr = cr_raw - 0.5;
+
+    let r = y + 1.57480 * cr;
+    let g = y - 0.18732 * cb - 0.46812 * cr;
+    let b = y + 1.85560 * cb;
+
+    return vec4<f32>(
+        gamma_decode(clamp(r, 0.0, 1.0)),
+        gamma_decode(clamp(g, 0.0, 1.0)),
+        gamma_decode(clamp(b, 0.0, 1.0)),
+        alpha_raw * options.opacity,
+    );
+}

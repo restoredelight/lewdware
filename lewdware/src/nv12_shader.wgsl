@@ -83,3 +83,31 @@ fn fs_nv12_full(in: VertexOutput) -> @location(0) vec4<f32> {
         options.opacity,
     );
 }
+
+// Packed-alpha NV12: top half of Y = color luma, bottom half of Y = alpha channel.
+// Always encoded full-range, so color uses the same formula as fs_nv12_full.
+// UV (chroma) is sampled from the top half only.
+@fragment
+fn fs_nv12_packed_alpha(in: VertexOutput) -> @location(0) vec4<f32> {
+    let color_uv = vec2<f32>(in.uv.x, in.uv.y * 0.5);
+    let alpha_uv = vec2<f32>(in.uv.x, in.uv.y * 0.5 + 0.5);
+
+    let y_raw     = textureSample(t_y,  s, color_uv).r;
+    let uv        = textureSample(t_uv, s, color_uv);
+    let alpha_raw = textureSample(t_y,  s, alpha_uv).r;
+
+    let y  = y_raw;
+    let cb = uv.r - 0.5;
+    let cr = uv.g - 0.5;
+
+    let r = y + 1.57480 * cr;
+    let g = y - 0.18732 * cb - 0.46812 * cr;
+    let b = y + 1.85560 * cb;
+
+    return vec4<f32>(
+        gamma_decode(clamp(r, 0.0, 1.0)),
+        gamma_decode(clamp(g, 0.0, 1.0)),
+        gamma_decode(clamp(b, 0.0, 1.0)),
+        alpha_raw * options.opacity,
+    );
+}

@@ -235,6 +235,7 @@ async fn handle_request(
                     data.file,
                     play_audio,
                     loop_video,
+                    data.transparent,
                     wgpu_device,
                 )
                 .map_err(|err| MediaError::VideoError(err))

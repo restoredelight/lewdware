@@ -32,6 +32,7 @@ pub struct Video {
 pub struct VideoData {
     pub width: u32,
     pub height: u32,
+    pub transparent: bool,
     pub file: FileOrPath,
 }
 
@@ -57,12 +58,6 @@ pub struct Audio {
 }
 
 #[derive(Clone)]
-pub struct Notification {
-    pub summary: Option<String>,
-    pub body: String,
-}
-
-#[derive(Clone)]
 pub struct Link {
     pub link: String,
 }
@@ -70,11 +65,4 @@ pub struct Link {
 #[derive(Clone)]
 pub struct Prompt {
     pub prompt: String,
-}
-
-pub struct Wallpaper {
-    pub width: u64,
-    pub height: u64,
-    pub transparent: bool,
-    pub file: FileOrPath,
 }

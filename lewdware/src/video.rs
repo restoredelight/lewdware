@@ -110,6 +110,7 @@ pub struct VideoDecoder {
     native_height: u32,
     full_range: bool,
     pixel_format: VideoPixelFormat,
+    packed_alpha: bool,
     paused: bool,
     video_duration: Duration,
     pub lag_count: u32,
@@ -138,6 +139,7 @@ impl VideoDecoder {
         video: FileOrPath,
         play_audio: bool,
         loop_video: bool,
+        packed_alpha: bool,
         wgpu_device: Arc<wgpu::Device>,
     ) -> Result<Self> {
         let path = video.path();
@@ -146,6 +148,7 @@ impl VideoDecoder {
             spawn_video_stream(
                 path.to_path_buf(),
                 loop_video,
+                packed_alpha,
                 wgpu_device,
             )?;
 
@@ -167,6 +170,7 @@ impl VideoDecoder {
             native_height,
             full_range,
             pixel_format,
+            packed_alpha,
             audio_player,
             last_frame_time: Instant::now(),
             frame_duration: Duration::ZERO,
@@ -201,6 +205,10 @@ impl VideoDecoder {
 
     pub fn pixel_format(&self) -> VideoPixelFormat {
         self.pixel_format
+    }
+
+    pub fn packed_alpha(&self) -> bool {
+        self.packed_alpha
     }
 
     /// Get the next frame, if it's ready.
@@ -314,6 +322,7 @@ struct VideoMetadata {
 fn spawn_video_stream(
     path: PathBuf,
     loop_video: bool,
+    packed_alpha: bool,
     wgpu_device: Arc<wgpu::Device>,
 ) -> Result<(
     Receiver<Option<VideoFrame>>,
@@ -340,6 +349,7 @@ fn spawn_video_stream(
             path,
             tx,
             loop_video,
+            packed_alpha,
             video_duration_inner,
             meta_tx,
             recycle_rx,
@@ -412,6 +422,7 @@ fn decode_video(
     path: PathBuf,
     tx: SyncSender<Option<VideoFrame>>,
     loop_video: bool,
+    packed_alpha: bool,
     video_duration: Duration,
     meta_tx: SyncSender<VideoMetadata>,
     recycle_rx: Receiver<Video>,
@@ -465,7 +476,8 @@ fn decode_video(
     });
 
     let native_width = decoder.width();
-    let native_height = decoder.height();
+    // For packed-alpha videos the decoded frame is twice the display height.
+    let native_height = if packed_alpha { decoder.height() / 2 } else { decoder.height() };
     let full_range = decoder.color_range() == ffmpeg::color::Range::JPEG;
     let pixel_format = if hw_pix_fmt.is_some() {
         VideoPixelFormat::Nv12

@@ -283,8 +283,8 @@ impl MediaPack {
     }
 
     pub async fn get_video_data(&self, id: u64) -> Result<VideoData> {
-        let (offset, length, width, height) = self.db.query_row(
-            "SELECT offset, length, width, height FROM media WHERE id = ?",
+        let (offset, length, width, height, transparent) = self.db.query_row(
+            "SELECT offset, length, width, height, transparent FROM media WHERE id = ?",
             params![id],
             |row| {
                 Ok((
@@ -292,6 +292,7 @@ impl MediaPack {
                     row.get("Length")?,
                     row.get("width")?,
                     row.get("height")?,
+                    row.get("transparent")?,
                 ))
             },
         )?;
@@ -300,6 +301,7 @@ impl MediaPack {
             file: FileOrPath::File(self.write_to_temp_file(offset, length, ".mp4").await?),
             width,
             height,
+            transparent,
         })
     }
 
