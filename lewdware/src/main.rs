@@ -9,24 +9,22 @@ use winit::event_loop::EventLoop;
 
 use crate::{
     app::ChaosApp,
-    wgpu::WgpuState,
     utils::{create_tray_icon, handle_sigterm, spawn_panic_thread},
+    wgpu::WgpuState,
 };
 
 mod app;
 mod audio;
-mod buffer;
 mod egui;
 mod error;
 mod inner_window;
 mod lua;
 mod media;
 mod monitor;
-mod transition;
 mod utils;
 mod video;
-mod window;
 mod wgpu;
+mod window;
 mod zero_copy;
 
 fn main() -> Result<()> {

@@ -9,9 +9,11 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
         [],
     )?;
 
-    let value = db.query_row("SELECT migration_index FROM migrations", [], |row| {
-        row.get("migration_index")
-    }).optional()?;
+    let value = db
+        .query_row("SELECT migration_index FROM migrations", [], |row| {
+            row.get("migration_index")
+        })
+        .optional()?;
 
     println!("{:?}", value);
 
@@ -24,12 +26,12 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
     if value.is_none() {
         db.execute(
             "INSERT INTO migrations (migration_index) VALUES (?)",
-            params![MIGRATIONS.len()]
+            params![MIGRATIONS.len()],
         )?;
     } else {
         db.execute(
             "UPDATE migrations SET migration_index = ?",
-            params![MIGRATIONS.len()]
+            params![MIGRATIONS.len()],
         )?;
     }
 

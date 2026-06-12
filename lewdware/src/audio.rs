@@ -8,25 +8,15 @@ use ffmpeg_next::{
 use std::{
     num::NonZero,
     path::PathBuf,
-    sync::{
-        Arc,
-        mpsc::{Receiver, SyncSender, TryRecvError},
-    },
-    thread::{self, JoinHandle},
+    sync::Arc,
+    thread::{self},
     time::Duration,
 };
 use winit::event_loop::EventLoopProxy;
 
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source, buffer::SamplesBuffer};
 
-use crate::{app::UserEvent, media::FileOrPath};
-
-/// An audio player using ffmpeg and rodio.
-pub struct AudioHandle {
-    _audio: FileOrPath,
-    handle: JoinHandle<()>,
-    message_tx: SyncSender<AudioMessage>,
-}
+use crate::app::UserEvent;
 
 pub struct AudioPlayer {
     _stream: MixerDeviceSink,
@@ -65,29 +55,12 @@ impl AudioPlayer {
         self.sink.play();
     }
 
-    pub fn is_finished(&self) -> bool {
-        self.sink.empty()
-    }
-
     pub fn position(&self) -> Duration {
         // Blocking!
         let pos = self.sink.get_pos();
         // println!("{}", pos.as_millis());
         pos
     }
-
-    pub fn on_finish(&self, f: impl FnOnce() + Send + 'static) {
-        let sink = self.sink.clone();
-        thread::spawn(move || {
-            sink.sleep_until_end();
-            f();
-        });
-    }
-}
-
-pub enum AudioMessage {
-    Play,
-    Pause,
 }
 
 pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink, Player)> {
@@ -186,48 +159,6 @@ pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink
     sink.append(source);
 
     return Ok((stream, sink));
-}
-
-/// Process all messages sent to the audio thread. Returns two booleans indicating whether to stop
-/// the audio thread, and whether a `Loop` message was received.
-fn process_audio_messages(sink: &Player, message_rx: &Receiver<AudioMessage>) -> bool {
-    loop {
-        match message_rx.try_recv() {
-            Ok(message) => match message {
-                AudioMessage::Play => sink.play(),
-                AudioMessage::Pause => {
-                    sink.pause();
-
-                    loop {
-                        match message_rx.recv() {
-                            Ok(message) => match message {
-                                AudioMessage::Play => {
-                                    sink.play();
-                                    break;
-                                }
-                                AudioMessage::Pause => {}
-                            },
-                            Err(_) => {
-                                sink.stop();
-                                return true;
-                            }
-                        }
-
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                }
-            },
-            Err(err) => match err {
-                TryRecvError::Empty => break,
-                TryRecvError::Disconnected => {
-                    sink.stop();
-                    return true;
-                }
-            },
-        }
-    }
-
-    false
 }
 
 fn convert_audio_frame(frame: &frame::Audio) -> Result<Vec<f32>> {

@@ -2,7 +2,8 @@ use std::{
     cell::Cell,
     path::PathBuf,
     sync::{
-        Arc, mpsc::{Receiver, SyncSender, TryRecvError, sync_channel}
+        Arc,
+        mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
     },
     thread,
     time::{Duration, Instant},
@@ -12,7 +13,11 @@ use anyhow::{Context, Result};
 use ffmpeg::{codec, format};
 use ffmpeg_next::{self as ffmpeg, ffi, frame::Video};
 
-use crate::{audio::AudioPlayer, media::FileOrPath, zero_copy::{HardwareFrame, initialize_hardware_device, preferred_hw_type}};
+use crate::{
+    audio::AudioPlayer,
+    media::FileOrPath,
+    zero_copy::{HardwareFrame, initialize_hardware_device, preferred_hw_type},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoPixelFormat {
@@ -112,7 +117,7 @@ pub struct VideoDecoder {
     pixel_format: VideoPixelFormat,
     packed_alpha: bool,
     paused: bool,
-    video_duration: Duration,
+    _video_duration: Duration,
     pub lag_count: u32,
 }
 
@@ -145,12 +150,7 @@ impl VideoDecoder {
         let path = video.path();
 
         let (receiver, video_duration, native_width, native_height, full_range, pixel_format) =
-            spawn_video_stream(
-                path.to_path_buf(),
-                loop_video,
-                packed_alpha,
-                wgpu_device,
-            )?;
+            spawn_video_stream(path.to_path_buf(), loop_video, packed_alpha, wgpu_device)?;
 
         let audio_player = if play_audio {
             match AudioPlayer::new(path.to_path_buf(), loop_video, None, None) {
@@ -178,7 +178,7 @@ impl VideoDecoder {
             tolerance: Duration::from_millis(200),
             _video: video,
             paused: true,
-            video_duration,
+            _video_duration: video_duration,
             lag_count: 0,
         })
     }
@@ -454,11 +454,7 @@ fn decode_video(
     let hw_pix_fmt: Option<ffi::AVPixelFormat> = unsafe {
         let ctx_ptr = context_decoder.as_mut_ptr();
         let hw_type = preferred_hw_type();
-        if let Some(fmt) = try_hw_setup(
-            ctx_ptr,
-            hw_type,
-            &wgpu_device,
-        ) {
+        if let Some(fmt) = try_hw_setup(ctx_ptr, hw_type, &wgpu_device) {
             HW_PIX_FMT.with(|c| c.set(fmt as i32));
             (*ctx_ptr).get_format = Some(get_hw_format);
             Some(fmt)
@@ -477,7 +473,11 @@ fn decode_video(
 
     let native_width = decoder.width();
     // For packed-alpha videos the decoded frame is twice the display height.
-    let native_height = if packed_alpha { decoder.height() / 2 } else { decoder.height() };
+    let native_height = if packed_alpha {
+        decoder.height() / 2
+    } else {
+        decoder.height()
+    };
     let full_range = decoder.color_range() == ffmpeg::color::Range::JPEG;
     let pixel_format = if hw_pix_fmt.is_some() {
         VideoPixelFormat::Nv12

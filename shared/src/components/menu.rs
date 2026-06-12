@@ -11,8 +11,7 @@ pub trait MenuItem: std::fmt::Display + Sized + Copy + PartialEq + 'static {
 pub fn Menu<T: MenuItem>(initially_open: bool, selected: Signal<T>) -> Element {
     let mut open = use_signal(|| initially_open);
 
-    let options = 
-        T::VARIANTS.iter().map(|&option| {
+    let options = T::VARIANTS.iter().map(|&option| {
             rsx! {
                 button {
                     class: "flex items-center p-1 rounded-sm w-full nowrap transition-[width]",

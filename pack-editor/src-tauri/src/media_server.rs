@@ -1,9 +1,9 @@
 use axum::{
-    Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
+    Router,
 };
 use tokio::net::TcpListener;
 
@@ -27,16 +27,15 @@ pub async fn start(pack_state: PackState) -> anyhow::Result<u16> {
     Ok(port)
 }
 
-async fn thumbnail_handler(
-    State(pack_state): State<PackState>,
-    Path(id): Path<u64>,
-) -> Response {
+async fn thumbnail_handler(State(pack_state): State<PackState>, Path(id): Path<u64>) -> Response {
     let view = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {
             Some(pack) => match pack.get_view() {
                 Ok(v) => v,
-                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                }
             },
             None => return (StatusCode::NOT_FOUND, "No pack open").into_response(),
         }
@@ -52,16 +51,15 @@ async fn thumbnail_handler(
     }
 }
 
-async fn preview_handler(
-    State(pack_state): State<PackState>,
-    Path(id): Path<u64>,
-) -> Response {
+async fn preview_handler(State(pack_state): State<PackState>, Path(id): Path<u64>) -> Response {
     let view = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {
             Some(pack) => match pack.get_view() {
                 Ok(v) => v,
-                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                }
             },
             None => return (StatusCode::NOT_FOUND, "No pack open").into_response(),
         }
@@ -77,16 +75,15 @@ async fn preview_handler(
     }
 }
 
-async fn display_handler(
-    State(pack_state): State<PackState>,
-    Path(id): Path<u64>,
-) -> Response {
+async fn display_handler(State(pack_state): State<PackState>, Path(id): Path<u64>) -> Response {
     let view = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {
             Some(pack) => match pack.get_view() {
                 Ok(v) => v,
-                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                }
             },
             None => return (StatusCode::NOT_FOUND, "No pack open").into_response(),
         }
@@ -112,7 +109,9 @@ async fn file_handler(
         match lock.as_ref() {
             Some(pack) => match pack.get_view() {
                 Ok(v) => v,
-                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                }
             },
             None => return (StatusCode::NOT_FOUND, "No pack open").into_response(),
         }
@@ -126,9 +125,7 @@ async fn file_handler(
     if let Some(range_str) = range_str {
         let range = match parse_range(&range_str) {
             Ok(r) => r,
-            Err(()) => {
-                return (StatusCode::RANGE_NOT_SATISFIABLE, "Invalid range").into_response()
-            }
+            Err(()) => return (StatusCode::RANGE_NOT_SATISFIABLE, "Invalid range").into_response(),
         };
         match view.get_file_range(id, range).await {
             Ok((dr, ft)) => {
@@ -178,7 +175,15 @@ fn parse_range(s: &str) -> Result<Range, ()> {
     let mut parts = value.split('-');
     let start_str = parts.next().ok_or(())?;
     let end_str = parts.next().ok_or(())?;
-    let start = if start_str.is_empty() { None } else { start_str.parse().ok() };
-    let end = if end_str.is_empty() { None } else { end_str.parse().ok() };
+    let start = if start_str.is_empty() {
+        None
+    } else {
+        start_str.parse().ok()
+    };
+    let end = if end_str.is_empty() {
+        None
+    } else {
+        end_str.parse().ok()
+    };
     Ok(Range { start, end })
 }

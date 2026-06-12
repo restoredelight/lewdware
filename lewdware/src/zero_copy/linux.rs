@@ -14,7 +14,6 @@ use crate::{
     zero_copy::ImportOpts,
 };
 
-
 pub fn preferred_hw_type() -> ffi::AVHWDeviceType {
     ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI
 }

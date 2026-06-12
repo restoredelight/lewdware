@@ -13,10 +13,7 @@ pub struct Media {
 #[serde(tag = "type")]
 pub enum MediaData {
     #[serde(rename = "image")]
-    Image {
-        width: u32,
-        height: u32
-    },
+    Image { width: u32, height: u32 },
     #[serde(rename = "video")]
     Video {
         width: u32,
@@ -24,9 +21,7 @@ pub enum MediaData {
         duration: f64,
     },
     #[serde(rename = "audio")]
-    Audio {
-        duration: f64,
-    },
+    Audio { duration: f64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,7 +31,7 @@ pub enum MediaType {
     #[serde(rename = "video")]
     Video,
     #[serde(rename = "audio")]
-    Audio
+    Audio,
 }
 
 impl IntoLua for Media {

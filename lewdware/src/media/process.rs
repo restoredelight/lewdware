@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
@@ -11,8 +13,17 @@ pub struct Media {
 
 #[derive(Debug, Clone)]
 pub enum MediaType {
-    Image { width: u64, height: u64, transparent: bool, },
-    Video { width: u64, height: u64, duration: f64, audio: bool },
+    Image {
+        width: u64,
+        height: u64,
+        transparent: bool,
+    },
+    Video {
+        width: u64,
+        height: u64,
+        duration: f64,
+        audio: bool,
+    },
 }
 
 pub struct Audio {
@@ -100,18 +111,36 @@ pub enum Processed {
 
 pub fn process_path(path: &Path) -> Result<Processed> {
     match classify_file(path)? {
-        FileInfo::Image { width, height, transparent } => {
-            Ok(Processed::Media(Media {
-                media_type: MediaType::Image { width, height, transparent },
-                path: path.to_path_buf(),
-            }))
-        }
-        FileInfo::Video { width, height, duration, audio, .. } => {
-            Ok(Processed::Media(Media {
-                media_type: MediaType::Video { width, height, duration, audio },
-                path: path.to_path_buf(),
-            }))
-        }
-        FileInfo::Audio { duration } => Ok(Processed::Audio(Audio { duration, path: path.to_path_buf() })),
+        FileInfo::Image {
+            width,
+            height,
+            transparent,
+        } => Ok(Processed::Media(Media {
+            media_type: MediaType::Image {
+                width,
+                height,
+                transparent,
+            },
+            path: path.to_path_buf(),
+        })),
+        FileInfo::Video {
+            width,
+            height,
+            duration,
+            audio,
+            ..
+        } => Ok(Processed::Media(Media {
+            media_type: MediaType::Video {
+                width,
+                height,
+                duration,
+                audio,
+            },
+            path: path.to_path_buf(),
+        })),
+        FileInfo::Audio { duration } => Ok(Processed::Audio(Audio {
+            duration,
+            path: path.to_path_buf(),
+        })),
     }
 }

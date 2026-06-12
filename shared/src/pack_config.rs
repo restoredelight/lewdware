@@ -2,14 +2,18 @@ use std::{collections::HashMap, io};
 
 use ciborium::{from_reader, into_writer};
 #[cfg(feature = "dioxus")]
-use dioxus::stores::Store;
-#[cfg(feature = "dioxus")]
 use dioxus::prelude::*;
+#[cfg(feature = "dioxus")]
+use dioxus::stores::Store;
 use indexmap::IndexMap;
 use merge::Merge;
 use serde::{Deserialize, Serialize};
 
-use crate::{create_arg, target::Target, mode::{Mode, SourceFile}};
+use crate::{
+    create_arg,
+    mode::{Mode, SourceFile},
+    target::Target,
+};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct PackOpts {

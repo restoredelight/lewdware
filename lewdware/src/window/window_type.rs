@@ -3,9 +3,18 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use egui::{RichText, TextEdit};
 use tiny_skia::{IntSize, Pixmap};
-use winit::{dpi::{LogicalPosition, PhysicalPosition}, event::{Touch, WindowEvent}};
+use winit::{
+    dpi::{LogicalPosition, PhysicalPosition},
+    event::{Touch, WindowEvent},
+};
 
-use crate::{egui::EguiCPUWindow, lua::{self, ChoiceWindowOption}, media::ImageData, video::{NextFrame, VideoDecoder}, window::{header::HEADER_HEIGHT, inner_window::InnerWindow}};
+use crate::{
+    egui::EguiCPUWindow,
+    lua::{self, ChoiceWindowOption},
+    media::ImageData,
+    video::{NextFrame, VideoDecoder},
+    window::{header::HEADER_HEIGHT, inner_window::InnerWindow},
+};
 
 pub enum WindowType<'a> {
     Image(ImageWindow<'a>),
@@ -159,7 +168,6 @@ impl<'a> VideoWindow<'a> {
     }
 }
 
-
 /// A prompt window, rendered using `egui`.
 pub struct PromptWindow<'a> {
     inner_window: InnerWindow<'a>,
@@ -260,7 +268,6 @@ impl<'a> PromptWindow<'a> {
     }
 }
 
-
 pub struct ChoiceWindow<'a> {
     inner_window: InnerWindow<'a>,
     egui_window: EguiCPUWindow,
@@ -355,7 +362,6 @@ impl<'a> ChoiceWindow<'a> {
         self.inner_window.window().request_redraw();
     }
 }
-
 
 fn translate_event_position(event: WindowEvent, scale_factor: f64) -> WindowEvent {
     match event {

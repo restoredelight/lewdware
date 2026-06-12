@@ -96,7 +96,9 @@ async fn new_pack_dialog(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "New Pack".to_string());
 
-    let pack = MediaPack::new(path, &name).await.map_err(|e| e.to_string())?;
+    let pack = MediaPack::new(path, &name)
+        .await
+        .map_err(|e| e.to_string())?;
     let info = PackInfo { name: pack.name() };
     *state.pack.lock().await = Some(pack);
     Ok(Some(info))
@@ -182,7 +184,9 @@ async fn save_pack_as_dialog(
             .map_err(|e| e.to_string())?;
 
         if let Some(new_pack) = new_pack {
-            let info = PackInfo { name: new_pack.name() };
+            let info = PackInfo {
+                name: new_pack.name(),
+            };
             *lock = Some(new_pack);
             let _ = app.emit("save:done", ());
             return Ok(Some(info));
@@ -238,11 +242,7 @@ async fn remove_files(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), S
 }
 
 #[tauri::command]
-async fn set_file_title(
-    state: State<'_, AppState>,
-    id: u64,
-    name: String,
-) -> Result<(), String> {
+async fn set_file_title(state: State<'_, AppState>, id: u64, name: String) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         pack.set_title(id, name).await.map_err(|e| e.to_string())?;
@@ -271,11 +271,7 @@ async fn get_file_tags(state: State<'_, AppState>, id: u64) -> Result<Vec<String
 }
 
 #[tauri::command]
-async fn add_tag_to_file(
-    state: State<'_, AppState>,
-    id: u64,
-    tag: String,
-) -> Result<(), String> {
+async fn add_tag_to_file(state: State<'_, AppState>, id: u64, tag: String) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         pack.add_tag(id, tag).await.map_err(|e| e.to_string())?;
@@ -323,13 +319,12 @@ async fn get_pack_metadata(state: State<'_, AppState>) -> Result<MetadataDto, St
 }
 
 #[tauri::command]
-async fn set_pack_metadata(
-    state: State<'_, AppState>,
-    dto: MetadataDto,
-) -> Result<(), String> {
+async fn set_pack_metadata(state: State<'_, AppState>, dto: MetadataDto) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
-        pack.set_metadata(&dto.into()).await.map_err(|e| e.to_string())?;
+        pack.set_metadata(&dto.into())
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -363,7 +358,11 @@ async fn add_files_dialog(
     use tauri_plugin_dialog::DialogExt;
     let app_c = app.clone();
     let files = tokio::task::spawn_blocking(move || {
-        app_c.dialog().file().set_title("Select files").blocking_pick_files()
+        app_c
+            .dialog()
+            .file()
+            .set_title("Select files")
+            .blocking_pick_files()
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -379,7 +378,13 @@ async fn add_files_dialog(
     }
 
     let pack_state = state.pack.clone();
-    tauri::async_runtime::spawn(encode::process_files(pack_state, paths, skip_duplicates, app, state.hardware_encoder.clone()));
+    tauri::async_runtime::spawn(encode::process_files(
+        pack_state,
+        paths,
+        skip_duplicates,
+        app,
+        state.hardware_encoder.clone(),
+    ));
     Ok(())
 }
 
@@ -393,7 +398,11 @@ async fn add_folder_dialog(
     use tauri_plugin_dialog::DialogExt;
     let app_c = app.clone();
     let folder = tokio::task::spawn_blocking(move || {
-        app_c.dialog().file().set_title("Select folder").blocking_pick_folder()
+        app_c
+            .dialog()
+            .file()
+            .set_title("Select folder")
+            .blocking_pick_folder()
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -410,7 +419,13 @@ async fn add_folder_dialog(
     }
 
     let pack_state = state.pack.clone();
-    tauri::async_runtime::spawn(encode::process_files(pack_state, paths, skip_duplicates, app, state.hardware_encoder.clone()));
+    tauri::async_runtime::spawn(encode::process_files(
+        pack_state,
+        paths,
+        skip_duplicates,
+        app,
+        state.hardware_encoder.clone(),
+    ));
     Ok(())
 }
 
@@ -437,7 +452,9 @@ pub fn run() {
             let (tx, rx) = std::sync::mpsc::channel();
             tauri::async_runtime::spawn(async move {
                 match media_server::start(pack).await {
-                    Ok(port) => { tx.send(port).ok(); }
+                    Ok(port) => {
+                        tx.send(port).ok();
+                    }
                     Err(e) => eprintln!("media server failed to start: {e}"),
                 }
             });

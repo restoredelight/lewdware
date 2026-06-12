@@ -18,26 +18,29 @@ use tokio::{
     sync::mpsc::{Receiver, UnboundedSender, channel, unbounded_channel},
     task::LocalSet,
 };
-use winit::{dpi::LogicalPosition, event_loop::EventLoopProxy, window::WindowId};
+use winit::{event_loop::EventLoopProxy, window::WindowId};
 
 use crate::{
     app::UserEvent,
     lua::{
-        api::create_api, audio::AudioHandle, mode::{Mode, ReadSeek}, request::RequestSender, window::Window,
+        api::create_api,
+        audio::AudioHandle,
+        mode::{Mode, ReadSeek},
+        request::RequestSender,
+        window::Window,
     },
     media::MediaManager,
     monitor::Monitor,
 };
 
-pub use api::{Anchor, Coord, Notification, SpawnWindowOpts, WallpaperMode};
+pub use api::{Coord, Notification, SpawnWindowOpts, WallpaperMode};
 pub use media::{Media, MediaData, MediaType};
 pub use request::{AudioAction, LuaRequest, WindowAction};
-pub use window::{ChoiceWindowOption, Easing, MoveOpts, FadeOpts};
+pub use window::{ChoiceWindowOption, Easing, FadeOpts, MoveOpts};
 
 pub enum Event {
     WindowClosed { id: WindowId },
     MoveFinish { id: WindowId, move_id: u64 },
-    VideoFinish { id: WindowId },
     AudioFinish { id: u64 },
     PromptSubmit { id: WindowId, text: String },
     ChoiceSelect { id: WindowId, option_id: String },
@@ -55,12 +58,6 @@ pub struct WindowProps {
     pub y: u32,
     pub monitor: Monitor,
     pub visible: bool,
-}
-
-impl WindowProps {
-    pub fn position(&self) -> LogicalPosition<u32> {
-        LogicalPosition::new(self.x, self.y)
-    }
 }
 
 pub type Windows = Rc<RefCell<HashMap<WindowId, Window>>>;
@@ -135,25 +132,24 @@ pub fn start_lua_thread(
             .build()
             .expect("Failed to build tokio runtime");
 
-        let (media_manager, _) =
-            match MediaManager::open(
-                &config.pack_path.clone().unwrap(),
-                event_loop_proxy.clone(),
-                wgpu_device,
-            ) {
-                Ok(x) => x,
-                Err(err) => {
-                    eprintln!("{err}");
-                    return;
-                }
-            };
+        let (media_manager, _) = match MediaManager::open(
+            &config.pack_path.clone().unwrap(),
+            event_loop_proxy.clone(),
+            wgpu_device,
+        ) {
+            Ok(x) => x,
+            Err(err) => {
+                eprintln!("{err}");
+                return;
+            }
+        };
 
         let (mut file, mode): (Box<dyn ReadSeek>, _) = match config.mode.clone() {
             shared::user_config::Mode::Default(default_mode) => {
                 let mode_data = include_bytes!("../../../default-modes/build/Default Modes.lwmode");
 
                 (Box::new(Cursor::new(mode_data)), default_mode)
-            },
+            }
             shared::user_config::Mode::Pack { id, mode } => {
                 let mode_data = match rt.block_on(media_manager.get_mode(id)) {
                     Ok(data) => data,
@@ -164,7 +160,7 @@ pub fn start_lua_thread(
                 };
 
                 (Box::new(Cursor::new(mode_data)), mode)
-            },
+            }
             shared::user_config::Mode::File { path, mode } => {
                 let file = match File::open(path) {
                     Ok(file) => file,
@@ -175,11 +171,11 @@ pub fn start_lua_thread(
                 };
 
                 (Box::new(file), mode)
-            },
+            }
         };
 
         // TODO: Use header to decide API version
-        let (header, Metadata { modes, files, .. }) = match read_mode_metadata(&mut file) {
+        let (_header, Metadata { modes, files, .. }) = match read_mode_metadata(&mut file) {
             Ok(x) => x,
             Err(err) => {
                 eprintln!("{err}");
@@ -200,7 +196,10 @@ pub fn start_lua_thread(
 
         // Make sure the config contains all the correct options
         for (key, option) in mode_obj.options.iter() {
-            if mode_config.get(key).is_none_or(|value| !option.matches_value(value)) {
+            if mode_config
+                .get(key)
+                .is_none_or(|value| !option.matches_value(value))
+            {
                 mode_config.insert(key.clone(), option.default_value());
             }
         }
@@ -309,16 +308,6 @@ impl LuaRuntime {
             Event::FadeFinish { id, fade_id } => {
                 if let Some(window) = self.windows.borrow().get(&id).cloned() {
                     window.inner_window().on_fade_finished(fade_id);
-                }
-            }
-            Event::VideoFinish { id } => {
-                if let Some(window) = self.windows.borrow().get(&id).cloned() {
-                    match window {
-                        Window::Video(video_window) => {
-                            video_window.on_finish();
-                        }
-                        _ => bail!("Video finish event for a non-video window"),
-                    }
                 }
             }
             Event::AudioFinish { id } => {

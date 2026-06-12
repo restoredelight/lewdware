@@ -1,11 +1,10 @@
-mod pack;
-mod manager;
-mod dir;
-mod types;
 mod dev_pack;
+mod dir;
+mod manager;
+mod pack;
 mod process;
+mod types;
 
-pub use manager::{MediaManager, MediaTypes, MediaError};
+pub use manager::{MediaError, MediaManager, MediaTypes};
 
-pub use types::{Image, VideoData, Audio, FileOrPath, ImageData};
-
+pub use types::{Audio, FileOrPath, Image, ImageData, VideoData};

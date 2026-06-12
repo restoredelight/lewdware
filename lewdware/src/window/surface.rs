@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
-use tiny_skia::{PathBuilder, Pixmap, PixmapMut, Rect, Paint, Color, Stroke, Transform};
+use tiny_skia::{Color, Paint, PathBuilder, Pixmap, PixmapMut, Rect, Stroke, Transform};
 use winit::window::Window;
 
 use crate::{video::VideoFrame, window::video_renderer::VideoRenderer};

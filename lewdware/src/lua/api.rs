@@ -819,11 +819,7 @@ async fn spawn_choice(
     let opts = opts.unwrap_or_default();
 
     let props = request_sender
-        .spawn_choice(
-            opts.text.clone(),
-            opts.options.clone(),
-            opts.window_opts,
-        )
+        .spawn_choice(opts.text.clone(), opts.options.clone(), opts.window_opts)
         .await?;
 
     let id = props.window_id;

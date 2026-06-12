@@ -64,12 +64,7 @@ impl ImageWindow {
 
 pub struct VideoWindow {
     inner_window: InnerWindow,
-    state: RefCell<VideoWindowState>,
     video: Media,
-}
-
-struct VideoWindowState {
-    finish_callbacks: Vec<mlua::Function>,
 }
 
 impl UserData for VideoWindow {
@@ -82,12 +77,6 @@ impl UserData for VideoWindow {
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         InnerWindow::add_methods(methods);
-
-        methods.add_method("on_finish", |_, this, cb: mlua::Function| {
-            this.state.borrow_mut().finish_callbacks.push(cb);
-
-            Ok(())
-        });
 
         methods.add_async_method("pause", async |_, this, _: ()| {
             this.inner_window
@@ -115,31 +104,7 @@ impl VideoWindow {
     pub fn new(props: WindowProps, video: Media, request_tx: WindowRequestSender) -> Self {
         VideoWindow {
             inner_window: InnerWindow::new(props, request_tx),
-            state: RefCell::new(VideoWindowState::new()),
             video,
-        }
-    }
-
-    pub fn on_finish(&self) {
-        let callbacks = {
-            let state = self.state.borrow();
-            state.finish_callbacks.clone()
-        };
-
-        for cb in callbacks {
-            tokio::task::spawn_local(async move {
-                if let Err(err) = cb.call_async::<()>(()).await {
-                    eprintln!("{err}");
-                }
-            });
-        }
-    }
-}
-
-impl VideoWindowState {
-    fn new() -> Self {
-        Self {
-            finish_callbacks: Vec::new(),
         }
     }
 }
@@ -433,7 +398,9 @@ impl InnerWindow {
         fields.add_field_method_get("x", |_, this| Ok(this.inner_window().state.borrow().x));
         fields.add_field_method_get("y", |_, this| Ok(this.inner_window().state.borrow().y));
         fields.add_field_method_get("monitor", |_, this| Ok(this.inner_window().monitor.clone()));
-        fields.add_field_method_get("closed", |_, this| Ok(this.inner_window().state.borrow().closed));
+        fields.add_field_method_get("closed", |_, this| {
+            Ok(this.inner_window().state.borrow().closed)
+        });
         fields.add_field_method_get("visible", |_, this| {
             Ok(this.inner_window().state.borrow().visible)
         });

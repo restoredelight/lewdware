@@ -1,9 +1,11 @@
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use anyhow::Result;
 use wgpu::InstanceDescriptor;
 use winit::event_loop::OwnedDisplayHandle;
-
 
 /// A struct holding wgpu resources that should be shared between windows.
 pub struct WgpuState {
@@ -31,9 +33,8 @@ pub struct WgpuState {
         std::collections::HashMap<(wgpu::TextureFormat, bool), Arc<wgpu::RenderPipeline>>,
     >,
     // Packed-alpha YUV420p (always full-range). Key: surface format.
-    pub yuv_packed_alpha_pipelines: std::sync::Mutex<
-        std::collections::HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>,
-    >,
+    pub yuv_packed_alpha_pipelines:
+        std::sync::Mutex<std::collections::HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
 
     // NV12 video renderer resources (3 bindings: Y, UV, sampler)
     pub nv12_bind_group_layout: wgpu::BindGroupLayout,
@@ -44,9 +45,8 @@ pub struct WgpuState {
         std::collections::HashMap<(wgpu::TextureFormat, bool), Arc<wgpu::RenderPipeline>>,
     >,
     // Packed-alpha NV12: top half = color, bottom half = alpha (always full-range). Key: surface format.
-    pub nv12_packed_alpha_pipelines: std::sync::Mutex<
-        std::collections::HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>,
-    >,
+    pub nv12_packed_alpha_pipelines:
+        std::sync::Mutex<std::collections::HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
 }
 
 impl WgpuState {
@@ -57,15 +57,13 @@ impl WgpuState {
 
         #[allow(unused_mut)]
         let mut chosen_adapter = None;
-        #[allow(unused_mut)]
-        let mut windows_use_hardware_decode = false;
 
+        // We need DX12 for zero-copy hardware decoding on Windows
         #[cfg(target_os = "windows")]
         {
             for adapter in instance.enumerate_adapters(wgpu::Backends::PRIMARY).await {
                 if adapter.get_info().backend == wgpu::Backend::Dx12 {
                     chosen_adapter = Some(adapter);
-                    windows_use_hardware_decode = true;
                     break;
                 }
             }
@@ -193,10 +191,10 @@ impl WgpuState {
             ],
         });
 
-        let window_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Window Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let window_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Window Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -205,9 +203,8 @@ impl WgpuState {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Shared Pipeline Layout"),
@@ -270,7 +267,10 @@ impl WgpuState {
 
         let yuv_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("YUV Pipeline Layout"),
-            bind_group_layouts: &[Some(&yuv_bind_group_layout), Some(&window_bind_group_layout)],
+            bind_group_layouts: &[
+                Some(&yuv_bind_group_layout),
+                Some(&window_bind_group_layout),
+            ],
             immediate_size: 0,
         });
 
@@ -320,7 +320,10 @@ impl WgpuState {
 
         let nv12_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("NV12 Pipeline Layout"),
-            bind_group_layouts: &[Some(&nv12_bind_group_layout), Some(&window_bind_group_layout)],
+            bind_group_layouts: &[
+                Some(&nv12_bind_group_layout),
+                Some(&window_bind_group_layout),
+            ],
             immediate_size: 0,
         });
 

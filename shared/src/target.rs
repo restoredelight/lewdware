@@ -80,7 +80,10 @@ use serde::{Deserialize, Serialize};
 ///     ..Opts,
 ///     tags
 ///   }
-pub type Target<Primary, PrimaryStruct, Opts = Empty, ExtraOpts = Empty> = Either<Items<Primary, PrimaryStruct, Opts>, WithDefaults<Primary, PrimaryStruct, Opts, ExtraOpts>>;
+pub type Target<Primary, PrimaryStruct, Opts = Empty, ExtraOpts = Empty> = Either<
+    Items<Primary, PrimaryStruct, Opts>,
+    WithDefaults<Primary, PrimaryStruct, Opts, ExtraOpts>,
+>;
 
 /// A helper macro to create a struct to pass into the `PrimaryStruct` argument of `Target`.
 #[macro_export]
@@ -115,7 +118,10 @@ where
 }
 
 #[derive(Serialize, Deserialize, Default)]
-pub struct Default<Opts> where Opts: default::Default + Merge {
+pub struct Default<Opts>
+where
+    Opts: default::Default + Merge,
+{
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(flatten)]
@@ -127,7 +133,10 @@ pub struct Empty {}
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum Items<Primary, PrimaryStruct, Opts> where Opts: default::Default {
+pub enum Items<Primary, PrimaryStruct, Opts>
+where
+    Opts: default::Default,
+{
     Single(Item<Primary, PrimaryStruct, Opts>),
     Multiple(Vec<Item<Primary, PrimaryStruct, Opts>>),
 }

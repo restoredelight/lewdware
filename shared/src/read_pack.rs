@@ -129,7 +129,10 @@ impl Header {
     }
 
     pub fn is_default(&self) -> bool {
-        return self.index_offset == 0 && self.index_length == 0 && self.metadata_offset == 0 && self.metadata_length == 0;
+        return self.index_offset == 0
+            && self.index_length == 0
+            && self.metadata_offset == 0
+            && self.metadata_length == 0;
     }
 }
 
@@ -163,8 +166,7 @@ pub async fn read_pack_metadata_async<F: AsyncRead + AsyncSeek + Unpin>(
 
     let header = Header::from_buf(buf)?;
 
-    file.seek(SeekFrom::Start(header.metadata_offset))
-        .await?;
+    file.seek(SeekFrom::Start(header.metadata_offset)).await?;
 
     let mut buf = vec![0u8; header.metadata_length as usize];
     file.read_exact(&mut buf).await?;

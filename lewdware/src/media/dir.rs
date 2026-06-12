@@ -1,4 +1,6 @@
-use std::path::{Path};
+#![allow(unused)]
+
+use std::path::Path;
 
 use anyhow::Result;
 use image::ImageReader;
@@ -7,7 +9,7 @@ use walkdir::WalkDir;
 
 use ffmpeg_next as ffmpeg;
 
-use crate::media::process::{process_path, Audio, Media, MediaType, Processed};
+use crate::media::process::{Audio, Media, MediaType, Processed, process_path};
 use crate::media::types::ImageData;
 use crate::media::{self, Image, types::FileOrPath};
 
@@ -69,8 +71,12 @@ impl MediaDir {
             .media
             .iter()
             .filter_map(|x| match x.media_type {
-                MediaType::Image { width, height, transparent } => Some((&x.path, width, height, transparent)),
-                _ => None
+                MediaType::Image {
+                    width,
+                    height,
+                    transparent,
+                } => Some((&x.path, width, height, transparent)),
+                _ => None,
             })
             .nth(index)
         {

@@ -85,7 +85,11 @@ impl VideoRenderer {
     ) -> Self {
         let device = &wgpu_state.device;
         // When packed_alpha, the decoded frame is twice the display height.
-        let decoded_height = if packed_alpha { video_height * 2 } else { video_height };
+        let decoded_height = if packed_alpha {
+            video_height * 2
+        } else {
+            video_height
+        };
         let chroma_w = (video_width + 1) / 2;
         let chroma_h = (decoded_height + 1) / 2;
 

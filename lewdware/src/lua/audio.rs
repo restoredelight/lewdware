@@ -52,7 +52,12 @@ impl UserData for AudioHandle {
 }
 
 impl AudioHandle {
-    pub fn new(id: u64, audio: Media, request_sender: AudioRequestSender, audio_handles: AudioHandles) -> Self {
+    pub fn new(
+        id: u64,
+        audio: Media,
+        request_sender: AudioRequestSender,
+        audio_handles: AudioHandles,
+    ) -> Self {
         Self {
             id,
             audio,

@@ -10,10 +10,10 @@ use tokio::sync::mpsc;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, PhysicalUnit};
 use winit::window::Window;
 
-use crate::wgpu::WgpuState;
 use crate::error::{LewdwareError, MonitorError};
-use crate::lua::{self, Coord, Easing, MoveOpts, FadeOpts};
+use crate::lua::{self, Coord, Easing, FadeOpts, MoveOpts};
 use crate::video::{VideoFrame, VideoPixelFormat};
+use crate::wgpu::WgpuState;
 use crate::window::header::HEADER_HEIGHT;
 use crate::window::surface::Buffer;
 use crate::window::video_renderer::{VideoRenderer, upload_texture_data};
@@ -147,22 +147,26 @@ impl<'a> InnerWindow<'a> {
 
             use wgpu::util::DeviceExt;
             let opacity_val = opacity.unwrap_or(1.0);
-            let opacity_buffer = wgpu_state.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Opacity Buffer"),
-                contents: bytemuck::cast_slice(&[opacity_val]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+            let opacity_buffer =
+                wgpu_state
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Opacity Buffer"),
+                        contents: bytemuck::cast_slice(&[opacity_val]),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    });
 
-            let window_bind_group = wgpu_state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Window Bind Group"),
-                layout: &wgpu_state.window_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: opacity_buffer.as_entire_binding(),
-                    },
-                ],
-            });
+            let window_bind_group =
+                wgpu_state
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Window Bind Group"),
+                        layout: &wgpu_state.window_bind_group_layout,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: opacity_buffer.as_entire_binding(),
+                        }],
+                    });
 
             Surface::Wgpu {
                 surface,
@@ -244,7 +248,9 @@ impl<'a> InnerWindow<'a> {
     pub fn set_opacity(&mut self, opacity: f32) {
         self.opacity = opacity;
         if let Surface::Wgpu { opacity_buffer, .. } = &self.surface {
-            self.wgpu_state.queue.write_buffer(opacity_buffer, 0, bytemuck::cast_slice(&[opacity]));
+            self.wgpu_state
+                .queue
+                .write_buffer(opacity_buffer, 0, bytemuck::cast_slice(&[opacity]));
             self.request_redraw();
         }
     }
@@ -657,9 +663,11 @@ impl<'a> InnerWindow<'a> {
 
             let new_position = LogicalPosition::new(
                 current_move.from.x
-                    + ((current_move.to.x as f64 - current_move.from.x as f64) * eased_percent).round() as u32,
+                    + ((current_move.to.x as f64 - current_move.from.x as f64) * eased_percent)
+                        .round() as u32,
                 current_move.from.y
-                    + ((current_move.to.y as f64 - current_move.from.y as f64) * eased_percent).round() as u32,
+                    + ((current_move.to.y as f64 - current_move.from.y as f64) * eased_percent)
+                        .round() as u32,
             );
 
             if new_position != self.position {
@@ -716,22 +724,23 @@ impl<'a> InnerWindow<'a> {
     }
 
     pub fn update_fade(&mut self) {
-        let (new_opacity, percent, is_finished, fade_id) = if let Some(current_fade) = &self.current_fade {
-            let percent = current_fade
-                .start
-                .elapsed()
-                .div_duration_f64(current_fade.duration)
-                .min(1.0);
+        let (new_opacity, _percent, is_finished, fade_id) =
+            if let Some(current_fade) = &self.current_fade {
+                let percent = current_fade
+                    .start
+                    .elapsed()
+                    .div_duration_f64(current_fade.duration)
+                    .min(1.0);
 
-            let eased_percent = current_fade.easing.apply(percent);
+                let eased_percent = current_fade.easing.apply(percent);
 
-            let new_opacity = current_fade.from
-                + ((current_fade.to - current_fade.from) as f64 * eased_percent) as f32;
+                let new_opacity = current_fade.from
+                    + ((current_fade.to - current_fade.from) as f64 * eased_percent) as f32;
 
-            (new_opacity, percent, percent >= 1.0, current_fade.id)
-        } else {
-            return;
-        };
+                (new_opacity, percent, percent >= 1.0, current_fade.id)
+            } else {
+                return;
+            };
 
         if new_opacity != self.opacity {
             self.set_opacity(new_opacity);

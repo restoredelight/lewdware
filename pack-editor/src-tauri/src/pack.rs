@@ -3,9 +3,8 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{
-        Arc,
-        RwLock as StdRwLock,
         atomic::{AtomicBool, Ordering},
+        Arc, RwLock as StdRwLock,
     },
     thread::available_parallelism,
 };
@@ -247,7 +246,11 @@ impl MediaPack {
             saving: self.saving.clone(),
             dir: self.dir.clone(),
             db_pool: self.db_pool.clone(),
-            thread_pool: Arc::new(rayon::ThreadPoolBuilder::new().num_threads(threads).build()?),
+            thread_pool: Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()?,
+            ),
         })
     }
 
@@ -305,7 +308,10 @@ impl MediaPack {
         OpenOptions::new().write(true).open(&self.path).await
     }
 
-    pub async fn save(&self, on_progress: impl Fn(usize, usize) + Send + Sync + 'static) -> Result<()> {
+    pub async fn save(
+        &self,
+        on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
+    ) -> Result<()> {
         if self.saved.load(Ordering::Relaxed) {
             return Ok(());
         }
@@ -328,7 +334,8 @@ impl MediaPack {
         let buf = self.metadata.read().unwrap().to_buf()?;
         let metadata_length = buf.len() as u64;
         file.write_all(&buf).await?;
-        file.set_len(offset + metadata_length + index_length).await?;
+        file.set_len(offset + metadata_length + index_length)
+            .await?;
 
         let header = Header {
             id: self.header.read().unwrap().id,
@@ -362,19 +369,17 @@ impl MediaPack {
                 .write(true)
                 .open(to_path.as_ref().unwrap_or(&path))?;
 
-            let mut num_files: usize = conn.query_row_and_then(
-                "SELECT COUNT(*) as files FROM media",
-                params![],
-                |row| row.get("files"),
-            )?;
+            let mut num_files: usize =
+                conn.query_row_and_then("SELECT COUNT(*) as files FROM media", params![], |row| {
+                    row.get("files")
+                })?;
 
             let mut offset = HEADER_SIZE as u64;
 
             let mut get_stmt = conn.prepare(
                 "SELECT id, offset, length FROM media WHERE offset IS NOT NULL ORDER BY offset",
             )?;
-            let mut edit_offset_stmt =
-                conn.prepare("UPDATE media SET offset = ? WHERE id = ?")?;
+            let mut edit_offset_stmt = conn.prepare("UPDATE media SET offset = ? WHERE id = ?")?;
 
             let mut media = get_stmt
                 .query_map(params![], |row| {
@@ -420,10 +425,9 @@ impl MediaPack {
                 on_progress(saved, num_files);
             }
 
-            let mut get_stmt =
-                conn.prepare("SELECT id, path FROM media WHERE path IS NOT NULL")?;
-            let mut set_offset_len = conn
-                .prepare("UPDATE media SET offset = ?, length = ?, path = NULL WHERE id = ?")?;
+            let mut get_stmt = conn.prepare("SELECT id, path FROM media WHERE path IS NOT NULL")?;
+            let mut set_offset_len =
+                conn.prepare("UPDATE media SET offset = ?, length = ?, path = NULL WHERE id = ?")?;
 
             let media = get_stmt.query_map::<(i64, String), _, _>(params![], |row| {
                 Ok((row.get("id")?, row.get("path")?))
@@ -476,7 +480,9 @@ impl MediaPack {
             file.sync_data().await?;
         } else {
             let on_progress = Arc::new(on_progress);
-            let offset = self.write_files(Some(path.to_path_buf()), on_progress).await?;
+            let offset = self
+                .write_files(Some(path.to_path_buf()), on_progress)
+                .await?;
 
             self.db_execute(|conn| conn.execute("VACUUM", []).map_err(|err| err.into()))
                 .await?;
@@ -490,7 +496,8 @@ impl MediaPack {
             let buf = self.metadata.read().unwrap().to_buf()?;
             let metadata_length = buf.len() as u64;
             file.write_all(&buf).await?;
-            file.set_len(offset + metadata_length + index_length).await?;
+            file.set_len(offset + metadata_length + index_length)
+                .await?;
 
             let header = Header {
                 id: Uuid::new_v4(),
@@ -520,7 +527,13 @@ impl MediaPack {
         // Extract all header fields before any .await so Ref<Header> doesn't cross await points
         let (not_saved_yet, metadata_offset, metadata_length, index_offset, index_length) = {
             let h = self.header.read().unwrap();
-            (h.is_default(), h.metadata_offset, h.metadata_length, h.index_offset, h.index_length)
+            (
+                h.is_default(),
+                h.metadata_offset,
+                h.metadata_length,
+                h.index_offset,
+                h.index_length,
+            )
         };
 
         let metadata = if not_saved_yet {
@@ -727,11 +740,10 @@ impl MediaPack {
     pub async fn add_tag(&self, id: u64, tag: String) -> Result<()> {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| {
-            let tag_id: u64 = conn.query_row(
-                "SELECT id FROM tags WHERE name = ?",
-                params![tag],
-                |row| row.get("id"),
-            )?;
+            let tag_id: u64 =
+                conn.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
+                    row.get("id")
+                })?;
             conn.execute(
                 "INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?)",
                 params![id, tag_id],
@@ -793,7 +805,10 @@ impl MediaPack {
     pub async fn set_title(&self, id: u64, name: String) -> Result<()> {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| {
-            conn.execute("UPDATE media SET file_name = ? WHERE id = ?", params![name, id])?;
+            conn.execute(
+                "UPDATE media SET file_name = ? WHERE id = ?",
+                params![name, id],
+            )?;
             Ok(())
         })
         .await?;
@@ -925,7 +940,12 @@ impl MediaPackView {
                 file.seek(SeekFrom::Start(offset + start)).await?;
                 let mut buf = vec![0u8; (end - start) as usize];
                 file.read_exact(&mut buf).await?;
-                DataRange { data: buf, start, end, total_size: length }
+                DataRange {
+                    data: buf,
+                    start,
+                    end,
+                    total_size: length,
+                }
             }
             (_, _, Some(path)) => {
                 let path = self.dir.join("media").join(path);
@@ -935,7 +955,12 @@ impl MediaPackView {
                 file.seek(SeekFrom::Start(start)).await?;
                 let mut buf = vec![0u8; (end - start) as usize];
                 file.read_exact(&mut buf).await?;
-                DataRange { data: buf, start, end, total_size: size }
+                DataRange {
+                    data: buf,
+                    start,
+                    end,
+                    total_size: size,
+                }
             }
             _ => bail!("No offset, length or path"),
         };

@@ -1,14 +1,22 @@
 mod build;
 mod config;
-mod new;
 mod dev;
+mod new;
 
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, bail};
 use clap::Subcommand;
 
-use crate::mode::{build::{BuildArgs, build}, config::Config, dev::{DevArgs, dev}, new::create_new_mode};
+use crate::mode::{
+    build::{BuildArgs, build},
+    config::Config,
+    dev::{DevArgs, dev},
+    new::create_new_mode,
+};
 
 #[derive(Subcommand)]
 pub enum ModeCommand {
@@ -46,5 +54,7 @@ fn find_root() -> Result<PathBuf> {
 }
 
 fn read_config(root: &Path) -> Result<Config> {
-    Ok(json5::from_str(&fs::read_to_string(root.join("config.jsonc"))?)?)
+    Ok(json5::from_str(&fs::read_to_string(
+        root.join("config.jsonc"),
+    )?)?)
 }

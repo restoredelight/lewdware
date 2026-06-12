@@ -7,12 +7,12 @@ use anyhow::Result;
 use egui::Ui;
 use egui_software_backend::{BufferMutRef, ColorFieldOrder, EguiSoftwareRender};
 use egui_wgpu::{RendererOptions, wgpu};
-use wgpu::InstanceDescriptor;
-use winit::{event::WindowEvent, event_loop::OwnedDisplayHandle, window::Window};
+use winit::{event::WindowEvent, window::Window};
 
 use crate::wgpu::WgpuState;
 
 /// A struct handling rendering onto a winit window using egui.
+#[allow(unused)]
 pub struct EguiWindow<'a> {
     context: egui::Context,
     window: Arc<Window>,
@@ -26,6 +26,7 @@ pub struct EguiWindow<'a> {
     repaint_requested: Arc<AtomicBool>,
 }
 
+#[allow(unused)]
 impl<'a> EguiWindow<'a> {
     pub fn new(wgpu_state: &WgpuState, window: Arc<Window>) -> Result<Self> {
         let context = egui::Context::default();

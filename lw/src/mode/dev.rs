@@ -74,12 +74,12 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
 
     while let Ok(()) = rx.recv() {
         println!("Oh?");
-        while let Ok(()) = rx.try_recv() { }
+        while let Ok(()) = rx.try_recv() {}
         thread::sleep(Duration::from_millis(200));
         loop {
             if let Ok(()) = rx.try_recv() {
                 thread::sleep(Duration::from_millis(200));
-                while let Ok(()) = rx.try_recv() { }
+                while let Ok(()) = rx.try_recv() {}
             } else {
                 break;
             }

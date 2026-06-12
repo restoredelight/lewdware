@@ -633,7 +633,16 @@ fn encode_video_with_transparency(
         command.arg("-an");
     }
 
-    command.args(["-c:v", "libx264", "-crf", "23", "-color_range", "pc", "-pix_fmt", "yuv420p"]);
+    command.args([
+        "-c:v",
+        "libx264",
+        "-crf",
+        "23",
+        "-color_range",
+        "pc",
+        "-pix_fmt",
+        "yuv420p",
+    ]);
 
     if fixed_fps {
         command.arg("-r").arg("30");

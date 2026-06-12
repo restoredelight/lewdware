@@ -38,10 +38,13 @@ impl MediaManager {
     ) -> anyhow::Result<(Self, Metadata)> {
         let (tx, metadata) = spawn_media_manager_thread(pack_path, event_loop_proxy)?;
 
-        Ok((Self {
-            tx,
-            wgpu_device: wgpu_device,
-        }, metadata))
+        Ok((
+            Self {
+                tx,
+                wgpu_device: wgpu_device,
+            },
+            metadata,
+        ))
     }
 
     async fn send<T>(
@@ -152,7 +155,11 @@ impl MediaManager {
     }
 
     pub async fn get_mode(&self, id: u64) -> anyhow::Result<Vec<u8>> {
-        self.send(|tx| MediaRequest::GetModeData { id, response_tx: tx }).await?
+        self.send(|tx| MediaRequest::GetModeData {
+            id,
+            response_tx: tx,
+        })
+        .await?
     }
 }
 
@@ -263,11 +270,6 @@ async fn handle_request(
     } {
         eprintln!("Failed to send response");
     }
-}
-
-struct Request {
-    pub id: u64,
-    pub request: MediaRequest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

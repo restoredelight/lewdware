@@ -1,4 +1,4 @@
-use std::{sync::{Arc, LazyLock}};
+use std::sync::{Arc, LazyLock};
 
 use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
@@ -26,9 +26,7 @@ pub const HEADER_HEIGHT: u32 = 24;
 
 static FONT: LazyLock<Option<FontArc>> = LazyLock::new(|| {
     let font_definitions = egui::FontDefinitions::default();
-    let font_data = font_definitions
-        .font_data
-        .get("Ubuntu-Light");
+    let font_data = font_definitions.font_data.get("Ubuntu-Light");
 
     if let Some(data) = font_data {
         FontArc::try_from_vec(data.font.to_vec()).ok()
@@ -79,7 +77,8 @@ impl Header {
         let header_rect =
             Rect::from_xywh(0.0, 0.0, self.size.width as f32, self.size.height as f32).unwrap();
 
-        self.pixmap.fill_rect(header_rect, &paint, transform.clone(), None);
+        self.pixmap
+            .fill_rect(header_rect, &paint, transform.clone(), None);
 
         self.background_drawn = true;
     }
@@ -188,7 +187,8 @@ impl Header {
             }
         };
 
-        self.pixmap.fill_rect(close_rect, &paint, transform.clone(), None);
+        self.pixmap
+            .fill_rect(close_rect, &paint, transform.clone(), None);
 
         if self.clicked || self.hover {
             paint.set_color(Color::WHITE);
@@ -207,7 +207,8 @@ impl Header {
 
         let path = left_line.finish().unwrap();
 
-        self.pixmap.stroke_path(&path, &paint, &Stroke::default(), transform.clone(), None);
+        self.pixmap
+            .stroke_path(&path, &paint, &Stroke::default(), transform.clone(), None);
 
         let mut right_line = PathBuilder::new();
         right_line.move_to(cross_middle_x - cross_offset, cross_middle_y + cross_offset);
@@ -215,7 +216,8 @@ impl Header {
 
         let path = right_line.finish().unwrap();
 
-        self.pixmap.stroke_path(&path, &paint, &Stroke::default(), transform.clone(), None);
+        self.pixmap
+            .stroke_path(&path, &paint, &Stroke::default(), transform.clone(), None);
     }
 
     pub fn draw(&mut self) -> Option<&Pixmap> {

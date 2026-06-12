@@ -28,6 +28,7 @@ impl Mode {
         }
     }
 
+    #[allow(unused)]
     pub fn metadata(&self) -> anyhow::Result<Metadata> {
         let (_, metadata) = read_mode_metadata(&mut *self.file.borrow_mut())?;
 

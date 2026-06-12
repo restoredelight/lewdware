@@ -18,7 +18,6 @@ use winit::{
 };
 
 use crate::audio::AudioPlayer;
-use crate::wgpu::WgpuState;
 use crate::error::{LewdwareError, MonitorError, Result};
 use crate::lua::{
     self, AudioAction, ChoiceWindowOption, LuaRequest, Notification, SpawnWindowOpts,
@@ -28,7 +27,10 @@ use crate::media::{FileOrPath, ImageData};
 use crate::monitor::Monitors;
 use crate::utils::calculate_media_popup_size;
 use crate::video::VideoDecoder;
-use crate::window::{ChoiceWindow, ImageWindow, InnerWindow, PromptWindow, VideoWindow, WindowType, HEADER_HEIGHT};
+use crate::wgpu::WgpuState;
+use crate::window::{
+    ChoiceWindow, HEADER_HEIGHT, ImageWindow, InnerWindow, PromptWindow, VideoWindow, WindowType,
+};
 
 /// The main app.
 /// * `windows`: A map containing all the windows spawned by the app. Since dropping a winit window
@@ -36,7 +38,7 @@ use crate::window::{ChoiceWindow, ImageWindow, InnerWindow, PromptWindow, VideoW
 /// * `default_wallpaper`: Stores the user's default wallpaper, so we can restore it on panic.
 pub struct ChaosApp<'a> {
     running: bool,
-    config: Arc<AppConfig>,
+    _config: Arc<AppConfig>,
     wgpu_state: Arc<WgpuState>,
     windows: HashMap<WindowId, WindowType<'a>>,
     audio_players: HashMap<u64, AudioPlayer>,
@@ -45,7 +47,6 @@ pub struct ChaosApp<'a> {
     lua_request_rx: tokio::sync::mpsc::Receiver<lua::LuaRequest>,
     lua_event_tx: tokio::sync::mpsc::UnboundedSender<lua::Event>,
     monitors: Monitors,
-    event_loop_proxy: EventLoopProxy<UserEvent>,
 }
 
 enum WindowSizeBehaviour {
@@ -91,17 +92,14 @@ impl<'a> ChaosApp<'a> {
         //     end)
         // end)
 
-        let (lua_event_tx, lua_request_rx) = start_lua_thread(
-            event_loop_proxy.clone(),
-            config.clone(),
-            wgpu_state.device.clone(),
-        );
+        let (lua_event_tx, lua_request_rx) =
+            start_lua_thread(event_loop_proxy, config.clone(), wgpu_state.device.clone());
 
         let monitors = Monitors::new(config.disabled_monitors.clone());
 
         Ok(Self {
             running: false,
-            config,
+            _config: config,
             wgpu_state: wgpu_state,
             windows: HashMap::new(),
             audio_players: HashMap::new(),
@@ -110,7 +108,6 @@ impl<'a> ChaosApp<'a> {
             lua_request_rx,
             lua_event_tx,
             monitors,
-            event_loop_proxy,
         })
     }
 

@@ -9,13 +9,13 @@ use std::{
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use shared::{
     db::migrate,
     mode::{self, Metadata, OptionType, OptionValue},
     read_pack::read_pack_metadata,
     user_config::{self, AppConfig, Key, Mode},
 };
-use serde_json::Value as JsonValue;
 use tauri::AppHandle;
 use tempfile::NamedTempFile;
 
@@ -196,7 +196,10 @@ fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
         modes.push(PackModeEntry { id, metadata });
     }
 
-    Ok(LoadedPack { _db_file: db_file, modes })
+    Ok(LoadedPack {
+        _db_file: db_file,
+        modes,
+    })
 }
 
 fn load_mode_file(path: PathBuf) -> anyhow::Result<UploadedModeEntry> {
@@ -222,14 +225,21 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
             .iter()
             .flat_map(|m| {
                 m.metadata.modes.iter().map(|(key, mode)| ModeEntryDto {
-                    id: ModeIdDto::Pack { id: m.id, mode: key.clone() },
+                    id: ModeIdDto::Pack {
+                        id: m.id,
+                        mode: key.clone(),
+                    },
                     name: mode.name.clone(),
                 })
             })
             .collect();
 
         if !entries.is_empty() {
-            groups.push(ModeGroupDto { label, source: "pack".into(), entries });
+            groups.push(ModeGroupDto {
+                label,
+                source: "pack".into(),
+                entries,
+            });
         }
     }
 
@@ -248,12 +258,19 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
             .modes
             .iter()
             .map(|(key, mode)| ModeEntryDto {
-                id: ModeIdDto::File { path: path_str.clone(), mode: key.clone() },
+                id: ModeIdDto::File {
+                    path: path_str.clone(),
+                    mode: key.clone(),
+                },
                 name: mode.name.clone(),
             })
             .collect();
 
-        groups.push(ModeGroupDto { label, source: "uploaded".into(), entries });
+        groups.push(ModeGroupDto {
+            label,
+            source: "uploaded".into(),
+            entries,
+        });
     }
 
     let entries: Vec<_> = state
@@ -300,7 +317,11 @@ fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<ModeOptionD
         return Vec::new();
     };
 
-    let stored = config.mode_options.get(&config.mode).cloned().unwrap_or_default();
+    let stored = config
+        .mode_options
+        .get(&config.mode)
+        .cloned()
+        .unwrap_or_default();
 
     mode_meta
         .options
@@ -370,7 +391,12 @@ async fn get_monitors(app_handle: AppHandle, state: State<'_>) -> Result<Vec<Mon
             let size = m.size();
             let name = format!("{id} ({}x{})", size.width, size.height);
             let is_disabled = disabled.contains(&id);
-            Some(MonitorDto { id, name, primary, disabled: is_disabled })
+            Some(MonitorDto {
+                id,
+                name,
+                primary,
+                disabled: is_disabled,
+            })
         })
         .collect();
 
@@ -403,7 +429,11 @@ fn set_mode_option(state: State<'_>, key: String, value: JsonValue) -> Result<()
     let typed_value = coerce_option_value(value, opt_type.as_ref())
         .ok_or_else(|| "invalid option value".to_string())?;
 
-    config.mode_options.entry(mode).or_default().insert(key, typed_value);
+    config
+        .mode_options
+        .entry(mode)
+        .or_default()
+        .insert(key, typed_value);
     let uploaded = state.uploaded.lock().unwrap();
     save_to_disk(&config, &uploaded).map_err(|e| e.to_string())
 }
@@ -419,7 +449,13 @@ fn get_option_type_for_key(
         Mode::Pack { id, mode } => {
             let pack = state.pack.lock().unwrap();
             pack.as_ref().and_then(|p| {
-                p.modes.iter().find(|m| m.id == *id)?.metadata.modes.get(mode).cloned()
+                p.modes
+                    .iter()
+                    .find(|m| m.id == *id)?
+                    .metadata
+                    .modes
+                    .get(mode)
+                    .cloned()
             })
         }
         Mode::File { path, mode } => {
@@ -439,9 +475,7 @@ fn get_option_type_for_key(
 
 fn coerce_option_value(value: JsonValue, opt_type: Option<&OptionType>) -> Option<OptionValue> {
     match (opt_type, &value) {
-        (Some(OptionType::Enum { .. }), JsonValue::String(s)) => {
-            Some(OptionValue::Enum(s.clone()))
-        }
+        (Some(OptionType::Enum { .. }), JsonValue::String(s)) => Some(OptionValue::Enum(s.clone())),
         (Some(OptionType::Integer { .. }), JsonValue::Number(n)) => {
             Some(OptionValue::Integer(n.as_i64()?))
         }
@@ -451,9 +485,7 @@ fn coerce_option_value(value: JsonValue, opt_type: Option<&OptionType>) -> Optio
         (Some(OptionType::String { .. }), JsonValue::String(s)) => {
             Some(OptionValue::String(s.clone()))
         }
-        (Some(OptionType::Boolean { .. }), JsonValue::Bool(b)) => {
-            Some(OptionValue::Boolean(*b))
-        }
+        (Some(OptionType::Boolean { .. }), JsonValue::Bool(b)) => Some(OptionValue::Boolean(*b)),
         // fallback: untagged deserialize
         _ => serde_json::from_value(value).ok(),
     }
@@ -467,7 +499,10 @@ pub struct PickPackResult {
 }
 
 #[tauri::command]
-async fn pick_pack(app_handle: AppHandle, state: State<'_>) -> Result<Option<PickPackResult>, String> {
+async fn pick_pack(
+    app_handle: AppHandle,
+    state: State<'_>,
+) -> Result<Option<PickPackResult>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let path = app_handle
@@ -534,7 +569,10 @@ pub struct UploadModeResult {
 }
 
 #[tauri::command]
-async fn upload_mode(app_handle: AppHandle, state: State<'_>) -> Result<Option<UploadModeResult>, String> {
+async fn upload_mode(
+    app_handle: AppHandle,
+    state: State<'_>,
+) -> Result<Option<UploadModeResult>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let path = app_handle
@@ -551,7 +589,9 @@ async fn upload_mode(app_handle: AppHandle, state: State<'_>) -> Result<Option<U
     {
         let uploaded = state.uploaded.lock().unwrap();
         if uploaded.iter().any(|u| u.path == path) {
-            return Ok(Some(UploadModeResult { mode_groups: build_mode_groups(&state) }));
+            return Ok(Some(UploadModeResult {
+                mode_groups: build_mode_groups(&state),
+            }));
         }
     }
 
@@ -570,7 +610,9 @@ async fn upload_mode(app_handle: AppHandle, state: State<'_>) -> Result<Option<U
     let uploaded = state.uploaded.lock().unwrap();
     save_to_disk(&config, &uploaded).map_err(|e| e.to_string())?;
 
-    Ok(Some(UploadModeResult { mode_groups: build_mode_groups(&state) }))
+    Ok(Some(UploadModeResult {
+        mode_groups: build_mode_groups(&state),
+    }))
 }
 
 #[tauri::command]
@@ -595,10 +637,18 @@ fn remove_uploaded_mode(state: State<'_>, path: String) -> Result<Vec<ModeGroupD
 // ─── Process management ───────────────────────────────────────────────────────
 
 fn find_lewdware() -> Option<Command> {
-    let bin_name = if cfg!(windows) { "lewdware.exe" } else { "lewdware" };
+    let bin_name = if cfg!(windows) {
+        "lewdware.exe"
+    } else {
+        "lewdware"
+    };
 
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.canonicalize().ok().and_then(|p| p.parent().map(|p| p.to_owned())) {
+        if let Some(dir) = exe
+            .canonicalize()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_owned()))
+        {
             let neighbor = dir.join(bin_name);
             if neighbor.exists() {
                 let mut cmd = Command::new(neighbor);
@@ -643,7 +693,9 @@ fn stop_lewdware(state: State<'_>) -> Result<(), String> {
         let _ = child.kill();
 
         // Reap without blocking the command thread.
-        std::thread::spawn(move || { let _ = child.wait(); });
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
     }
 
     Ok(())
@@ -662,8 +714,7 @@ fn lewdware_running(state: State<'_>) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let default_modes_bytes =
-        include_bytes!("../../../default-modes/build/Default Modes.lwmode");
+    let default_modes_bytes = include_bytes!("../../../default-modes/build/Default Modes.lwmode");
     let default_modes = mode::read_mode_metadata(&mut Cursor::new(default_modes_bytes))
         .expect("failed to load embedded default modes")
         .1;

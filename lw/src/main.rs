@@ -26,9 +26,6 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Mode { command } => {
-            handle_mode_command(command)
-        }
+        Commands::Mode { command } => handle_mode_command(command),
     }
 }
-

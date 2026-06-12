@@ -47,7 +47,7 @@ impl Display for LewdwareError {
             Self::WrongWindowType { expected, actual } => {
                 writeln!(f, "Wrong window type")?;
                 write!(f, "Expected {expected}, got {actual}")
-            },
+            }
             Self::AudioHandleNotFound => write!(f, "Audio handle not found"),
             Self::MediaError(error) => error.fmt(f),
             Self::Internal(err) => write!(f, "Internal error: {err}"),
@@ -69,7 +69,7 @@ impl Display for MonitorError {
         match self {
             Self::MonitorNotFound => write!(f, "Monitor not found"),
             Self::NoAvailableMonitors => write!(f, "No available monitors"),
-            Self::WindowMonitorNotFound => write!(f, "Monitor not found for the current window")
+            Self::WindowMonitorNotFound => write!(f, "Monitor not found for the current window"),
         }
     }
 }

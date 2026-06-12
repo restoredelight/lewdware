@@ -58,10 +58,18 @@ pub struct Key {
 impl std::fmt::Display for Key {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts = Vec::new();
-        if self.modifiers.ctrl  { parts.push("Ctrl");  }
-        if self.modifiers.alt   { parts.push("Alt");   }
-        if self.modifiers.shift { parts.push("Shift"); }
-        if self.modifiers.meta  { parts.push("Meta");  }
+        if self.modifiers.ctrl {
+            parts.push("Ctrl");
+        }
+        if self.modifiers.alt {
+            parts.push("Alt");
+        }
+        if self.modifiers.shift {
+            parts.push("Shift");
+        }
+        if self.modifiers.meta {
+            parts.push("Meta");
+        }
         parts.push(&self.name);
         write!(f, "{}", parts.join(" + "))
     }

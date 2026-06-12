@@ -4,7 +4,8 @@ use std::{
     fs,
     io::{self, ErrorKind},
     mem,
-    path::{Path, PathBuf}, str::FromStr,
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use crate::{
@@ -90,11 +91,13 @@ impl Display for ConfigError {
                 error,
             } => {
                 writeln!(f, "Error in {}: {}", file.display(), error)?;
-                if let Some(position) = error.position() && let Some(line) = string.lines().nth(position.line) {
+                if let Some(position) = error.position()
+                    && let Some(line) = string.lines().nth(position.line)
+                {
                     writeln!(f, "{}", line)?;
                     write!(f, "{}^", " ".repeat(position.column - 1))?;
                 }
-            },
+            }
             ConfigError::PackOptsError { file, error } => {
                 writeln!(f, "Error in {}", file.display())?;
                 error.fmt(f)?;

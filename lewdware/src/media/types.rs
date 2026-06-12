@@ -10,6 +10,7 @@ use tempfile::NamedTempFile;
 // }
 
 #[derive(Debug)]
+#[allow(unused)]
 pub struct Image {
     pub width: u64,
     pub height: u64,
@@ -20,15 +21,7 @@ pub struct Image {
 pub type ImageData = image::ImageBuffer<image::Rgba<u8>, Vec<u8>>;
 
 #[derive(Debug)]
-pub struct Video {
-    pub width: u64,
-    pub height: u64,
-    pub duration: f64,
-    pub audio: bool,
-    pub file: FileOrPath,
-}
-
-#[derive(Debug)]
+#[allow(unused)]
 pub struct VideoData {
     pub width: u32,
     pub height: u32,
@@ -51,18 +44,9 @@ impl FileOrPath {
     }
 }
 
+#[allow(unused)]
 #[derive(Debug)]
 pub struct Audio {
     pub duration: f64,
     pub file: FileOrPath,
-}
-
-#[derive(Clone)]
-pub struct Link {
-    pub link: String,
-}
-
-#[derive(Clone)]
-pub struct Prompt {
-    pub prompt: String,
 }

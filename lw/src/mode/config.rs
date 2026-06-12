@@ -148,7 +148,3 @@ impl OptionType {
         Ok(())
     }
 }
-
-fn return_true() -> bool {
-    true
-}

@@ -96,7 +96,9 @@ pub fn apply_wayland_preload_safeguards() {
                     .env("LD_PRELOAD", preload_path)
                     .env("LEWDWARE_APPIMAGE_WAYLAND_PRELOAD_ATTEMPTED", "1")
                     .exec();
-                eprintln!("Lewdware AppImage Wayland preload skipped: failed to re-exec ({error:?})");
+                eprintln!(
+                    "Lewdware AppImage Wayland preload skipped: failed to re-exec ({error:?})"
+                );
             }
         }
     }

@@ -33,9 +33,12 @@ pub async fn generate_display_image(file_data: FileData) -> Result<Vec<u8>> {
     cmd.args(["-y", "-i"]).arg(&path).args([
         "-vf",
         "scale='min(iw,2560)':'min(ih,1440)':force_original_aspect_ratio=decrease",
-        "-pix_fmt", "yuv420p",
-        "-f", "mjpeg",
-        "-q:v", "2",
+        "-pix_fmt",
+        "yuv420p",
+        "-f",
+        "mjpeg",
+        "-q:v",
+        "2",
         "pipe:1",
     ]);
 
@@ -54,8 +57,7 @@ pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec
     let path = match file_data {
         FileData::Path(path) => path,
         FileData::Data(data) => {
-            let mut tempfile =
-                NamedTempFile::with_suffix(if is_image { ".avif" } else { ".mp4" })?;
+            let mut tempfile = NamedTempFile::with_suffix(if is_image { ".avif" } else { ".mp4" })?;
             tempfile.write_all(&data)?;
             let path = tempfile.path().to_path_buf();
             _temp_file = Some(tempfile);
@@ -87,9 +89,12 @@ pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec
     cmd.args([
         "-vf",
         "scale='min(iw,300)':'min(ih,200)':force_original_aspect_ratio=decrease",
-        "-pix_fmt", "yuv420p",
-        "-f", "mjpeg",
-        "-q:v", "4",
+        "-pix_fmt",
+        "yuv420p",
+        "-f",
+        "mjpeg",
+        "-q:v",
+        "4",
         "pipe:1",
     ]);
 

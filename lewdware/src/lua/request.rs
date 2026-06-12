@@ -4,11 +4,17 @@ use tokio::sync::{mpsc::Sender, oneshot};
 use winit::{event_loop::EventLoopProxy, window::WindowId};
 
 use crate::{
-    app::UserEvent, audio::AudioPlayer, error::{LewdwareError, Result}, lua::{
+    app::UserEvent,
+    audio::AudioPlayer,
+    error::{LewdwareError, Result},
+    lua::{
         WindowProps,
         api::{Notification, SpawnWindowOpts, WallpaperMode},
-        window::{ChoiceWindowOption, MoveOpts, FadeOpts},
-    }, media::{FileOrPath, ImageData}, monitor::Monitor, video::VideoDecoder
+        window::{ChoiceWindowOption, FadeOpts, MoveOpts},
+    },
+    media::{FileOrPath, ImageData},
+    monitor::Monitor,
+    video::VideoDecoder,
 };
 
 #[derive(Clone)]
@@ -137,10 +143,7 @@ impl RequestSender {
 
     pub async fn spawn_audio(&self, audio_player: AudioPlayer) -> Result<u64> {
         Ok(self
-            .send(|tx| LuaRequest::SpawnAudio {
-                audio_player,
-                tx,
-            })
+            .send(|tx| LuaRequest::SpawnAudio { audio_player, tx })
             .await?)
     }
 
@@ -275,7 +278,8 @@ impl WindowRequestSender {
     }
 
     pub async fn set_opacity(&self, opacity: f32) -> Result<()> {
-        self.send(|tx| WindowAction::SetOpacity { tx, opacity }).await
+        self.send(|tx| WindowAction::SetOpacity { tx, opacity })
+            .await
     }
 }
 
@@ -464,7 +468,7 @@ pub enum WindowAction {
     SetOpacity {
         tx: oneshot::Sender<()>,
         opacity: f32,
-    }
+    },
 }
 
 #[derive(Debug)]

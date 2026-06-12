@@ -17,7 +17,7 @@ use crate::mode::{
 #[derive(Args)]
 pub struct BuildArgs {}
 
-pub fn build(args: BuildArgs) -> Result<()> {
+pub fn build(_args: BuildArgs) -> Result<()> {
     let root = find_root()?;
 
     let root: &Path = &root;
