@@ -124,8 +124,7 @@ pub type AudioHandles = Rc<RefCell<HashMap<u64, Rc<AudioHandle>>>>;
 pub fn start_lua_thread(
     event_loop_proxy: EventLoopProxy<UserEvent>,
     config: Arc<AppConfig>,
-    #[cfg(target_os = "windows")]
-    wgpu_device: std::sync::Arc<wgpu::Device>,
+    wgpu_device: Arc<wgpu::Device>,
 ) -> (UnboundedSender<Event>, Receiver<LuaRequest>) {
     let (event_tx, mut event_rx) = unbounded_channel();
     let (request_tx, request_rx) = channel(20);
@@ -140,7 +139,6 @@ pub fn start_lua_thread(
             match MediaManager::open(
                 &config.pack_path.clone().unwrap(),
                 event_loop_proxy.clone(),
-                #[cfg(target_os = "windows")]
                 wgpu_device,
             ) {
                 Ok(x) => x,

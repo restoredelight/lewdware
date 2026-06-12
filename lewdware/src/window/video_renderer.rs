@@ -1,14 +1,9 @@
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
-#[cfg(target_os = "windows")]
-use crate::zero_copy::windows::D3d12ImportedTextures;
-#[cfg(target_os = "linux")]
-use crate::zero_copy::linux::DrmImportedTextures;
-#[cfg(target_os = "macos")]
-use crate::zero_copy::macos::VtbImportedTextures;
 use crate::{
-    wgpu::WgpuState,
     video::{VideoFrame, VideoPixelFormat},
+    wgpu::WgpuState,
+    zero_copy::{ImportOpts, ImportedTextures},
 };
 
 pub struct VideoRenderer {
@@ -19,16 +14,9 @@ pub struct VideoRenderer {
     ui_texture: wgpu::Texture,
     ui_bind_group: wgpu::BindGroup,
     ui_pipeline: Arc<wgpu::RenderPipeline>,
-    // DMA-BUF imported textures ring (Linux only): keeps last N frames alive for GPU safety.
+    // GPU imported textures ring: keeps last N frames alive for GPU safety.
     // The most recent entry (back) is the active frame for rendering.
-    #[cfg(target_os = "linux")]
-    drm_ring: std::collections::VecDeque<DrmImportedTextures>,
-    // IOSurface-backed Metal textures ring (macOS only): same purpose as drm_ring.
-    #[cfg(target_os = "macos")]
-    vtb_ring: std::collections::VecDeque<VtbImportedTextures>,
-    // D3D12VA-decoded NV12 textures ring (Windows only): same purpose as drm_ring.
-    #[cfg(target_os = "windows")]
-    d3d12_ring: std::collections::VecDeque<D3d12ImportedTextures>,
+    hardware_textures_ring: VecDeque<ImportedTextures>,
 }
 
 enum VideoFrameTextures {
@@ -217,12 +205,7 @@ impl VideoRenderer {
             ui_texture,
             ui_bind_group,
             ui_pipeline,
-            #[cfg(target_os = "linux")]
-            drm_ring: std::collections::VecDeque::new(),
-            #[cfg(target_os = "macos")]
-            vtb_ring: std::collections::VecDeque::new(),
-            #[cfg(target_os = "windows")]
-            d3d12_ring: std::collections::VecDeque::new(),
+            hardware_textures_ring: VecDeque::new(),
         }
     }
 
@@ -231,79 +214,25 @@ impl VideoRenderer {
     }
 
     pub fn update_video(&mut self, wgpu_state: &WgpuState, frame: &VideoFrame) {
-        // On Linux, try zero-copy DRM PRIME import first.
-        #[cfg(target_os = "linux")]
-        if let Some(drm_prime) = &frame.drm_prime {
-            if let VideoFrameTextures::Nv12 { .. } = &self.frame_textures {
-                if let Some(imported) = crate::zero_copy::linux::try_import_drm_prime(
-                    &wgpu_state.device,
-                    drm_prime,
-                    self.video_width,
-                    self.video_height,
-                    &wgpu_state.nv12_bind_group_layout,
-                    &wgpu_state.sampler,
-                ) {
-                    self.drm_ring.push_back(imported);
-                    // Keep at most 3 frames in the ring so GPU can finish with older ones.
-                    while self.drm_ring.len() > 3 {
-                        self.drm_ring.pop_front();
-                    }
-                    return;
-                }
+        if let Some(imported) = ImportedTextures::try_import_from_frame(
+            wgpu_state,
+            frame,
+            ImportOpts {
+                pix_fmt: self.frame_textures.pix_fmt(),
+                video_width: self.video_width,
+                video_height: self.video_height,
+            },
+        ) {
+            self.hardware_textures_ring.push_back(imported);
+
+            while self.hardware_textures_ring.len() > 3 {
+                self.hardware_textures_ring.pop_front();
             }
+
+            return;
         }
 
-        // CPU path: clear the DRM ring (DRM PRIME not in use for this frame).
-        #[cfg(target_os = "linux")]
-        self.drm_ring.clear();
-
-        // On macOS, try VideoToolbox IOSurface zero-copy import.
-        #[cfg(target_os = "macos")]
-        if let Some(vtb_frame) = &frame.vtb_frame {
-            if let VideoFrameTextures::Nv12 { .. } = &self.frame_textures {
-                if let Some(imported) = crate::zero_copy::macos::try_import_vtb_frame(
-                    &wgpu_state.device,
-                    vtb_frame,
-                    self.video_width,
-                    self.video_height,
-                    &wgpu_state.nv12_bind_group_layout,
-                    &wgpu_state.sampler,
-                ) {
-                    self.vtb_ring.push_back(imported);
-                    while self.vtb_ring.len() > 3 {
-                        self.vtb_ring.pop_front();
-                    }
-                    return;
-                }
-            }
-        }
-        // CPU path: clear the VTB ring (IOSurface not in use for this frame).
-        #[cfg(target_os = "macos")]
-        self.vtb_ring.clear();
-
-        // On Windows, try D3D12VA zero-copy NV12 import.
-        #[cfg(target_os = "windows")]
-        if let Some(d3d12_frame) = &frame.d3d12va_frame {
-            if let VideoFrameTextures::Nv12 { .. } = &self.frame_textures {
-                if let Some(imported) = crate::zero_copy::windows::try_import_d3d12va_frame(
-                    &wgpu_state.device,
-                    d3d12_frame.clone(),
-                    self.video_width,
-                    self.video_height,
-                    &wgpu_state.nv12_bind_group_layout,
-                    &wgpu_state.sampler,
-                ) {
-                    self.d3d12_ring.push_back(imported);
-                    while self.d3d12_ring.len() > 3 {
-                        self.d3d12_ring.pop_front();
-                    }
-                    return;
-                }
-            }
-        }
-        // CPU path: clear the D3D12 ring (zero-copy not in use for this frame).
-        #[cfg(target_os = "windows")]
-        self.d3d12_ring.clear();
+        self.hardware_textures_ring.clear();
 
         if frame.frame.width() == 0 {
             return;
@@ -379,33 +308,16 @@ impl VideoRenderer {
     }
 
     pub fn video_pipeline_and_bind_group(&self) -> (&wgpu::RenderPipeline, &wgpu::BindGroup) {
-        // On Linux, prefer the DRM-imported bind group from the most recent frame.
-        #[cfg(target_os = "linux")]
-        if let Some(latest) = self.drm_ring.back() {
+        // Prefer the imported bind group from the most recent frame.
+        if let Some(latest) = self.hardware_textures_ring.back() {
             let pipeline = match &self.frame_textures {
                 VideoFrameTextures::Nv12 { pipeline, .. } => pipeline.as_ref(),
                 VideoFrameTextures::Yuv420p { pipeline, .. } => pipeline.as_ref(),
             };
-            return (pipeline, &latest.bind_group);
+
+            return (pipeline, latest.bind_group());
         }
-        // On macOS, prefer the IOSurface-backed bind group from the most recent frame.
-        #[cfg(target_os = "macos")]
-        if let Some(latest) = self.vtb_ring.back() {
-            let pipeline = match &self.frame_textures {
-                VideoFrameTextures::Nv12 { pipeline, .. } => pipeline.as_ref(),
-                VideoFrameTextures::Yuv420p { pipeline, .. } => pipeline.as_ref(),
-            };
-            return (pipeline, &latest.bind_group);
-        }
-        // On Windows, prefer the D3D12VA-imported bind group from the most recent frame.
-        #[cfg(target_os = "windows")]
-        if let Some(latest) = self.d3d12_ring.back() {
-            let pipeline = match &self.frame_textures {
-                VideoFrameTextures::Nv12 { pipeline, .. } => pipeline.as_ref(),
-                VideoFrameTextures::Yuv420p { pipeline, .. } => pipeline.as_ref(),
-            };
-            return (pipeline, &latest.bind_group);
-        }
+
         match &self.frame_textures {
             VideoFrameTextures::Yuv420p {
                 pipeline,
@@ -491,5 +403,14 @@ pub fn upload_texture_data(
                 depth_or_array_layers: 1,
             },
         );
+    }
+}
+
+impl VideoFrameTextures {
+    fn pix_fmt(&self) -> VideoPixelFormat {
+        match self {
+            VideoFrameTextures::Yuv420p { .. } => VideoPixelFormat::Yuv420p,
+            VideoFrameTextures::Nv12 { .. } => VideoPixelFormat::Nv12,
+        }
     }
 }

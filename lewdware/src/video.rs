@@ -2,8 +2,7 @@ use std::{
     cell::Cell,
     path::PathBuf,
     sync::{
-        Arc,
-        mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
+        Arc, mpsc::{Receiver, SyncSender, TryRecvError, sync_channel}
     },
     thread,
     time::{Duration, Instant},
@@ -13,7 +12,7 @@ use anyhow::{Context, Result};
 use ffmpeg::{codec, format};
 use ffmpeg_next::{self as ffmpeg, ffi, frame::Video};
 
-use crate::{audio::AudioPlayer, media::FileOrPath};
+use crate::{audio::AudioPlayer, media::FileOrPath, zero_copy::{HardwareFrame, initialize_hardware_device, preferred_hw_type}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoPixelFormat {
@@ -46,26 +45,11 @@ unsafe extern "C" fn get_hw_format(
     ffi::AVPixelFormat::AV_PIX_FMT_NONE
 }
 
-#[cfg(target_os = "linux")]
-fn preferred_hw_type() -> ffi::AVHWDeviceType {
-    ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI
-}
-
-#[cfg(target_os = "macos")]
-fn preferred_hw_type() -> ffi::AVHWDeviceType {
-    ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
-}
-
-#[cfg(target_os = "windows")]
-fn preferred_hw_type() -> ffi::AVHWDeviceType {
-    ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA
-}
-
 // Returns the hw pixel format (e.g. AV_PIX_FMT_VAAPI) on success.
 unsafe fn try_hw_setup(
     ctx: *mut ffi::AVCodecContext,
     hw_type: ffi::AVHWDeviceType,
-    #[cfg(target_os = "windows")] wgpu_device: Option<&std::sync::Arc<wgpu::Device>>,
+    wgpu_device: &std::sync::Arc<wgpu::Device>,
 ) -> Option<ffi::AVPixelFormat> {
     // ctx->codec is NULL before avcodec_open2; find the decoder via codec_id instead.
     let codec_id = unsafe { (*ctx).codec_id };
@@ -97,32 +81,7 @@ unsafe fn try_hw_setup(
         return None;
     }
 
-    let mut hw_device_ctx: *mut ffi::AVBufferRef = std::ptr::null_mut();
-
-    // On Windows with D3D12VA: inject wgpu's D3D12 device so textures are on the same device.
-    #[cfg(target_os = "windows")]
-    if let Some(device) = wgpu_device {
-        if let Some(ctx_buf) =
-            unsafe { crate::zero_copy::windows::alloc_d3d12va_device_ctx(device, hw_type) }
-        {
-            hw_device_ctx = ctx_buf;
-        }
-    }
-
-    if hw_device_ctx.is_null() {
-        let ret = unsafe {
-            ffi::av_hwdevice_ctx_create(
-                &mut hw_device_ctx,
-                hw_type,
-                std::ptr::null(),
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        if ret < 0 || hw_device_ctx.is_null() {
-            return None;
-        }
-    }
+    let mut hw_device_ctx = initialize_hardware_device(wgpu_device, hw_type)?;
 
     unsafe {
         (*ctx).hw_device_ctx = ffi::av_buffer_ref(hw_device_ctx);
@@ -156,78 +115,10 @@ pub struct VideoDecoder {
     pub lag_count: u32,
 }
 
-/// On Linux, holds a DRM PRIME mapped frame that keeps the VAAPI surface alive.
-/// `frame.data[0]` points to an `AVDRMFrameDescriptor` with DMA-BUF fd(s).
-#[cfg(target_os = "linux")]
-pub struct DrmPrimeFrame {
-    pub frame: Video,
-}
-
-/// On macOS, retains a `CVPixelBufferRef` from a VideoToolbox-decoded frame.
-/// The pixel buffer contains an IOSurface that Metal textures can be created from directly.
-#[cfg(target_os = "macos")]
-pub struct VtbFrame {
-    pub pixel_buf: *const std::ffi::c_void,
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for VtbFrame {
-    fn drop(&mut self) {
-        unsafe { CVPixelBufferRelease(self.pixel_buf) };
-    }
-}
-
-// Safety: CVPixelBufferRef is safe to move between threads; retain/release are thread-safe.
-#[cfg(target_os = "macos")]
-unsafe impl Send for VtbFrame {}
-#[cfg(target_os = "macos")]
-unsafe impl Sync for VtbFrame {}
-
-#[cfg(target_os = "macos")]
-#[link(name = "CoreVideo", kind = "framework")]
-unsafe extern "C" {
-    fn CVPixelBufferRetain(buffer: *const std::ffi::c_void) -> *const std::ffi::c_void;
-    fn CVPixelBufferRelease(buffer: *const std::ffi::c_void);
-}
-
-/// On Windows, holds a D3D12VA-decoded frame keeping the texture in the decode pool,
-/// along with fence synchronization info for GPU ordering.
-#[cfg(target_os = "windows")]
-pub struct D3d12Frame {
-    /// The D3D12VA hardware frame — keeps the decode surface alive in ffmpeg's pool.
-    pub frame: Video,
-    /// Raw `ID3D12Resource*` pointer (COM, no extra AddRef — lifetime covered by `frame`).
-    pub texture_raw: *mut std::ffi::c_void,
-    /// Array slice index within the texture (0 for non-array resources).
-    pub index: u32,
-    /// Raw `ID3D12Fence*` or null if no fence is present.
-    pub fence_raw: *mut std::ffi::c_void,
-    /// Fence value to wait for before sampling the texture.
-    pub fence_value: u64,
-}
-
-// Safety: COM pointers are safe to move across threads; fence/wait are thread-safe.
-#[cfg(target_os = "windows")]
-unsafe impl Send for D3d12Frame {}
-#[cfg(target_os = "windows")]
-unsafe impl Sync for D3d12Frame {}
-
 pub struct VideoFrame {
     /// NV12 / YUV420P data in system memory, or empty when using zero-copy.
     pub frame: Video,
-    /// DRM PRIME mapped frame for zero-copy GPU import (Linux only).
-    /// Wrapped in Arc so DrmImportedTextures can share ownership, keeping the VAAPI
-    /// surface alive until the wgpu texture is dropped from drm_ring.
-    #[cfg(target_os = "linux")]
-    pub drm_prime: Option<Arc<DrmPrimeFrame>>,
-    /// Retained CVPixelBuffer for zero-copy IOSurface import (macOS only).
-    /// Wrapped in Arc so VtbImportedTextures can share ownership.
-    #[cfg(target_os = "macos")]
-    pub vtb_frame: Option<Arc<VtbFrame>>,
-    /// D3D12VA hardware frame for zero-copy GPU import (Windows only).
-    /// Wrapped in Arc so D3d12ImportedTextures can share ownership.
-    #[cfg(target_os = "windows")]
-    pub d3d12va_frame: Option<Arc<D3d12Frame>>,
+    pub hardware_frame: Option<HardwareFrame>,
     pub pts: Duration,
     pub recycle_tx: SyncSender<Video>,
 }
@@ -247,7 +138,7 @@ impl VideoDecoder {
         video: FileOrPath,
         play_audio: bool,
         loop_video: bool,
-        #[cfg(target_os = "windows")] wgpu_device: Option<Arc<wgpu::Device>>,
+        wgpu_device: Arc<wgpu::Device>,
     ) -> Result<Self> {
         let path = video.path();
 
@@ -255,7 +146,6 @@ impl VideoDecoder {
             spawn_video_stream(
                 path.to_path_buf(),
                 loop_video,
-                #[cfg(target_os = "windows")]
                 wgpu_device,
             )?;
 
@@ -424,7 +314,7 @@ struct VideoMetadata {
 fn spawn_video_stream(
     path: PathBuf,
     loop_video: bool,
-    #[cfg(target_os = "windows")] wgpu_device: Option<Arc<wgpu::Device>>,
+    wgpu_device: Arc<wgpu::Device>,
 ) -> Result<(
     Receiver<Option<VideoFrame>>,
     Duration,
@@ -454,7 +344,6 @@ fn spawn_video_stream(
             meta_tx,
             recycle_rx,
             recycle_tx.clone(),
-            #[cfg(target_os = "windows")]
             wgpu_device,
         ) {
             eprintln!("Error decoding video: {}", err);
@@ -494,78 +383,13 @@ fn hw_frame_to_video_frame(
     recycle_tx: &SyncSender<Video>,
     pts: Duration,
 ) -> Result<VideoFrame, ()> {
-    #[cfg(target_os = "linux")]
-    {
-        // Try DRM PRIME zero-copy path first.
-        // Set dst->format = DRM_PRIME so av_hwframe_map exports as DMA-BUF rather than NV12.
-        let mut drm = Video::empty();
-        unsafe { (*drm.as_mut_ptr()).format = ffi::AVPixelFormat::AV_PIX_FMT_DRM_PRIME as i32 };
-        let ret = unsafe {
-            ffi::av_hwframe_map(
-                drm.as_mut_ptr(),
-                decoded.as_ptr(),
-                ffi::AV_HWFRAME_MAP_READ as i32,
-            )
-        };
-        if ret >= 0
-            && unsafe { (*drm.as_ptr()).format } == ffi::AVPixelFormat::AV_PIX_FMT_DRM_PRIME as i32
-        {
-            *decoded = Video::empty();
-            return Ok(VideoFrame {
-                frame: Video::empty(),
-                drm_prime: Some(Arc::new(DrmPrimeFrame { frame: drm })),
-                pts,
-                recycle_tx: recycle_tx.clone(),
-            });
-        }
-        // av_hwframe_map failed — fall through to av_hwframe_transfer_data.
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        // VideoToolbox: data[3] is a CVPixelBufferRef wrapping an IOSurface.
-        // Retain before swapping out the decoded frame so the buffer outlives it.
-        let pixel_buf = unsafe { (*decoded.as_ptr()).data[3] } as *const std::ffi::c_void;
-        if !pixel_buf.is_null() {
-            unsafe { CVPixelBufferRetain(pixel_buf) };
-            *decoded = Video::empty();
-            return Ok(VideoFrame {
-                frame: Video::empty(),
-                vtb_frame: Some(Arc::new(VtbFrame { pixel_buf })),
-                pts,
-                recycle_tx: recycle_tx.clone(),
-            });
-        }
-        // pixel_buf null — fall through to av_hwframe_transfer_data.
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // D3D12VA: data[0] is a pointer to AVD3D12VAFrame containing the texture + fence.
-        let d3d12_frame_ptr =
-            unsafe { (*decoded.as_ptr()).data[0] } as *const crate::zero_copy::windows::AvD3d12VaFrame;
-        if !d3d12_frame_ptr.is_null() {
-            let (texture_raw, index, fence_raw, fence_value) = unsafe {
-                let f = &*d3d12_frame_ptr;
-                (f.texture, f.subresource_index as u32, f.sync_ctx.fence, f.sync_ctx.fence_value)
-            };
-            if !texture_raw.is_null() {
-                let d3d12_holding_frame = std::mem::take(decoded);
-                return Ok(VideoFrame {
-                    frame: Video::empty(),
-                    d3d12va_frame: Some(Arc::new(D3d12Frame {
-                        frame: d3d12_holding_frame,
-                        texture_raw,
-                        index,
-                        fence_raw,
-                        fence_value,
-                    })),
-                    pts,
-                    recycle_tx: recycle_tx.clone(),
-                });
-            }
-        }
-        // Null data — fall through to av_hwframe_transfer_data.
+    if let Some(frame) = HardwareFrame::from_decoder_frame(decoded) {
+        return Ok(VideoFrame {
+            frame: Video::empty(),
+            hardware_frame: Some(frame),
+            pts,
+            recycle_tx: recycle_tx.clone(),
+        });
     }
 
     // CPU fallback: transfer NV12 data to system memory.
@@ -575,14 +399,10 @@ fn hw_frame_to_video_frame(
         eprintln!("av_hwframe_transfer_data failed: {ret}");
         return Err(());
     }
+
     Ok(VideoFrame {
         frame: sw,
-        #[cfg(target_os = "linux")]
-        drm_prime: None,
-        #[cfg(target_os = "macos")]
-        vtb_frame: None,
-        #[cfg(target_os = "windows")]
-        d3d12va_frame: None,
+        hardware_frame: None,
         pts,
         recycle_tx: recycle_tx.clone(),
     })
@@ -596,7 +416,7 @@ fn decode_video(
     meta_tx: SyncSender<VideoMetadata>,
     recycle_rx: Receiver<Video>,
     recycle_tx: SyncSender<Video>,
-    #[cfg(target_os = "windows")] wgpu_device: Option<Arc<wgpu::Device>>,
+    wgpu_device: Arc<wgpu::Device>,
 ) -> Result<()> {
     ffmpeg::init()?;
     let mut ictx = format::input(&path)?;
@@ -626,8 +446,7 @@ fn decode_video(
         if let Some(fmt) = try_hw_setup(
             ctx_ptr,
             hw_type,
-            #[cfg(target_os = "windows")]
-            wgpu_device.as_ref(),
+            &wgpu_device,
         ) {
             HW_PIX_FMT.with(|c| c.set(fmt as i32));
             (*ctx_ptr).get_format = Some(get_hw_format);
@@ -639,8 +458,7 @@ fn decode_video(
 
     let mut decoder = context_decoder.decoder().video()?;
 
-    // Limit thread count to 1 to prevent resource contention when running many video popups.
-    // (HW decoders ignore this, but it's a no-op for them.)
+    // Limit (software-decoding) thread count to 1
     decoder.set_threading(codec::threading::Config {
         kind: codec::threading::Type::Frame,
         count: 1,
@@ -697,12 +515,7 @@ fn decode_video(
                             let frame = std::mem::replace(&mut decoded, next);
                             Ok(VideoFrame {
                                 frame,
-                                #[cfg(target_os = "linux")]
-                                drm_prime: None,
-                                #[cfg(target_os = "macos")]
-                                vtb_frame: None,
-                                #[cfg(target_os = "windows")]
-                                d3d12va_frame: None,
+                                hardware_frame: None,
                                 pts: pts_duration + current_loop_offset,
                                 recycle_tx: recycle_tx.clone(),
                             })
@@ -713,12 +526,7 @@ fn decode_video(
                         let frame = std::mem::replace(&mut decoded, next);
                         Ok(VideoFrame {
                             frame,
-                            #[cfg(target_os = "linux")]
-                            drm_prime: None,
-                            #[cfg(target_os = "macos")]
-                            vtb_frame: None,
-                            #[cfg(target_os = "windows")]
-                            d3d12va_frame: None,
+                            hardware_frame: None,
                             pts: pts_duration + current_loop_offset,
                             recycle_tx: recycle_tx.clone(),
                         })
@@ -756,12 +564,7 @@ fn decode_video(
                     let frame = std::mem::replace(&mut decoded, next);
                     Ok(VideoFrame {
                         frame,
-                        #[cfg(target_os = "linux")]
-                        drm_prime: None,
-                        #[cfg(target_os = "macos")]
-                        vtb_frame: None,
-                        #[cfg(target_os = "windows")]
-                        d3d12va_frame: None,
+                        hardware_frame: None,
                         pts: pts_duration + current_loop_offset,
                         recycle_tx: recycle_tx.clone(),
                     })
@@ -771,12 +574,7 @@ fn decode_video(
                 let frame = std::mem::replace(&mut decoded, next);
                 Ok(VideoFrame {
                     frame,
-                    #[cfg(target_os = "linux")]
-                    drm_prime: None,
-                    #[cfg(target_os = "macos")]
-                    vtb_frame: None,
-                    #[cfg(target_os = "windows")]
-                    d3d12va_frame: None,
+                    hardware_frame: None,
                     pts: pts_duration + current_loop_offset,
                     recycle_tx: recycle_tx.clone(),
                 })

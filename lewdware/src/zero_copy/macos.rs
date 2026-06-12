@@ -5,14 +5,23 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use ffmpeg_next::ffi;
 use objc2::{msg_send_id, rc::Retained, runtime::ProtocolObject};
+use objc2_io_surface::IOSurfaceRef;
 use objc2_metal::{
     MTLDevice, MTLPixelFormat, MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType,
     MTLTextureUsage,
 };
-use objc2_io_surface::IOSurfaceRef;
 
-use crate::video::VtbFrame;
+use crate::{
+    video::{VideoFrame, VideoPixelFormat},
+    wgpu::WgpuState,
+    zero_copy::ImportOpts,
+};
+
+pub fn preferred_hw_type() -> ffi::AVHWDeviceType {
+    ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
+}
 
 /// Holds the wgpu textures and bind group for an IOSurface-imported NV12 frame.
 /// Dropping this releases the Metal textures and the CVPixelBuffer reference.
@@ -24,6 +33,70 @@ pub struct VtbImportedTextures {
     _vtb_frame: Arc<VtbFrame>,
 }
 
+/// On macOS, retains a `CVPixelBufferRef` from a VideoToolbox-decoded frame.
+/// The pixel buffer contains an IOSurface that Metal textures can be created from directly.
+pub struct VtbFrame {
+    pub pixel_buf: *const std::ffi::c_void,
+}
+
+impl Drop for VtbFrame {
+    fn drop(&mut self) {
+        unsafe { CVPixelBufferRelease(self.pixel_buf) };
+    }
+}
+
+// Safety: CVPixelBufferRef is safe to move between threads; retain/release are thread-safe.
+unsafe impl Send for VtbFrame {}
+unsafe impl Sync for VtbFrame {}
+
+#[link(name = "CoreVideo", kind = "framework")]
+unsafe extern "C" {
+    fn CVPixelBufferRetain(buffer: *const std::ffi::c_void) -> *const std::ffi::c_void;
+    fn CVPixelBufferRelease(buffer: *const std::ffi::c_void);
+}
+
+impl VtbImportedTextures {
+    pub fn try_import_from_frame(
+        wgpu_state: &WgpuState,
+        frame: &VideoFrame,
+        opts: ImportOpts,
+    ) -> Option<Self> {
+        if let Some(hardware_frame) = &frame.hardware_frame {
+            if opts.pix_fmt == VideoPixelFormat::Nv12 {
+                return create_iosurface_texture(
+                    &wgpu_state.device,
+                    &hardware_frame.0,
+                    opts.video_width,
+                    opts.video_height,
+                    &wgpu_state.nv12_bind_group_layout,
+                    &wgpu_state.sampler,
+                );
+            }
+        }
+
+        None
+    }
+
+    pub fn bind_group(&self) -> &wgpu::BindGroup {
+        &self.bind_group
+    }
+}
+
+impl VtbFrame {
+    pub fn from_decoder_frame(decoded: &mut Video) -> Option<Self> {
+        // VideoToolbox: data[3] is a CVPixelBufferRef wrapping an IOSurface.
+        // Retain before swapping out the decoded frame so the buffer outlives it.
+        let pixel_buf = unsafe { (*decoded.as_ptr()).data[3] } as *const std::ffi::c_void;
+        if !pixel_buf.is_null() {
+            unsafe { CVPixelBufferRetain(pixel_buf) };
+            *decoded = Video::empty();
+            return Some(VtbFrame { pixel_buf });
+        }
+
+        None
+    }
+}
+
 #[link(name = "CoreVideo", kind = "framework")]
 unsafe extern "C" {
     fn CVPixelBufferGetIOSurface(buffer: *const std::ffi::c_void) -> *mut IOSurfaceRef;
@@ -31,7 +104,7 @@ unsafe extern "C" {
 
 /// Tries to import a VideoToolbox CVPixelBuffer frame as wgpu textures via Metal IOSurface.
 /// Returns `None` if the device is not Metal or if IOSurface is unavailable.
-pub fn try_import_vtb_frame(
+fn try_import_vtb_frame(
     device: &wgpu::Device,
     vtb_frame: &Arc<VtbFrame>,
     video_width: u32,
@@ -109,7 +182,11 @@ pub fn try_import_vtb_frame(
             MTLTextureType::Type2D,
             1,
             1,
-            wgpu::hal::CopyExtent { width: video_width, height: video_height, depth: 1 },
+            wgpu::hal::CopyExtent {
+                width: video_width,
+                height: video_height,
+                depth: 1,
+            },
         );
         device.create_texture_from_hal::<wgpu::hal::metal::Api>(hal_tex, &y_tex_desc)
     };
@@ -120,7 +197,11 @@ pub fn try_import_vtb_frame(
             MTLTextureType::Type2D,
             1,
             1,
-            wgpu::hal::CopyExtent { width: chroma_w, height: chroma_h, depth: 1 },
+            wgpu::hal::CopyExtent {
+                width: chroma_w,
+                height: chroma_h,
+                depth: 1,
+            },
         );
         device.create_texture_from_hal::<wgpu::hal::metal::Api>(hal_tex, &uv_tex_desc)
     };

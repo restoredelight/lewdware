@@ -6,28 +6,152 @@ use std::sync::{
 };
 
 use ash::vk;
-use ffmpeg_next::ffi;
+use ffmpeg_next::{ffi, frame::Video};
 
-use crate::video::DrmPrimeFrame;
+use crate::{
+    video::{VideoFrame, VideoPixelFormat},
+    wgpu::WgpuState,
+    zero_copy::ImportOpts,
+};
+
+
+pub fn preferred_hw_type() -> ffi::AVHWDeviceType {
+    ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI
+}
 
 /// Holds the wgpu textures and bind group for a DMA-BUF imported NV12 frame.
 /// Dropping this struct frees the underlying Vulkan memory (closes the DMA-BUF fd)
 /// and releases the VAAPI surface back to the decoder pool.
 pub struct DrmImportedTextures {
-    pub _y_texture: wgpu::Texture,
-    pub _uv_texture: wgpu::Texture,
-    pub bind_group: wgpu::BindGroup,
+    _y_texture: wgpu::Texture,
+    _uv_texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
     /// Keeps the VAAPI surface alive until the wgpu textures are dropped. Without this,
     /// the decoder could reuse the underlying GEM object for a new frame while the GPU
     /// is still reading the old frame's data through the dup'd DMA-BUF fd.
     _drm_frame: Arc<DrmPrimeFrame>,
 }
 
+/// On Linux, holds a DRM PRIME mapped frame that keeps the VAAPI surface alive.
+/// `frame.data[0]` points to an `AVDRMFrameDescriptor` with DMA-BUF fd(s).
+pub struct DrmPrimeFrame {
+    pub frame: Video,
+}
+
+impl DrmPrimeFrame {
+    pub fn from_decoder_frame(decoded: &mut Video) -> Option<Self> {
+        // Try DRM PRIME zero-copy path first.
+        // Set dst->format = DRM_PRIME so av_hwframe_map exports as DMA-BUF rather than NV12.
+        let mut drm = Video::empty();
+        unsafe { (*drm.as_mut_ptr()).format = ffi::AVPixelFormat::AV_PIX_FMT_DRM_PRIME as i32 };
+        let ret = unsafe {
+            ffi::av_hwframe_map(
+                drm.as_mut_ptr(),
+                decoded.as_ptr(),
+                ffi::AV_HWFRAME_MAP_READ as i32,
+            )
+        };
+        if ret >= 0
+            && unsafe { (*drm.as_ptr()).format } == ffi::AVPixelFormat::AV_PIX_FMT_DRM_PRIME as i32
+        {
+            *decoded = Video::empty();
+            return Some(Self { frame: drm });
+        }
+
+        None
+    }
+}
+
+impl DrmImportedTextures {
+    pub fn try_import_from_frame(
+        wgpu_state: &WgpuState,
+        frame: &VideoFrame,
+        opts: ImportOpts,
+    ) -> Option<Self> {
+        if let Some(hardware_frame) = &frame.hardware_frame {
+            if opts.pix_fmt == VideoPixelFormat::Nv12 {
+                return try_import_drm_prime(
+                    &wgpu_state.device,
+                    &hardware_frame.0,
+                    opts.video_width,
+                    opts.video_height,
+                    &wgpu_state.nv12_bind_group_layout,
+                    &wgpu_state.sampler,
+                );
+            }
+        }
+
+        None
+    }
+
+    pub fn bind_group(&self) -> &wgpu::BindGroup {
+        &self.bind_group
+    }
+}
+
+struct VkImage<'a> {
+    device: &'a ash::Device,
+    image: vk::Image,
+}
+
+impl<'a> VkImage<'a> {
+    fn new(device: &'a ash::Device, image: vk::Image) -> Self {
+        Self { device, image }
+    }
+
+    fn with_memory(self, memory: vk::DeviceMemory) -> VkImageWithMemory<'a> {
+        let image = self.image;
+        let device = self.device;
+
+        std::mem::forget(self);
+
+        VkImageWithMemory {
+            device,
+            image,
+            memory,
+        }
+    }
+}
+
+impl Drop for VkImage<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_image(self.image, None);
+        }
+    }
+}
+
+struct VkImageWithMemory<'a> {
+    device: &'a ash::Device,
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+}
+
+impl VkImageWithMemory<'_> {
+    fn take_image_and_memory(self) -> (vk::Image, vk::DeviceMemory) {
+        let (image, memory) = (self.image, self.memory);
+
+        std::mem::forget(self);
+
+        (image, memory)
+    }
+}
+
+impl Drop for VkImageWithMemory<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            // Destroy image before freeing memory for spec compliance
+            self.device.destroy_image(self.image, None);
+            self.device.free_memory(self.memory, None);
+        }
+    }
+}
+
 /// Tries to import a DRM PRIME frame as wgpu textures via Vulkan external memory.
 /// Returns `None` if import fails (extension not available, stride mismatch, etc.).
 /// Takes `&Arc<DrmPrimeFrame>` so the imported textures can share ownership and keep
 /// the VAAPI surface alive for as long as the GPU may be reading from it.
-pub fn try_import_drm_prime(
+fn try_import_drm_prime(
     device: &wgpu::Device,
     drm_prime: &Arc<DrmPrimeFrame>,
     video_width: u32,
@@ -87,9 +211,9 @@ pub fn try_import_drm_prime(
     let chroma_w = (video_width + 1) / 2;
     let chroma_h = (video_height + 1) / 2;
 
+    let is_linear = modifier == 0 || modifier == 0x00FF_FFFF_FFFF_FFFF;
     static LOGGED_ATTEMPT: AtomicBool = AtomicBool::new(false);
     if !LOGGED_ATTEMPT.swap(true, Ordering::Relaxed) {
-        let is_linear = modifier == 0 || modifier == u64::MAX;
         eprintln!(
             "[drm_import] first attempt: modifier={modifier:#018x} is_linear={is_linear} size={total_size} y_pitch={y_pitch} uv_pitch={uv_pitch} uv_offset={uv_offset}"
         );
@@ -98,53 +222,13 @@ pub fn try_import_drm_prime(
     let hal_guard = unsafe { device.as_hal::<wgpu::hal::vulkan::Api>() };
     let hal_device = hal_guard.as_deref()?;
 
-    unsafe {
-        import_via_vulkan(
-            hal_device,
-            device,
-            fd,
-            total_size,
-            video_width,
-            video_height,
-            chroma_w,
-            chroma_h,
-            modifier,
-            y_offset,
-            y_pitch,
-            uv_offset,
-            uv_pitch,
-            nv12_bind_group_layout,
-            sampler,
-            Arc::clone(drm_prime),
-        )
-    }
-}
-
-unsafe fn import_via_vulkan(
-    hal: &wgpu::hal::vulkan::Device,
-    wgpu_device: &wgpu::Device,
-    fd: i32,
-    total_size: u64,
-    video_width: u32,
-    video_height: u32,
-    chroma_w: u32,
-    chroma_h: u32,
-    modifier: u64,
-    y_offset: u64,
-    y_pitch: u64,
-    uv_offset: u64,
-    uv_pitch: u64,
-    nv12_bind_group_layout: &wgpu::BindGroupLayout,
-    sampler: &wgpu::Sampler,
-    drm_frame: Arc<DrmPrimeFrame>,
-) -> Option<DrmImportedTextures> {
-    let ash_device = hal.raw_device();
-    let ash_instance = hal.shared_instance().raw_instance();
-    let physical_device = hal.raw_physical_device();
+    let drm_frame = drm_prime.clone();
+    let ash_device = hal_device.raw_device();
+    let ash_instance = hal_device.shared_instance().raw_instance();
+    let physical_device = hal_device.raw_physical_device();
     let ext_mem_fd = ash::khr::external_memory_fd::Device::new(ash_instance, ash_device);
 
-    let is_linear = modifier == 0 || modifier == u64::MAX;
-    let has_modifier_ext = hal
+    let has_modifier_ext = hal_device
         .enabled_device_extensions()
         .contains(&ash::vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_NAME);
 
@@ -162,12 +246,37 @@ unsafe fn import_via_vulkan(
     // For linear: LINEAR tiling, bind at plane offset. Check stride matches DRM pitch.
     // For tiled: DRM_FORMAT_MODIFIER_EXT tiling, bind at offset 0, plane offset in modifier info.
     let (y_image, uv_image) = if is_linear {
-        let y = unsafe {
+        // Verify the driver supports SAMPLED_IMAGE for linear tiling — not guaranteed by spec.
+        let y_feats = unsafe {
+            ash_instance
+                .get_physical_device_format_properties(physical_device, vk::Format::R8_UNORM)
+        };
+
+        let uv_feats = unsafe {
+            ash_instance
+                .get_physical_device_format_properties(physical_device, vk::Format::R8G8_UNORM)
+        };
+
+        if !y_feats
+            .linear_tiling_features
+            .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
+            || !uv_feats
+                .linear_tiling_features
+                .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
+        {
+            eprintln!(
+                "[drm_import] linear tiling does not support SAMPLED_IMAGE — falling back to CPU"
+            );
+            return None;
+        }
+
+        let y = VkImage::new(&ash_device, unsafe {
             create_linear_image(ash_device, vk::Format::R8_UNORM, video_width, video_height)
-        }?;
+        }?);
+
         let y_row_pitch = unsafe {
             ash_device.get_image_subresource_layout(
-                y,
+                y.image,
                 vk::ImageSubresource {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     mip_level: 0,
@@ -176,23 +285,19 @@ unsafe fn import_via_vulkan(
             )
         }
         .row_pitch as u64;
+
         if y_row_pitch != y_pitch {
             eprintln!("[drm_import] Y stride mismatch: Vulkan={y_row_pitch} DRM={y_pitch}");
-            unsafe { ash_device.destroy_image(y, None) };
             return None;
         }
-        let uv = match unsafe {
+
+        let uv = VkImage::new(&ash_device, unsafe {
             create_linear_image(ash_device, vk::Format::R8G8_UNORM, chroma_w, chroma_h)
-        } {
-            Some(img) => img,
-            None => {
-                unsafe { ash_device.destroy_image(y, None) };
-                return None;
-            }
-        };
+        }?);
+
         let uv_row_pitch = unsafe {
             ash_device.get_image_subresource_layout(
-                uv,
+                uv.image,
                 vk::ImageSubresource {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     mip_level: 0,
@@ -201,19 +306,17 @@ unsafe fn import_via_vulkan(
             )
         }
         .row_pitch as u64;
+
         if uv_row_pitch != uv_pitch {
             eprintln!("[drm_import] UV stride mismatch: Vulkan={uv_row_pitch} DRM={uv_pitch}");
-            unsafe {
-                ash_device.destroy_image(y, None);
-                ash_device.destroy_image(uv, None)
-            };
             return None;
         }
+
         (y, uv)
     } else {
         // Tiled format: use VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT with explicit plane layouts.
         // Plane offsets are baked into the modifier create-info; we bind memory at offset 0.
-        let y = match unsafe {
+        let y = VkImage::new(&ash_device, unsafe {
             create_modifier_image(
                 ash_device,
                 vk::Format::R8_UNORM,
@@ -223,11 +326,9 @@ unsafe fn import_via_vulkan(
                 y_offset,
                 y_pitch,
             )
-        } {
-            Some(img) => img,
-            None => return None,
-        };
-        let uv = match unsafe {
+        }?);
+
+        let uv = VkImage::new(&ash_device, unsafe {
             create_modifier_image(
                 ash_device,
                 vk::Format::R8G8_UNORM,
@@ -237,13 +338,8 @@ unsafe fn import_via_vulkan(
                 uv_offset,
                 uv_pitch,
             )
-        } {
-            Some(img) => img,
-            None => {
-                unsafe { ash_device.destroy_image(y, None) };
-                return None;
-            }
-        };
+        }?);
+
         (y, uv)
     };
 
@@ -255,16 +351,12 @@ unsafe fn import_via_vulkan(
     };
 
     // Memory requirements and DMA-BUF compatible memory types.
-    let y_mem_req = unsafe { ash_device.get_image_memory_requirements(y_image) };
-    let uv_mem_req = unsafe { ash_device.get_image_memory_requirements(uv_image) };
+    let y_mem_req = unsafe { ash_device.get_image_memory_requirements(y_image.image) };
+    let uv_mem_req = unsafe { ash_device.get_image_memory_requirements(uv_image.image) };
 
     let mut fd_props = vk::MemoryFdPropertiesKHR::default();
     let fd_dup = unsafe { libc::dup(fd) };
     if fd_dup < 0 {
-        unsafe {
-            ash_device.destroy_image(y_image, None);
-            ash_device.destroy_image(uv_image, None)
-        };
         return None;
     }
     let props_ok = unsafe {
@@ -276,10 +368,6 @@ unsafe fn import_via_vulkan(
     };
     unsafe { libc::close(fd_dup) };
     if props_ok.is_err() {
-        unsafe {
-            ash_device.destroy_image(y_image, None);
-            ash_device.destroy_image(uv_image, None)
-        };
         return None;
     }
 
@@ -291,12 +379,9 @@ unsafe fn import_via_vulkan(
     // Import DMA-BUF for Y plane.
     let y_fd = unsafe { libc::dup(fd) };
     if y_fd < 0 {
-        unsafe {
-            ash_device.destroy_image(y_image, None);
-            ash_device.destroy_image(uv_image, None)
-        };
         return None;
     }
+
     let y_memory = {
         let mut import = vk::ImportMemoryFdInfoKHR::default()
             .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
@@ -310,30 +395,20 @@ unsafe fn import_via_vulkan(
             Err(_) => {
                 unsafe {
                     libc::close(y_fd);
-                    ash_device.destroy_image(y_image, None);
-                    ash_device.destroy_image(uv_image, None)
                 };
                 return None;
             }
         }
     };
-    if unsafe { ash_device.bind_image_memory(y_image, y_memory, y_bind_offset) }.is_err() {
-        unsafe {
-            ash_device.free_memory(y_memory, None);
-            ash_device.destroy_image(y_image, None);
-            ash_device.destroy_image(uv_image, None)
-        };
+
+    let y = y_image.with_memory(y_memory);
+    if unsafe { ash_device.bind_image_memory(y.image, y.memory, y_bind_offset) }.is_err() {
         return None;
     }
 
     // Import DMA-BUF for UV plane (second dup of same fd).
     let uv_fd = unsafe { libc::dup(fd) };
     if uv_fd < 0 {
-        unsafe {
-            ash_device.free_memory(y_memory, None);
-            ash_device.destroy_image(y_image, None);
-            ash_device.destroy_image(uv_image, None)
-        };
         return None;
     }
     let uv_memory = {
@@ -349,21 +424,14 @@ unsafe fn import_via_vulkan(
             Err(_) => {
                 unsafe {
                     libc::close(uv_fd);
-                    ash_device.free_memory(y_memory, None);
-                    ash_device.destroy_image(y_image, None);
-                    ash_device.destroy_image(uv_image, None)
                 };
                 return None;
             }
         }
     };
-    if unsafe { ash_device.bind_image_memory(uv_image, uv_memory, uv_bind_offset) }.is_err() {
-        unsafe {
-            ash_device.free_memory(uv_memory, None);
-            ash_device.free_memory(y_memory, None);
-            ash_device.destroy_image(y_image, None);
-            ash_device.destroy_image(uv_image, None)
-        };
+
+    let uv = uv_image.with_memory(uv_memory);
+    if unsafe { ash_device.bind_image_memory(uv.image, uv.memory, uv_bind_offset) }.is_err() {
         return None;
     }
 
@@ -419,29 +487,32 @@ unsafe fn import_via_vulkan(
         view_formats: vec![],
     };
 
+    let (y_image, y_memory) = y.take_image_and_memory();
     let y_texture = unsafe {
-        let hal_tex = hal.texture_from_raw(
+        let hal_tex = hal_device.texture_from_raw(
             y_image,
             &hal_desc_y,
             None,
             wgpu::hal::vulkan::TextureMemory::Dedicated(y_memory),
         );
-        wgpu_device.create_texture_from_hal::<wgpu::hal::vulkan::Api>(hal_tex, &y_tex_desc)
+        device.create_texture_from_hal::<wgpu::hal::vulkan::Api>(hal_tex, &y_tex_desc)
     };
+
+    let (uv_image, uv_memory) = uv.take_image_and_memory();
     let uv_texture = unsafe {
-        let hal_tex = hal.texture_from_raw(
+        let hal_tex = hal_device.texture_from_raw(
             uv_image,
             &hal_desc_uv,
             None,
             wgpu::hal::vulkan::TextureMemory::Dedicated(uv_memory),
         );
-        wgpu_device.create_texture_from_hal::<wgpu::hal::vulkan::Api>(hal_tex, &uv_tex_desc)
+        device.create_texture_from_hal::<wgpu::hal::vulkan::Api>(hal_tex, &uv_tex_desc)
     };
 
     let y_view = y_texture.create_view(&wgpu::TextureViewDescriptor::default());
     let uv_view = uv_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let bind_group = wgpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("DRM PRIME NV12 Bind Group"),
         layout: nv12_bind_group_layout,
         entries: &[
@@ -468,9 +539,10 @@ unsafe fn import_via_vulkan(
             "tiled (modifier ext)"
         };
         eprintln!(
-            "[drm_import] DMA-BUF zero-copy active ({path}) — GPU→CPU→GPU round-trip eliminated"
+            "[drm_import] DMA-BUF zero-copy active ({path}) — GPU->CPU->GPU round-trip eliminated"
         );
     }
+
     Some(DrmImportedTextures {
         _y_texture: y_texture,
         _uv_texture: uv_texture,
