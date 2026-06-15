@@ -66,7 +66,7 @@ impl Drop for Lock {
 pub struct MediaPack {
     path: PathBuf,
     saving: Arc<RwLock<()>>,
-    lock: Lock,
+    _lock: Lock,
     header: StdRwLock<Header>,
     dir: PathBuf,
     metadata: StdRwLock<Metadata>,
@@ -80,7 +80,7 @@ pub struct MediaPackView {
     saving: Arc<RwLock<()>>,
     dir: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
-    thread_pool: Arc<rayon::ThreadPool>,
+    _thread_pool: Arc<rayon::ThreadPool>,
 }
 
 #[derive(Debug)]
@@ -158,7 +158,7 @@ impl MediaPack {
         Ok(Self {
             path,
             saving: Arc::new(RwLock::new(())),
-            lock,
+            _lock: lock,
             header: StdRwLock::new(header),
             dir,
             metadata: StdRwLock::new(metadata),
@@ -229,7 +229,7 @@ impl MediaPack {
         Ok(Self {
             path,
             saving: Arc::new(RwLock::new(())),
-            lock,
+            _lock: lock,
             header: StdRwLock::new(header),
             dir,
             metadata: StdRwLock::new(metadata),
@@ -246,7 +246,7 @@ impl MediaPack {
             saving: self.saving.clone(),
             dir: self.dir.clone(),
             db_pool: self.db_pool.clone(),
-            thread_pool: Arc::new(
+            _thread_pool: Arc::new(
                 rayon::ThreadPoolBuilder::new()
                     .num_threads(threads)
                     .build()?,

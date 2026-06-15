@@ -1,10 +1,153 @@
 use std::{collections::VecDeque, sync::Arc};
+use wgpu::util::DeviceExt;
 
 use crate::{
     video::{VideoFrame, VideoPixelFormat},
     wgpu::WgpuState,
     zero_copy::{ImportOpts, ImportedTextures},
 };
+
+pub struct GpuRenderer {
+    pub opacity_buffer: wgpu::Buffer,
+    pub window_bind_group: wgpu::BindGroup,
+    pub renderer_type: GpuRendererType,
+}
+
+pub enum GpuRendererType {
+    Image {
+        texture: wgpu::Texture,
+        bind_group: wgpu::BindGroup,
+    },
+    Video(VideoRenderer),
+}
+
+impl GpuRenderer {
+    pub fn new_image(wgpu_state: &WgpuState, width: u32, height: u32, opacity: f32) -> Self {
+        let device = &wgpu_state.device;
+
+        let opacity_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Opacity Buffer"),
+            contents: bytemuck::cast_slice(&[opacity]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let window_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Window Bind Group"),
+            layout: &wgpu_state.window_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: opacity_buffer.as_entire_binding(),
+            }],
+        });
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Frame Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Frame Bind Group"),
+            layout: &wgpu_state.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&wgpu_state.sampler),
+                },
+            ],
+        });
+
+        Self {
+            opacity_buffer,
+            window_bind_group,
+            renderer_type: GpuRendererType::Image { texture, bind_group },
+        }
+    }
+
+    pub fn new_video(
+        wgpu_state: &WgpuState,
+        format: wgpu::TextureFormat,
+        video_width: u32,
+        video_height: u32,
+        full_range: bool,
+        pixel_format: VideoPixelFormat,
+        packed_alpha: bool,
+        ui_width: u32,
+        ui_height: u32,
+        opacity: f32,
+    ) -> Self {
+        let device = &wgpu_state.device;
+
+        let opacity_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Opacity Buffer"),
+            contents: bytemuck::cast_slice(&[opacity]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let window_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Window Bind Group"),
+            layout: &wgpu_state.window_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: opacity_buffer.as_entire_binding(),
+            }],
+        });
+
+        let video_renderer = VideoRenderer::new(
+            wgpu_state,
+            format,
+            video_width,
+            video_height,
+            full_range,
+            pixel_format,
+            packed_alpha,
+            ui_width,
+            ui_height,
+        );
+
+        Self {
+            opacity_buffer,
+            window_bind_group,
+            renderer_type: GpuRendererType::Video(video_renderer),
+        }
+    }
+
+    pub fn set_opacity(&self, wgpu_state: &WgpuState, opacity: f32) {
+        wgpu_state.queue.write_buffer(&self.opacity_buffer, 0, bytemuck::cast_slice(&[opacity]));
+    }
+
+    /// Upload CPU-side frame buffer data: for Image writes to the frame texture; for Video
+    /// writes to the UI overlay texture.
+    pub fn upload_frame_buffer(
+        &self,
+        queue: &wgpu::Queue,
+        data: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        match &self.renderer_type {
+            GpuRendererType::Image { texture, .. } => {
+                upload_texture_data(queue, texture, data, width, height, width * 4, 4);
+            }
+            GpuRendererType::Video(video) => {
+                video.update_ui(queue, data, width, height);
+            }
+        }
+    }
+}
 
 pub struct VideoRenderer {
     frame_textures: VideoFrameTextures,

@@ -4,19 +4,15 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use egui_software_backend::BufferMutRef;
-use tiny_skia::Pixmap;
 use tokio::sync::mpsc;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, PhysicalUnit};
 use winit::window::Window;
 
 use crate::error::{LewdwareError, MonitorError};
 use crate::lua::{self, Coord, Easing, FadeOpts, MoveOpts};
-use crate::video::{VideoFrame, VideoPixelFormat};
 use crate::wgpu::WgpuState;
 use crate::window::header::HEADER_HEIGHT;
 use crate::window::surface::Buffer;
-use crate::window::video_renderer::{VideoRenderer, upload_texture_data};
 use crate::window::{header::Header, surface::Surface};
 
 pub struct InnerWindow<'a> {
@@ -33,7 +29,7 @@ pub struct InnerWindow<'a> {
     wgpu_state: Arc<WgpuState>,
     transparent: bool,
     current_fade: Option<Fade>,
-    opacity: f32,
+    pub opacity: f32,
 }
 
 struct Move {
@@ -109,74 +105,9 @@ impl<'a> InnerWindow<'a> {
             };
             surface.configure(&wgpu_state.device, &surface_config);
 
-            let frame_buffer = vec![0; (outer_size.width * outer_size.height * 4) as usize];
-
-            let texture = wgpu_state.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Wgpu Surface Frame Texture"),
-                size: wgpu::Extent3d {
-                    width: outer_size.width,
-                    height: outer_size.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-
-            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            let bind_group = wgpu_state
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Wgpu Surface Frame Bind Group"),
-                    layout: &wgpu_state.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&texture_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&wgpu_state.sampler),
-                        },
-                    ],
-                });
-
-            use wgpu::util::DeviceExt;
-            let opacity_val = opacity.unwrap_or(1.0);
-            let opacity_buffer =
-                wgpu_state
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Opacity Buffer"),
-                        contents: bytemuck::cast_slice(&[opacity_val]),
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    });
-
-            let window_bind_group =
-                wgpu_state
-                    .device
-                    .create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Window Bind Group"),
-                        layout: &wgpu_state.window_bind_group_layout,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: opacity_buffer.as_entire_binding(),
-                        }],
-                    });
-
             Surface::Wgpu {
                 surface,
                 surface_config,
-                frame_buffer,
-                texture,
-                bind_group,
-                opacity_buffer,
-                window_bind_group,
-                video_renderer: None,
             }
         } else {
             let (context, surface) = init_softbuffer(window.clone())?;
@@ -216,43 +147,27 @@ impl<'a> InnerWindow<'a> {
         })
     }
 
-    pub fn init_video_texture(
-        &mut self,
-        width: u32,
-        height: u32,
-        full_range: bool,
-        pixel_format: VideoPixelFormat,
-        packed_alpha: bool,
-    ) -> Result<()> {
-        if let Surface::Wgpu {
-            video_renderer,
-            surface_config,
-            ..
-        } = &mut self.surface
-        {
-            *video_renderer = Some(VideoRenderer::new(
-                &self.wgpu_state,
-                surface_config.format,
-                width,
-                height,
-                full_range,
-                pixel_format,
-                packed_alpha,
-                surface_config.width,
-                surface_config.height,
-            ));
-        }
-        Ok(())
-    }
-
     pub fn set_opacity(&mut self, opacity: f32) {
         self.opacity = opacity;
-        if let Surface::Wgpu { opacity_buffer, .. } = &self.surface {
-            self.wgpu_state
-                .queue
-                .write_buffer(opacity_buffer, 0, bytemuck::cast_slice(&[opacity]));
-            self.request_redraw();
+    }
+
+    pub fn wgpu_state(&self) -> &Arc<WgpuState> {
+        &self.wgpu_state
+    }
+
+    pub fn surface_format(&self) -> Option<wgpu::TextureFormat> {
+        match &self.surface {
+            Surface::Wgpu { surface_config, .. } => Some(surface_config.format),
+            _ => None,
         }
+    }
+
+    pub fn inner_size(&self) -> winit::dpi::PhysicalSize<u32> {
+        self.inner_size
+    }
+
+    pub fn outer_size(&self) -> winit::dpi::PhysicalSize<u32> {
+        self.outer_size
     }
 
     pub fn start_render(&mut self) -> Result<()> {
@@ -283,46 +198,18 @@ impl<'a> InnerWindow<'a> {
         Ok(())
     }
 
-    pub fn present(&mut self) -> Result<()> {
+    pub fn draw_wgpu(
+        &mut self,
+        draw_fn: impl FnOnce(&mut wgpu::RenderPass, u32, u32),
+    ) -> Result<()> {
         let (x, y) = self.inner_offset();
-
         match &mut self.surface {
             Surface::Wgpu {
                 surface,
                 surface_config,
-                frame_buffer,
-                texture,
-                bind_group,
-                window_bind_group,
-                video_renderer,
-                ..
             } => {
                 if self.wgpu_state.error.load(Ordering::Acquire) {
                     bail!("wgpu error; stopping rendering");
-                }
-
-                let width = self.inner_size.width;
-                let height = self.inner_size.height;
-
-                if let Some(video) = video_renderer.as_ref() {
-                    // Upload frame_buffer only to the UI overlay texture; skip the redundant
-                    // upload to `texture` which is never used in the video render path.
-                    video.update_ui(
-                        &self.wgpu_state.queue,
-                        frame_buffer,
-                        surface_config.width,
-                        surface_config.height,
-                    );
-                } else {
-                    upload_texture_data(
-                        &self.wgpu_state.queue,
-                        texture,
-                        frame_buffer,
-                        surface_config.width,
-                        surface_config.height,
-                        surface_config.width * 4,
-                        4,
-                    );
                 }
 
                 let output = match surface.get_current_texture() {
@@ -359,62 +246,20 @@ impl<'a> InnerWindow<'a> {
                     },
                 );
 
-                if let Some(video) = video_renderer {
-                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Video Render Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(if self.transparent {
-                                    wgpu::Color::TRANSPARENT
-                                } else {
-                                    wgpu::Color::BLACK
-                                }),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-
-                    // Video: YUV/NV12->RGB via dedicated pipeline, scaled to inner viewport
-                    let (vid_pipeline, vid_bind_group) = video.video_pipeline_and_bind_group();
-                    rpass.set_pipeline(vid_pipeline);
-                    rpass.set_bind_group(0, vid_bind_group, &[]);
-                    rpass.set_bind_group(1, &*window_bind_group, &[]);
-                    rpass.set_viewport(x as f32, y as f32, width as f32, height as f32, 0.0, 1.0);
-                    rpass.draw(0..4, 0..1);
-
-                    // UI overlay: RGBA pipeline, full surface
-                    rpass.set_pipeline(video.ui_pipeline());
-                    rpass.set_bind_group(0, video.ui_bind_group(), &[]);
-                    rpass.set_bind_group(1, &*window_bind_group, &[]);
-                    rpass.set_viewport(
-                        0.0,
-                        0.0,
-                        surface_config.width as f32,
-                        surface_config.height as f32,
-                        0.0,
-                        1.0,
-                    );
-                    rpass.draw(0..4, 0..1);
+                let clear = if self.transparent {
+                    wgpu::Color::TRANSPARENT
                 } else {
-                    // Render the CPU frame buffer texture
+                    wgpu::Color::BLACK
+                };
+
+                {
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Frame Render Pass"),
+                        label: Some("Render Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: &view,
                             resolve_target: None,
                             ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(if self.transparent {
-                                    wgpu::Color::TRANSPARENT
-                                } else {
-                                    wgpu::Color::BLACK
-                                }),
+                                load: wgpu::LoadOp::Clear(clear),
                                 store: wgpu::StoreOp::Store,
                             },
                             depth_slice: None,
@@ -425,10 +270,6 @@ impl<'a> InnerWindow<'a> {
                         multiview_mask: None,
                     });
 
-                    let pipeline = self.wgpu_state.get_pipeline(surface_config.format);
-                    rpass.set_pipeline(&pipeline);
-                    rpass.set_bind_group(0, &*bind_group, &[]);
-                    rpass.set_bind_group(1, &*window_bind_group, &[]);
                     rpass.set_viewport(
                         0.0,
                         0.0,
@@ -437,27 +278,59 @@ impl<'a> InnerWindow<'a> {
                         0.0,
                         1.0,
                     );
-                    rpass.draw(0..4, 0..1);
+
+                    draw_fn(&mut rpass, x, y);
                 }
 
                 self.wgpu_state.queue.submit(Some(encoder.finish()));
                 output.present();
             }
-            Surface::Softbuffer { _context, surface } => {
-                surface
-                    .buffer_mut()
-                    .map_err(|err| anyhow!("{err}"))?
-                    .present()
-                    .map_err(|err| anyhow!("{err}"))?;
-            }
+            _ => bail!("Called draw_wgpu on a non-GPU surface"),
         }
 
         Ok(())
     }
 
-    fn render_border(&mut self) -> Result<bool> {
+    pub fn draw_softbuffer(
+        &mut self,
+        draw_fn: impl FnOnce(&mut Buffer),
+    ) -> Result<()> {
+        let softbuffer_surface = match &mut self.surface {
+            Surface::Softbuffer { surface, .. } => surface,
+            _ => bail!("Called draw_softbuffer on a non-CPU surface"),
+        };
+
+        let buffer_data = softbuffer_surface.buffer_mut().map_err(|err| anyhow!("{err}"))?;
+        let mut buffer = Buffer::Softbuffer(buffer_data);
+        
+        draw_fn(&mut buffer);
+
+        // draw decorations
+        if self.decorations {
+            if !self.border_rendered {
+                buffer.draw_border();
+                self.border_rendered = true;
+            }
+            if let Some(header) = &mut self.header {
+                let scale_factor = self.window.scale_factor();
+                let border_offset = PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0;
+                if let Some(pixmap) = header.draw() {
+                    buffer.copy_from_pixmap(pixmap, border_offset, border_offset);
+                }
+            }
+        }
+
+        match buffer {
+            Buffer::Softbuffer(b) => b.present().map_err(|err| anyhow!("{err}"))?,
+            _ => unreachable!(),
+        }
+
+        Ok(())
+    }
+
+    fn render_border(&mut self, buffer: &mut Buffer) -> Result<bool> {
         if !self.border_rendered {
-            self.surface.buffer()?.draw_border();
+            buffer.draw_border();
 
             self.border_rendered = true;
 
@@ -467,15 +340,13 @@ impl<'a> InnerWindow<'a> {
         }
     }
 
-    fn render_header(&mut self) -> Result<bool> {
+    fn render_header(&mut self, buffer: &mut Buffer) -> Result<bool> {
         if let Some(header) = &mut self.header {
             let scale_factor = self.window.scale_factor();
             let border_offset = PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0;
 
             if let Some(pixmap) = header.draw() {
-                self.surface
-                    .buffer()?
-                    .copy_from_pixmap(pixmap, border_offset, border_offset);
+                buffer.copy_from_pixmap(pixmap, border_offset, border_offset);
 
                 Ok(true)
             } else {
@@ -486,7 +357,7 @@ impl<'a> InnerWindow<'a> {
         }
     }
 
-    fn inner_offset(&self) -> (u32, u32) {
+    pub fn inner_offset(&self) -> (u32, u32) {
         if self.decorations {
             let scale_factor = self.window.scale_factor();
             let border_offset = PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0;
@@ -499,84 +370,10 @@ impl<'a> InnerWindow<'a> {
         }
     }
 
-    pub fn render_pixmap(&mut self, pixmap: &Pixmap) -> Result<()> {
-        let (x, y) = self.inner_offset();
-
-        self.surface.buffer()?.copy_from_pixmap(pixmap, x, y);
-
-        Ok(())
-    }
-
-    pub fn render_frame(&mut self, frame: &VideoFrame) -> Result<()> {
-        if let Surface::Wgpu {
-            video_renderer: Some(video),
-            ..
-        } = &mut self.surface
-        {
-            let wgpu_state = self.wgpu_state.clone();
-            video.update_video(&wgpu_state, frame);
-            return Ok(());
-        }
-
-        let (x, y) = self.inner_offset();
-        self.surface.buffer()?.copy_from_frame(frame, x, y);
-
-        Ok(())
-    }
-
-    pub fn render_with_softbuffer_buffer(
-        &mut self,
-        f: impl FnOnce(&mut BufferMutRef) -> Result<()>,
-    ) -> Result<()> {
+    pub fn render_decorations(&mut self, buffer: &mut Buffer) -> Result<bool> {
         if self.decorations {
-            let mut buffer = vec![0; (self.inner_size.width * self.inner_size.height) as usize];
-
-            let buffer_ref = &mut BufferMutRef::new(
-                bytemuck::cast_slice_mut(&mut buffer),
-                self.inner_size.width as usize,
-                self.inner_size.height as usize,
-            );
-
-            f(buffer_ref)?;
-
-            let (x, y) = self.inner_offset();
-            self.surface
-                .buffer()?
-                .copy_from_u32_buf(&mut buffer, self.inner_size.width, x, y);
-        } else {
-            match self.surface.buffer()? {
-                Buffer::Pixmap(mut pixmap) => {
-                    pixmap.data_mut().fill(0);
-
-                    let buffer_ref = &mut BufferMutRef::new(
-                        bytemuck::cast_slice_mut(pixmap.data_mut()),
-                        self.inner_size.width as usize,
-                        self.inner_size.height as usize,
-                    );
-
-                    f(buffer_ref)?;
-                }
-                Buffer::Softbuffer(mut buffer) => {
-                    buffer.fill(0);
-
-                    let buffer_ref = &mut BufferMutRef::new(
-                        bytemuck::cast_slice_mut(&mut buffer),
-                        self.inner_size.width as usize,
-                        self.inner_size.height as usize,
-                    );
-
-                    f(buffer_ref)?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn render_decorations(&mut self) -> Result<bool> {
-        if self.decorations {
-            let border = self.render_border()?;
-            let header = self.render_header()?;
+            let border = self.render_border(buffer)?;
+            let header = self.render_header(buffer)?;
             Ok(border || header)
         } else {
             Ok(false)

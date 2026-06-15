@@ -5,13 +5,12 @@ use ciborium::{from_reader, into_writer};
 use dioxus::prelude::*;
 #[cfg(feature = "dioxus")]
 use dioxus::stores::Store;
-use indexmap::IndexMap;
 use merge::Merge;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     create_arg,
-    mode::{Mode, SourceFile},
+    mode::SourceFile,
     target::Target,
 };
 
