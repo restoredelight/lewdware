@@ -29,12 +29,19 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 
 struct WindowOptions {
     opacity: f32,
+    // Non-zero when the surface is CompositeAlphaMode::PreMultiplied, in which case rgb must
+    // be pre-scaled by alpha. Otherwise (PostMultiplied, or Opaque where alpha is ignored by
+    // the compositor entirely) rgb is emitted straight.
+    premultiply: u32,
 }
 @group(1) @binding(0) var<uniform> options: WindowOptions;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    var color = textureSample(t_diffuse, s_diffuse, in.uv);
-    color.a = color.a * options.opacity;
-    return color;
+    let color = textureSample(t_diffuse, s_diffuse, in.uv);
+    let alpha = color.a * options.opacity;
+    if options.premultiply != 0u {
+        return vec4<f32>(color.rgb * alpha, alpha);
+    }
+    return vec4<f32>(color.rgb, alpha);
 }

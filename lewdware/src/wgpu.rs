@@ -215,7 +215,7 @@ impl WgpuState {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shared Quad Shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "shader.wgsl"
+                "shaders/rgba.wgsl"
             ))),
         });
 
@@ -277,7 +277,7 @@ impl WgpuState {
         let yuv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("YUV Quad Shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "video_shader.wgsl"
+                "shaders/yuv.wgsl"
             ))),
         });
 
@@ -330,7 +330,7 @@ impl WgpuState {
         let nv12_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("NV12 Quad Shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "nv12_shader.wgsl"
+                "shaders/nv12.wgsl"
             ))),
         });
 

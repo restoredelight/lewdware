@@ -30,6 +30,10 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 
 struct WindowOptions {
     opacity: f32,
+    // Non-zero when the surface is CompositeAlphaMode::PreMultiplied, in which case rgb must
+    // be pre-scaled by alpha. Otherwise (PostMultiplied, or Opaque where alpha is ignored by
+    // the compositor entirely) rgb is emitted straight.
+    premultiply: u32,
 }
 @group(1) @binding(0) var<uniform> options: WindowOptions;
 
@@ -39,6 +43,13 @@ fn gamma_decode(c: f32) -> f32 {
         return c / 12.92;
     }
     return pow((c + 0.055) / 1.055, 2.4);
+}
+
+fn premultiply(rgb: vec3<f32>, alpha: f32) -> vec4<f32> {
+    if options.premultiply != 0u {
+        return vec4<f32>(rgb * alpha, alpha);
+    }
+    return vec4<f32>(rgb, alpha);
 }
 
 // BT.709 limited range: Y in [16/255, 235/255], Cb/Cr in [16/255, 240/255]
@@ -56,12 +67,13 @@ fn fs_yuv_limited(in: VertexOutput) -> @location(0) vec4<f32> {
     let g = y - 0.18732 * cb - 0.46812 * cr;
     let b = y + 1.85560 * cb;
 
-    return vec4<f32>(
+    let alpha = options.opacity;
+    let rgb = vec3<f32>(
         gamma_decode(clamp(r, 0.0, 1.0)),
         gamma_decode(clamp(g, 0.0, 1.0)),
         gamma_decode(clamp(b, 0.0, 1.0)),
-        options.opacity,
     );
+    return premultiply(rgb, alpha);
 }
 
 // BT.709 full range: Y in [0, 1], Cb/Cr in [0, 1] centred at 0.5
@@ -79,12 +91,13 @@ fn fs_yuv_full(in: VertexOutput) -> @location(0) vec4<f32> {
     let g = y - 0.18732 * cb - 0.46812 * cr;
     let b = y + 1.85560 * cb;
 
-    return vec4<f32>(
+    let alpha = options.opacity;
+    let rgb = vec3<f32>(
         gamma_decode(clamp(r, 0.0, 1.0)),
         gamma_decode(clamp(g, 0.0, 1.0)),
         gamma_decode(clamp(b, 0.0, 1.0)),
-        options.opacity,
     );
+    return premultiply(rgb, alpha);
 }
 
 // Packed-alpha YUV420p: top half = color, bottom half = alpha-as-luma.
@@ -107,10 +120,11 @@ fn fs_yuv_packed_alpha(in: VertexOutput) -> @location(0) vec4<f32> {
     let g = y - 0.18732 * cb - 0.46812 * cr;
     let b = y + 1.85560 * cb;
 
-    return vec4<f32>(
+    let alpha = alpha_raw * options.opacity;
+    let rgb = vec3<f32>(
         gamma_decode(clamp(r, 0.0, 1.0)),
         gamma_decode(clamp(g, 0.0, 1.0)),
         gamma_decode(clamp(b, 0.0, 1.0)),
-        alpha_raw * options.opacity,
     );
+    return premultiply(rgb, alpha);
 }
