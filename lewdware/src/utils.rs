@@ -16,10 +16,14 @@ pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<(
 
     let tray_menu = Menu::with_items(&[&MenuItem::new("Panic", true, None)])?;
 
-    TrayIconBuilder::new()
+    let tray_icon = TrayIconBuilder::new()
         .with_tooltip("Lewdware")
         .with_menu(Box::new(tray_menu))
         .build()?;
+
+    // The TrayIcon must be kept alive for the icon to remain visible. Since it should
+    // live for the entire application lifetime, we intentionally leak it here.
+    std::mem::forget(tray_icon);
 
     MenuEvent::set_event_handler(Some(move |_| {
         let _ = event_loop_proxy.send_event(UserEvent::Exit);
@@ -38,6 +42,19 @@ pub fn create_tray_icon(_: EventLoopProxy<UserEvent>) -> Result<()> {
 pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_key: Key) {
     println!("Spawning panic thread");
     thread::spawn(move || {
+        // On Windows, rdev installs a WH_KEYBOARD_LL hook whose callback is called as a
+        // sent message to this thread. Windows will silently remove the hook if the
+        // callback doesn't return within LowLevelHooksTimeout (typically 300ms). Under
+        // heavy CPU load (many video windows), this thread can be starved long enough to
+        // hit that timeout. Raising to TIME_CRITICAL ensures it gets scheduled in time.
+        #[cfg(target_os = "windows")]
+        unsafe {
+            use windows::Win32::System::Threading::{
+                GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
+            };
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+        }
+
         let rdev_key = match key_to_rdev(&target_key) {
             Some(x) => x,
             None => {
