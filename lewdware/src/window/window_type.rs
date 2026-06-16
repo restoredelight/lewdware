@@ -12,7 +12,7 @@ use crate::{
     egui::EguiCPUWindow,
     lua::{self, ChoiceWindowOption},
     media::ImageData,
-    video::{NextFrame, VideoDecoder},
+    video::{NextFrame, VideoDecoder, VideoFrame, VideoPixelFormat},
     window::{
         gpu_renderer::{GpuRenderer, GpuRendererType},
         header::HEADER_HEIGHT,
@@ -67,7 +67,7 @@ impl<'a> ImageWindow<'a> {
         let (gpu_renderer, frame_buffer) = if inner_window.is_gpu() {
             let outer_size = inner_window.outer_size();
             let frame_buffer = vec![0; (outer_size.width * outer_size.height * 4) as usize];
-            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity);
+            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity, inner_window.premultiplied_alpha());
             (Some(gpu_renderer), frame_buffer)
         } else {
             (None, Vec::new())
@@ -123,15 +123,19 @@ impl<'a> ImageWindow<'a> {
     }
 }
 
-/// A video popup, rendered using wgpu.
+/// A video popup, rendered using wgpu (GPU path) or software YUV conversion (CPU fallback).
 pub struct VideoWindow<'a> {
     pub inner_window: InnerWindow<'a>,
     video_player: VideoDecoder,
     last_frame_time: Instant,
     duration: Option<Duration>,
     paused: bool,
-    gpu_renderer: GpuRenderer,
+    // Present when the window was initialised with GPU support.
+    gpu_renderer: Option<GpuRenderer>,
+    // GPU path: RGBA overlay for decorations / UI.
     ui_frame_buffer: Vec<u8>,
+    // CPU path: ARGB pixel buffer sized to inner_size (display area).
+    cpu_frame_buffer: Vec<u32>,
 }
 
 impl<'a> VideoWindow<'a> {
@@ -141,22 +145,31 @@ impl<'a> VideoWindow<'a> {
         _loop_video: bool,
     ) -> anyhow::Result<Self> {
         let outer_size = inner_window.outer_size();
-        let ui_frame_buffer = vec![0; (outer_size.width * outer_size.height * 4) as usize];
-        let gpu_renderer = GpuRenderer::new_video(
-            inner_window.wgpu_state(),
-            inner_window.surface_format().unwrap(),
-            video_player.native_width(),
-            video_player.native_height(),
-            video_player.full_range(),
-            video_player.pixel_format(),
-            video_player.packed_alpha(),
-            outer_size.width,
-            outer_size.height,
-            inner_window.opacity,
-        );
+        let inner_size = inner_window.inner_size();
+
+        let (gpu_renderer, ui_frame_buffer) = if inner_window.is_gpu() {
+            let ui_frame_buffer = vec![0u8; (outer_size.width * outer_size.height * 4) as usize];
+            let gpu_renderer = GpuRenderer::new_video(
+                inner_window.wgpu_state(),
+                inner_window.surface_format().unwrap(),
+                video_player.native_width(),
+                video_player.native_height(),
+                video_player.full_range(),
+                video_player.pixel_format(),
+                video_player.packed_alpha(),
+                outer_size.width,
+                outer_size.height,
+                inner_window.opacity,
+                inner_window.premultiplied_alpha(),
+            );
+            (Some(gpu_renderer), ui_frame_buffer)
+        } else {
+            (None, Vec::new())
+        };
+
+        let cpu_frame_buffer = vec![0u32; (inner_size.width * inner_size.height) as usize];
 
         video_player.play();
-
         inner_window.window().request_redraw();
 
         Ok(Self {
@@ -167,75 +180,137 @@ impl<'a> VideoWindow<'a> {
             paused: false,
             gpu_renderer,
             ui_frame_buffer,
+            cpu_frame_buffer,
         })
     }
 
     pub fn update(&mut self) -> Result<bool> {
         self.inner_window.start_render()?;
 
-        self.gpu_renderer.set_opacity(self.inner_window.wgpu_state(), self.inner_window.opacity);
+        if self.inner_window.is_gpu() {
+            // --- GPU path ---
+            if let Some(gpu_renderer) = &self.gpu_renderer {
+                gpu_renderer.set_opacity(self.inner_window.wgpu_state(), self.inner_window.opacity);
+            }
 
-        let mut render = false;
+            let mut render = false;
+            let outer_size = self.inner_window.outer_size();
 
-        let outer_size = self.inner_window.outer_size();
-        self.ui_frame_buffer.fill(0);
-        let decorations_rendered = {
-            let pixmap = PixmapMut::from_bytes(&mut self.ui_frame_buffer, outer_size.width, outer_size.height).unwrap();
-            let mut buffer = Buffer::Pixmap(pixmap);
-            self.inner_window.render_decorations(&mut buffer)?
-        };
+            self.ui_frame_buffer.fill(0);
+            let decorations_rendered = {
+                let pixmap = PixmapMut::from_bytes(
+                    &mut self.ui_frame_buffer,
+                    outer_size.width,
+                    outer_size.height,
+                )
+                .unwrap();
+                let mut buffer = Buffer::Pixmap(pixmap);
+                self.inner_window.render_decorations(&mut buffer)?
+            };
 
-        if decorations_rendered {
-            self.gpu_renderer.upload_frame_buffer(&self.inner_window.wgpu_state().queue, &self.ui_frame_buffer, outer_size.width, outer_size.height);
-            render = true;
-        }
-
-        match self.video_player.next_frame() {
-            NextFrame::Ready(frame) => {
-                if let GpuRendererType::Video(video_renderer) = &mut self.gpu_renderer.renderer_type {
-                    video_renderer.update_video(self.inner_window.wgpu_state(), &frame);
+            if decorations_rendered {
+                if let Some(gpu_renderer) = &self.gpu_renderer {
+                    gpu_renderer.upload_frame_buffer(
+                        &self.inner_window.wgpu_state().queue,
+                        &self.ui_frame_buffer,
+                        outer_size.width,
+                        outer_size.height,
+                    );
                 }
                 render = true;
             }
-            NextFrame::Finish => {
-                return Ok(true);
-            }
-            NextFrame::None => {}
-        }
 
-        if render {
-            let gpu_renderer = &self.gpu_renderer;
-            let inner_size = self.inner_window.inner_size();
-            self.inner_window.draw_wgpu(|rpass, x, y| {
-                if let GpuRendererType::Video(video) = &gpu_renderer.renderer_type {
-                    let (vid_pipeline, vid_bind_group) = video.video_pipeline_and_bind_group();
-                    rpass.set_pipeline(vid_pipeline);
-                    rpass.set_bind_group(0, vid_bind_group, &[]);
-                    rpass.set_bind_group(1, &gpu_renderer.window_bind_group, &[]);
-                    
-                    rpass.set_viewport(
-                        x as f32,
-                        y as f32,
-                        inner_size.width as f32,
-                        inner_size.height as f32,
-                        0.0,
-                        1.0,
-                    );
-                    rpass.draw(0..4, 0..1);
-
-                    rpass.set_pipeline(video.ui_pipeline());
-                    rpass.set_bind_group(0, video.ui_bind_group(), &[]);
-                    rpass.set_bind_group(1, &gpu_renderer.window_bind_group, &[]);
-                    rpass.set_viewport(
-                        0.0,
-                        0.0,
-                        outer_size.width as f32,
-                        outer_size.height as f32,
-                        0.0,
-                        1.0,
-                    );
-                    rpass.draw(0..4, 0..1);
+            match self.video_player.next_frame() {
+                NextFrame::Ready(frame) => {
+                    if let Some(gpu_renderer) = &mut self.gpu_renderer {
+                        if let GpuRendererType::Video(video_renderer) =
+                            &mut gpu_renderer.renderer_type
+                        {
+                            video_renderer.update_video(self.inner_window.wgpu_state(), &frame);
+                        }
+                    }
+                    render = true;
                 }
+                NextFrame::Finish => return Ok(true),
+                NextFrame::None => {}
+            }
+
+            if render {
+                let gpu_renderer = self.gpu_renderer.as_ref();
+                let inner_size = self.inner_window.inner_size();
+                let outer_w = outer_size.width as f32;
+                let outer_h = outer_size.height as f32;
+                self.inner_window.draw_wgpu(|rpass, x, y| {
+                    if let Some(gpu_renderer) = gpu_renderer {
+                        if let GpuRendererType::Video(video) = &gpu_renderer.renderer_type {
+                            let (vid_pipeline, vid_bind_group) =
+                                video.video_pipeline_and_bind_group();
+                            rpass.set_pipeline(vid_pipeline);
+                            rpass.set_bind_group(0, vid_bind_group, &[]);
+                            rpass.set_bind_group(1, &gpu_renderer.window_bind_group, &[]);
+                            rpass.set_viewport(
+                                x as f32,
+                                y as f32,
+                                inner_size.width as f32,
+                                inner_size.height as f32,
+                                0.0,
+                                1.0,
+                            );
+                            rpass.draw(0..4, 0..1);
+
+                            rpass.set_pipeline(video.ui_pipeline());
+                            rpass.set_bind_group(0, video.ui_bind_group(), &[]);
+                            rpass.set_bind_group(1, &gpu_renderer.window_bind_group, &[]);
+                            rpass.set_viewport(0.0, 0.0, outer_w, outer_h, 0.0, 1.0);
+                            rpass.draw(0..4, 0..1);
+                        }
+                    }
+                })?;
+            }
+        } else {
+            // --- CPU path ---
+            match self.video_player.next_frame() {
+                NextFrame::Ready(frame) => {
+                    if frame.frame.width() > 0 {
+                        let inner_size = self.inner_window.inner_size();
+                        let display_w = self.video_player.native_width();
+                        let display_h = self.video_player.native_height();
+                        let full_range = self.video_player.full_range();
+                        let packed_alpha = self.video_player.packed_alpha();
+
+                        match self.video_player.pixel_format() {
+                            VideoPixelFormat::Yuv420p => render_yuv420p_to_argb(
+                                &frame,
+                                &mut self.cpu_frame_buffer,
+                                inner_size.width,
+                                inner_size.height,
+                                display_w,
+                                display_h,
+                                full_range,
+                                packed_alpha,
+                            ),
+                            VideoPixelFormat::Nv12 => render_nv12_to_argb(
+                                &frame,
+                                &mut self.cpu_frame_buffer,
+                                inner_size.width,
+                                inner_size.height,
+                                display_w,
+                                display_h,
+                                full_range,
+                                packed_alpha,
+                            ),
+                        }
+                    }
+                }
+                NextFrame::Finish => return Ok(true),
+                NextFrame::None => {}
+            }
+
+            let cpu_frame = &self.cpu_frame_buffer;
+            let inner_size = self.inner_window.inner_size();
+            let (x, y) = self.inner_window.inner_offset();
+            self.inner_window.draw_softbuffer(|buffer| {
+                buffer.copy_from_u32_buf(cpu_frame, inner_size.width, x, y);
             })?;
         }
 
@@ -285,7 +360,7 @@ impl<'a> PromptWindow<'a> {
         let (gpu_renderer, frame_buffer) = if inner_window.is_gpu() {
             let outer_size = inner_window.outer_size();
             let frame_buffer = vec![0; (outer_size.width * outer_size.height * 4) as usize];
-            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity);
+            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity, inner_window.premultiplied_alpha());
             (Some(gpu_renderer), frame_buffer)
         } else {
             (None, Vec::new())
@@ -476,7 +551,7 @@ impl<'a> ChoiceWindow<'a> {
         let (gpu_renderer, frame_buffer) = if inner_window.is_gpu() {
             let outer_size = inner_window.outer_size();
             let frame_buffer = vec![0; (outer_size.width * outer_size.height * 4) as usize];
-            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity);
+            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity, inner_window.premultiplied_alpha());
             (Some(gpu_renderer), frame_buffer)
         } else {
             (None, Vec::new())
@@ -668,4 +743,103 @@ fn translate_position(position: PhysicalPosition<f64>, scale_factor: f64) -> Phy
     logical_position.y -= 1.0 + HEADER_HEIGHT as f64;
 
     return logical_position.to_physical(scale_factor);
+}
+
+// BT.709 YCbCr → linear RGB (clipped). Limited range scales Y from [16,235] and Cb/Cr from
+// [16,240]; full range (JPEG / yuvj420p) maps [0,255] directly.
+fn yuv_to_argb(y: u8, cb: u8, cr: u8, alpha: u8, full_range: bool) -> u32 {
+    let (y_f, cb_f, cr_f) = if full_range {
+        (y as f32 / 255.0, cb as f32 / 255.0 - 0.5, cr as f32 / 255.0 - 0.5)
+    } else {
+        (
+            (y as f32 - 16.0) / 219.0,
+            (cb as f32 - 128.0) / 224.0,
+            (cr as f32 - 128.0) / 224.0,
+        )
+    };
+    let r = ((y_f + 1.57480 * cr_f).clamp(0.0, 1.0) * 255.0) as u8;
+    let g = ((y_f - 0.18732 * cb_f - 0.46812 * cr_f).clamp(0.0, 1.0) * 255.0) as u8;
+    let b = ((y_f + 1.85560 * cb_f).clamp(0.0, 1.0) * 255.0) as u8;
+    ((alpha as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+}
+
+/// Convert a YUV420P `VideoFrame` into ARGB u32 pixels scaled to `(dst_w, dst_h)`.
+/// `packed_alpha`: top half = colour, bottom half = alpha-as-luma (same layout as packed MP4).
+fn render_yuv420p_to_argb(
+    frame: &VideoFrame,
+    dst: &mut [u32],
+    dst_w: u32,
+    dst_h: u32,
+    src_display_w: u32,
+    src_display_h: u32,
+    full_range: bool,
+    packed_alpha: bool,
+) {
+    let f = &frame.frame;
+    let y_data = f.data(0);
+    let cb_data = f.data(1);
+    let cr_data = f.data(2);
+    let y_stride = f.stride(0) as usize;
+    let cb_stride = f.stride(1) as usize;
+    let cr_stride = f.stride(2) as usize;
+
+    let sw = src_display_w as usize;
+    let sh = src_display_h as usize;
+    let dw = dst_w as usize;
+    let dh = dst_h as usize;
+
+    for dy in 0..dh {
+        let sy = (dy * sh) / dh;
+        let cy = sy / 2;
+        let ay = sy + sh; // alpha row offset (packed only)
+        for dx in 0..dw {
+            let sx = (dx * sw) / dw;
+            let cx = sx / 2;
+            let y = y_data[sy * y_stride + sx];
+            let cb = cb_data[cy * cb_stride + cx];
+            let cr = cr_data[cy * cr_stride + cx];
+            let alpha = if packed_alpha { y_data[ay * y_stride + sx] } else { 255 };
+            dst[dy * dw + dx] = yuv_to_argb(y, cb, cr, alpha, full_range);
+        }
+    }
+}
+
+/// Convert an NV12 `VideoFrame` into ARGB u32 pixels scaled to `(dst_w, dst_h)`.
+/// Handles both software NV12 (from `av_hwframe_transfer_data`) and the packed-alpha layout.
+fn render_nv12_to_argb(
+    frame: &VideoFrame,
+    dst: &mut [u32],
+    dst_w: u32,
+    dst_h: u32,
+    src_display_w: u32,
+    src_display_h: u32,
+    full_range: bool,
+    packed_alpha: bool,
+) {
+    let f = &frame.frame;
+    let y_data = f.data(0);
+    let uv_data = f.data(1);
+    let y_stride = f.stride(0) as usize;
+    let uv_stride = f.stride(1) as usize;
+
+    let sw = src_display_w as usize;
+    let sh = src_display_h as usize;
+    let dw = dst_w as usize;
+    let dh = dst_h as usize;
+
+    for dy in 0..dh {
+        let sy = (dy * sh) / dh;
+        let cy = sy / 2;
+        let ay = sy + sh;
+        for dx in 0..dw {
+            let sx = (dx * sw) / dw;
+            let cx = sx / 2;
+            let y = y_data[sy * y_stride + sx];
+            // UV plane: interleaved Cb Cr pairs
+            let cb = uv_data[cy * uv_stride + cx * 2];
+            let cr = uv_data[cy * uv_stride + cx * 2 + 1];
+            let alpha = if packed_alpha { y_data[ay * y_stride + sx] } else { 255 };
+            dst[dy * dw + dx] = yuv_to_argb(y, cb, cr, alpha, full_range);
+        }
+    }
 }

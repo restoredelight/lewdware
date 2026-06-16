@@ -13,6 +13,17 @@ pub struct GpuRenderer {
     pub renderer_type: GpuRendererType,
 }
 
+/// Mirrors the `WindowOptions` uniform struct in the shaders. `premultiplied` tells the
+/// fragment shaders whether the surface expects premultiplied alpha (`CompositeAlphaMode::
+/// PreMultiplied`) or straight alpha (anything else, since e.g. `Opaque` ignores alpha
+/// entirely) — see `InnerWindow::premultiplied_alpha`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct WindowUniform {
+    opacity: f32,
+    premultiplied: u32,
+}
+
 pub enum GpuRendererType {
     Image {
         texture: wgpu::Texture,
@@ -22,12 +33,21 @@ pub enum GpuRendererType {
 }
 
 impl GpuRenderer {
-    pub fn new_image(wgpu_state: &WgpuState, width: u32, height: u32, opacity: f32) -> Self {
+    pub fn new_image(
+        wgpu_state: &WgpuState,
+        width: u32,
+        height: u32,
+        opacity: f32,
+        premultiplied_alpha: bool,
+    ) -> Self {
         let device = &wgpu_state.device;
 
         let opacity_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Opacity Buffer"),
-            contents: bytemuck::cast_slice(&[opacity]),
+            contents: bytemuck::bytes_of(&WindowUniform {
+                opacity,
+                premultiplied: premultiplied_alpha as u32,
+            }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -88,12 +108,16 @@ impl GpuRenderer {
         ui_width: u32,
         ui_height: u32,
         opacity: f32,
+        premultiplied_alpha: bool,
     ) -> Self {
         let device = &wgpu_state.device;
 
         let opacity_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Opacity Buffer"),
-            contents: bytemuck::cast_slice(&[opacity]),
+            contents: bytemuck::bytes_of(&WindowUniform {
+                opacity,
+                premultiplied: premultiplied_alpha as u32,
+            }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 

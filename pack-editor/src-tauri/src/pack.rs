@@ -844,11 +844,11 @@ impl MediaPackView {
         OpenOptions::new().read(true).open(&self.path).await
     }
 
-    async fn get_raw_file(&self, id: u64) -> Result<(FileData, FileType)> {
-        let (offset, length, path, file_type) = self
+    async fn get_raw_file(&self, id: u64) -> Result<(FileData, FileType, bool)> {
+        let (offset, length, path, file_type, transparent) = self
             .db_execute(move |conn| {
                 conn.query_row_and_then(
-                    "SELECT offset, length, path, file_type FROM media WHERE id = ?",
+                    "SELECT offset, length, path, file_type, transparent FROM media WHERE id = ?",
                     params![id],
                     |row| -> Result<_> {
                         Ok((
@@ -856,6 +856,7 @@ impl MediaPackView {
                             row.get::<_, Option<usize>>("length")?,
                             row.get::<_, Option<String>>("path")?,
                             row.get::<_, String>("file_type")?.parse()?,
+                            row.get::<_, Option<bool>>("transparent")?.unwrap_or(false),
                         ))
                     },
                 )
@@ -876,7 +877,7 @@ impl MediaPackView {
             _ => bail!("No offset, length or path"),
         };
 
-        Ok((file_data, file_type))
+        Ok((file_data, file_type, transparent))
     }
 
     pub async fn get_thumbnail(&self, id: u64) -> Result<Vec<u8>> {
@@ -891,19 +892,20 @@ impl MediaPackView {
 
     pub async fn get_preview(&self, id: u64) -> Result<Vec<u8>> {
         let _handle = self.saving.read().await;
-        let (file_data, file_type) = self.get_raw_file(id).await?;
-        crate::thumbnail::generate_preview(file_data, file_type == FileType::Image).await
+        let (file_data, file_type, transparent) = self.get_raw_file(id).await?;
+        crate::thumbnail::generate_preview(file_data, file_type == FileType::Image, transparent)
+            .await
     }
 
     pub async fn get_display(&self, id: u64) -> Result<Vec<u8>> {
         let _handle = self.saving.read().await;
-        let (file_data, _) = self.get_raw_file(id).await?;
+        let (file_data, _, _) = self.get_raw_file(id).await?;
         crate::thumbnail::generate_display_image(file_data).await
     }
 
     pub async fn get_file_data(&self, id: u64) -> Result<(Vec<u8>, FileType)> {
         let _handle = self.saving.read().await;
-        let (file_data, file_type) = self.get_raw_file(id).await?;
+        let (file_data, file_type, _) = self.get_raw_file(id).await?;
         let data = match file_data {
             FileData::Path(path) => tokio::fs::read(path).await?,
             FileData::Data(data) => data,

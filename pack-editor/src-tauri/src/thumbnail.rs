@@ -51,7 +51,11 @@ pub async fn generate_display_image(file_data: FileData) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
-pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec<u8>> {
+pub async fn generate_preview(
+    file_data: FileData,
+    is_image: bool,
+    transparent: bool,
+) -> Result<Vec<u8>> {
     let mut _temp_file = None;
 
     let path = match file_data {
@@ -86,17 +90,17 @@ pub async fn generate_preview(file_data: FileData, is_image: bool) -> Result<Vec
         cmd.args(["-frames:v", "1"]);
     }
 
-    cmd.args([
-        "-vf",
-        "scale='min(iw,300)':'min(ih,200)':force_original_aspect_ratio=decrease",
-        "-pix_fmt",
-        "yuv420p",
-        "-f",
-        "mjpeg",
-        "-q:v",
-        "4",
-        "pipe:1",
-    ]);
+    // Transparent videos are packed as color-on-top, alpha-as-luma-on-bottom (see
+    // `encode_video_with_transparency`); crop to the top half before scaling so the preview
+    // shows the actual color frame instead of the raw double-height packed frame.
+    let scale = "scale='min(iw,300)':'min(ih,200)':force_original_aspect_ratio=decrease";
+    let filter = if transparent {
+        format!("crop=iw:ih/2:0:0,{scale}")
+    } else {
+        scale.to_string()
+    };
+
+    cmd.args(["-vf", &filter, "-pix_fmt", "yuv420p", "-f", "mjpeg", "-q:v", "4", "pipe:1"]);
 
     let output = cmd.output().await?;
 

@@ -107,6 +107,24 @@
           class="max-w-full max-h-full object-contain pointer-events-auto"
           style="max-height: calc(100vh - 32px)"
         />
+      {:else if file.file_info.type === "video" && file.file_info.transparent}
+        <!-- Transparent videos are encoded as a packed frame (color on top, alpha-as-luma on
+             the bottom) for lewdware's shader to composite. The browser has no way to render
+             that alpha channel, so just crop to the color half rather than showing the raw,
+             double-height packed frame with the alpha mask flickering underneath.
+             Overriding the intrinsic 2:1 aspect ratio + object-fit: cover + object-position: top
+             scales the packed frame 1:1 (since cover's scale factor is 1 here) and keeps only
+             the top half visible — no wrapper/absolute positioning needed. -->
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video
+          src="{store.mediaBase}/file/{file.id}"
+          autoplay
+          loop
+          muted
+          playsinline
+          class="max-w-full max-h-full object-cover object-top pointer-events-auto"
+          style="aspect-ratio: {file.file_info.width} / {file.file_info.height}; max-height: calc(100vh - 32px)"
+        ></video>
       {:else if file.file_info.type === "video"}
         <!-- svelte-ignore a11y_media_has_caption -->
         <video

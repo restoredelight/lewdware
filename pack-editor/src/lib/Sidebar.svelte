@@ -19,7 +19,7 @@
     }
     if (info.type === "video") {
       return [
-        { label: "Type", value: "Video" },
+        { label: "Type", value: info.transparent ? "Video (transparent)" : "Video" },
         { label: "Size", value: `${info.width} × ${info.height}` },
         { label: "Duration", value: formatDuration(info.duration) },
         { label: "Audio", value: info.audio ? "Yes" : "No" },

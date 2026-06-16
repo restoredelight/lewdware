@@ -108,10 +108,22 @@ impl HardwareEncoder {
 
     pub fn ffmpeg_args(&self) -> &[&'static str] {
         match self {
-            Self::Nvidia => &["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"],
+            Self::Nvidia => &[
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                "p4",
+                "-cq",
+                "23",
+                "-b:v",
+                "0",
+            ],
             Self::Apple => &["-c:v", "h264_videotoolbox", "-q:v", "60"],
-            Self::Intel => &["-c:v", "h264_qsv", "-global_quality", "23"],
-            Self::Amd => &["-c:v", "h264_amf", "-quality", "quality"],
+            Self::Intel => &["-c:v", "h264_qsv", "-global_quality:v", "23"],
+            Self::Amd => &[
+                "-c:v", "h264_amf", "-quality", "quality", "-rc", "cqp", "-qp_i", "23", "-qp_p",
+                "23", "-qp_b", "23",
+            ],
             Self::SoftwareFallback => &["-c:v", "libx264", "-crf", "23"],
         }
     }
@@ -426,7 +438,7 @@ fn encode_image(
     let filter = format!(
         "[0:v]scale=w='{width}':h='{height}',format=yuva420p[main]; \
          [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]; \
-         [0:v]alphaextract,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YMIN[alpha]"
+         [0:v]format=rgba,alphaextract,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YMIN[alpha]"
     );
 
     let mut cmd = new_command(get_ffmpeg_path());
@@ -510,7 +522,7 @@ fn encode_video(
     let filter = format!(
         "[0:v]scale=w='{width}':h='{height}',format=yuv420p[main]; \
          [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]; \
-         [0:v]alphaextract,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YMIN[alpha]"
+         [0:v]format=rgba,alphaextract,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YMIN[alpha]"
     );
 
     let mut cmd = new_command(get_ffmpeg_path());
@@ -569,6 +581,8 @@ fn encode_video(
     let result = child.wait()?;
 
     if !result.success() {
+        eprintln!("{stderr_buf}");
+
         if !fixed_fps {
             eprintln!("Encoding with non-fixed FPS failed; trying fixed FPS");
 
@@ -585,7 +599,6 @@ fn encode_video(
             }
         }
 
-        eprintln!("{stderr_buf}");
         bail!("ffmpeg failed for {}", input.display());
     }
 
@@ -613,7 +626,7 @@ fn encode_video_with_transparency(
     // Both parts are encoded full-range so the shader can read alpha directly (0→transparent, 1→opaque).
     let filter = format!(
         "[0:v]scale=w='{width}':h='{height}':out_range=pc,format=yuv420p[color]; \
-         [0:v]scale=w='{width}':h='{height}',alphaextract,scale=out_range=pc,format=yuv420p[alpha_yuv]; \
+         [0:v]scale=w='{width}':h='{height}',format=rgba,alphaextract,scale=out_range=pc,format=yuv420p[alpha_yuv]; \
          [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]; \
          [color][alpha_yuv]vstack=inputs=2[out]"
     );
@@ -656,6 +669,7 @@ fn encode_video_with_transparency(
     let result = command.output()?;
 
     if !result.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&result.stderr));
         if !fixed_fps {
             eprintln!("Encoding with non-fixed FPS failed; trying fixed FPS");
 
@@ -665,8 +679,6 @@ fn encode_video_with_transparency(
                 return Ok(res);
             }
         }
-
-        eprintln!("{}", String::from_utf8_lossy(&result.stderr));
 
         bail!("ffmpeg failed for {}", input.display());
     }

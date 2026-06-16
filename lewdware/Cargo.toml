@@ -32,7 +32,7 @@ tokio = { version = "1.48.0", features = ["full"] }
 pollster = "0.4.0"
 mlua = { version = "0.11.5", features = ["luau", "async", "anyhow", "serde", "userdata-wrappers"] }
 egui_software_backend = { git = "https://github.com/DGriffin91/egui_software_backend.git", features = ["rayon"] }
-bytemuck = "1.24.0"
+bytemuck = { version = "1.24.0", features = ["derive"] }
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.34.0"
 rayon = "1.11.0"

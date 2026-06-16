@@ -28,9 +28,17 @@ pub struct InnerWindow<'a> {
     current_move: Option<Move>,
     wgpu_state: Arc<WgpuState>,
     transparent: bool,
+    // Whether the surface's CompositeAlphaMode is PreMultiplied (vs. PostMultiplied/Opaque).
+    // Tells the fragment shaders whether they need to pre-scale rgb by alpha themselves.
+    premultiplied_alpha: bool,
     current_fade: Option<Fade>,
     pub opacity: f32,
 }
+
+// Warn at most once per run if the platform/adapter can't actually composite transparent
+// windows, rather than silently rendering them opaque with no indication why.
+static ALPHA_MODE_UNSUPPORTED_WARNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 struct Move {
     id: u64,
@@ -66,6 +74,8 @@ impl<'a> InnerWindow<'a> {
         let window = Arc::new(window);
         let (inner_size, outer_size) = calculate_size(&window, decorations);
 
+        let mut premultiplied_alpha = false;
+
         let surface = if gpu && !wgpu_state.error.load(Ordering::Acquire) {
             let surface = wgpu_state.instance.create_surface(window.clone())?;
             let surface_caps = surface.get_capabilities(&wgpu_state.adapter);
@@ -80,6 +90,7 @@ impl<'a> InnerWindow<'a> {
                     .alpha_modes
                     .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
                 {
+                    premultiplied_alpha = true;
                     wgpu::CompositeAlphaMode::PreMultiplied
                 } else if surface_caps
                     .alpha_modes
@@ -87,7 +98,17 @@ impl<'a> InnerWindow<'a> {
                 {
                     wgpu::CompositeAlphaMode::PostMultiplied
                 } else {
-                    wgpu::CompositeAlphaMode::Auto
+                    // Neither mode is available, so the compositor has no way to blend this
+                    // window's alpha against the desktop at all (common on plain Win32/DX12
+                    // swapchains, non-compositing X11, and software/llvmpipe GL). `Auto` would
+                    // only ever resolve to `Opaque` or `Inherit` here anyway, both of which
+                    // amount to the same thing in practice, so make that explicit.
+                    if !ALPHA_MODE_UNSUPPORTED_WARNED.swap(true, Ordering::Relaxed) {
+                        eprintln!(
+                            "This platform/adapter doesn't support transparent windows (no PreMultiplied/PostMultiplied composite alpha mode available); transparent popups will render opaque"
+                        );
+                    }
+                    wgpu::CompositeAlphaMode::Opaque
                 }
             } else {
                 wgpu::CompositeAlphaMode::Opaque
@@ -142,6 +163,7 @@ impl<'a> InnerWindow<'a> {
             current_move: None,
             wgpu_state,
             transparent,
+            premultiplied_alpha,
             current_fade: None,
             opacity: opacity.unwrap_or(1.0),
         })
@@ -597,6 +619,13 @@ impl<'a> InnerWindow<'a> {
 
     pub fn transparent(&self) -> bool {
         self.transparent
+    }
+
+    /// Whether the surface was configured with `CompositeAlphaMode::PreMultiplied`. If so, the
+    /// fragment shaders need to pre-scale their rgb output by alpha; otherwise (PostMultiplied,
+    /// or Opaque where alpha is ignored by the compositor entirely) they should emit it straight.
+    pub fn premultiplied_alpha(&self) -> bool {
+        self.premultiplied_alpha
     }
 
     pub fn decorations(&self) -> bool {

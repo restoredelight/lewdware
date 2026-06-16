@@ -51,9 +51,23 @@ pub struct WgpuState {
 
 impl WgpuState {
     pub async fn new(display_handle: OwnedDisplayHandle) -> Result<Self> {
-        let instance = wgpu::Instance::new(InstanceDescriptor::new_with_display_handle(Box::new(
-            display_handle,
-        )));
+        #[allow(unused_mut)]
+        let mut instance_descriptor =
+            InstanceDescriptor::new_with_display_handle(Box::new(display_handle));
+
+        #[cfg(target_os = "windows")]
+        {
+            // A DX12 swapchain made directly from the window's HWND (the default) never
+            // reports a PreMultiplied/PostMultiplied composite alpha mode, so transparent
+            // windows always render opaque. Routing through a DirectComposition visual
+            // instead (which wgpu sets up internally from the same HWND) is the only way to
+            // get real per-pixel window transparency on Windows. Applies to every window in
+            // this instance, not just transparent ones, and loses RenderDoc support.
+            instance_descriptor.backend_options.dx12.presentation_system =
+                wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        }
+
+        let instance = wgpu::Instance::new(instance_descriptor);
 
         #[allow(unused_mut)]
         let mut chosen_adapter = None;

@@ -1,6 +1,6 @@
 export type FileInfo =
   | { type: "image"; width: number; height: number; transparent: boolean }
-  | { type: "video"; width: number; height: number; duration: number; audio: boolean }
+  | { type: "video"; width: number; height: number; duration: number; audio: boolean; transparent: boolean }
   | { type: "audio"; duration: number };
 
 export interface MediaFile {
