@@ -42,6 +42,8 @@ pub fn create_tray_icon(_: EventLoopProxy<UserEvent>) -> Result<()> {
 pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_key: Key) {
     println!("Spawning panic thread");
     thread::spawn(move || {
+        println!("Panic thread started");
+
         // On Windows, rdev installs a WH_KEYBOARD_LL hook whose callback is called as a
         // sent message to this thread. Windows will silently remove the hook if the
         // callback doesn't return within LowLevelHooksTimeout (typically 300ms). Under
@@ -52,7 +54,10 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_ke
             use windows::Win32::System::Threading::{
                 GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
             };
-            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+            match SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) {
+                Ok(()) => println!("Panic thread priority set to TIME_CRITICAL"),
+                Err(e) => eprintln!("Failed to set panic thread priority: {e}"),
+            }
         }
 
         let rdev_key = match key_to_rdev(&target_key) {
@@ -63,29 +68,43 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_ke
             }
         };
 
+        println!(
+            "Panic listener starting: watching for {:?} with modifiers {:?}",
+            rdev_key, target_key.modifiers
+        );
+
         let mut keys = HashSet::new();
 
-        if let Err(err) = rdev::listen(move |event| {
+        let result = rdev::listen(move |event| {
             if let rdev::EventType::KeyPress(key) = event.event_type {
+                println!("Key press: {:?}", key);
                 keys.insert(key);
 
                 if key == rdev_key {
                     let modifiers = rdev_keys_to_modifiers(&keys);
+                    println!(
+                        "Target key pressed — active modifiers: {:?}, required: {:?}",
+                        modifiers, target_key.modifiers
+                    );
 
-                    if modifier_matches(&modifiers, &target_key.modifiers)
-                        && let Err(err) = event_loop_proxy.send_event(UserEvent::Exit)
-                    {
-                        eprintln!("Could not send panic button event: {}", err);
+                    if modifier_matches(&modifiers, &target_key.modifiers) {
+                        println!("Modifier match — sending exit event");
+                        match event_loop_proxy.send_event(UserEvent::Exit) {
+                            Ok(()) => println!("Exit event sent successfully"),
+                            Err(err) => eprintln!("Could not send panic button event: {}", err),
+                        }
+                    } else {
+                        println!("Modifier mismatch — not triggering panic");
                     }
                 }
             } else if let rdev::EventType::KeyRelease(key) = event.event_type {
                 keys.remove(&key);
             }
-        }) {
-            eprintln!(
-                "Error occurred while trying to setup panic listener: {:?}",
-                err
-            );
+        });
+
+        match result {
+            Ok(()) => eprintln!("rdev::listen returned Ok — panic listener is no longer active"),
+            Err(err) => eprintln!("rdev::listen returned error: {:?}", err),
         }
     });
 }
