@@ -26,6 +26,7 @@ pub enum Buffer<'a> {
 }
 
 impl<'a> Buffer<'a> {
+    /// `offset` is a byte offset and `data` is RGBA bytes (tiny_skia's pixel byte order).
     pub fn copy_from_slice(&mut self, offset: usize, data: &[u8]) {
         match self {
             Buffer::Pixmap(pixmap) => {
@@ -33,8 +34,14 @@ impl<'a> Buffer<'a> {
                 dest[offset..offset + data.len()].copy_from_slice(data);
             }
             Buffer::Softbuffer(buffer) => {
-                let dest = bytemuck::cast_slice_mut(buffer);
-                dest[offset..offset + data.len()].copy_from_slice(data);
+                // softbuffer's u32 is the *value* 0x00RRGGBB (R in bits 16-23, G in 8-15, B in
+                // 0-7) — on a little-endian machine that's byte order [B, G, R, 0], not RGBA.
+                // Repack each pixel instead of memcpying, or R and B end up swapped.
+                let pixel_offset = offset / 4;
+                for (i, px) in data.chunks_exact(4).enumerate() {
+                    buffer[pixel_offset + i] =
+                        (px[0] as u32) << 16 | (px[1] as u32) << 8 | (px[2] as u32);
+                }
             }
         }
     }
@@ -45,7 +52,7 @@ impl<'a> Buffer<'a> {
         let src_data = source.data();
 
         if x == 0 && dst_width == source.width() {
-            self.copy_from_slice(offset, src_data);
+            self.copy_from_slice(offset * 4, src_data);
         } else {
             for (i, row) in src_data
                 .chunks_exact(source.width() as usize * 4)
