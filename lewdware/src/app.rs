@@ -47,6 +47,10 @@ pub struct ChaosApp<'a> {
     lua_request_rx: tokio::sync::mpsc::Receiver<lua::LuaRequest>,
     lua_event_tx: tokio::sync::mpsc::UnboundedSender<lua::Event>,
     monitors: Monitors,
+    // Kept alive for the app's lifetime: every `AudioPlayer` connects to this single device's
+    // `Mixer` rather than opening its own output stream, so multiple videos/audio clips can
+    // play concurrently through one real device connection instead of contending over several.
+    _audio_stream: rodio::MixerDeviceSink,
 }
 
 enum WindowSizeBehaviour {
@@ -68,6 +72,15 @@ impl<'a> ChaosApp<'a> {
         config: AppConfig,
     ) -> Result<Self> {
         let config = Arc::new(config);
+
+        // A single shared audio device connection for the whole app's lifetime. Every
+        // `AudioPlayer` connects to this `Mixer` rather than opening its own output stream, so
+        // concurrently playing videos/audio clips don't each fight over a separate OS-level
+        // audio stream.
+        let mut audio_stream = rodio::DeviceSinkBuilder::open_default_sink()
+            .map_err(|err| LewdwareError::AudioError(err.into()))?;
+        audio_stream.log_on_drop(false);
+        let mixer = audio_stream.mixer().clone();
 
         let wallpaper = match wallpaper::get() {
             Ok(wallpaper) => Some(wallpaper),
@@ -92,8 +105,12 @@ impl<'a> ChaosApp<'a> {
         //     end)
         // end)
 
-        let (lua_event_tx, lua_request_rx) =
-            start_lua_thread(event_loop_proxy, config.clone(), wgpu_state.device.clone());
+        let (lua_event_tx, lua_request_rx) = start_lua_thread(
+            event_loop_proxy,
+            config.clone(),
+            wgpu_state.device.clone(),
+            mixer,
+        );
 
         let monitors = Monitors::new(config.disabled_monitors.clone());
 
@@ -108,6 +125,7 @@ impl<'a> ChaosApp<'a> {
             lua_request_rx,
             lua_event_tx,
             monitors,
+            _audio_stream: audio_stream,
         })
     }
 

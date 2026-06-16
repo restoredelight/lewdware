@@ -146,6 +146,7 @@ impl VideoDecoder {
         loop_video: bool,
         packed_alpha: bool,
         wgpu_device: Arc<wgpu::Device>,
+        mixer: &rodio::mixer::Mixer,
     ) -> Result<Self> {
         let path = video.path();
 
@@ -153,7 +154,7 @@ impl VideoDecoder {
             spawn_video_stream(path.to_path_buf(), loop_video, packed_alpha, wgpu_device)?;
 
         let audio_player = if play_audio {
-            match AudioPlayer::new(path.to_path_buf(), loop_video, None, None) {
+            match AudioPlayer::new(path.to_path_buf(), loop_video, None, None, mixer) {
                 Ok(audio_player) => Some(audio_player),
                 Err(err) => {
                     eprintln!("{err}");

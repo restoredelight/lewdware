@@ -14,12 +14,11 @@ use std::{
 };
 use winit::event_loop::EventLoopProxy;
 
-use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source, buffer::SamplesBuffer};
+use rodio::{Player, Source, buffer::SamplesBuffer, mixer::Mixer};
 
 use crate::app::UserEvent;
 
 pub struct AudioPlayer {
-    _stream: MixerDeviceSink,
     sink: Arc<Player>,
 }
 
@@ -29,8 +28,9 @@ impl AudioPlayer {
         loop_audio: bool,
         id: Option<u64>,
         event_loop_proxy: Option<EventLoopProxy<UserEvent>>,
+        mixer: &Mixer,
     ) -> Result<Self> {
-        let (stream, sink) = setup_decoder(path, loop_audio)?;
+        let sink = setup_decoder(path, loop_audio, mixer)?;
         let sink = Arc::new(sink);
 
         if let (Some(id), Some(event_loop_proxy)) = (id, event_loop_proxy) {
@@ -41,10 +41,7 @@ impl AudioPlayer {
             });
         }
 
-        Ok(Self {
-            _stream: stream,
-            sink,
-        })
+        Ok(Self { sink })
     }
 
     pub fn pause(&self) {
@@ -63,7 +60,7 @@ impl AudioPlayer {
     }
 }
 
-pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink, Player)> {
+pub fn setup_decoder(path: PathBuf, loop_audio: bool, mixer: &Mixer) -> Result<Player> {
     ffmpeg::init()?;
     let mut ictx = ffmpeg::format::input(&path)?;
     let audio_stream_index = match ictx.streams().best(ffmpeg::media::Type::Audio) {
@@ -81,11 +78,7 @@ pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink
 
     decoder.set_packet_time_base(media.time_base());
 
-    let mut stream = DeviceSinkBuilder::open_default_sink()?;
-
-    stream.log_on_drop(false);
-
-    let sink = Player::connect_new(stream.mixer());
+    let sink = Player::connect_new(mixer);
 
     sink.pause();
 
@@ -158,7 +151,7 @@ pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink
 
     sink.append(source);
 
-    return Ok((stream, sink));
+    return Ok(sink);
 }
 
 fn convert_audio_frame(frame: &frame::Audio) -> Result<Vec<f32>> {

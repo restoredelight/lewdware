@@ -24,6 +24,7 @@ use crate::{
 pub struct MediaManager {
     tx: Sender<MediaRequest>,
     wgpu_device: Arc<wgpu::Device>,
+    mixer: rodio::mixer::Mixer,
 }
 
 pub type Result<T, E = MediaError> = std::result::Result<T, E>;
@@ -35,6 +36,7 @@ impl MediaManager {
         pack_path: &Path,
         event_loop_proxy: EventLoopProxy<UserEvent>,
         wgpu_device: Arc<wgpu::Device>,
+        mixer: rodio::mixer::Mixer,
     ) -> anyhow::Result<(Self, Metadata)> {
         let (tx, metadata) = spawn_media_manager_thread(pack_path, event_loop_proxy)?;
 
@@ -42,6 +44,7 @@ impl MediaManager {
             Self {
                 tx,
                 wgpu_device: wgpu_device,
+                mixer,
             },
             metadata,
         ))
@@ -129,12 +132,14 @@ impl MediaManager {
         play_audio: bool,
     ) -> Result<VideoDecoder> {
         let wgpu_device = self.wgpu_device.clone();
+        let mixer = self.mixer.clone();
         self.send(|tx| MediaRequest::GetVideoData {
             id,
             response_tx: tx,
             loop_video,
             play_audio,
             wgpu_device,
+            mixer,
         })
         .await?
     }
@@ -145,11 +150,13 @@ impl MediaManager {
         audio_id: u64,
         loop_audio: bool,
     ) -> Result<AudioPlayer> {
+        let mixer = self.mixer.clone();
         self.send(|tx| MediaRequest::GetAudioData {
             id,
             audio_id,
             loop_audio,
             response_tx: tx,
+            mixer,
         })
         .await?
     }
@@ -235,6 +242,7 @@ async fn handle_request(
             play_audio,
             loop_video,
             wgpu_device,
+            mixer,
             response_tx,
         } => response_tx
             .send(pack.get_video_data(id).await.and_then(|data| {
@@ -244,6 +252,7 @@ async fn handle_request(
                     loop_video,
                     data.transparent,
                     wgpu_device,
+                    &mixer,
                 )
                 .map_err(|err| MediaError::VideoError(err))
             }))
@@ -252,6 +261,7 @@ async fn handle_request(
             id,
             audio_id,
             loop_audio,
+            mixer,
             response_tx,
         } => response_tx
             .send(pack.get_audio_data(id).await.and_then(|file| {
@@ -260,6 +270,7 @@ async fn handle_request(
                     loop_audio,
                     Some(audio_id),
                     Some(event_loop_proxy),
+                    &mixer,
                 )
                 .map_err(|err| MediaError::AudioError(err))
             }))
@@ -362,12 +373,14 @@ enum MediaRequest {
         play_audio: bool,
         loop_video: bool,
         wgpu_device: Arc<wgpu::Device>,
+        mixer: rodio::mixer::Mixer,
         response_tx: oneshot::Sender<Result<VideoDecoder>>,
     },
     GetAudioData {
         id: u64,
         audio_id: u64,
         loop_audio: bool,
+        mixer: rodio::mixer::Mixer,
         response_tx: oneshot::Sender<Result<AudioPlayer>>,
     },
     GetModeData {
