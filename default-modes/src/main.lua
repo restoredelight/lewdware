@@ -9,9 +9,15 @@ lewdware.every(popup_frequency, function()
 
 	if media then
 		if media.type == "image" then
-			lewdware.spawn_image_popup(media)
+			lewdware.spawn_image_popup(media, {
+				transparent = true,
+				opacity = 0.5,
+			})
 		elseif media.type == "video" then
-			lewdware.spawn_video_popup(media)
+			lewdware.spawn_video_popup(media, {
+				transparent = true,
+				opacity = 0.5,
+			})
 		end
 	end
 end)
