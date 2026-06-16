@@ -175,6 +175,7 @@ impl<'a> ChaosApp<'a> {
 
         let position = LogicalPosition::new(monitor_position.x + x, monitor_position.y + y);
 
+        #[allow(unused_mut)]
         let mut attrs = WindowAttributes::default()
             .with_title("Chaos Window")
             .with_position(position)

@@ -148,7 +148,6 @@ impl WgpuState {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_features: if cfg!(target_os = "windows")
-                    && windows_use_hardware_decode
                     && adapter
                         .features()
                         .contains(wgpu::Features::TEXTURE_FORMAT_NV12)

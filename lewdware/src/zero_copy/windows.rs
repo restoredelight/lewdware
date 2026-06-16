@@ -1,6 +1,6 @@
 use std::{ffi::c_void, sync::Arc};
 
-use ffmpeg_next::ffi;
+use ffmpeg_next::{ffi, frame::Video};
 use wgpu::hal::dx12 as dx12_hal;
 use windows::Win32::Graphics::Direct3D12 as d3d12;
 use windows::core::Interface; // as_raw(), from_raw_borrowed(), from_raw()
@@ -44,7 +44,7 @@ pub fn initialize_hardware_device(
     wgpu_device: &Arc<wgpu::Device>,
     hw_type: ffi::AVHWDeviceType,
 ) -> Option<*mut ffi::AVBufferRef> {
-    unsafe { alloc_d3d12va_device_ctx(device, hw_type) }
+    unsafe { alloc_d3d12va_device_ctx(wgpu_device, hw_type) }
 }
 
 /// Allocates an `AVBufferRef` wrapping a D3D12VA hardware device context, with wgpu's
@@ -89,7 +89,7 @@ unsafe fn alloc_d3d12va_device_ctx(
 pub struct D3d12ImportedTextures {
     pub nv12_texture: wgpu::Texture,
     pub bind_group: wgpu::BindGroup,
-    pub _frame: Arc<crate::video::D3d12Frame>,
+    pub _frame: Arc<D3d12Frame>,
 }
 
 /// On Windows, holds a D3D12VA-decoded frame keeping the texture in the decode pool,
@@ -113,7 +113,7 @@ unsafe impl Sync for D3d12Frame {}
 
 impl D3d12Frame {
     pub fn from_decoder_frame(decoded: &mut Video) -> Option<Self> {
-        let d3d12_frame_ptr = unsafe { (*decoded.as_ptr()).data[0] } as AvD3d12VaFrame;
+        let d3d12_frame_ptr = unsafe { (*decoded.as_ptr()).data[0] } as *const AvD3d12VaFrame;
         if !d3d12_frame_ptr.is_null() {
             let (texture_raw, index, fence_raw, fence_value) = unsafe {
                 let f = &*d3d12_frame_ptr;
@@ -125,7 +125,7 @@ impl D3d12Frame {
                 )
             };
             if !texture_raw.is_null() {
-                let d3d12_holding_frame = std::mem::take(decoded);
+                let d3d12_holding_frame = std::mem::replace(decoded, Video::empty());
                 return Some(D3d12Frame {
                     frame: d3d12_holding_frame,
                     texture_raw,
@@ -135,6 +135,8 @@ impl D3d12Frame {
                 });
             }
         }
+
+        None
     }
 }
 
@@ -171,7 +173,7 @@ impl D3d12ImportedTextures {
 /// Returns `None` if the frame has no texture or the wgpu DX12 hal is unavailable.
 fn try_import_d3d12va_frame(
     device: &wgpu::Device,
-    frame: Arc<crate::video::D3d12Frame>,
+    frame: Arc<D3d12Frame>,
     width: u32,
     height: u32,
     layout: &wgpu::BindGroupLayout,

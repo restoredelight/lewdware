@@ -5,8 +5,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use ffmpeg_next::ffi;
-use objc2::{msg_send_id, rc::Retained, runtime::ProtocolObject};
+use ffmpeg_next::{ffi, frame::Video};
+use objc2::{msg_send, rc::Retained, runtime::ProtocolObject};
 use objc2_io_surface::IOSurfaceRef;
 use objc2_metal::{
     MTLDevice, MTLPixelFormat, MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType,
@@ -63,7 +63,7 @@ impl VtbImportedTextures {
     ) -> Option<Self> {
         if let Some(hardware_frame) = &frame.hardware_frame {
             if opts.pix_fmt == VideoPixelFormat::Nv12 {
-                return create_iosurface_texture(
+                return try_import_vtb_frame(
                     &wgpu_state.device,
                     &hardware_frame.0,
                     opts.video_width,
@@ -265,7 +265,7 @@ unsafe fn create_iosurface_texture(
     // `newTextureWithDescriptor:iosurface:plane:` is not in objc2-metal 0.3.2 bindings,
     // so we call it via raw message send.
     unsafe {
-        msg_send_id![
+        msg_send![
             device,
             newTextureWithDescriptor: &*desc,
             iosurface: iosurface,
