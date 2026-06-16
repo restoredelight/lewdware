@@ -630,19 +630,9 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                     }),
                     _ => {}
                 },
-                WindowType::Video(window) => match event {
-                    WindowEvent::RedrawRequested => match window.update() {
-                        Err(err) => {
-                            eprintln!("Error updating video window: {err}");
-                        }
-                        Ok(true) => {
-                            entry.remove();
-                            return;
-                        }
-                        Ok(false) => {}
-                    },
-                    _ => {}
-                },
+                // Video windows are driven directly from `about_to_wait` instead of through
+                // `RedrawRequested` — see the comment there for why.
+                WindowType::Video(_) => {}
                 WindowType::Prompt(window) => match &event {
                     WindowEvent::RedrawRequested => {
                         window.render().unwrap_or_else(|err| {
@@ -723,12 +713,23 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let mut moving_windows = false;
-        for window in self.windows.values_mut() {
-            match window {
-                WindowType::Video(_) => {
-                    window.inner_window().request_redraw();
+        let mut finished_videos = Vec::new();
+
+        for (id, window) in self.windows.iter_mut() {
+            // Video windows are driven directly here rather than via `request_redraw()` /
+            // `RedrawRequested`. On the Win32 backend, winit only reliably delivers
+            // `RedrawRequested` to the last couple of windows that requested it within the same
+            // `AboutToWait` cycle (https://github.com/rust-windowing/winit/issues/3648), so with
+            // 3+ simultaneous video windows the rest would silently stop advancing.
+            if let WindowType::Video(video_window) = window {
+                match video_window.update() {
+                    Ok(true) => finished_videos.push(*id),
+                    Ok(false) => {}
+                    Err(err) => eprintln!("Error updating video window: {err}"),
                 }
-                _ => {}
+                // Keep polling continuously while any video window exists, since we can no
+                // longer rely on `request_redraw()` to wake the loop back up for them.
+                moving_windows = true;
             }
 
             if window.inner_window().is_moving() {
@@ -739,6 +740,10 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                 window.inner_window_mut().update_fade();
                 moving_windows = true; // reusing `moving_windows` to mean "animating windows"
             }
+        }
+
+        for id in finished_videos {
+            self.windows.remove(&id);
         }
 
         if moving_windows {

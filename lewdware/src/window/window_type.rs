@@ -185,16 +185,6 @@ impl<'a> VideoWindow<'a> {
     }
 
     pub fn update(&mut self) -> Result<bool> {
-        // TEMPORARY DEBUG LOGGING — remove once the focus/pause issue is diagnosed.
-        eprintln!(
-            "[video-debug] update() window={:?} has_focus={} is_gpu={} paused={} lag_count={}",
-            self.inner_window.window().id(),
-            self.inner_window.window().has_focus(),
-            self.inner_window.is_gpu(),
-            self.paused,
-            self.video_player.lag_count,
-        );
-
         self.inner_window.start_render()?;
 
         if self.inner_window.is_gpu() {
@@ -230,17 +220,7 @@ impl<'a> VideoWindow<'a> {
                 render = true;
             }
 
-            let next = self.video_player.next_frame();
-            eprintln!(
-                "[video-debug] window={:?} next_frame={}",
-                self.inner_window.window().id(),
-                match &next {
-                    NextFrame::Ready(_) => "Ready",
-                    NextFrame::Finish => "Finish",
-                    NextFrame::None => "None",
-                }
-            );
-            match next {
+            match self.video_player.next_frame() {
                 NextFrame::Ready(frame) => {
                     if let Some(gpu_renderer) = &mut self.gpu_renderer {
                         if let GpuRendererType::Video(video_renderer) =
@@ -289,17 +269,7 @@ impl<'a> VideoWindow<'a> {
             }
         } else {
             // --- CPU path ---
-            let next = self.video_player.next_frame();
-            eprintln!(
-                "[video-debug] window={:?} next_frame={}",
-                self.inner_window.window().id(),
-                match &next {
-                    NextFrame::Ready(_) => "Ready",
-                    NextFrame::Finish => "Finish",
-                    NextFrame::None => "None",
-                }
-            );
-            match next {
+            match self.video_player.next_frame() {
                 NextFrame::Ready(frame) => {
                     if frame.frame.width() > 0 {
                         let inner_size = self.inner_window.inner_size();
