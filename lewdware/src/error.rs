@@ -7,7 +7,6 @@ pub enum LewdwareError {
     MonitorError(MonitorError),
     WindowError(anyhow::Error),
     WallpaperError(anyhow::Error),
-    AudioError(anyhow::Error),
     OpenLinkError(anyhow::Error),
     NotifyError(notify_rust::error::Error),
     MainThreadConnection,
@@ -37,10 +36,6 @@ impl Display for LewdwareError {
             }
             Self::OpenLinkError(err) => {
                 writeln!(f, "Error opening link:")?;
-                err.fmt(f)
-            }
-            Self::AudioError(err) => {
-                writeln!(f, "Error initializing audio device:")?;
                 err.fmt(f)
             }
             Self::NotifyError(err) => {

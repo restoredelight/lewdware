@@ -122,7 +122,6 @@ pub fn start_lua_thread(
     event_loop_proxy: EventLoopProxy<UserEvent>,
     config: Arc<AppConfig>,
     wgpu_device: Arc<wgpu::Device>,
-    mixer: rodio::mixer::Mixer,
 ) -> (UnboundedSender<Event>, Receiver<LuaRequest>) {
     let (event_tx, mut event_rx) = unbounded_channel();
     let (request_tx, request_rx) = channel(20);
@@ -137,7 +136,6 @@ pub fn start_lua_thread(
             &config.pack_path.clone().unwrap(),
             event_loop_proxy.clone(),
             wgpu_device,
-            mixer,
         ) {
             Ok(x) => x,
             Err(err) => {
