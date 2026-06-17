@@ -30,7 +30,7 @@ impl Mode {
 
     #[allow(unused)]
     pub fn metadata(&self) -> anyhow::Result<Metadata> {
-        let (_, metadata) = read_mode_metadata(&mut *self.file.borrow_mut())?;
+        let (_, metadata) = read_mode_metadata(&mut *self.file.try_borrow_mut()?)?;
 
         Ok(metadata)
     }
@@ -39,7 +39,7 @@ impl Mode {
         &self,
         module: &str,
     ) -> anyhow::Result<Option<tokio::sync::broadcast::Receiver<()>>> {
-        if let Some(weak_sender) = self.loading.borrow().get(module) {
+        if let Some(weak_sender) = self.loading.try_borrow()?.get(module) {
             if let Some(sender) = weak_sender.upgrade() {
                 Ok(Some(sender.subscribe()))
             } else {
@@ -60,17 +60,17 @@ impl Mode {
                     }
                 }
 
-                if let Some(value) = self.cache.borrow().get(&path) {
+                if let Some(value) = self.cache.try_borrow()?.get(&path) {
                     return Ok(value.clone());
                 }
 
                 let (sender, _) = tokio::sync::broadcast::channel(1);
 
                 self.loading
-                    .borrow_mut()
+                    .try_borrow_mut()?
                     .insert(path.clone(), sender.clone().downgrade());
 
-                let file: String = read_source_file(&mut *self.file.borrow_mut(), source_file)?;
+                let file: String = read_source_file(&mut *self.file.try_borrow_mut()?, source_file)?;
 
                 let result: mlua::Value = lua
                     .load(file)
@@ -84,7 +84,7 @@ impl Mode {
                     result
                 };
 
-                self.cache.borrow_mut().insert(path, final_value.clone());
+                self.cache.try_borrow_mut()?.insert(path, final_value.clone());
 
                 let _ = sender.send(());
 
@@ -97,7 +97,7 @@ impl Mode {
 
     pub fn load(&self, lua: &mlua::Lua, path: String) -> anyhow::Result<mlua::Chunk<'static>> {
         if let Some(source_file) = self.files.get(&path) {
-            let file: String = read_source_file(&mut *self.file.borrow_mut(), source_file)?;
+            let file: String = read_source_file(&mut *self.file.try_borrow_mut()?, source_file)?;
 
             Ok(lua.load(file).set_name(format!("@{path}")))
         } else {

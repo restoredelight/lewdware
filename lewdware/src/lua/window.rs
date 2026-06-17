@@ -136,15 +136,23 @@ impl UserData for PromptWindow {
 
         fields.add_field("type", "prompt");
 
-        fields.add_field_method_get("text", |_, this| Ok(this.state.borrow().text.clone()));
-        fields.add_field_method_get("value", |_, this| Ok(this.state.borrow().value.clone()));
+        fields.add_field_method_get("text", |_, this| {
+            Ok(this.state.try_borrow().into_lua_err()?.text.clone())
+        });
+        fields.add_field_method_get("value", |_, this| {
+            Ok(this.state.try_borrow().into_lua_err()?.value.clone())
+        });
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         InnerWindow::add_methods(methods);
 
         methods.add_method("on_submit", |_, this, cb: mlua::Function| {
-            this.state.borrow_mut().submit_callbacks.push(cb);
+            this.state
+                .try_borrow_mut()
+                .into_lua_err()?
+                .submit_callbacks
+                .push(cb);
 
             Ok(())
         });
@@ -155,7 +163,7 @@ impl UserData for PromptWindow {
                 .set_text(text.clone())
                 .await?;
 
-            this.state.borrow_mut().text = text;
+            this.state.try_borrow_mut().into_lua_err()?.text = text;
 
             Ok(())
         });
@@ -166,7 +174,7 @@ impl UserData for PromptWindow {
                 .set_value(value.clone())
                 .await?;
 
-            this.state.borrow_mut().value = value.unwrap_or_default();
+            this.state.try_borrow_mut().into_lua_err()?.value = value.unwrap_or_default();
 
             Ok(())
         });
@@ -186,9 +194,9 @@ impl PromptWindow {
         }
     }
 
-    pub fn on_submit(&self, text: String) {
+    pub fn on_submit(&self, text: String) -> anyhow::Result<()> {
         let callbacks = {
-            let state = self.state.borrow();
+            let state = self.state.try_borrow()?;
             state.submit_callbacks.clone()
         };
 
@@ -197,10 +205,12 @@ impl PromptWindow {
 
             tokio::task::spawn_local(async move {
                 if let Err(err) = cb.call_async::<()>(text).await {
-                    eprintln!("{err}");
+                    tracing::error!("{err}");
                 }
             });
         }
+
+        Ok(())
     }
 }
 
@@ -231,15 +241,23 @@ impl UserData for ChoiceWindow {
 
         fields.add_field("type", "choice");
 
-        fields.add_field_method_get("text", |_, this| Ok(this.state.borrow().text.clone()));
-        fields.add_field_method_get("options", |_, this| Ok(this.state.borrow().options.clone()));
+        fields.add_field_method_get("text", |_, this| {
+            Ok(this.state.try_borrow().into_lua_err()?.text.clone())
+        });
+        fields.add_field_method_get("options", |_, this| {
+            Ok(this.state.try_borrow().into_lua_err()?.options.clone())
+        });
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         InnerWindow::add_methods(methods);
 
         methods.add_method("on_select", |_, this, cb: mlua::Function| {
-            this.state.borrow_mut().select_callbacks.push(cb);
+            this.state
+                .try_borrow_mut()
+                .into_lua_err()?
+                .select_callbacks
+                .push(cb);
 
             Ok(())
         });
@@ -250,7 +268,7 @@ impl UserData for ChoiceWindow {
                 .set_text(text.clone())
                 .await?;
 
-            this.state.borrow_mut().text = text;
+            this.state.try_borrow_mut().into_lua_err()?.text = text;
 
             Ok(())
         });
@@ -265,7 +283,7 @@ impl UserData for ChoiceWindow {
                     .set_options(options.clone())
                     .await?;
 
-                this.state.borrow_mut().options = options;
+                this.state.try_borrow_mut().into_lua_err()?.options = options;
 
                 Ok(())
             },
@@ -286,9 +304,9 @@ impl ChoiceWindow {
         }
     }
 
-    pub fn on_select(&self, id: String) {
+    pub fn on_select(&self, id: String) -> anyhow::Result<()> {
         let callbacks = {
-            let state = self.state.borrow();
+            let state = self.state.try_borrow()?;
             state.select_callbacks.clone()
         };
 
@@ -297,10 +315,12 @@ impl ChoiceWindow {
 
             tokio::task::spawn_local(async move {
                 if let Err(err) = cb.call_async::<()>(id).await {
-                    eprintln!("{err}");
+                    tracing::error!("{err}");
                 }
             });
         }
+
+        Ok(())
     }
 }
 
@@ -395,14 +415,28 @@ impl InnerWindow {
         fields.add_field_method_get("outer_height", |_, this| {
             Ok(this.inner_window().outer_height)
         });
-        fields.add_field_method_get("x", |_, this| Ok(this.inner_window().state.borrow().x));
-        fields.add_field_method_get("y", |_, this| Ok(this.inner_window().state.borrow().y));
+        fields.add_field_method_get("x", |_, this| {
+            Ok(this.inner_window().state.try_borrow().into_lua_err()?.x)
+        });
+        fields.add_field_method_get("y", |_, this| {
+            Ok(this.inner_window().state.try_borrow().into_lua_err()?.y)
+        });
         fields.add_field_method_get("monitor", |_, this| Ok(this.inner_window().monitor.clone()));
         fields.add_field_method_get("closed", |_, this| {
-            Ok(this.inner_window().state.borrow().closed)
+            Ok(this
+                .inner_window()
+                .state
+                .try_borrow()
+                .into_lua_err()?
+                .closed)
         });
         fields.add_field_method_get("visible", |_, this| {
-            Ok(this.inner_window().state.borrow().visible)
+            Ok(this
+                .inner_window()
+                .state
+                .try_borrow()
+                .into_lua_err()?
+                .visible)
         });
     }
 
@@ -418,7 +452,8 @@ impl InnerWindow {
         methods.add_method("on_close", |_, this, cb: mlua::Function| {
             this.inner_window()
                 .state
-                .borrow_mut()
+                .try_borrow_mut()
+                .into_lua_err()?
                 .close_callbacks
                 .push(cb);
 
@@ -432,7 +467,7 @@ impl InnerWindow {
                 let opts = opts.unwrap_or_default();
 
                 let id = {
-                    let mut state = inner_window.state.borrow_mut();
+                    let mut state = inner_window.state.try_borrow_mut().into_lua_err()?;
 
                     let id = state.current_move_id;
                     state.current_move_id += 1;
@@ -463,7 +498,7 @@ impl InnerWindow {
                 let opts = opts.unwrap_or_default();
 
                 let id = {
-                    let mut state = inner_window.state.borrow_mut();
+                    let mut state = inner_window.state.try_borrow_mut().into_lua_err()?;
 
                     let id = state.current_fade_id;
                     state.current_fade_id += 1;
@@ -494,7 +529,7 @@ impl InnerWindow {
                 .await
                 .into_lua_err()?;
 
-            this.inner_window().state.borrow_mut().visible = visible;
+            this.inner_window().state.try_borrow_mut().into_lua_err()?.visible = visible;
 
             Ok(())
         });
@@ -520,26 +555,28 @@ impl InnerWindow {
         });
     }
 
-    pub fn on_close(&self) {
-        self.state.borrow_mut().closed = true;
+    pub fn on_close(&self) -> anyhow::Result<()> {
+        self.state.try_borrow_mut().into_lua_err()?.closed = true;
 
         let callbacks = {
-            let state = self.state.borrow();
+            let state = self.state.try_borrow()?;
             state.close_callbacks.clone()
         };
 
         for cb in callbacks {
             tokio::task::spawn_local(async move {
                 if let Err(err) = cb.call_async::<()>(()).await {
-                    eprintln!("{err}");
+                    tracing::error!("{err}");
                 }
             });
         }
+
+        Ok(())
     }
 
-    pub fn on_move_finished(&self, move_id: u64) {
+    pub fn on_move_finished(&self, move_id: u64) -> anyhow::Result<()> {
         let cb = {
-            let mut state = self.state.borrow_mut();
+            let mut state = self.state.try_borrow_mut()?;
 
             match state.move_callback.take() {
                 Some((id, cb)) if move_id == id => Some(cb),
@@ -550,15 +587,17 @@ impl InnerWindow {
         if let Some(cb) = cb {
             tokio::task::spawn_local(async move {
                 if let Err(err) = cb.call_async::<()>(()).await {
-                    eprintln!("{err}");
+                    tracing::error!("{err}");
                 }
             });
         }
+
+        Ok(())
     }
 
-    pub fn on_fade_finished(&self, fade_id: u64) {
+    pub fn on_fade_finished(&self, fade_id: u64) -> anyhow::Result<()> {
         let cb = {
-            let mut state = self.state.borrow_mut();
+            let mut state = self.state.try_borrow_mut()?;
 
             match state.fade_callback.take() {
                 Some((id, cb)) if fade_id == id => Some(cb),
@@ -569,10 +608,12 @@ impl InnerWindow {
         if let Some(cb) = cb {
             tokio::task::spawn_local(async move {
                 if let Err(err) = cb.call_async::<()>(()).await {
-                    eprintln!("{err}");
+                    tracing::error!("{err}");
                 }
             });
         }
+
+        Ok(())
     }
 }
 

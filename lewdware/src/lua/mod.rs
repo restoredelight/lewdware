@@ -139,7 +139,7 @@ pub fn start_lua_thread(
         ) {
             Ok(x) => x,
             Err(err) => {
-                eprintln!("{err}");
+                tracing::error!("{err}");
                 return;
             }
         };
@@ -154,7 +154,7 @@ pub fn start_lua_thread(
                 let mode_data = match rt.block_on(media_manager.get_mode(id)) {
                     Ok(data) => data,
                     Err(err) => {
-                        eprintln!("{err}");
+                        tracing::error!("{err}");
                         return;
                     }
                 };
@@ -165,7 +165,7 @@ pub fn start_lua_thread(
                 let file = match File::open(path) {
                     Ok(file) => file,
                     Err(err) => {
-                        eprintln!("{err}");
+                        tracing::error!("{err}");
                         return;
                     }
                 };
@@ -178,11 +178,11 @@ pub fn start_lua_thread(
         let (_header, Metadata { modes, files, .. }) = match read_mode_metadata(&mut file) {
             Ok(x) => x,
             Err(err) => {
-                eprintln!("{err}");
+                tracing::error!("{err}");
                 return;
             }
         };
-        println!("Read header and metadata");
+        tracing::info!("Read header and metadata");
 
         let mode_obj = modes.get(&mode).unwrap();
 
@@ -216,7 +216,7 @@ pub fn start_lua_thread(
         ) {
             Ok(x) => Rc::new(x),
             Err(err) => {
-                eprintln!("{err}");
+                tracing::error!("{err}");
                 return;
             }
         };
@@ -225,10 +225,10 @@ pub fn start_lua_thread(
 
         local.spawn_local(async move {
             if let Err(err) = runtime_clone.run_entrypoint(entrypoint).await {
-                eprintln!("{err}");
+                tracing::error!("{err}");
             }
 
-            println!("Code finished");
+            tracing::info!("Code finished");
         });
 
         local.spawn_local(async move {
@@ -237,7 +237,7 @@ pub fn start_lua_thread(
 
                 tokio::task::spawn_local(async move {
                     if let Err(err) = runtime.handle_event(event).await {
-                        eprintln!("{err}");
+                        tracing::error!("{err}");
                     }
                 });
             }
@@ -245,7 +245,7 @@ pub fn start_lua_thread(
 
         rt.block_on(local);
 
-        println!("Thread killed");
+        tracing::info!("Thread killed");
     });
 
     (event_tx, request_rx)
@@ -296,27 +296,27 @@ impl LuaRuntime {
     async fn handle_event(&self, event: Event) -> anyhow::Result<()> {
         match event {
             Event::WindowClosed { id } => {
-                if let Some(window) = self.windows.borrow_mut().remove(&id) {
-                    window.inner_window().on_close();
+                if let Some(window) = self.windows.try_borrow_mut()?.remove(&id) {
+                    window.inner_window().on_close()?;
                 }
             }
             Event::MoveFinish { id, move_id } => {
-                if let Some(window) = self.windows.borrow().get(&id).cloned() {
+                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
                     window.inner_window().on_move_finished(move_id);
                 }
             }
             Event::FadeFinish { id, fade_id } => {
-                if let Some(window) = self.windows.borrow().get(&id).cloned() {
+                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
                     window.inner_window().on_fade_finished(fade_id);
                 }
             }
             Event::AudioFinish { id } => {
-                if let Some(audio) = self.audio_handles.borrow().get(&id).cloned() {
-                    audio.on_finish();
+                if let Some(audio) = self.audio_handles.try_borrow()?.get(&id).cloned() {
+                    audio.on_finish()?;
                 }
             }
             Event::PromptSubmit { id, text } => {
-                if let Some(window) = self.windows.borrow().get(&id).cloned() {
+                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
                     match window {
                         Window::Prompt(prompt) => {
                             prompt.on_submit(text);
@@ -329,7 +329,7 @@ impl LuaRuntime {
                 id,
                 option_id: choice_id,
             } => {
-                if let Some(window) = self.windows.borrow().get(&id).cloned() {
+                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
                     match window {
                         Window::Choice(prompt) => {
                             prompt.on_select(choice_id);
@@ -377,7 +377,7 @@ fn print(_: &Lua, args: mlua::Variadic<mlua::Value>) -> std::result::Result<(), 
         .map(|value| value.to_string())
         .collect::<mlua::Result<Vec<_>>>()?;
 
-    println!("{}", args_str.join("\t"));
+    tracing::info!("{}", args_str.join("\t"));
 
     Ok(())
 }

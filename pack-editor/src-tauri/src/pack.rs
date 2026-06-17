@@ -55,10 +55,10 @@ impl Lock {
 impl Drop for Lock {
     fn drop(&mut self) {
         if let Err(err) = self.file.unlock() {
-            eprintln!("{err}");
+            tracing::error!("{err}");
         }
         if let Err(err) = fs::remove_file(&self.path) {
-            eprintln!("{err}");
+            tracing::error!("{err}");
         }
     }
 }
@@ -443,7 +443,7 @@ impl MediaPack {
                 set_offset_len.execute(params![offset, size, id])?;
                 offset += size;
                 if let Err(err) = fs::remove_file(&full_path) {
-                    eprintln!("{err}");
+                    tracing::error!("{err}");
                 }
                 saved += 1;
                 on_progress(saved, num_files);
@@ -591,7 +591,7 @@ impl MediaPack {
     fn clean_media(&self) -> Result<()> {
         for entry in fs::read_dir(self.dir.join("media"))? {
             if let Err(err) = entry.and_then(|e| fs::remove_file(e.path())) {
-                eprintln!("{err}");
+                tracing::error!("{err}");
             }
         }
         Ok(())
@@ -820,7 +820,7 @@ impl Drop for MediaPack {
     fn drop(&mut self) {
         if self.saved.load(Ordering::Relaxed) {
             if let Err(err) = fs::remove_dir_all(&self.dir) {
-                eprintln!("{err}");
+                tracing::error!("{err}");
             }
         }
     }

@@ -40,9 +40,9 @@ pub fn create_tray_icon(_: EventLoopProxy<UserEvent>) -> Result<()> {
 /// Spawn a thread that will listen for the panic key being pressed, and send
 /// [UserEvent::PanicButtonPressed] to the event loop.
 pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_key: Key) {
-    println!("Spawning panic thread");
+    tracing::info!("Spawning panic thread");
     thread::spawn(move || {
-        println!("Panic thread started");
+        tracing::info!("Panic thread started");
 
         // On Windows, rdev installs a WH_KEYBOARD_LL hook whose callback is called as a
         // sent message to this thread. Windows will silently remove the hook if the
@@ -55,20 +55,20 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_ke
                 GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
             };
             match SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) {
-                Ok(()) => println!("Panic thread priority set to TIME_CRITICAL"),
-                Err(e) => eprintln!("Failed to set panic thread priority: {e}"),
+                Ok(()) => tracing::info!("Panic thread priority set to TIME_CRITICAL"),
+                Err(e) => tracing::error!("Failed to set panic thread priority: {e}"),
             }
         }
 
         let rdev_key = match key_to_rdev(&target_key) {
             Some(x) => x,
             None => {
-                eprintln!("Key cannot be matched: {:?}", target_key.code);
+                tracing::error!("Key cannot be matched: {:?}", target_key.code);
                 return;
             }
         };
 
-        println!(
+        tracing::info!(
             "Panic listener starting: watching for {:?} with modifiers {:?}",
             rdev_key, target_key.modifiers
         );
@@ -77,24 +77,24 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_ke
 
         let result = rdev::listen(move |event| {
             if let rdev::EventType::KeyPress(key) = event.event_type {
-                println!("Key press: {:?}", key);
+                tracing::info!("Key press: {:?}", key);
                 keys.insert(key);
 
                 if key == rdev_key {
                     let modifiers = rdev_keys_to_modifiers(&keys);
-                    println!(
+                    tracing::info!(
                         "Target key pressed — active modifiers: {:?}, required: {:?}",
                         modifiers, target_key.modifiers
                     );
 
                     if modifier_matches(&modifiers, &target_key.modifiers) {
-                        println!("Modifier match — sending exit event");
+                        tracing::info!("Modifier match — sending exit event");
                         match event_loop_proxy.send_event(UserEvent::Exit) {
-                            Ok(()) => println!("Exit event sent successfully"),
-                            Err(err) => eprintln!("Could not send panic button event: {}", err),
+                            Ok(()) => tracing::info!("Exit event sent successfully"),
+                            Err(err) => tracing::error!("Could not send panic button event: {}", err),
                         }
                     } else {
-                        println!("Modifier mismatch — not triggering panic");
+                        tracing::info!("Modifier mismatch — not triggering panic");
                     }
                 }
             } else if let rdev::EventType::KeyRelease(key) = event.event_type {
@@ -103,8 +103,8 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_ke
         });
 
         match result {
-            Ok(()) => eprintln!("rdev::listen returned Ok — panic listener is no longer active"),
-            Err(err) => eprintln!("rdev::listen returned error: {:?}", err),
+            Ok(()) => tracing::error!("rdev::listen returned Ok — panic listener is no longer active"),
+            Err(err) => tracing::error!("rdev::listen returned error: {:?}", err),
         }
     });
 }
@@ -347,7 +347,7 @@ pub fn raise_fd_limit() {
             if rlim.rlim_cur < target_limit {
                 rlim.rlim_cur = std::cmp::min(target_limit, rlim.rlim_max);
                 if libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) != 0 {
-                    eprintln!("Failed to raise file descriptor limit");
+                    tracing::error!("Failed to raise file descriptor limit");
                 }
             }
         }

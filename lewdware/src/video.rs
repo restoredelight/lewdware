@@ -156,7 +156,7 @@ impl VideoDecoder {
             match AudioPlayer::new(path.to_path_buf(), loop_video, None, None) {
                 Ok(audio_player) => Some(audio_player),
                 Err(err) => {
-                    eprintln!("{err}");
+                    tracing::error!("{err}");
                     None
                 }
             }
@@ -340,7 +340,7 @@ fn spawn_video_stream(
         let video_duration_inner = match get_video_duration(&path) {
             Ok(duration) => duration,
             Err(err) => {
-                eprintln!("Failed to get video duration: {err}");
+                tracing::error!("Failed to get video duration: {err}");
                 return;
             }
         };
@@ -356,7 +356,7 @@ fn spawn_video_stream(
             recycle_tx.clone(),
             wgpu_device,
         ) {
-            eprintln!("Error decoding video: {}", err);
+            tracing::error!("Error decoding video: {}", err);
         }
     });
 
@@ -406,7 +406,7 @@ fn hw_frame_to_video_frame(
     let mut sw = Video::empty();
     let ret = unsafe { ffi::av_hwframe_transfer_data(sw.as_mut_ptr(), decoded.as_ptr(), 0) };
     if ret < 0 {
-        eprintln!("av_hwframe_transfer_data failed: {ret}");
+        tracing::error!("av_hwframe_transfer_data failed: {ret}");
         return Err(());
     }
 
@@ -495,7 +495,7 @@ fn decode_video(
         })
         .is_err()
     {
-        eprintln!("Failed to send video metadata");
+        tracing::error!("Failed to send video metadata");
         return Ok(());
     }
 

@@ -143,7 +143,7 @@ pub fn read_pack_metadata<F: Read + Seek>(mut file: F) -> anyhow::Result<(Header
 
     let header = Header::from_buf(buf)?;
 
-    println!("{:?}", header);
+    tracing::info!("{:?}", header);
 
     file.seek(SeekFrom::Start(header.metadata_offset))?;
 

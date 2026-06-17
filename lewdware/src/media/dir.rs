@@ -51,7 +51,7 @@ impl MediaDir {
                     audio.push(path);
                 }
                 Err(err) => {
-                    eprintln!("Error processing {}: {}", path.display(), err);
+                    tracing::error!("Error processing {}: {}", path.display(), err);
                 }
             }
         }

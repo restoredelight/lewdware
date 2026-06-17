@@ -65,7 +65,7 @@ impl MediaManager {
 
     // async fn send(&self, request: MediaRequest) {
     //     if let Err(_) = self.tx.send(request).await {
-    //         eprintln!("Media request channel closed");
+    //         tracing::error!("Media request channel closed");
     //     }
     // }
 
@@ -268,7 +268,7 @@ async fn handle_request(
             response_tx.send(pack.get_mode(id)).is_ok()
         }
     } {
-        eprintln!("Failed to send response");
+        tracing::error!("Failed to send response");
     }
 }
 

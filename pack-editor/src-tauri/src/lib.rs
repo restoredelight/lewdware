@@ -440,6 +440,7 @@ fn get_media_port(state: State<'_, AppState>) -> u16 {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _log_guard = shared::logging::init("pack-editor");
     let hardware_encoder = HardwareEncoder::detect_and_test();
 
     tauri::Builder::default()
@@ -455,7 +456,7 @@ pub fn run() {
                     Ok(port) => {
                         tx.send(port).ok();
                     }
-                    Err(e) => eprintln!("media server failed to start: {e}"),
+                    Err(e) => tracing::error!("media server failed to start: {e}"),
                 }
             });
             if let Ok(port) = rx.recv() {

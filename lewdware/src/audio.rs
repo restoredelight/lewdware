@@ -58,7 +58,7 @@ impl AudioPlayer {
     pub fn position(&self) -> Duration {
         // Blocking!
         let pos = self.sink.get_pos();
-        // println!("{}", pos.as_millis());
+        // tracing::info!("{}", pos.as_millis());
         pos
     }
 }
@@ -96,7 +96,7 @@ pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink
             for (stream, packet) in ictx.packets() {
                 if stream.index() == audio_stream_index {
                     if let Err(err) = decoder.send_packet(&packet) {
-                        eprintln!("Failed to send packet: {err}");
+                        tracing::error!("Failed to send packet: {err}");
                     }
 
                     while decoder.receive_frame(&mut frame).is_ok() {
@@ -110,12 +110,12 @@ pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink
                                             channels, frame_rate, samples,
                                         ));
                                     } else {
-                                        eprintln!("Channels or frame rate is 0");
+                                        tracing::warn!("Channels or frame rate is 0");
                                     }
                                 }
                             }
                             Err(err) => {
-                                eprintln!("Converting audio frame failed: {}", err);
+                                tracing::error!("Converting audio frame failed: {err}");
                             }
                         }
                     }
@@ -133,12 +133,12 @@ pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink
                             {
                                 return Some(SamplesBuffer::new(channels, frame_rate, samples));
                             } else {
-                                eprintln!("Channels or frame rate is 0");
+                                tracing::error!("Channels or frame rate is 0");
                             }
                         }
                     }
                     Err(err) => {
-                        eprintln!("{err}");
+                        tracing::error!("{err}");
                     }
                 }
             }
@@ -147,10 +147,10 @@ pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink
                 return None;
             }
 
-            println!("Looping");
+            tracing::info!("Looping");
 
             if let Err(err) = ictx.seek(0, ..0) {
-                eprintln!("Failed to seek to start: {err}");
+                tracing::error!("Failed to seek to start: {err}");
             }
         }
     })

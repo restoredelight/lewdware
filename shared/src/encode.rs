@@ -165,7 +165,7 @@ pub fn is_media(ffprobe_command: impl Fn() -> Command, path: &Path) -> Result<bo
     let output = ffprobe_command().args(args).arg(path).output()?;
 
     if !output.status.success() {
-        println!("{}", String::from_utf8_lossy(&output.stderr));
+        tracing::info!("{}", String::from_utf8_lossy(&output.stderr));
         return Ok(false);
     }
 
@@ -187,7 +187,7 @@ pub fn is_media(ffprobe_command: impl Fn() -> Command, path: &Path) -> Result<bo
 //     let output = ffprobe_command().args(args).arg(path).output()?;
 //
 //     if !output.status.success() {
-//         println!("{}", String::from_utf8_lossy(&output.stderr));
+//         tracing::info!("{}", String::from_utf8_lossy(&output.stderr));
 //         return Ok(None);
 //     }
 //
@@ -315,8 +315,8 @@ fn encode_image(
     width: u64,
     height: u64,
 ) -> anyhow::Result<(u64, u64)> {
-    println!("{}", input.display());
-    println!("{}", output.display());
+    tracing::info!("{}", input.display());
+    tracing::info!("{}", output.display());
 
     let (width, height) = resize_dimensions(width, height, MAX_IMAGE_SIZE, false);
 
@@ -344,11 +344,11 @@ fn encode_image(
         .output()?;
 
     if !result.status.success() {
-        eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+        tracing::error!("{}", String::from_utf8_lossy(&result.stderr));
 
-        eprintln!("Encoding image failed");
+        tracing::error!("Encoding image failed");
 
-        eprintln!("{}", std::fs::read_to_string(input)?);
+        tracing::error!("{}", std::fs::read_to_string(input)?);
 
         bail!("ffmpeg failed for {}", input.display());
     }
@@ -363,8 +363,8 @@ fn encode_image_transparent(
     width: u64,
     height: u64,
 ) -> anyhow::Result<(u64, u64)> {
-    println!("{}", input.display());
-    println!("{}", output.display());
+    tracing::info!("{}", input.display());
+    tracing::info!("{}", output.display());
 
     let (width, height) = resize_dimensions(width, height, MAX_IMAGE_SIZE, false);
 
@@ -395,11 +395,11 @@ fn encode_image_transparent(
         .output()?;
 
     if !result.status.success() {
-        eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+        tracing::error!("{}", String::from_utf8_lossy(&result.stderr));
 
-        eprintln!("Encoding image failed");
+        tracing::error!("Encoding image failed");
 
-        eprintln!("{}", std::fs::read_to_string(input)?);
+        tracing::error!("{}", std::fs::read_to_string(input)?);
 
         bail!("ffmpeg failed for {}", input.display());
     }
@@ -449,7 +449,7 @@ fn encode_video(
     let result = command.arg(output).output()?;
 
     if !result.status.success() {
-        eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+        tracing::error!("{}", String::from_utf8_lossy(&result.stderr));
 
         if !fixed_frame_rate {
             if let Ok(res) = encode_video(ffmpeg_command, input, output, width, height, audio, true)
@@ -458,7 +458,7 @@ fn encode_video(
             }
         }
 
-        eprintln!("Encoding video failed");
+        tracing::error!("Encoding video failed");
 
         bail!("ffmpeg failed for {}", input.display());
     }
@@ -471,8 +471,8 @@ fn encode_audio(
     input: &Path,
     output: &Path,
 ) -> anyhow::Result<()> {
-    println!("{}", input.display());
-    println!("{}", output.display());
+    tracing::info!("{}", input.display());
+    tracing::info!("{}", output.display());
 
     #[rustfmt::skip]
     let args = [
@@ -492,7 +492,7 @@ fn encode_audio(
         .status()?;
 
     if !status.success() {
-        eprintln!("Audio failed");
+        tracing::error!("Audio failed");
         bail!("ffmpeg failed for {}", input.display());
     }
 

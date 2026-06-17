@@ -68,7 +68,7 @@ impl Header {
 
         let mut magic = [0u8; 6];
         cursor.read_exact(&mut magic)?;
-        println!("{}", String::from_utf8(magic.to_vec()).unwrap());
+        tracing::info!("{}", String::from_utf8(magic.to_vec()).unwrap());
         if magic != *MAGIC {
             return Err(ReadError::InvalidMagic);
         }

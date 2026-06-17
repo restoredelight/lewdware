@@ -496,7 +496,7 @@ fn encode_image(
     let result = child.wait()?;
 
     if !result.success() {
-        eprintln!("{stderr_buf}");
+        tracing::error!("{stderr_buf}");
         bail!("ffmpeg failed for {}", input.display());
     }
 
@@ -581,10 +581,10 @@ fn encode_video(
     let result = child.wait()?;
 
     if !result.success() {
-        eprintln!("{stderr_buf}");
+        tracing::error!("{stderr_buf}");
 
         if !fixed_fps {
-            eprintln!("Encoding with non-fixed FPS failed; trying fixed FPS");
+            tracing::error!("Encoding with non-fixed FPS failed; trying fixed FPS");
 
             if let Ok(r) = encode_video(
                 input,
@@ -669,9 +669,9 @@ fn encode_video_with_transparency(
     let result = command.output()?;
 
     if !result.status.success() {
-        eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+        tracing::error!("{}", String::from_utf8_lossy(&result.stderr));
         if !fixed_fps {
-            eprintln!("Encoding with non-fixed FPS failed; trying fixed FPS");
+            tracing::error!("Encoding with non-fixed FPS failed; trying fixed FPS");
 
             if let Ok(res) =
                 encode_video_with_transparency(input, output, width, height, audio, true)
@@ -701,7 +701,7 @@ fn encode_audio(input: &Path, output: &Path) -> Result<()> {
     let output = command.output()?;
 
     if !output.status.success() {
-        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        tracing::error!("{}", String::from_utf8_lossy(&output.stderr));
         bail!("ffmpeg failed for {}", input.display());
     }
 

@@ -672,7 +672,8 @@ async fn spawn_image_popup(
     ));
 
     windows
-        .borrow_mut()
+        .try_borrow_mut()
+        .into_lua_err()?
         .insert(id, Window::Image(window.clone()));
 
     Ok(window)
@@ -741,7 +742,8 @@ async fn spawn_video_popup(
     ));
 
     windows
-        .borrow_mut()
+        .try_borrow_mut()
+        .into_lua_err()?
         .insert(id, Window::Video(window.clone()));
 
     Ok(window)
@@ -789,7 +791,8 @@ async fn spawn_prompt(
     ));
 
     windows
-        .borrow_mut()
+        .try_borrow_mut()
+        .into_lua_err()?
         .insert(id, Window::Prompt(window.clone()));
 
     Ok(window)
@@ -832,7 +835,8 @@ async fn spawn_choice(
     ));
 
     windows
-        .borrow_mut()
+        .try_borrow_mut()
+        .into_lua_err()?
         .insert(id, Window::Choice(window.clone()));
 
     Ok(window)
@@ -928,7 +932,7 @@ async fn play_audio(
         audio_handles.clone(),
     ));
 
-    audio_handles.borrow_mut().insert(id, audio_handle.clone());
+    audio_handles.try_borrow_mut().into_lua_err()?.insert(id, audio_handle.clone());
 
     Ok(audio_handle)
 }
@@ -972,135 +976,6 @@ async fn exit(_: Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> 
     request_sender.exit().await.into_lua_err()
 }
 
-// fn on_spawn(
-//     _: &Lua,
-//     cb: mlua::Function,
-//     callbacks: Rc<RefCell<Vec<mlua::Function>>>,
-// ) -> mlua::Result<()> {
-//     callbacks.borrow_mut().push(cb);
-//
-//     Ok(())
-// }
-//
-// async fn spawn_image(
-//     _: Lua,
-//     name: String,
-//     request_tx: RequestSender,
-//     windows: Rc<RefCell<HashMap<WindowId, Window>>>,
-// ) -> mlua::Result<Window> {
-//     let (tx, rx) = oneshot::channel();
-//
-//     request_tx
-//         .send(LuaRequest::SpawnImage { tx, name })
-//         .await
-//         .map_err(|err| err.into_lua_err())?;
-//
-//     let props = rx.await.map_err(|err| err.into_lua_err())?;
-//
-//     let window_id = props.window_id.clone();
-//
-//     let mut windows = windows.borrow_mut();
-//     let window = windows
-//         .entry(window_id)
-//         .or_insert_with(|| Window::Image(Rc::new(ImageWindow::new(props, request_tx))));
-//
-//     Ok(window.clone())
-// }
-//
-//
-// async fn spawn_video(
-//     _: Lua,
-//     name: String,
-//     request_tx: RequestSender,
-//     windows: Rc<RefCell<HashMap<WindowId, Window>>>,
-// ) -> mlua::Result<Window> {
-//     let (tx, rx) = oneshot::channel();
-//
-//     request_tx
-//         .send(LuaRequest::SpawnVideo { tx, name })
-//         .await
-//         .map_err(|err| err.into_lua_err())?;
-//
-//     let props = rx.await.map_err(|err| err.into_lua_err())?;
-//
-//     let window_id = props.window_id.clone();
-//
-//     let mut windows = windows.borrow_mut();
-//     let window = windows
-//         .entry(window_id)
-//         .or_insert_with(|| Window::Video(Rc::new(VideoWindow::new(props, request_tx))));
-//
-//     Ok(window.clone())
-// }
-//
-// async fn spawn_popup(
-//     lua: Lua,
-//     opts: mlua::Value,
-//     request_tx: RequestSender,
-//     windows: Rc<RefCell<HashMap<WindowId, Window>>>,
-// ) -> mlua::Result<Window> {
-//     let opts: RandomPopupOpts = lua.from_value(opts)?;
-//     let (tx, rx) = oneshot::channel();
-//
-//     request_tx
-//         .send(LuaRequest::SpawnRandomPopup {
-//             tx,
-//             popup_type: opts.popup_type,
-//             tags: opts.tags,
-//         })
-//         .await
-//         .map_err(|err| err.into_lua_err())?;
-//
-//     let (popup_type, props) = rx.await.map_err(|err| err.into_lua_err())?;
-//
-//     let window_id = props.window_id.clone();
-//
-//     let mut windows = windows.borrow_mut();
-//     let window = windows
-//         .entry(window_id)
-//         .or_insert_with(|| match popup_type {
-//             PopupResultType::Image => Window::Image(Rc::new(ImageWindow::new(props, request_tx))),
-//             PopupResultType::Video => Window::Video(Rc::new(VideoWindow::new(props, request_tx))),
-//         });
-//
-//     Ok(window.clone())
-// }
-//
-// async fn spawn_prompt(
-//     _: Lua,
-//     text: String,
-//     request_tx: RequestSender,
-//     windows: Rc<RefCell<HashMap<WindowId, Window>>>,
-// ) -> mlua::Result<Window> {
-//     let (tx, rx) = oneshot::channel();
-//
-//     request_tx
-//         .send(LuaRequest::SpawnPrompt {
-//             tx,
-//             text: text.clone(),
-//         })
-//         .await
-//         .map_err(|err| err.into_lua_err())?;
-//
-//     let props = rx.await.map_err(|err| err.into_lua_err())?;
-//
-//     let window_id = props.window_id.clone();
-//
-//     let mut windows = windows.borrow_mut();
-//     let window = windows
-//         .entry(window_id)
-//         .or_insert_with(|| Window::Prompt(Rc::new(PromptWindow::new(props, text, request_tx))));
-//
-//     Ok(window.clone())
-// }
-
-// async fn open_link(_: Lua, url: String, request_tx: RequestSender) -> mlua::Result<()> {
-//     request_tx
-//         .send(LuaRequest::OpenLink { url })
-//         .await
-//         .map_err(|err| err.into_lua_err())
-// }
-
 fn after(_: &Lua, (ms, function): (u64, mlua::Function)) -> mlua::Result<Timer> {
     Ok(Timer::new(Duration::from_millis(ms), function))
 }
@@ -1108,9 +983,3 @@ fn after(_: &Lua, (ms, function): (u64, mlua::Function)) -> mlua::Result<Timer> 
 fn every(_: &Lua, (ms, function): (u64, mlua::Function)) -> mlua::Result<Interval> {
     Ok(Interval::new(Duration::from_millis(ms), function))
 }
-
-// async fn sleep(_: Lua, ms: u64) -> mlua::Result<()> {
-//     tokio::time::sleep(Duration::from_millis(ms)).await;
-//
-//     Ok(())
-// }

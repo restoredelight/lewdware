@@ -21,6 +21,7 @@ serde_json = "1"
 shared = { path = "../../shared" }
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
 r2d2 = "0.8"
 r2d2_sqlite = { version = "0.34.0", features = ["bundled"] }
 rusqlite = { version = "0.39.0", features = ["bundled", "fallible_uint"] }

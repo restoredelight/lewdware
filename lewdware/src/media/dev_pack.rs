@@ -66,7 +66,7 @@
 //                     audio.push(Item { tags, item: path });
 //                 }
 //                 Err(err) => {
-//                     eprintln!("Error processing {}: {}", path.display(), err);
+//                     tracing::error!("Error processing {}: {}", path.display(), err);
 //                 }
 //             }
 //         }

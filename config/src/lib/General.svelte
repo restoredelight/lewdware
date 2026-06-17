@@ -122,6 +122,21 @@
     </div>
   </div>
 
+  <!-- Logs -->
+  <div class="flex flex-col gap-2">
+    <span class="text-sm font-semibold text-[#232629]">Logs</span>
+    <p class="text-xs text-[#7f8c8d]">
+      Open the folder containing log files for all Lewdware apps.
+    </p>
+    <button
+      onclick={() => api.openLogs()}
+      class="self-start px-4 py-2 rounded-md text-sm font-medium
+             bg-[#eff0f1] hover:bg-[#e0e4e7] text-[#232629] transition-colors"
+    >
+      Open logs folder
+    </button>
+  </div>
+
   <!-- Monitors -->
   <div class="flex flex-col gap-2">
     <span class="text-sm font-semibold text-[#232629]">Monitors</span>

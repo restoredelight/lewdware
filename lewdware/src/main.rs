@@ -28,6 +28,7 @@ mod window;
 mod zero_copy;
 
 fn main() -> Result<()> {
+    let _log_guard = shared::logging::init("lewdware");
     utils::raise_fd_limit();
     let mut args = args_os();
 

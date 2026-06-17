@@ -39,4 +39,6 @@ export const api = {
   stopLewdware: () => invoke<void>("stop_lewdware"),
 
   lewdwareRunning: () => invoke<boolean>("lewdware_running"),
+
+  openLogs: () => invoke<void>("open_logs"),
 };

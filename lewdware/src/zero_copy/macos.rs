@@ -230,7 +230,7 @@ fn try_import_vtb_frame(
 
     static LOGGED: AtomicBool = AtomicBool::new(false);
     if !LOGGED.swap(true, Ordering::Relaxed) {
-        eprintln!("[vtb_import] VideoToolbox IOSurface zero-copy active");
+        tracing::error!("[vtb_import] VideoToolbox IOSurface zero-copy active");
     }
 
     Some(VtbImportedTextures {

@@ -72,12 +72,12 @@ impl<'a> ChaosApp<'a> {
         let wallpaper = match wallpaper::get() {
             Ok(wallpaper) => Some(wallpaper),
             Err(err) => {
-                eprintln!("Error getting wallpaper: {}", err);
+                tracing::error!("Error getting wallpaper: {}", err);
                 None
             }
         };
 
-        println!("{:?}", config);
+        tracing::info!("{:?}", config);
         // local video = lewdware.media.random_video()
         // local video_window = lewdware.spawn_video_popup(video, {
         //     width = { percent = 100 },
@@ -252,7 +252,7 @@ impl<'a> ChaosApp<'a> {
         opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
-        println!("Windows: {}", self.windows.len());
+        tracing::info!("Windows: {}", self.windows.len());
         let (window, props) = self.create_window(
             opts.clone(),
             WindowSizeBehaviour::ResizeWithMedia {
@@ -299,7 +299,7 @@ impl<'a> ChaosApp<'a> {
         self.windows
             .insert(props.window_id.clone(), WindowType::Video(video_window));
 
-        println!("{}", self.windows.len());
+        tracing::info!("{}", self.windows.len());
 
         Ok(props)
     }
@@ -578,7 +578,7 @@ impl<'a> ChaosApp<'a> {
                 }
             }
         } {
-            eprintln!("Couldn't send response");
+            tracing::error!("Couldn't send response");
         }
 
         false
@@ -608,7 +608,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             match entry.get_mut() {
                 WindowType::Image(window) => match event {
                     WindowEvent::RedrawRequested => window.draw().unwrap_or_else(|err| {
-                        eprintln!("Error drawing image window: {}", err);
+                        tracing::error!("Error drawing image window: {}", err);
                     }),
                     _ => {}
                 },
@@ -618,7 +618,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                 WindowType::Prompt(window) => match &event {
                     WindowEvent::RedrawRequested => {
                         window.render().unwrap_or_else(|err| {
-                            eprintln!("Error rendering prompt window: {}", err);
+                            tracing::error!("Error rendering prompt window: {}", err);
                         });
                     }
                     event => {
@@ -628,7 +628,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                 WindowType::Choice(window) => match &event {
                     WindowEvent::RedrawRequested => {
                         window.render().unwrap_or_else(|err| {
-                            eprintln!("Error rendering prompt window: {}", err);
+                            tracing::error!("Error rendering prompt window: {}", err);
                         });
                     }
                     event => {
@@ -686,7 +686,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
             UserEvent::AudioFinish { id } => {
                 if self.audio_players.remove(&id).is_some() {
                     if let Err(err) = self.lua_event_tx.send(lua::Event::AudioFinish { id }) {
-                        eprintln!("{err}");
+                        tracing::error!("{err}");
                     }
                 }
             }
@@ -707,7 +707,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
                 match video_window.update() {
                     Ok(true) => finished_videos.push(*id),
                     Ok(false) => {}
-                    Err(err) => eprintln!("Error updating video window: {err}"),
+                    Err(err) => tracing::error!("Error updating video window: {err}"),
                 }
                 // Keep polling continuously while any video window exists, since we can no
                 // longer rely on `request_redraw()` to wake the loop back up for them.
@@ -740,10 +740,10 @@ impl Drop for ChaosApp<'_> {
     fn drop(&mut self) {
         if let Some(wallpaper) = &self.default_wallpaper {
             if let Err(err) = wallpaper::set_from_path(wallpaper) {
-                eprintln!("Error setting wallpaper back to default: {}", err);
+                tracing::error!("Error setting wallpaper back to default: {}", err);
             }
         } else {
-            eprintln!("No default wallpaper found; leaving wallpaper as is");
+            tracing::error!("No default wallpaper found; leaving wallpaper as is");
         }
     }
 }

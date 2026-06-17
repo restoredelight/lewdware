@@ -15,13 +15,13 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
         })
         .optional()?;
 
-    println!("{:?}", value);
+    tracing::info!("{:?}", value);
 
     for i in value.unwrap_or(0)..MIGRATIONS.len() {
         db.execute_batch(MIGRATIONS[i])?;
     }
 
-    println!("Executed migrations");
+    tracing::info!("Executed migrations");
 
     if value.is_none() {
         db.execute(

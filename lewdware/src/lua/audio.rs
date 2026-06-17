@@ -32,7 +32,11 @@ impl UserData for AudioHandle {
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("on_finish", |_, this, cb: mlua::Function| {
-            this.state.borrow_mut().finish_callbacks.push(cb);
+            this.state
+                .try_borrow_mut()
+                .into_lua_err()?
+                .finish_callbacks
+                .push(cb);
 
             Ok(())
         });
@@ -67,24 +71,33 @@ impl AudioHandle {
         }
     }
 
-    pub fn on_finish(&self) {
+    pub fn on_finish(&self) -> anyhow::Result<()> {
         let callbacks = {
-            let state = self.state.borrow();
+            let state = self.state.try_borrow()?;
             state.finish_callbacks.clone()
         };
 
         for cb in callbacks {
             tokio::task::spawn_local(async move {
                 if let Err(err) = cb.call_async::<()>(()).await {
-                    eprintln!("{err}");
+                    tracing::error!("{err}");
                 }
             });
         }
+
+        Ok(())
     }
 }
 
 impl Drop for AudioHandle {
     fn drop(&mut self) {
-        self.audio_handles.borrow_mut().remove(&self.id);
+        match self.audio_handles.try_borrow_mut() {
+            Ok(mut handles) => {
+                handles.remove(&self.id);
+            }
+            Err(err) => {
+                tracing::error!("Couldn't borrow audio_handles: {err}");
+            }
+        }
     }
 }

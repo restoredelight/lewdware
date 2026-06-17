@@ -127,7 +127,7 @@ pub async fn save_config_async(config: AppConfig) -> Result<()> {
     let path = config_path()?;
     let temp_config_path = path.with_added_extension("tmp");
 
-    println!("{}", temp_config_path.display());
+    tracing::info!("{}", temp_config_path.display());
 
     tokio::fs::write(
         &temp_config_path,

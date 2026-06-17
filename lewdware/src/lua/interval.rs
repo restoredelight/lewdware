@@ -12,7 +12,7 @@ impl Timer {
             tokio::time::sleep(duration).await;
 
             if let Err(err) = function.call_async::<()>(()).await {
-                eprintln!("{err}");
+                tracing::error!("{err}");
             };
         });
 
@@ -60,7 +60,7 @@ impl Interval {
                             last_tick = tick;
 
                             if let Err(err) = function.call_async::<()>(()).await {
-                                eprintln!("{err}");
+                                tracing::error!("{err}");
                             };
                         },
                             result = interval_rx.changed() => {
@@ -71,7 +71,7 @@ impl Interval {
                                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                             } else {
                                 interval_rx_opt = None;
-                                println!("Error!");
+                                tracing::warn!("interval watch channel closed");
                             }
                         }
                     }
@@ -79,7 +79,7 @@ impl Interval {
                     interval.tick().await;
 
                     if let Err(err) = function.call_async::<()>(()).await {
-                        eprintln!("{err}");
+                        tracing::error!("{err}");
                     };
                 }
             }

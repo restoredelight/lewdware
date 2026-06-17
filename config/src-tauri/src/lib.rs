@@ -710,6 +710,36 @@ fn lewdware_running(state: State<'_>) -> bool {
     }
 }
 
+// ─── Logs ─────────────────────────────────────────────────────────────────────
+
+fn open_log_dir() -> Result<(), String> {
+    let dir = shared::logging::log_dir().ok_or("Could not determine log directory")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn open_logs() -> Result<(), String> {
+    open_log_dir()
+}
+
 // ─── Entry ────────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -719,11 +749,13 @@ pub fn run() {
         .expect("failed to load embedded default modes")
         .1;
 
+    let _log_guard = shared::logging::init("config");
+
     let config = user_config::load_config().unwrap_or_default();
 
     let pack = config.pack_path.as_ref().and_then(|p| {
         load_pack(p.clone())
-            .inspect_err(|e| eprintln!("failed to load pack: {e}"))
+            .inspect_err(|e| tracing::error!("failed to load pack: {e}"))
             .ok()
     });
 
@@ -732,7 +764,7 @@ pub fn run() {
         .iter()
         .filter_map(|p| {
             load_mode_file(p.clone())
-                .inspect_err(|e| eprintln!("failed to load mode {}: {e}", p.display()))
+                .inspect_err(|e| tracing::error!("failed to load mode {}: {e}", p.display()))
                 .ok()
         })
         .collect();
@@ -761,6 +793,7 @@ pub fn run() {
             launch_lewdware,
             stop_lewdware,
             lewdware_running,
+            open_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -104,7 +104,7 @@ impl<'a> InnerWindow<'a> {
                     // only ever resolve to `Opaque` or `Inherit` here anyway, both of which
                     // amount to the same thing in practice, so make that explicit.
                     if !ALPHA_MODE_UNSUPPORTED_WARNED.swap(true, Ordering::Relaxed) {
-                        eprintln!(
+                        tracing::error!(
                             "This platform/adapter doesn't support transparent windows (no PreMultiplied/PostMultiplied composite alpha mode available); transparent popups will render opaque"
                         );
                     }
@@ -196,7 +196,7 @@ impl<'a> InnerWindow<'a> {
         match &mut self.surface {
             Surface::Wgpu { .. } => {
                 if self.wgpu_state.error.load(Ordering::Acquire) {
-                    println!("wgpu error; switching to softbuffer");
+                    tracing::info!("wgpu error; switching to softbuffer");
                     let (context, surface) = init_softbuffer(self.window.clone())?;
 
                     self.surface = Surface::Softbuffer {
@@ -451,7 +451,7 @@ impl<'a> InnerWindow<'a> {
             LogicalPosition::new(x.unwrap_or(self.position.x), y.unwrap_or(self.position.y))
         };
 
-        println!("{:?}", self.position);
+        tracing::info!("{:?}", self.position);
 
         let move_obj = Move {
             id: id,
@@ -509,7 +509,7 @@ impl<'a> InnerWindow<'a> {
                     id: self.window.id(),
                     move_id: current_move.id,
                 }) {
-                    eprintln!("{err}");
+                    tracing::error!("{err}");
                 }
 
                 self.current_move = None;
@@ -570,7 +570,7 @@ impl<'a> InnerWindow<'a> {
                 id: self.window.id(),
                 fade_id,
             }) {
-                eprintln!("{err}");
+                tracing::error!("{err}");
             }
 
             self.current_fade = None;
@@ -642,7 +642,7 @@ impl Drop for InnerWindow<'_> {
         if let Err(_) = self.lua_event_tx.send(lua::Event::WindowClosed {
             id: self.window.id(),
         }) {
-            eprintln!("Event receiver closed");
+            tracing::error!("Event receiver closed");
         }
     }
 }

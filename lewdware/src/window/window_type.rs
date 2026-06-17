@@ -438,7 +438,7 @@ impl<'a> PromptWindow<'a> {
                                     id,
                                     text: self.value.clone(),
                                 }) {
-                                    eprintln!("{err}");
+                                    tracing::error!("{err}");
                                 }
                             }
                         })
@@ -501,7 +501,7 @@ impl<'a> PromptWindow<'a> {
                                         id,
                                         text: self.value.clone(),
                                     }) {
-                                        eprintln!("{err}");
+                                        tracing::error!("{err}");
                                     }
                                 }
                             })

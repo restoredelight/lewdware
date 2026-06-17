@@ -123,7 +123,7 @@ impl WgpuState {
                     }
                     .map_err(|e| anyhow::anyhow!("Vulkan device creation failed: {e:?}"))?
                 };
-                eprintln!("[wgpu] VK_EXT_image_drm_format_modifier enabled");
+                tracing::error!("[wgpu] VK_EXT_image_drm_format_modifier enabled");
                 unsafe {
                     adapter.create_device_from_hal::<vulkan::Api>(
                         open_device,
@@ -167,7 +167,7 @@ impl WgpuState {
         let error_clone = error.clone();
 
         device.on_uncaptured_error(Arc::new(move |err| {
-            eprintln!("wgpu error: {}", err);
+            tracing::error!("wgpu error: {}", err);
 
             error_clone.store(true, Ordering::Release);
         }));

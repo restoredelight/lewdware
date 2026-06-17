@@ -1,12 +1,10 @@
 /// DMA-BUF zero-copy import: maps VAAPI-decoded DRM PRIME frames directly into
 /// Vulkan textures, eliminating the GPU->CPU->GPU round-trip of av_hwframe_transfer_data.
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use ash::vk;
 use ffmpeg_next::{ffi, frame::Video};
+use shared::once;
 
 use crate::{
     video::{VideoFrame, VideoPixelFormat},
@@ -167,7 +165,7 @@ fn try_import_drm_prime(
     let desc = unsafe { &*desc_ptr };
 
     if desc.nb_objects != 1 {
-        eprintln!("[drm_import] unexpected nb_objects={}", desc.nb_objects);
+        tracing::error!("[drm_import] unexpected nb_objects={}", desc.nb_objects);
         return None;
     }
 
@@ -193,7 +191,7 @@ fn try_import_drm_prime(
             desc.layers[1].planes[0].pitch as u64,
         )
     } else {
-        eprintln!(
+        tracing::error!(
             "[drm_import] unhandled layout: nb_layers={} planes=[{}]",
             desc.nb_layers,
             (0..desc.nb_layers as usize)
@@ -211,12 +209,10 @@ fn try_import_drm_prime(
     let chroma_h = (video_height + 1) / 2;
 
     let is_linear = modifier == 0 || modifier == 0x00FF_FFFF_FFFF_FFFF;
-    static LOGGED_ATTEMPT: AtomicBool = AtomicBool::new(false);
-    if !LOGGED_ATTEMPT.swap(true, Ordering::Relaxed) {
-        eprintln!(
-            "[drm_import] first attempt: modifier={modifier:#018x} is_linear={is_linear} size={total_size} y_pitch={y_pitch} uv_pitch={uv_pitch} uv_offset={uv_offset}"
-        );
-    }
+
+    once!(tracing::info!(
+        "[drm_import] first attempt: modifier={modifier:#018x} is_linear={is_linear} size={total_size} y_pitch={y_pitch} uv_pitch={uv_pitch} uv_offset={uv_offset}"
+    ));
 
     let hal_guard = unsafe { device.as_hal::<wgpu::hal::vulkan::Api>() };
     let hal_device = hal_guard.as_deref()?;
@@ -232,12 +228,10 @@ fn try_import_drm_prime(
         .contains(&ash::vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_NAME);
 
     if !is_linear && !has_modifier_ext {
-        static NOT_SUPPORTED: AtomicBool = AtomicBool::new(false);
-        if !NOT_SUPPORTED.swap(true, Ordering::Relaxed) {
-            eprintln!(
-                "[drm_import] non-linear modifier {modifier:#018x} but VK_EXT_image_drm_format_modifier not enabled — falling back to CPU"
-            );
-        }
+        once!(tracing::warn!(
+            "[drm_import] non-linear modifier {modifier:#018x} but VK_EXT_image_drm_format_modifier not enabled — falling back to CPU"
+        ));
+
         return None;
     }
 
@@ -263,9 +257,9 @@ fn try_import_drm_prime(
                 .linear_tiling_features
                 .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
         {
-            eprintln!(
+            once!(tracing::warn!(
                 "[drm_import] linear tiling does not support SAMPLED_IMAGE — falling back to CPU"
-            );
+            ));
             return None;
         }
 
@@ -286,7 +280,7 @@ fn try_import_drm_prime(
         .row_pitch as u64;
 
         if y_row_pitch != y_pitch {
-            eprintln!("[drm_import] Y stride mismatch: Vulkan={y_row_pitch} DRM={y_pitch}");
+            tracing::error!("[drm_import] Y stride mismatch: Vulkan={y_row_pitch} DRM={y_pitch}");
             return None;
         }
 
@@ -307,7 +301,9 @@ fn try_import_drm_prime(
         .row_pitch as u64;
 
         if uv_row_pitch != uv_pitch {
-            eprintln!("[drm_import] UV stride mismatch: Vulkan={uv_row_pitch} DRM={uv_pitch}");
+            tracing::error!(
+                "[drm_import] UV stride mismatch: Vulkan={uv_row_pitch} DRM={uv_pitch}"
+            );
             return None;
         }
 
@@ -530,17 +526,17 @@ fn try_import_drm_prime(
         ],
     });
 
-    static LOGGED_SUCCESS: AtomicBool = AtomicBool::new(false);
-    if !LOGGED_SUCCESS.swap(true, Ordering::Relaxed) {
+    once!({
         let path = if is_linear {
             "linear"
         } else {
             "tiled (modifier ext)"
         };
-        eprintln!(
+
+        tracing::info!(
             "[drm_import] DMA-BUF zero-copy active ({path}) — GPU->CPU->GPU round-trip eliminated"
-        );
-    }
+        )
+    });
 
     Some(DrmImportedTextures {
         _y_texture: y_texture,
