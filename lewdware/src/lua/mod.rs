@@ -302,12 +302,12 @@ impl LuaRuntime {
             }
             Event::MoveFinish { id, move_id } => {
                 if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
-                    window.inner_window().on_move_finished(move_id);
+                    window.inner_window().on_move_finished(move_id)?;
                 }
             }
             Event::FadeFinish { id, fade_id } => {
                 if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
-                    window.inner_window().on_fade_finished(fade_id);
+                    window.inner_window().on_fade_finished(fade_id)?;
                 }
             }
             Event::AudioFinish { id } => {
@@ -319,7 +319,7 @@ impl LuaRuntime {
                 if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
                     match window {
                         Window::Prompt(prompt) => {
-                            prompt.on_submit(text);
+                            prompt.on_submit(text)?;
                         }
                         _ => bail!("Video finish event for a non-video window"),
                     }
@@ -332,7 +332,7 @@ impl LuaRuntime {
                 if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
                     match window {
                         Window::Choice(prompt) => {
-                            prompt.on_select(choice_id);
+                            prompt.on_select(choice_id)?;
                         }
                         _ => bail!("Video finish event for a non-video window"),
                     }

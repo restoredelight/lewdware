@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{env::args_os, path::PathBuf};
+use std::{env::args_os, fs::File, path::PathBuf};
 
 use anyhow::{Context, Result};
 use pollster::block_on;
@@ -29,6 +29,16 @@ mod zero_copy;
 
 fn main() -> Result<()> {
     let _log_guard = shared::logging::init("lewdware");
+
+    let lock_path = dirs::runtime_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("lewdware.lock");
+    let lock_file = File::create(&lock_path).context("Failed to create lock file")?;
+    if lock_file.try_lock().is_err() {
+        tracing::error!("Another instance of lewdware is already running");
+        return Ok(());
+    }
+
     utils::raise_fd_limit();
     let mut args = args_os();
 
