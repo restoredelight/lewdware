@@ -1,0 +1,33 @@
+---
+title: Lewdware
+description: A scriptable desktop experience engine. Spawn popup windows, play media, and script everything with Lua.
+template: splash
+hero:
+  tagline: Desktop experiences, scripted in Lua.
+  actions:
+    - text: Download
+      link: /download/
+      icon: right-arrow
+      variant: primary
+    - text: Lua API
+      link: /reference/lua-api/
+      icon: open-book
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid>
+	<Card title="Packs" icon="puzzle">
+		Bundle images, videos, and audio into shareable packs. Install a pack to give Lewdware its
+		content.
+	</Card>
+	<Card title="Modes" icon="pencil">
+		Write Lua scripts that control when and how popups appear, media plays, and more. Distribute
+		modes inside packs or on their own.
+	</Card>
+	<Card title="Pack Editor" icon="laptop">
+		A graphical tool for building packs — import media, assign tags, embed modes, and export for
+		distribution.
+	</Card>
+</CardGrid>

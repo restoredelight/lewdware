@@ -84,7 +84,7 @@ function Window:move(opts, cb) end
 ---or you want to avoid the fade-out animation that occurs when a window is closed normally.
 ---
 ---Making a window invisible will stop the user from interacting with it, but e.g. video windows
----will continue to play, so you should consider calling [VideoWindow:pause()]. Always remember
+---will continue to play, so you should consider calling [VideoWindow:pause](lua://VideoWindow.pause). Always remember
 ---to close windows that you are no longer using.
 function Window:set_visible(visible) end
 
@@ -236,8 +236,11 @@ function lewdware.media.random_audio(opts) end
 function lewdware.spawn_image_popup(image, opts) end
 
 ---@class SpawnWindowOpts
----Options that can be passed into any of [spawn_image()], [spawn_video()], [spawn_prompt()] and
----[spawn_choice()].
+---Options that can be passed into any of
+---[spawn_image_popup()](lua://lewdware.spawn_image_popup),
+---[spawn_video_popup()](lua://lewdware.spawn_video_popup),
+---[spawn_prompt()](lua://lewdware.spawn_prompt) and
+---[spawn_choice()](lua://lewdware.spawn_choice).
 ---
 ---@field x? Coord The horizontal coordinate to spawn the window at. By default, the coordinates
 ---  of the window will be chosen at random, ensuring that the window remains entirely visible.

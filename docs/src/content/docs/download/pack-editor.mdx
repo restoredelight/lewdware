@@ -1,0 +1,40 @@
+---
+title: Download Pack Editor
+description: Download the Lewdware Pack Editor for your platform.
+---
+
+import DownloadSection from '../../../components/DownloadSection.astro';
+
+The Pack Editor is a graphical tool for creating and editing packs — import media, assign tags,
+embed modes, and export for distribution.
+
+:::note[macOS Gatekeeper]
+The app is not notarized. After mounting the `.dmg` and dragging Pack Editor to Applications,
+macOS will block it on first launch.
+
+**Option 1 (quickest):** Right-click (or Control-click) the app in Applications and choose
+**Open**, then click **Open** in the dialog.
+
+**Option 2:** After the first blocked attempt, open **System Settings → Privacy & Security**,
+scroll to the security section, and click **Open Anyway**.
+:::
+
+<DownloadSection
+  windowsUrl="https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_x64-setup.msi"
+  windowsExt="msi"
+  macosArm64Url="https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_aarch64.dmg"
+  macosX64Url="https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_x64.dmg"
+  macosExt="dmg"
+  linuxX64={{
+    deb: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_amd64.deb',
+    rpm: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_amd64.rpm',
+    other: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_amd64.AppImage',
+    otherLabel: 'AppImage',
+  }}
+  linuxArm64={{
+    deb: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_arm64.deb',
+    rpm: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_arm64.rpm',
+    other: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_arm64.AppImage',
+    otherLabel: 'AppImage',
+  }}
+/>

@@ -1,0 +1,48 @@
+---
+title: Download Lewdware
+description: Download Lewdware, the config app, and the lw CLI for your platform.
+---
+
+import DownloadSection from '../../../components/DownloadSection.astro';
+
+This installer includes:
+
+- **lewdware** — the main app
+- **lewdware-config** — the configuration GUI
+- **lw** — the CLI for building and testing modes
+
+:::note[Windows SmartScreen]
+On Windows, the installer is not code-signed. When prompted by SmartScreen, click **More info** →
+**Run anyway** to proceed.
+:::
+
+:::note[macOS Gatekeeper]
+The installer is not notarized. macOS will block it on first open.
+
+**Option 1 (quickest):** Right-click (or Control-click) the downloaded `.pkg` and choose **Open**,
+then click **Open** in the dialog.
+
+**Option 2:** After the first blocked attempt, open **System Settings → Privacy & Security**,
+scroll to the security section at the bottom, and click **Open Anyway** next to the blocked
+installer entry.
+:::
+
+<DownloadSection
+  windowsUrl="https://github.com/restoredelight/lewdware/releases/latest/download/Lewdware-Installer-x64.exe"
+  windowsExt="exe"
+  macosArm64Url="https://github.com/restoredelight/lewdware/releases/latest/download/Lewdware-Installer-macOS-arm64.pkg"
+  macosX64Url="https://github.com/restoredelight/lewdware/releases/latest/download/Lewdware-Installer-macOS-x86_64.pkg"
+  macosExt="pkg"
+  linuxX64={{
+    deb: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_amd64.deb',
+    rpm: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_x86_64.rpm',
+    other: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_amd64.tar.gz',
+    otherLabel: '.tar.gz',
+  }}
+  linuxArm64={{
+    deb: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_arm64.deb',
+    rpm: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_aarch64.rpm',
+    other: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_arm64.tar.gz',
+    otherLabel: '.tar.gz',
+  }}
+/>

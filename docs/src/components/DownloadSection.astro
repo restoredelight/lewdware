@@ -1,0 +1,498 @@
+---
+interface LinuxFiles {
+	deb: string;
+	rpm: string;
+	other: string;
+	otherLabel: string; // ".tar.gz" or "AppImage"
+}
+
+interface Props {
+	windowsUrl: string;
+	windowsExt: string; // "exe" or "msi"
+	macosArm64Url: string;
+	macosX64Url: string;
+	macosExt: string; // "pkg" or "dmg"
+	linuxX64: LinuxFiles;
+	linuxArm64: LinuxFiles;
+}
+
+const { windowsUrl, windowsExt, macosArm64Url, macosX64Url, macosExt, linuxX64, linuxArm64 } =
+	Astro.props;
+
+const otherLabel = linuxX64.otherLabel;
+const otherDesc = otherLabel === 'AppImage' ? 'Portable, no installation required' : 'Portable, any distribution';
+---
+
+<div class="dl-wrap">
+	<!-- Primary download area — populated by client script -->
+	<div class="dl-primary-area">
+		<div id="dl-detecting" class="dl-state">
+			<span class="dl-detecting-text">Detecting your system…</span>
+		</div>
+
+		<div id="dl-windows" class="dl-state" hidden>
+			<a href={windowsUrl} class="dl-btn">
+				Download for Windows
+				<span class="dl-ext">(.{windowsExt})</span>
+			</a>
+		</div>
+
+		<div id="dl-macos-arm64" class="dl-state" hidden>
+			<a href={macosArm64Url} class="dl-btn">
+				Download for macOS <span class="dl-arch">(Apple Silicon)</span>
+				<span class="dl-ext">(.{macosExt})</span>
+			</a>
+			<a href={macosX64Url} class="dl-alt">Also available for Intel Mac</a>
+		</div>
+
+		<div id="dl-macos-x64" class="dl-state" hidden>
+			<a href={macosX64Url} class="dl-btn">
+				Download for macOS <span class="dl-arch">(Intel)</span>
+				<span class="dl-ext">(.{macosExt})</span>
+			</a>
+			<a href={macosArm64Url} class="dl-alt">Also available for Apple Silicon Mac</a>
+		</div>
+
+		<!-- Shown when we can detect macOS but not the architecture (Firefox, Safari) -->
+		<div id="dl-macos" class="dl-state" hidden>
+			<p class="dl-choose-label">Download for macOS</p>
+			<div class="macos-choice">
+				<a href={macosArm64Url} class="dl-btn">
+					Apple Silicon
+					<span class="dl-ext">(.{macosExt})</span>
+				</a>
+				<a href={macosX64Url} class="dl-btn dl-btn-secondary">
+					Intel
+					<span class="dl-ext">(.{macosExt})</span>
+				</a>
+			</div>
+		</div>
+
+		<div id="dl-linux" class="dl-state" hidden>
+			<button class="dl-btn" id="linux-open-modal">
+				Download for Linux
+				<span class="dl-ext" id="linux-formats-hint"
+					>(.deb / .rpm / {otherLabel})</span
+				>
+			</button>
+		</div>
+
+		<div id="dl-unknown" class="dl-state" hidden>
+			<p class="dl-unknown-msg">Could not detect your platform — see all downloads below.</p>
+		</div>
+	</div>
+
+	<!-- Linux format dialog -->
+	<dialog id="linux-modal" class="linux-modal">
+		<h2 class="modal-title">Choose a Linux format</h2>
+		<p class="modal-arch">
+			Detected architecture: <strong id="modal-arch-name">x86_64</strong>
+			<button id="modal-switch-arch" class="arch-switch-btn">Switch to ARM64</button>
+		</p>
+		<div class="modal-options">
+			<a
+				class="modal-opt"
+				data-x64={linuxX64.deb}
+				data-arm64={linuxArm64.deb}
+				href={linuxX64.deb}
+			>
+				<span class="opt-label">.deb</span>
+				<span class="opt-desc">Debian, Ubuntu, and derivatives</span>
+			</a>
+			<a
+				class="modal-opt"
+				data-x64={linuxX64.rpm}
+				data-arm64={linuxArm64.rpm}
+				href={linuxX64.rpm}
+			>
+				<span class="opt-label">.rpm</span>
+				<span class="opt-desc">Fedora, RHEL, openSUSE, and derivatives</span>
+			</a>
+			<a
+				class="modal-opt"
+				data-x64={linuxX64.other}
+				data-arm64={linuxArm64.other}
+				href={linuxX64.other}
+			>
+				<span class="opt-label">{otherLabel}</span>
+				<span class="opt-desc">{otherDesc}</span>
+			</a>
+		</div>
+		<button id="linux-close-modal" class="modal-cancel">Cancel</button>
+	</dialog>
+
+	<!-- All downloads table (always visible) -->
+	<details class="all-downloads" open>
+		<summary>All downloads</summary>
+		<table class="dl-table">
+			<thead>
+				<tr>
+					<th>Platform</th>
+					<th>Architecture</th>
+					<th>Format</th>
+					<th></th>
+				</tr>
+			</thead>
+			<tbody>
+				<tr>
+					<td>Windows</td>
+					<td>x86_64</td>
+					<td>.{windowsExt}</td>
+					<td><a href={windowsUrl}>Download</a></td>
+				</tr>
+				<tr>
+					<td rowspan="2">macOS</td>
+					<td>Apple Silicon (ARM64)</td>
+					<td>.{macosExt}</td>
+					<td><a href={macosArm64Url}>Download</a></td>
+				</tr>
+				<tr>
+					<td>Intel (x86_64)</td>
+					<td>.{macosExt}</td>
+					<td><a href={macosX64Url}>Download</a></td>
+				</tr>
+				<tr>
+					<td rowspan="6">Linux</td>
+					<td rowspan="3">x86_64</td>
+					<td>.deb</td>
+					<td><a href={linuxX64.deb}>Download</a></td>
+				</tr>
+				<tr>
+					<td>.rpm</td>
+					<td><a href={linuxX64.rpm}>Download</a></td>
+				</tr>
+				<tr>
+					<td>{linuxX64.otherLabel}</td>
+					<td><a href={linuxX64.other}>Download</a></td>
+				</tr>
+				<tr>
+					<td rowspan="3">ARM64</td>
+					<td>.deb</td>
+					<td><a href={linuxArm64.deb}>Download</a></td>
+				</tr>
+				<tr>
+					<td>.rpm</td>
+					<td><a href={linuxArm64.rpm}>Download</a></td>
+				</tr>
+				<tr>
+					<td>{linuxArm64.otherLabel}</td>
+					<td><a href={linuxArm64.other}>Download</a></td>
+				</tr>
+			</tbody>
+		</table>
+	</details>
+</div>
+
+<style>
+	.dl-wrap {
+		display: flex;
+		flex-direction: column;
+		gap: 2rem;
+	}
+
+	/* Primary button area */
+	.dl-primary-area {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.75rem;
+		min-height: 3.5rem;
+	}
+
+	.dl-state {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.5rem;
+	}
+
+	.dl-state[hidden] {
+		display: none;
+	}
+
+	.dl-detecting-text {
+		color: var(--sl-color-gray-3);
+		font-size: 0.9rem;
+	}
+
+	.dl-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.75rem 1.5rem;
+		background: var(--sl-color-accent);
+		color: var(--sl-color-white);
+		border: none;
+		border-radius: 0.5rem;
+		font-size: 1rem;
+		font-weight: 600;
+		cursor: pointer;
+		text-decoration: none;
+		line-height: 1.2;
+		transition: background 0.15s;
+	}
+
+	.dl-btn:hover {
+		background: var(--sl-color-accent-high);
+		color: var(--sl-color-white);
+	}
+
+	.dl-arch {
+		font-weight: 400;
+	}
+
+	.dl-ext {
+		font-weight: 400;
+		opacity: 0.8;
+		font-size: 0.875rem;
+	}
+
+	.dl-alt {
+		font-size: 0.875rem;
+		color: var(--sl-color-text-accent);
+	}
+
+	.dl-unknown-msg {
+		color: var(--sl-color-gray-3);
+		margin: 0;
+	}
+
+	/* Linux modal */
+	.linux-modal {
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.75rem;
+		background: var(--sl-color-bg);
+		color: var(--sl-color-text);
+		padding: 1.5rem;
+		max-width: 28rem;
+		width: calc(100vw - 2rem);
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+	}
+
+	.linux-modal::backdrop {
+		background: rgba(0, 0, 0, 0.5);
+	}
+
+	.modal-title {
+		margin: 0 0 0.5rem;
+		font-size: 1.25rem;
+	}
+
+	.modal-arch {
+		font-size: 0.875rem;
+		color: var(--sl-color-gray-3);
+		margin: 0 0 1.25rem;
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+
+	.arch-switch-btn {
+		background: none;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.375rem;
+		padding: 0.125rem 0.5rem;
+		font-size: 0.8rem;
+		cursor: pointer;
+		color: var(--sl-color-text-accent);
+	}
+
+	.modal-options {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		margin-bottom: 1rem;
+	}
+
+	.modal-opt {
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+		padding: 0.875rem 1rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.5rem;
+		text-decoration: none;
+		color: var(--sl-color-text);
+		transition: background 0.1s, border-color 0.1s;
+	}
+
+	.modal-opt:hover {
+		background: var(--sl-color-bg-nav);
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-text);
+	}
+
+	.opt-label {
+		font-family: var(--sl-font-mono, monospace);
+		font-weight: 600;
+		font-size: 1rem;
+		min-width: 5rem;
+	}
+
+	.opt-desc {
+		font-size: 0.875rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.modal-cancel {
+		background: none;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.5rem;
+		padding: 0.5rem 1rem;
+		cursor: pointer;
+		color: var(--sl-color-text);
+		font-size: 0.875rem;
+		width: 100%;
+	}
+
+	.modal-cancel:hover {
+		background: var(--sl-color-bg-nav);
+	}
+
+	/* All downloads table */
+	.all-downloads summary {
+		cursor: pointer;
+		font-weight: 600;
+		color: var(--sl-color-text-accent);
+		user-select: none;
+		padding: 0.25rem 0;
+	}
+
+	.dl-table {
+		width: 100%;
+		border-collapse: collapse;
+		margin-top: 0.75rem;
+		font-size: 0.9rem;
+	}
+
+	.dl-table th {
+		text-align: left;
+		padding: 0.5rem 0.75rem;
+		border-bottom: 1px solid var(--sl-color-hairline);
+		font-weight: 600;
+		color: var(--sl-color-gray-2);
+		font-size: 0.8rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+
+	.dl-table td {
+		padding: 0.5rem 0.75rem;
+		border-bottom: 1px solid var(--sl-color-hairline-light, var(--sl-color-hairline));
+		vertical-align: middle;
+	}
+
+	.dl-table tr:last-child td {
+		border-bottom: none;
+	}
+
+	/* macOS two-button fallback */
+	.dl-choose-label {
+		font-size: 0.9rem;
+		color: var(--sl-color-gray-3);
+		margin: 0;
+	}
+
+	.macos-choice {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.625rem;
+	}
+
+	.dl-btn-secondary {
+		background: transparent;
+		color: var(--sl-color-accent);
+		border: 1.5px solid var(--sl-color-accent);
+	}
+
+	.dl-btn-secondary:hover {
+		background: color-mix(in srgb, var(--sl-color-accent) 10%, transparent);
+		color: var(--sl-color-accent);
+	}
+</style>
+
+<script>
+	(async function () {
+		const ua = navigator.userAgent;
+		let platform = 'unknown';
+		// null means "macOS detected but architecture unknown"
+		let arch: 'x64' | 'arm64' | null = null;
+
+		// --- OS detection: UA string is the primary source, works in all browsers ---
+		if (/Windows/.test(ua)) {
+			platform = 'windows';
+		} else if (/Macintosh|Mac OS X/.test(ua)) {
+			platform = 'macos';
+			// userAgentData.getHighEntropyValues is Chromium-only.
+			// On Firefox/Safari we leave arch as null and show a two-button fallback.
+			try {
+				const uaData = (navigator as any).userAgentData;
+				if (uaData?.getHighEntropyValues) {
+					const high = await uaData.getHighEntropyValues(['architecture']);
+					arch = high.architecture === 'arm' ? 'arm64' : 'x64';
+				}
+			} catch {
+				// arch stays null
+			}
+		} else if (/Linux/.test(ua) && !/Android|CrOS/.test(ua)) {
+			platform = 'linux';
+			// navigator.platform is more reliable than UA for Linux arch
+			// e.g. Firefox reports "Linux aarch64" on ARM64
+			const plt = navigator.platform ?? '';
+			arch = /aarch64|arm/i.test(plt) || /aarch64/i.test(ua) ? 'arm64' : 'x64';
+		}
+
+		// --- Show the right primary state ---
+		const detecting = document.getElementById('dl-detecting');
+		if (detecting) detecting.hidden = true;
+
+		let stateId: string;
+		if (platform === 'macos' && arch !== null) {
+			stateId = `dl-macos-${arch}`;     // specific arch detected
+		} else if (platform === 'macos') {
+			stateId = 'dl-macos';              // macOS but arch unknown → show both buttons
+		} else {
+			stateId = `dl-${platform}`;        // windows / linux / unknown
+		}
+
+		const el = document.getElementById(stateId) ?? document.getElementById('dl-unknown');
+		if (el) el.hidden = false;
+
+		// --- Linux modal wiring ---
+		const modal = document.getElementById('linux-modal') as HTMLDialogElement | null;
+		if (!modal) return;
+
+		let linuxArch: 'x64' | 'arm64' = arch === 'arm64' ? 'arm64' : 'x64';
+
+		function updateModalArch(a: 'x64' | 'arm64') {
+			linuxArch = a;
+			const archName = document.getElementById('modal-arch-name');
+			const switchBtn = document.getElementById('modal-switch-arch');
+			if (archName) archName.textContent = a === 'x64' ? 'x86_64' : 'ARM64';
+			if (switchBtn) switchBtn.textContent = `Switch to ${a === 'x64' ? 'ARM64' : 'x86_64'}`;
+			modal?.querySelectorAll<HTMLAnchorElement>('.modal-opt').forEach((opt) => {
+				const url = a === 'x64' ? opt.dataset.x64 : opt.dataset.arm64;
+				if (url) opt.href = url;
+			});
+		}
+
+		updateModalArch(linuxArch);
+
+		document.getElementById('modal-switch-arch')?.addEventListener('click', () => {
+			updateModalArch(linuxArch === 'x64' ? 'arm64' : 'x64');
+		});
+
+		document.getElementById('linux-open-modal')?.addEventListener('click', () => {
+			modal.showModal();
+		});
+
+		document.getElementById('linux-close-modal')?.addEventListener('click', () => {
+			modal.close();
+		});
+
+		modal.addEventListener('click', (e) => {
+			if (e.target === modal) modal.close();
+		});
+	})();
+</script>

@@ -1,0 +1,134 @@
+---
+title: Mode Config
+description: Reference for config.jsonc — the configuration file for a mode.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Each mode is described by a `config.jsonc` file at the root of the mode directory. The file uses
+[JSON with Comments](https://code.visualstudio.com/docs/languages/json#_json-with-comments) (JSONC)
+syntax. A JSON Schema is available at
+`https://lewdware.github.com/mode.schema.json` for editor autocompletion.
+
+## Example
+
+```jsonc
+{
+  "$schema": "https://lewdware.github.com/mode.schema.json",
+  "name": "My Mode",
+  "version": "1.0.0",
+  "author": "your-name",
+  "modes": {
+    "default": {
+      "name": "Default",
+      "entrypoint": "src/main.lua",
+      "options": {
+        "popup_frequency": {
+          "label": "Popup frequency (seconds)",
+          "description": "How often popups appear",
+          "type": "number",
+          "default": 1,
+          "min": 0.1,
+          "max": 10,
+          "step": 0.1
+        }
+      }
+    }
+  }
+}
+```
+
+## Top-level fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | `string` | Yes | The display name of the mode file. |
+| `version` | `string` | No | Version string, e.g. `"1.0.0"`. |
+| `author` | `string` | No | Author name. |
+| `include` | `string[]` | No | Paths of additional directories or files to bundle (e.g. `["src"]`). |
+| `modes` | `object` | Yes | Map of mode keys to [mode definitions](#mode). |
+
+## Mode
+
+Each key in `modes` is an arbitrary identifier (used internally). The value is a mode object:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | `string` | Yes | The display name shown to the user in the config app. |
+| `entrypoint` | `string` | Yes | Path to the main Lua file, relative to the config file. |
+| `options` | `object` | No | Map of option keys to [option definitions](#options). |
+
+A mode file can define multiple modes in a single `modes` map. Lewdware will present each to the
+user as a separate selectable mode.
+
+## Options
+
+Options expose configurable values to the user. At runtime, each option's current value is
+accessible in Lua as `lewdware.config["key"]`, where `"key"` is the option's key in the `options`
+map.
+
+All option types share these base fields:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `label` | `string` | Yes | Label shown to the user in the config app. |
+| `description` | `string` | No | Optional explanation shown below the label. |
+| `type` | `string` | Yes | One of `"integer"`, `"number"`, `"string"`, `"boolean"`, `"enum"`. |
+
+The remaining fields depend on `type`:
+
+<Tabs>
+  <TabItem label="integer">
+    | Field | Type | Required | Description |
+    |---|---|---|---|
+    | `default` | `integer` | Yes | Default value. |
+    | `min` | `integer` | No | Minimum allowed value. |
+    | `max` | `integer` | No | Maximum allowed value. |
+    | `step` | `integer` | No | Increment step. |
+    | `clamp` | `boolean` | No | Whether to clamp the value to `[min, max]`. |
+    | `slider` | `boolean` | No | Whether to show a slider in the UI. |
+  </TabItem>
+  <TabItem label="number">
+    | Field | Type | Required | Description |
+    |---|---|---|---|
+    | `default` | `number` | Yes | Default value. |
+    | `min` | `number` | No | Minimum allowed value. |
+    | `max` | `number` | No | Maximum allowed value. |
+    | `step` | `number` | No | Increment step. |
+    | `clamp` | `boolean` | No | Whether to clamp the value to `[min, max]`. |
+    | `slider` | `boolean` | No | Whether to show a slider in the UI. |
+  </TabItem>
+  <TabItem label="string">
+    | Field | Type | Required | Description |
+    |---|---|---|---|
+    | `default` | `string` | Yes | Default value. |
+  </TabItem>
+  <TabItem label="boolean">
+    | Field | Type | Required | Description |
+    |---|---|---|---|
+    | `default` | `boolean` | Yes | Default value (`true` or `false`). |
+  </TabItem>
+  <TabItem label="enum">
+    An enum presents the user with a fixed set of choices.
+
+    | Field | Type | Required | Description |
+    |---|---|---|---|
+    | `values` | `object` | Yes | Map of value keys to display labels. Must have at least one entry. |
+    | `default` | `string` | Yes | Default value key (must be a key in `values`). |
+
+    ```jsonc
+    "theme": {
+      "label": "Theme",
+      "type": "enum",
+      "values": {
+        "dark": "Dark",
+        "light": "Light",
+        "auto": "Follow system"
+      },
+      "default": "auto"
+    }
+    ```
+
+    The runtime value of `lewdware.config["theme"]` will be the selected key (e.g. `"dark"`).
+  </TabItem>
+</Tabs>

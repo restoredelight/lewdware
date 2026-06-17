@@ -1,0 +1,418 @@
+---
+import { readFileSync } from 'node:fs';
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { createHighlighter } from 'shiki';
+import { parseLuaCATS } from '../../lib/parse-luacats';
+import type { Func } from '../../lib/parse-luacats';
+
+const apiSource = readFileSync(
+	new URL('../../../../shared/src/lua/api.lua', import.meta.url),
+	'utf-8',
+);
+const api = parseLuaCATS(apiSource);
+
+// Shiki highlighter for function/method signatures (build-time, no client JS)
+const hl = await createHighlighter({ themes: ['github-dark', 'github-light'], langs: ['lua'] });
+
+function highlight(code: string): string {
+	return hl.codeToHtml(code, {
+		lang: 'lua',
+		themes: { dark: 'github-dark', light: 'github-light' },
+		defaultColor: false,
+	});
+}
+
+// Build a set of known type names for cross-linking
+const knownTypes = new Set<string>([
+	...api.aliases.map((a) => a.name),
+	...api.classes.map((c) => c.name),
+]);
+
+// Render a text string:
+// - wraps uppercase type names in anchor links
+// - converts [label](lua://TypeName) LuaCATS reference links to HTML anchors
+// Returns an HTML string safe for use with set:html.
+function linkTypes(text: string): string {
+	// First handle explicit [label](lua://TypeName) links
+	let result = text.replace(
+		/\[([^\]]+)\]\(lua:\/\/([^)]+)\)/g,
+		(_, label, target) => {
+			const slug = target.toLowerCase().replace(/[.:]/g, '-');
+			return `<a href="#${slug}">${label}</a>`;
+		},
+	);
+	// Then auto-link bare uppercase identifiers that match known types
+	result = result.replace(/\b([A-Z][a-zA-Z0-9]*)\b/g, (match) =>
+		knownTypes.has(match) ? `<a href="#${match.toLowerCase()}">${match}</a>` : match,
+	);
+	return result;
+}
+
+function buildSignature(func: Func): string {
+	const params = func.params
+		.map((p) => `${p.name}${p.optional ? '?' : ''}: ${p.type}`)
+		.join(', ');
+	const ret = func.returnType ? `: ${func.returnType}` : '';
+	return `function ${func.fullName}(${params})${ret}`;
+}
+
+function funcSlug(fullName: string): string {
+	return fullName.replace(/[.:]/g, '-').toLowerCase();
+}
+
+// Classes to render in the Types section (exclude pure-namespace accessor classes)
+const optionsClassNames = new Set(['LewdwareMedia', 'LewdwareMonitors']);
+const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Lua API',
+		description: 'Complete API reference for the lewdware Lua scripting environment.',
+		tableOfContents: { maxHeadingLevel: 4 },
+	}}
+	headings={[
+		{ depth: 2, slug: 'functions', text: 'Functions' },
+		...api.namespaces.flatMap((ns) => [
+			{ depth: 3, slug: ns.name.replace(/\./g, '-'), text: ns.name },
+			...ns.functions.map((f) => ({ depth: 4, slug: funcSlug(f.fullName), text: `${f.name}()` })),
+		]),
+		{ depth: 2, slug: 'types', text: 'Types' },
+		...mainClasses.map((c) => ({ depth: 3, slug: c.name.toLowerCase(), text: c.name })),
+		{ depth: 2, slug: 'aliases', text: 'Aliases' },
+		...api.aliases.map((a) => ({ depth: 3, slug: a.name.toLowerCase(), text: a.name })),
+	]}
+>
+	<p>
+		This page documents the <code>lewdware</code> global table and all types available in a mode's
+		Lua environment. Annotations follow the <a href="https://luals.github.io/wiki/annotations/">LuaLS</a> convention.
+	</p>
+
+	{/* ------------------------------------------------------------------ */}
+	{/* FUNCTIONS                                                            */}
+	{/* ------------------------------------------------------------------ */}
+	<h2 id="functions">Functions</h2>
+
+	{api.namespaces.map((ns) => (
+		<section>
+			<h3 id={ns.name.replace(/\./g, '-')}>{ns.name}</h3>
+
+			{ns.functions.map((func) => (
+				<div class="api-entry">
+					<h4 id={funcSlug(func.fullName)} class="fn-heading">{func.name}()</h4>
+					<div class="api-sig" set:html={highlight(buildSignature(func))} />
+
+					{func.desc && (
+						<p class="api-desc" set:html={func.desc.replace(/\n/g, '<br>')} />
+					)}
+
+					{func.params.length > 0 && (
+						<table class="api-table">
+							<thead>
+								<tr>
+									<th>Parameter</th>
+									<th>Type</th>
+									<th>Description</th>
+								</tr>
+							</thead>
+							<tbody>
+								{func.params.map((p) => (
+									<tr>
+										<td>
+											<code>{p.name}{p.optional ? '?' : ''}</code>
+										</td>
+										<td>
+											<span set:html={linkTypes(p.type)} />
+										</td>
+										<td set:html={p.desc ? linkTypes(p.desc) : ''} />
+									</tr>
+								))}
+							</tbody>
+						</table>
+					)}
+
+					{func.returnType && (
+						<p class="api-return">
+							<strong>Returns:</strong>{' '}
+							<span set:html={linkTypes(func.returnType)} />
+						</p>
+					)}
+				</div>
+			))}
+		</section>
+	))}
+
+	{/* ------------------------------------------------------------------ */}
+	{/* TYPES                                                                */}
+	{/* ------------------------------------------------------------------ */}
+	<h2 id="types">Types</h2>
+
+	{mainClasses.map((cls) => (
+		<section class="type-section">
+			<h3 id={cls.name.toLowerCase()}>
+				{cls.name}
+				{cls.parent && (
+					<span class="type-parent">
+						{' '}extends{' '}
+						<a href={`#${cls.parent.toLowerCase()}`}>{cls.parent}</a>
+					</span>
+				)}
+			</h3>
+
+			{cls.desc && <p set:html={linkTypes(cls.desc)} />}
+
+			{cls.fields.length > 0 && (
+				<>
+					<h4 class="subsection-heading">Fields</h4>
+					<table class="api-table">
+						<thead>
+							<tr>
+								<th>Field</th>
+								<th>Type</th>
+								<th>Description</th>
+							</tr>
+						</thead>
+						<tbody>
+							{cls.fields.map((f) => (
+								<tr>
+									<td>
+										<code>{f.name}{f.optional ? '?' : ''}</code>
+									</td>
+									<td>
+										<span set:html={linkTypes(f.type)} />
+									</td>
+									<td set:html={f.desc ? linkTypes(f.desc) : ''} />
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</>
+			)}
+
+			{cls.methods.length > 0 && (
+				<>
+					<h4 class="subsection-heading">Methods</h4>
+					{cls.methods.map((method) => (
+						<div class="api-entry api-method">
+							<div class="api-sig" set:html={highlight(buildSignature(method))} />
+
+							{method.desc && (
+								<p class="api-desc" set:html={method.desc.replace(/\n/g, '<br>')} />
+							)}
+
+							{method.params.filter((p) => p.name !== 'self').length > 0 && (
+								<table class="api-table">
+									<thead>
+										<tr>
+											<th>Parameter</th>
+											<th>Type</th>
+											<th>Description</th>
+										</tr>
+									</thead>
+									<tbody>
+										{method.params
+											.filter((p) => p.name !== 'self')
+											.map((p) => (
+												<tr>
+													<td>
+														<code>{p.name}{p.optional ? '?' : ''}</code>
+													</td>
+													<td>
+														<span set:html={linkTypes(p.type)} />
+													</td>
+													<td set:html={p.desc ? linkTypes(p.desc) : ''} />
+												</tr>
+											))}
+									</tbody>
+								</table>
+							)}
+
+							{method.returnType && (
+								<p class="api-return">
+									<strong>Returns:</strong>{' '}
+									<span set:html={linkTypes(method.returnType)} />
+								</p>
+							)}
+						</div>
+					))}
+				</>
+			)}
+		</section>
+	))}
+
+	{/* ------------------------------------------------------------------ */}
+	{/* ALIASES                                                              */}
+	{/* ------------------------------------------------------------------ */}
+	<h2 id="aliases">Aliases</h2>
+
+	<dl class="alias-list">
+		{api.aliases.map((alias) => (
+			<>
+				<dt id={alias.name.toLowerCase()}>
+					<code>{alias.name}</code>
+				</dt>
+				<dd>
+					{alias.desc && <p>{alias.desc}</p>}
+					{alias.variants && alias.variants.length > 0 ? (
+						<div class="alias-variants">
+							{alias.variants.map((v) => (
+								<code class="alias-variant">{v}</code>
+							))}
+						</div>
+					) : alias.type ? (
+						<code set:html={linkTypes(alias.type)} />
+					) : null}
+				</dd>
+			</>
+		))}
+	</dl>
+</StarlightPage>
+
+<style>
+	/* API entry block */
+	.api-entry {
+		margin-block: 1.5rem 2.5rem;
+		padding: 0;
+	}
+
+	.api-method {
+		border-left: 2px solid var(--sl-color-hairline);
+		padding-left: 1rem;
+		margin-block: 1rem 1.5rem;
+	}
+
+	/* Shiki-highlighted signature block */
+	.api-sig :global(pre.shiki) {
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.375rem;
+		padding: 0.625rem 1rem;
+		overflow-x: auto;
+		margin: 0 0 0.5rem;
+		font-size: 0.875rem;
+	}
+
+	/* Dual-theme color switching — Starlight sets data-theme on <html> */
+	:root[data-theme='light'] .api-sig :global(.shiki) {
+		background-color: var(--shiki-light-bg) !important;
+		color: var(--shiki-light) !important;
+	}
+	:root[data-theme='light'] .api-sig :global(.shiki span) {
+		color: var(--shiki-light) !important;
+	}
+	:root[data-theme='dark'] .api-sig :global(.shiki) {
+		background-color: var(--shiki-dark-bg) !important;
+		color: var(--shiki-dark) !important;
+	}
+	:root[data-theme='dark'] .api-sig :global(.shiki span) {
+		color: var(--shiki-dark) !important;
+	}
+
+	/* Individual function heading inside each namespace section */
+	.fn-heading {
+		font-family: var(--sl-font-mono, monospace);
+		font-size: 0.95rem;
+		font-weight: 600;
+		color: var(--sl-color-text-accent);
+		margin-block: 2rem 0.35rem;
+		border: none;
+	}
+
+	.api-desc {
+		margin-block: 0.25rem 0.75rem;
+		color: var(--sl-color-text);
+	}
+
+	.api-return {
+		margin-block: 0.5rem 0;
+		font-size: 0.9rem;
+	}
+
+	/* Tables */
+	.api-table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 0.875rem;
+		margin-block: 0.5rem 1rem;
+	}
+
+	.api-table th {
+		text-align: left;
+		padding: 0.375rem 0.75rem;
+		border-bottom: 1px solid var(--sl-color-hairline);
+		font-weight: 600;
+		color: var(--sl-color-gray-2);
+		font-size: 0.8rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+
+	.api-table td {
+		padding: 0.375rem 0.75rem;
+		border-bottom: 1px solid var(--sl-color-hairline-light, var(--sl-color-hairline));
+		vertical-align: top;
+	}
+
+	.api-table tr:last-child td {
+		border-bottom: none;
+	}
+
+	/* Type section */
+	.type-section {
+		margin-block: 2rem 3rem;
+	}
+
+	.type-parent {
+		font-size: 0.85em;
+		font-weight: 400;
+		color: var(--sl-color-gray-3);
+	}
+
+	.subsection-heading {
+		font-size: 0.9rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--sl-color-gray-2);
+		margin-block: 1.25rem 0.5rem;
+		border: none;
+	}
+
+	/* Aliases */
+	.alias-list {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 0.25rem 1.5rem;
+		align-items: start;
+		margin-block: 1rem;
+	}
+
+	.alias-list dt {
+		padding-top: 0.5rem;
+		font-weight: 600;
+	}
+
+	.alias-list dd {
+		margin: 0;
+		padding-block: 0.5rem;
+		border-bottom: 1px solid var(--sl-color-hairline-light, var(--sl-color-hairline));
+	}
+
+	.alias-list dt:last-of-type ~ dd {
+		border-bottom: none;
+	}
+
+	.alias-variants {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem;
+		margin-top: 0.375rem;
+	}
+
+	.alias-variant {
+		background: var(--sl-color-bg-nav);
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.375rem;
+		padding: 0.125rem 0.5rem;
+		font-size: 0.85rem;
+	}
+</style>
