@@ -70,10 +70,12 @@ impl Mode {
                     .try_borrow_mut()?
                     .insert(path.clone(), sender.clone().downgrade());
 
-                let file: String = read_source_file(&mut *self.file.try_borrow_mut()?, source_file)?;
+                let file: String =
+                    read_source_file(&mut *self.file.try_borrow_mut()?, source_file)?;
 
                 let result: mlua::Value = lua
                     .load(file)
+                    .set_mode(mlua::ChunkMode::Text)
                     .set_name(format!("@{path}"))
                     .eval_async()
                     .await?;
@@ -84,7 +86,9 @@ impl Mode {
                     result
                 };
 
-                self.cache.try_borrow_mut()?.insert(path, final_value.clone());
+                self.cache
+                    .try_borrow_mut()?
+                    .insert(path, final_value.clone());
 
                 let _ = sender.send(());
 
@@ -99,7 +103,10 @@ impl Mode {
         if let Some(source_file) = self.files.get(&path) {
             let file: String = read_source_file(&mut *self.file.try_borrow_mut()?, source_file)?;
 
-            Ok(lua.load(file).set_name(format!("@{path}")))
+            Ok(lua
+                .load(file)
+                .set_mode(mlua::ChunkMode::Text)
+                .set_name(format!("@{path}")))
         } else {
             bail!("File {path} not found");
         }

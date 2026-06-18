@@ -9,7 +9,7 @@ mod window;
 use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, sync::Arc, thread};
 
 use anyhow::bail;
-use mlua::{ExternalResult, Lua};
+use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
     mode::{Metadata, OptionValue, read_mode_metadata},
     user_config::AppConfig,
@@ -62,61 +62,6 @@ pub struct WindowProps {
 
 pub type Windows = Rc<RefCell<HashMap<WindowId, Window>>>;
 pub type AudioHandles = Rc<RefCell<HashMap<u64, Rc<AudioHandle>>>>;
-
-// impl IntoLua for Window {
-//     fn into_lua(self, lua: &Lua) -> mlua::Result<mlua::Value> {
-//         match self {
-//             Window::Image(image_window) => image_window.into_lua(lua),
-//             Window::Video(video_window) => video_window.into_lua(lua),
-//             Window::Prompt(prompt_window) => prompt_window.into_lua(lua),
-//         }
-//     }
-// }
-
-// impl IntoLuaMulti for Window {
-//     fn into_lua_multi(self, lua: &Lua) -> mlua::Result<mlua::MultiValue> {
-//         self.into_lua(lua).into_lua_multi(lua)
-//     }
-// }
-
-// pub enum MediaResponse {
-//     Image,
-//     Video,
-//     Audio,
-//     Notification,
-//     Prompt,
-//     Link,
-//     Wallpaper,
-//     Error(String),
-//     None,
-// }
-
-// impl Event {
-//     fn from_response(response: &media::Response) -> Event {
-//         Event::MediaResponse {
-//             id: response.id,
-//             response: MediaResponse::new(&response.response),
-//         }
-//     }
-// }
-//
-// impl MediaResponse {
-//     fn new(value: &media::MediaResponse) -> Self {
-//         match value {
-//             media::MediaResponse::Media(media) => match media {
-//                 media::Media::Image(image) => MediaResponse::Image,
-//                 media::Media::Video(video) => MediaResponse::Video,
-//             },
-//             media::MediaResponse::Audio(audio) => MediaResponse::Audio,
-//             media::MediaResponse::Notification(notification) => MediaResponse::Notification,
-//             media::MediaResponse::Prompt(prompt) => MediaResponse::Prompt,
-//             media::MediaResponse::Link(link) => MediaResponse::Link,
-//             media::MediaResponse::Wallpaper(wallpaper) => MediaResponse::Wallpaper,
-//             media::MediaResponse::Error(error) => MediaResponse::Error(error.to_string()),
-//             media::MediaResponse::None => MediaResponse::None,
-//         }
-//     }
-// }
 
 pub fn start_lua_thread(
     event_loop_proxy: EventLoopProxy<UserEvent>,
@@ -267,9 +212,7 @@ impl LuaRuntime {
         media_manager: MediaManager,
         config: HashMap<String, OptionValue>,
     ) -> anyhow::Result<Self> {
-        let lua = Lua::new();
-
-        lua.sandbox(true)?;
+        let lua = create_sandboxed_lua()?;
 
         let mut runtime = Self {
             mode: Rc::new(mode),
@@ -371,7 +314,7 @@ impl LuaRuntime {
     }
 }
 
-fn print(_: &Lua, args: mlua::Variadic<mlua::Value>) -> std::result::Result<(), mlua::Error> {
+fn print(_: &Lua, args: mlua::Variadic<mlua::Value>) -> mlua::Result<()> {
     let args_str = args
         .into_iter()
         .map(|value| value.to_string())
@@ -380,4 +323,35 @@ fn print(_: &Lua, args: mlua::Variadic<mlua::Value>) -> std::result::Result<(), 
     tracing::info!("{}", args_str.join("\t"));
 
     Ok(())
+}
+
+fn create_sandboxed_lua() -> mlua::Result<Lua> {
+    let libs = StdLib::COROUTINE | StdLib::TABLE | StdLib::STRING | StdLib::UTF8 | StdLib::MATH | StdLib::OS;
+
+    let lua = Lua::new_with(libs, mlua::LuaOptions::default())?;
+
+    lua.globals().raw_remove("load")?;
+    lua.globals().raw_remove("loadstring")?;
+    lua.globals().raw_remove("loadfile")?;
+    lua.globals().raw_remove("dofile")?;
+
+    lua.globals().raw_remove("collectgarbage")?;
+    lua.globals().raw_remove("warn")?;
+    lua.globals().raw_remove("newproxy")?;
+    lua.globals().raw_remove("module")?;
+    lua.globals().raw_remove("getfenv")?;
+    lua.globals().raw_remove("setfenv")?;
+
+    lua.globals().get::<mlua::Table>("string")?.raw_remove("dump")?;
+
+    let os = lua.globals().get ::<mlua::Table>("os")?;
+    let sandboxed_os = lua.create_table()?;
+
+    for name in ["clock", "date", "difftime", "time"] {
+        sandboxed_os.set(name, os.get::<mlua::Value>(name)?)?;
+    }
+
+    lua.globals().set("os", sandboxed_os)?;
+
+    Ok(lua)
 }
