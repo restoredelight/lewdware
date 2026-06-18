@@ -3,10 +3,10 @@ use std::{
     io::{self, Cursor, Read, Seek, SeekFrom, Write},
 };
 
+use ciborium::{from_reader, into_writer};
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncSeek};
 use uuid::Uuid;
-
-use crate::pack_config::Metadata;
 
 pub const MAGIC: &[u8; 6] = b"LWPACK";
 pub const VERSION: u8 = 0;
@@ -19,6 +19,29 @@ pub struct Header {
     pub metadata_offset: u64,
     pub metadata_length: u64,
     pub id: Uuid,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+pub struct Metadata {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+impl Metadata {
+    pub fn to_buf(&self) -> Result<Vec<u8>, ciborium::ser::Error<io::Error>> {
+        let mut buf = Vec::new();
+        into_writer(self, &mut buf)?;
+        Ok(buf)
+    }
+
+    pub fn from_buf(buf: &[u8]) -> Result<Self, ciborium::de::Error<io::Error>> {
+        from_reader(buf)
+    }
 }
 
 #[derive(Debug)]

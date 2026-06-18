@@ -17,8 +17,7 @@ use serde::{Deserialize, Serialize};
 use shared::{
     db::migrate,
     encode::{FileInfo, FileInfoParts, FileType},
-    pack_config::Metadata,
-    read_pack::{Header, HEADER_SIZE},
+    read_pack::{HEADER_SIZE, Header, Metadata},
 };
 use tokio::{
     fs::{remove_file, File, OpenOptions},

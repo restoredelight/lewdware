@@ -1,8 +1,8 @@
 use crate::app::UserEvent;
 use std::{error::Error, fmt::Display, io, path::Path, rc::Rc, sync::Arc, thread};
+use shared::read_pack::Metadata;
 use winit::event_loop::EventLoopProxy;
 
-use shared::pack_config::Metadata;
 use tokio::{
     sync::{
         mpsc::{Sender, channel},

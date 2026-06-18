@@ -38,7 +38,7 @@ async fn check_for_update() -> Result<Option<String>, String> {
         Ok(None)
     }
 }
-use shared::pack_config::Metadata;
+use shared::read_pack::Metadata;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 

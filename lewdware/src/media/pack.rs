@@ -8,9 +8,7 @@ use std::{
 use image::{ImageFormat, ImageReader};
 use rusqlite::{Connection, Row, params, params_from_iter};
 use shared::{
-    db::migrate,
-    pack_config::Metadata,
-    read_pack::{Header, read_pack_metadata},
+    db::migrate, read_pack::{Header, Metadata, read_pack_metadata}
 };
 use tempfile::NamedTempFile;
 use tokio::{
