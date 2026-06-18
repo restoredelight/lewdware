@@ -280,6 +280,7 @@ impl WindowRequestSender {
     pub async fn set_opacity(&self, opacity: f32) -> Result<()> {
         self.send(|tx| WindowAction::SetOpacity { tx, opacity })
             .await
+            .flatten()
     }
 }
 
@@ -466,7 +467,7 @@ pub enum WindowAction {
         title: Option<String>,
     },
     SetOpacity {
-        tx: oneshot::Sender<()>,
+        tx: oneshot::Sender<Result<()>>,
         opacity: f32,
     },
 }

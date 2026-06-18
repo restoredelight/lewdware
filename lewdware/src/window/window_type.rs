@@ -46,6 +46,7 @@ impl<'a> WindowType<'a> {
             Self::Choice(choice_window) => &mut choice_window.inner_window,
         }
     }
+
 }
 
 /// A window displaying an image.
@@ -67,7 +68,7 @@ impl<'a> ImageWindow<'a> {
         let (gpu_renderer, frame_buffer) = if inner_window.is_gpu() {
             let outer_size = inner_window.outer_size();
             let frame_buffer = vec![0; (outer_size.width * outer_size.height * 4) as usize];
-            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity, inner_window.premultiplied_alpha());
+            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity, inner_window.premultiplied_alpha(), inner_window.force_opaque());
             (Some(gpu_renderer), frame_buffer)
         } else {
             (None, Vec::new())
@@ -161,6 +162,7 @@ impl<'a> VideoWindow<'a> {
                 outer_size.height,
                 inner_window.opacity,
                 inner_window.premultiplied_alpha(),
+                inner_window.force_opaque(),
             );
             (Some(gpu_renderer), ui_frame_buffer)
         } else {
@@ -363,6 +365,7 @@ impl<'a> PromptWindow<'a> {
                 inner_window.transparent(),
                 inner_window.opacity,
                 inner_window.premultiplied_alpha(),
+                inner_window.force_opaque(),
             )?;
             let decoration_overlay = if inner_window.decorations() {
                 let outer_size = inner_window.outer_size();
@@ -372,6 +375,7 @@ impl<'a> PromptWindow<'a> {
                     outer_size.height,
                     inner_window.premultiplied_alpha(),
                     inner_window.opacity,
+                    inner_window.force_opaque(),
                 ))
             } else {
                 None
@@ -597,6 +601,7 @@ impl<'a> ChoiceWindow<'a> {
                 inner_window.transparent(),
                 inner_window.opacity,
                 inner_window.premultiplied_alpha(),
+                inner_window.force_opaque(),
             )?;
             let decoration_overlay = if inner_window.decorations() {
                 let outer_size = inner_window.outer_size();
@@ -606,6 +611,7 @@ impl<'a> ChoiceWindow<'a> {
                     outer_size.height,
                     inner_window.premultiplied_alpha(),
                     inner_window.opacity,
+                    inner_window.force_opaque(),
                 ))
             } else {
                 None

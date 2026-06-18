@@ -22,6 +22,7 @@ pub struct GpuRenderer {
 struct WindowUniform {
     opacity: f32,
     premultiplied: u32,
+    force_opaque: u32,
 }
 
 pub enum GpuRendererType {
@@ -39,6 +40,7 @@ impl GpuRenderer {
         height: u32,
         opacity: f32,
         premultiplied_alpha: bool,
+        force_opaque: bool,
     ) -> Self {
         let device = &wgpu_state.device;
 
@@ -47,6 +49,7 @@ impl GpuRenderer {
             contents: bytemuck::bytes_of(&WindowUniform {
                 opacity,
                 premultiplied: premultiplied_alpha as u32,
+                force_opaque: force_opaque as u32,
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -109,6 +112,7 @@ impl GpuRenderer {
         ui_height: u32,
         opacity: f32,
         premultiplied_alpha: bool,
+        force_opaque: bool,
     ) -> Self {
         let device = &wgpu_state.device;
 
@@ -117,6 +121,7 @@ impl GpuRenderer {
             contents: bytemuck::bytes_of(&WindowUniform {
                 opacity,
                 premultiplied: premultiplied_alpha as u32,
+                force_opaque: force_opaque as u32,
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -625,6 +630,7 @@ impl DecorationOverlay {
         outer_height: u32,
         premultiplied_alpha: bool,
         opacity: f32,
+        force_opaque: bool,
     ) -> Self {
         let device = &wgpu_state.device;
 
@@ -666,6 +672,7 @@ impl DecorationOverlay {
                 contents: bytemuck::bytes_of(&WindowUniform {
                     opacity,
                     premultiplied: premultiplied_alpha as u32,
+                    force_opaque: force_opaque as u32,
                 }),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });

@@ -34,6 +34,10 @@ struct WindowOptions {
     // be pre-scaled by alpha. Otherwise (PostMultiplied, or Opaque where alpha is ignored by
     // the compositor entirely) rgb is emitted straight.
     premultiply: u32,
+    // Non-zero when the window was created non-transparent. Forces alpha = 1.0 in the output so
+    // that compositors which ignore CompositeAlphaMode::Opaque (e.g. some X11 compositors) cannot
+    // accidentally show the desktop through transparent pixels.
+    force_opaque: u32,
 }
 @group(1) @binding(0) var<uniform> options: WindowOptions;
 
@@ -45,6 +49,9 @@ fn gamma_decode(c: f32) -> f32 {
 }
 
 fn premultiply(rgb: vec3<f32>, alpha: f32) -> vec4<f32> {
+    if options.force_opaque != 0u {
+        return vec4<f32>(rgb * alpha, 1.0);
+    }
     if options.premultiply != 0u {
         return vec4<f32>(rgb * alpha, alpha);
     }

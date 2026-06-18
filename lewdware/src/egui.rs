@@ -33,6 +33,7 @@ impl EguiGpuRenderer {
         transparent: bool,
         opacity: f32,
         premultiplied_alpha: bool,
+        force_opaque: bool,
     ) -> Result<Self> {
         let context = egui::Context::default();
         let viewport_id = egui::ViewportId::from_hash_of(window.id());
@@ -75,6 +76,7 @@ impl EguiGpuRenderer {
         struct WindowUniform {
             opacity: f32,
             premultiplied: u32,
+            force_opaque: u32,
         }
 
         let opacity_buffer =
@@ -85,6 +87,7 @@ impl EguiGpuRenderer {
                     contents: bytemuck::bytes_of(&WindowUniform {
                         opacity,
                         premultiplied: premultiplied_alpha as u32,
+                        force_opaque: force_opaque as u32,
                     }),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });

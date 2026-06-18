@@ -13,12 +13,17 @@ pub struct Media {
 #[serde(tag = "type")]
 pub enum MediaData {
     #[serde(rename = "image")]
-    Image { width: u32, height: u32 },
+    Image {
+        width: u32,
+        height: u32,
+        transparent: bool,
+    },
     #[serde(rename = "video")]
     Video {
         width: u32,
         height: u32,
         duration: f64,
+        transparent: bool,
     },
     #[serde(rename = "audio")]
     Audio { duration: f64 },

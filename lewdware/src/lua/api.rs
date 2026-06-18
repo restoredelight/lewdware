@@ -583,7 +583,7 @@ pub struct SpawnWindowOpts {
     #[serde(default)]
     pub opacity: Option<f32>,
     #[serde(default)]
-    pub transparent: bool,
+    pub transparent: Option<bool>,
     #[serde(default)]
     pub click_through: bool,
 }
@@ -602,7 +602,7 @@ impl Default for SpawnWindowOpts {
             closeable: true,
             visible: true,
             opacity: None,
-            transparent: false,
+            transparent: None,
             click_through: false,
         }
     }
@@ -629,10 +629,18 @@ async fn spawn_image_popup(
 ) -> mlua::Result<Rc<ImageWindow>> {
     let mut opts = opts.unwrap_or_default();
 
-    let (image_width, image_height) = match image.media_data {
-        MediaData::Image { width, height } => (width, height),
+    let (image_width, image_height, media_transparent) = match image.media_data {
+        MediaData::Image { width, height, transparent } => (width, height, transparent),
         _ => return Err("`image` is not an image".into_lua_err()),
     };
+
+    if opts.window_opts.transparent.is_none() {
+        let needs_transparent = media_transparent
+            || opts.window_opts.opacity.map_or(false, |o| o < 1.0);
+        if needs_transparent {
+            opts.window_opts.transparent = Some(true);
+        }
+    }
 
     let monitor = match &opts.window_opts.monitor {
         Some(monitor) => request_sender
@@ -717,12 +725,20 @@ async fn spawn_video_popup(
     request_sender: RequestSender,
     windows: Windows,
 ) -> mlua::Result<Rc<VideoWindow>> {
-    let opts = opts.unwrap_or_default();
+    let mut opts = opts.unwrap_or_default();
 
-    match video.media_data {
-        MediaData::Video { .. } => {}
+    let media_transparent = match video.media_data {
+        MediaData::Video { transparent, .. } => transparent,
         _ => return Err("`video` is not an video".into_lua_err()),
     };
+
+    if opts.window_opts.transparent.is_none() {
+        let needs_transparent = media_transparent
+            || opts.window_opts.opacity.map_or(false, |o| o < 1.0);
+        if needs_transparent {
+            opts.window_opts.transparent = Some(true);
+        }
+    }
 
     let data = media_manager
         .get_video_data(video.id, opts.loop_video, opts.audio)

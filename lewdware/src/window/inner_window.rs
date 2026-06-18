@@ -32,6 +32,7 @@ pub struct InnerWindow<'a> {
     // Whether the surface's CompositeAlphaMode is PreMultiplied (vs. PostMultiplied/Opaque).
     // Tells the fragment shaders whether they need to pre-scale rgb by alpha themselves.
     premultiplied_alpha: bool,
+    force_opaque: bool,
     current_fade: Option<Fade>,
     pub opacity: f32,
 }
@@ -63,6 +64,7 @@ impl<'a> InnerWindow<'a> {
         closeable: bool,
         gpu: bool,
         transparent: bool,
+        force_opaque: bool,
         opacity: Option<f32>,
         position: LogicalPosition<u32>,
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
@@ -166,6 +168,7 @@ impl<'a> InnerWindow<'a> {
             wgpu_state,
             transparent,
             premultiplied_alpha,
+            force_opaque,
             current_fade: None,
             opacity: opacity.unwrap_or(1.0),
         })
@@ -636,6 +639,10 @@ impl<'a> InnerWindow<'a> {
     /// or Opaque where alpha is ignored by the compositor entirely) they should emit it straight.
     pub fn premultiplied_alpha(&self) -> bool {
         self.premultiplied_alpha
+    }
+
+    pub fn force_opaque(&self) -> bool {
+        self.force_opaque
     }
 
     pub fn decorations(&self) -> bool {

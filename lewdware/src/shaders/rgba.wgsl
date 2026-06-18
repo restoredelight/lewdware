@@ -33,6 +33,10 @@ struct WindowOptions {
     // be pre-scaled by alpha. Otherwise (PostMultiplied, or Opaque where alpha is ignored by
     // the compositor entirely) rgb is emitted straight.
     premultiply: u32,
+    // Non-zero when the window was created non-transparent. Forces alpha = 1.0 in the output so
+    // that compositors which ignore CompositeAlphaMode::Opaque (e.g. some X11 compositors) cannot
+    // accidentally show the desktop through transparent pixels.
+    force_opaque: u32,
 }
 @group(1) @binding(0) var<uniform> options: WindowOptions;
 
@@ -40,6 +44,10 @@ struct WindowOptions {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let color = textureSample(t_diffuse, s_diffuse, in.uv);
     let alpha = color.a * options.opacity;
+    if options.force_opaque != 0u {
+        // Composite against the black clear colour and output a fully-opaque pixel.
+        return vec4<f32>(color.rgb * alpha, 1.0);
+    }
     if options.premultiply != 0u {
         return vec4<f32>(color.rgb * alpha, alpha);
     }

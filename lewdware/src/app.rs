@@ -119,12 +119,14 @@ impl<'a> ChaosApp<'a> {
         opts: SpawnWindowOpts,
         size_behaviour: WindowSizeBehaviour,
         mut gpu: bool,
+        transparent: bool,
         event_loop: &ActiveEventLoop,
     ) -> Result<(InnerWindow<'a>, WindowProps)> {
         if self.wgpu_state.is_none() {
             gpu = false;
         }
-        let transparent = opts.transparent && gpu;
+        let transparent = transparent && gpu;
+        let force_opaque = opts.transparent == Some(false);
         let monitor_info = match opts.monitor {
             Some(x) => x,
             None => self.monitors.random(event_loop)?,
@@ -244,6 +246,7 @@ impl<'a> ChaosApp<'a> {
             opts.closeable,
             gpu,
             transparent,
+            force_opaque,
             opts.opacity,
             LogicalPosition::new(x, y),
             self.lua_event_tx.clone(),
@@ -260,13 +263,15 @@ impl<'a> ChaosApp<'a> {
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
         tracing::info!("Windows: {}", self.windows.len());
+        let transparent = opts.transparent.unwrap_or(false);
         let (window, props) = self.create_window(
             opts.clone(),
             WindowSizeBehaviour::ResizeWithMedia {
                 width: data.width(),
                 height: data.height(),
             },
-            opts.transparent,
+            transparent,
+            transparent,
             event_loop,
         )?;
 
@@ -288,6 +293,9 @@ impl<'a> ChaosApp<'a> {
         opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
+        let auto_transparent =
+            video_player.packed_alpha() || opts.opacity.map_or(false, |o| o < 1.0);
+        let transparent = opts.transparent.unwrap_or(auto_transparent);
         let (window, props) = self.create_window(
             opts,
             WindowSizeBehaviour::ResizeWithMedia {
@@ -295,6 +303,7 @@ impl<'a> ChaosApp<'a> {
                 height: video_player.height() as u32,
             },
             true,
+            transparent,
             event_loop,
         )?;
 
@@ -319,14 +328,16 @@ impl<'a> ChaosApp<'a> {
         window_opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
-        let gpu = window_opts.transparent;
+        let auto_transparent = window_opts.opacity.map_or(false, |o| o < 1.0);
+        let transparent = window_opts.transparent.unwrap_or(auto_transparent);
         let (window, props) = self.create_window(
             window_opts,
             WindowSizeBehaviour::UseDefaults {
                 width: 400,
                 height: 400,
             },
-            gpu,
+            transparent,
+            transparent,
             event_loop,
         )?;
 
@@ -346,14 +357,16 @@ impl<'a> ChaosApp<'a> {
         window_opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
-        let gpu = window_opts.transparent;
+        let auto_transparent = window_opts.opacity.map_or(false, |o| o < 1.0);
+        let transparent = window_opts.transparent.unwrap_or(auto_transparent);
         let (window, props) = self.create_window(
             window_opts,
             WindowSizeBehaviour::UseDefaults {
                 width: 400,
                 height: 400,
             },
-            gpu,
+            transparent,
+            transparent,
             event_loop,
         )?;
 
@@ -563,12 +576,34 @@ impl<'a> ChaosApp<'a> {
                             .send(entry.get_mut().inner_window_mut().set_title(title))
                             .is_ok(),
                         WindowAction::SetOpacity { tx, opacity } => {
-                            entry.get_mut().inner_window_mut().set_opacity(opacity);
-                            tx.send(()).is_ok()
+                            let window = entry.get_mut();
+                            let result = if opacity != 1.0 && !window.inner_window().transparent() {
+                                Err(LewdwareError::Internal(
+                                    "Cannot change opacity on a non-transparent window. \
+                                     Ensure the window is created with transparency enabled: \
+                                     use media that has an alpha channel, set `opacity` to a \
+                                     value below 1.0, or set `transparent = true`.",
+                                ))
+                            } else {
+                                window.inner_window_mut().set_opacity(opacity);
+                                Ok(())
+                            };
+                            tx.send(result).is_ok()
                         }
-                        WindowAction::Fade { id, tx, opts } => tx
-                            .send(entry.get_mut().inner_window_mut().start_fade(id, opts))
-                            .is_ok(),
+                        WindowAction::Fade { id, tx, opts } => {
+                            let window = entry.get_mut();
+                            let result = if !window.inner_window().transparent() {
+                                Err(LewdwareError::Internal(
+                                    "Cannot fade a non-transparent window. \
+                                     Ensure the window is created with transparency enabled: \
+                                     use media that has an alpha channel, set `opacity` to a \
+                                     value below 1.0, or set `transparent = true`.",
+                                ))
+                            } else {
+                                window.inner_window_mut().start_fade(id, opts)
+                            };
+                            tx.send(result).is_ok()
+                        }
                     }
                 } else {
                     true

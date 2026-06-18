@@ -102,7 +102,7 @@ impl MediaPack {
 
     fn build_sql(&self, opts: MediaOpts) -> Result<(String, Vec<Box<dyn rusqlite::ToSql + '_>>)> {
         let mut sql = "
-            SELECT id, file_name, file_type, offset, length, width, height, duration, audio
+            SELECT id, file_name, file_type, offset, length, width, height, duration, audio, transparent
             FROM media
         "
         .to_string();
@@ -364,11 +364,13 @@ fn parse_media(row: &Row<'_>) -> Result<Media> {
         "image" => MediaData::Image {
             width: row.get("width")?,
             height: row.get("height")?,
+            transparent: row.get::<_, Option<bool>>("transparent")?.unwrap_or(false),
         },
         "video" => MediaData::Video {
             width: row.get("width")?,
             height: row.get("height")?,
             duration: row.get("duration")?,
+            transparent: row.get::<_, Option<bool>>("transparent")?.unwrap_or(false),
         },
         "audio" => MediaData::Audio {
             duration: row.get("duration")?,
