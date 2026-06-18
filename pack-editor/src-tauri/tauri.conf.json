@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "lewdware-pack-editor",
-  "version": "0.1.0",
   "identifier": "com..lewdware-pack-editor",
   "build": {
     "beforeDevCommand": "pnpm dev",

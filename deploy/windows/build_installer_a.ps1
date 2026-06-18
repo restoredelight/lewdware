@@ -3,7 +3,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$VERSION = "0.1.0"
+$VERSION = (Select-String -Path "Cargo.toml" -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
 $STAGE_DIR = "build/win-stage"
 $OUTPUT_DIR = "dist"
 
@@ -104,6 +104,6 @@ if ($isccCmd) {
     exit 1
 }
 
-& $ISCC deploy\windows\installer_a.iss
+& $ISCC "/DAppVersion=$VERSION" deploy\windows\installer_a.iss
 Check-LastExitCode
 Write-Host "SUCCESS: Installer created in dist/"

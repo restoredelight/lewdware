@@ -1,4 +1,5 @@
 mod mode;
+mod update;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -20,6 +21,12 @@ enum Commands {
         #[command(subcommand)]
         command: ModeCommand,
     },
+    /// Check for and install updates
+    Update {
+        /// Download and install the update
+        #[arg(long)]
+        install: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -27,5 +34,6 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Mode { command } => handle_mode_command(command),
+        Commands::Update { install } => update::run(install),
     }
 }

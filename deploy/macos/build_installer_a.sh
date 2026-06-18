@@ -6,7 +6,7 @@ set -e
 # Configuration
 APP_NAME="Lewdware"
 BUNDLE_ID="com.lewdware"
-VERSION="0.1.0"
+VERSION=$(grep '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
 ARCH=$(uname -m)
 BUILD_DIR="build/stage"
 OUTPUT_DIR="dist"

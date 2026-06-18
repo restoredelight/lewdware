@@ -1,6 +1,6 @@
 [package]
 name = "lw"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 
 [target.'cfg(unix)'.dependencies]
@@ -17,3 +17,4 @@ shared = { version = "0.1.0", path = "../shared" }
 walkdir = "2.5.0"
 which = "8.0.0"
 zstd = "0.13.3"
+ureq = { version = "2", features = ["json"] }

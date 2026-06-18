@@ -9,6 +9,37 @@ use std::{
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use serde::{Deserialize, Serialize};
+
+// ─── Update check ─────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct UpdateManifest {
+    version: String,
+    download_page: String,
+}
+
+fn parse_version(v: &str) -> (u32, u32, u32) {
+    let mut parts = v.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
+#[tauri::command]
+async fn check_for_update() -> Result<Option<String>, String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let resp = reqwest::get("https://lewdware.net/download/latest.json")
+        .await
+        .map_err(|e| e.to_string())?;
+    let manifest: UpdateManifest = resp.json().await.map_err(|e| e.to_string())?;
+    if parse_version(&manifest.version) > parse_version(current) {
+        Ok(Some(manifest.download_page))
+    } else {
+        Ok(None)
+    }
+}
 use serde_json::Value as JsonValue;
 use shared::{
     db::migrate,
@@ -794,6 +825,7 @@ pub fn run() {
             stop_lewdware,
             lewdware_running,
             open_logs,
+            check_for_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

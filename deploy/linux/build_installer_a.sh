@@ -3,8 +3,9 @@
 # Linux Build & Debian Packaging script for Lewdware Main Suite (Installer A)
 set -e
 
-VERSION="0.1.0"
+VERSION=$(grep '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
 DEB_ARCH=$(dpkg --print-architecture)
+RPM_ARCH=$(uname -m)
 STAGE_DIR="build/deb-stage"
 OUTPUT_DIR="dist"
 
@@ -185,7 +186,7 @@ EOF
     "$RPM_STAGE_DIR/SPECS/lewdware.spec"
 
   # Find generated RPM and copy to dist
-  find "$RPM_STAGE_DIR/RPMS" -type f -name "*.rpm" -exec cp {} "$OUTPUT_DIR/" \;
+  find "$RPM_STAGE_DIR/RPMS" -type f -name "*.rpm" -exec cp {} "$OUTPUT_DIR/lewdware_${VERSION}_${RPM_ARCH}.rpm" \;
   echo "RPM package created!"
 else
   echo "Warning: rpmbuild not found, skipping RPM packaging."

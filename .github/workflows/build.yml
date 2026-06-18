@@ -263,3 +263,74 @@ jobs:
           files: release-files/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  generate-manifests:
+    name: Generate Download Manifests
+    needs: [release-assets]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Generate manifests
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          python3 -c "
+          import json, sys
+          version, base, pub_date = sys.argv[1], sys.argv[2], sys.argv[3]
+
+          with open('docs/src/data/latest.json', 'w') as f:
+            json.dump({
+              'version': version,
+              'pub_date': pub_date,
+              'download_page': 'https://lewdware.net/download/',
+              'assets': {
+                'windows-x64': f'{base}/Lewdware-Installer-x64.exe',
+                'macos-arm64': f'{base}/Lewdware-Installer-macOS-arm64.pkg',
+                'macos-x64': f'{base}/Lewdware-Installer-macOS-x86_64.pkg',
+                'linux-x64-deb': f'{base}/lewdware_{version}_amd64.deb',
+                'linux-x64-rpm': f'{base}/lewdware_{version}_x86_64.rpm',
+                'linux-x64-tar': f'{base}/lewdware_{version}_amd64.tar.gz',
+                'linux-arm64-deb': f'{base}/lewdware_{version}_arm64.deb',
+                'linux-arm64-rpm': f'{base}/lewdware_{version}_aarch64.rpm',
+                'linux-arm64-tar': f'{base}/lewdware_{version}_arm64.tar.gz',
+              },
+            }, f, indent=2)
+            f.write('\n')
+
+          with open('docs/src/data/pack-editor-latest.json', 'w') as f:
+            json.dump({
+              'version': version,
+              'pub_date': pub_date,
+              'download_page': 'https://lewdware.net/download/pack-editor',
+              'assets': {
+                'windows-x64': f'{base}/lewdware-pack-editor_{version}_x64-setup.msi',
+                'macos-arm64': f'{base}/lewdware-pack-editor_{version}_aarch64.dmg',
+                'macos-x64': f'{base}/lewdware-pack-editor_{version}_x64.dmg',
+                'linux-x64-deb': f'{base}/lewdware-pack-editor_{version}_amd64.deb',
+                'linux-x64-rpm': f'{base}/lewdware-pack-editor_{version}_amd64.rpm',
+                'linux-x64-appimage': f'{base}/lewdware-pack-editor_{version}_amd64.AppImage',
+                'linux-arm64-deb': f'{base}/lewdware-pack-editor_{version}_arm64.deb',
+                'linux-arm64-rpm': f'{base}/lewdware-pack-editor_{version}_arm64.rpm',
+                'linux-arm64-appimage': f'{base}/lewdware-pack-editor_{version}_arm64.AppImage',
+              },
+            }, f, indent=2)
+            f.write('\n')
+          " "$VERSION" "$BASE" "$PUB_DATE"
+
+      - name: Commit manifests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/src/data/latest.json docs/src/data/pack-editor-latest.json
+          git diff --staged --quiet || git commit -m "Update download manifests for ${{ github.ref_name }} [skip ci]"
+          git push

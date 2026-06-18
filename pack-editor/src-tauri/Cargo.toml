@@ -1,6 +1,6 @@
 [package]
 name = "lewdware-pack-editor"
-version = "0.1.0"
+version.workspace = true
 description = "Lewdware Pack Editor"
 authors = ["restoredelight <restoreddelight@proton.me>"]
 edition = "2021"
@@ -33,6 +33,7 @@ rusqlite = { version = "0.39.0", features = ["bundled", "fallible_uint"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
 

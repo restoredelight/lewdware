@@ -7,6 +7,37 @@ use std::{path::PathBuf, sync::Arc};
 
 use pack::{MediaFile, MediaPack};
 use serde::{Deserialize, Serialize};
+
+// ─── Update check ─────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct UpdateManifest {
+    version: String,
+    download_page: String,
+}
+
+fn parse_version(v: &str) -> (u32, u32, u32) {
+    let mut parts = v.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
+#[tauri::command]
+async fn check_for_update() -> Result<Option<String>, String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let resp = reqwest::get("https://lewdware.net/download/pack-editor-latest.json")
+        .await
+        .map_err(|e| e.to_string())?;
+    let manifest: UpdateManifest = resp.json().await.map_err(|e| e.to_string())?;
+    if parse_version(&manifest.version) > parse_version(current) {
+        Ok(Some(manifest.download_page))
+    } else {
+        Ok(None)
+    }
+}
 use shared::pack_config::Metadata;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
@@ -487,6 +518,7 @@ pub fn run() {
             add_files_dialog,
             add_folder_dialog,
             get_media_port,
+            check_for_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

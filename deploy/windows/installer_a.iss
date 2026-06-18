@@ -3,7 +3,7 @@
 
 [Setup]
 AppName=Lewdware
-AppVersion=0.1.0
+AppVersion={#AppVersion}
 DefaultDirName={localappdata}\Programs\Lewdware
 DefaultGroupName=Lewdware
 OutputDir=..\..\dist

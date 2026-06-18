@@ -25,4 +25,5 @@ export default defineConfig({
 			],
 		}),
 	],
+	site: "https://lewdware.net",
 });
