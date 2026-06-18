@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2024"
 
 [dependencies]
-shared = { path = "../shared/" }
+shared = { path = "../shared/", features = ["mlua"] }
 anyhow = "1.0.99"
 egui = { version = "0.34.2", features = ["serde"] }
 egui-wgpu = "0.34.2"

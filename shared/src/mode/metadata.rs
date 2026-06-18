@@ -73,6 +73,7 @@ pub enum OptionValue {
     Enum(String),
 }
 
+#[cfg(feature = "mlua")]
 impl mlua::IntoLua for OptionValue {
     fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
         match self {
