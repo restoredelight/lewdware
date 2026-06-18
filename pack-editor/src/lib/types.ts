@@ -20,6 +20,7 @@ export interface MetadataDto {
 
 export interface PackInfo {
   name: string;
+  has_unsaved_changes: boolean;
 }
 
 export interface UploadError {

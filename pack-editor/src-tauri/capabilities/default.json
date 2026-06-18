@@ -6,6 +6,10 @@
   "permissions": [
     "core:default",
     "core:menu:default",
-    "opener:default"
+    "opener:default",
+    "core:window:allow-close",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-destroy"
   ]
 }

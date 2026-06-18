@@ -8,6 +8,7 @@ export const api = {
   savePackAsDialog: () => invoke<PackInfo | null>("save_pack_as_dialog"),
   discardChanges: () => invoke<MetadataDto>("discard_changes"),
   closePack: () => invoke<void>("close_pack"),
+  confirmClose: () => invoke<void>("confirm_close"),
   isPackSaved: () => invoke<boolean>("is_pack_saved"),
 
   getFiles: () => invoke<MediaFile[]>("get_files"),

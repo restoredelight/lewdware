@@ -65,6 +65,7 @@ impl AppState {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PackInfo {
     pub name: String,
+    pub has_unsaved_changes: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -127,10 +128,14 @@ async fn new_pack_dialog(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "New Pack".to_string());
 
-    let pack = MediaPack::new(path, &name)
+    let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
+    let pack = MediaPack::new(path, &data_dir, &name)
         .await
         .map_err(|e| e.to_string())?;
-    let info = PackInfo { name: pack.name() };
+    let info = PackInfo {
+        name: pack.name(),
+        has_unsaved_changes: false,
+    };
     *state.pack.lock().await = Some(pack);
     Ok(Some(info))
 }
@@ -156,8 +161,13 @@ async fn open_pack_dialog(
     let Some(path) = file else { return Ok(None) };
     let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
 
-    let pack = MediaPack::open(path).await.map_err(|e| e.to_string())?;
-    let info = PackInfo { name: pack.name() };
+    let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
+    let pack = MediaPack::open(path, &data_dir).await.map_err(|e| e.to_string())?;
+    let has_unsaved_changes = !pack.is_saved().await;
+    let info = PackInfo {
+        name: pack.name(),
+        has_unsaved_changes,
+    };
     *state.pack.lock().await = Some(pack);
     Ok(Some(info))
 }
@@ -217,6 +227,7 @@ async fn save_pack_as_dialog(
         if let Some(new_pack) = new_pack {
             let info = PackInfo {
                 name: new_pack.name(),
+                has_unsaved_changes: false,
             };
             *lock = Some(new_pack);
             let _ = app.emit("save:done", ());
@@ -240,6 +251,13 @@ async fn discard_changes(state: State<'_, AppState>) -> Result<MetadataDto, Stri
 #[tauri::command]
 async fn close_pack(state: State<'_, AppState>) -> Result<(), String> {
     *state.pack.lock().await = None;
+    Ok(())
+}
+
+#[tauri::command]
+async fn confirm_close(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    *state.pack.lock().await = None;
+    app.exit(0);
     Ok(())
 }
 
@@ -493,6 +511,15 @@ pub fn run() {
             if let Ok(port) = rx.recv() {
                 state.media_port.set(port).ok();
             }
+            if let Some(window) = app.get_webview_window("main") {
+                let win = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        win.emit("close-requested", ()).ok();
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -502,6 +529,7 @@ pub fn run() {
             save_pack_as_dialog,
             discard_changes,
             close_pack,
+            confirm_close,
             is_pack_saved,
             get_files,
             remove_files,

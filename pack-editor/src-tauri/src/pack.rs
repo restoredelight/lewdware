@@ -9,7 +9,7 @@ use std::{
     thread::available_parallelism,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{named_params, params, params_from_iter, OptionalExtension};
@@ -64,6 +64,7 @@ impl Drop for Lock {
 
 pub struct MediaPack {
     path: PathBuf,
+    data_dir: PathBuf,
     saving: Arc<RwLock<()>>,
     _lock: Lock,
     header: StdRwLock<Header>,
@@ -107,7 +108,7 @@ pub struct Range {
 }
 
 impl MediaPack {
-    pub async fn new(path: PathBuf, name: &str) -> Result<Self> {
+    pub async fn new(path: PathBuf, data_dir: &Path, name: &str) -> Result<Self> {
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -127,7 +128,6 @@ impl MediaPack {
             ..Metadata::default()
         };
 
-        let data_dir = dirs::data_dir().context("Couldn't find data dir")?;
         let dir = data_dir
             .join("Lewdware Pack Editor")
             .join(header.id.to_string());
@@ -156,6 +156,7 @@ impl MediaPack {
 
         Ok(Self {
             path,
+            data_dir: data_dir.to_path_buf(),
             saving: Arc::new(RwLock::new(())),
             _lock: lock,
             header: StdRwLock::new(header),
@@ -167,7 +168,7 @@ impl MediaPack {
         })
     }
 
-    pub async fn open(path: PathBuf) -> Result<Self> {
+    pub async fn open(path: PathBuf, data_dir: &Path) -> Result<Self> {
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -181,7 +182,6 @@ impl MediaPack {
         file.read_exact(&mut buf).await?;
         let header = Header::from_buf(buf)?;
 
-        let data_dir = dirs::data_dir().context("Couldn't find data dir")?;
         let dir = data_dir
             .join("Lewdware Pack Editor")
             .join(header.id.to_string());
@@ -227,6 +227,7 @@ impl MediaPack {
 
         Ok(Self {
             path,
+            data_dir: data_dir.to_path_buf(),
             saving: Arc::new(RwLock::new(())),
             _lock: lock,
             header: StdRwLock::new(header),
@@ -512,7 +513,7 @@ impl MediaPack {
             self.mark_saved().await?;
         }
 
-        Ok(Some(Self::open(path.to_path_buf()).await?))
+        Ok(Some(Self::open(path.to_path_buf(), &self.data_dir).await?))
     }
 
     pub async fn discard_changes(&self) -> Result<Metadata> {
@@ -989,5 +990,142 @@ fn resolve_range(range: Range, size: u64) -> Result<(u64, u64)> {
         (Some(start), Some(end)) => Ok((start, (end + 1).min(size))),
         (Some(start), None) => Ok((start, size)),
         _ => bail!("Invalid range"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::params;
+    use shared::read_pack::Metadata;
+    use tempfile::tempdir;
+
+    use super::*;
+
+    async fn new_test_pack(pack_path: &Path, data_dir: &Path, name: &str) -> MediaPack {
+        MediaPack::new(pack_path.to_path_buf(), data_dir, name)
+            .await
+            .unwrap()
+    }
+
+    // Insert a minimal audio row backed by a staging file in dir/media/.
+    // Returns the assigned media id.
+    async fn insert_staged_audio(pack: &MediaPack, content: &[u8]) -> u64 {
+        let filename = Uuid::new_v4().to_string();
+        tokio::fs::write(pack.dir.join("media").join(&filename), content)
+            .await
+            .unwrap();
+
+        let hash_bytes = *blake3::hash(content).as_bytes();
+        pack.db_execute(move |conn| {
+            let id: u64 = conn.query_row(
+                "INSERT INTO media (file_name, file_type, path, duration, hash) \
+                 VALUES ('test.wav', 'audio', ?, 1.0, ?) RETURNING id",
+                params![filename, hash_bytes],
+                |row| row.get("id"),
+            )?;
+            Ok(id)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn save_and_reopen_preserves_metadata() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "My Pack").await;
+        pack.save(|_, _| {}).await.unwrap();
+        drop(pack);
+
+        let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        assert_eq!(pack2.name(), "My Pack");
+        assert!(pack2.is_saved().await);
+    }
+
+    #[tokio::test]
+    async fn file_content_survives_save_and_reopen() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let content = b"raw audio bytes for testing";
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
+        let file_id = insert_staged_audio(&pack, content).await;
+        pack.save(|_, _| {}).await.unwrap();
+        drop(pack);
+
+        let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        let view = pack2.get_view().unwrap();
+        let (data, _) = view.get_file_data(file_id).await.unwrap();
+        assert_eq!(data.as_slice(), content.as_slice());
+    }
+
+    #[tokio::test]
+    async fn unsaved_recovery_prefers_dir_metadata() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Original Name").await;
+        pack.set_metadata(&Metadata {
+            name: "Modified Name".to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        pack.save_metadata().await.unwrap();
+        // Drop without calling save() — UNSAVED marker remains and dir is not cleaned up.
+        drop(pack);
+
+        let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        assert_eq!(pack2.name(), "Modified Name");
+        assert!(!pack2.is_saved().await);
+    }
+
+    #[tokio::test]
+    async fn staged_file_recoverable_before_save() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let content = b"critical data that must survive a crash";
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
+        let file_id = insert_staged_audio(&pack, content).await;
+        // Drop without saving — simulates crash before or during save.
+        // The staging file and DB row (path-based) are intact.
+        drop(pack);
+
+        let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        let view = pack2.get_view().unwrap();
+        let (data, _) = view.get_file_data(file_id).await.unwrap();
+        assert_eq!(data.as_slice(), content.as_slice());
+    }
+
+    #[tokio::test]
+    async fn all_files_survive_multi_file_save_and_reopen() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let payloads: &[&[u8]] = &[b"file one", b"file two", b"file three"];
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Multi").await;
+        let mut ids = Vec::new();
+        for payload in payloads {
+            ids.push(insert_staged_audio(&pack, payload).await);
+        }
+        pack.save(|_, _| {}).await.unwrap();
+        drop(pack);
+
+        let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        let view = pack2.get_view().unwrap();
+        for (i, expected) in payloads.iter().enumerate() {
+            let (data, _) = view.get_file_data(ids[i]).await.unwrap();
+            assert_eq!(data.as_slice(), *expected);
+        }
     }
 }

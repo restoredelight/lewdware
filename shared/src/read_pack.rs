@@ -69,6 +69,12 @@ impl From<io::Error> for ReadError {
     }
 }
 
+impl Default for Header {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Header {
     pub fn new() -> Self {
         Self {
@@ -156,6 +162,97 @@ impl Header {
             && self.index_length == 0
             && self.metadata_offset == 0
             && self.metadata_length == 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_header(index_offset: u64, index_length: u64, metadata_offset: u64, metadata_length: u64) -> Header {
+        Header {
+            index_offset,
+            index_length,
+            metadata_offset,
+            metadata_length,
+            id: Uuid::nil(),
+        }
+    }
+
+    #[test]
+    fn header_roundtrip() {
+        let original = make_header(64, 512, 576, 128);
+        let buf = original.to_buf().unwrap();
+        let decoded = Header::from_buf(buf).unwrap();
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn header_new_generates_unique_ids() {
+        let a = Header::new();
+        let b = Header::new();
+        assert_ne!(a.id, b.id);
+    }
+
+    #[test]
+    fn header_is_default_when_all_offsets_zero() {
+        let h = make_header(0, 0, 0, 0);
+        assert!(h.is_default());
+    }
+
+    #[test]
+    fn header_is_not_default_when_offsets_set() {
+        let h = make_header(64, 0, 0, 0);
+        assert!(!h.is_default());
+    }
+
+    #[test]
+    fn header_make_clone_assigns_new_id() {
+        let original = Header::new();
+        let cloned = original.make_clone();
+        assert_ne!(original.id, cloned.id);
+        assert_eq!(original.index_offset, cloned.index_offset);
+        assert_eq!(original.metadata_offset, cloned.metadata_offset);
+    }
+
+    #[test]
+    fn header_invalid_magic_rejected() {
+        let mut buf = make_header(0, 0, 0, 0).to_buf().unwrap();
+        buf[0] = b'X';
+        assert!(matches!(Header::from_buf(buf), Err(ReadError::InvalidMagic)));
+    }
+
+    #[test]
+    fn header_unsupported_version_rejected() {
+        let mut buf = make_header(0, 0, 0, 0).to_buf().unwrap();
+        buf[6] = VERSION + 1;
+        assert!(matches!(
+            Header::from_buf(buf),
+            Err(ReadError::UnsupportedVersion)
+        ));
+    }
+
+    #[test]
+    fn metadata_roundtrip() {
+        let original = Metadata {
+            name: "test-pack".to_string(),
+            creator: Some("Alice".to_string()),
+            description: Some("A test pack".to_string()),
+            version: Some("1.0.0".to_string()),
+        };
+        let buf = original.to_buf().unwrap();
+        let decoded = Metadata::from_buf(&buf).unwrap();
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn metadata_roundtrip_with_absent_optionals() {
+        let original = Metadata { name: "minimal".to_string(), ..Default::default() };
+        let buf = original.to_buf().unwrap();
+        let decoded = Metadata::from_buf(&buf).unwrap();
+        assert_eq!(original, decoded);
+        assert!(decoded.creator.is_none());
+        assert!(decoded.version.is_none());
     }
 }
 

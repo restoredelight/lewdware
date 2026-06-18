@@ -6,6 +6,10 @@
   import type { MediaFile, UploadError, SaveProgress } from "$lib/types.js";
   import Start from "$lib/Start.svelte";
   import Editor from "$lib/Editor.svelte";
+  import Dialog from "$lib/Dialog.svelte";
+
+  let showCloseDialog = $state(false);
+  let pendingClose = $state(false);
 
   onMount(() => {
     api.getMediaPort().then((port) => (store.mediaPort = port));
@@ -24,6 +28,17 @@
       listen("save:done", () => {
         store.saveActive = false;
         store.packSaved = true;
+        if (pendingClose) {
+          pendingClose = false;
+          api.confirmClose();
+        }
+      }),
+      listen("close-requested", () => {
+        if (!store.packOpen || store.packSaved) {
+          api.confirmClose();
+        } else {
+          showCloseDialog = true;
+        }
       }),
     ];
 
@@ -31,10 +46,37 @@
       unsubs.forEach((p) => p.then((fn) => fn()));
     };
   });
+
+  async function onCloseSave() {
+    showCloseDialog = false;
+    pendingClose = true;
+    await api.savePack();
+  }
+
+  async function onCloseDiscard() {
+    showCloseDialog = false;
+    await api.confirmClose();
+  }
+
+  function onCloseCancel() {
+    showCloseDialog = false;
+  }
 </script>
 
 {#if store.packOpen}
   <Editor />
 {:else}
   <Start />
+{/if}
+
+{#if showCloseDialog}
+  <Dialog
+    title="Unsaved Changes"
+    description="You have unsaved changes. What would you like to do?"
+    buttons={[
+      { label: "Cancel", onclick: onCloseCancel },
+      { label: "Discard", onclick: onCloseDiscard },
+      { label: "Save", primary: true, onclick: onCloseSave },
+    ]}
+  />
 {/if}

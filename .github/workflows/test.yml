@@ -25,6 +25,31 @@ jobs:
       - name: Run tests
         run: cargo test -p shared -p lw
 
+  rust-pack-editor:
+    name: pack-editor Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            liblua5.4-dev
+
+      - name: Run tests
+        run: cargo test -p lewdware-pack-editor
+
   frontend:
     name: Frontend type check
     runs-on: ubuntu-latest
