@@ -39,6 +39,12 @@ impl From<io::Error> for ReadError {
     }
 }
 
+impl Default for Header {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Header {
     pub fn new() -> Self {
         Self {
@@ -101,5 +107,72 @@ impl Header {
             metadata_offset,
             metadata_length,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_header(offset: u64, length: u64) -> Header {
+        Header {
+            metadata_offset: offset,
+            metadata_length: length,
+            version_major: VERSION_MAJOR,
+            version_minor: VERSION_MINOR,
+        }
+    }
+
+    #[test]
+    fn roundtrip() {
+        let original = make_header(32, 256);
+        let buf = original.to_buf().unwrap();
+        let decoded = Header::from_buf(buf).unwrap();
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn new_has_zero_offsets() {
+        let h = Header::new();
+        assert_eq!(h.metadata_offset, 0);
+        assert_eq!(h.metadata_length, 0);
+        assert_eq!(h.version_major, VERSION_MAJOR);
+        assert_eq!(h.version_minor, VERSION_MINOR);
+    }
+
+    #[test]
+    fn invalid_magic_rejected() {
+        let mut buf = make_header(0, 0).to_buf().unwrap();
+        buf[0] = b'X';
+        assert!(matches!(Header::from_buf(buf), Err(ReadError::InvalidMagic)));
+    }
+
+    #[test]
+    fn unsupported_major_version_rejected() {
+        let mut buf = make_header(0, 0).to_buf().unwrap();
+        buf[6] = VERSION_MAJOR + 1;
+        assert!(matches!(
+            Header::from_buf(buf),
+            Err(ReadError::UnsupportedVersion)
+        ));
+    }
+
+    #[test]
+    fn unsupported_minor_version_rejected() {
+        let mut buf = make_header(0, 0).to_buf().unwrap();
+        buf[6] = VERSION_MAJOR;
+        buf[7] = VERSION_MINOR + 1;
+        assert!(matches!(
+            Header::from_buf(buf),
+            Err(ReadError::UnsupportedVersion)
+        ));
+    }
+
+    #[test]
+    fn large_offsets_roundtrip() {
+        let original = make_header(u64::MAX, u64::MAX / 2);
+        let buf = original.to_buf().unwrap();
+        let decoded = Header::from_buf(buf).unwrap();
+        assert_eq!(original, decoded);
     }
 }

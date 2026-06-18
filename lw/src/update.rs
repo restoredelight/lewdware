@@ -61,7 +61,7 @@ fn download(url: &str, ext: &str) -> anyhow::Result<PathBuf> {
         .context("failed to download update")?;
     let tmp_path = std::env::temp_dir().join(format!("lewdware-update{ext}"));
     let mut file = fs::File::create(&tmp_path)?;
-    io::copy(&mut resp.into_reader(), &mut file)?;
+    io::copy(&mut resp.into_body().into_reader(), &mut file)?;
     Ok(tmp_path)
 }
 
@@ -100,7 +100,8 @@ pub fn run(install: bool) -> anyhow::Result<()> {
     let manifest: Manifest = ureq::get(MANIFEST_URL)
         .call()
         .context("failed to reach lewdware.net")?
-        .into_json()
+        .into_body()
+        .read_json()
         .context("invalid manifest")?;
 
     println!("Current version: {current}");

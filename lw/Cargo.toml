@@ -17,4 +17,7 @@ shared = { version = "0.1.0", path = "../shared" }
 walkdir = "2.5.0"
 which = "8.0.0"
 zstd = "0.13.3"
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3.3.0", features = ["json"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

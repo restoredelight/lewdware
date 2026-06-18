@@ -136,6 +136,68 @@ pub async fn save_config_async(config: AppConfig) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn appconfig_json_roundtrip() {
+        let original = AppConfig::default();
+        let json = serde_json::to_string(&original).unwrap();
+        let decoded: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            serde_json::to_value(&original).unwrap(),
+            serde_json::to_value(&decoded).unwrap()
+        );
+    }
+
+    #[test]
+    fn key_display_no_modifiers() {
+        let key = Key {
+            name: "Escape".to_string(),
+            code: "Escape".to_string(),
+            modifiers: Modifiers::default(),
+        };
+        assert_eq!(key.to_string(), "Escape");
+    }
+
+    #[test]
+    fn key_display_with_modifiers() {
+        let key = Key {
+            name: "Escape".to_string(),
+            code: "Escape".to_string(),
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        };
+        assert_eq!(key.to_string(), "Shift + Escape");
+    }
+
+    #[test]
+    fn key_display_all_modifiers() {
+        let key = Key {
+            name: "F1".to_string(),
+            code: "F1".to_string(),
+            modifiers: Modifiers {
+                ctrl: true,
+                alt: true,
+                shift: true,
+                meta: true,
+            },
+        };
+        assert_eq!(key.to_string(), "Ctrl + Alt + Shift + Meta + F1");
+    }
+
+    #[test]
+    fn default_panic_button_is_shift_escape() {
+        let config = AppConfig::default();
+        assert_eq!(config.panic_button.code, "Escape");
+        assert!(config.panic_button.modifiers.shift);
+        assert!(!config.panic_button.modifiers.ctrl);
+    }
+}
+
 fn config_path() -> Result<PathBuf> {
     let mut config_path = dirs::config_dir()
         .ok_or_else(|| anyhow!("Could not find a valid config dir for this OS"))?;

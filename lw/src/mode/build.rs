@@ -120,6 +120,88 @@ fn write_files(
     Ok(result)
 }
 
+#[cfg(test)]
+mod tests {
+    use std::io::{Seek, SeekFrom};
+
+    use shared::mode::{read_mode_metadata, read_source_file};
+    use tempfile::tempfile;
+
+    use super::*;
+    use crate::mode::read_config;
+
+    #[test]
+    fn build_and_read_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        let src_dir = root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let lua_content = "-- test script\nreturn {}";
+        fs::write(src_dir.join("main.lua"), lua_content).unwrap();
+
+        let config_src = r#"{
+            include: ["src"],
+            name: "roundtrip-test",
+            version: "0.1.0",
+            author: "tester",
+            modes: {
+                main: {
+                    name: "Main",
+                    entrypoint: "src/main.lua",
+                }
+            }
+        }"#;
+        fs::write(root.join("config.jsonc"), config_src).unwrap();
+
+        let config = read_config(root).unwrap();
+        let mut tmp = tempfile().unwrap();
+        build_to(&mut tmp, root, config).unwrap();
+
+        tmp.seek(SeekFrom::Start(0)).unwrap();
+        let (_, metadata) = read_mode_metadata(&mut tmp).unwrap();
+
+        assert_eq!(metadata.name, "roundtrip-test");
+        assert_eq!(metadata.version.as_deref(), Some("0.1.0"));
+        assert_eq!(metadata.author.as_deref(), Some("tester"));
+        assert!(metadata.modes.contains_key("main"));
+        assert_eq!(metadata.modes["main"].entrypoint, "main.lua");
+        assert!(metadata.files.contains_key("main.lua"));
+
+        let source_file = &metadata.files["main.lua"];
+        tmp.seek(SeekFrom::Start(0)).unwrap();
+        let contents = read_source_file(&mut tmp, source_file).unwrap();
+        assert_eq!(contents, lua_content);
+    }
+
+    #[test]
+    fn build_rejects_missing_entrypoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        let src_dir = root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("main.lua"), "").unwrap();
+
+        let config_src = r#"{
+            include: ["src"],
+            name: "bad-mode",
+            modes: {
+                main: {
+                    name: "Main",
+                    entrypoint: "src/missing.lua",
+                }
+            }
+        }"#;
+        fs::write(root.join("config.jsonc"), config_src).unwrap();
+
+        let config = read_config(root).unwrap();
+        let mut tmp = tempfile().unwrap();
+        assert!(build_to(&mut tmp, root, config).is_err());
+    }
+}
+
 fn create_metadata(
     Config {
         include: _,

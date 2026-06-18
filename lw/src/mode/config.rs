@@ -148,3 +148,109 @@ impl OptionType {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_enum_option(default: &str, values: &[&str]) -> ModeOption {
+        let mut map = IndexMap::new();
+        for v in values {
+            map.insert(v.to_string(), v.to_string());
+        }
+        ModeOption {
+            label: "test".to_string(),
+            description: None,
+            option_type: OptionType::Enum {
+                default: default.to_string(),
+                values: map,
+            },
+        }
+    }
+
+    #[test]
+    fn enum_valid_default_converts() {
+        let opt = make_enum_option("a", &["a", "b"]);
+        let result: Result<mode::ModeOption> = opt.try_into();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn enum_invalid_default_rejected() {
+        let opt = make_enum_option("z", &["a", "b"]);
+        let result: Result<mode::ModeOption> = opt.try_into();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn slider_defaults_true_when_min_and_max_set() {
+        let opt = OptionType::Integer {
+            default: 0,
+            min: Some(0),
+            max: Some(10),
+            step: None,
+            clamp: false,
+            slider: None,
+        };
+        let converted: mode::OptionType = opt.try_into().unwrap();
+        assert!(matches!(converted, mode::OptionType::Integer { slider: true, .. }));
+    }
+
+    #[test]
+    fn slider_defaults_false_when_only_min_set() {
+        let opt = OptionType::Integer {
+            default: 0,
+            min: Some(0),
+            max: None,
+            step: None,
+            clamp: false,
+            slider: None,
+        };
+        let converted: mode::OptionType = opt.try_into().unwrap();
+        assert!(matches!(converted, mode::OptionType::Integer { slider: false, .. }));
+    }
+
+    #[test]
+    fn explicit_slider_false_overrides_min_max() {
+        let opt = OptionType::Integer {
+            default: 0,
+            min: Some(0),
+            max: Some(10),
+            step: None,
+            clamp: false,
+            slider: Some(false),
+        };
+        let converted: mode::OptionType = opt.try_into().unwrap();
+        assert!(matches!(converted, mode::OptionType::Integer { slider: false, .. }));
+    }
+
+    #[test]
+    fn config_parses_from_json5() {
+        let src = r#"
+        {
+            include: ["src"],
+            name: "my-mode",
+            version: "0.1.0",
+            author: "tester",
+            modes: {
+                main: {
+                    name: "Main",
+                    entrypoint: "src/main.lua",
+                    options: {
+                        count: {
+                            label: "Count",
+                            type: "integer",
+                            default: 3,
+                        }
+                    }
+                }
+            }
+        }
+        "#;
+        let config: Config = json5::from_str(src).unwrap();
+        assert_eq!(config.name, "my-mode");
+        assert_eq!(config.modes.len(), 1);
+        assert!(config.modes.contains_key("main"));
+        assert_eq!(config.modes["main"].options.len(), 1);
+    }
+}

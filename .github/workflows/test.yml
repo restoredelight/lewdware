@@ -1,0 +1,70 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Lua 5.4 headers
+        run: sudo apt-get install -y liblua5.4-dev
+
+      - name: Run tests
+        run: cargo test -p shared -p lw
+
+  frontend:
+    name: Frontend type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install dependencies (config)
+        run: pnpm install
+        working-directory: config
+
+      - name: Type check (config)
+        run: pnpm check
+        working-directory: config
+
+      - name: Install dependencies (pack-editor)
+        run: pnpm install
+        working-directory: pack-editor
+
+      - name: Type check (pack-editor)
+        run: pnpm check
+        working-directory: pack-editor
+
+  lua:
+    name: Lua syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua 5.4
+        run: sudo apt-get install -y lua5.4
+
+      - name: Check syntax
+        run: find default-modes/src -name '*.lua' -exec luac5.4 -p {} +
