@@ -23,7 +23,7 @@ use crate::{
 #[derive(Clone)]
 pub struct MediaManager {
     tx: Sender<MediaRequest>,
-    wgpu_device: Arc<wgpu::Device>,
+    wgpu_device: Option<Arc<wgpu::Device>>,
 }
 
 pub type Result<T, E = MediaError> = std::result::Result<T, E>;
@@ -34,17 +34,11 @@ impl MediaManager {
     pub fn open(
         pack_path: &Path,
         event_loop_proxy: EventLoopProxy<UserEvent>,
-        wgpu_device: Arc<wgpu::Device>,
+        wgpu_device: Option<Arc<wgpu::Device>>,
     ) -> anyhow::Result<(Self, Metadata)> {
         let (tx, metadata) = spawn_media_manager_thread(pack_path, event_loop_proxy)?;
 
-        Ok((
-            Self {
-                tx,
-                wgpu_device: wgpu_device,
-            },
-            metadata,
-        ))
+        Ok((Self { tx, wgpu_device }, metadata))
     }
 
     async fn send<T>(
@@ -361,7 +355,7 @@ enum MediaRequest {
         id: u64,
         play_audio: bool,
         loop_video: bool,
-        wgpu_device: Arc<wgpu::Device>,
+        wgpu_device: Option<Arc<wgpu::Device>>,
         response_tx: oneshot::Sender<Result<VideoDecoder>>,
     },
     GetAudioData {

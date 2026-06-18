@@ -39,7 +39,7 @@ use crate::window::{
 pub struct ChaosApp<'a> {
     running: bool,
     _config: Arc<AppConfig>,
-    wgpu_state: Arc<WgpuState>,
+    wgpu_state: Option<Arc<WgpuState>>,
     windows: HashMap<WindowId, WindowType<'a>>,
     audio_players: HashMap<u64, AudioPlayer>,
     current_audio_id: u64,
@@ -63,7 +63,7 @@ pub enum UserEvent {
 
 impl<'a> ChaosApp<'a> {
     pub fn new(
-        wgpu_state: std::sync::Arc<WgpuState>,
+        wgpu_state: Option<std::sync::Arc<WgpuState>>,
         event_loop_proxy: EventLoopProxy<UserEvent>,
         config: AppConfig,
     ) -> Result<Self> {
@@ -92,8 +92,11 @@ impl<'a> ChaosApp<'a> {
         //     end)
         // end)
 
-        let (lua_event_tx, lua_request_rx) =
-            start_lua_thread(event_loop_proxy, config.clone(), wgpu_state.device.clone());
+        let (lua_event_tx, lua_request_rx) = start_lua_thread(
+            event_loop_proxy,
+            config.clone(),
+            wgpu_state.as_ref().map(|s| s.device.clone()),
+        );
 
         let monitors = Monitors::new(config.disabled_monitors.clone());
 
@@ -115,9 +118,13 @@ impl<'a> ChaosApp<'a> {
         &mut self,
         opts: SpawnWindowOpts,
         size_behaviour: WindowSizeBehaviour,
-        gpu: bool,
+        mut gpu: bool,
         event_loop: &ActiveEventLoop,
     ) -> Result<(InnerWindow<'a>, WindowProps)> {
+        if self.wgpu_state.is_none() {
+            gpu = false;
+        }
+        let transparent = opts.transparent && gpu;
         let monitor_info = match opts.monitor {
             Some(x) => x,
             None => self.monitors.random(event_loop)?,
@@ -184,7 +191,7 @@ impl<'a> ChaosApp<'a> {
             .with_window_level(WindowLevel::AlwaysOnTop)
             .with_resizable(false)
             .with_visible(false)
-            .with_transparent(opts.transparent);
+            .with_transparent(transparent);
 
         #[cfg(target_os = "linux")]
         {
@@ -231,12 +238,12 @@ impl<'a> ChaosApp<'a> {
 
         let inner_window = InnerWindow::new(
             window,
-            self.wgpu_state.clone(),
+            self.wgpu_state.clone(),  // Option<Arc<WgpuState>>
             opts.decorations,
             opts.title,
             opts.closeable,
             gpu,
-            opts.transparent,
+            transparent,
             opts.opacity,
             LogicalPosition::new(x, y),
             self.lua_event_tx.clone(),

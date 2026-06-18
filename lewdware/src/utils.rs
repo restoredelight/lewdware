@@ -93,41 +93,30 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_ke
 
         tracing::info!(
             "Panic listener starting: watching for {:?} with modifiers {:?}",
-            rdev_key, target_key.modifiers
+            rdev_key,
+            target_key.modifiers
         );
 
         let mut keys = HashSet::new();
 
-        let result = rdev::listen(move |event| {
+        if let Err(err) = rdev::listen(move |event| {
             if let rdev::EventType::KeyPress(key) = event.event_type {
-                tracing::info!("Key press: {:?}", key);
                 keys.insert(key);
 
                 if key == rdev_key {
                     let modifiers = rdev_keys_to_modifiers(&keys);
-                    tracing::info!(
-                        "Target key pressed — active modifiers: {:?}, required: {:?}",
-                        modifiers, target_key.modifiers
-                    );
 
                     if modifier_matches(&modifiers, &target_key.modifiers) {
-                        tracing::info!("Modifier match — sending exit event");
-                        match event_loop_proxy.send_event(UserEvent::Exit) {
-                            Ok(()) => tracing::info!("Exit event sent successfully"),
-                            Err(err) => tracing::error!("Could not send panic button event: {}", err),
+                        if let Err(err) = event_loop_proxy.send_event(UserEvent::Exit) {
+                            tracing::error!("Could not send panic button event: {}", err);
                         }
-                    } else {
-                        tracing::info!("Modifier mismatch — not triggering panic");
                     }
                 }
             } else if let rdev::EventType::KeyRelease(key) = event.event_type {
                 keys.remove(&key);
             }
-        });
-
-        match result {
-            Ok(()) => tracing::error!("rdev::listen returned Ok — panic listener is no longer active"),
-            Err(err) => tracing::error!("rdev::listen returned error: {:?}", err),
+        }) {
+            tracing::error!("{:?}", err);
         }
     });
 }

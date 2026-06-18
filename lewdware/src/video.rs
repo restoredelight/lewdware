@@ -145,7 +145,7 @@ impl VideoDecoder {
         play_audio: bool,
         loop_video: bool,
         packed_alpha: bool,
-        wgpu_device: Arc<wgpu::Device>,
+        wgpu_device: Option<Arc<wgpu::Device>>,
     ) -> Result<Self> {
         let path = video.path();
 
@@ -323,7 +323,7 @@ fn spawn_video_stream(
     path: PathBuf,
     loop_video: bool,
     packed_alpha: bool,
-    wgpu_device: Arc<wgpu::Device>,
+    wgpu_device: Option<Arc<wgpu::Device>>,
 ) -> Result<(
     Receiver<Option<VideoFrame>>,
     Duration,
@@ -427,7 +427,7 @@ fn decode_video(
     meta_tx: SyncSender<VideoMetadata>,
     recycle_rx: Receiver<Video>,
     recycle_tx: SyncSender<Video>,
-    wgpu_device: Arc<wgpu::Device>,
+    wgpu_device: Option<Arc<wgpu::Device>>,
 ) -> Result<()> {
     ffmpeg::init()?;
     let mut ictx = format::input(&path)?;
@@ -451,17 +451,17 @@ fn decode_video(
     let mut context_decoder = codec::Context::from_parameters(video_stream.parameters())?;
 
     // Attempt hardware decoding setup before avcodec_open2 (which happens inside .video()).
-    let hw_pix_fmt: Option<ffi::AVPixelFormat> = unsafe {
+    let hw_pix_fmt: Option<ffi::AVPixelFormat> = wgpu_device.as_ref().and_then(|device| unsafe {
         let ctx_ptr = context_decoder.as_mut_ptr();
         let hw_type = preferred_hw_type();
-        if let Some(fmt) = try_hw_setup(ctx_ptr, hw_type, &wgpu_device) {
+        if let Some(fmt) = try_hw_setup(ctx_ptr, hw_type, device) {
             HW_PIX_FMT.with(|c| c.set(fmt as i32));
             (*ctx_ptr).get_format = Some(get_hw_format);
             Some(fmt)
         } else {
             None
         }
-    };
+    });
 
     let mut decoder = context_decoder.decoder().video()?;
 

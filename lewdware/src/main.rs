@@ -83,8 +83,13 @@ fn main() -> Result<()> {
     let event_loop = event_loop_builder.build()?;
     let proxy = event_loop.create_proxy();
 
-    let wgpu_state =
-        std::sync::Arc::new(block_on(WgpuState::new(event_loop.owned_display_handle()))?);
+    let wgpu_state = match block_on(WgpuState::new(event_loop.owned_display_handle())) {
+        Ok(state) => Some(std::sync::Arc::new(state)),
+        Err(err) => {
+            tracing::warn!("GPU initialisation failed, falling back to software rendering: {err}");
+            None
+        }
+    };
 
     handle_sigterm(proxy.clone());
 

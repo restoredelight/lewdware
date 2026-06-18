@@ -121,7 +121,7 @@ pub type AudioHandles = Rc<RefCell<HashMap<u64, Rc<AudioHandle>>>>;
 pub fn start_lua_thread(
     event_loop_proxy: EventLoopProxy<UserEvent>,
     config: Arc<AppConfig>,
-    wgpu_device: Arc<wgpu::Device>,
+    wgpu_device: Option<Arc<wgpu::Device>>,
 ) -> (UnboundedSender<Event>, Receiver<LuaRequest>) {
     let (event_tx, mut event_rx) = unbounded_channel();
     let (request_tx, request_rx) = channel(20);
