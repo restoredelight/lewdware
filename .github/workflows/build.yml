@@ -113,12 +113,15 @@ jobs:
         run: |
           brew update
           brew install ffmpeg dav1d
+          echo "BREW_DEPS=$(brew ls --versions ffmpeg dav1d | tr '\n' ' ')" >> $GITHUB_ENV
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+        with:
+          env-vars: BREW_DEPS
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
