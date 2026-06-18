@@ -220,9 +220,15 @@ impl<'a> InnerWindow<'a> {
         Ok(())
     }
 
+    pub fn with_header_pixmap<F: FnOnce(&tiny_skia::Pixmap)>(&mut self, f: F) {
+        if let Some(pixmap) = self.header.as_mut().and_then(|h| h.draw()) {
+            f(pixmap);
+        }
+    }
+
     pub fn draw_wgpu(
         &mut self,
-        draw_fn: impl FnOnce(&mut wgpu::RenderPass, u32, u32),
+        draw_fn: impl FnOnce(&mut wgpu::RenderPass<'static>, u32, u32),
     ) -> Result<()> {
         let (x, y) = self.inner_offset();
         match &mut self.surface {
@@ -275,7 +281,7 @@ impl<'a> InnerWindow<'a> {
                 };
 
                 {
-                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Render Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: &view,
@@ -291,6 +297,7 @@ impl<'a> InnerWindow<'a> {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
+                    let mut rpass = rpass.forget_lifetime();
 
                     rpass.set_viewport(
                         0.0,

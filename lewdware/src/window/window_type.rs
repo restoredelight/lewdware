@@ -9,12 +9,12 @@ use winit::{
 };
 
 use crate::{
-    egui::EguiCPUWindow,
+    egui::{EguiCPUWindow, EguiGpuRenderer},
     lua::{self, ChoiceWindowOption},
     media::ImageData,
     video::{NextFrame, VideoDecoder, VideoFrame, VideoPixelFormat},
     window::{
-        gpu_renderer::{GpuRenderer, GpuRendererType},
+        gpu_renderer::{DecorationOverlay, GpuRenderer, GpuRendererType},
         header::HEADER_HEIGHT,
         inner_window::InnerWindow,
         surface::Buffer,
@@ -336,12 +336,14 @@ impl<'a> VideoWindow<'a> {
 
 pub struct PromptWindow<'a> {
     pub inner_window: InnerWindow<'a>,
-    egui_window: EguiCPUWindow,
     text: Option<String>,
     placeholder: Option<String>,
     value: String,
-    gpu_renderer: Option<GpuRenderer>,
-    frame_buffer: Vec<u8>,
+    // Exactly one of these two is Some based on GPU availability.
+    egui_cpu: Option<EguiCPUWindow>,
+    egui_gpu: Option<EguiGpuRenderer>,
+    // Present when GPU is active and the window has decorations.
+    decoration_overlay: Option<DecorationOverlay>,
 }
 
 impl<'a> PromptWindow<'a> {
@@ -351,121 +353,168 @@ impl<'a> PromptWindow<'a> {
         placeholder: Option<String>,
         initial_value: Option<String>,
     ) -> Result<Self> {
-        let egui_window = EguiCPUWindow::new(
-            inner_window.window().clone(),
-            inner_window.is_gpu(),
-            inner_window.transparent(),
-        )?;
-
-        let (gpu_renderer, frame_buffer) = if inner_window.is_gpu() {
-            let outer_size = inner_window.outer_size();
-            let frame_buffer = vec![0; (outer_size.width * outer_size.height * 4) as usize];
-            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity, inner_window.premultiplied_alpha());
-            (Some(gpu_renderer), frame_buffer)
+        let (egui_cpu, egui_gpu, decoration_overlay) = if inner_window.is_gpu() {
+            let surface_format = inner_window.surface_format().unwrap();
+            let inner_size = inner_window.inner_size();
+            let egui_gpu = EguiGpuRenderer::new(
+                inner_window.wgpu_state(),
+                inner_window.window(),
+                inner_size,
+                inner_window.transparent(),
+                inner_window.opacity,
+                inner_window.premultiplied_alpha(),
+            )?;
+            let decoration_overlay = if inner_window.decorations() {
+                let outer_size = inner_window.outer_size();
+                Some(DecorationOverlay::new(
+                    inner_window.wgpu_state(),
+                    outer_size.width,
+                    outer_size.height,
+                    inner_window.premultiplied_alpha(),
+                    inner_window.opacity,
+                ))
+            } else {
+                None
+            };
+            let _ = surface_format; // only needed to confirm surface is GPU
+            (None, Some(egui_gpu), decoration_overlay)
         } else {
-            (None, Vec::new())
+            let egui_cpu = EguiCPUWindow::new(
+                inner_window.window().clone(),
+                inner_window.transparent(),
+            )?;
+            (Some(egui_cpu), None, None)
         };
 
         Ok(Self {
             inner_window,
-            egui_window,
             text,
             placeholder,
             value: initial_value.unwrap_or_default(),
-            gpu_renderer,
-            frame_buffer,
+            egui_cpu,
+            egui_gpu,
+            decoration_overlay,
         })
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) {
-        let event = if self.inner_window.decorations() {
-            &translate_event_position(event.clone(), self.inner_window.window().scale_factor())
+        let translated = if self.inner_window.decorations() {
+            Some(translate_event_position(
+                event.clone(),
+                self.inner_window.window().scale_factor(),
+            ))
         } else {
-            event
+            None
         };
+        let translated_ref = translated.as_ref().unwrap_or(event);
 
-        self.egui_window.handle_event(event);
+        if let Some(egui_gpu) = &mut self.egui_gpu {
+            egui_gpu.handle_event(self.inner_window.window(), translated_ref);
+        } else if let Some(egui_cpu) = &mut self.egui_cpu {
+            egui_cpu.handle_event(translated_ref);
+        }
     }
 
     pub fn render(&mut self) -> Result<()> {
         self.inner_window.start_render()?;
 
-        if let Some(gpu_renderer) = &self.gpu_renderer {
-            gpu_renderer.set_opacity(self.inner_window.wgpu_state(), self.inner_window.opacity);
-        }
-
         let id = self.inner_window.window().id();
         let lua_event_tx = self.inner_window.lua_event_tx().clone();
-        
         let inner_size = self.inner_window.inner_size();
-        let outer_size = self.inner_window.outer_size();
-        let (x, y) = self.inner_window.inner_offset();
+        let (ox, oy) = self.inner_window.inner_offset();
+        let opacity = self.inner_window.opacity;
 
-        if let Some(gpu_renderer) = &mut self.gpu_renderer {
-            self.frame_buffer.fill(0);
-            
-            let mut egui_buffer = vec![0u32; (inner_size.width * inner_size.height) as usize];
-            let mut buffer_ref = egui_software_backend::BufferMutRef::new(
-                bytemuck::cast_slice_mut(&mut egui_buffer),
-                inner_size.width as usize,
-                inner_size.height as usize,
-            );
+        if self.egui_gpu.is_some() {
+            let wgpu_state = self.inner_window.wgpu_state().clone();
+            let window = self.inner_window.window().clone();
 
-            let _ = self.egui_window.redraw(&mut buffer_ref, |ui| {
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.heading("Repeat after me");
-                        ui.add_space(20.0);
-
-                        if let Some(text) = &self.text {
-                            ui.label(RichText::new(text).heading());
-                        }
-
-                        let mut prompt = TextEdit::singleline(&mut self.value);
-
-                        if let Some(placeholder) = &self.placeholder {
-                            prompt = prompt.hint_text(placeholder);
-                        };
-
-                        let response = ui.add(prompt);
-                        response.request_focus();
-
-                        ui.add_space(ui.available_height() - 50.0);
-
+            // Render egui into the intermediate texture.
+            let text = self.text.clone();
+            let placeholder = self.placeholder.clone();
+            self.egui_gpu.as_mut().unwrap().render_to_texture(
+                &wgpu_state,
+                &window,
+                inner_size,
+                |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
                         ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new("Submit")).clicked() {
-                                if let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
-                                    id,
-                                    text: self.value.clone(),
-                                }) {
-                                    tracing::error!("{err}");
-                                }
+                            ui.heading("Repeat after me");
+                            ui.add_space(20.0);
+
+                            if let Some(text) = &text {
+                                ui.label(RichText::new(text).heading());
                             }
-                        })
-                    })
-                });
+
+                            let mut prompt = TextEdit::singleline(&mut self.value);
+                            if let Some(placeholder) = &placeholder {
+                                prompt = prompt.hint_text(placeholder);
+                            }
+                            let response = ui.add(prompt);
+                            response.request_focus();
+
+                            ui.add_space(ui.available_height() - 50.0);
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                if ui.add(egui::Button::new("Submit")).clicked() {
+                                    if let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
+                                        id,
+                                        text: self.value.clone(),
+                                    }) {
+                                        tracing::error!("{err}");
+                                    }
+                                }
+                            });
+                        });
+                    });
+                },
+            )?;
+
+            // Upload header pixmap to decoration overlay if it changed.
+            let decoration_overlay = &mut self.decoration_overlay;
+            self.inner_window.with_header_pixmap(|pixmap| {
+                if let Some(overlay) = decoration_overlay {
+                    overlay.upload_header(&wgpu_state.queue, pixmap, ox, oy);
+                }
             });
 
-            {
-                let pixmap = PixmapMut::from_bytes(&mut self.frame_buffer, outer_size.width, outer_size.height).unwrap();
-                let mut buffer = Buffer::Pixmap(pixmap);
-                buffer.copy_from_u32_buf(&egui_buffer, inner_size.width, x, y);
-                self.inner_window.render_decorations(&mut buffer)?;
+            // Update opacity for both layers.
+            if let Some(overlay) = &self.decoration_overlay {
+                overlay.set_opacity(&wgpu_state.queue, opacity);
             }
+            self.egui_gpu
+                .as_ref()
+                .unwrap()
+                .set_opacity(&wgpu_state.queue, opacity);
 
-            gpu_renderer.upload_frame_buffer(&self.inner_window.wgpu_state().queue, &self.frame_buffer, outer_size.width, outer_size.height);
+            // Blit egui texture and decoration overlay into the surface.
+            let surface_format = self.inner_window.surface_format().unwrap();
+            let pipeline = wgpu_state.get_pipeline(surface_format);
+            let egui_bind_group = &self.egui_gpu.as_ref().unwrap().bind_group;
+            let egui_window_bind_group = &self.egui_gpu.as_ref().unwrap().window_bind_group;
+            let decoration_overlay = self.decoration_overlay.as_ref();
 
-            let pipeline = self.inner_window.wgpu_state().get_pipeline(self.inner_window.surface_format().unwrap());
-            
-            self.inner_window.draw_wgpu(|rpass, _x, _y| {
-                if let GpuRendererType::Image { bind_group, .. } = &gpu_renderer.renderer_type {
-                    rpass.set_pipeline(&pipeline);
-                    rpass.set_bind_group(0, bind_group, &[]);
-                    rpass.set_bind_group(1, &gpu_renderer.window_bind_group, &[]);
-                    rpass.draw(0..4, 0..1);
+            self.inner_window.draw_wgpu(|rpass, x, y| {
+                // Egui layer: inner viewport.
+                rpass.set_pipeline(&pipeline);
+                rpass.set_bind_group(0, egui_bind_group, &[]);
+                rpass.set_bind_group(1, egui_window_bind_group, &[]);
+                rpass.set_viewport(
+                    x as f32,
+                    y as f32,
+                    inner_size.width as f32,
+                    inner_size.height as f32,
+                    0.0,
+                    1.0,
+                );
+                rpass.draw(0..4, 0..1);
+
+                // Decoration overlay: full outer viewport.
+                if let Some(overlay) = decoration_overlay {
+                    overlay.render(rpass, &pipeline);
                 }
             })?;
         } else {
+            // CPU (softbuffer) path — unchanged behaviour.
+            let egui_cpu = self.egui_cpu.as_mut().unwrap();
             self.inner_window.draw_softbuffer(|buffer| {
                 let mut egui_buffer = vec![0u32; (inner_size.width * inner_size.height) as usize];
                 let mut buffer_ref = egui_software_backend::BufferMutRef::new(
@@ -474,7 +523,7 @@ impl<'a> PromptWindow<'a> {
                     inner_size.height as usize,
                 );
 
-                let _ = self.egui_window.redraw(&mut buffer_ref, |ui| {
+                let _ = egui_cpu.redraw(&mut buffer_ref, |ui| {
                     egui::CentralPanel::default().show_inside(ui, |ui| {
                         ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                             ui.heading("Repeat after me");
@@ -485,16 +534,13 @@ impl<'a> PromptWindow<'a> {
                             }
 
                             let mut prompt = TextEdit::singleline(&mut self.value);
-
                             if let Some(placeholder) = &self.placeholder {
                                 prompt = prompt.hint_text(placeholder);
-                            };
-
+                            }
                             let response = ui.add(prompt);
                             response.request_focus();
 
                             ui.add_space(ui.available_height() - 50.0);
-
                             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                                 if ui.add(egui::Button::new("Submit")).clicked() {
                                     if let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
@@ -504,12 +550,12 @@ impl<'a> PromptWindow<'a> {
                                         tracing::error!("{err}");
                                     }
                                 }
-                            })
-                        })
+                            });
+                        });
                     });
                 });
 
-                buffer.copy_from_u32_buf(&egui_buffer, inner_size.width, x, y);
+                buffer.copy_from_u32_buf(&egui_buffer, inner_size.width, ox, oy);
             })?;
         }
 
@@ -529,11 +575,11 @@ impl<'a> PromptWindow<'a> {
 
 pub struct ChoiceWindow<'a> {
     pub inner_window: InnerWindow<'a>,
-    egui_window: EguiCPUWindow,
     text: Option<String>,
     options: Vec<ChoiceWindowOption>,
-    gpu_renderer: Option<GpuRenderer>,
-    frame_buffer: Vec<u8>,
+    egui_cpu: Option<EguiCPUWindow>,
+    egui_gpu: Option<EguiGpuRenderer>,
+    decoration_overlay: Option<DecorationOverlay>,
 }
 
 impl<'a> ChoiceWindow<'a> {
@@ -542,117 +588,158 @@ impl<'a> ChoiceWindow<'a> {
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
     ) -> Result<Self> {
-        let egui_window = EguiCPUWindow::new(
-            inner_window.window().clone(),
-            inner_window.is_gpu(),
-            inner_window.transparent(),
-        )?;
-
-        let (gpu_renderer, frame_buffer) = if inner_window.is_gpu() {
-            let outer_size = inner_window.outer_size();
-            let frame_buffer = vec![0; (outer_size.width * outer_size.height * 4) as usize];
-            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity, inner_window.premultiplied_alpha());
-            (Some(gpu_renderer), frame_buffer)
+        let (egui_cpu, egui_gpu, decoration_overlay) = if inner_window.is_gpu() {
+            let inner_size = inner_window.inner_size();
+            let egui_gpu = EguiGpuRenderer::new(
+                inner_window.wgpu_state(),
+                inner_window.window(),
+                inner_size,
+                inner_window.transparent(),
+                inner_window.opacity,
+                inner_window.premultiplied_alpha(),
+            )?;
+            let decoration_overlay = if inner_window.decorations() {
+                let outer_size = inner_window.outer_size();
+                Some(DecorationOverlay::new(
+                    inner_window.wgpu_state(),
+                    outer_size.width,
+                    outer_size.height,
+                    inner_window.premultiplied_alpha(),
+                    inner_window.opacity,
+                ))
+            } else {
+                None
+            };
+            (None, Some(egui_gpu), decoration_overlay)
         } else {
-            (None, Vec::new())
+            let egui_cpu = EguiCPUWindow::new(
+                inner_window.window().clone(),
+                inner_window.transparent(),
+            )?;
+            (Some(egui_cpu), None, None)
         };
 
         Ok(Self {
             inner_window,
-            egui_window,
             text,
             options,
-            gpu_renderer,
-            frame_buffer,
+            egui_cpu,
+            egui_gpu,
+            decoration_overlay,
         })
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) {
-        let event = if self.inner_window.decorations() {
-            &translate_event_position(event.clone(), self.inner_window.window().scale_factor())
+        let translated = if self.inner_window.decorations() {
+            Some(translate_event_position(
+                event.clone(),
+                self.inner_window.window().scale_factor(),
+            ))
         } else {
-            event
+            None
         };
+        let translated_ref = translated.as_ref().unwrap_or(event);
 
-        self.egui_window.handle_event(event);
+        if let Some(egui_gpu) = &mut self.egui_gpu {
+            egui_gpu.handle_event(self.inner_window.window(), translated_ref);
+        } else if let Some(egui_cpu) = &mut self.egui_cpu {
+            egui_cpu.handle_event(translated_ref);
+        }
     }
 
     pub fn render(&mut self) -> Result<()> {
         self.inner_window.start_render()?;
 
-        if let Some(gpu_renderer) = &self.gpu_renderer {
-            gpu_renderer.set_opacity(self.inner_window.wgpu_state(), self.inner_window.opacity);
-        }
-
         let id = self.inner_window.window().id();
         let lua_event_tx = self.inner_window.lua_event_tx().clone();
-        
         let inner_size = self.inner_window.inner_size();
-        let outer_size = self.inner_window.outer_size();
-        let (x, y) = self.inner_window.inner_offset();
+        let (ox, oy) = self.inner_window.inner_offset();
+        let opacity = self.inner_window.opacity;
 
-        if let Some(gpu_renderer) = &mut self.gpu_renderer {
-            self.frame_buffer.fill(0);
-            
-            let mut egui_buffer = vec![0u32; (inner_size.width * inner_size.height) as usize];
-            let mut buffer_ref = egui_software_backend::BufferMutRef::new(
-                bytemuck::cast_slice_mut(&mut egui_buffer),
-                inner_size.width as usize,
-                inner_size.height as usize,
-            );
+        if self.egui_gpu.is_some() {
+            let wgpu_state = self.inner_window.wgpu_state().clone();
+            let window = self.inner_window.window().clone();
 
-            let _ = self.egui_window.redraw(&mut buffer_ref, |ui| {
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.add_space(20.0);
+            let text = self.text.clone();
+            let options = self.options.clone();
+            self.egui_gpu.as_mut().unwrap().render_to_texture(
+                &wgpu_state,
+                &window,
+                inner_size,
+                |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                            ui.add_space(20.0);
 
-                        if let Some(text) = &self.text {
-                            ui.label(RichText::new(text).heading());
-                        }
+                            if let Some(text) = &text {
+                                ui.label(RichText::new(text).heading());
+                            }
 
-                        ui.add_space(ui.available_height() - 100.0);
+                            ui.add_space(ui.available_height() - 100.0);
 
-                        ui.with_layout(
-                            egui::Layout::left_to_right(egui::Align::Center)
-                                .with_main_wrap(true)
-                                .with_main_align(egui::Align::Center)
-                                .with_main_justify(true),
-                            |ui| {
-                                for option in &self.options {
-                                    if ui.button(&option.label).clicked() {
-                                        let _ = lua_event_tx.send(lua::Event::ChoiceSelect {
-                                            id,
-                                            option_id: option.id.clone(),
-                                        });
+                            ui.with_layout(
+                                egui::Layout::left_to_right(egui::Align::Center)
+                                    .with_main_wrap(true)
+                                    .with_main_align(egui::Align::Center)
+                                    .with_main_justify(true),
+                                |ui| {
+                                    for option in &options {
+                                        if ui.button(&option.label).clicked() {
+                                            let _ = lua_event_tx.send(lua::Event::ChoiceSelect {
+                                                id,
+                                                option_id: option.id.clone(),
+                                            });
+                                        }
+                                        ui.add_space(5.0);
                                     }
-                                    ui.add_space(5.0);
-                                }
-                            },
-                        )
-                    })
-                });
+                                },
+                            );
+                        });
+                    });
+                },
+            )?;
+
+            let decoration_overlay = &mut self.decoration_overlay;
+            self.inner_window.with_header_pixmap(|pixmap| {
+                if let Some(overlay) = decoration_overlay {
+                    overlay.upload_header(&wgpu_state.queue, pixmap, ox, oy);
+                }
             });
 
-            {
-                let pixmap = PixmapMut::from_bytes(&mut self.frame_buffer, outer_size.width, outer_size.height).unwrap();
-                let mut buffer = Buffer::Pixmap(pixmap);
-                buffer.copy_from_u32_buf(&egui_buffer, inner_size.width, x, y);
-                self.inner_window.render_decorations(&mut buffer)?;
+            if let Some(overlay) = &self.decoration_overlay {
+                overlay.set_opacity(&wgpu_state.queue, opacity);
             }
+            self.egui_gpu
+                .as_ref()
+                .unwrap()
+                .set_opacity(&wgpu_state.queue, opacity);
 
-            gpu_renderer.upload_frame_buffer(&self.inner_window.wgpu_state().queue, &self.frame_buffer, outer_size.width, outer_size.height);
+            let surface_format = self.inner_window.surface_format().unwrap();
+            let pipeline = wgpu_state.get_pipeline(surface_format);
+            let egui_bind_group = &self.egui_gpu.as_ref().unwrap().bind_group;
+            let egui_window_bind_group = &self.egui_gpu.as_ref().unwrap().window_bind_group;
+            let decoration_overlay = self.decoration_overlay.as_ref();
 
-            let pipeline = self.inner_window.wgpu_state().get_pipeline(self.inner_window.surface_format().unwrap());
-            
-            self.inner_window.draw_wgpu(|rpass, _x, _y| {
-                if let GpuRendererType::Image { bind_group, .. } = &gpu_renderer.renderer_type {
-                    rpass.set_pipeline(&pipeline);
-                    rpass.set_bind_group(0, bind_group, &[]);
-                    rpass.set_bind_group(1, &gpu_renderer.window_bind_group, &[]);
-                    rpass.draw(0..4, 0..1);
+            self.inner_window.draw_wgpu(|rpass, x, y| {
+                rpass.set_pipeline(&pipeline);
+                rpass.set_bind_group(0, egui_bind_group, &[]);
+                rpass.set_bind_group(1, egui_window_bind_group, &[]);
+                rpass.set_viewport(
+                    x as f32,
+                    y as f32,
+                    inner_size.width as f32,
+                    inner_size.height as f32,
+                    0.0,
+                    1.0,
+                );
+                rpass.draw(0..4, 0..1);
+
+                if let Some(overlay) = decoration_overlay {
+                    overlay.render(rpass, &pipeline);
                 }
             })?;
         } else {
+            let egui_cpu = self.egui_cpu.as_mut().unwrap();
             self.inner_window.draw_softbuffer(|buffer| {
                 let mut egui_buffer = vec![0u32; (inner_size.width * inner_size.height) as usize];
                 let mut buffer_ref = egui_software_backend::BufferMutRef::new(
@@ -661,7 +748,7 @@ impl<'a> ChoiceWindow<'a> {
                     inner_size.height as usize,
                 );
 
-                let _ = self.egui_window.redraw(&mut buffer_ref, |ui| {
+                let _ = egui_cpu.redraw(&mut buffer_ref, |ui| {
                     egui::CentralPanel::default().show_inside(ui, |ui| {
                         ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                             ui.add_space(20.0);
@@ -688,12 +775,12 @@ impl<'a> ChoiceWindow<'a> {
                                         ui.add_space(5.0);
                                     }
                                 },
-                            )
-                        })
+                            );
+                        });
                     });
                 });
 
-                buffer.copy_from_u32_buf(&egui_buffer, inner_size.width, x, y);
+                buffer.copy_from_u32_buf(&egui_buffer, inner_size.width, ox, oy);
             })?;
         }
 
