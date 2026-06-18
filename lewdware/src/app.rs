@@ -190,7 +190,7 @@ impl<'a> ChaosApp<'a> {
         {
             use winit::platform::x11::{WindowAttributesExtX11, WindowType};
 
-            attrs = attrs.with_x11_window_type(vec![WindowType::Notification]);
+            attrs = attrs.with_x11_window_type(vec![WindowType::Dock]);
         }
 
         #[cfg(target_os = "windows")]
