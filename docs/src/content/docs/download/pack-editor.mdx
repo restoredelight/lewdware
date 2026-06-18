@@ -4,6 +4,7 @@ description: Download the Lewdware Pack Editor for your platform.
 ---
 
 import DownloadSection from '../../../components/DownloadSection.astro';
+import latest from '../../../data/pack-editor-latest.json';
 
 The Pack Editor is a graphical tool for creating and editing packs — import media, assign tags,
 embed modes, and export for distribution.
@@ -20,21 +21,21 @@ scroll to the security section, and click **Open Anyway**.
 :::
 
 <DownloadSection
-  windowsUrl="https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_x64-setup.msi"
+  windowsUrl={latest.assets['windows-x64']}
   windowsExt="msi"
-  macosArm64Url="https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_aarch64.dmg"
-  macosX64Url="https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_x64.dmg"
+  macosArm64Url={latest.assets['macos-arm64']}
+  macosX64Url={latest.assets['macos-x64']}
   macosExt="dmg"
   linuxX64={{
-    deb: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_amd64.deb',
-    rpm: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_amd64.rpm',
-    other: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_amd64.AppImage',
+    deb: latest.assets['linux-x64-deb'],
+    rpm: latest.assets['linux-x64-rpm'],
+    other: latest.assets['linux-x64-appimage'],
     otherLabel: 'AppImage',
   }}
   linuxArm64={{
-    deb: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_arm64.deb',
-    rpm: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_arm64.rpm',
-    other: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware-pack-editor_0.1.0_arm64.AppImage',
+    deb: latest.assets['linux-arm64-deb'],
+    rpm: latest.assets['linux-arm64-rpm'],
+    other: latest.assets['linux-arm64-appimage'],
     otherLabel: 'AppImage',
   }}
 />

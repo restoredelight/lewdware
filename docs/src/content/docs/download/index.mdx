@@ -4,6 +4,7 @@ description: Download Lewdware, the config app, and the lw CLI for your platform
 ---
 
 import DownloadSection from '../../../components/DownloadSection.astro';
+import latest from '../../../data/latest.json';
 
 This installer includes:
 
@@ -28,21 +29,21 @@ installer entry.
 :::
 
 <DownloadSection
-  windowsUrl="https://github.com/restoredelight/lewdware/releases/latest/download/Lewdware-Installer-x64.exe"
+  windowsUrl={latest.assets['windows-x64']}
   windowsExt="exe"
-  macosArm64Url="https://github.com/restoredelight/lewdware/releases/latest/download/Lewdware-Installer-macOS-arm64.pkg"
-  macosX64Url="https://github.com/restoredelight/lewdware/releases/latest/download/Lewdware-Installer-macOS-x86_64.pkg"
+  macosArm64Url={latest.assets['macos-arm64']}
+  macosX64Url={latest.assets['macos-x64']}
   macosExt="pkg"
   linuxX64={{
-    deb: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_amd64.deb',
-    rpm: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_x86_64.rpm',
-    other: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_amd64.tar.gz',
+    deb: latest.assets['linux-x64-deb'],
+    rpm: latest.assets['linux-x64-rpm'],
+    other: latest.assets['linux-x64-tar'],
     otherLabel: '.tar.gz',
   }}
   linuxArm64={{
-    deb: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_arm64.deb',
-    rpm: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_aarch64.rpm',
-    other: 'https://github.com/restoredelight/lewdware/releases/latest/download/lewdware_0.1.0_arm64.tar.gz',
+    deb: latest.assets['linux-arm64-deb'],
+    rpm: latest.assets['linux-arm64-rpm'],
+    other: latest.assets['linux-arm64-tar'],
     otherLabel: '.tar.gz',
   }}
 />

@@ -1,0 +1,16 @@
+{
+  "version": "0.1.0",
+  "pub_date": "2026-06-18T00:00:00Z",
+  "download_page": "https://lewdware.net/download/",
+  "assets": {
+    "windows-x64": "https://github.com/restoredelight/lewdware/releases/download/v0.1.0/Lewdware-Installer-x64.exe",
+    "macos-arm64": "https://github.com/restoredelight/lewdware/releases/download/v0.1.0/Lewdware-Installer-macOS-arm64.pkg",
+    "macos-x64": "https://github.com/restoredelight/lewdware/releases/download/v0.1.0/Lewdware-Installer-macOS-x86_64.pkg",
+    "linux-x64-deb": "https://github.com/restoredelight/lewdware/releases/download/v0.1.0/lewdware_0.1.0_amd64.deb",
+    "linux-x64-rpm": "https://github.com/restoredelight/lewdware/releases/download/v0.1.0/lewdware_0.1.0_x86_64.rpm",
+    "linux-x64-tar": "https://github.com/restoredelight/lewdware/releases/download/v0.1.0/lewdware_0.1.0_amd64.tar.gz",
+    "linux-arm64-deb": "https://github.com/restoredelight/lewdware/releases/download/v0.1.0/lewdware_0.1.0_arm64.deb",
+    "linux-arm64-rpm": "https://github.com/restoredelight/lewdware/releases/download/v0.1.0/lewdware_0.1.0_aarch64.rpm",
+    "linux-arm64-tar": "https://github.com/restoredelight/lewdware/releases/download/v0.1.0/lewdware_0.1.0_arm64.tar.gz"
+  }
+}
