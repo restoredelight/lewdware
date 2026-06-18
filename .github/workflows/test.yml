@@ -47,6 +47,16 @@ jobs:
             librsvg2-dev \
             liblua5.4-dev
 
+      - name: Create sidecar stubs
+        run: |
+          TRIPLE=$(rustc -vV | grep '^host:' | cut -d' ' -f2)
+          mkdir -p pack-editor/src-tauri/binaries
+          for name in lewdware-ffmpeg lewdware-ffprobe; do
+            stub="pack-editor/src-tauri/binaries/${name}-${TRIPLE}"
+            printf '#!/bin/sh\n' > "$stub"
+            chmod +x "$stub"
+          done
+
       - name: Run tests
         run: cargo test -p lewdware-pack-editor
 
