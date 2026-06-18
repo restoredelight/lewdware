@@ -5,10 +5,9 @@ description: Reference for config.jsonc — the configuration file for a mode.
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Each mode is described by a `config.jsonc` file at the root of the mode directory. The file uses
-[JSON with Comments](https://code.visualstudio.com/docs/languages/json#_json-with-comments) (JSONC)
-syntax. A JSON Schema is available at
-`https://lewdware.github.com/mode.schema.json` for editor autocompletion.
+Each mode is described by a `config.jsonc` file at the root of the mode directory. Config files
+are parsed following the [json5](https://json5.org/) specification (so comments and trailing
+commas are allowed).
 
 ## Example
 
@@ -45,12 +44,12 @@ syntax. A JSON Schema is available at
 | `name` | `string` | Yes | The display name of the mode file. |
 | `version` | `string` | No | Version string, e.g. `"1.0.0"`. |
 | `author` | `string` | No | Author name. |
-| `include` | `string[]` | No | Paths of additional directories or files to bundle (e.g. `["src"]`). |
+| `include` | `string[]` | No | Paths of directories or files of Lua code to bundle (e.g. `["src"]`). |
 | `modes` | `object` | Yes | Map of mode keys to [mode definitions](#mode). |
 
 ## Mode
 
-Each key in `modes` is an arbitrary identifier (used internally). The value is a mode object:
+Each value in `modes` is a mode object:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -129,6 +128,6 @@ The remaining fields depend on `type`:
     }
     ```
 
-    The runtime value of `lewdware.config["theme"]` will be the selected key (e.g. `"dark"`).
+    The runtime value of `lewdware.config["theme"]` will be the selected key (e.g. `"auto"`).
   </TabItem>
 </Tabs>
