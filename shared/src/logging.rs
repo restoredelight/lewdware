@@ -24,7 +24,13 @@ pub fn init(log_file_prefix: &str) -> WorkerGuard {
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
 
     let stderr_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new(if cfg!(debug_assertions) { "debug" } else { "warn" })
+        // In debug builds default to debug for our own crates, warn for everything else.
+        // Set RUST_LOG to override (e.g. RUST_LOG=debug to see all deps).
+        EnvFilter::new(if cfg!(debug_assertions) {
+            "warn,lewdware=debug,shared=debug,lewdware_config=debug,lewdware_pack_editor=debug"
+        } else {
+            "warn"
+        })
     });
 
     tracing_subscriber::registry()
@@ -32,9 +38,17 @@ pub fn init(log_file_prefix: &str) -> WorkerGuard {
             fmt::layer()
                 .with_writer(file_writer)
                 .with_ansi(false)
+                .with_file(true)
+                .with_line_number(true)
                 .with_filter(EnvFilter::new("info")),
         )
-        .with(fmt::layer().with_writer(std::io::stderr).with_filter(stderr_filter))
+        .with(
+            fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_file(true)
+                .with_line_number(true)
+                .with_filter(stderr_filter),
+        )
         .init();
 
     guard

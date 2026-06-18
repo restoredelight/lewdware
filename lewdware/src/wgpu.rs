@@ -123,7 +123,7 @@ impl WgpuState {
                     }
                     .map_err(|e| anyhow::anyhow!("Vulkan device creation failed: {e:?}"))?
                 };
-                tracing::error!("[wgpu] VK_EXT_image_drm_format_modifier enabled");
+                tracing::info!("[wgpu] VK_EXT_image_drm_format_modifier enabled");
                 unsafe {
                     adapter.create_device_from_hal::<vulkan::Api>(
                         open_device,

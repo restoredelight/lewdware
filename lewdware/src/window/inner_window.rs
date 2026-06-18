@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use shared::once;
 use tokio::sync::mpsc;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, PhysicalUnit};
 use winit::window::Window;
@@ -26,7 +27,7 @@ pub struct InnerWindow<'a> {
     position: LogicalPosition<u32>,
     lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     current_move: Option<Move>,
-    wgpu_state: Arc<WgpuState>,
+    wgpu_state: Option<Arc<WgpuState>>,
     transparent: bool,
     // Whether the surface's CompositeAlphaMode is PreMultiplied (vs. PostMultiplied/Opaque).
     // Tells the fragment shaders whether they need to pre-scale rgb by alpha themselves.
@@ -34,11 +35,6 @@ pub struct InnerWindow<'a> {
     current_fade: Option<Fade>,
     pub opacity: f32,
 }
-
-// Warn at most once per run if the platform/adapter can't actually composite transparent
-// windows, rather than silently rendering them opaque with no indication why.
-static ALPHA_MODE_UNSUPPORTED_WARNED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 
 struct Move {
     id: u64,
@@ -61,7 +57,7 @@ struct Fade {
 impl<'a> InnerWindow<'a> {
     pub fn new(
         window: Window,
-        wgpu_state: Arc<WgpuState>,
+        wgpu_state: Option<Arc<WgpuState>>,
         decorations: bool,
         title: Option<String>,
         closeable: bool,
@@ -76,63 +72,69 @@ impl<'a> InnerWindow<'a> {
 
         let mut premultiplied_alpha = false;
 
-        let surface = if gpu && !wgpu_state.error.load(Ordering::Acquire) {
-            let surface = wgpu_state.instance.create_surface(window.clone())?;
-            let surface_caps = surface.get_capabilities(&wgpu_state.adapter);
-            let surface_format = surface_caps
-                .formats
-                .iter()
-                .find(|f| f.is_srgb())
-                .unwrap_or(&surface_caps.formats[0]);
+        let surface = if let (true, Some(wgpu)) = (gpu, &wgpu_state) {
+            if !wgpu.error.load(Ordering::Acquire) {
+                let surface = wgpu.instance.create_surface(window.clone())?;
+                let surface_caps = surface.get_capabilities(&wgpu.adapter);
+                let surface_format = surface_caps
+                    .formats
+                    .iter()
+                    .find(|f| f.is_srgb())
+                    .unwrap_or(&surface_caps.formats[0]);
 
-            let alpha_mode = if transparent {
-                if surface_caps
-                    .alpha_modes
-                    .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
-                {
-                    premultiplied_alpha = true;
-                    wgpu::CompositeAlphaMode::PreMultiplied
-                } else if surface_caps
-                    .alpha_modes
-                    .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
-                {
-                    wgpu::CompositeAlphaMode::PostMultiplied
-                } else {
-                    // Neither mode is available, so the compositor has no way to blend this
-                    // window's alpha against the desktop at all (common on plain Win32/DX12
-                    // swapchains, non-compositing X11, and software/llvmpipe GL). `Auto` would
-                    // only ever resolve to `Opaque` or `Inherit` here anyway, both of which
-                    // amount to the same thing in practice, so make that explicit.
-                    if !ALPHA_MODE_UNSUPPORTED_WARNED.swap(true, Ordering::Relaxed) {
-                        tracing::error!(
+                let alpha_mode = if transparent {
+                    if surface_caps
+                        .alpha_modes
+                        .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+                    {
+                        premultiplied_alpha = true;
+                        wgpu::CompositeAlphaMode::PreMultiplied
+                    } else if surface_caps
+                        .alpha_modes
+                        .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
+                    {
+                        wgpu::CompositeAlphaMode::PostMultiplied
+                    } else {
+                        // Neither mode is available, so the compositor has no way to blend this
+                        // window's alpha against the desktop at all (common on plain Win32/DX12
+                        // swapchains, non-compositing X11, and software/llvmpipe GL). `Auto` would
+                        // only ever resolve to `Opaque` or `Inherit` here anyway, both of which
+                        // amount to the same thing in practice, so make that explicit.
+                        once!(tracing::error!(
                             "This platform/adapter doesn't support transparent windows (no PreMultiplied/PostMultiplied composite alpha mode available); transparent popups will render opaque"
-                        );
+                        ));
+
+                        wgpu::CompositeAlphaMode::Opaque
                     }
+                } else {
                     wgpu::CompositeAlphaMode::Opaque
+                };
+
+                let surface_config = wgpu::SurfaceConfiguration {
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    format: *surface_format,
+                    width: outer_size.width,
+                    height: outer_size.height,
+                    present_mode: wgpu::PresentMode::Fifo,
+                    alpha_mode,
+                    view_formats: vec![],
+                    desired_maximum_frame_latency: 2,
+                };
+                surface.configure(&wgpu.device, &surface_config);
+
+                Surface::Wgpu {
+                    surface,
+                    surface_config,
                 }
             } else {
-                wgpu::CompositeAlphaMode::Opaque
-            };
-
-            let surface_config = wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: *surface_format,
-                width: outer_size.width,
-                height: outer_size.height,
-                present_mode: wgpu::PresentMode::Fifo,
-                alpha_mode,
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            };
-            surface.configure(&wgpu_state.device, &surface_config);
-
-            Surface::Wgpu {
-                surface,
-                surface_config,
+                let (context, surface) = init_softbuffer(window.clone())?;
+                Surface::Softbuffer {
+                    _context: context,
+                    surface,
+                }
             }
         } else {
             let (context, surface) = init_softbuffer(window.clone())?;
-
             Surface::Softbuffer {
                 _context: context,
                 surface,
@@ -174,7 +176,7 @@ impl<'a> InnerWindow<'a> {
     }
 
     pub fn wgpu_state(&self) -> &Arc<WgpuState> {
-        &self.wgpu_state
+        self.wgpu_state.as_ref().unwrap()
     }
 
     pub fn surface_format(&self) -> Option<wgpu::TextureFormat> {
@@ -195,7 +197,13 @@ impl<'a> InnerWindow<'a> {
     pub fn start_render(&mut self) -> Result<()> {
         match &mut self.surface {
             Surface::Wgpu { .. } => {
-                if self.wgpu_state.error.load(Ordering::Acquire) {
+                if self
+                    .wgpu_state
+                    .as_ref()
+                    .unwrap()
+                    .error
+                    .load(Ordering::Acquire)
+                {
                     tracing::info!("wgpu error; switching to softbuffer");
                     let (context, surface) = init_softbuffer(self.window.clone())?;
 
@@ -236,7 +244,8 @@ impl<'a> InnerWindow<'a> {
                 surface,
                 surface_config,
             } => {
-                if self.wgpu_state.error.load(Ordering::Acquire) {
+                let wgpu = self.wgpu_state.as_ref().unwrap();
+                if wgpu.error.load(Ordering::Acquire) {
                     bail!("wgpu error; stopping rendering");
                 }
 
@@ -245,17 +254,12 @@ impl<'a> InnerWindow<'a> {
                     wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => surface_texture,
                     wgpu::CurrentSurfaceTexture::Timeout => return Ok(()),
                     wgpu::CurrentSurfaceTexture::Outdated => {
-                        surface.configure(&self.wgpu_state.device, surface_config);
+                        surface.configure(&wgpu.device, surface_config);
                         return Ok(());
                     }
                     wgpu::CurrentSurfaceTexture::Lost => {
-                        *surface = self
-                            .wgpu_state
-                            .instance
-                            .create_surface(self.window.clone())?;
-
-                        surface.configure(&self.wgpu_state.device, surface_config);
-
+                        *surface = wgpu.instance.create_surface(self.window.clone())?;
+                        surface.configure(&wgpu.device, surface_config);
                         return Ok(());
                     }
                     wgpu::CurrentSurfaceTexture::Occluded => return Ok(()),
@@ -268,11 +272,11 @@ impl<'a> InnerWindow<'a> {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                let mut encoder = self.wgpu_state.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor {
-                        label: Some("Wgpu Surface Render Encoder"),
-                    },
-                );
+                let mut encoder =
+                    wgpu.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Wgpu Surface Render Encoder"),
+                        });
 
                 let clear = if self.transparent {
                     wgpu::Color::TRANSPARENT
@@ -311,7 +315,7 @@ impl<'a> InnerWindow<'a> {
                     draw_fn(&mut rpass, x, y);
                 }
 
-                self.wgpu_state.queue.submit(Some(encoder.finish()));
+                wgpu.queue.submit(Some(encoder.finish()));
                 output.present();
             }
             _ => bail!("Called draw_wgpu on a non-GPU surface"),
@@ -320,18 +324,17 @@ impl<'a> InnerWindow<'a> {
         Ok(())
     }
 
-    pub fn draw_softbuffer(
-        &mut self,
-        draw_fn: impl FnOnce(&mut Buffer),
-    ) -> Result<()> {
+    pub fn draw_softbuffer(&mut self, draw_fn: impl FnOnce(&mut Buffer)) -> Result<()> {
         let softbuffer_surface = match &mut self.surface {
             Surface::Softbuffer { surface, .. } => surface,
             _ => bail!("Called draw_softbuffer on a non-CPU surface"),
         };
 
-        let buffer_data = softbuffer_surface.buffer_mut().map_err(|err| anyhow!("{err}"))?;
+        let buffer_data = softbuffer_surface
+            .buffer_mut()
+            .map_err(|err| anyhow!("{err}"))?;
         let mut buffer = Buffer::Softbuffer(buffer_data);
-        
+
         draw_fn(&mut buffer);
 
         // draw decorations
