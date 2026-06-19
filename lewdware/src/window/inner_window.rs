@@ -340,18 +340,15 @@ impl<'a> InnerWindow<'a> {
 
         draw_fn(&mut buffer);
 
-        // draw decorations
+        // draw decorations — always written every frame because softbuffer buffers are not
+        // guaranteed to retain content across frames (e.g. macOS CALayer backing store).
         if self.decorations {
-            if !self.border_rendered {
-                buffer.draw_border();
-                self.border_rendered = true;
-            }
+            buffer.draw_border();
             if let Some(header) = &mut self.header {
                 let scale_factor = self.window.scale_factor();
                 let border_offset = PhysicalUnit::from_logical::<_, u32>(1, scale_factor).0;
-                if let Some(pixmap) = header.draw() {
-                    buffer.copy_from_pixmap(pixmap, border_offset, border_offset);
-                }
+                let pixmap = header.get_pixmap();
+                buffer.copy_from_pixmap(pixmap, border_offset, border_offset);
             }
         }
 

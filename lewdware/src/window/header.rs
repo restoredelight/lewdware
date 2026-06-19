@@ -225,6 +225,21 @@ impl Header {
             return None;
         }
 
+        self.render();
+
+        Some(&self.pixmap)
+    }
+
+    /// Re-render the pixmap if dirty, then always return it. Use this on the softbuffer path
+    /// where the buffer is not guaranteed to retain previous frame content (e.g. macOS).
+    pub fn get_pixmap(&mut self) -> &Pixmap {
+        if self.needs_redraw {
+            self.render();
+        }
+        &self.pixmap
+    }
+
+    fn render(&mut self) {
         if !self.background_drawn || self.text_changed {
             self.draw_background();
         }
@@ -238,8 +253,6 @@ impl Header {
         }
 
         self.needs_redraw = false;
-
-        Some(&self.pixmap)
     }
 
     fn over_close_button(&self, position: PhysicalPosition<f64>) -> bool {
