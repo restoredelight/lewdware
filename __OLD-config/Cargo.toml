@@ -14,7 +14,7 @@ dioxus-stores = "0.7.3"
 r2d2 = "0.8.10"
 r2d2_sqlite = { version = "0.32.0", features = ["bundled"] }
 rusqlite = { version = "0.38.0", features = ["bundled", "fallible_uint"] }
-shared = { version = "0.1.0", path = "../shared" }
+shared = { path = "../shared" }
 tempfile = "3.25.0"
 tokio = { version = "1.49.0", features = ["io-util"] }
 tokio-stream = "0.1.18"
