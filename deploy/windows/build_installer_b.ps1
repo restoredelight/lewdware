@@ -68,11 +68,13 @@ Pop-Location
 Write-Host "Staging outputs..."
 if (!(Test-Path "dist")) { New-Item -ItemType Directory -Path "dist" }
 
-# Find generated MSI or EXE installer
+$VERSION = (Select-String -Path "Cargo.toml" -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+
 $INSTALLER = Get-ChildItem -Path "target\release\bundle" -Filter "lewdware-pack-editor*.msi" -Recurse | Select-Object -First 1
 if ($INSTALLER) {
-    Copy-Item $INSTALLER.FullName -Destination "dist\" -Force
-    Write-Host "SUCCESS: Generated $($INSTALLER.Name) in dist/"
+    $DEST = "dist\lewdware-pack-editor_${VERSION}_x86_64.msi"
+    Copy-Item $INSTALLER.FullName -Destination $DEST -Force
+    Write-Host "SUCCESS: Staged lewdware-pack-editor_${VERSION}_x86_64.msi in dist/"
 } else {
     Write-Error "Could not find generated MSI package under target/release/bundle/"
 }

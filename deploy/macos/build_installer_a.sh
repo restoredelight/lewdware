@@ -112,6 +112,6 @@ pkgbuild --root "$BUILD_DIR/root" \
 # 6. Build the Final Installer
 echo "📦 Wrapping into final installer..."
 productbuild --package "$BUILD_DIR/LewdwareComponents.pkg" \
-             "$OUTPUT_DIR/Lewdware-Installer-macOS-${ARCH}.pkg"
+             "$OUTPUT_DIR/lewdware_${VERSION}_${ARCH}.pkg"
 
-echo "🎉 SUCCESS: $OUTPUT_DIR/Lewdware-Installer-macOS-${ARCH}.pkg created!"
+echo "SUCCESS: $OUTPUT_DIR/lewdware_${VERSION}_${ARCH}.pkg created!"

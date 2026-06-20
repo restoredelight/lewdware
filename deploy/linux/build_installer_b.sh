@@ -4,10 +4,14 @@
 set -e
 
 # Detect architecture
-ARCH=$(uname -m)
+case "$(uname -m)" in
+  x86_64)       ARCH="x86_64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
+  *)             ARCH="$(uname -m)" ;;
+esac
 if [ "$ARCH" = "x86_64" ]; then
   FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
-elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+elif [ "$ARCH" = "arm64" ]; then
   FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
 else
   echo "Unsupported architecture: $ARCH"
@@ -50,15 +54,30 @@ cd ..
 echo "Staging outputs..."
 mkdir -p dist
 
-# Look for generated Linux packages
+VERSION=$(grep '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+
 copied_count=0
-while read -r pkg; do
-  if [ -n "$pkg" ]; then
-    cp "$pkg" dist/
-    echo "SUCCESS: Staged $(basename "$pkg") in dist/"
-    copied_count=$((copied_count + 1))
-  fi
-done < <(find target/release/bundle/ -type f \( -name "lewdware-pack-editor*.deb" -o -name "lewdware-pack-editor*.rpm" -o -name "lewdware-pack-editor*.AppImage" \) 2>/dev/null)
+
+DEB_PATH=$(find target/release/bundle/ -type f -name "lewdware-pack-editor*.deb" 2>/dev/null | head -1)
+if [ -n "$DEB_PATH" ]; then
+  cp "$DEB_PATH" "dist/lewdware-pack-editor_${VERSION}_${ARCH}.deb"
+  echo "SUCCESS: Staged lewdware-pack-editor_${VERSION}_${ARCH}.deb in dist/"
+  copied_count=$((copied_count + 1))
+fi
+
+RPM_PATH=$(find target/release/bundle/ -type f -name "lewdware-pack-editor*.rpm" 2>/dev/null | head -1)
+if [ -n "$RPM_PATH" ]; then
+  cp "$RPM_PATH" "dist/lewdware-pack-editor_${VERSION}_${ARCH}.rpm"
+  echo "SUCCESS: Staged lewdware-pack-editor_${VERSION}_${ARCH}.rpm in dist/"
+  copied_count=$((copied_count + 1))
+fi
+
+APPIMAGE_PATH=$(find target/release/bundle/ -type f -name "lewdware-pack-editor*.AppImage" 2>/dev/null | head -1)
+if [ -n "$APPIMAGE_PATH" ]; then
+  cp "$APPIMAGE_PATH" "dist/lewdware-pack-editor_${VERSION}_${ARCH}.AppImage"
+  echo "SUCCESS: Staged lewdware-pack-editor_${VERSION}_${ARCH}.AppImage in dist/"
+  copied_count=$((copied_count + 1))
+fi
 
 if [ "$copied_count" -eq 0 ]; then
   echo "Error: No generated packages (.deb, .rpm, .AppImage) found under target/release/bundle/!" >&2

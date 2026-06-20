@@ -5,7 +5,11 @@ set -e
 
 VERSION=$(grep '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
 DEB_ARCH=$(dpkg --print-architecture)
-RPM_ARCH=$(uname -m)
+case "$(uname -m)" in
+  x86_64)       ARCH="x86_64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
+  *)             ARCH="$(uname -m)" ;;
+esac
 STAGE_DIR="build/deb-stage"
 OUTPUT_DIR="dist"
 
@@ -133,7 +137,7 @@ EOF
 
 # 6. Build the Debian Package
 echo "Building Debian package..."
-dpkg-deb --build "$STAGE_DIR" "$OUTPUT_DIR/lewdware_${VERSION}_${DEB_ARCH}.deb"
+dpkg-deb --build "$STAGE_DIR" "$OUTPUT_DIR/lewdware_${VERSION}_${ARCH}.deb"
 echo "Debian package created!"
 
 # 7. Build the RPM Package
@@ -185,7 +189,7 @@ EOF
     "$RPM_STAGE_DIR/SPECS/lewdware.spec"
 
   # Find generated RPM and copy to dist
-  find "$RPM_STAGE_DIR/RPMS" -type f -name "*.rpm" -exec cp {} "$OUTPUT_DIR/lewdware_${VERSION}_${RPM_ARCH}.rpm" \;
+  find "$RPM_STAGE_DIR/RPMS" -type f -name "*.rpm" -exec cp {} "$OUTPUT_DIR/lewdware_${VERSION}_${ARCH}.rpm" \;
   echo "RPM package created!"
 else
   echo "Warning: rpmbuild not found, skipping RPM packaging."
@@ -234,7 +238,7 @@ Simply run the config app from the `bin` directory:
 EOF
 
 # Pack archive
-tar -czf "$OUTPUT_DIR/lewdware_${VERSION}_${DEB_ARCH}.tar.gz" -C "$TAR_STAGE" "lewdware-${VERSION}"
+tar -czf "$OUTPUT_DIR/lewdware_${VERSION}_${ARCH}.tar.gz" -C "$TAR_STAGE" "lewdware-${VERSION}"
 echo "Portable tar.gz package created!"
 
 echo "SUCCESS: All Linux target packages staged/created in $OUTPUT_DIR!"

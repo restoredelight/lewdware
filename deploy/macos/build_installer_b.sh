@@ -54,11 +54,12 @@ cd ..
 echo "Staging outputs..."
 mkdir -p dist
 
-# Look for generated dmg or app package
+VERSION=$(grep '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+
 DMG_PATH=$(find target/release/bundle/dmg/ -name "lewdware-pack-editor*.dmg" 2>/dev/null | head -n 1)
 if [ -n "$DMG_PATH" ]; then
-  cp "$DMG_PATH" dist/
-  echo "SUCCESS: Generated $(basename "$DMG_PATH") in dist/"
+  cp "$DMG_PATH" "dist/lewdware-pack-editor_${VERSION}_${ARCH}.dmg"
+  echo "SUCCESS: Staged lewdware-pack-editor_${VERSION}_${ARCH}.dmg in dist/"
 else
   echo "Error: Could not find generated .dmg package under target/release/bundle/dmg/" >&2
   exit 1
