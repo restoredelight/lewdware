@@ -36,9 +36,9 @@
         }
       }
     },
-    "externalBin": [
-      "binaries/lewdware-ffmpeg",
-      "binaries/lewdware-ffprobe"
+    "resources": [
+      "binaries/lewdware-ffmpeg*",
+      "binaries/lewdware-ffprobe*"
     ],
     "icon": [
       "icons/32x32.png",

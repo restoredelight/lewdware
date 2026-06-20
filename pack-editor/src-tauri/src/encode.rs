@@ -165,6 +165,13 @@ impl std::fmt::Display for ProcessErrorKind {
 }
 
 static ENCODE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+static FFMPEG_PATH: OnceLock<PathBuf> = OnceLock::new();
+static FFPROBE_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn init_binary_paths(ffmpeg: PathBuf, ffprobe: PathBuf) {
+    let _ = FFMPEG_PATH.set(ffmpeg);
+    let _ = FFPROBE_PATH.set(ffprobe);
+}
 
 fn encode_semaphore() -> &'static Semaphore {
     ENCODE_SEMAPHORE.get_or_init(|| {
@@ -208,138 +215,58 @@ fn is_media_path(path: &Path) -> anyhow::Result<bool> {
     Ok(false)
 }
 
-fn get_ffmpeg_name() -> String {
-    let base = "lewdware-ffmpeg";
-    let arch = if cfg!(target_arch = "x86_64") {
-        "x86_64"
-    } else if cfg!(target_arch = "aarch64") {
-        "aarch64"
-    } else {
-        return base.to_string();
-    };
-
-    let os = if cfg!(target_os = "windows") {
-        "pc-windows-msvc"
-    } else if cfg!(target_os = "macos") {
-        "apple-darwin"
-    } else if cfg!(target_os = "linux") {
-        "unknown-linux-gnu"
-    } else {
-        return base.to_string();
-    };
-
-    let ext = if cfg!(target_os = "windows") {
-        ".exe"
-    } else {
-        ""
-    };
-    format!("{}-{}-{}{}", base, arch, os, ext)
+fn ffmpeg_filename() -> &'static str {
+    if cfg!(target_os = "windows") { "lewdware-ffmpeg.exe" } else { "lewdware-ffmpeg" }
 }
 
-fn get_ffprobe_name() -> String {
-    let base = "lewdware-ffprobe";
-    let arch = if cfg!(target_arch = "x86_64") {
-        "x86_64"
-    } else if cfg!(target_arch = "aarch64") {
-        "aarch64"
-    } else {
-        return base.to_string();
-    };
-
-    let os = if cfg!(target_os = "windows") {
-        "pc-windows-msvc"
-    } else if cfg!(target_os = "macos") {
-        "apple-darwin"
-    } else if cfg!(target_os = "linux") {
-        "unknown-linux-gnu"
-    } else {
-        return base.to_string();
-    };
-
-    let ext = if cfg!(target_os = "windows") {
-        ".exe"
-    } else {
-        ""
-    };
-    format!("{}-{}-{}{}", base, arch, os, ext)
+fn ffprobe_filename() -> &'static str {
+    if cfg!(target_os = "windows") { "lewdware-ffprobe.exe" } else { "lewdware-ffprobe" }
 }
 
 pub fn get_ffmpeg_path() -> PathBuf {
-    let sidecar_name = get_ffmpeg_name();
-    let direct_name = if cfg!(target_os = "windows") {
-        "lewdware-ffmpeg.exe"
-    } else {
-        "lewdware-ffmpeg"
-    };
+    if let Some(p) = FFMPEG_PATH.get() {
+        return p.clone();
+    }
 
+    let name = ffmpeg_filename();
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            // Check 1: Sibling direct name
-            let path = exe_dir.join(direct_name);
+            let path = exe_dir.join(name);
             if path.exists() {
                 return path;
             }
-
-            // Check 2: Sibling sidecar name
-            let path = exe_dir.join(&sidecar_name);
-            if path.exists() {
-                return path;
-            }
-
-            // Check 3: macOS bundle Resources directory
-            let macos_resources = exe_dir.join("../Resources").join(&sidecar_name);
-            if macos_resources.exists() {
-                return macos_resources;
-            }
-
-            // Check 4: macOS bundle Resources direct
-            let macos_resources_direct = exe_dir.join("../Resources").join(direct_name);
-            if macos_resources_direct.exists() {
-                return macos_resources_direct;
+            // macOS .app bundle
+            let resources = exe_dir.join("../Resources").join(name);
+            if resources.exists() {
+                return resources;
             }
         }
     }
 
-    PathBuf::from(direct_name)
+    PathBuf::from(name)
 }
 
 pub fn get_ffprobe_path() -> PathBuf {
-    let sidecar_name = get_ffprobe_name();
-    let direct_name = if cfg!(target_os = "windows") {
-        "lewdware-ffprobe.exe"
-    } else {
-        "lewdware-ffprobe"
-    };
+    if let Some(p) = FFPROBE_PATH.get() {
+        return p.clone();
+    }
 
+    let name = ffprobe_filename();
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            // Check 1: Sibling direct name
-            let path = exe_dir.join(direct_name);
+            let path = exe_dir.join(name);
             if path.exists() {
                 return path;
             }
-
-            // Check 2: Sibling sidecar name
-            let path = exe_dir.join(&sidecar_name);
-            if path.exists() {
-                return path;
-            }
-
-            // Check 3: macOS bundle Resources directory
-            let macos_resources = exe_dir.join("../Resources").join(&sidecar_name);
-            if macos_resources.exists() {
-                return macos_resources;
-            }
-
-            // Check 4: macOS bundle Resources direct
-            let macos_resources_direct = exe_dir.join("../Resources").join(direct_name);
-            if macos_resources_direct.exists() {
-                return macos_resources_direct;
+            // macOS .app bundle
+            let resources = exe_dir.join("../Resources").join(name);
+            if resources.exists() {
+                return resources;
             }
         }
     }
 
-    PathBuf::from(direct_name)
+    PathBuf::from(name)
 }
 
 fn file_info(path: &Path) -> Result<Option<FileInfo>> {

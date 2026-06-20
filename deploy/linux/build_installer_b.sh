@@ -6,10 +6,8 @@ set -e
 # Detect architecture
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
-  TRIPLE="x86_64-unknown-linux-gnu"
   FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
 elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-  TRIPLE="aarch64-unknown-linux-gnu"
   FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
 else
   echo "Unsupported architecture: $ARCH"
@@ -19,8 +17,8 @@ fi
 BINARIES_DIR="pack-editor/src-tauri/binaries"
 mkdir -p "$BINARIES_DIR"
 
-FFMPEG_SIDECAR="$BINARIES_DIR/lewdware-ffmpeg-$TRIPLE"
-FFPROBE_SIDECAR="$BINARIES_DIR/lewdware-ffprobe-$TRIPLE"
+FFMPEG_SIDECAR="$BINARIES_DIR/lewdware-ffmpeg"
+FFPROBE_SIDECAR="$BINARIES_DIR/lewdware-ffprobe"
 
 # 1. Fetch static FFmpeg and ffprobe if not already present
 if [ ! -f "$FFMPEG_SIDECAR" ] || [ ! -f "$FFPROBE_SIDECAR" ]; then

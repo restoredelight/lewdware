@@ -3,7 +3,7 @@ mod media_server;
 mod pack;
 mod thumbnail;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::{Arc, OnceLock}};
 
 use pack::{MediaFile, MediaPack};
 use serde::{Deserialize, Serialize};
@@ -48,16 +48,16 @@ pub type PackState = Arc<Mutex<Option<MediaPack>>>;
 
 pub struct AppState {
     pub pack: PackState,
-    pub media_port: std::sync::OnceLock<u16>,
-    pub hardware_encoder: HardwareEncoder,
+    pub media_port: OnceLock<u16>,
+    pub hardware_encoder: OnceLock<HardwareEncoder>,
 }
 
 impl AppState {
-    fn new(hardware_encoder: HardwareEncoder) -> Self {
+    fn new() -> Self {
         Self {
             pack: Arc::new(Mutex::new(None)),
-            media_port: std::sync::OnceLock::new(),
-            hardware_encoder,
+            media_port: OnceLock::new(),
+            hardware_encoder: OnceLock::new(),
         }
     }
 }
@@ -427,12 +427,13 @@ async fn add_files_dialog(
     }
 
     let pack_state = state.pack.clone();
+    let encoder = state.hardware_encoder.get().cloned().unwrap_or(HardwareEncoder::SoftwareFallback);
     tauri::async_runtime::spawn(encode::process_files(
         pack_state,
         paths,
         skip_duplicates,
         app,
-        state.hardware_encoder.clone(),
+        encoder,
     ));
     Ok(())
 }
@@ -468,12 +469,13 @@ async fn add_folder_dialog(
     }
 
     let pack_state = state.pack.clone();
+    let encoder = state.hardware_encoder.get().cloned().unwrap_or(HardwareEncoder::SoftwareFallback);
     tauri::async_runtime::spawn(encode::process_files(
         pack_state,
         paths,
         skip_duplicates,
         app,
-        state.hardware_encoder.clone(),
+        encoder,
     ));
     Ok(())
 }
@@ -490,14 +492,25 @@ fn get_media_port(state: State<'_, AppState>) -> u16 {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _log_guard = shared::logging::init("pack-editor");
-    let hardware_encoder = HardwareEncoder::detect_and_test();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::new(hardware_encoder))
+        .manage(AppState::new())
         .setup(|app| {
             let state = app.state::<AppState>();
+
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                let ffmpeg_name = if cfg!(target_os = "windows") { "lewdware-ffmpeg.exe" } else { "lewdware-ffmpeg" };
+                let ffprobe_name = if cfg!(target_os = "windows") { "lewdware-ffprobe.exe" } else { "lewdware-ffprobe" };
+                let ffmpeg = resource_dir.join(ffmpeg_name);
+                let ffprobe = resource_dir.join(ffprobe_name);
+                if ffmpeg.exists() && ffprobe.exists() {
+                    encode::init_binary_paths(ffmpeg, ffprobe);
+                }
+            }
+            let _ = state.hardware_encoder.set(HardwareEncoder::detect_and_test());
+
             let pack = state.pack.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             tauri::async_runtime::spawn(async move {

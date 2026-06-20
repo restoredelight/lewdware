@@ -6,11 +6,9 @@ set -e
 # Detect architecture
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
-  TRIPLE="x86_64-apple-darwin"
   FFMPEG_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/snapshot/ffmpeg.zip"
   FFPROBE_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/snapshot/ffprobe.zip"
 elif [ "$ARCH" = "arm64" ]; then
-  TRIPLE="aarch64-apple-darwin"
   FFMPEG_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/snapshot/ffmpeg.zip"
   FFPROBE_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/snapshot/ffprobe.zip"
 else
@@ -21,8 +19,8 @@ fi
 BINARIES_DIR="pack-editor/src-tauri/binaries"
 mkdir -p "$BINARIES_DIR"
 
-FFMPEG_SIDECAR="$BINARIES_DIR/lewdware-ffmpeg-$TRIPLE"
-FFPROBE_SIDECAR="$BINARIES_DIR/lewdware-ffprobe-$TRIPLE"
+FFMPEG_SIDECAR="$BINARIES_DIR/lewdware-ffmpeg"
+FFPROBE_SIDECAR="$BINARIES_DIR/lewdware-ffprobe"
 
 # 1. stage FFmpeg and ffprobe if not already present
 if [ ! -f "$FFMPEG_SIDECAR" ] || [ ! -f "$FFPROBE_SIDECAR" ]; then

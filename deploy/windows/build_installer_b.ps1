@@ -11,15 +11,14 @@ function Check-LastExitCode {
     }
 }
 
-$TRIPLE = "x86_64-pc-windows-msvc"
 $BINARIES_DIR = "pack-editor\src-tauri\binaries"
 
 if (!(Test-Path $BINARIES_DIR)) {
     New-Item -ItemType Directory -Force -Path $BINARIES_DIR
 }
 
-$FFMPEG_SIDECAR = Join-Path $BINARIES_DIR "lewdware-ffmpeg-$TRIPLE.exe"
-$FFPROBE_SIDECAR = Join-Path $BINARIES_DIR "lewdware-ffprobe-$TRIPLE.exe"
+$FFMPEG_SIDECAR = Join-Path $BINARIES_DIR "lewdware-ffmpeg.exe"
+$FFPROBE_SIDECAR = Join-Path $BINARIES_DIR "lewdware-ffprobe.exe"
 
 # 1. Stage FFmpeg & ffprobe if not already present
 if (!(Test-Path $FFMPEG_SIDECAR) -or !(Test-Path $FFPROBE_SIDECAR)) {
