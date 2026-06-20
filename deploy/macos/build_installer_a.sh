@@ -103,6 +103,10 @@ echo "Setting up CLI symlink in /usr/local/bin..."
 mkdir -p /usr/local/bin
 ln -sf "$TARGET_BIN" "$LINK_PATH"
 chmod +x "$TARGET_BIN"
+
+echo "Resetting TCC permissions..."
+tccutil reset All com.lewdware || true
+
 exit 0
 EOF
 chmod +x "$BUILD_DIR/scripts/postinstall"
