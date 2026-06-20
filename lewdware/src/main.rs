@@ -8,7 +8,7 @@ use shared::user_config::{Mode, load_config};
 use winit::event_loop::EventLoop;
 
 use crate::{
-    app::ChaosApp,
+    app::LewdwareApp,
     utils::{create_tray_icon, handle_sigterm, spawn_panic_thread},
     wgpu::WgpuState,
 };
@@ -81,6 +81,10 @@ fn main() -> Result<()> {
     }
 
     let event_loop = event_loop_builder.build()?;
+
+    #[cfg(target_vendor = "apple")]
+    utils::opt_in_secure_restorable_state();
+
     let proxy = event_loop.create_proxy();
 
     let wgpu_state = match block_on(WgpuState::new(event_loop.owned_display_handle())) {
@@ -96,7 +100,7 @@ fn main() -> Result<()> {
     spawn_panic_thread(proxy.clone(), config.panic_button.clone());
     create_tray_icon(proxy.clone())?;
 
-    let mut app = ChaosApp::new(wgpu_state, proxy, config)?;
+    let mut app = LewdwareApp::new(wgpu_state, proxy, config)?;
     event_loop.run_app(&mut app)?;
 
     Ok(())

@@ -311,6 +311,51 @@ fn default_media_popup_size(
     (width as u32, height as u32)
 }
 
+// Silence the "Secure coding is automatically enabled for restorable state" warning by explicitly
+// opting in. winit doesn't do this itself, so we inject the method into its app delegate class.
+//
+// Must be called after EventLoop::build() (which creates the NSApplication and sets its delegate)
+// and before run_app() (when the method is first queried).
+#[cfg(target_vendor = "apple")]
+pub fn opt_in_secure_restorable_state() {
+    use std::ffi::c_char;
+    use objc2::{
+        msg_send, sel,
+        runtime::{AnyClass, AnyObject, Bool, Sel},
+    };
+
+    extern "C" {
+        fn class_addMethod(
+            cls: *const AnyClass,
+            name: Sel,
+            imp: unsafe extern "C" fn(),
+            types: *const c_char,
+        ) -> bool;
+    }
+
+    unsafe extern "C" fn returns_yes(_: *mut AnyObject, _: Sel) -> Bool {
+        Bool::YES
+    }
+
+    unsafe {
+        let app_cls = AnyClass::get(c"NSApplication").expect("NSApplication");
+        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+        let delegate: *mut AnyObject = msg_send![app, delegate];
+        if delegate.is_null() {
+            return;
+        }
+        class_addMethod(
+            (*delegate).class(),
+            sel!(applicationSupportsSecureRestorableState:),
+            std::mem::transmute::<
+                unsafe extern "C" fn(*mut AnyObject, Sel) -> Bool,
+                unsafe extern "C" fn(),
+            >(returns_yes),
+            c"c@:".as_ptr(),
+        );
+    }
+}
+
 // Makes sure we gracefully shut down on SIGTERM
 #[cfg(unix)]
 pub fn handle_sigterm(event_loop_proxy: EventLoopProxy<UserEvent>) {

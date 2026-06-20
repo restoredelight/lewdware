@@ -36,7 +36,7 @@ use crate::window::{
 /// * `windows`: A map containing all the windows spawned by the app. Since dropping a winit window
 ///   closes it, we can close windows by removing them from this map.
 /// * `default_wallpaper`: Stores the user's default wallpaper, so we can restore it on panic.
-pub struct ChaosApp<'a> {
+pub struct LewdwareApp<'a> {
     running: bool,
     _config: Arc<AppConfig>,
     wgpu_state: Option<Arc<WgpuState>>,
@@ -61,7 +61,7 @@ pub enum UserEvent {
     AudioFinish { id: u64 },
 }
 
-impl<'a> ChaosApp<'a> {
+impl<'a> LewdwareApp<'a> {
     pub fn new(
         wgpu_state: Option<std::sync::Arc<WgpuState>>,
         event_loop_proxy: EventLoopProxy<UserEvent>,
@@ -186,7 +186,7 @@ impl<'a> ChaosApp<'a> {
 
         #[allow(unused_mut)]
         let mut attrs = WindowAttributes::default()
-            .with_title("Chaos Window")
+            // .with_title()
             .with_position(position)
             .with_inner_size(LogicalSize::new(outer_width, outer_height))
             .with_decorations(false)
@@ -635,7 +635,7 @@ impl<'a> ChaosApp<'a> {
     }
 }
 
-impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
+impl<'a> ApplicationHandler<UserEvent> for LewdwareApp<'a> {
     fn resumed(&mut self, _: &ActiveEventLoop) {
         self.running = true;
     }
@@ -778,7 +778,7 @@ impl<'a> ApplicationHandler<UserEvent> for ChaosApp<'a> {
     }
 }
 
-impl Drop for ChaosApp<'_> {
+impl Drop for LewdwareApp<'_> {
     fn drop(&mut self) {
         if let Some(wallpaper) = &self.default_wallpaper {
             if let Err(err) = wallpaper::set_from_path(wallpaper) {
