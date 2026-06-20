@@ -4,10 +4,18 @@ lewdware = {}
 ---@type { [string]: number | string | boolean }
 lewdware.config = {}
 
----@alias MediaType "image" | "video" | "audio"
+---@alias MediaType
+---| "image"
+---| "video"
+---| "audio"
+
 ---@alias Coord number | { percent: number } Either a coordinate in pixels, or a percentage of the
 ---  screen width/height.
----@alias Anchor "top-left" | "center" | "bottom-right"
+
+---@alias Anchor
+---| "top-left"
+---| "center"
+---| "bottom-right"
 
 ---@class Media
 ---@field id number A unique identifier for the file.
@@ -80,11 +88,10 @@ function Window:move(opts, cb) end
 ---Set the visibility of a window.
 ---@param visible boolean
 ---
----Making a window invisible instead of closing it can be a good idea if you want to use it again,
----or you want to avoid the fade-out animation that occurs when a window is closed normally.
+---Making a window invisible instead of closing it can be a good idea if you want to use it again.
 ---
 ---Making a window invisible will stop the user from interacting with it, but e.g. video windows
----will continue to play, so you should consider calling [VideoWindow:pause](lua://VideoWindow.pause). Always remember
+---will continue to play, so you should consider calling [VideoWindow:pause()](lua://VideoWindow.pause). Always remember
 ---to close windows that you are no longer using.
 function Window:set_visible(visible) end
 

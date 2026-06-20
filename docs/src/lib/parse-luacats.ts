@@ -118,27 +118,32 @@ function joinContinuations(lines: string[]): string[] {
 function readType(s: string): { type: string; rest: string } {
 	let i = 0;
 	let depth = 0;
+	let prevNonSpace = '';
 
 	while (i < s.length) {
 		const ch = s[i];
 		if (ch === '{' || ch === '[' || ch === '(') {
 			depth++;
+			prevNonSpace = ch;
 			i++;
 			continue;
 		}
 		if (ch === '}' || ch === ']' || ch === ')') {
 			depth--;
+			prevNonSpace = ch;
 			i++;
 			continue;
 		}
 		if (depth === 0 && ch === ' ') {
 			const ahead = s.slice(i + 1).trimStart();
-			if (ahead.startsWith('|') || ahead.startsWith('&')) {
+			if (ahead.startsWith('|') || ahead.startsWith('&') ||
+				prevNonSpace === '|' || prevNonSpace === '&') {
 				i++;
 				continue;
 			}
 			break;
 		}
+		if (ch !== ' ') prevNonSpace = ch;
 		i++;
 	}
 
@@ -226,16 +231,33 @@ function parseClassBlock(block: Block): Class | null {
 	};
 }
 
-function parseAliasBlock(block: Block): Alias | null {
+function parseAliasBlock(block: Block): Alias[] {
 	const lines = joinContinuations(block.comments);
+	const results: Alias[] = [];
 
 	let name = '';
 	let type = '';
 	let desc = '';
-	const variants: string[] = [];
+	let variants: string[] = [];
+
+	function flush() {
+		if (!name) return;
+		results.push({
+			name,
+			desc: desc || undefined,
+			type: type || undefined,
+			variants: variants.length > 0 ? variants : undefined,
+		});
+	}
 
 	for (const line of lines) {
 		if (line.startsWith('@alias ')) {
+			flush();
+			name = '';
+			type = '';
+			desc = '';
+			variants = [];
+
 			const m = line.match(/^@alias\s+(\w+)(?:\s+(.+))?$/);
 			if (!m) continue;
 			name = m[1];
@@ -258,13 +280,8 @@ function parseAliasBlock(block: Block): Alias | null {
 		}
 	}
 
-	if (!name) return null;
-	return {
-		name,
-		desc: desc || undefined,
-		type: type || undefined,
-		variants: variants.length > 0 ? variants : undefined,
-	};
+	flush();
+	return results;
 }
 
 function parseFuncBlock(block: Block & { codeLine: string }): Func | null {
@@ -364,8 +381,7 @@ export function parseLuaCATS(source: string): ApiDoc {
 				}
 			}
 		} else if (hasAlias) {
-			const alias = parseAliasBlock(block);
-			if (alias) aliases.push(alias);
+			aliases.push(...parseAliasBlock(block));
 		} else if (block.codeLine) {
 			const func = parseFuncBlock(block as Block & { codeLine: string });
 			if (!func) continue;

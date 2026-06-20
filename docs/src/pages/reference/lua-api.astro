@@ -33,18 +33,27 @@ const knownTypes = new Set<string>([
 // - converts [label](lua://TypeName) LuaCATS reference links to HTML anchors
 // Returns an HTML string safe for use with set:html.
 function linkTypes(text: string): string {
-	// First handle explicit [label](lua://TypeName) links
+	const placeholders: string[] = [];
+
+	// Replace explicit [label](lua://TypeName) links with placeholders so the
+	// auto-link pass below cannot match identifiers inside the converted anchors.
 	let result = text.replace(
 		/\[([^\]]+)\]\(lua:\/\/([^)]+)\)/g,
 		(_, label, target) => {
 			const slug = target.toLowerCase().replace(/[.:]/g, '-');
-			return `<a href="#${slug}">${label}</a>`;
+			placeholders.push(`<a href="#${slug}">${label}</a>`);
+			return `\x00${placeholders.length - 1}\x00`;
 		},
 	);
-	// Then auto-link bare uppercase identifiers that match known types
+
+	// Auto-link bare uppercase identifiers that match known types
 	result = result.replace(/\b([A-Z][a-zA-Z0-9]*)\b/g, (match) =>
 		knownTypes.has(match) ? `<a href="#${match.toLowerCase()}">${match}</a>` : match,
 	);
+
+	// Restore explicit link placeholders
+	result = result.replace(/\x00(\d+)\x00/g, (_, i) => placeholders[Number(i)]);
+
 	return result;
 }
 
@@ -193,11 +202,11 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 				<>
 					<h4 class="subsection-heading">Methods</h4>
 					{cls.methods.map((method) => (
-						<div class="api-entry api-method">
+						<div id={funcSlug(method.fullName)} class="api-entry api-method">
 							<div class="api-sig" set:html={highlight(buildSignature(method))} />
 
 							{method.desc && (
-								<p class="api-desc" set:html={method.desc.replace(/\n/g, '<br>')} />
+								<p class="api-desc" set:html={linkTypes(method.desc).replace(/\n/g, '<br>')} />
 							)}
 
 							{method.params.filter((p) => p.name !== 'self').length > 0 && (
@@ -387,6 +396,7 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 	}
 
 	.alias-list dt {
+		margin-top: 0;
 		padding-top: 0.5rem;
 		font-weight: 600;
 	}
