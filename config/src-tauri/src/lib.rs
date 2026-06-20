@@ -669,23 +669,33 @@ fn remove_uploaded_mode(state: State<'_>, path: String) -> Result<Vec<ModeGroupD
 
 fn find_lewdware() -> Option<Command> {
     let bin_name = if cfg!(windows) {
-        "lewdware.exe"
+        "lewdware-engine.exe"
     } else {
-        "lewdware"
+        "lewdware-engine"
     };
 
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe
-            .canonicalize()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.to_owned()))
-        {
-            let neighbor = dir.join(bin_name);
-            if neighbor.exists() {
-                let mut cmd = Command::new(neighbor);
-                shared::utils::sanitize_child_env(&mut cmd);
-                return Some(cmd);
+        if let Some(dir) = exe.canonicalize().ok().and_then(|p| p.parent().map(|p| p.to_owned())) {
+            // Windows / macOS: engine sits next to the config binary.
+            candidates.push(dir.join(bin_name));
+            // Portable tar.gz on Linux: bin/lewdware → lib/lewdware/lewdware-engine.
+            if let Some(root) = dir.parent() {
+                candidates.push(root.join("lib").join("lewdware").join(bin_name));
             }
+        }
+    }
+
+    // Linux package installs (deb/rpm): engine lives in /usr/lib/lewdware/.
+    #[cfg(target_os = "linux")]
+    candidates.push(PathBuf::from("/usr/lib/lewdware").join(bin_name));
+
+    for path in candidates {
+        if path.exists() {
+            let mut cmd = Command::new(path);
+            shared::utils::sanitize_child_env(&mut cmd);
+            return Some(cmd);
         }
     }
 

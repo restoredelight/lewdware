@@ -35,7 +35,7 @@ cd ..
 
 # 2. Copy config.app package to our staging area
 echo "📦 Staging config.app bundle..."
-cp -R "target/release/bundle/macos/lewdware-config.app" "$BUILD_DIR/root/Applications/Lewdware.app"
+cp -R "target/release/bundle/macos/lewdware.app" "$BUILD_DIR/root/Applications/Lewdware.app"
 
 # Fix the bundle display name — productName in tauri.conf.json is still "config-tauri"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName Lewdware" \
@@ -51,8 +51,8 @@ mkdir -p "$FRAMEWORKS_DIR"
 
 # Copy CLI and Engine into the bundle
 cp "target/release/lw" "$MAC_BIN_DIR/lw"
-cp "target/release/lewdware" "$MAC_BIN_DIR/lewdware"
-chmod +x "$MAC_BIN_DIR/lw" "$MAC_BIN_DIR/lewdware"
+cp "target/release/lewdware-engine" "$MAC_BIN_DIR/lewdware-engine"
+chmod +x "$MAC_BIN_DIR/lw" "$MAC_BIN_DIR/lewdware-engine"
 
 # 3. Dynamic Library Bundling and Relinking (dylib)
 echo "Resolving dynamic library dependencies (FFmpeg & dav1d)..."
@@ -79,9 +79,9 @@ bundle_dylib() {
   done < <(otool -L "$target" | tail -n +2 | awk '{print $1}')
 }
 
-bundle_dylib "$MAC_BIN_DIR/lewdware"
+bundle_dylib "$MAC_BIN_DIR/lewdware-engine"
 bundle_dylib "$MAC_BIN_DIR/lw"
-bundle_dylib "$MAC_BIN_DIR/lewdware-config"
+bundle_dylib "$MAC_BIN_DIR/lewdware"
 
 # 4. Create the postinstall script for PATH integration
 echo "📝 Creating installer postinstall script..."

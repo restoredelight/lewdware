@@ -40,10 +40,10 @@ cd ..
 
 # 2. Stage binaries
 echo "Staging binaries..."
-cp "target/release/lewdware-config" "$STAGE_DIR/usr/bin/lewdware-config"
-cp "target/release/lw" "$STAGE_DIR/usr/bin/lw"
 cp "target/release/lewdware" "$STAGE_DIR/usr/bin/lewdware"
-chmod +x "$STAGE_DIR/usr/bin/"*
+cp "target/release/lw" "$STAGE_DIR/usr/bin/lw"
+cp "target/release/lewdware-engine" "$STAGE_DIR/usr/lib/lewdware/lewdware-engine"
+chmod +x "$STAGE_DIR/usr/bin/"* "$STAGE_DIR/usr/lib/lewdware/lewdware-engine"
 
 # 3. Dynamic Library Bundling (FFmpeg, dav1d, and all transitive deps)
 echo "Bundling dynamic library dependencies..."
@@ -90,9 +90,9 @@ bundle_lib() {
   done < <(ldd "$target" 2>/dev/null | awk '/=>/ { print $3 }')
 }
 
-bundle_lib "target/release/lewdware"
+bundle_lib "target/release/lewdware-engine"
 bundle_lib "target/release/lw"
-bundle_lib "target/release/lewdware-config"
+bundle_lib "target/release/lewdware"
 
 echo "Patching bundled library rpaths..."
 for lib in "$STAGE_DIR/usr/lib/lewdware/"*; do
@@ -102,12 +102,12 @@ done
 
 # 4. Create Desktop File and Icon
 echo "Creating desktop entries..."
-cat <<EOF > "$STAGE_DIR/usr/share/applications/lewdware-config.desktop"
+cat <<EOF > "$STAGE_DIR/usr/share/applications/lewdware.desktop"
 [Desktop Entry]
-Name=Lewdware Config
-Comment=Configure Lewdware
-Exec=lewdware-config
-Icon=lewdware-config
+Name=Lewdware
+Comment=Configure and launch Lewdware
+Exec=lewdware
+Icon=lewdware
 Terminal=false
 Type=Application
 Categories=Utility;Development;
@@ -115,7 +115,7 @@ EOF
 
 # Copy app icon if exists (use a placeholder if not)
 if [ -f "config/src-tauri/icons/128x128.png" ]; then
-  cp "config/src-tauri/icons/128x128.png" "$STAGE_DIR/usr/share/icons/hicolor/128x128/apps/lewdware-config.png"
+  cp "config/src-tauri/icons/128x128.png" "$STAGE_DIR/usr/share/icons/hicolor/128x128/apps/lewdware.png"
 fi
 
 # 5. Create Debian Package control file
@@ -172,12 +172,11 @@ cp -p %{staged_dir}/usr/share/applications/* %{buildroot}/usr/share/applications
 cp -p %{staged_dir}/usr/share/icons/hicolor/128x128/apps/* %{buildroot}/usr/share/icons/hicolor/128x128/apps/
 
 %files
-/usr/bin/lewdware-config
-/usr/bin/lw
 /usr/bin/lewdware
+/usr/bin/lw
 /usr/lib/lewdware/*
-/usr/share/applications/lewdware-config.desktop
-/usr/share/icons/hicolor/128x128/apps/lewdware-config.png
+/usr/share/applications/lewdware.desktop
+/usr/share/icons/hicolor/128x128/apps/lewdware.png
 EOF
 
   rpmbuild -bb \
@@ -200,39 +199,37 @@ rm -rf "$TAR_STAGE"
 mkdir -p "$TAR_ROOT/bin"
 mkdir -p "$TAR_ROOT/lib/lewdware"
 
-# Copy lewdware & lw binaries
-cp "$STAGE_DIR/usr/bin/lewdware" "$TAR_ROOT/bin/"
+# Copy lw CLI
 cp "$STAGE_DIR/usr/bin/lw" "$TAR_ROOT/bin/"
 
-# Copy config-tauri AppImage as lewdware-config binary
-APPIMAGE_PATH=$(find "target/release/bundle/appimage/" -name "lewdware-config_${VERSION}_*.AppImage" 2>/dev/null | head -1)
+# Copy config AppImage as the user-facing lewdware binary
+APPIMAGE_PATH=$(find "target/release/bundle/appimage/" -name "lewdware_${VERSION}_*.AppImage" 2>/dev/null | head -1)
 if [ -f "$APPIMAGE_PATH" ]; then
-  cp "$APPIMAGE_PATH" "$TAR_ROOT/bin/lewdware-config"
-  chmod +x "$TAR_ROOT/bin/lewdware-config"
+  cp "$APPIMAGE_PATH" "$TAR_ROOT/bin/lewdware"
+  chmod +x "$TAR_ROOT/bin/lewdware"
 else
   echo "Warning: config AppImage not found! Skipping config GUI in tar.gz."
 fi
 
-# Copy dynamic libraries
+# Copy dynamic libraries and the engine (internal, launched by config app)
 cp "$STAGE_DIR/usr/lib/lewdware/"* "$TAR_ROOT/lib/lewdware/"
 
 # Create a simple setup/run README
 cat << 'EOF' > "$TAR_ROOT/README.md"
 # Lewdware (and tools)
 
-This portable distribution contains the Lewdware App, Config GUI, and lw CLI.
+This portable distribution contains the Lewdware Config app, Engine, and lw CLI.
 
 ## Structure
-* `bin/lewdware`: Lewdware Engine
+* `bin/lewdware`: Lewdware Config app (AppImage) — start here
 * `bin/lw`: Lewdware CLI
-* `bin/lewdware-config`: Config GUI (AppImage)
-* `lib/lewdware/`: Bundled dynamic libraries (FFmpeg and dav1d)
+* `lib/lewdware/`: Engine and bundled dynamic libraries (FFmpeg and dav1d)
 
 ## Running
 Ensure you have the basic client dependencies installed on your Linux distribution (X11, ALSA, etc.).
-Simply run the binaries from the `bin` directory:
+Simply run the config app from the `bin` directory:
 ```bash
-./bin/lewdware-config
+./bin/lewdware
 ```
 EOF
 

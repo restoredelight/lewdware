@@ -16,10 +16,10 @@ DisableProgramGroupPage=yes
 SetupIconFile=..\..\config\src-tauri\icons\icon.ico
 
 [Files]
-; Main config GUI app
-Source: "..\..\target\release\lewdware-config.exe"; DestDir: "{app}"; DestName: "lewdware-config.exe"; Flags: ignoreversion
-; Engine
-Source: "..\..\target\release\lewdware.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Config GUI (user-facing entry point)
+Source: "..\..\target\release\lewdware.exe"; DestDir: "{app}"; DestName: "lewdware.exe"; Flags: ignoreversion
+; Engine (internal, launched by config app)
+Source: "..\..\target\release\lewdware-engine.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; CLI
 Source: "..\..\target\release\lw.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; DLLs (copied from staging)
@@ -29,9 +29,7 @@ Source: "..\..\build\win-stage\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: dele
 
 [Icons]
 Name: "{group}\Lewdware"; Filename: "{app}\lewdware.exe"
-Name: "{group}\Lewdware Config"; Filename: "{app}\lewdware-config.exe"
 Name: "{userdesktop}\Lewdware"; Filename: "{app}\lewdware.exe"; Tasks: desktopicon
-Name: "{userdesktop}\Lewdware Config"; Filename: "{app}\lewdware-config.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Visual C++ Redistributable..."
