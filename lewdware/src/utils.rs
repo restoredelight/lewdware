@@ -324,7 +324,7 @@ pub fn opt_in_secure_restorable_state() {
         runtime::{AnyClass, AnyObject, Bool, Sel},
     };
 
-    extern "C" {
+    unsafe extern "C" {
         fn class_addMethod(
             cls: *const AnyClass,
             name: Sel,
