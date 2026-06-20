@@ -49,6 +49,7 @@ use shared::{
 };
 use tauri::AppHandle;
 use tempfile::NamedTempFile;
+use tokio::sync::oneshot;
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 
@@ -758,17 +759,23 @@ fn lewdware_running(state: State<'_>) -> bool {
 // ─── Input Monitoring (macOS) ─────────────────────────────────────────────────
 
 #[tauri::command]
-fn input_monitoring_granted(#[allow(unused)] app_handle: AppHandle) -> Result<bool, String> {
+async fn input_monitoring_granted(#[allow(unused)] app_handle: AppHandle) -> Result<bool, String> {
     #[cfg(target_vendor = "apple")]
-    return app_handle
-        .run_on_main_thread(move || {
-            #[link(name = "CoreGraphics", kind = "framework")]
-            unsafe extern "C-unwind" {
-                fn CGPreflightListenEventAccess() -> bool;
-            }
-            return unsafe { CGPreflightListenEventAccess() };
-        })
-        .map_err(|err| err.to_string());
+    {
+        let (tx, rx) = oneshot::channel();
+
+        app_handle
+            .run_on_main_thread(move || {
+                #[link(name = "CoreGraphics", kind = "framework")]
+                unsafe extern "C-unwind" {
+                    fn CGPreflightListenEventAccess() -> bool;
+                }
+                tx.send(unsafe { CGPreflightListenEventAccess() });
+            })
+            .map_err(|err| err.to_string())?;
+
+        return rx.await.map_err(|err| err.to_string());
+    }
 
     #[cfg(not(target_vendor = "apple"))]
     Ok(true)
