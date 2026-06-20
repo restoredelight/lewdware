@@ -12,14 +12,14 @@ CREATE TABLE IF NOT EXISTS media (
     audio INTEGER,
     hash BLOB NOT NULL,
     thumbnail BLOB
-);
+) STRICT;
 
 CREATE INDEX media_hash_index ON media (hash);
 
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY,
     name TEXT UNIQUE NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS media_tags (
     media_id INTEGER NOT NULL,
@@ -27,9 +27,9 @@ CREATE TABLE IF NOT EXISTS media_tags (
     PRIMARY KEY (media_id, tag_id),
     FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE,
     FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS modes (
     id INTEGER PRIMARY KEY,
     "file" BLOB NOT NULL
-);
+) STRICT;
