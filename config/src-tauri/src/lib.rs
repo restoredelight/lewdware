@@ -782,25 +782,38 @@ async fn input_monitoring_granted(#[allow(unused)] app_handle: AppHandle) -> Res
 }
 
 #[tauri::command]
-fn request_input_monitoring(#[allow(unused)] app_handle: AppHandle) -> Result<(), String> {
-    tracing::info!("Requesting Input Monitoring");
-
+fn request_input_monitoring(#[allow(unused)] app_handle: AppHandle) -> Result<bool, String> {
     #[cfg(target_vendor = "apple")]
-    app_handle
-        .run_on_main_thread(move || {
-            #[link(name = "CoreGraphics", kind = "framework")]
-            unsafe extern "C-unwind" {
-                fn CGRequestListenEventAccess() -> bool;
-            }
-            if unsafe { CGRequestListenEventAccess() } {
-                tracing::info!("Input Monitoring access granted");
-            } else {
-                tracing::error!("Input Monitoring access not granted");
-            }
-        })
-        .map_err(|err| err.to_string())?;
+    {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
-    Ok(())
+        let granted = Arc::new(AtomicBool::new(false));
+        let granted_clone = granted.clone();
+
+        app_handle
+            .run_on_main_thread(move || {
+                #[link(name = "CoreGraphics", kind = "framework")]
+                unsafe extern "C-unwind" {
+                    fn CGRequestListenEventAccess() -> bool;
+                }
+                granted_clone.store(unsafe { CGRequestListenEventAccess() }, Ordering::Relaxed);
+            })
+            .map_err(|err| err.to_string())?;
+
+        return Ok(granted.load(Ordering::Relaxed));
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    Ok(true)
+}
+
+#[tauri::command]
+fn open_input_monitoring_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+            .spawn();
+    }
 }
 
 // ─── Logs ─────────────────────────────────────────────────────────────────────
@@ -890,6 +903,7 @@ pub fn run() {
             check_for_update,
             input_monitoring_granted,
             request_input_monitoring,
+            open_input_monitoring_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -7,6 +7,7 @@
   let running = $state(false);
   let pollInterval: ReturnType<typeof setInterval>;
   let inputMonitoringGranted = $state(true);
+  let inputMonitoringPromptFailed = $state(false);
 
   async function checkRunning() {
     running = await api.lewdwareRunning();
@@ -34,10 +35,11 @@
   }
 
   async function openInputMonitoringSettings() {
-    try {
-      await api.requestInputMonitoring();
-    } catch (e) {
-      alert(e.message);
+    const granted = await api.requestInputMonitoring();
+    if (granted) {
+      inputMonitoringGranted = true;
+    } else {
+      inputMonitoringPromptFailed = true;
     }
   }
 
@@ -123,15 +125,27 @@
       Pressing this key combination closes the app immediately.
     </p>
     {#if !inputMonitoringGranted}
-      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[#fef3cd] border border-[#f0ad4e] text-sm text-[#8a6d3b]">
-        <span>The panic key requires Input Monitoring permission.</span>
-        <button
-          onclick={openInputMonitoringSettings}
-          class="ml-auto shrink-0 px-3 py-1 rounded text-xs font-medium
-                 bg-[#f0ad4e] hover:bg-[#ec971f] text-white transition-colors"
-        >
-          Open Settings
-        </button>
+      <div class="flex flex-col gap-2 px-3 py-2 rounded-md bg-[#fef3cd] border border-[#f0ad4e] text-sm text-[#8a6d3b]">
+        <div class="flex items-center gap-3">
+          <span>The panic key requires Input Monitoring permission.</span>
+          <button
+            onclick={openInputMonitoringSettings}
+            class="ml-auto shrink-0 px-3 py-1 rounded text-xs font-medium
+                   bg-[#f0ad4e] hover:bg-[#ec971f] text-white transition-colors"
+          >
+            Open Settings
+          </button>
+        </div>
+        {#if inputMonitoringPromptFailed}
+          <p class="text-xs">
+            The permission prompt could not be shown (the app may need to be signed).
+            To enable manually: open <button
+              onclick={() => api.openInputMonitoringSettings()}
+              class="underline hover:text-[#6d5618] transition-colors"
+            >System Settings → Privacy &amp; Security → Input Monitoring</button>
+            and add Lewdware, then restart the app.
+          </p>
+        {/if}
       </div>
     {/if}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->

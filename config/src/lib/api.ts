@@ -44,5 +44,7 @@ export const api = {
 
   inputMonitoringGranted: () => invoke<boolean>("input_monitoring_granted"),
 
-  requestInputMonitoring: () => invoke<void>("request_input_monitoring"),
+  requestInputMonitoring: () => invoke<boolean>("request_input_monitoring"),
+
+  openInputMonitoringSettings: () => invoke<void>("open_input_monitoring_settings"),
 };
