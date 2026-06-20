@@ -50,7 +50,12 @@ pub fn request_accessibility_access() -> bool {
 
     #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
+        fn AXIsProcessTrusted() -> u8;
         fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> u8;
+    }
+
+    if unsafe { AXIsProcessTrusted() } != 0 {
+        return true;
     }
 
     let key = CFString::new("AXTrustedCheckOptionPrompt");
