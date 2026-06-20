@@ -34,7 +34,11 @@
   }
 
   async function openInputMonitoringSettings() {
-    await api.requestInputMonitoring();
+    try {
+      await api.requestInputMonitoring();
+    } catch (e) {
+      alert(e.message);
+    }
   }
 
   let recording = $state(false);

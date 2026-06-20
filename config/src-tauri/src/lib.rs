@@ -758,7 +758,7 @@ fn input_monitoring_granted() -> bool {
     #[cfg(target_vendor = "apple")]
     {
         #[link(name = "CoreGraphics", kind = "framework")]
-        unsafe extern "C" {
+        unsafe extern "C-unwind" {
             fn CGPreflightListenEventAccess() -> bool;
         }
         return unsafe { CGPreflightListenEventAccess() };
@@ -769,13 +769,19 @@ fn input_monitoring_granted() -> bool {
 
 #[tauri::command]
 fn request_input_monitoring() {
+    tracing::info!("Requesting Input Monitoring");
+
     #[cfg(target_vendor = "apple")]
     {
         #[link(name = "CoreGraphics", kind = "framework")]
-        unsafe extern "C" {
+        unsafe extern "C-unwind" {
             fn CGRequestListenEventAccess() -> bool;
         }
-        unsafe { CGRequestListenEventAccess() };
+        if unsafe { CGRequestListenEventAccess() } {
+            tracing::info!("Input Monitoring access granted");
+        } else {
+            tracing::error!("Input Monitoring access not granted");
+        }
     }
 }
 
