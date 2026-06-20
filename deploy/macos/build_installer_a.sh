@@ -83,6 +83,11 @@ bundle_dylib "$MAC_BIN_DIR/lewdware-engine"
 bundle_dylib "$MAC_BIN_DIR/lw"
 bundle_dylib "$MAC_BIN_DIR/lewdware"
 
+codesign --force --sign - "$MAC_BIN_DIR/lw"
+codesign --force --sign - "$MAC_BIN_DIR/lewdware-engine"
+codesign --force --sign - "$MAC_BIN_DIR/lewdware"
+codesign --force --deep --sign - "$BUILD_DIR/root/Applications/Lewdware.app"
+
 # 4. Create the postinstall script for PATH integration
 echo "📝 Creating installer postinstall script..."
 cat << 'EOF' > "$BUILD_DIR/scripts/postinstall"
