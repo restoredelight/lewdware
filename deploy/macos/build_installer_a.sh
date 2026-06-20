@@ -83,6 +83,8 @@ bundle_dylib "$MAC_BIN_DIR/lewdware-engine"
 bundle_dylib "$MAC_BIN_DIR/lw"
 bundle_dylib "$MAC_BIN_DIR/lewdware"
 
+find "$FRAMEWORKS_DIR" -type f -name "*.dylib" -exec codesign --force --sign - {} \;
+
 codesign --force --sign - "$MAC_BIN_DIR/lw"
 codesign --force --sign - "$MAC_BIN_DIR/lewdware-engine"
 codesign --force --sign - "$MAC_BIN_DIR/lewdware"
