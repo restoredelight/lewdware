@@ -677,7 +677,11 @@ fn find_lewdware() -> Option<Command> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.canonicalize().ok().and_then(|p| p.parent().map(|p| p.to_owned())) {
+        if let Some(dir) = exe
+            .canonicalize()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_owned()))
+        {
             // Windows / macOS: engine sits next to the config binary.
             candidates.push(dir.join(bin_name));
             // Portable tar.gz on Linux: bin/lewdware → lib/lewdware/lewdware-engine.
@@ -754,35 +758,42 @@ fn lewdware_running(state: State<'_>) -> bool {
 // ─── Input Monitoring (macOS) ─────────────────────────────────────────────────
 
 #[tauri::command]
-fn input_monitoring_granted() -> bool {
+fn input_monitoring_granted(#[allow(unused)] app_handle: AppHandle) -> Result<bool, String> {
     #[cfg(target_vendor = "apple")]
-    {
-        #[link(name = "CoreGraphics", kind = "framework")]
-        unsafe extern "C-unwind" {
-            fn CGPreflightListenEventAccess() -> bool;
-        }
-        return unsafe { CGPreflightListenEventAccess() };
-    }
+    return app_handle
+        .run_on_main_thread(move || {
+            #[link(name = "CoreGraphics", kind = "framework")]
+            unsafe extern "C-unwind" {
+                fn CGPreflightListenEventAccess() -> bool;
+            }
+            return unsafe { CGPreflightListenEventAccess() };
+        })
+        .map_err(|err| err.to_string());
+
     #[cfg(not(target_vendor = "apple"))]
-    true
+    Ok(true)
 }
 
 #[tauri::command]
-fn request_input_monitoring() {
+fn request_input_monitoring(#[allow(unused)] app_handle: AppHandle) -> Result<(), String> {
     tracing::info!("Requesting Input Monitoring");
 
     #[cfg(target_vendor = "apple")]
-    {
-        #[link(name = "CoreGraphics", kind = "framework")]
-        unsafe extern "C-unwind" {
-            fn CGRequestListenEventAccess() -> bool;
-        }
-        if unsafe { CGRequestListenEventAccess() } {
-            tracing::info!("Input Monitoring access granted");
-        } else {
-            tracing::error!("Input Monitoring access not granted");
-        }
-    }
+    app_handle
+        .run_on_main_thread(move || {
+            #[link(name = "CoreGraphics", kind = "framework")]
+            unsafe extern "C-unwind" {
+                fn CGRequestListenEventAccess() -> bool;
+            }
+            if unsafe { CGRequestListenEventAccess() } {
+                tracing::info!("Input Monitoring access granted");
+            } else {
+                tracing::error!("Input Monitoring access not granted");
+            }
+        })
+        .map_err(|err| err.to_string())?;
+
+    Ok(())
 }
 
 // ─── Logs ─────────────────────────────────────────────────────────────────────
