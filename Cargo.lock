@@ -3435,7 +3435,6 @@ dependencies = [
  "anyhow",
  "ash",
  "bytemuck",
- "core-foundation 0.10.1",
  "dirs 6.0.0",
  "egui",
  "egui-wgpu",

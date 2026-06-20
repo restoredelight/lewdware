@@ -93,11 +93,6 @@ fn main() -> Result<()> {
 
     handle_sigterm(proxy.clone());
 
-    #[cfg(target_vendor = "apple")]
-    if !utils::request_accessibility_access() {
-        tracing::warn!("Accessibility permission not yet granted; keyboard listener will not fire until it is granted and the app is restarted");
-    }
-
     spawn_panic_thread(proxy.clone(), config.panic_button.clone());
     create_tray_icon(proxy.clone())?;
 

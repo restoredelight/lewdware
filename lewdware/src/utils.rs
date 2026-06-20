@@ -37,33 +37,6 @@ pub fn create_tray_icon(_: EventLoopProxy<UserEvent>) -> Result<()> {
     Ok(())
 }
 
-/// Checks whether this process has Accessibility API access, prompting the user via the
-/// System Settings dialog if not. Returns true if access is already granted.
-#[cfg(target_vendor = "apple")]
-pub fn request_accessibility_access() -> bool {
-    use core_foundation::{
-        base::TCFType,
-        boolean::CFBoolean,
-        dictionary::{CFDictionary, CFDictionaryRef},
-        string::CFString,
-    };
-
-    #[link(name = "ApplicationServices", kind = "framework")]
-    unsafe extern "C" {
-        fn AXIsProcessTrusted() -> u8;
-        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> u8;
-    }
-
-    if unsafe { AXIsProcessTrusted() } != 0 {
-        return true;
-    }
-
-    let key = CFString::new("AXTrustedCheckOptionPrompt");
-    let value = CFBoolean::true_value();
-    let opts = CFDictionary::from_CFType_pairs(&[(key, value)]);
-
-    unsafe { AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef()) != 0 }
-}
 
 /// Spawn a thread that will listen for the panic key being pressed, and send
 /// [UserEvent::PanicButtonPressed] to the event loop.
@@ -121,7 +94,13 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_ke
                 keys.remove(&key);
             }
         }) {
-            tracing::error!("{:?}", err);
+            #[cfg(target_vendor = "apple")]
+            tracing::error!(
+                "Panic key listener failed (this usually means accessibility permission was not granted): {:?}",
+                err
+            );
+            #[cfg(not(target_vendor = "apple"))]
+            tracing::error!("Panic key listener failed: {:?}", err);
         }
     });
 }

@@ -41,4 +41,8 @@ export const api = {
   lewdwareRunning: () => invoke<boolean>("lewdware_running"),
 
   openLogs: () => invoke<void>("open_logs"),
+
+  inputMonitoringGranted: () => invoke<boolean>("input_monitoring_granted"),
+
+  requestInputMonitoring: () => invoke<void>("request_input_monitoring"),
 };

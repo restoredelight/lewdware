@@ -154,9 +154,9 @@ fn terminate(child: &mut Child) {
 
 fn find_lewdware_binary() -> Option<Command> {
     let bin_name = if cfg!(target_os = "windows") {
-        "lewdware.exe"
+        "lewdware-engine.exe"
     } else {
-        "lewdware"
+        "lewdware-engine"
     };
 
     if let Ok(current_exe) = env::current_exe() {

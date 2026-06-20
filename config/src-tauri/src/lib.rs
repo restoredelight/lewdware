@@ -751,6 +751,34 @@ fn lewdware_running(state: State<'_>) -> bool {
     }
 }
 
+// ─── Input Monitoring (macOS) ─────────────────────────────────────────────────
+
+#[tauri::command]
+fn input_monitoring_granted() -> bool {
+    #[cfg(target_vendor = "apple")]
+    {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGPreflightListenEventAccess() -> bool;
+        }
+        return unsafe { CGPreflightListenEventAccess() };
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    true
+}
+
+#[tauri::command]
+fn request_input_monitoring() {
+    #[cfg(target_vendor = "apple")]
+    {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGRequestListenEventAccess() -> bool;
+        }
+        unsafe { CGRequestListenEventAccess() };
+    }
+}
+
 // ─── Logs ─────────────────────────────────────────────────────────────────────
 
 fn open_log_dir() -> Result<(), String> {
@@ -836,6 +864,8 @@ pub fn run() {
             lewdware_running,
             open_logs,
             check_for_update,
+            input_monitoring_granted,
+            request_input_monitoring,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

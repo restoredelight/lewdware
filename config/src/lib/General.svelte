@@ -6,12 +6,19 @@
 
   let running = $state(false);
   let pollInterval: ReturnType<typeof setInterval>;
+  let inputMonitoringGranted = $state(true);
+
+  async function checkRunning() {
+    running = await api.lewdwareRunning();
+  }
+
+  async function checkInputMonitoringGranted() {
+    inputMonitoringGranted = await api.inputMonitoringGranted();
+  }
 
   onMount(async () => {
-    running = await api.lewdwareRunning();
-    pollInterval = setInterval(async () => {
-      running = await api.lewdwareRunning();
-    }, 1000);
+    await Promise.all([checkRunning(), checkInputMonitoringGranted()]);
+    pollInterval = setInterval(async () => await checkRunning(), 1000);
   });
 
   onDestroy(() => clearInterval(pollInterval));
@@ -24,6 +31,10 @@
   async function stop() {
     await api.stopLewdware();
     running = false;
+  }
+
+  async function openInputMonitoringSettings() {
+    await api.requestInputMonitoring();
   }
 
   let recording = $state(false);
@@ -107,6 +118,18 @@
     <p class="text-xs text-[#7f8c8d]">
       Pressing this key combination closes the app immediately.
     </p>
+    {#if !inputMonitoringGranted}
+      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[#fef3cd] border border-[#f0ad4e] text-sm text-[#8a6d3b]">
+        <span>The panic key requires Input Monitoring permission.</span>
+        <button
+          onclick={openInputMonitoringSettings}
+          class="ml-auto shrink-0 px-3 py-1 rounded text-xs font-medium
+                 bg-[#f0ad4e] hover:bg-[#ec971f] text-white transition-colors"
+        >
+          Open Settings
+        </button>
+      </div>
+    {/if}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
       tabindex="0"
