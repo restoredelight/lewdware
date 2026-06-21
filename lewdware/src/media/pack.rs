@@ -312,24 +312,33 @@ impl MediaPack {
 
         let image = reader.decode()?;
 
-        let result = if image.width() != width || image.height() != height {
+        if image.width() != width || image.height() != height {
             let (tx, rx) = oneshot::channel();
 
             rayon::spawn(move || {
-                let _ = tx.send(
-                    image
-                        .resize_exact(width, height, image::imageops::FilterType::Triangle)
-                        .into_rgba8(),
-                );
+                use fast_image_resize::{
+                    FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer, images::Image,
+                };
+
+                let src: image::DynamicImage = image.into_rgba8().into();
+                let mut dst = Image::new(width, height, PixelType::U8x4);
+                let opts = ResizeOptions::new()
+                    .resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
+                let result = Resizer::new()
+                    .resize(&src, &mut dst, &opts)
+                    .map(|_| {
+                        image::ImageBuffer::from_raw(width, height, dst.into_vec())
+                            .expect("buffer size is always width * height * 4")
+                    })
+                    .map_err(|_| MediaError::Internal("Image resizing failed"));
+                let _ = tx.send(result);
             });
 
             rx.await
-                .map_err(|_| MediaError::Internal("Image resizing sender dropped"))
+                .map_err(|_| MediaError::Internal("Image resizing sender dropped"))?
         } else {
             Ok(image.into_rgba8())
-        };
-
-        result
+        }
     }
 
     async fn write_to_temp_file(
