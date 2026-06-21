@@ -56,7 +56,13 @@ Lewdware aims, as much as possible, to be:
 You will need to install Rust and Cargo, and have dav1d and ffmpeg libraries
 installed.
 
-<!-- TODO: detail how to download ffmpeg sidecar binaries for pack-editor -->
+The pack editor requires static `ffmpeg` and `ffprobe` binaries to be downloaded
+into `pack-editor/src-tauri/binaries/`. Run the appropriate script from the
+repo root:
+
+- **Linux**: `./deploy/linux/download_ffmpeg_sidecars.sh`
+- **macOS**: `./deploy/macos/download_ffmpeg_sidecars.sh`
+- **Windows**: `.\deploy\windows\download_ffmpeg_sidecars.ps1`
 
 The engine and config apps require the default modes to be built:
 
