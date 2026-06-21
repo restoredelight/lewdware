@@ -33,7 +33,33 @@ pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<(
 }
 
 #[cfg(target_os = "linux")]
-pub fn create_tray_icon(_: EventLoopProxy<UserEvent>) -> Result<()> {
+pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<()> {
+    use ksni::{Tray, TrayService, menu::StandardItem};
+
+    struct LewdwareTray {
+        proxy: EventLoopProxy<UserEvent>,
+    }
+
+    impl Tray for LewdwareTray {
+        fn title(&self) -> String {
+            "Lewdware".into()
+        }
+        fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+            vec![StandardItem {
+                label: "Panic".into(),
+                activate: Box::new(|this: &mut Self| {
+                    let _ = this.proxy.send_event(UserEvent::Exit);
+                }),
+                ..Default::default()
+            }
+            .into()]
+        }
+    }
+
+    TrayService::new(LewdwareTray {
+        proxy: event_loop_proxy,
+    })
+    .spawn();
     Ok(())
 }
 
