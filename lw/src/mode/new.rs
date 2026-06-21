@@ -16,7 +16,7 @@ pub fn create_new_mode(name: &str) -> Result<()> {
 
     let config_content = format!(
         r#"{{
-  "$schema": "https://lewdware.github.com/mode.schema.json",
+  "$schema": "https://lewdware.net/reference/mode.schema.json",
   "name": "{name}",
   "version": "0.1.0",
   "author": "",

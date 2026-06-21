@@ -1,0 +1,261 @@
+---
+title: Create a mode
+description: Learn how to create a mode using the `lw` command line tool
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+To create a mode, you will need the `lw` command line tool. This is automatically
+installed when you install Lewdware; type `lw` in a terminal to verify.
+
+To create a new mode, run (replacing `<name-of-mode>` with a name for your mode):
+
+``` bash
+lw mode new <name-of-mode>
+```
+
+This will create a new mode in a new folder. Enter the folder, and view the contents:
+
+``` bash
+cd <name-of-mode>
+```
+
+The structure of the directory should look like:
+
+<FileTree>
+- config.jsonc
+- src
+  - main.lua
+</FileTree>
+
+Modes are written using [Lua 5.5](https://www.lua.org/manual/5.5/readme.html), a
+small scripting language, so some basic programming experience is likely to be
+necessary. Before continuing, it is recommended (if you haven't already) to
+download a code editor (e.g. [VSCode](https://code.visualstudio.com/)) and
+install the [Lua Language Server](https://luals.github.io/#install) extension.
+This will provide autocompletion and diagnostics to help you write mode
+scripts.
+
+Take a look at `src/main.lua`:
+
+``` lua
+// src/main.lua
+lewdware.every(1000, function()
+    local media = lewdware.media.random({ type = {"image", "video"} });
+    if media then
+        if media.type == "image" then
+            lewdware.spawn_image_popup(media)
+        elseif media.type == "video" then
+            lewdware.spawn_video_popup(media)
+        end
+    end
+end)
+```
+
+Hopefully it is obvious what this is doing (with a peek at the [Lua API reference](/reference/lua-api/)):
+
+- Every 1000 milliseconds (1 second), run a function that:
+- Gets a random image or video from the current pack.
+- If the result is an image, spawn an image popup.
+
+Let's play some audio. Add this to the end of the file:
+
+``` lua
+// src/main.lua
+local audio = lewdware.media.random_audio()
+
+lewdware.play_audio(audio)
+```
+
+To test your mode, run `lw mode dev`, which will run `lewdware` with this
+mode (and will automatically reload whenever you change a file).
+
+When an audio file ends, we'd like to go on to play another one. A look at the
+documentation tells us that
+[`lewdware.play_audio()`](/reference/lua-api/#lewdware-play_audio) returns an
+[`AudioHandle`](/reference/lua-api/#audiohandle) object, which has an
+`on_finish()` method.
+
+Lets first make a function for our audio playing, and call it when the mode starts:
+
+``` lua
+// src/main.lua
+local function spawn_audio()
+    local audio = lewdware.media.random_audio()
+
+    lewdware.play_audio(audio)
+end
+
+spawn_audio()
+```
+
+Next, lets make sure a new audio file is played when the current one finishes:
+
+```diff lang="lua"
+// src/main.lua
+local function spawn_audio()
+    local audio = lewdware.media.random_audio()
+
+-    lewdware.play_audio(audio)
++    local audio_handle = lewdware.play_audio(audio)
++
++    audio_handle:on_finish(spawn_audio)
+end
+
+spawn_audio()
+```
+
+## User-provided options
+
+Let's give the user some options to configure the mode. Take a look at `config.jsonc`:
+
+```jsonc
+// config.jsonc
+{
+  "$schema": "https://lewdware.net/reference/mode.schema.json",
+  "name": "<your-mode>",
+  "version": "0.1.0",
+  "author": "",
+  "include": ["src"],
+  "modes": {
+    "default": {
+      "name": "<your-mode>",
+      "entrypoint": "src/main.lua",
+      "options": {}
+    }
+  }
+}
+```
+
+It's useful to fill in some of the top level fields (`"author"`, `"description"`, etc.).
+However, we're going to be editing `"options"` - this is where user-facing
+options are defined (see the [mode config reference](/reference/mode-config/)
+for details).
+
+Let's add an option to change the frequency at which popups are spawned:
+
+
+```diff lang="jsonc"
+// config.jsonc
+{
+  "$schema": "https://lewdware.net/reference/mode.schema.json",
+  "name": "<your-mode>",
+  "version": "0.1.0",
+  "author": "",
+  "include": ["src"],
+  "modes": {
+    "default": {
+      "name": "<your-mode>",
+      "entrypoint": "src/main.lua",
+-      "options": {}
++      "options": {
++        "popup_frequency": {
++          "label": "Popup frequency",
++          "description": "How often popups will appear",
++          "type": "integer",
++          "default": 1000,
++          "min": 100,
++          "max": 10000,
++        }
+      }
+    }
+  }
+}
+```
+
+This value is then available to us via `lewdware.config.popup_frequency`. Lets modify 
+`main.lua` to use this value.
+
+```diff lang="lua"
+// src/main.lua
+-lewdware.every(1000, function()
++lewdware.every(lewdware.config.popup_frequency, function()
+    local media = lewdware.media.random({ type = {"image", "video"} });
+    if media then
+        if media.type == "image" then
+            lewdware.spawn_image_popup(media)
+        elseif media.type == "video" then
+            lewdware.spawn_video_popup(media)
+        end
+    end
+end)
+```
+
+## Multiple files
+
+Modes can be split into multiple Lua files. This is useful to organise your code if
+your modes become large, or if you want to share code between multiple modes.
+
+Let's create a new file, `src/spawn.lua`. We'll move the image/video window
+spawning code to this file.
+
+```lua
+// src/spawn.lua
+-- Standard Lua module syntax: create a table of functions,
+-- and return it at the end
+local M = {}
+
+function M.spawn_popup()
+    local media = lewdware.media.random({ type = {"image", "video"} });
+    if media then
+        if media.type == "image" then
+            return lewdware.spawn_image_popup(media)
+        elseif media.type == "video" then
+            return lewdware.spawn_video_popup(media)
+        end
+    end
+end
+
+return M
+```
+
+Notice that `M.spawn_popup()` returns the created
+[`Window`](/reference/lua-api/#window) object, allowing the caller of the
+function to use it. Now, let's update `main.lua` to import and use this
+function.
+
+```diff lang="lua"
+// src/main.lua
++local spawn = require("spawn")
++
+lewdware.every(1000, function()
+lewdware.every(lewdware.config.popup_frequency, function()
+-    local media = lewdware.media.random({ type = {"image", "video"} });
+-    if media then
+-        if media.type == "image" then
+-            lewdware.spawn_image_popup(media)
+-        elseif media.type == "video" then
+-            lewdware.spawn_video_popup(media)
+-        end
+-    end
++    spawn.spawn_popup()
+end)
+```
+
+Finally, let's add a fun feature to our mode - when a window is closed,
+we'll spawn three more windows at once.
+
+```diff lang="lua"
+// src/main.lua
+lewdware.every(1000, function()
+lewdware.every(lewdware.config.popup_frequency, function()
+-    spawn.spawn_popup()
++    local window = spawn.spawn_popup()
++
++    window:on_close(function()
++        for _ = 1, 3 do
++            spawn.spawn_popup()
++        end
++    end)
+end)
+```
+
+Now, when closing a window, you should see three more pop up (but closing those
+three should do nothing).
+
+Congratulations! You've made a mode. To turn your mode into a single `.lwmode`
+file, run `lw mode build`.
+
+This guide shows just a fraction of what you are able to do. Read through the
+[Lua API reference](/reference/lua-api/) and [mode config
+reference](/reference/mode-config/) to understand the full extent of the API.
