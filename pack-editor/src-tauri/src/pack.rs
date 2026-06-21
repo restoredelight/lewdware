@@ -318,7 +318,11 @@ impl MediaPack {
         let _handle = self.saving.write().await;
         let on_progress = Arc::new(on_progress);
 
+        tracing::warn!("Writing files");
+
         let offset = self.write_files(None, on_progress).await?;
+
+        tracing::warn!("Finished writing files");
 
         self.db_execute(|conn| conn.execute("VACUUM", []).map_err(|err| err.into()))
             .await?;
@@ -436,10 +440,21 @@ impl MediaPack {
             for media_result in media {
                 let (id, media_path) = media_result?;
                 let full_path = dir.join("media").join(media_path);
-                let size = {
-                    let mut media_file = fs::File::open(&full_path)?;
-                    io::copy(&mut media_file, &mut out_file)?
+                tracing::debug!("Saving file: {}", full_path.display());
+                let mut media_file = match fs::File::open(&full_path) {
+                    Ok(f) => f,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                        tracing::error!(
+                            "Staged file missing, dropping from pack: {}",
+                            full_path.display()
+                        );
+                        conn.execute("DELETE FROM media WHERE id = ?", params![id])?;
+                        num_files = num_files.saturating_sub(1);
+                        continue;
+                    }
+                    Err(err) => return Err(err.into()),
                 };
+                let size = io::copy(&mut media_file, &mut out_file)?;
                 set_offset_len.execute(params![offset, size, id])?;
                 offset += size;
                 if let Err(err) = fs::remove_file(&full_path) {

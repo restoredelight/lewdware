@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { api } from "./api.js";
   import { store } from "./store.svelte.js";
 
   let showErrors = $state(false);
@@ -9,11 +10,17 @@
     {#if store.uploading}
       <span class="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin"></span>
       <span class="text-muted">
-        Processing {store.uploadDone} / {store.uploadProcessing} files…
+        Processing {store.uploadDone} / {store.uploadTotal} files…
       </span>
+      <button
+        onclick={() => api.cancelUpload()}
+        class="text-muted hover:text-text transition-colors"
+      >
+        Cancel
+      </button>
     {:else}
       <span class="text-muted">
-        Done — {store.uploadProcessing} file{store.uploadProcessing === 1 ? "" : "s"} processed
+        Done — {store.uploadDone} file{store.uploadDone === 1 ? "" : "s"} processed
       </span>
     {/if}
   </div>

@@ -3,7 +3,10 @@ use std::{
     io::{self, BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::OnceLock,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock,
+    },
     thread::available_parallelism,
 };
 
@@ -24,7 +27,7 @@ use futures::{stream, StreamExt};
 use infer::MatcherType;
 use shared::encode::FileInfo;
 use tempfile::NamedTempFile;
-use tokio::sync::{oneshot, Semaphore};
+use tokio::sync::{oneshot, RwLock, Semaphore};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -714,7 +717,12 @@ pub async fn process_files(
     skip_duplicates: bool,
     app: tauri::AppHandle,
     encoder: HardwareEncoder,
+    upload_lock: Arc<RwLock<()>>,
+    cancel: Arc<AtomicBool>,
 ) {
+    let total = paths.len();
+    let _ = app.emit("upload:start", serde_json::json!({ "total": total }));
+
     let dir = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {
@@ -731,8 +739,16 @@ pub async fn process_files(
             let app = app.clone();
             let dir = dir.clone();
             let encoder = encoder.clone();
+            let upload_lock = upload_lock.clone();
+            let cancel = cancel.clone();
             async move {
-                let _ = app.emit("upload:processing", path.to_string_lossy().as_ref());
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = app.emit("upload:file-done", ());
+                    return;
+                }
+                // Hold read lock for duration of file processing so save can acquire
+                // the write lock and run exclusively between file uploads.
+                let _read_guard = upload_lock.read().await;
                 match process_one_file(&pack_state, &path, &dir, skip_duplicates, encoder).await {
                     Ok(Some(media_file)) => {
                         let _ = app.emit("upload:added", &media_file);

@@ -291,7 +291,7 @@
   </div>
 
   <!-- Upload progress bar -->
-  {#if store.uploading || store.uploadProcessing > 0}
+  {#if store.showUploadProgress}
     <UploadProgress />
   {/if}
 

@@ -3,5 +3,5 @@
 
 fn main() {
     shared::utils::apply_wayland_preload_safeguards();
-    pack_editor_tauri_lib::run()
+    lewdware_pack_editor_lib::run()
 }

@@ -10,7 +10,7 @@ authors = ["restoredelight"]
 edition = "2021"
 
 [lib]
-name = "config_lib"
+name = "lewdware_config_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

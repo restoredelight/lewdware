@@ -27,7 +27,7 @@ pub fn init(log_file_prefix: &str) -> WorkerGuard {
         // In debug builds default to debug for our own crates, warn for everything else.
         // Set RUST_LOG to override (e.g. RUST_LOG=debug to see all deps).
         EnvFilter::new(if cfg!(debug_assertions) {
-            "warn,lewdware=debug,shared=debug,lewdware_config=debug,lewdware_pack_editor=debug"
+            "warn,lewdware=debug,shared=debug,lewdware_config=debug,lewdware_config_lib=debug,lewdware_pack_editor=debug,lewdware_pack_editor_lib=debug"
         } else {
             "warn"
         })

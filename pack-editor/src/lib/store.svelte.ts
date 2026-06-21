@@ -30,10 +30,17 @@ class AppStore {
   tagFilter = $state(new Set<string>());
 
   // Upload
-  uploadProcessing = $state(0);
+  uploadTotal = $state(0);
   uploadDone = $state(0);
-  uploading = $state(false);
+  uploadBatches = $state(0);
   uploadErrors = $state<UploadError[]>([]);
+  _showDoneBriefly = $state(false);
+  _doneTimer: ReturnType<typeof setTimeout> | null = null;
+
+  uploading = $derived(this.uploadBatches > 0);
+  showUploadProgress = $derived(
+    this.uploadBatches > 0 || this.uploadErrors.length > 0 || this._showDoneBriefly,
+  );
 
   // Save
   saveActive = $state(false);
@@ -167,13 +174,19 @@ class AppStore {
     this.primaryId = list.length > 0 ? list[list.length - 1].id : null;
   }
 
-  onUploadProcessing() {
-    if (!this.uploading) {
-      this.uploadProcessing = 0;
-      this.uploadDone = 0;
-      this.uploading = true;
+  onUploadStart(total: number) {
+    if (this._doneTimer !== null) {
+      clearTimeout(this._doneTimer);
+      this._doneTimer = null;
     }
-    this.uploadProcessing++;
+    this._showDoneBriefly = false;
+    if (this.uploadBatches === 0) {
+      this.uploadTotal = total;
+      this.uploadDone = 0;
+    } else {
+      this.uploadTotal += total;
+    }
+    this.uploadBatches++;
   }
 
   onUploadFileDone() {
@@ -181,7 +194,14 @@ class AppStore {
   }
 
   onUploadDone() {
-    this.uploading = false;
+    if (this.uploadBatches > 0) this.uploadBatches--;
+    if (this.uploadBatches === 0) {
+      this._showDoneBriefly = true;
+      this._doneTimer = setTimeout(() => {
+        this._showDoneBriefly = false;
+        this._doneTimer = null;
+      }, 3000);
+    }
   }
 
   addUploadError(error: UploadError) {

@@ -6,7 +6,7 @@ authors = ["restoredelight <restoreddelight@proton.me>"]
 edition = "2021"
 
 [lib]
-name = "pack_editor_tauri_lib"
+name = "lewdware_pack_editor_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

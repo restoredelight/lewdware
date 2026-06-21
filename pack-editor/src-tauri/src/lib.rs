@@ -3,7 +3,13 @@ mod media_server;
 mod pack;
 mod thumbnail;
 
-use std::{path::PathBuf, sync::{Arc, OnceLock}};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock,
+    },
+};
 
 use pack::{MediaFile, MediaPack};
 use serde::{Deserialize, Serialize};
@@ -40,7 +46,7 @@ async fn check_for_update() -> Result<Option<String>, String> {
 }
 use shared::read_pack::Metadata;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::encode::HardwareEncoder;
 
@@ -50,6 +56,8 @@ pub struct AppState {
     pub pack: PackState,
     pub media_port: OnceLock<u16>,
     pub hardware_encoder: OnceLock<HardwareEncoder>,
+    pub upload_lock: Arc<RwLock<()>>,
+    pub cancel_flag: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -58,6 +66,8 @@ impl AppState {
             pack: Arc::new(Mutex::new(None)),
             media_port: OnceLock::new(),
             hardware_encoder: OnceLock::new(),
+            upload_lock: Arc::new(RwLock::new(())),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -113,7 +123,7 @@ async fn new_pack_dialog(
             .dialog()
             .file()
             .set_title("Create new pack")
-            .add_filter("Lewdware Pack", &["md"])
+            .add_filter("Lewdware Pack", &["lwpack"])
             .blocking_save_file()
     })
     .await
@@ -152,7 +162,7 @@ async fn open_pack_dialog(
             .dialog()
             .file()
             .set_title("Open pack")
-            .add_filter("Lewdware Pack", &["md"])
+            .add_filter("Lewdware Pack", &["lwpack"])
             .blocking_pick_file()
     })
     .await
@@ -174,9 +184,14 @@ async fn open_pack_dialog(
 
 #[tauri::command]
 async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    tracing::warn!("Here!");
+    // Write lock pauses any in-flight uploads until they finish their current file,
+    // then holds exclusive access for the duration of the save.
+    let _write_guard = state.upload_lock.write().await;
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         let app_cb = app.clone();
+        tracing::warn!("Here!");
         pack.save(move |saved, t| {
             let _ = app_cb.emit(
                 "save:progress",
@@ -202,7 +217,7 @@ async fn save_pack_as_dialog(
             .dialog()
             .file()
             .set_title("Save pack as")
-            .add_filter("Lewdware Pack", &["md"])
+            .add_filter("Lewdware Pack", &["lwpack"])
             .blocking_save_file()
     })
     .await
@@ -211,6 +226,7 @@ async fn save_pack_as_dialog(
     let Some(path) = file else { return Ok(None) };
     let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
 
+    let _write_guard = state.upload_lock.write().await;
     let mut lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         let app_cb = app.clone();
@@ -428,12 +444,17 @@ async fn add_files_dialog(
 
     let pack_state = state.pack.clone();
     let encoder = state.hardware_encoder.get().cloned().unwrap_or(HardwareEncoder::SoftwareFallback);
+    let upload_lock = state.upload_lock.clone();
+    let cancel = state.cancel_flag.clone();
+    cancel.store(false, Ordering::SeqCst);
     tauri::async_runtime::spawn(encode::process_files(
         pack_state,
         paths,
         skip_duplicates,
         app,
         encoder,
+        upload_lock,
+        cancel,
     ));
     Ok(())
 }
@@ -470,13 +491,24 @@ async fn add_folder_dialog(
 
     let pack_state = state.pack.clone();
     let encoder = state.hardware_encoder.get().cloned().unwrap_or(HardwareEncoder::SoftwareFallback);
+    let upload_lock = state.upload_lock.clone();
+    let cancel = state.cancel_flag.clone();
+    cancel.store(false, Ordering::SeqCst);
     tauri::async_runtime::spawn(encode::process_files(
         pack_state,
         paths,
         skip_duplicates,
         app,
         encoder,
+        upload_lock,
+        cancel,
     ));
+    Ok(())
+}
+
+#[tauri::command]
+async fn cancel_upload(state: State<'_, AppState>) -> Result<(), String> {
+    state.cancel_flag.store(true, Ordering::SeqCst);
     Ok(())
 }
 
@@ -558,6 +590,7 @@ pub fn run() {
             mark_pack_unsaved,
             add_files_dialog,
             add_folder_dialog,
+            cancel_upload,
             get_media_port,
             check_for_update,
         ])

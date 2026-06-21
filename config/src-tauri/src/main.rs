@@ -3,5 +3,5 @@
 
 fn main() {
     shared::utils::apply_wayland_preload_safeguards();
-    config_lib::run()
+    lewdware_config_lib::run()
 }

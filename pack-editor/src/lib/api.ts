@@ -32,6 +32,7 @@ export const api = {
     invoke<void>("add_files_dialog", { skipDuplicates }),
   addFolderDialog: (recursive: boolean, skipDuplicates: boolean) =>
     invoke<void>("add_folder_dialog", { recursive, skipDuplicates }),
+  cancelUpload: () => invoke<void>("cancel_upload"),
 
   getMediaPort: () => invoke<number>("get_media_port"),
 };

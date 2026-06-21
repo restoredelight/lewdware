@@ -15,7 +15,7 @@
     api.getMediaPort().then((port) => (store.mediaPort = port));
 
     const unsubs = [
-      listen<string>("upload:processing", () => store.onUploadProcessing()),
+      listen<{ total: number }>("upload:start", (e) => store.onUploadStart(e.payload.total)),
       listen<MediaFile>("upload:added", (e) => store.addFile(e.payload)),
       listen<UploadError>("upload:error", (e) => store.addUploadError(e.payload)),
       listen("upload:file-done", () => store.onUploadFileDone()),
