@@ -10,13 +10,13 @@ installed when you install Lewdware; type `lw` in a terminal to verify.
 
 To create a new mode, run (replacing `<name-of-mode>` with a name for your mode):
 
-``` bash
+```bash frame="none"
 lw mode new <name-of-mode>
 ```
 
-This will create a new mode in a new folder. Enter the folder, and view the contents:
+This will create a new mode in a new folder.
 
-``` bash
+``` bash frame="none"
 cd <name-of-mode>
 ```
 
@@ -29,12 +29,11 @@ The structure of the directory should look like:
 </FileTree>
 
 Modes are written using [Lua 5.5](https://www.lua.org/manual/5.5/readme.html), a
-small scripting language, so some basic programming experience is likely to be
-necessary. Before continuing, it is recommended (if you haven't already) to
-download a code editor (e.g. [VSCode](https://code.visualstudio.com/)) and
-install the [Lua Language Server](https://luals.github.io/#install) extension.
-This will provide autocompletion and diagnostics to help you write mode
-scripts.
+small scripting language, so some basic programming knowledge is required.
+Before continuing, it is recommended (if you haven't already) to download a
+code editor (e.g. [VSCode](https://code.visualstudio.com/)) and install the
+[Lua Language Server](https://luals.github.io/#install) extension. This will
+provide autocompletion and diagnostics to help you write mode scripts.
 
 Take a look at `src/main.lua`:
 
