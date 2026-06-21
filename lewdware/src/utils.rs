@@ -17,7 +17,11 @@ pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<(
 
     let tray_menu = Menu::with_items(&[&MenuItem::new("Panic", true, None)])?;
 
+    #[cfg(target_os = "windows")]
+    let icon_bytes = include_bytes!("../assets/tray-windows.ico");
+    #[cfg(not(target_os = "windows"))]
     let icon_bytes = include_bytes!("../assets/tray.png");
+
     let img = image::load_from_memory(icon_bytes)?.into_rgba8();
     let icon = Icon::from_rgba(img.to_vec(), img.width(), img.height())?;
 
@@ -45,26 +49,18 @@ pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<(
 
     struct LewdwareTray {
         proxy: EventLoopProxy<UserEvent>,
+        icon_theme_path: String,
     }
 
     impl Tray for LewdwareTray {
         fn title(&self) -> String {
             "Lewdware".into()
         }
-        fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-            let icon_bytes = include_bytes!("../assets/tray.png");
-            if let Ok(img) = image::load_from_memory(icon_bytes) {
-                let img = img.into_rgba8();
-                let width = img.width() as i32;
-                let height = img.height() as i32;
-                // ksni expects ARGB32 in network (big-endian) byte order
-                let data: Vec<u8> = img
-                    .chunks_exact(4)
-                    .flat_map(|p| [p[3], p[0], p[1], p[2]])
-                    .collect();
-                return vec![ksni::Icon { width, height, data }];
-            }
-            vec![]
+        fn icon_name(&self) -> String {
+            "lewdware-symbolic".into()
+        }
+        fn icon_theme_path(&self) -> String {
+            self.icon_theme_path.clone()
         }
         fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
             vec![StandardItem {
@@ -80,9 +76,23 @@ pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<(
 
     TrayService::new(LewdwareTray {
         proxy: event_loop_proxy,
+        icon_theme_path: install_symbolic_icon().unwrap_or_default(),
     })
     .spawn();
     Ok(())
+}
+
+// Writes the symbolic SVG to the user's hicolor icon theme and returns the
+// theme root path for the SNI IconThemePath property.
+#[cfg(target_os = "linux")]
+fn install_symbolic_icon() -> Option<String> {
+    let svg = include_bytes!("../../assets/tray-symbolic.svg");
+    let apps_dir = dirs::data_local_dir()?
+        .join("icons/hicolor/scalable/apps");
+    std::fs::create_dir_all(&apps_dir).ok()?;
+    std::fs::write(apps_dir.join("lewdware-symbolic.svg"), svg).ok()?;
+    dirs::data_local_dir()
+        .map(|p| p.join("icons").to_string_lossy().into_owned())
 }
 
 
