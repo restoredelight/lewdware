@@ -1,7 +1,22 @@
 @import "tailwindcss";
 
+@theme {
+  --color-bg: #030712;
+  --color-surface: #0f1117;
+  --color-surface-2: #1a1d26;
+  --color-border: #252836;
+  --color-accent: #c70036;
+  --color-accent-hover: #e8003f;
+  --color-text: #e8e8e8;
+  --color-muted: #8b8fa8;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
 }
 
 html, body {
@@ -10,6 +25,50 @@ html, body {
   height: 100%;
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 14px;
-  background: #eff0f1;
-  color: #232629;
+  background: #030712;
+  color: #e8e8e8;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(to right, #c70036 var(--fill, 0%), #252836 var(--fill, 0%));
+  border-radius: 2px;
+  height: 4px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #c70036;
+  margin-top: -5px;
+}
+
+input[type="range"]::-moz-range-track {
+  background: #252836;
+  border-radius: 2px;
+  height: 4px;
+  border: none;
+}
+
+input[type="range"]::-moz-range-progress {
+  background: #c70036;
+  border-radius: 2px;
+  height: 4px;
+}
+
+input[type="range"]::-moz-range-thumb {
+  border: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #c70036;
 }

@@ -6,6 +6,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: "Lewdware",
+			customCss: ['./src/styles/custom.css'],
 			social: [
 				{
 					icon: "github",

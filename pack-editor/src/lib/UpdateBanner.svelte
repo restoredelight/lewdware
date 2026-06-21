@@ -16,10 +16,10 @@
 </script>
 
 {#if downloadUrl && !dismissed}
-  <div class="flex items-center gap-3 border-b border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
+  <div class="flex items-center gap-3 border-b border-accent/30 bg-accent/10 px-4 py-2 text-sm text-text">
     <span class="flex-1">A new version of Pack Editor is available.</span>
     <button
-      class="font-medium underline hover:text-blue-900"
+      class="font-medium underline hover:text-accent"
       onclick={() => openUrl(downloadUrl!)}
     >
       Download update

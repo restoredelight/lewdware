@@ -16,10 +16,10 @@
 </script>
 
 {#if downloadUrl && !dismissed}
-  <div class="flex items-center gap-3 border-b border-[#bdc3c7] bg-[#d6eaf8] px-4 py-2 text-sm text-[#1a5276]">
+  <div class="flex items-center gap-3 border-b border-accent/30 bg-accent/10 px-4 py-2 text-sm text-text">
     <span class="flex-1">A new version of Lewdware is available.</span>
     <button
-      class="font-medium underline hover:text-[#154360]"
+      class="font-medium underline hover:text-accent"
       onclick={() => openUrl(downloadUrl!)}
     >
       Download update

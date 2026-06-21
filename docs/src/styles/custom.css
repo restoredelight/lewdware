@@ -1,0 +1,12 @@
+/* Crimson accent to match the app branding */
+:root {
+  --sl-color-accent-low: #ffe0e6;
+  --sl-color-accent: #c70036;
+  --sl-color-accent-high: #8b0025;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #3d0010;
+  --sl-color-accent: #c70036;
+  --sl-color-accent-high: #ff2652;
+}

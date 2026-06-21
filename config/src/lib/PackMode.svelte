@@ -65,6 +65,15 @@
     return value;
   }
 
+  function sliderFill(opt: ModeOptionDto): string {
+    const value = opt.value as number;
+    const min = getMin(opt) ?? 0;
+    const max = getMax(opt) ?? 100;
+    if (max <= min) return '0%';
+    const pct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+    return `${pct}%`;
+  }
+
   function handleNumberInput(opt: ModeOptionDto, raw: string) {
     const n = parseFloat(raw);
     if (isNaN(n)) return;
@@ -78,29 +87,29 @@
 <div class="flex flex-col gap-8 p-8 overflow-y-auto flex-1">
   <!-- Pack picker -->
   <div class="flex flex-col gap-3">
-    <h2 class="text-xl font-semibold text-[#232629]">Media Pack</h2>
+    <h2 class="text-xl font-semibold text-text">Media Pack</h2>
     <div class="flex flex-col gap-2">
-      <span class="text-sm font-semibold text-[#232629]">Current pack</span>
+      <span class="text-sm font-semibold text-text">Current pack</span>
       <div class="flex gap-2 items-center">
         <div
-          class="flex-1 px-3 py-2 bg-[#fcfcfc] border border-[#bdc3c7] rounded text-sm
-                 text-[#232629] truncate"
+          class="flex-1 px-3 py-2 bg-surface border border-border rounded text-sm
+                 text-text truncate"
         >
           {store.config?.pack_path ?? "No pack selected"}
         </div>
         {#if store.config?.pack_path}
           <button
             onclick={() => store.removePack()}
-            class="px-3 py-2 text-sm text-[#7f8c8d] border border-[#bdc3c7] rounded
-                   hover:bg-[#eff0f1] transition-colors"
+            class="px-3 py-2 text-sm text-muted border border-border rounded
+                   hover:bg-surface-2 transition-colors"
           >
             Remove
           </button>
         {/if}
         <button
           onclick={() => store.pickPack()}
-          class="px-3 py-2 text-sm text-white bg-[#3daee9] rounded
-                 hover:bg-[#2c97d0] transition-colors"
+          class="px-3 py-2 text-sm text-white bg-accent rounded
+                 hover:bg-accent-hover transition-colors"
         >
           Browse…
         </button>
@@ -108,27 +117,27 @@
     </div>
   </div>
 
-  <hr class="border-[#bdc3c7]" />
+  <hr class="border-border" />
 
   <!-- Mode selector -->
   <div class="flex flex-col gap-3">
-    <h2 class="text-xl font-semibold text-[#232629]">Mode</h2>
+    <h2 class="text-xl font-semibold text-text">Mode</h2>
 
     <div
       class="flex flex-col gap-2 max-h-80 overflow-y-auto rounded-md border
-             border-[#bdc3c7] bg-[#fcfcfc] p-2"
+             border-border bg-surface p-2"
     >
       {#each store.modeGroups as group (group.label + group.source)}
         <div class="flex flex-col gap-0.5">
           <div class="flex items-center justify-between pr-1">
-            <p class="text-xs font-semibold text-[#7f8c8d] px-2 py-1 uppercase tracking-wide">
+            <p class="text-xs font-semibold text-muted px-2 py-1 uppercase tracking-wide">
               {group.label}
             </p>
             {#if group.source === "uploaded"}
               <button
                 onclick={() => store.uploadMode()}
-                class="text-xs text-[#3daee9] hover:text-[#2c97d0] px-2 py-0.5
-                       hover:bg-[#e8f4fb] rounded transition-colors"
+                class="text-xs text-accent hover:text-accent-hover px-2 py-0.5
+                       hover:bg-accent/10 rounded transition-colors"
               >
                 + Upload
               </button>
@@ -142,14 +151,10 @@
                 <button
                   onclick={() => store.setMode(entry.id)}
                   class="flex-1 flex items-center gap-2 px-2 py-1.5 rounded text-sm
-                         text-left transition-colors"
-                  class:bg-[#e8f4fb]={selected}
-                  class:text-[#1b6fa8]={selected}
-                  class:font-medium={selected}
-                  class:text-[#232629]={!selected}
-                  class:hover:bg-[#eff0f1]={!selected}
+                         text-left transition-colors
+                         {selected ? 'bg-accent/10 text-accent font-medium' : 'text-text hover:bg-surface-2'}"
                 >
-                  <span class="w-4 text-[#3daee9] shrink-0">
+                  <span class="w-4 text-accent shrink-0">
                     {#if selected}✓{/if}
                   </span>
                   {entry.name}
@@ -157,8 +162,8 @@
                 {#if entry.id.type === "File"}
                   <button
                     onclick={() => store.removeUploadedMode((entry.id as Extract<typeof entry.id, {type: "File"}>).path)}
-                    class="px-1.5 py-1 text-xs text-[#7f8c8d] hover:text-red-500
-                           hover:bg-red-50 rounded transition-colors"
+                    class="px-1.5 py-1 text-xs text-muted hover:text-red-500
+                           hover:bg-red-950 rounded transition-colors"
                     title="Remove this mode"
                   >
                     ✕
@@ -167,31 +172,31 @@
               </div>
             {/each}
             {#if group.entries.length === 0 && group.source === "uploaded"}
-              <p class="text-xs text-[#7f8c8d] italic px-2 py-1">No uploaded modes.</p>
+              <p class="text-xs text-muted italic px-2 py-1">No uploaded modes.</p>
             {/if}
           </div>
         </div>
 
         {#if group !== store.modeGroups.at(-1)}
-          <hr class="border-[#e8e8e8] my-1" />
+          <hr class="border-border my-1" />
         {/if}
       {/each}
 
       {#if store.modeGroups.find((g) => g.source === "uploaded") === undefined}
         <div class="flex flex-col gap-0.5">
           <div class="flex items-center justify-between pr-1">
-            <p class="text-xs font-semibold text-[#7f8c8d] px-2 py-1 uppercase tracking-wide">
+            <p class="text-xs font-semibold text-muted px-2 py-1 uppercase tracking-wide">
               Uploaded
             </p>
             <button
               onclick={() => store.uploadMode()}
-              class="text-xs text-[#3daee9] hover:text-[#2c97d0] px-2 py-0.5
-                     hover:bg-[#e8f4fb] rounded transition-colors"
+              class="text-xs text-accent hover:text-accent-hover px-2 py-0.5
+                     hover:bg-accent/10 rounded transition-colors"
             >
               + Upload
             </button>
           </div>
-          <p class="text-xs text-[#7f8c8d] italic px-2 py-1">No uploaded modes.</p>
+          <p class="text-xs text-muted italic px-2 py-1">No uploaded modes.</p>
         </div>
       {/if}
     </div>
@@ -199,20 +204,20 @@
 
   <!-- Mode options -->
   {#if store.modeOptions.length > 0}
-    <hr class="border-[#bdc3c7]" />
+    <hr class="border-border" />
 
     <div class="flex flex-col gap-3">
-      <h2 class="text-xl font-semibold text-[#232629]">Mode Options</h2>
+      <h2 class="text-xl font-semibold text-text">Mode Options</h2>
 
       <div class="flex flex-col gap-5">
         {#each store.modeOptions as opt (opt.key)}
           {@const typeKey = optionTypeKey(opt)}
           <div class="flex flex-col gap-1.5">
             <div class="flex items-center gap-2">
-              <span class="text-sm font-medium text-[#232629]">{opt.label}</span>
+              <span class="text-sm font-medium text-text">{opt.label}</span>
               {#if opt.description}
                 <span
-                  class="text-xs text-[#7f8c8d] border border-[#bdc3c7] rounded-full
+                  class="text-xs text-muted border border-border rounded-full
                          w-4 h-4 inline-flex items-center justify-center cursor-help"
                   title={opt.description}
                 >
@@ -225,8 +230,8 @@
               <label class="flex items-center gap-2 cursor-pointer w-fit">
                 <div
                   class="relative w-10 h-5 rounded-full transition-colors duration-200"
-                  class:bg-[#3daee9]={opt.value === true}
-                  class:bg-[#bdc3c7]={opt.value !== true}
+                  class:bg-accent={opt.value === true}
+                  class:bg-border={opt.value !== true}
                 >
                   <input
                     type="checkbox"
@@ -240,7 +245,7 @@
                     class:translate-x-5={opt.value === true}
                   ></span>
                 </div>
-                <span class="text-sm text-[#7f8c8d]">
+                <span class="text-sm text-muted">
                   {opt.value === true ? "On" : "Off"}
                 </span>
               </label>
@@ -250,16 +255,16 @@
                 type="text"
                 value={opt.value as string}
                 oninput={(e) => store.setModeOption(opt.key, e.currentTarget.value)}
-                class="px-3 py-1.5 border border-[#bdc3c7] rounded text-sm bg-[#fcfcfc]
-                       text-[#232629] focus:outline-none focus:border-[#3daee9] w-64"
+                class="px-3 py-1.5 border border-border rounded text-sm bg-surface
+                       text-text focus:outline-none focus:border-accent w-64"
               />
 
             {:else if typeKey === "Enum"}
               <select
                 value={opt.value as string}
                 onchange={(e) => store.setModeOption(opt.key, e.currentTarget.value)}
-                class="px-3 py-1.5 border border-[#bdc3c7] rounded text-sm bg-[#fcfcfc]
-                       text-[#232629] focus:outline-none focus:border-[#3daee9] w-64"
+                class="px-3 py-1.5 border border-border rounded text-sm bg-surface
+                       text-text focus:outline-none focus:border-accent w-64"
               >
                 {#each Object.entries(enumValues(opt)) as [k, label]}
                   <option value={k}>{label}</option>
@@ -276,7 +281,8 @@
                     max={getMax(opt)}
                     step={getStep(opt) ?? 1}
                     oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
-                    class="flex-1 max-w-xs accent-[#3daee9]"
+                    class="flex-1 max-w-xs"
+                    style="--fill: {sliderFill(opt)}"
                   />
                   <input
                     type="number"
@@ -285,8 +291,8 @@
                     max={getMax(opt)}
                     step={getStep(opt)}
                     oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
-                    class="px-3 py-1.5 border border-[#bdc3c7] rounded text-sm bg-[#fcfcfc]
-                           text-[#232629] focus:outline-none focus:border-[#3daee9] w-24"
+                    class="px-3 py-1.5 border border-border rounded text-sm bg-surface
+                           text-text focus:outline-none focus:border-accent w-24"
                   />
                 </div>
               {:else}
@@ -297,8 +303,8 @@
                   max={getMax(opt)}
                   step={getStep(opt)}
                   oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
-                  class="px-3 py-1.5 border border-[#bdc3c7] rounded text-sm bg-[#fcfcfc]
-                         text-[#232629] focus:outline-none focus:border-[#3daee9] w-32"
+                  class="px-3 py-1.5 border border-border rounded text-sm bg-surface
+                         text-text focus:outline-none focus:border-accent w-32"
                 />
               {/if}
             {/if}

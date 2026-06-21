@@ -1,5 +1,5 @@
 {
-  "$schema": "../config.schema.json",
+  "$schema": "../docs/src/data/config.schema.json",
   // "$schema": "https://lewdware.github.com/mode.schema.json",
   "include": ["src"],
   "name": "Default Modes",
@@ -18,6 +18,33 @@
           "min": 0.1,
           "max": 10,
           "step": 0.1
+        },
+        "x": {
+          "label": "x",
+          "type": "integer",
+          "default": 1,
+          "min": 1,
+          "max": 10,
+          "step": 1
+        },
+        "y": {
+          "label": "y",
+          "type": "string",
+          "default": "AAA"
+        },
+        "z": {
+          "label": "z",
+          "type": "boolean",
+          "default": false
+        },
+        "w": {
+          "label": "w",
+          "type": "enum",
+          "values": {
+            "1": "A value",
+            "2": "A value"
+          },
+          "default": "1"
         }
       }
     }
