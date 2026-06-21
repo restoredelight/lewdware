@@ -144,7 +144,10 @@ mod tests {
     fn invalid_magic_rejected() {
         let mut buf = make_header(0, 0).to_buf().unwrap();
         buf[0] = b'X';
-        assert!(matches!(Header::from_buf(buf), Err(ReadError::InvalidMagic)));
+        assert!(matches!(
+            Header::from_buf(buf),
+            Err(ReadError::InvalidMagic)
+        ));
     }
 
     #[test]

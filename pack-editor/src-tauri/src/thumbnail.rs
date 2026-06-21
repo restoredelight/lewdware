@@ -100,7 +100,9 @@ pub async fn generate_preview(
         scale.to_string()
     };
 
-    cmd.args(["-vf", &filter, "-pix_fmt", "yuv420p", "-f", "mjpeg", "-q:v", "4", "pipe:1"]);
+    cmd.args([
+        "-vf", &filter, "-pix_fmt", "yuv420p", "-f", "mjpeg", "-q:v", "4", "pipe:1",
+    ]);
 
     let output = cmd.output().await?;
 

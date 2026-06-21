@@ -92,17 +92,16 @@ impl EguiGpuRenderer {
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
 
-        let window_bind_group =
-            wgpu_state
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Egui Window Bind Group"),
-                    layout: &wgpu_state.window_bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: opacity_buffer.as_entire_binding(),
-                    }],
-                });
+        let window_bind_group = wgpu_state
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Egui Window Bind Group"),
+                layout: &wgpu_state.window_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: opacity_buffer.as_entire_binding(),
+                }],
+            });
 
         Ok(Self {
             context,

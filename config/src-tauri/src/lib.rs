@@ -785,7 +785,10 @@ async fn input_monitoring_granted(#[allow(unused)] app_handle: AppHandle) -> Res
 fn request_input_monitoring(#[allow(unused)] app_handle: AppHandle) -> Result<bool, String> {
     #[cfg(target_vendor = "apple")]
     {
-        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
 
         let granted = Arc::new(AtomicBool::new(false));
         let granted_clone = granted.clone();

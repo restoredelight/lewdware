@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs, io, path::PathBuf};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use serde::Deserialize;
 
 const MANIFEST_URL: &str = "https://lewdware.net/download/latest.json";
@@ -56,9 +56,7 @@ fn linux_asset() -> (String, &'static str) {
 }
 
 fn download(url: &str, ext: &str) -> anyhow::Result<PathBuf> {
-    let resp = ureq::get(url)
-        .call()
-        .context("failed to download update")?;
+    let resp = ureq::get(url).call().context("failed to download update")?;
     let tmp_path = std::env::temp_dir().join(format!("lewdware-update{ext}"));
     let mut file = fs::File::create(&tmp_path)?;
     io::copy(&mut resp.into_body().into_reader(), &mut file)?;

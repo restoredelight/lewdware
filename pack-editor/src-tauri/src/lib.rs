@@ -172,7 +172,9 @@ async fn open_pack_dialog(
     let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
 
     let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
-    let pack = MediaPack::open(path, &data_dir).await.map_err(|e| e.to_string())?;
+    let pack = MediaPack::open(path, &data_dir)
+        .await
+        .map_err(|e| e.to_string())?;
     let has_unsaved_changes = !pack.is_saved().await;
     let info = PackInfo {
         name: pack.name(),
@@ -443,7 +445,11 @@ async fn add_files_dialog(
     }
 
     let pack_state = state.pack.clone();
-    let encoder = state.hardware_encoder.get().cloned().unwrap_or(HardwareEncoder::SoftwareFallback);
+    let encoder = state
+        .hardware_encoder
+        .get()
+        .cloned()
+        .unwrap_or(HardwareEncoder::SoftwareFallback);
     let upload_lock = state.upload_lock.clone();
     let cancel = state.cancel_flag.clone();
     cancel.store(false, Ordering::SeqCst);
@@ -490,7 +496,11 @@ async fn add_folder_dialog(
     }
 
     let pack_state = state.pack.clone();
-    let encoder = state.hardware_encoder.get().cloned().unwrap_or(HardwareEncoder::SoftwareFallback);
+    let encoder = state
+        .hardware_encoder
+        .get()
+        .cloned()
+        .unwrap_or(HardwareEncoder::SoftwareFallback);
     let upload_lock = state.upload_lock.clone();
     let cancel = state.cancel_flag.clone();
     cancel.store(false, Ordering::SeqCst);
@@ -538,15 +548,25 @@ pub fn run() {
             let state = app.state::<AppState>();
 
             if let Ok(resource_dir) = app.path().resource_dir() {
-                let ffmpeg_name = if cfg!(target_os = "windows") { "lewdware-ffmpeg.exe" } else { "lewdware-ffmpeg" };
-                let ffprobe_name = if cfg!(target_os = "windows") { "lewdware-ffprobe.exe" } else { "lewdware-ffprobe" };
+                let ffmpeg_name = if cfg!(target_os = "windows") {
+                    "lewdware-ffmpeg.exe"
+                } else {
+                    "lewdware-ffmpeg"
+                };
+                let ffprobe_name = if cfg!(target_os = "windows") {
+                    "lewdware-ffprobe.exe"
+                } else {
+                    "lewdware-ffprobe"
+                };
                 let ffmpeg = resource_dir.join(ffmpeg_name);
                 let ffprobe = resource_dir.join(ffprobe_name);
                 if ffmpeg.exists() && ffprobe.exists() {
                     encode::init_binary_paths(ffmpeg, ffprobe);
                 }
             }
-            let _ = state.hardware_encoder.set(HardwareEncoder::detect_and_test());
+            let _ = state
+                .hardware_encoder
+                .set(HardwareEncoder::detect_and_test());
 
             let pack = state.pack.clone();
             let (tx, rx) = std::sync::mpsc::channel();

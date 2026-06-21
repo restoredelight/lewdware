@@ -529,7 +529,11 @@ impl InnerWindow {
                 .await
                 .into_lua_err()?;
 
-            this.inner_window().state.try_borrow_mut().into_lua_err()?.visible = visible;
+            this.inner_window()
+                .state
+                .try_borrow_mut()
+                .into_lua_err()?
+                .visible = visible;
 
             Ok(())
         });

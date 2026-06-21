@@ -15,7 +15,11 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
         })
         .optional()?;
 
-    tracing::info!("Migrating from {} to {}", value.unwrap_or(0), MIGRATIONS.len());
+    tracing::info!(
+        "Migrating from {} to {}",
+        value.unwrap_or(0),
+        MIGRATIONS.len()
+    );
 
     for i in value.unwrap_or(0)..MIGRATIONS.len() {
         db.execute_batch(MIGRATIONS[i])?;
@@ -38,6 +42,4 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-const MIGRATIONS: [&str; 1] = [
-    include_str!("migrations/0001_init_schema.sql")
-];
+const MIGRATIONS: [&str; 1] = [include_str!("migrations/0001_init_schema.sql")];

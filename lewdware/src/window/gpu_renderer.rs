@@ -96,7 +96,10 @@ impl GpuRenderer {
         Self {
             opacity_buffer,
             window_bind_group,
-            renderer_type: GpuRendererType::Image { texture, bind_group },
+            renderer_type: GpuRendererType::Image {
+                texture,
+                bind_group,
+            },
         }
     }
 
@@ -155,18 +158,14 @@ impl GpuRenderer {
     }
 
     pub fn set_opacity(&self, wgpu_state: &WgpuState, opacity: f32) {
-        wgpu_state.queue.write_buffer(&self.opacity_buffer, 0, bytemuck::cast_slice(&[opacity]));
+        wgpu_state
+            .queue
+            .write_buffer(&self.opacity_buffer, 0, bytemuck::cast_slice(&[opacity]));
     }
 
     /// Upload CPU-side frame buffer data: for Image writes to the frame texture; for Video
     /// writes to the UI overlay texture.
-    pub fn upload_frame_buffer(
-        &self,
-        queue: &wgpu::Queue,
-        data: &[u8],
-        width: u32,
-        height: u32,
-    ) {
+    pub fn upload_frame_buffer(&self, queue: &wgpu::Queue, data: &[u8], width: u32, height: u32) {
         match &self.renderer_type {
             GpuRendererType::Image { texture, .. } => {
                 upload_texture_data(queue, texture, data, width, height, width * 4, 4);
@@ -666,16 +665,15 @@ impl DecorationOverlay {
             ],
         });
 
-        let opacity_buffer =
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Decoration Opacity Buffer"),
-                contents: bytemuck::bytes_of(&WindowUniform {
-                    opacity,
-                    premultiplied: premultiplied_alpha as u32,
-                    force_opaque: force_opaque as u32,
-                }),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+        let opacity_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Decoration Opacity Buffer"),
+            contents: bytemuck::bytes_of(&WindowUniform {
+                opacity,
+                premultiplied: premultiplied_alpha as u32,
+                force_opaque: force_opaque as u32,
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
 
         let window_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Decoration Window Bind Group"),
@@ -777,11 +775,7 @@ impl DecorationOverlay {
     }
 
     /// Blit the decoration overlay into the active render pass (full outer-window viewport).
-    pub fn render(
-        &self,
-        rpass: &mut wgpu::RenderPass<'static>,
-        pipeline: &wgpu::RenderPipeline,
-    ) {
+    pub fn render(&self, rpass: &mut wgpu::RenderPass<'static>, pipeline: &wgpu::RenderPipeline) {
         rpass.set_pipeline(pipeline);
         rpass.set_bind_group(0, &self.bind_group, &[]);
         rpass.set_bind_group(1, &self.window_bind_group, &[]);

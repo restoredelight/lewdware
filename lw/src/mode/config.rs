@@ -193,7 +193,10 @@ mod tests {
             slider: None,
         };
         let converted: mode::OptionType = opt.try_into().unwrap();
-        assert!(matches!(converted, mode::OptionType::Integer { slider: true, .. }));
+        assert!(matches!(
+            converted,
+            mode::OptionType::Integer { slider: true, .. }
+        ));
     }
 
     #[test]
@@ -207,7 +210,10 @@ mod tests {
             slider: None,
         };
         let converted: mode::OptionType = opt.try_into().unwrap();
-        assert!(matches!(converted, mode::OptionType::Integer { slider: false, .. }));
+        assert!(matches!(
+            converted,
+            mode::OptionType::Integer { slider: false, .. }
+        ));
     }
 
     #[test]
@@ -221,7 +227,10 @@ mod tests {
             slider: Some(false),
         };
         let converted: mode::OptionType = opt.try_into().unwrap();
-        assert!(matches!(converted, mode::OptionType::Integer { slider: false, .. }));
+        assert!(matches!(
+            converted,
+            mode::OptionType::Integer { slider: false, .. }
+        ));
     }
 
     #[test]

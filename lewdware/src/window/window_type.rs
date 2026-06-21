@@ -46,7 +46,6 @@ impl<'a> WindowType<'a> {
             Self::Choice(choice_window) => &mut choice_window.inner_window,
         }
     }
-
 }
 
 /// A window displaying an image.
@@ -68,7 +67,14 @@ impl<'a> ImageWindow<'a> {
         let (gpu_renderer, frame_buffer) = if inner_window.is_gpu() {
             let outer_size = inner_window.outer_size();
             let frame_buffer = vec![0; (outer_size.width * outer_size.height * 4) as usize];
-            let gpu_renderer = GpuRenderer::new_image(inner_window.wgpu_state(), outer_size.width, outer_size.height, inner_window.opacity, inner_window.premultiplied_alpha(), inner_window.force_opaque());
+            let gpu_renderer = GpuRenderer::new_image(
+                inner_window.wgpu_state(),
+                outer_size.width,
+                outer_size.height,
+                inner_window.opacity,
+                inner_window.premultiplied_alpha(),
+                inner_window.force_opaque(),
+            );
             (Some(gpu_renderer), frame_buffer)
         } else {
             (None, Vec::new())
@@ -94,17 +100,30 @@ impl<'a> ImageWindow<'a> {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
             let outer_size = self.inner_window.outer_size();
             {
-                let pixmap = PixmapMut::from_bytes(&mut self.frame_buffer, outer_size.width, outer_size.height).unwrap();
+                let pixmap = PixmapMut::from_bytes(
+                    &mut self.frame_buffer,
+                    outer_size.width,
+                    outer_size.height,
+                )
+                .unwrap();
                 let mut buffer = Buffer::Pixmap(pixmap);
 
                 buffer.copy_from_pixmap(&self.image, x, y);
                 self.inner_window.render_decorations(&mut buffer)?;
             }
 
-            gpu_renderer.upload_frame_buffer(&self.inner_window.wgpu_state().queue, &self.frame_buffer, outer_size.width, outer_size.height);
+            gpu_renderer.upload_frame_buffer(
+                &self.inner_window.wgpu_state().queue,
+                &self.frame_buffer,
+                outer_size.width,
+                outer_size.height,
+            );
 
-            let pipeline = self.inner_window.wgpu_state().get_pipeline(self.inner_window.surface_format().unwrap());
-            
+            let pipeline = self
+                .inner_window
+                .wgpu_state()
+                .get_pipeline(self.inner_window.surface_format().unwrap());
+
             self.inner_window.draw_wgpu(|rpass, _x, _y| {
                 if let GpuRendererType::Image { bind_group, .. } = &gpu_renderer.renderer_type {
                     rpass.set_pipeline(&pipeline);
@@ -383,10 +402,8 @@ impl<'a> PromptWindow<'a> {
             let _ = surface_format; // only needed to confirm surface is GPU
             (None, Some(egui_gpu), decoration_overlay)
         } else {
-            let egui_cpu = EguiCPUWindow::new(
-                inner_window.window().clone(),
-                inner_window.transparent(),
-            )?;
+            let egui_cpu =
+                EguiCPUWindow::new(inner_window.window().clone(), inner_window.transparent())?;
             (Some(egui_cpu), None, None)
         };
 
@@ -618,10 +635,8 @@ impl<'a> ChoiceWindow<'a> {
             };
             (None, Some(egui_gpu), decoration_overlay)
         } else {
-            let egui_cpu = EguiCPUWindow::new(
-                inner_window.window().clone(),
-                inner_window.transparent(),
-            )?;
+            let egui_cpu =
+                EguiCPUWindow::new(inner_window.window().clone(), inner_window.transparent())?;
             (Some(egui_cpu), None, None)
         };
 
@@ -842,7 +857,11 @@ fn translate_position(position: PhysicalPosition<f64>, scale_factor: f64) -> Phy
 // [16,240]; full range (JPEG / yuvj420p) maps [0,255] directly.
 fn yuv_to_argb(y: u8, cb: u8, cr: u8, alpha: u8, full_range: bool) -> u32 {
     let (y_f, cb_f, cr_f) = if full_range {
-        (y as f32 / 255.0, cb as f32 / 255.0 - 0.5, cr as f32 / 255.0 - 0.5)
+        (
+            y as f32 / 255.0,
+            cb as f32 / 255.0 - 0.5,
+            cr as f32 / 255.0 - 0.5,
+        )
     } else {
         (
             (y as f32 - 16.0) / 219.0,
@@ -891,7 +910,11 @@ fn render_yuv420p_to_argb(
             let y = y_data[sy * y_stride + sx];
             let cb = cb_data[cy * cb_stride + cx];
             let cr = cr_data[cy * cr_stride + cx];
-            let alpha = if packed_alpha { y_data[ay * y_stride + sx] } else { 255 };
+            let alpha = if packed_alpha {
+                y_data[ay * y_stride + sx]
+            } else {
+                255
+            };
             dst[dy * dw + dx] = yuv_to_argb(y, cb, cr, alpha, full_range);
         }
     }
@@ -931,7 +954,11 @@ fn render_nv12_to_argb(
             // UV plane: interleaved Cb Cr pairs
             let cb = uv_data[cy * uv_stride + cx * 2];
             let cr = uv_data[cy * uv_stride + cx * 2 + 1];
-            let alpha = if packed_alpha { y_data[ay * y_stride + sx] } else { 255 };
+            let alpha = if packed_alpha {
+                y_data[ay * y_stride + sx]
+            } else {
+                255
+            };
             dst[dy * dw + dx] = yuv_to_argb(y, cb, cr, alpha, full_range);
         }
     }

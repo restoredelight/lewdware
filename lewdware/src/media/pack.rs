@@ -8,7 +8,8 @@ use std::{
 use image::{ImageFormat, ImageReader};
 use rusqlite::{Connection, Row, params, params_from_iter};
 use shared::{
-    db::migrate, read_pack::{Header, Metadata, read_pack_metadata}
+    db::migrate,
+    read_pack::{Header, Metadata, read_pack_metadata},
 };
 use tempfile::NamedTempFile;
 use tokio::{
@@ -322,8 +323,8 @@ impl MediaPack {
 
                 let src: image::DynamicImage = image.into_rgba8().into();
                 let mut dst = Image::new(width, height, PixelType::U8x4);
-                let opts = ResizeOptions::new()
-                    .resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
+                let opts =
+                    ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
                 let result = Resizer::new()
                     .resize(&src, &mut dst, &opts)
                     .map(|_| {

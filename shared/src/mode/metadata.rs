@@ -244,15 +244,31 @@ mod tests {
     fn default_values() {
         let cases: &[(OptionType, OptionValue)] = &[
             (
-                OptionType::Integer { default: 7, min: None, max: None, step: None, clamp: false, slider: false },
+                OptionType::Integer {
+                    default: 7,
+                    min: None,
+                    max: None,
+                    step: None,
+                    clamp: false,
+                    slider: false,
+                },
                 OptionValue::Integer(7),
             ),
             (
-                OptionType::Number { default: 3.14, min: None, max: None, step: None, clamp: false, slider: false },
+                OptionType::Number {
+                    default: 3.14,
+                    min: None,
+                    max: None,
+                    step: None,
+                    clamp: false,
+                    slider: false,
+                },
                 OptionValue::Number(3.14),
             ),
             (
-                OptionType::String { default: "hi".to_string() },
+                OptionType::String {
+                    default: "hi".to_string(),
+                },
                 OptionValue::String("hi".to_string()),
             ),
             (
@@ -260,7 +276,10 @@ mod tests {
                 OptionValue::Boolean(false),
             ),
             (
-                OptionType::Enum { default: "x".to_string(), values: IndexMap::new() },
+                OptionType::Enum {
+                    default: "x".to_string(),
+                    values: IndexMap::new(),
+                },
                 OptionValue::Enum("x".to_string()),
             ),
         ];
@@ -279,15 +298,31 @@ mod tests {
     fn matches_value_correct_types() {
         let pairs: &[(OptionType, OptionValue)] = &[
             (
-                OptionType::Integer { default: 0, min: None, max: None, step: None, clamp: false, slider: false },
+                OptionType::Integer {
+                    default: 0,
+                    min: None,
+                    max: None,
+                    step: None,
+                    clamp: false,
+                    slider: false,
+                },
                 OptionValue::Integer(42),
             ),
             (
-                OptionType::Number { default: 0.0, min: None, max: None, step: None, clamp: false, slider: false },
+                OptionType::Number {
+                    default: 0.0,
+                    min: None,
+                    max: None,
+                    step: None,
+                    clamp: false,
+                    slider: false,
+                },
                 OptionValue::Number(1.0),
             ),
             (
-                OptionType::String { default: String::new() },
+                OptionType::String {
+                    default: String::new(),
+                },
                 OptionValue::String("s".to_string()),
             ),
             (
@@ -295,7 +330,10 @@ mod tests {
                 OptionValue::Boolean(false),
             ),
             (
-                OptionType::Enum { default: "a".to_string(), values: IndexMap::new() },
+                OptionType::Enum {
+                    default: "a".to_string(),
+                    values: IndexMap::new(),
+                },
                 OptionValue::Enum("b".to_string()),
             ),
         ];
@@ -315,7 +353,14 @@ mod tests {
         let opt = ModeOption {
             label: "test".to_string(),
             description: None,
-            option_type: OptionType::Integer { default: 0, min: None, max: None, step: None, clamp: false, slider: false },
+            option_type: OptionType::Integer {
+                default: 0,
+                min: None,
+                max: None,
+                step: None,
+                clamp: false,
+                slider: false,
+            },
         };
         assert!(!opt.matches_value(&OptionValue::String("oops".to_string())));
     }

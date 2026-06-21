@@ -326,7 +326,12 @@ fn print(_: &Lua, args: mlua::Variadic<mlua::Value>) -> mlua::Result<()> {
 }
 
 fn create_sandboxed_lua() -> mlua::Result<Lua> {
-    let libs = StdLib::COROUTINE | StdLib::TABLE | StdLib::STRING | StdLib::UTF8 | StdLib::MATH | StdLib::OS;
+    let libs = StdLib::COROUTINE
+        | StdLib::TABLE
+        | StdLib::STRING
+        | StdLib::UTF8
+        | StdLib::MATH
+        | StdLib::OS;
 
     let lua = Lua::new_with(libs, mlua::LuaOptions::default())?;
 
@@ -342,9 +347,11 @@ fn create_sandboxed_lua() -> mlua::Result<Lua> {
     lua.globals().raw_remove("getfenv")?;
     lua.globals().raw_remove("setfenv")?;
 
-    lua.globals().get::<mlua::Table>("string")?.raw_remove("dump")?;
+    lua.globals()
+        .get::<mlua::Table>("string")?
+        .raw_remove("dump")?;
 
-    let os = lua.globals().get ::<mlua::Table>("os")?;
+    let os = lua.globals().get::<mlua::Table>("os")?;
     let sandboxed_os = lua.create_table()?;
 
     for name in ["clock", "date", "difftime", "time"] {

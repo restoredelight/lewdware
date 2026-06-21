@@ -240,7 +240,7 @@ impl<'a> LewdwareApp<'a> {
 
         let inner_window = InnerWindow::new(
             window,
-            self.wgpu_state.clone(),  // Option<Arc<WgpuState>>
+            self.wgpu_state.clone(), // Option<Arc<WgpuState>>
             opts.decorations,
             opts.title,
             opts.closeable,

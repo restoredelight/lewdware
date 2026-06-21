@@ -630,13 +630,17 @@ async fn spawn_image_popup(
     let mut opts = opts.unwrap_or_default();
 
     let (image_width, image_height, media_transparent) = match image.media_data {
-        MediaData::Image { width, height, transparent } => (width, height, transparent),
+        MediaData::Image {
+            width,
+            height,
+            transparent,
+        } => (width, height, transparent),
         _ => return Err("`image` is not an image".into_lua_err()),
     };
 
     if opts.window_opts.transparent.is_none() {
-        let needs_transparent = media_transparent
-            || opts.window_opts.opacity.map_or(false, |o| o < 1.0);
+        let needs_transparent =
+            media_transparent || opts.window_opts.opacity.map_or(false, |o| o < 1.0);
         if needs_transparent {
             opts.window_opts.transparent = Some(true);
         }
@@ -733,8 +737,8 @@ async fn spawn_video_popup(
     };
 
     if opts.window_opts.transparent.is_none() {
-        let needs_transparent = media_transparent
-            || opts.window_opts.opacity.map_or(false, |o| o < 1.0);
+        let needs_transparent =
+            media_transparent || opts.window_opts.opacity.map_or(false, |o| o < 1.0);
         if needs_transparent {
             opts.window_opts.transparent = Some(true);
         }
@@ -948,7 +952,10 @@ async fn play_audio(
         audio_handles.clone(),
     ));
 
-    audio_handles.try_borrow_mut().into_lua_err()?.insert(id, audio_handle.clone());
+    audio_handles
+        .try_borrow_mut()
+        .into_lua_err()?
+        .insert(id, audio_handle.clone());
 
     Ok(audio_handle)
 }

@@ -1,7 +1,7 @@
+mod gpu_renderer;
 mod header;
 mod inner_window;
 mod surface;
-mod gpu_renderer;
 mod window_type;
 
 pub use header::HEADER_HEIGHT;

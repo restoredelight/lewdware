@@ -10,8 +10,7 @@ use crate::{app::UserEvent, lua::Coord};
 #[cfg(not(target_os = "linux"))]
 pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<()> {
     use tray_icon::{
-        Icon,
-        TrayIconBuilder,
+        Icon, TrayIconBuilder,
         menu::{Menu, MenuEvent, MenuItem},
     };
 
@@ -63,14 +62,16 @@ pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<(
             self.icon_theme_path.clone()
         }
         fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
-            vec![StandardItem {
-                label: "Panic".into(),
-                activate: Box::new(|this: &mut Self| {
-                    let _ = this.proxy.send_event(UserEvent::Exit);
-                }),
-                ..Default::default()
-            }
-            .into()]
+            vec![
+                StandardItem {
+                    label: "Panic".into(),
+                    activate: Box::new(|this: &mut Self| {
+                        let _ = this.proxy.send_event(UserEvent::Exit);
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            ]
         }
     }
 
@@ -87,14 +88,11 @@ pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<(
 #[cfg(target_os = "linux")]
 fn install_symbolic_icon() -> Option<String> {
     let svg = include_bytes!("../../assets/tray-symbolic.svg");
-    let apps_dir = dirs::data_local_dir()?
-        .join("icons/hicolor/scalable/apps");
+    let apps_dir = dirs::data_local_dir()?.join("icons/hicolor/scalable/apps");
     std::fs::create_dir_all(&apps_dir).ok()?;
     std::fs::write(apps_dir.join("lewdware-symbolic.svg"), svg).ok()?;
-    dirs::data_local_dir()
-        .map(|p| p.join("icons").to_string_lossy().into_owned())
+    dirs::data_local_dir().map(|p| p.join("icons").to_string_lossy().into_owned())
 }
-
 
 /// Spawn a thread that will listen for the panic key being pressed, and send
 /// [UserEvent::PanicButtonPressed] to the event loop.
@@ -376,11 +374,12 @@ fn default_media_popup_size(
 // and before run_app() (when the method is first queried).
 #[cfg(target_vendor = "apple")]
 pub fn opt_in_secure_restorable_state() {
-    use std::ffi::c_char;
     use objc2::{
-        msg_send, sel,
+        msg_send,
         runtime::{AnyClass, AnyObject, Bool, Sel},
+        sel,
     };
+    use std::ffi::c_char;
 
     unsafe extern "C" {
         fn class_addMethod(

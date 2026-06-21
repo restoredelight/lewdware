@@ -169,7 +169,12 @@ impl Header {
 mod tests {
     use super::*;
 
-    fn make_header(index_offset: u64, index_length: u64, metadata_offset: u64, metadata_length: u64) -> Header {
+    fn make_header(
+        index_offset: u64,
+        index_length: u64,
+        metadata_offset: u64,
+        metadata_length: u64,
+    ) -> Header {
         Header {
             index_offset,
             index_length,
@@ -219,7 +224,10 @@ mod tests {
     fn header_invalid_magic_rejected() {
         let mut buf = make_header(0, 0, 0, 0).to_buf().unwrap();
         buf[0] = b'X';
-        assert!(matches!(Header::from_buf(buf), Err(ReadError::InvalidMagic)));
+        assert!(matches!(
+            Header::from_buf(buf),
+            Err(ReadError::InvalidMagic)
+        ));
     }
 
     #[test]
@@ -247,7 +255,10 @@ mod tests {
 
     #[test]
     fn metadata_roundtrip_with_absent_optionals() {
-        let original = Metadata { name: "minimal".to_string(), ..Default::default() };
+        let original = Metadata {
+            name: "minimal".to_string(),
+            ..Default::default()
+        };
         let buf = original.to_buf().unwrap();
         let decoded = Metadata::from_buf(&buf).unwrap();
         assert_eq!(original, decoded);

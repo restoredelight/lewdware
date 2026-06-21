@@ -1,6 +1,6 @@
 use crate::app::UserEvent;
-use std::{error::Error, fmt::Display, io, path::Path, rc::Rc, sync::Arc, thread};
 use shared::read_pack::Metadata;
+use std::{error::Error, fmt::Display, io, path::Path, rc::Rc, sync::Arc, thread};
 use winit::event_loop::EventLoopProxy;
 
 use tokio::{

@@ -219,11 +219,19 @@ fn is_media_path(path: &Path) -> anyhow::Result<bool> {
 }
 
 fn ffmpeg_filename() -> &'static str {
-    if cfg!(target_os = "windows") { "lewdware-ffmpeg.exe" } else { "lewdware-ffmpeg" }
+    if cfg!(target_os = "windows") {
+        "lewdware-ffmpeg.exe"
+    } else {
+        "lewdware-ffmpeg"
+    }
 }
 
 fn ffprobe_filename() -> &'static str {
-    if cfg!(target_os = "windows") { "lewdware-ffprobe.exe" } else { "lewdware-ffprobe" }
+    if cfg!(target_os = "windows") {
+        "lewdware-ffprobe.exe"
+    } else {
+        "lewdware-ffprobe"
+    }
 }
 
 pub fn get_ffmpeg_path() -> PathBuf {
