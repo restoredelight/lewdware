@@ -47,7 +47,7 @@ use shared::{
     read_pack::read_pack_metadata,
     user_config::{self, AppConfig, Key, Mode},
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tempfile::NamedTempFile;
 use tokio::sync::oneshot;
 
@@ -884,6 +884,13 @@ pub fn run() {
             uploaded: Mutex::new(uploaded),
             default_modes,
             lewdware_process: Mutex::new(None),
+        })
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+                window.set_icon(icon)?;
+            }
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_config,

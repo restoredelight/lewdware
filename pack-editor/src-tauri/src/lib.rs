@@ -530,6 +530,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
+                window.set_icon(icon)?;
+            }
+
             let state = app.state::<AppState>();
 
             if let Ok(resource_dir) = app.path().resource_dir() {

@@ -10,15 +10,22 @@ use crate::{app::UserEvent, lua::Coord};
 #[cfg(not(target_os = "linux"))]
 pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<()> {
     use tray_icon::{
+        Icon,
         TrayIconBuilder,
         menu::{Menu, MenuEvent, MenuItem},
     };
 
     let tray_menu = Menu::with_items(&[&MenuItem::new("Panic", true, None)])?;
 
+    let icon_bytes = include_bytes!("../assets/tray.png");
+    let img = image::load_from_memory(icon_bytes)?.into_rgba8();
+    let icon = Icon::from_rgba(img.to_vec(), img.width(), img.height())?;
+
     let tray_icon = TrayIconBuilder::new()
         .with_tooltip("Lewdware")
         .with_menu(Box::new(tray_menu))
+        .with_icon(icon)
+        .with_icon_as_template(cfg!(target_vendor = "apple"))
         .build()?;
 
     // The TrayIcon must be kept alive for the icon to remain visible. Since it should
@@ -43,6 +50,21 @@ pub fn create_tray_icon(event_loop_proxy: EventLoopProxy<UserEvent>) -> Result<(
     impl Tray for LewdwareTray {
         fn title(&self) -> String {
             "Lewdware".into()
+        }
+        fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+            let icon_bytes = include_bytes!("../assets/tray.png");
+            if let Ok(img) = image::load_from_memory(icon_bytes) {
+                let img = img.into_rgba8();
+                let width = img.width() as i32;
+                let height = img.height() as i32;
+                // ksni expects ARGB32 in network (big-endian) byte order
+                let data: Vec<u8> = img
+                    .chunks_exact(4)
+                    .flat_map(|p| [p[3], p[0], p[1], p[2]])
+                    .collect();
+                return vec![ksni::Icon { width, height, data }];
+            }
+            vec![]
         }
         fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
             vec![StandardItem {
