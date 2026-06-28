@@ -701,8 +701,6 @@ pub struct FadeOpts {
     pub duration: u64,
     #[serde(default)]
     pub easing: Easing,
-    #[serde(default)]
-    pub relative: bool,
 }
 
 impl FromLua for FadeOpts {

@@ -6,6 +6,7 @@ use egui_software_backend::{BufferMutRef, ColorFieldOrder, EguiSoftwareRender};
 use egui_wgpu::{RendererOptions, wgpu};
 use winit::{dpi::PhysicalSize, event::WindowEvent, window::Window};
 
+use crate::lua::Color;
 use crate::wgpu::WgpuState;
 
 /// GPU-accelerated egui renderer that does NOT own a wgpu surface. It renders into the caller's
@@ -30,10 +31,10 @@ impl EguiGpuRenderer {
         wgpu_state: &WgpuState,
         window: &Arc<Window>,
         inner_size: PhysicalSize<u32>,
-        transparent: bool,
         opacity: f32,
         premultiplied_alpha: bool,
         force_opaque: bool,
+        background_color: Option<Color>,
     ) -> Result<Self> {
         let context = egui::Context::default();
         let viewport_id = egui::ViewportId::from_hash_of(window.id());
@@ -60,9 +61,15 @@ impl EguiGpuRenderer {
         });
 
         let mut visuals = egui::Visuals::light();
-        if transparent {
-            visuals.window_fill = egui::Color32::TRANSPARENT;
-            visuals.panel_fill = egui::Color32::TRANSPARENT;
+        if let Some(c) = background_color {
+            let color = egui::Color32::from_rgba_unmultiplied(
+                (c.r * 255.0).round() as u8,
+                (c.g * 255.0).round() as u8,
+                (c.b * 255.0).round() as u8,
+                (c.a * 255.0).round() as u8,
+            );
+            visuals.window_fill = color;
+            visuals.panel_fill = color;
         }
         context.set_visuals(visuals);
 
@@ -281,7 +288,7 @@ pub struct EguiCPUWindow {
 }
 
 impl EguiCPUWindow {
-    pub fn new(window: Arc<Window>, transparent: bool) -> Result<Self> {
+    pub fn new(window: Arc<Window>, background_color: Option<Color>) -> Result<Self> {
         let context = egui::Context::default();
         let viewport_id = egui::ViewportId::from_hash_of(window.id());
         let state = egui_winit::State::new(
@@ -303,9 +310,15 @@ impl EguiCPUWindow {
         });
 
         let mut visuals = egui::Visuals::light();
-        if transparent {
-            visuals.window_fill = egui::Color32::TRANSPARENT;
-            visuals.panel_fill = egui::Color32::TRANSPARENT;
+        if let Some(c) = background_color {
+            let color = egui::Color32::from_rgba_unmultiplied(
+                (c.r * 255.0).round() as u8,
+                (c.g * 255.0).round() as u8,
+                (c.b * 255.0).round() as u8,
+                (c.a * 255.0).round() as u8,
+            );
+            visuals.window_fill = color;
+            visuals.panel_fill = color;
         }
         context.set_visuals(visuals);
 

@@ -493,7 +493,7 @@ impl<'a> PromptWindow<'a> {
             let decoration_overlay = &mut self.decoration_overlay;
             self.inner_window.with_header_pixmap(|pixmap| {
                 if let Some(overlay) = decoration_overlay {
-                    overlay.upload_header(&wgpu_state.queue, pixmap, ox, oy);
+                    overlay.upload_header(&wgpu_state.queue, pixmap, ox, ox);
                 }
             });
 
@@ -723,7 +723,7 @@ impl<'a> ChoiceWindow<'a> {
             let decoration_overlay = &mut self.decoration_overlay;
             self.inner_window.with_header_pixmap(|pixmap| {
                 if let Some(overlay) = decoration_overlay {
-                    overlay.upload_header(&wgpu_state.queue, pixmap, ox, oy);
+                    overlay.upload_header(&wgpu_state.queue, pixmap, ox, ox);
                 }
             });
 

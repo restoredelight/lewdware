@@ -5,6 +5,66 @@ use serde::{Deserialize, Serialize};
 use shared::mode::OptionValue;
 use winit::dpi::LogicalSize;
 
+#[derive(Debug, Clone, Copy)]
+pub struct Color {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
+
+impl Serialize for Color {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let r = (self.r * 255.0).round() as u8;
+        let g = (self.g * 255.0).round() as u8;
+        let b = (self.b * 255.0).round() as u8;
+        let a = (self.a * 255.0).round() as u8;
+        if a == 255 {
+            serializer.serialize_str(&format!("#{r:02x}{g:02x}{b:02x}"))
+        } else {
+            serializer.serialize_str(&format!("#{r:02x}{g:02x}{b:02x}{a:02x}"))
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Color {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let hex = s
+            .strip_prefix('#')
+            .ok_or_else(|| serde::de::Error::custom("color must start with '#'"))?;
+
+        fn channel(s: &str) -> Option<f32> {
+            u8::from_str_radix(s, 16).ok().map(|v| v as f32 / 255.0)
+        }
+
+        match hex.len() {
+            6 => Ok(Color {
+                r: channel(&hex[0..2])
+                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
+                g: channel(&hex[2..4])
+                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
+                b: channel(&hex[4..6])
+                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
+                a: 1.0,
+            }),
+            8 => Ok(Color {
+                r: channel(&hex[0..2])
+                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
+                g: channel(&hex[2..4])
+                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
+                b: channel(&hex[4..6])
+                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
+                a: channel(&hex[6..8])
+                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
+            }),
+            _ => Err(serde::de::Error::custom(
+                "color must be '#rrggbb' or '#rrggbbaa'",
+            )),
+        }
+    }
+}
+
 use crate::{
     lua::{
         AudioHandles, Media, MediaData, MediaType, Window, Windows,
@@ -585,6 +645,8 @@ pub struct SpawnWindowOpts {
     #[serde(default)]
     pub transparent: Option<bool>,
     #[serde(default)]
+    pub background_color: Option<Color>,
+    #[serde(default)]
     pub click_through: bool,
 }
 
@@ -603,6 +665,7 @@ impl Default for SpawnWindowOpts {
             visible: true,
             opacity: None,
             transparent: None,
+            background_color: None,
             click_through: false,
         }
     }
@@ -639,8 +702,9 @@ async fn spawn_image_popup(
     };
 
     if opts.window_opts.transparent.is_none() {
-        let needs_transparent =
-            media_transparent || opts.window_opts.opacity.map_or(false, |o| o < 1.0);
+        let needs_transparent = media_transparent
+            || opts.window_opts.opacity.map_or(false, |o| o < 1.0)
+            || opts.window_opts.background_color.map_or(false, |c| c.a < 1.0);
         if needs_transparent {
             opts.window_opts.transparent = Some(true);
         }
@@ -737,8 +801,9 @@ async fn spawn_video_popup(
     };
 
     if opts.window_opts.transparent.is_none() {
-        let needs_transparent =
-            media_transparent || opts.window_opts.opacity.map_or(false, |o| o < 1.0);
+        let needs_transparent = media_transparent
+            || opts.window_opts.opacity.map_or(false, |o| o < 1.0)
+            || opts.window_opts.background_color.map_or(false, |c| c.a < 1.0);
         if needs_transparent {
             opts.window_opts.transparent = Some(true);
         }
