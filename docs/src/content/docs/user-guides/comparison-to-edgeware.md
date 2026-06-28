@@ -47,9 +47,9 @@ results in less space for user configuration (unless you write your own mode).
 - Edgeware++ provides a "corruption" feature, allowing packs to change
   behaviour over time without any scripting. This behaviour can be
   emulated by a Lewdware mode, but doing so is more complex.
-- Edgeware++ has a "fill drive" feature that modifies files on your computer.
-  Lewdware does not currently do this, for security reasons (this is potentially
-  unsafe and unwanted for obvious reasons). If we do implement this, it would
-  probably be a standalone program, rather than being integrated into Lewdware.
+- Edgeware++ has a "fill drive" feature that creates and modifies files on your
+  computer. Lewdware does not currently do this, for security reasons. If we do
+  implement this, it would probably be a standalone program, rather than being
+  integrated into Lewdware.
 - Edgeware++ provides a Booru downloader. Lewdware does not do this because
   it would be difficult to maintain.

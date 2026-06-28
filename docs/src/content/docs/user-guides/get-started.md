@@ -20,9 +20,9 @@ available](https://github.com/restoredelight/lewdware).
 
 ## Get started
 
-First, [download Lewdware for your OS](/download/), and use the download installer
+First, [download Lewdware for your OS](/download/), and use the installer
 to install Lewdware. On Windows and macOS, you will likely get a warning about
-untrusted publisher; these are safe to bypass and ignore (I would have to pay
+an untrusted publisher - these are safe to bypass and ignore (I would have to pay
 around $100/year to remove those warnings).
 
 If at any point you want to uninstall Lewdware, it should be fairly simple to
@@ -31,7 +31,7 @@ macOS, find the program in the Applications folder, and delete it.
 
 Once you've got Lewdware installed, start it up. This should open up a
 config window, allowing you to configure and run the main program. You will
-need a pack - you can find a few in TODO.
+need [a pack](/download/packs/).
 
 Once you have downloaded a pack, go to *Packs and Modes* on the side menu,
 click *Browse*, and choose the pack you downloaded. Then, go back to *x*, and
