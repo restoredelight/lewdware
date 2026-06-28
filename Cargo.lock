@@ -3519,7 +3519,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lewdware"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3569,7 +3569,7 @@ dependencies = [
 
 [[package]]
 name = "lewdware-config"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "nix",
@@ -3591,7 +3591,7 @@ dependencies = [
 
 [[package]]
 name = "lewdware-pack-editor"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -3804,7 +3804,7 @@ dependencies = [
 
 [[package]]
 name = "lw"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "clap 4.6.1",
@@ -6216,7 +6216,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "ciborium",
