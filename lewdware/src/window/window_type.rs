@@ -21,15 +21,15 @@ use crate::{
     },
 };
 
-pub enum WindowType<'a> {
-    Image(ImageWindow<'a>),
-    Video(VideoWindow<'a>),
-    Prompt(PromptWindow<'a>),
-    Choice(ChoiceWindow<'a>),
+pub enum WindowType {
+    Image(ImageWindow),
+    Video(VideoWindow),
+    Prompt(PromptWindow),
+    Choice(ChoiceWindow),
 }
 
-impl<'a> WindowType<'a> {
-    pub fn inner_window(&self) -> &InnerWindow<'_> {
+impl WindowType {
+    pub fn inner_window(&self) -> &InnerWindow {
         match self {
             Self::Image(image_window) => &image_window.inner_window,
             Self::Video(video_window) => &video_window.inner_window,
@@ -38,7 +38,7 @@ impl<'a> WindowType<'a> {
         }
     }
 
-    pub fn inner_window_mut(&mut self) -> &mut InnerWindow<'a> {
+    pub fn inner_window_mut(&mut self) -> &mut InnerWindow {
         match self {
             Self::Image(image_window) => &mut image_window.inner_window,
             Self::Video(video_window) => &mut video_window.inner_window,
@@ -46,18 +46,30 @@ impl<'a> WindowType<'a> {
             Self::Choice(choice_window) => &mut choice_window.inner_window,
         }
     }
+
+    /// Consume this `WindowType`, dropping all rendering resources and returning the
+    /// underlying `InnerWindow`. Field declaration order on each variant ensures that
+    /// egui/overlay resources (which hold `Arc<Window>` clones) are dropped first.
+    pub fn into_inner_window(self) -> InnerWindow {
+        match self {
+            Self::Image(w) => w.inner_window,
+            Self::Video(w) => w.inner_window,
+            Self::Prompt(w) => w.inner_window,
+            Self::Choice(w) => w.inner_window,
+        }
+    }
 }
 
 /// A window displaying an image.
-pub struct ImageWindow<'a> {
-    pub inner_window: InnerWindow<'a>,
+pub struct ImageWindow {
+    pub inner_window: InnerWindow,
     image: Pixmap,
     gpu_renderer: Option<GpuRenderer>,
     frame_buffer: Vec<u8>,
 }
 
-impl<'a> ImageWindow<'a> {
-    pub fn new(inner_window: InnerWindow<'a>, image: ImageData) -> Result<Self> {
+impl ImageWindow {
+    pub fn new(inner_window: InnerWindow, image: ImageData) -> Result<Self> {
         let width = image.width();
         let height = image.height();
 
@@ -144,8 +156,8 @@ impl<'a> ImageWindow<'a> {
 }
 
 /// A video popup, rendered using wgpu (GPU path) or software YUV conversion (CPU fallback).
-pub struct VideoWindow<'a> {
-    pub inner_window: InnerWindow<'a>,
+pub struct VideoWindow {
+    pub inner_window: InnerWindow,
     video_player: VideoDecoder,
     last_frame_time: Instant,
     duration: Option<Duration>,
@@ -158,9 +170,9 @@ pub struct VideoWindow<'a> {
     cpu_frame_buffer: Vec<u32>,
 }
 
-impl<'a> VideoWindow<'a> {
+impl VideoWindow {
     pub fn new(
-        inner_window: InnerWindow<'a>,
+        inner_window: InnerWindow,
         mut video_player: VideoDecoder,
         _loop_video: bool,
     ) -> anyhow::Result<Self> {
@@ -355,21 +367,20 @@ impl<'a> VideoWindow<'a> {
     }
 }
 
-pub struct PromptWindow<'a> {
-    pub inner_window: InnerWindow<'a>,
+pub struct PromptWindow {
     text: Option<String>,
     placeholder: Option<String>,
     value: String,
-    // Exactly one of these two is Some based on GPU availability.
     egui_cpu: Option<EguiCPUWindow>,
     egui_gpu: Option<EguiGpuRenderer>,
-    // Present when GPU is active and the window has decorations.
     decoration_overlay: Option<DecorationOverlay>,
+    // Declared last so it drops last: egui's Arc<Window> clone is released first.
+    pub inner_window: InnerWindow,
 }
 
-impl<'a> PromptWindow<'a> {
+impl PromptWindow {
     pub fn new(
-        inner_window: InnerWindow<'a>,
+        inner_window: InnerWindow,
         text: Option<String>,
         placeholder: Option<String>,
         initial_value: Option<String>,
@@ -381,10 +392,10 @@ impl<'a> PromptWindow<'a> {
                 inner_window.wgpu_state(),
                 inner_window.window(),
                 inner_size,
-                inner_window.transparent(),
                 inner_window.opacity,
                 inner_window.premultiplied_alpha(),
                 inner_window.force_opaque(),
+                None,
             )?;
             let decoration_overlay = if inner_window.decorations() {
                 let outer_size = inner_window.outer_size();
@@ -402,19 +413,18 @@ impl<'a> PromptWindow<'a> {
             let _ = surface_format; // only needed to confirm surface is GPU
             (None, Some(egui_gpu), decoration_overlay)
         } else {
-            let egui_cpu =
-                EguiCPUWindow::new(inner_window.window().clone(), inner_window.transparent())?;
+            let egui_cpu = EguiCPUWindow::new(inner_window.window().clone(), None)?;
             (Some(egui_cpu), None, None)
         };
 
         Ok(Self {
-            inner_window,
             text,
             placeholder,
             value: initial_value.unwrap_or_default(),
             egui_cpu,
             egui_gpu,
             decoration_overlay,
+            inner_window,
         })
     }
 
@@ -594,18 +604,19 @@ impl<'a> PromptWindow<'a> {
     }
 }
 
-pub struct ChoiceWindow<'a> {
-    pub inner_window: InnerWindow<'a>,
+pub struct ChoiceWindow {
     text: Option<String>,
     options: Vec<ChoiceWindowOption>,
     egui_cpu: Option<EguiCPUWindow>,
     egui_gpu: Option<EguiGpuRenderer>,
     decoration_overlay: Option<DecorationOverlay>,
+    // Declared last so it drops last: egui's Arc<Window> clone is released first.
+    pub inner_window: InnerWindow,
 }
 
-impl<'a> ChoiceWindow<'a> {
+impl ChoiceWindow {
     pub fn new(
-        inner_window: InnerWindow<'a>,
+        inner_window: InnerWindow,
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
     ) -> Result<Self> {
@@ -615,10 +626,10 @@ impl<'a> ChoiceWindow<'a> {
                 inner_window.wgpu_state(),
                 inner_window.window(),
                 inner_size,
-                inner_window.transparent(),
                 inner_window.opacity,
                 inner_window.premultiplied_alpha(),
                 inner_window.force_opaque(),
+                None,
             )?;
             let decoration_overlay = if inner_window.decorations() {
                 let outer_size = inner_window.outer_size();
@@ -635,18 +646,17 @@ impl<'a> ChoiceWindow<'a> {
             };
             (None, Some(egui_gpu), decoration_overlay)
         } else {
-            let egui_cpu =
-                EguiCPUWindow::new(inner_window.window().clone(), inner_window.transparent())?;
+            let egui_cpu = EguiCPUWindow::new(inner_window.window().clone(), None)?;
             (Some(egui_cpu), None, None)
         };
 
         Ok(Self {
-            inner_window,
             text,
             options,
             egui_cpu,
             egui_gpu,
             decoration_overlay,
+            inner_window,
         })
     }
 

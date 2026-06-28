@@ -3,9 +3,9 @@ use std::sync::Arc;
 use tiny_skia::{Color, Paint, PathBuilder, PixmapMut, Rect, Stroke, Transform};
 use winit::window::Window;
 
-pub enum Surface<'a> {
+pub enum Surface {
     Wgpu {
-        surface: wgpu::Surface<'a>,
+        surface: wgpu::Surface<'static>,
         surface_config: wgpu::SurfaceConfiguration,
     },
     Softbuffer {
@@ -14,7 +14,7 @@ pub enum Surface<'a> {
     },
 }
 
-impl<'a> Surface<'a> {
+impl Surface {
     pub fn is_gpu(&self) -> bool {
         matches!(self, Self::Wgpu { .. })
     }

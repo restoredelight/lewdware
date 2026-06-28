@@ -6,10 +6,9 @@ use anyhow::anyhow;
 use rand::random_range;
 use shared::user_config::AppConfig;
 use url::{Host, Url};
-use winit::dpi::{LogicalPosition, LogicalSize};
+use winit::dpi::LogicalPosition;
 use winit::event::MouseButton;
 use winit::event_loop::{ControlFlow, EventLoopProxy};
-use winit::window::{WindowAttributes, WindowLevel};
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, WindowEvent},
@@ -29,24 +28,26 @@ use crate::utils::calculate_media_popup_size;
 use crate::video::VideoDecoder;
 use crate::wgpu::WgpuState;
 use crate::window::{
-    ChoiceWindow, HEADER_HEIGHT, ImageWindow, InnerWindow, PromptWindow, VideoWindow, WindowType,
+    ChoiceWindow, HEADER_HEIGHT, ImageWindow, InnerWindow, PromptWindow, VideoWindow, WindowOpts,
+    WindowPool, WindowType,
 };
 
 /// The main app.
 /// * `windows`: A map containing all the windows spawned by the app. Since dropping a winit window
 ///   closes it, we can close windows by removing them from this map.
 /// * `default_wallpaper`: Stores the user's default wallpaper, so we can restore it on panic.
-pub struct LewdwareApp<'a> {
+pub struct LewdwareApp {
     running: bool,
     _config: Arc<AppConfig>,
     wgpu_state: Option<Arc<WgpuState>>,
-    windows: HashMap<WindowId, WindowType<'a>>,
+    windows: HashMap<WindowId, WindowType>,
     audio_players: HashMap<u64, AudioPlayer>,
     current_audio_id: u64,
     default_wallpaper: Option<String>,
     lua_request_rx: tokio::sync::mpsc::Receiver<lua::LuaRequest>,
     lua_event_tx: tokio::sync::mpsc::UnboundedSender<lua::Event>,
     monitors: Monitors,
+    window_pool: WindowPool,
 }
 
 enum WindowSizeBehaviour {
@@ -61,7 +62,7 @@ pub enum UserEvent {
     AudioFinish { id: u64 },
 }
 
-impl<'a> LewdwareApp<'a> {
+impl LewdwareApp {
     pub fn new(
         wgpu_state: Option<std::sync::Arc<WgpuState>>,
         event_loop_proxy: EventLoopProxy<UserEvent>,
@@ -111,149 +112,144 @@ impl<'a> LewdwareApp<'a> {
             lua_request_rx,
             lua_event_tx,
             monitors,
+            window_pool: WindowPool::new(),
         })
     }
 
-    fn create_window(
+    /// Resolve a [`SpawnWindowOpts`] into a fully computed [`WindowOpts`], factoring in the
+    /// monitor layout, GPU availability, and size constraints.
+    fn resolve_window_opts(
         &mut self,
-        opts: SpawnWindowOpts,
+        spawn_opts: SpawnWindowOpts,
         size_behaviour: WindowSizeBehaviour,
         mut gpu: bool,
         transparent: bool,
         event_loop: &ActiveEventLoop,
-    ) -> Result<(InnerWindow<'a>, WindowProps)> {
+    ) -> Result<WindowOpts> {
         if self.wgpu_state.is_none() {
             gpu = false;
         }
         let transparent = transparent && gpu;
-        let force_opaque = opts.transparent == Some(false);
-        let monitor_info = match opts.monitor {
-            Some(x) => x,
+        let force_opaque = spawn_opts.transparent == Some(false);
+
+        let monitor = match spawn_opts.monitor {
+            Some(m) => m,
             None => self.monitors.random(event_loop)?,
         };
 
-        let monitor = self
+        let monitor_handle = self
             .monitors
-            .get_handle(monitor_info.id, event_loop)
+            .get_handle(monitor.id, event_loop)
             .ok_or(MonitorError::MonitorNotFound)?;
 
-        let scale_factor = monitor.scale_factor();
-        let monitor_size = monitor.size().to_logical(scale_factor);
-        let monitor_position: LogicalPosition<u32> = monitor.position().to_logical(scale_factor);
+        let scale_factor = monitor_handle.scale_factor();
+        let monitor_size = monitor_handle.size().to_logical(scale_factor);
+        let monitor_position: LogicalPosition<u32> =
+            monitor_handle.position().to_logical(scale_factor);
 
         let (width, height) = match size_behaviour {
             WindowSizeBehaviour::ResizeWithMedia { width, height } => calculate_media_popup_size(
-                opts.width,
-                opts.height,
+                spawn_opts.width,
+                spawn_opts.height,
                 width,
                 height,
                 monitor_size.width,
                 monitor_size.height,
             ),
             WindowSizeBehaviour::UseDefaults { width, height } => (
-                opts.width
-                    .map(|width| width.to_pixels(monitor_size.width))
+                spawn_opts
+                    .width
+                    .map(|w| w.to_pixels(monitor_size.width))
                     .unwrap_or(width),
-                opts.height
-                    .map(|height| height.to_pixels(monitor_size.height))
+                spawn_opts
+                    .height
+                    .map(|h| h.to_pixels(monitor_size.height))
                     .unwrap_or(height),
             ),
         };
 
         let (mut outer_width, mut outer_height) = (width, height);
-
-        if opts.decorations {
+        if spawn_opts.decorations {
             outer_width += 2;
             outer_height += HEADER_HEIGHT + 2;
         }
 
-        let x = opts
+        let x = spawn_opts
             .x
-            .map(|coord| {
-                opts.anchor
-                    .resolve(coord.to_pixels(monitor_size.width), outer_width)
-            })
+            .map(|c| spawn_opts.anchor.resolve(c.to_pixels(monitor_size.width), outer_width))
             .unwrap_or_else(|| random_position(outer_width, monitor_size.width));
-        let y = opts
+        let y = spawn_opts
             .y
-            .map(|coord| {
-                opts.anchor
-                    .resolve(coord.to_pixels(monitor_size.height), outer_height)
-            })
+            .map(|c| spawn_opts.anchor.resolve(c.to_pixels(monitor_size.height), outer_height))
             .unwrap_or_else(|| random_position(outer_height, monitor_size.height));
 
         let position = LogicalPosition::new(monitor_position.x + x, monitor_position.y + y);
 
-        #[allow(unused_mut)]
-        let mut attrs = WindowAttributes::default()
-            // .with_title()
-            .with_position(position)
-            .with_inner_size(LogicalSize::new(outer_width, outer_height))
-            .with_decorations(false)
-            .with_window_level(WindowLevel::AlwaysOnTop)
-            .with_resizable(false)
-            .with_visible(false)
-            .with_transparent(transparent);
-
-        #[cfg(target_os = "linux")]
-        {
-            use winit::platform::x11::{WindowAttributesExtX11, WindowType};
-
-            attrs = attrs.with_x11_window_type(vec![WindowType::Dock]);
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            use winit::platform::windows::WindowAttributesExtWindows;
-
-            attrs = attrs.with_skip_taskbar(true);
-        }
-
-        let window = event_loop
-            .create_window(attrs)
-            .map_err(|err| LewdwareError::WindowError(err.into()))?;
-
-        if opts.click_through {
-            let _ = window.set_cursor_hittest(false);
-        }
-
-        // If we call `with_visible(true)` in `WindowAttributes`, then on Windows, the window
-        // flashes on screen with decorations and the wrong size/position, before going to the
-        // correct place. I think this is because winit creates the window, then sends requests to
-        // change the size, position and borders.
-        // See https://github.com/rust-windowing/winit/issues/4116
-        if opts.visible {
-            window.set_visible(true);
-        }
-
-        let props = WindowProps {
-            window_id: window.id(),
-            width,
-            height,
+        Ok(WindowOpts {
+            position,
             x,
             y,
+            width,
+            height,
             outer_width,
             outer_height,
-            monitor: monitor_info,
+            gpu,
+            transparent,
+            force_opaque,
+            opacity: spawn_opts.opacity.unwrap_or(1.0),
+            click_through: spawn_opts.click_through,
+            visible: spawn_opts.visible,
+            decorations: spawn_opts.decorations,
+            title: spawn_opts.title,
+            closeable: spawn_opts.closeable,
+            monitor,
+        })
+    }
+
+    /// Acquire a window from the pool (or create one), configure it, and wrap it in an
+    /// [`InnerWindow`]. Returns the window handle and the [`WindowProps`] for Lua.
+    fn create_window(
+        &mut self,
+        opts: WindowOpts,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<(InnerWindow, WindowProps)> {
+        let window = self
+            .window_pool
+            .acquire(&opts, event_loop)
+            .map_err(LewdwareError::WindowError)?;
+
+        let _ = window.set_cursor_hittest(!opts.click_through);
+
+        let window_id = window.id();
+        let props = WindowProps {
+            window_id,
+            width: opts.width,
+            height: opts.height,
+            outer_width: opts.outer_width,
+            outer_height: opts.outer_height,
+            x: opts.x,
+            y: opts.y,
+            monitor: opts.monitor.clone(),
             visible: opts.visible,
         };
 
         let inner_window = InnerWindow::new(
             window,
-            self.wgpu_state.clone(), // Option<Arc<WgpuState>>
-            opts.decorations,
-            opts.title,
-            opts.closeable,
-            gpu,
-            transparent,
-            force_opaque,
-            opts.opacity,
-            LogicalPosition::new(x, y),
+            &opts,
+            self.wgpu_state.clone(),
             self.lua_event_tx.clone(),
         )
-        .map_err(|err| LewdwareError::WindowError(err))?;
+        .map_err(LewdwareError::WindowError)?;
 
         Ok((inner_window, props))
+    }
+
+    /// Release a window back to the pool. Moving offscreen rather than unmapping avoids
+    /// the KWin strut relayout freeze on Dock-type windows.
+    fn close_window(&mut self, window_type: WindowType) {
+        let transparent = window_type.inner_window().transparent();
+        let arc_window = window_type.into_inner_window().into_arc_window();
+        self.window_pool.release(arc_window, transparent);
     }
 
     fn spawn_image(
@@ -264,8 +260,8 @@ impl<'a> LewdwareApp<'a> {
     ) -> Result<WindowProps> {
         tracing::info!("Windows: {}", self.windows.len());
         let transparent = opts.transparent.unwrap_or(false);
-        let (window, props) = self.create_window(
-            opts.clone(),
+        let window_opts = self.resolve_window_opts(
+            opts,
             WindowSizeBehaviour::ResizeWithMedia {
                 width: data.width(),
                 height: data.height(),
@@ -274,11 +270,22 @@ impl<'a> LewdwareApp<'a> {
             transparent,
             event_loop,
         )?;
+        let (inner_window, props) = self.create_window(window_opts, event_loop)?;
+        let visible = props.visible;
 
-        window.request_redraw();
+        let mut image_window =
+            ImageWindow::new(inner_window, data).map_err(|err| LewdwareError::WindowError(err))?;
 
-        let image_window =
-            ImageWindow::new(window, data).map_err(|err| LewdwareError::WindowError(err))?;
+        // Render the image while the window is still offscreen so the compositor already has the
+        // correct pixels before XMoveWindow fires. X11 protocol ordering guarantees XShmPutImage
+        // is processed before XMoveWindow, so KWin composites with the image, not a blank frame.
+        if let Err(e) = image_window.draw() {
+            tracing::warn!("image pre-draw failed: {e}");
+        }
+
+        if visible {
+            image_window.inner_window.set_visible(true);
+        }
 
         self.windows
             .insert(props.window_id.clone(), WindowType::Image(image_window));
@@ -296,7 +303,7 @@ impl<'a> LewdwareApp<'a> {
         let auto_transparent =
             video_player.packed_alpha() || opts.opacity.map_or(false, |o| o < 1.0);
         let transparent = opts.transparent.unwrap_or(auto_transparent);
-        let (window, props) = self.create_window(
+        let window_opts = self.resolve_window_opts(
             opts,
             WindowSizeBehaviour::ResizeWithMedia {
                 width: video_player.width() as u32,
@@ -306,11 +313,17 @@ impl<'a> LewdwareApp<'a> {
             transparent,
             event_loop,
         )?;
+        let (window, props) = self.create_window(window_opts, event_loop)?;
+        let visible = props.visible;
 
         window.request_redraw();
 
         let video_window = VideoWindow::new(window, video_player, loop_video)
             .map_err(|err| LewdwareError::WindowError(err))?;
+
+        if visible {
+            video_window.inner_window.set_visible(true);
+        }
 
         self.windows
             .insert(props.window_id.clone(), WindowType::Video(video_window));
@@ -330,7 +343,7 @@ impl<'a> LewdwareApp<'a> {
     ) -> Result<WindowProps> {
         let auto_transparent = window_opts.opacity.map_or(false, |o| o < 1.0);
         let transparent = window_opts.transparent.unwrap_or(auto_transparent);
-        let (window, props) = self.create_window(
+        let resolved = self.resolve_window_opts(
             window_opts,
             WindowSizeBehaviour::UseDefaults {
                 width: 400,
@@ -340,9 +353,15 @@ impl<'a> LewdwareApp<'a> {
             transparent,
             event_loop,
         )?;
+        let (window, props) = self.create_window(resolved, event_loop)?;
+        let visible = props.visible;
 
         let prompt_window = PromptWindow::new(window, text, placeholder, initial_value)
             .map_err(|err| LewdwareError::WindowError(err))?;
+
+        if visible {
+            prompt_window.inner_window.set_visible(true);
+        }
 
         self.windows
             .insert(props.window_id.clone(), WindowType::Prompt(prompt_window));
@@ -359,7 +378,7 @@ impl<'a> LewdwareApp<'a> {
     ) -> Result<WindowProps> {
         let auto_transparent = window_opts.opacity.map_or(false, |o| o < 1.0);
         let transparent = window_opts.transparent.unwrap_or(auto_transparent);
-        let (window, props) = self.create_window(
+        let resolved = self.resolve_window_opts(
             window_opts,
             WindowSizeBehaviour::UseDefaults {
                 width: 400,
@@ -369,12 +388,18 @@ impl<'a> LewdwareApp<'a> {
             transparent,
             event_loop,
         )?;
+        let (window, props) = self.create_window(resolved, event_loop)?;
+        let visible = props.visible;
 
-        let prompt_window = ChoiceWindow::new(window, text, options)
+        let choice_window = ChoiceWindow::new(window, text, options)
             .map_err(|err| LewdwareError::WindowError(err))?;
 
+        if visible {
+            choice_window.inner_window.set_visible(true);
+        }
+
         self.windows
-            .insert(props.window_id.clone(), WindowType::Choice(prompt_window));
+            .insert(props.window_id.clone(), WindowType::Choice(choice_window));
 
         Ok(props)
     }
@@ -514,7 +539,8 @@ impl<'a> LewdwareApp<'a> {
                 if let Entry::Occupied(mut entry) = self.windows.entry(id) {
                     match action {
                         WindowAction::CloseWindow { tx } => {
-                            entry.remove();
+                            let window_type = entry.remove();
+                            self.close_window(window_type);
                             tx.send(()).is_ok()
                         }
                         WindowAction::PauseVideo { tx } => tx
@@ -635,7 +661,7 @@ impl<'a> LewdwareApp<'a> {
     }
 }
 
-impl<'a> ApplicationHandler<UserEvent> for LewdwareApp<'a> {
+impl ApplicationHandler<UserEvent> for LewdwareApp {
     fn resumed(&mut self, _: &ActiveEventLoop) {
         self.running = true;
     }
@@ -682,7 +708,8 @@ impl<'a> ApplicationHandler<UserEvent> for LewdwareApp<'a> {
             // Global event handling
             match event {
                 WindowEvent::CloseRequested => {
-                    entry.remove();
+                    let window_type = entry.remove();
+                    self.close_window(window_type);
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     entry
@@ -706,7 +733,8 @@ impl<'a> ApplicationHandler<UserEvent> for LewdwareApp<'a> {
                     ..
                 } => {
                     if entry.get_mut().inner_window_mut().handle_mouse_up() {
-                        entry.remove();
+                        let window_type = entry.remove();
+                        self.close_window(window_type);
                         return;
                     }
                 }
@@ -767,7 +795,9 @@ impl<'a> ApplicationHandler<UserEvent> for LewdwareApp<'a> {
         }
 
         for id in finished_videos {
-            self.windows.remove(&id);
+            if let Some(window_type) = self.windows.remove(&id) {
+                self.close_window(window_type);
+            }
         }
 
         if moving_windows {
@@ -778,7 +808,7 @@ impl<'a> ApplicationHandler<UserEvent> for LewdwareApp<'a> {
     }
 }
 
-impl Drop for LewdwareApp<'_> {
+impl Drop for LewdwareApp {
     fn drop(&mut self) {
         if let Some(wallpaper) = &self.default_wallpaper {
             if let Err(err) = wallpaper::set_from_path(wallpaper) {

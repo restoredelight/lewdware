@@ -9,21 +9,24 @@ use tokio::sync::mpsc;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, PhysicalUnit};
 use winit::window::Window;
 
-use crate::error::{LewdwareError, MonitorError};
+use crate::error::LewdwareError;
 use crate::lua::{self, Coord, Easing, FadeOpts, MoveOpts};
 use crate::wgpu::WgpuState;
 use crate::window::header::HEADER_HEIGHT;
+use crate::window::opts::WindowOpts;
 use crate::window::surface::Buffer;
 use crate::window::{header::Header, surface::Surface};
 
-pub struct InnerWindow<'a> {
+pub struct InnerWindow {
     window: Arc<winit::window::Window>,
-    surface: Surface<'a>,
+    surface: Surface,
     decorations: bool,
     border_rendered: bool,
     header: Option<Header>,
     inner_size: PhysicalSize<u32>,
     outer_size: PhysicalSize<u32>,
+    monitor_position: LogicalPosition<u32>,
+    monitor_size: LogicalSize<u32>,
     position: LogicalPosition<u32>,
     lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     current_move: Option<Move>,
@@ -55,22 +58,24 @@ struct Fade {
     easing: Easing,
 }
 
-impl<'a> InnerWindow<'a> {
+impl InnerWindow {
     pub fn new(
-        window: Window,
+        window: Arc<Window>,
+        opts: &WindowOpts,
         wgpu_state: Option<Arc<WgpuState>>,
-        decorations: bool,
-        title: Option<String>,
-        closeable: bool,
-        gpu: bool,
-        transparent: bool,
-        force_opaque: bool,
-        opacity: Option<f32>,
-        position: LogicalPosition<u32>,
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     ) -> Result<Self> {
-        let window = Arc::new(window);
-        let (inner_size, outer_size) = calculate_size(&window, decorations);
+        let decorations = opts.decorations;
+        let gpu = opts.gpu;
+        let transparent = opts.transparent;
+        let force_opaque = opts.force_opaque;
+        // Use opts directly rather than window.inner_size(): request_inner_size() is
+        // async on X11, so a recycled pool window still reports its previous size here.
+        let scale_factor = window.scale_factor();
+        let outer_size: PhysicalSize<u32> =
+            LogicalSize::new(opts.outer_width, opts.outer_height).to_physical(scale_factor);
+        let inner_size: PhysicalSize<u32> =
+            LogicalSize::new(opts.width, opts.height).to_physical(scale_factor);
 
         let mut premultiplied_alpha = false;
 
@@ -97,15 +102,11 @@ impl<'a> InnerWindow<'a> {
                     {
                         wgpu::CompositeAlphaMode::PostMultiplied
                     } else {
-                        // Neither mode is available, so the compositor has no way to blend this
-                        // window's alpha against the desktop at all (common on plain Win32/DX12
-                        // swapchains, non-compositing X11, and software/llvmpipe GL). `Auto` would
-                        // only ever resolve to `Opaque` or `Inherit` here anyway, both of which
-                        // amount to the same thing in practice, so make that explicit.
                         once!(tracing::error!(
-                            "This platform/adapter doesn't support transparent windows (no PreMultiplied/PostMultiplied composite alpha mode available); transparent popups will render opaque"
+                            "This platform/adapter doesn't support transparent windows \
+                             (no PreMultiplied/PostMultiplied composite alpha mode \
+                             available); transparent popups will render opaque"
                         ));
-
                         wgpu::CompositeAlphaMode::Opaque
                     }
                 } else {
@@ -117,13 +118,12 @@ impl<'a> InnerWindow<'a> {
                     format: *surface_format,
                     width: outer_size.width,
                     height: outer_size.height,
-                    present_mode: wgpu::PresentMode::Fifo,
+                    present_mode: wgpu::PresentMode::AutoNoVsync,
                     alpha_mode,
                     view_formats: vec![],
-                    desired_maximum_frame_latency: 2,
+                    desired_maximum_frame_latency: 1,
                 };
                 surface.configure(&wgpu.device, &surface_config);
-
                 Surface::Wgpu {
                     surface,
                     surface_config,
@@ -143,16 +143,21 @@ impl<'a> InnerWindow<'a> {
             }
         };
 
-        let scale_factor = window.scale_factor();
         let header = decorations.then(|| {
             Header::new(
                 window.clone(),
                 inner_size.clone(),
                 scale_factor,
-                title,
-                closeable,
+                opts.title.clone(),
+                opts.closeable,
             )
         });
+
+        let monitor_position = LogicalPosition::new(
+            opts.position.x - opts.x,
+            opts.position.y - opts.y,
+        );
+        let monitor_size = LogicalSize::new(opts.monitor.width, opts.monitor.height);
 
         Ok(Self {
             window,
@@ -162,7 +167,9 @@ impl<'a> InnerWindow<'a> {
             header,
             inner_size,
             outer_size,
-            position,
+            monitor_position,
+            monitor_size,
+            position: LogicalPosition::new(opts.x, opts.y),
             lua_event_tx,
             current_move: None,
             wgpu_state,
@@ -170,7 +177,7 @@ impl<'a> InnerWindow<'a> {
             premultiplied_alpha,
             force_opaque,
             current_fade: None,
-            opacity: opacity.unwrap_or(1.0),
+            opacity: opts.opacity,
         })
     }
 
@@ -258,11 +265,13 @@ impl<'a> InnerWindow<'a> {
                     wgpu::CurrentSurfaceTexture::Timeout => return Ok(()),
                     wgpu::CurrentSurfaceTexture::Outdated => {
                         surface.configure(&wgpu.device, surface_config);
+                        self.window.request_redraw();
                         return Ok(());
                     }
                     wgpu::CurrentSurfaceTexture::Lost => {
                         *surface = wgpu.instance.create_surface(self.window.clone())?;
                         surface.configure(&wgpu.device, surface_config);
+                        self.window.request_redraw();
                         return Ok(());
                     }
                     wgpu::CurrentSurfaceTexture::Occluded => return Ok(()),
@@ -425,14 +434,7 @@ impl<'a> InnerWindow<'a> {
 
         let size = self.window.inner_size().to_logical(scale_factor);
 
-        let monitor_size = self
-            .window
-            .current_monitor()
-            .ok_or(LewdwareError::MonitorError(
-                MonitorError::WindowMonitorNotFound,
-            ))?
-            .size()
-            .to_logical::<u32>(scale_factor);
+        let monitor_size = self.monitor_size;
 
         let x = match opts.x {
             Some(Coord::Pixel(x)) => Some(opts.anchor.resolve(x, size.width)),
@@ -500,15 +502,9 @@ impl<'a> InnerWindow<'a> {
             );
 
             if new_position != self.position {
-                let monitor_position = self
-                    .window
-                    .current_monitor()
-                    .map(|monitor| monitor.position().to_logical(self.window.scale_factor()))
-                    .unwrap_or(LogicalPosition::new(0, 0));
-
                 self.window.set_outer_position(LogicalPosition::new(
-                    monitor_position.x + new_position.x,
-                    monitor_position.y + new_position.y,
+                    self.monitor_position.x + new_position.x,
+                    self.monitor_position.y + new_position.y,
                 ));
 
                 self.position = new_position;
@@ -528,11 +524,7 @@ impl<'a> InnerWindow<'a> {
     }
 
     pub fn start_fade(&mut self, id: u64, opts: FadeOpts) -> Result<(), LewdwareError> {
-        let to = if opts.relative {
-            self.opacity + opts.opacity
-        } else {
-            opts.opacity
-        };
+        let to = opts.opacity;
 
         let fade_obj = Fade {
             id,
@@ -614,6 +606,23 @@ impl<'a> InnerWindow<'a> {
     }
 
     pub fn set_visible(&self, visible: bool) {
+        #[cfg(target_os = "linux")]
+        {
+            if visible {
+                // Move back to the correct absolute position before showing.
+                self.window.set_outer_position(LogicalPosition::new(
+                    self.monitor_position.x + self.position.x,
+                    self.monitor_position.y + self.position.y,
+                ));
+                self.window.set_visible(true);
+            } else {
+                // XUnmapWindow on a Dock window triggers KWin strut relayout (same freeze as
+                // XDestroyWindow). Move offscreen instead of unmapping.
+                self.window
+                    .set_outer_position(LogicalPosition::new(-32000i32, -32000i32));
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
         self.window.set_visible(visible);
     }
 
@@ -649,9 +658,15 @@ impl<'a> InnerWindow<'a> {
     pub fn lua_event_tx(&self) -> &mpsc::UnboundedSender<lua::Event> {
         &self.lua_event_tx
     }
+
+    /// Consume this `InnerWindow` and return the underlying `Arc<Window>` for pool reuse.
+    /// `Drop` fires normally, sending `WindowClosed` to Lua and releasing GPU/CPU surfaces.
+    pub fn into_arc_window(self) -> Arc<Window> {
+        self.window.clone()
+    }
 }
 
-impl Drop for InnerWindow<'_> {
+impl Drop for InnerWindow {
     fn drop(&mut self) {
         if let Err(_) = self.lua_event_tx.send(lua::Event::WindowClosed {
             id: self.window.id(),
@@ -661,25 +676,6 @@ impl Drop for InnerWindow<'_> {
     }
 }
 
-fn calculate_size(
-    window: &Arc<Window>,
-    decorations: bool,
-) -> (PhysicalSize<u32>, PhysicalSize<u32>) {
-    let outer_size = window.inner_size();
-
-    let inner_size = if decorations {
-        let logical_size = outer_size.to_logical::<u32>(window.scale_factor());
-        LogicalSize::new(
-            logical_size.width - 2,
-            logical_size.height - 2 - HEADER_HEIGHT,
-        )
-        .to_physical(window.scale_factor())
-    } else {
-        outer_size.clone()
-    };
-
-    (inner_size, outer_size)
-}
 
 fn init_softbuffer(
     window: Arc<Window>,

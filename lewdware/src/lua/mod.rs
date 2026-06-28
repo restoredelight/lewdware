@@ -33,7 +33,7 @@ use crate::{
     monitor::Monitor,
 };
 
-pub use api::{Coord, Notification, SpawnWindowOpts, WallpaperMode};
+pub use api::{Color, Coord, Notification, SpawnWindowOpts, WallpaperMode};
 pub use media::{Media, MediaData, MediaType};
 pub use request::{AudioAction, LuaRequest, WindowAction};
 pub use window::{ChoiceWindowOption, Easing, FadeOpts, MoveOpts};

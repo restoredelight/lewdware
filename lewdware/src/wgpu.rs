@@ -405,6 +405,7 @@ impl WgpuState {
                                 entry_point: Some(entry_point),
                                 targets: &[Some(wgpu::ColorTargetState {
                                     format,
+                                    // TODO: Review this
                                     blend: None,
                                     write_mask: wgpu::ColorWrites::ALL,
                                 })],
