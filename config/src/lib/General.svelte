@@ -53,6 +53,8 @@
         : ""
   );
 
+  const hasPack = $derived(!!store.config?.pack_path);
+
   const captureClass = $derived(
     recording
       ? "bg-accent/10 border-accent text-accent italic"
@@ -109,13 +111,27 @@
       {:else}
         <button
           onclick={launch}
+          disabled={!hasPack}
           class="px-4 py-2 rounded-md text-sm font-medium text-white
-                 bg-[#27ae60] hover:bg-[#219a52] transition-colors"
+                 bg-[#27ae60] hover:bg-[#219a52] transition-colors
+                 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#27ae60]"
         >
           Launch
         </button>
       {/if}
     </div>
+    {#if !hasPack && !running}
+      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[#fef3cd] border border-[#f0ad4e] text-sm text-[#8a6d3b]">
+        <span>No pack selected. Upload a pack to launch Lewdware.</span>
+        <button
+          onclick={() => (store.activeTab = "pack_mode")}
+          class="ml-auto shrink-0 px-3 py-1 rounded text-xs font-medium
+                 bg-[#f0ad4e] hover:bg-[#ec971f] text-white transition-colors"
+        >
+          Pack &amp; Mode settings
+        </button>
+      </div>
+    {/if}
   </div>
 
   <!-- Panic Key -->
