@@ -49,7 +49,7 @@ end)
 
     let luarc_content = r#"{
   "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
-  "runtime.version": "Lua 5.4",
+  "runtime.version": "Lua 5.5",
   "workspace.library": ["src", ".types/lewdware.d.lua"],
   "diagnostics.globals": ["lewdware"]
 }"#;
