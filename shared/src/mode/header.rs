@@ -2,9 +2,20 @@ use core::fmt;
 use std::io::{self, Cursor, Read, Write};
 
 pub const MAGIC: &[u8; 6] = b"LWMODE";
-pub const VERSION_MAJOR: u8 = 0;
-pub const VERSION_MINOR: u8 = 0;
+pub const VERSION_MAJOR: u8 = parse_version_byte(env!("CARGO_PKG_VERSION_MAJOR"));
+pub const VERSION_MINOR: u8 = parse_version_byte(env!("CARGO_PKG_VERSION_MINOR"));
 pub const HEADER_SIZE: usize = 32;
+
+const fn parse_version_byte(s: &str) -> u8 {
+    let bytes = s.as_bytes();
+    let mut result: u8 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        result = result * 10 + (bytes[i] - b'0');
+        i += 1;
+    }
+    result
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
@@ -17,15 +28,20 @@ pub struct Header {
 #[derive(Debug)]
 pub enum ReadError {
     InvalidMagic,
-    UnsupportedVersion,
+    UnsupportedVersion { mode_major: u8, mode_minor: u8 },
     IoError(io::Error),
 }
 
 impl fmt::Display for ReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ReadError::InvalidMagic => write!(f, "Invalid magic bytes"),
-            ReadError::UnsupportedVersion => write!(f, "UnsupportedVersion"),
+            ReadError::InvalidMagic => write!(f, "invalid magic bytes — not a .lwmode file"),
+            ReadError::UnsupportedVersion { mode_major, mode_minor } => write!(
+                f,
+                "mode requires API v{mode_major}.{mode_minor}, \
+                 this engine provides API v{VERSION_MAJOR}.{VERSION_MINOR} — \
+                 please update Lewdware"
+            ),
             ReadError::IoError(error) => error.fmt(f),
         }
     }
@@ -82,15 +98,18 @@ impl Header {
         let mut buf = [0u8; 1];
         cursor.read_exact(&mut buf)?;
         let version_major = u8::from_le_bytes(buf);
-        if version_major > VERSION_MAJOR {
-            return Err(ReadError::UnsupportedVersion);
-        }
 
         let mut buf = [0u8; 1];
         cursor.read_exact(&mut buf)?;
         let version_minor = u8::from_le_bytes(buf);
-        if version_major == VERSION_MAJOR && version_minor > VERSION_MINOR {
-            return Err(ReadError::UnsupportedVersion);
+
+        if version_major > VERSION_MAJOR
+            || (version_major == VERSION_MAJOR && version_minor > VERSION_MINOR)
+        {
+            return Err(ReadError::UnsupportedVersion {
+                mode_major: version_major,
+                mode_minor: version_minor,
+            });
         }
 
         let mut buf8 = [0u8; 8];
@@ -156,7 +175,7 @@ mod tests {
         buf[6] = VERSION_MAJOR + 1;
         assert!(matches!(
             Header::from_buf(buf),
-            Err(ReadError::UnsupportedVersion)
+            Err(ReadError::UnsupportedVersion { .. })
         ));
     }
 
@@ -167,7 +186,7 @@ mod tests {
         buf[7] = VERSION_MINOR + 1;
         assert!(matches!(
             Header::from_buf(buf),
-            Err(ReadError::UnsupportedVersion)
+            Err(ReadError::UnsupportedVersion { .. })
         ));
     }
 

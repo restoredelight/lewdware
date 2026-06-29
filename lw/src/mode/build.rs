@@ -12,6 +12,7 @@ use shared::mode::{self, Header, SourceFile};
 use crate::mode::{
     config::{Config, Mode},
     find_root, read_config,
+    types::write_type_stubs,
 };
 
 #[derive(Args)]
@@ -36,6 +37,8 @@ pub fn build(_args: BuildArgs) -> Result<()> {
 
         return Err(err);
     }
+
+    write_type_stubs(root)?;
 
     println!("Built to '{}'", path.display());
 

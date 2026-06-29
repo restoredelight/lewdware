@@ -2,6 +2,7 @@ mod build;
 mod config;
 mod dev;
 mod new;
+mod types;
 
 use std::{
     env, fs,
@@ -16,6 +17,7 @@ use crate::mode::{
     config::Config,
     dev::{DevArgs, dev},
     new::create_new_mode,
+    types::types,
 };
 
 #[derive(Subcommand)]
@@ -27,6 +29,8 @@ pub enum ModeCommand {
     },
     Build(BuildArgs),
     Dev(DevArgs),
+    /// Update .types/lewdware.d.lua to match the installed lw version
+    Types,
 }
 
 pub fn handle_mode_command(command: ModeCommand) -> Result<()> {
@@ -34,6 +38,7 @@ pub fn handle_mode_command(command: ModeCommand) -> Result<()> {
         ModeCommand::New { name } => create_new_mode(&name),
         ModeCommand::Build(args) => build(args),
         ModeCommand::Dev(args) => dev(args),
+        ModeCommand::Types => types(),
     }
 }
 

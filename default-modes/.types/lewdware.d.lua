@@ -4,10 +4,18 @@ lewdware = {}
 ---@type { [string]: number | string | boolean }
 lewdware.config = {}
 
----@alias MediaType "image" | "video" | "audio"
+---@alias MediaType
+---| "image"
+---| "video"
+---| "audio"
+
 ---@alias Coord number | { percent: number } Either a coordinate in pixels, or a percentage of the
 ---  screen width/height.
----@alias Anchor "top-left" | "center" | "bottom-right"
+
+---@alias Anchor
+---| "top-left"
+---| "center"
+---| "bottom-right"
 
 ---@class Media
 ---@field id number A unique identifier for the file.
@@ -77,14 +85,28 @@ function Window:on_close(cb) end
 ---This means you can call this function with no arguments to stop moving a window.
 function Window:move(opts, cb) end
 
+---@class FadeOpts
+---@field opacity number The opacity to transition to. Between 0 and 1, where 0
+---  is transparent and 1 is opaque.
+---@field duration? number How long the transition should take. By default, the transition happens
+---  instantly.
+---@field easing? Easing How the transition is animated.
+
+---Change the opacity of a window
+---@param opts? FadeOpts
+---@param cb? fun() Called when the window's opacity has finished changing.
+---
+---For a window's opacity to be changeable, it must have been created with
+---`transparent = true` (this is done automatically in some cases, see [SpawnWindowOpts.transparent](lua://SpawnWindowOpts.transparent)).
+function Window:fade(opts, cb) end
+
 ---Set the visibility of a window.
 ---@param visible boolean
 ---
----Making a window invisible instead of closing it can be a good idea if you want to use it again,
----or you want to avoid the fade-out animation that occurs when a window is closed normally.
+---Making a window invisible instead of closing it can be a good idea if you want to use it again.
 ---
 ---Making a window invisible will stop the user from interacting with it, but e.g. video windows
----will continue to play, so you should consider calling [VideoWindow:pause()]. Always remember
+---will continue to play, so you should consider calling [VideoWindow:pause()](lua://VideoWindow.pause). Always remember
 ---to close windows that you are no longer using.
 function Window:set_visible(visible) end
 
@@ -236,8 +258,11 @@ function lewdware.media.random_audio(opts) end
 function lewdware.spawn_image_popup(image, opts) end
 
 ---@class SpawnWindowOpts
----Options that can be passed into any of [spawn_image()], [spawn_video()], [spawn_prompt()] and
----[spawn_choice()].
+---Options that can be passed into any of
+---[spawn_image_popup()](lua://lewdware.spawn_image_popup),
+---[spawn_video_popup()](lua://lewdware.spawn_video_popup),
+---[spawn_prompt()](lua://lewdware.spawn_prompt) and
+---[spawn_choice()](lua://lewdware.spawn_choice).
 ---
 ---@field x? Coord The horizontal coordinate to spawn the window at. By default, the coordinates
 ---  of the window will be chosen at random, ensuring that the window remains entirely visible.
@@ -260,6 +285,20 @@ function lewdware.spawn_image_popup(image, opts) end
 ---  `decorations` is false, this will be ignored.
 ---@field visible? boolean Whether to make the window start off visible (defaults to true). See
 ---  `Window:set_visible()`.
+---@field opacity? number A number between 0 and 1, where 0 is fully
+---  transparent and 1 is opaque. Use [Window:fade()](lua::Window.fade) to set this value.
+---@field transparent? boolean Setting this to true allows the window to become transparent.
+---  This is set to `true` automatically if `opacity` is less than 1, or the image or video
+---  that this window contains is transparent, or `background_color` has an alpha less than 1.
+---  Set this to `true` if the opacity is 1 to begin with, but you want to use
+---  [Window:fade()](lua::Window.fade) to change it later. Set it to `false` explicitly if an
+---  image or video is transparent but you want to make the window opaque.
+---@field background_color? string The background colour of the window as a hex string. Accepts
+---  `"#rrggbb"` (opaque) or `"#rrggbbaa"` (with alpha). For prompt and choice windows this sets
+---  the panel fill colour; for image and video windows it sets the colour shown in transparent
+---  areas. If the alpha is less than 1, the window is automatically made transparent. When not
+---  set, the default egui light-theme background (`"#f8f8f8"`) is used for prompt/choice windows,
+---  and transparent areas on image/video windows fall back to the `transparent` flag behaviour.
 
 ---@class SpawnImageOpts : SpawnWindowOpts
 ---Options for `spawn_image()`.

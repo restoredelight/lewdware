@@ -11,7 +11,7 @@ use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, syn
 use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
-    mode::{Metadata, OptionValue, read_mode_metadata},
+    mode::{Metadata, OptionValue, VERSION_MAJOR, read_mode_metadata},
     user_config::AppConfig,
 };
 use tokio::{
@@ -119,8 +119,7 @@ pub fn start_lua_thread(
             }
         };
 
-        // TODO: Use header to decide API version
-        let (_header, Metadata { modes, files, .. }) = match read_mode_metadata(&mut file) {
+        let (header, Metadata { modes, files, .. }) = match read_mode_metadata(&mut file) {
             Ok(x) => x,
             Err(err) => {
                 tracing::error!("{err}");
@@ -128,6 +127,15 @@ pub fn start_lua_thread(
             }
         };
         tracing::info!("Read header and metadata");
+
+        if header.version_major < VERSION_MAJOR {
+            tracing::warn!(
+                "Mode was built for API v{}.x; this engine provides API v{}.x. \
+                 Rebuild the mode with `lw mode build` for best compatibility.",
+                header.version_major,
+                VERSION_MAJOR
+            );
+        }
 
         let mode_obj = modes.get(&mode).unwrap();
 

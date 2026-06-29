@@ -11,7 +11,7 @@ use clap::Args;
 use notify::{Event, EventKind, Watcher};
 
 use crate::mode::build::build_to;
-use crate::mode::{find_root, read_config};
+use crate::mode::{find_root, read_config, types::write_type_stubs};
 
 #[derive(Args)]
 pub struct DevArgs {
@@ -43,6 +43,8 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
         &Path::new(&root.join("src")),
         notify::RecursiveMode::Recursive,
     )?;
+
+    write_type_stubs(&root)?;
 
     let build_dir = root.join("build");
     fs::create_dir_all(&build_dir)?;

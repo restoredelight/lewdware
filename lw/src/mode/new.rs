@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use anyhow::Result;
 
-const API_STUBS: &str = include_str!("../../../shared/src/lua/api.lua");
+use super::types::write_type_stubs;
 
 pub fn create_new_mode(name: &str) -> Result<()> {
     let base_path = PathBuf::from(name);
@@ -45,18 +45,18 @@ end)
 "#;
     fs::write(base_path.join("src/main.lua"), lua_content)?;
 
-    fs::create_dir(base_path.join(".types"))?;
-    fs::write(base_path.join(".types/lewdware.lua"), API_STUBS)?;
+    write_type_stubs(&base_path)?;
 
     let luarc_content = r#"{
   "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
   "runtime.version": "Lua 5.4",
-  "workspace.library": ["src", ".types/lewdware.lua"],
+  "workspace.library": ["src", ".types/lewdware.d.lua"],
   "diagnostics.globals": ["lewdware"]
 }"#;
     fs::write(base_path.join(".luarc.json"), luarc_content)?;
 
     let gitingore_content = r#"build
+.types
 "#;
     fs::write(base_path.join(".gitignore"), gitingore_content)?;
 
