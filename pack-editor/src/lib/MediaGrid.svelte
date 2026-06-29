@@ -54,6 +54,7 @@
       store.selectSingle(file.id);
     }
     anchorId = file.id;
+    container?.focus();
   }
 
   function handleDblClick(file: MediaFile) {

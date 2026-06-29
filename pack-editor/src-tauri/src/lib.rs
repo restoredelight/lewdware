@@ -558,8 +558,8 @@ pub fn run() {
                 } else {
                     "lewdware-ffprobe"
                 };
-                let ffmpeg = resource_dir.join(ffmpeg_name);
-                let ffprobe = resource_dir.join(ffprobe_name);
+                let ffmpeg = resource_dir.join("binaries").join(ffmpeg_name);
+                let ffprobe = resource_dir.join("binaries").join(ffprobe_name);
                 if ffmpeg.exists() && ffprobe.exists() {
                     encode::init_binary_paths(ffmpeg, ffprobe);
                 }
