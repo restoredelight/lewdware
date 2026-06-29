@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://lewdware.github.com/mode.schema.json",
+  "$id": "https://lewdware.github.com/config.schema.json",
   "title": "Mode Config",
   "description": "Configuration file for a mode",
   "type": "object",

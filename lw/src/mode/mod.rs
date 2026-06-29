@@ -24,8 +24,9 @@ use crate::mode::{
 pub enum ModeCommand {
     /// Create a new lewdware mode
     New {
-        /// Name of the mode
-        name: String,
+        /// Start from the default mode instead of a minimal template
+        #[arg(long)]
+        from_default: bool,
     },
     Build(BuildArgs),
     Dev(DevArgs),
@@ -35,7 +36,7 @@ pub enum ModeCommand {
 
 pub fn handle_mode_command(command: ModeCommand) -> Result<()> {
     match command {
-        ModeCommand::New { name } => create_new_mode(&name),
+        ModeCommand::New { from_default } => create_new_mode(from_default),
         ModeCommand::Build(args) => build(args),
         ModeCommand::Dev(args) => dev(args),
         ModeCommand::Types => types(),
