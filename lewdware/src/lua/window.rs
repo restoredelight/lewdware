@@ -354,8 +354,8 @@ pub struct InnerWindow {
 }
 
 struct InnerWindowState {
-    x: u32,
-    y: u32,
+    x: i32,
+    y: i32,
     visible: bool,
     closed: bool,
     close_callbacks: Vec<mlua::Function>,
@@ -578,10 +578,11 @@ impl InnerWindow {
         Ok(())
     }
 
-    pub fn on_move_finished(&self, move_id: u64) -> anyhow::Result<()> {
+    pub fn on_move_finished(&self, move_id: u64, x: i32, y: i32) -> anyhow::Result<()> {
         let cb = {
             let mut state = self.state.try_borrow_mut()?;
-
+            state.x = x;
+            state.y = y;
             match state.move_callback.take() {
                 Some((id, cb)) if move_id == id => Some(cb),
                 _ => None,
@@ -622,7 +623,7 @@ impl InnerWindow {
 }
 
 impl InnerWindowState {
-    fn new(x: u32, y: u32, visible: bool) -> Self {
+    fn new(x: i32, y: i32, visible: bool) -> Self {
         Self {
             x,
             y,
@@ -674,6 +675,10 @@ impl Easing {
     }
 }
 
+fn return_true() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct MoveOpts {
     pub x: Option<Coord>,
@@ -686,6 +691,8 @@ pub struct MoveOpts {
     pub easing: Easing,
     #[serde(default)]
     pub relative: bool,
+    #[serde(default = "return_true")]
+    pub clamp: bool,
 }
 
 impl FromLua for MoveOpts {

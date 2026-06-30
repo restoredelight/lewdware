@@ -25,6 +25,7 @@
   onDestroy(() => clearInterval(pollInterval));
 
   async function launch() {
+    await store.saveConfig();
     await api.launchLewdware();
     running = true;
   }

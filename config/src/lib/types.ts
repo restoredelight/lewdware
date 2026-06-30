@@ -50,7 +50,8 @@ export interface ModeGroupDto {
 export type OptionValue =
   | number    // Integer, Number, Enum all come through as these in untagged serde
   | string
-  | boolean;
+  | boolean
+  | null;
 
 export type OptionType =
   | { Integer: { default: number; min: number | null; max: number | null; step: number | null; clamp: boolean; slider: boolean } }
@@ -59,13 +60,30 @@ export type OptionType =
   | { Boolean: { default: boolean } }
   | { Enum: { default: string; values: Record<string, string> } };
 
+export type ConditionValue = boolean | number | string;
+export type ShowWhen = Record<string, ConditionValue>;
+
 export interface ModeOptionDto {
   key: string;
   label: string;
   description: string | null;
   option_type: OptionType;
   value: OptionValue;
+  optional: boolean;
+  show_when: ShowWhen | null;
 }
+
+export interface OptionGroupEntryDto {
+  key: string;
+  label: string;
+  description: string | null;
+  show_when: ShowWhen | null;
+  entries: OptionEntryDto[];
+}
+
+export type OptionEntryDto =
+  | { kind: "Option" } & ModeOptionDto
+  | { kind: "Group" } & OptionGroupEntryDto;
 
 export interface PickPackResult {
   pack_path: string;

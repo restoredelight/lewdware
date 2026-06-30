@@ -40,7 +40,7 @@ pub use window::{ChoiceWindowOption, Easing, FadeOpts, MoveOpts};
 
 pub enum Event {
     WindowClosed { id: WindowId },
-    MoveFinish { id: WindowId, move_id: u64 },
+    MoveFinish { id: WindowId, move_id: u64, x: i32, y: i32 },
     AudioFinish { id: u64 },
     PromptSubmit { id: WindowId, text: String },
     ChoiceSelect { id: WindowId, option_id: String },
@@ -54,8 +54,8 @@ pub struct WindowProps {
     pub height: u32,
     pub outer_width: u32,
     pub outer_height: u32,
-    pub x: u32,
-    pub y: u32,
+    pub x: i32,
+    pub y: i32,
     pub monitor: Monitor,
     pub visible: bool,
 }
@@ -148,12 +148,12 @@ pub fn start_lua_thread(
             .unwrap_or_default();
 
         // Make sure the config contains all the correct options
-        for (key, option) in mode_obj.options.iter() {
+        for (key, option) in mode_obj.all_options() {
             if mode_config
                 .get(key)
                 .is_none_or(|value| !option.matches_value(value))
             {
-                mode_config.insert(key.clone(), option.default_value());
+                mode_config.insert(key.to_string(), option.default_value());
             }
         }
 
@@ -251,9 +251,9 @@ impl LuaRuntime {
                     window.inner_window().on_close()?;
                 }
             }
-            Event::MoveFinish { id, move_id } => {
+            Event::MoveFinish { id, move_id, x, y } => {
                 if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
-                    window.inner_window().on_move_finished(move_id)?;
+                    window.inner_window().on_move_finished(move_id, x, y)?;
                 }
             }
             Event::FadeFinish { id, fade_id } => {
@@ -328,7 +328,7 @@ fn print(_: &Lua, args: mlua::Variadic<mlua::Value>) -> mlua::Result<()> {
         .map(|value| value.to_string())
         .collect::<mlua::Result<Vec<_>>>()?;
 
-    tracing::info!("{}", args_str.join("\t"));
+    println!("{}", args_str.join("\t"));
 
     Ok(())
 }

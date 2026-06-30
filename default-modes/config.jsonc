@@ -12,39 +12,198 @@
       "options": {
         "popup_frequency": {
           "label": "Popup frequency (seconds)",
-          "description": "How often popups will appear",
+          "description": "How often popups appear",
           "type": "number",
           "default": 1,
           "min": 0.1,
-          "max": 10,
-          "step": 0.1
+          "max": 60,
+          "step": 0.1,
+          "show_when": { "spawn_mode": "constant" }
         },
-        "x": {
-          "label": "x",
+        "max_popups": {
+          "label": "Maximum simultaneous popups",
           "type": "integer",
-          "default": 1,
-          "min": 1,
-          "max": 10,
-          "step": 1
+          "optional": true,
+          "default": 5,
+          "min": 1
         },
-        "y": {
-          "label": "y",
-          "type": "string",
-          "default": "AAA"
+        "media_types": {
+          "type": "group",
+          "label": "Media types",
+          "options": {
+            "images_enabled": {
+              "label": "Images",
+              "type": "boolean",
+              "default": true
+            },
+            "videos_enabled": {
+              "label": "Videos",
+              "type": "boolean",
+              "default": true
+            },
+            "audio_enabled": {
+              "label": "Audio",
+              "type": "boolean",
+              "default": true
+            }
+          }
         },
-        "z": {
-          "label": "z",
-          "type": "boolean",
-          "default": false
+        "spawn_pattern": {
+          "type": "group",
+          "label": "Spawn pattern",
+          "options": {
+            "spawn_mode": {
+              "label": "Spawn mode",
+              "type": "enum",
+              "default": "constant",
+              "values": {
+                "constant": "Constant",
+                "accelerating": "Accelerating",
+                "random": "Random interval"
+              }
+            },
+            "start_frequency": {
+              "label": "Starting frequency (seconds)",
+              "description": "Initial time between popups; shrinks each spawn",
+              "type": "number",
+              "default": 5,
+              "min": 0.1,
+              "step": 0.1,
+              "show_when": { "spawn_mode": "accelerating" }
+            },
+            "acceleration_factor": {
+              "label": "Acceleration factor",
+              "description": "Interval is multiplied by this after each popup — values below 1 get faster over time",
+              "type": "number",
+              "default": 0.9,
+              "min": 0.01,
+              "max": 0.99,
+              "step": 0.01,
+              "show_when": { "spawn_mode": "accelerating" }
+            },
+            "min_frequency": {
+              "label": "Minimum frequency (seconds)",
+              "description": "Fastest rate the mode will reach",
+              "type": "number",
+              "default": 0.25,
+              "min": 0.05,
+              "step": 0.05,
+              "show_when": { "spawn_mode": "accelerating" }
+            },
+            "random_min": {
+              "label": "Minimum interval (seconds)",
+              "type": "number",
+              "default": 0.5,
+              "min": 0.05,
+              "step": 0.05,
+              "show_when": { "spawn_mode": "random" }
+            },
+            "random_max": {
+              "label": "Maximum interval (seconds)",
+              "type": "number",
+              "default": 5,
+              "min": 0.1,
+              "step": 0.1,
+              "show_when": { "spawn_mode": "random" }
+            }
+          }
         },
-        "w": {
-          "label": "w",
-          "type": "enum",
-          "values": {
-            "1": "A value",
-            "2": "A value"
-          },
-          "default": "1"
+        "dormancy": {
+          "type": "group",
+          "label": "Dormancy cycles",
+          "options": {
+            "dormancy_enabled": {
+              "label": "Enable dormancy cycles",
+              "description": "Alternates between active and dormant periods",
+              "type": "boolean",
+              "default": false
+            },
+            "active_min": {
+              "label": "Active duration minimum (seconds)",
+              "type": "number",
+              "default": 30,
+              "min": 1,
+              "show_when": { "dormancy_enabled": true }
+            },
+            "active_max": {
+              "label": "Active duration maximum (seconds)",
+              "type": "number",
+              "default": 120,
+              "min": 1,
+              "show_when": { "dormancy_enabled": true }
+            },
+            "dormant_min": {
+              "label": "Dormant duration minimum (seconds)",
+              "type": "number",
+              "default": 120,
+              "min": 1,
+              "show_when": { "dormancy_enabled": true }
+            },
+            "dormant_max": {
+              "label": "Dormant duration maximum (seconds)",
+              "type": "number",
+              "default": 600,
+              "min": 1,
+              "show_when": { "dormancy_enabled": true }
+            }
+          }
+        },
+        "close_trigger": {
+          "type": "group",
+          "label": "Close trigger",
+          "options": {
+            "close_trigger_enabled": {
+              "label": "Spawn popups when closing",
+              "description": "Closing a popup may spawn more",
+              "type": "boolean",
+              "default": false
+            },
+            "close_chance": {
+              "label": "Spawn chance (0–1)",
+              "description": "Probability that closing a popup triggers more spawns",
+              "type": "number",
+              "default": 0.5,
+              "min": 0.01,
+              "max": 1,
+              "step": 0.01,
+              "show_when": { "close_trigger_enabled": true }
+            },
+            "close_count": {
+              "label": "Spawns per trigger",
+              "type": "integer",
+              "default": 2,
+              "min": 1,
+              "max": 10,
+              "show_when": { "close_trigger_enabled": true }
+            }
+          }
+        },
+        "movement": {
+          "type": "group",
+          "label": "Movement",
+          "options": {
+            "movement_enabled": {
+              "label": "Move windows after spawning",
+              "type": "boolean",
+              "default": false
+            },
+            "movement_speed_min": {
+              "label": "Minimum speed (px/s)",
+              "type": "number",
+              "default": 50,
+              "min": 10,
+              "step": 10,
+              "show_when": { "movement_enabled": true }
+            },
+            "movement_speed_max": {
+              "label": "Maximum speed (px/s)",
+              "type": "number",
+              "default": 150,
+              "min": 10,
+              "step": 10,
+              "show_when": { "movement_enabled": true }
+            }
+          }
         }
       }
     }

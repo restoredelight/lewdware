@@ -44,11 +44,62 @@
         "options": {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/$defs/option"
+            "$ref": "#/$defs/entry"
           }
         }
       },
       "required": ["name", "entrypoint"]
+    },
+
+    "condition_value": {
+      "description": "A primitive value used in a show_when condition",
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" }
+      ]
+    },
+
+    "show_when": {
+      "description": "Map of option keys to required values. All conditions must match for this entry to be visible. null values never satisfy any condition.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/condition_value"
+      }
+    },
+
+    "entry": {
+      "oneOf": [
+        { "$ref": "#/$defs/option" },
+        { "$ref": "#/$defs/group" }
+      ]
+    },
+
+    "group": {
+      "type": "object",
+      "description": "A collapsible group of options",
+      "properties": {
+        "type": { "const": "group" },
+        "label": {
+          "type": "string",
+          "description": "The heading shown to the user"
+        },
+        "description": {
+          "type": "string"
+        },
+        "show_when": {
+          "$ref": "#/$defs/show_when"
+        },
+        "options": {
+          "type": "object",
+          "description": "The options inside this group",
+          "additionalProperties": {
+            "$ref": "#/$defs/option"
+          }
+        }
+      },
+      "required": ["type", "label", "options"],
+      "unevaluatedProperties": false
     },
 
     "option": {
@@ -62,6 +113,17 @@
           "type": "string",
           "description": "An optional description shown below the label"
         },
+        "optional": {
+          "type": "boolean",
+          "description": "If true, the value may be null/disabled. Use \"enabled_by_default\" to control the initial state."
+        },
+        "enabled_by_default": {
+          "type": "boolean",
+          "description": "For optional options: whether the option starts enabled. Defaults to false."
+        },
+        "show_when": {
+          "$ref": "#/$defs/show_when"
+        },
         "type": {
           "enum": ["integer", "number", "string", "boolean", "enum"]
         }
@@ -71,66 +133,38 @@
         {
           "properties": {
             "type": { "const": "integer" },
-            "default": {
-              "type": "integer"
-            },
-            "min": {
-              "type": "integer"
-            },
-            "max": {
-              "type": "integer"
-            },
-            "step": {
-              "type": "integer"
-            },
-            "clamp": {
-              "type": "boolean"
-            },
-            "slider": {
-              "type": "boolean"
-            }
+            "default": { "type": "integer" },
+            "min": { "type": "integer" },
+            "max": { "type": "integer" },
+            "step": { "type": "integer" },
+            "clamp": { "type": "boolean" },
+            "slider": { "type": "boolean" }
           },
           "required": ["default"]
         },
         {
           "properties": {
             "type": { "const": "number" },
-            "default": {
-              "type": "number"
-            },
-            "min": {
-              "type": "number"
-            },
-            "max": {
-              "type": "number"
-            },
-            "step": {
-              "type": "number"
-            },
-            "clamp": {
-              "type": "boolean"
-            },
-            "slider": {
-              "type": "boolean"
-            }
+            "default": { "type": "number" },
+            "min": { "type": "number" },
+            "max": { "type": "number" },
+            "step": { "type": "number" },
+            "clamp": { "type": "boolean" },
+            "slider": { "type": "boolean" }
           },
           "required": ["default"]
         },
         {
           "properties": {
             "type": { "const": "string" },
-            "default": {
-              "type": "string"
-            }
+            "default": { "type": "string" }
           },
           "required": ["default"]
         },
         {
           "properties": {
             "type": { "const": "boolean" },
-            "default": {
-              "type": "boolean"
-            }
+            "default": { "type": "boolean" }
           },
           "required": ["default"]
         },
@@ -145,9 +179,7 @@
               },
               "minProperties": 1
             },
-            "default": {
-              "type": "string"
-            }
+            "default": { "type": "string" }
           },
           "required": ["values", "default"]
         }

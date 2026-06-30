@@ -25,11 +25,12 @@ pub struct InnerWindow {
     header: Option<Header>,
     inner_size: PhysicalSize<u32>,
     outer_size: PhysicalSize<u32>,
-    monitor_position: LogicalPosition<u32>,
+    monitor_position: LogicalPosition<i32>,
     monitor_size: LogicalSize<u32>,
-    position: LogicalPosition<u32>,
+    position: LogicalPosition<i32>,
     lua_event_tx: mpsc::UnboundedSender<lua::Event>,
     current_move: Option<Move>,
+    last_move_update: Instant,
     wgpu_state: Option<Arc<WgpuState>>,
     transparent: bool,
     // Whether the surface's CompositeAlphaMode is PreMultiplied (vs. PostMultiplied/Opaque).
@@ -42,8 +43,8 @@ pub struct InnerWindow {
 
 struct Move {
     id: u64,
-    from: LogicalPosition<u32>,
-    to: LogicalPosition<u32>,
+    from: LogicalPosition<i32>,
+    to: LogicalPosition<i32>,
     duration: Duration,
     start: Instant,
     easing: Easing,
@@ -172,6 +173,7 @@ impl InnerWindow {
             position: LogicalPosition::new(opts.x, opts.y),
             lua_event_tx,
             current_move: None,
+            last_move_update: Instant::now(),
             wgpu_state,
             transparent,
             premultiplied_alpha,
@@ -436,31 +438,35 @@ impl InnerWindow {
 
         let monitor_size = self.monitor_size;
 
-        let x = match opts.x {
+        let x: Option<i32> = match opts.x {
             Some(Coord::Pixel(x)) => Some(opts.anchor.resolve(x, size.width)),
             Some(Coord::Percent { percent }) => Some(opts.anchor.resolve(
-                ((percent * monitor_size.width as f64) / 100.0).round() as u32,
+                ((percent * monitor_size.width as f64) / 100.0).round() as i32,
                 size.width,
             )),
             None => None,
         };
 
-        let y = match opts.y {
+        let y: Option<i32> = match opts.y {
             Some(Coord::Pixel(y)) => Some(opts.anchor.resolve(y, size.height)),
             Some(Coord::Percent { percent }) => Some(opts.anchor.resolve(
-                ((percent * monitor_size.height as f64) / 100.0).round() as u32,
+                ((percent * monitor_size.height as f64) / 100.0).round() as i32,
                 size.height,
             )),
             None => None,
         };
 
+        let clamp = opts.clamp;
         let new_position = if opts.relative {
             LogicalPosition::new(
-                self.position.x + x.unwrap_or(0),
-                self.position.y + y.unwrap_or(0),
+                if clamp { (self.position.x + x.unwrap_or(0)).max(0) } else { self.position.x + x.unwrap_or(0) },
+                if clamp { (self.position.y + y.unwrap_or(0)).max(0) } else { self.position.y + y.unwrap_or(0) },
             )
         } else {
-            LogicalPosition::new(x.unwrap_or(self.position.x), y.unwrap_or(self.position.y))
+            LogicalPosition::new(
+                if clamp { x.map(|v| v.max(0)).unwrap_or(self.position.x) } else { x.unwrap_or(self.position.x) },
+                if clamp { y.map(|v| v.max(0)).unwrap_or(self.position.y) } else { y.unwrap_or(self.position.y) },
+            )
         };
 
         tracing::info!("{:?}", self.position);
@@ -495,25 +501,34 @@ impl InnerWindow {
             let new_position = LogicalPosition::new(
                 current_move.from.x
                     + ((current_move.to.x as f64 - current_move.from.x as f64) * eased_percent)
-                        .round() as u32,
+                        .round() as i32,
                 current_move.from.y
                     + ((current_move.to.y as f64 - current_move.from.y as f64) * eased_percent)
-                        .round() as u32,
+                        .round() as i32,
             );
 
-            if new_position != self.position {
+            let complete = percent >= 1.0;
+
+            // Throttle visual updates to ~30 fps; always apply the final position on completion
+            // so the window lands exactly on the wall edge before the next move starts.
+            if new_position != self.position
+                && (complete
+                    || self.last_move_update.elapsed() >= Duration::from_millis(33))
+            {
                 self.window.set_outer_position(LogicalPosition::new(
                     self.monitor_position.x + new_position.x,
                     self.monitor_position.y + new_position.y,
                 ));
-
                 self.position = new_position;
+                self.last_move_update = Instant::now();
             }
 
-            if percent >= 1.0 {
+            if complete {
                 if let Err(err) = self.lua_event_tx.send(lua::Event::MoveFinish {
                     id: self.window.id(),
                     move_id: current_move.id,
+                    x: self.position.x,
+                    y: self.position.y,
                 }) {
                     tracing::error!("{err}");
                 }

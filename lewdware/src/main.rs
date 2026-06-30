@@ -69,6 +69,8 @@ fn main() -> Result<()> {
         };
     }
 
+    tracing::debug!("{:?}", config);
+
     let mut event_loop_builder = EventLoop::with_user_event();
 
     #[cfg(target_os = "linux")]

@@ -4,6 +4,8 @@ use ciborium::{from_reader, into_writer};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+pub type ShowWhen = IndexMap<String, ConditionValue>;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Metadata {
     pub name: String,
@@ -23,7 +25,22 @@ pub struct SourceFile {
 pub struct Mode {
     pub name: String,
     pub entrypoint: String,
-    pub options: IndexMap<String, ModeOption>,
+    pub entries: IndexMap<String, ModeEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind")]
+pub enum ModeEntry {
+    Option(ModeOption),
+    Group(ModeGroup),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModeGroup {
+    pub label: String,
+    pub description: Option<String>,
+    pub show_when: Option<ShowWhen>,
+    pub entries: IndexMap<String, ModeEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -31,6 +48,77 @@ pub struct ModeOption {
     pub label: String,
     pub description: Option<String>,
     pub option_type: OptionType,
+    #[serde(default)]
+    pub optional: bool,
+    #[serde(default)]
+    pub enabled_by_default: bool,
+    pub show_when: Option<ShowWhen>,
+}
+
+/// A value used in a `show_when` condition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum ConditionValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+}
+
+impl ConditionValue {
+    pub fn matches(&self, value: &OptionValue) -> bool {
+        match (self, value) {
+            (Self::Bool(b), OptionValue::Boolean(v)) => b == v,
+            (Self::Int(i), OptionValue::Integer(v)) => i == v,
+            (Self::Float(f), OptionValue::Number(v)) => f == v,
+            (Self::Str(s), OptionValue::Enum(v)) | (Self::Str(s), OptionValue::String(v)) => {
+                s == v
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Mode {
+    /// Returns all options in the mode as a flat list, depth-first through groups.
+    pub fn all_options(&self) -> Vec<(&str, &ModeOption)> {
+        fn collect<'a>(
+            entries: &'a IndexMap<String, ModeEntry>,
+            out: &mut Vec<(&'a str, &'a ModeOption)>,
+        ) {
+            for (key, entry) in entries {
+                match entry {
+                    ModeEntry::Option(opt) => out.push((key.as_str(), opt)),
+                    ModeEntry::Group(group) => collect(&group.entries, out),
+                }
+            }
+        }
+        let mut result = Vec::new();
+        collect(&self.entries, &mut result);
+        result
+    }
+
+    /// Looks up an option by its key, searching within groups.
+    pub fn get_option(&self, key: &str) -> Option<&ModeOption> {
+        fn find<'a>(
+            entries: &'a IndexMap<String, ModeEntry>,
+            key: &str,
+        ) -> Option<&'a ModeOption> {
+            for (k, entry) in entries {
+                match entry {
+                    ModeEntry::Option(opt) if k == key => return Some(opt),
+                    ModeEntry::Group(group) => {
+                        if let Some(opt) = find(&group.entries, key) {
+                            return Some(opt);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        find(&self.entries, key)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -71,6 +159,7 @@ pub enum OptionValue {
     String(String),
     Boolean(bool),
     Enum(String),
+    Null,
 }
 
 #[cfg(feature = "mlua")]
@@ -82,12 +171,16 @@ impl mlua::IntoLua for OptionValue {
             OptionValue::String(x) => x.into_lua(lua),
             OptionValue::Boolean(x) => x.into_lua(lua),
             OptionValue::Enum(x) => x.into_lua(lua),
+            OptionValue::Null => Ok(mlua::Value::Nil),
         }
     }
 }
 
 impl ModeOption {
     pub fn default_value(&self) -> OptionValue {
+        if self.optional && !self.enabled_by_default {
+            return OptionValue::Null;
+        }
         match &self.option_type {
             OptionType::Integer { default, .. } => OptionValue::Integer(*default),
             OptionType::Number { default, .. } => OptionValue::Number(*default),
@@ -98,6 +191,9 @@ impl ModeOption {
     }
 
     pub fn matches_value(&self, value: &OptionValue) -> bool {
+        if self.optional && matches!(value, OptionValue::Null) {
+            return true;
+        }
         match &self.option_type {
             OptionType::Integer { .. } => matches!(value, OptionValue::Integer(_)),
             OptionType::Number { .. } => matches!(value, OptionValue::Number(_)),
@@ -124,13 +220,24 @@ impl Metadata {
 mod tests {
     use super::*;
 
+    fn make_option(option_type: OptionType) -> ModeOption {
+        ModeOption {
+            label: "test".to_string(),
+            description: None,
+            option_type,
+            optional: false,
+            enabled_by_default: false,
+            show_when: None,
+        }
+    }
+
     fn sample_metadata() -> Metadata {
         let mut modes = IndexMap::new();
-        let mut options = IndexMap::new();
+        let mut entries = IndexMap::new();
 
-        options.insert(
+        entries.insert(
             "count".to_string(),
-            ModeOption {
+            ModeEntry::Option(ModeOption {
                 label: "Count".to_string(),
                 description: None,
                 option_type: OptionType::Integer {
@@ -141,11 +248,14 @@ mod tests {
                     clamp: true,
                     slider: false,
                 },
-            },
+                optional: false,
+                enabled_by_default: false,
+                show_when: None,
+            }),
         );
-        options.insert(
+        entries.insert(
             "speed".to_string(),
-            ModeOption {
+            ModeEntry::Option(ModeOption {
                 label: "Speed".to_string(),
                 description: Some("How fast".to_string()),
                 option_type: OptionType::Number {
@@ -156,39 +266,62 @@ mod tests {
                     clamp: false,
                     slider: false,
                 },
-            },
+                optional: false,
+                enabled_by_default: false,
+                show_when: None,
+            }),
         );
-        options.insert(
+        entries.insert(
             "label".to_string(),
-            ModeOption {
+            ModeEntry::Option(ModeOption {
                 label: "Label".to_string(),
                 description: None,
                 option_type: OptionType::String {
                     default: "hello".to_string(),
                 },
-            },
+                optional: false,
+                enabled_by_default: false,
+                show_when: None,
+            }),
         );
-        options.insert(
+        entries.insert(
             "enabled".to_string(),
-            ModeOption {
+            ModeEntry::Option(ModeOption {
                 label: "Enabled".to_string(),
                 description: None,
                 option_type: OptionType::Boolean { default: true },
-            },
+                optional: false,
+                enabled_by_default: false,
+                show_when: None,
+            }),
         );
+
+        let mut group_entries = IndexMap::new();
         let mut values = IndexMap::new();
         values.insert("a".to_string(), "Option A".to_string());
         values.insert("b".to_string(), "Option B".to_string());
-        options.insert(
+        group_entries.insert(
             "variant".to_string(),
-            ModeOption {
+            ModeEntry::Option(ModeOption {
                 label: "Variant".to_string(),
                 description: None,
                 option_type: OptionType::Enum {
                     default: "a".to_string(),
                     values,
                 },
-            },
+                optional: false,
+                enabled_by_default: false,
+                show_when: None,
+            }),
+        );
+        entries.insert(
+            "advanced".to_string(),
+            ModeEntry::Group(ModeGroup {
+                label: "Advanced".to_string(),
+                description: None,
+                show_when: None,
+                entries: group_entries,
+            }),
         );
 
         modes.insert(
@@ -196,7 +329,7 @@ mod tests {
             Mode {
                 name: "Main".to_string(),
                 entrypoint: "main.lua".to_string(),
-                options,
+                entries,
             },
         );
 
@@ -238,6 +371,26 @@ mod tests {
         let buf = original.to_buf().unwrap();
         let decoded = Metadata::from_buf(&buf).unwrap();
         assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn all_options_flattens_groups() {
+        let meta = sample_metadata();
+        let mode = meta.modes.get("main").unwrap();
+        let options = mode.all_options();
+        let keys: Vec<&str> = options.iter().map(|(k, _)| *k).collect();
+        assert!(keys.contains(&"count"));
+        assert!(keys.contains(&"variant")); // inside group
+        assert_eq!(keys.len(), 5);
+    }
+
+    #[test]
+    fn get_option_finds_in_group() {
+        let meta = sample_metadata();
+        let mode = meta.modes.get("main").unwrap();
+        assert!(mode.get_option("variant").is_some());
+        assert!(mode.get_option("count").is_some());
+        assert!(mode.get_option("nonexistent").is_none());
     }
 
     #[test]
@@ -285,12 +438,7 @@ mod tests {
         ];
 
         for (option_type, expected) in cases {
-            let opt = ModeOption {
-                label: "test".to_string(),
-                description: None,
-                option_type: option_type.clone(),
-            };
-            assert_eq!(opt.default_value(), *expected);
+            assert_eq!(make_option(option_type.clone()).default_value(), *expected);
         }
     }
 
@@ -339,29 +487,29 @@ mod tests {
         ];
 
         for (option_type, value) in pairs {
-            let opt = ModeOption {
-                label: "test".to_string(),
-                description: None,
-                option_type: option_type.clone(),
-            };
-            assert!(opt.matches_value(value));
+            assert!(make_option(option_type.clone()).matches_value(value));
         }
     }
 
     #[test]
     fn matches_value_wrong_type() {
-        let opt = ModeOption {
-            label: "test".to_string(),
-            description: None,
-            option_type: OptionType::Integer {
-                default: 0,
-                min: None,
-                max: None,
-                step: None,
-                clamp: false,
-                slider: false,
-            },
-        };
+        let opt = make_option(OptionType::Integer {
+            default: 0,
+            min: None,
+            max: None,
+            step: None,
+            clamp: false,
+            slider: false,
+        });
         assert!(!opt.matches_value(&OptionValue::String("oops".to_string())));
+    }
+
+    #[test]
+    fn condition_value_matches() {
+        assert!(ConditionValue::Bool(true).matches(&OptionValue::Boolean(true)));
+        assert!(!ConditionValue::Bool(true).matches(&OptionValue::Boolean(false)));
+        assert!(ConditionValue::Int(5).matches(&OptionValue::Integer(5)));
+        assert!(ConditionValue::Str("x".to_string()).matches(&OptionValue::Enum("x".to_string())));
+        assert!(!ConditionValue::Str("x".to_string()).matches(&OptionValue::Null));
     }
 }

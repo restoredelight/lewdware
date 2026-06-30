@@ -5,12 +5,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::Args;
 use shared::mode::{self, Header, SourceFile};
 
 use crate::mode::{
-    config::{Config, Mode},
+    config::{self, Config, Mode},
     find_root, read_config,
     types::write_type_stubs,
 };
@@ -247,17 +247,15 @@ fn create_metadata(
                     bail!("Entrypoint '{entrypoint}' must start with `src/`");
                 };
 
-                let options = options
-                    .into_iter()
-                    .map(|(key, option)| Ok((key, option.try_into()?)))
-                    .collect::<Result<_>>()?;
+                let entries = config::parse_entries(options)
+                    .with_context(|| format!("Error in mode '{name}'"))?;
 
                 Ok((
                     key,
                     mode::Mode {
                         name,
                         entrypoint,
-                        options,
+                        entries,
                     },
                 ))
             },

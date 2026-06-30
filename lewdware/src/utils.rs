@@ -328,8 +328,8 @@ pub fn calculate_media_popup_size(
     monitor_width: u32,
     monitor_height: u32,
 ) -> (u32, u32) {
-    let width = width.map(|width| width.to_pixels(monitor_width));
-    let height = height.map(|height| height.to_pixels(monitor_height));
+    let width = width.map(|width| width.to_pixels(monitor_width).max(0) as u32);
+    let height = height.map(|height| height.to_pixels(monitor_height).max(0) as u32);
 
     match (width, height) {
         (None, None) => {

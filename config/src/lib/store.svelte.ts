@@ -4,9 +4,24 @@ import type {
   Key,
   ModeGroupDto,
   ModeId,
-  ModeOptionDto,
+  OptionEntryDto,
+  OptionValue,
   MonitorDto,
 } from "./types";
+
+function updateOptionValue(
+  entries: OptionEntryDto[],
+  key: string,
+  value: OptionValue,
+): OptionEntryDto[] {
+  return entries.map((entry) => {
+    if (entry.kind === "Option") {
+      return entry.key === key ? { ...entry, value } : entry;
+    } else {
+      return { ...entry, entries: updateOptionValue(entry.entries, key, value) };
+    }
+  });
+}
 
 function modeIdEqual(a: ModeId, b: ModeId): boolean {
   if (a.type !== b.type) return false;
@@ -20,7 +35,7 @@ class AppStore {
   config = $state<ConfigDto | null>(null);
   monitors = $state<MonitorDto[]>([]);
   modeGroups = $state<ModeGroupDto[]>([]);
-  modeOptions = $state<ModeOptionDto[]>([]);
+  modeOptions = $state<OptionEntryDto[]>([]);
   activeTab = $state<"general" | "pack_mode">("general");
 
   get ready() {
@@ -115,9 +130,7 @@ class AppStore {
 
   async setModeOption(key: string, value: unknown) {
     await api.setModeOption(key, value as never);
-    this.modeOptions = this.modeOptions.map((o) =>
-      o.key === key ? { ...o, value: value as never } : o
-    );
+    this.modeOptions = updateOptionValue(this.modeOptions, key, value as OptionValue);
   }
 
   isModeSelected(modeId: ModeId): boolean {

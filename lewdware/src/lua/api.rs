@@ -589,15 +589,16 @@ async fn random_audio(
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum Coord {
-    Pixel(u32),
+    Pixel(i32),
     Percent { percent: f64 },
 }
 
 impl Coord {
-    pub fn to_pixels(&self, total_size: u32) -> u32 {
+    /// Returns a signed pixel value. Callers are responsible for clamping to valid bounds.
+    pub fn to_pixels(&self, total_size: u32) -> i32 {
         match self {
             Coord::Pixel(x) => *x,
-            Coord::Percent { percent } => ((percent * total_size as f64) / 100.0).round() as u32,
+            Coord::Percent { percent } => ((percent * total_size as f64) / 100.0).round() as i32,
         }
     }
 }
@@ -614,11 +615,11 @@ pub enum Anchor {
 }
 
 impl Anchor {
-    pub fn resolve(&self, coord: u32, size: u32) -> u32 {
+    pub fn resolve(&self, coord: i32, size: u32) -> i32 {
         match self {
             Self::TopLeft => coord,
-            Self::Center => coord - (size / 2),
-            Self::BottomRight => coord - size,
+            Self::Center => coord - (size / 2) as i32,
+            Self::BottomRight => coord - size as i32,
         }
     }
 }
@@ -648,6 +649,8 @@ pub struct SpawnWindowOpts {
     pub background_color: Option<Color>,
     #[serde(default)]
     pub click_through: bool,
+    #[serde(default = "return_true")]
+    pub clamp: bool,
 }
 
 impl Default for SpawnWindowOpts {
@@ -667,6 +670,7 @@ impl Default for SpawnWindowOpts {
             transparent: None,
             background_color: None,
             click_through: false,
+            clamp: true,
         }
     }
 }
@@ -734,8 +738,8 @@ async fn spawn_image_popup(
         .into_lua_err()?;
 
     opts.window_opts.monitor = Some(monitor);
-    opts.window_opts.width = Some(Coord::Pixel(width));
-    opts.window_opts.height = Some(Coord::Pixel(height));
+    opts.window_opts.width = Some(Coord::Pixel(width as i32));
+    opts.window_opts.height = Some(Coord::Pixel(height as i32));
 
     let props = request_sender.spawn_image(data, opts.window_opts).await?;
 

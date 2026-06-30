@@ -144,7 +144,7 @@ impl LewdwareApp {
 
         let scale_factor = monitor_handle.scale_factor();
         let monitor_size = monitor_handle.size().to_logical(scale_factor);
-        let monitor_position: LogicalPosition<u32> =
+        let monitor_position: LogicalPosition<i32> =
             monitor_handle.position().to_logical(scale_factor);
 
         let (width, height) = match size_behaviour {
@@ -159,11 +159,11 @@ impl LewdwareApp {
             WindowSizeBehaviour::UseDefaults { width, height } => (
                 spawn_opts
                     .width
-                    .map(|w| w.to_pixels(monitor_size.width))
+                    .map(|w| w.to_pixels(monitor_size.width).max(0) as u32)
                     .unwrap_or(width),
                 spawn_opts
                     .height
-                    .map(|h| h.to_pixels(monitor_size.height))
+                    .map(|h| h.to_pixels(monitor_size.height).max(0) as u32)
                     .unwrap_or(height),
             ),
         };
@@ -174,14 +174,28 @@ impl LewdwareApp {
             outer_height += HEADER_HEIGHT + 2;
         }
 
-        let x = spawn_opts
-            .x
-            .map(|c| spawn_opts.anchor.resolve(c.to_pixels(monitor_size.width), outer_width))
-            .unwrap_or_else(|| random_position(outer_width, monitor_size.width));
-        let y = spawn_opts
-            .y
-            .map(|c| spawn_opts.anchor.resolve(c.to_pixels(monitor_size.height), outer_height))
-            .unwrap_or_else(|| random_position(outer_height, monitor_size.height));
+        let x: i32 = {
+            let v = spawn_opts
+                .x
+                .map(|c| spawn_opts.anchor.resolve(c.to_pixels(monitor_size.width), outer_width))
+                .unwrap_or_else(|| random_position(outer_width, monitor_size.width));
+            if spawn_opts.clamp {
+                v.max(0).min(monitor_size.width.saturating_sub(outer_width) as i32)
+            } else {
+                v
+            }
+        };
+        let y: i32 = {
+            let v = spawn_opts
+                .y
+                .map(|c| spawn_opts.anchor.resolve(c.to_pixels(monitor_size.height), outer_height))
+                .unwrap_or_else(|| random_position(outer_height, monitor_size.height));
+            if spawn_opts.clamp {
+                v.max(0).min(monitor_size.height.saturating_sub(outer_height) as i32)
+            } else {
+                v
+            }
+        };
 
         let position = LogicalPosition::new(monitor_position.x + x, monitor_position.y + y);
 
@@ -820,10 +834,10 @@ impl Drop for LewdwareApp {
     }
 }
 
-fn random_position(window_size: u32, total_size: u32) -> u32 {
+fn random_position(window_size: u32, total_size: u32) -> i32 {
     if window_size > total_size {
         0
     } else {
-        random_range(0..=(total_size - window_size))
+        random_range(0i32..=(total_size - window_size) as i32)
     }
 }

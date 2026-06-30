@@ -9,11 +9,11 @@ use crate::monitor::Monitor;
 pub struct WindowOpts {
     /// Absolute screen position (monitor offset + x + y). Used for initial placement and for
     /// repositioning a pooled window.
-    pub position: LogicalPosition<u32>,
+    pub position: LogicalPosition<i32>,
     /// Monitor-relative x offset. Stored in `InnerWindow` for the move/animation system.
-    pub x: u32,
+    pub x: i32,
     /// Monitor-relative y offset.
-    pub y: u32,
+    pub y: i32,
     /// Inner content width (excluding decoration border).
     pub width: u32,
     /// Inner content height (excluding decoration border and header).

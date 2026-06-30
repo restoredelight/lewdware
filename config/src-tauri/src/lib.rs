@@ -41,9 +41,10 @@ async fn check_for_update() -> Result<Option<String>, String> {
     }
 }
 use serde_json::Value as JsonValue;
+use indexmap::IndexMap;
 use shared::{
     db::migrate,
-    mode::{self, Metadata, OptionType, OptionValue},
+    mode::{self, ModeEntry, Metadata, OptionType, OptionValue, ShowWhen},
     read_pack::read_pack_metadata,
     user_config::{self, AppConfig, Key, Mode},
 };
@@ -171,6 +172,24 @@ pub struct ModeOptionDto {
     pub description: Option<String>,
     pub option_type: OptionType,
     pub value: OptionValue,
+    pub optional: bool,
+    pub show_when: Option<ShowWhen>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct OptionGroupDto {
+    pub key: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub show_when: Option<ShowWhen>,
+    pub entries: Vec<OptionEntryDto>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind")]
+pub enum OptionEntryDto {
+    Option(ModeOptionDto),
+    Group(OptionGroupDto),
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -324,7 +343,7 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
     groups
 }
 
-fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<ModeOptionDto> {
+fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<OptionEntryDto> {
     let mode_meta = match &config.mode {
         Mode::Default(key) => state.default_modes.modes.get(key).cloned(),
         Mode::Pack { id, mode } => {
@@ -355,25 +374,41 @@ fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<ModeOptionD
         .cloned()
         .unwrap_or_default();
 
-    mode_meta
-        .options
-        .into_iter()
-        .map(|(key, opt)| {
-            let value = stored
-                .get(&key)
-                .filter(|v| opt.matches_value(v))
-                .cloned()
-                .unwrap_or_else(|| opt.default_value());
+    fn build_entries(
+        entries: &IndexMap<String, ModeEntry>,
+        stored: &HashMap<String, OptionValue>,
+    ) -> Vec<OptionEntryDto> {
+        entries
+            .iter()
+            .map(|(key, entry)| match entry {
+                ModeEntry::Option(opt) => {
+                    let value = stored
+                        .get(key)
+                        .filter(|v| opt.matches_value(v))
+                        .cloned()
+                        .unwrap_or_else(|| opt.default_value());
+                    OptionEntryDto::Option(ModeOptionDto {
+                        key: key.clone(),
+                        label: opt.label.clone(),
+                        description: opt.description.clone(),
+                        option_type: opt.option_type.clone(),
+                        value,
+                        optional: opt.optional,
+                        show_when: opt.show_when.clone(),
+                    })
+                }
+                ModeEntry::Group(group) => OptionEntryDto::Group(OptionGroupDto {
+                    key: key.clone(),
+                    label: group.label.clone(),
+                    description: group.description.clone(),
+                    show_when: group.show_when.clone(),
+                    entries: build_entries(&group.entries, stored),
+                }),
+            })
+            .collect()
+    }
 
-            ModeOptionDto {
-                key,
-                label: opt.label,
-                description: opt.description,
-                option_type: opt.option_type,
-                value,
-            }
-        })
-        .collect()
+    build_entries(&mode_meta.entries, &stored)
 }
 
 fn save_to_disk(config: &AppConfig, uploaded: &[UploadedModeEntry]) -> anyhow::Result<()> {
@@ -445,7 +480,7 @@ fn get_mode_groups(state: State<'_>) -> Vec<ModeGroupDto> {
 }
 
 #[tauri::command]
-fn get_mode_options(state: State<'_>) -> Vec<ModeOptionDto> {
+fn get_mode_options(state: State<'_>) -> Vec<OptionEntryDto> {
     let config = state.config.lock().unwrap();
     get_mode_options_for(&config, &state)
 }
@@ -502,11 +537,12 @@ fn get_option_type_for_key(
         }
     }?;
 
-    mode_meta.options.get(key).map(|o| o.option_type.clone())
+    mode_meta.get_option(key).map(|o| o.option_type.clone())
 }
 
 fn coerce_option_value(value: JsonValue, opt_type: Option<&OptionType>) -> Option<OptionValue> {
     match (opt_type, &value) {
+        (_, JsonValue::Null) => Some(OptionValue::Null),
         (Some(OptionType::Enum { .. }), JsonValue::String(s)) => Some(OptionValue::Enum(s.clone())),
         (Some(OptionType::Integer { .. }), JsonValue::Number(n)) => {
             Some(OptionValue::Integer(n.as_i64()?))
