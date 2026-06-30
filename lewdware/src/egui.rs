@@ -35,6 +35,7 @@ impl EguiGpuRenderer {
         premultiplied_alpha: bool,
         force_opaque: bool,
         background_color: Option<Color>,
+        font_definitions: Option<egui::FontDefinitions>,
     ) -> Result<Self> {
         let context = egui::Context::default();
         let viewport_id = egui::ViewportId::from_hash_of(window.id());
@@ -52,6 +53,10 @@ impl EguiGpuRenderer {
             wgpu::TextureFormat::Rgba8UnormSrgb,
             RendererOptions::default(),
         );
+
+        if let Some(font_definitions) = font_definitions {
+            context.set_fonts(font_definitions);
+        }
 
         context.request_repaint();
 
@@ -288,7 +293,11 @@ pub struct EguiCPUWindow {
 }
 
 impl EguiCPUWindow {
-    pub fn new(window: Arc<Window>, background_color: Option<Color>) -> Result<Self> {
+    pub fn new(
+        window: Arc<Window>,
+        background_color: Option<Color>,
+        font_definitions: Option<egui::FontDefinitions>,
+    ) -> Result<Self> {
         let context = egui::Context::default();
         let viewport_id = egui::ViewportId::from_hash_of(window.id());
         let state = egui_winit::State::new(
@@ -301,6 +310,10 @@ impl EguiCPUWindow {
         );
 
         let renderer = EguiSoftwareRender::new(ColorFieldOrder::Bgra);
+
+        if let Some(font_definitions) = font_definitions {
+            context.set_fonts(font_definitions);
+        }
 
         context.request_repaint();
 

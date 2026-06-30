@@ -4,7 +4,11 @@ use anyhow::Result;
 use shared::user_config::{Key, Modifiers};
 use winit::event_loop::EventLoopProxy;
 
-use crate::{app::UserEvent, lua::Coord};
+use crate::{
+    app::UserEvent,
+    lua::{Coord, TextFont},
+    text_font,
+};
 
 // Create a tray icon that can be used to close the program
 #[cfg(not(target_os = "linux"))]
@@ -344,6 +348,55 @@ pub fn calculate_media_popup_size(
             ((width as f64 / media_width as f64) * media_height as f64).round() as u32,
         ),
         (Some(width), Some(height)) => (width, height),
+    }
+}
+
+/// Resolve the size of a text popup. Unlike `calculate_media_popup_size`, text has no fixed
+/// aspect ratio to scale, so an omitted width/height wraps the text to fit rather than scaling a
+/// font size the caller explicitly chose.
+///
+/// `border_width` (0 if the text has no border/outline) is added as padding on auto-computed
+/// dimensions, since the border is drawn by repainting the text offset by up to `border_width`
+/// pixels in every direction — without this, the stroke would be clipped by the window bounds.
+pub fn calculate_text_popup_size(
+    width: Option<Coord>,
+    height: Option<Coord>,
+    text: &str,
+    font: TextFont,
+    font_size: f32,
+    border_width: f32,
+    monitor_width: u32,
+    monitor_height: u32,
+) -> (u32, u32) {
+    let width = width.map(|width| width.to_pixels(monitor_width).max(0) as u32);
+    let height = height.map(|height| height.to_pixels(monitor_height).max(0) as u32);
+
+    let padding = border_width * 2.0;
+
+    match (width, height) {
+        (Some(width), Some(height)) => (width, height),
+        (Some(width), None) => {
+            let wrap_width = (width as f32 - padding).max(0.0);
+            let size = text_font::measure(text, font, font_size, wrap_width);
+            (width, (size.y + padding).ceil() as u32)
+        }
+        (None, height) => {
+            let max_width = (monitor_width / 3) as f32 - padding;
+            let natural = text_font::measure(text, font, font_size, f32::INFINITY);
+
+            let (width, wrapped_height) = if natural.x <= max_width {
+                (natural.x, natural.y)
+            } else {
+                let wrapped = text_font::measure(text, font, font_size, max_width);
+                (max_width, wrapped.y)
+            };
+            let width = width + padding;
+
+            (
+                width.ceil() as u32,
+                height.unwrap_or((wrapped_height + padding).ceil() as u32),
+            )
+        }
     }
 }
 

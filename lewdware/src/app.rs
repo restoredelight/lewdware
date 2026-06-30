@@ -19,17 +19,17 @@ use winit::{
 use crate::audio::AudioPlayer;
 use crate::error::{LewdwareError, MonitorError, Result};
 use crate::lua::{
-    self, AudioAction, ChoiceWindowOption, LuaRequest, Notification, SpawnWindowOpts,
-    WallpaperMode, WindowAction, WindowProps, start_lua_thread,
+    self, AudioAction, ChoiceWindowOption, FontSize, LuaRequest, Notification, SpawnWindowOpts,
+    TextFont, TextStyle, WallpaperMode, WindowAction, WindowProps, start_lua_thread,
 };
 use crate::media::{FileOrPath, ImageData};
 use crate::monitor::Monitors;
-use crate::utils::calculate_media_popup_size;
+use crate::utils::{calculate_media_popup_size, calculate_text_popup_size};
 use crate::video::VideoDecoder;
 use crate::wgpu::WgpuState;
 use crate::window::{
-    ChoiceWindow, HEADER_HEIGHT, ImageWindow, InnerWindow, PromptWindow, VideoWindow, WindowOpts,
-    WindowPool, WindowType,
+    ChoiceWindow, HEADER_HEIGHT, ImageWindow, InnerWindow, PromptWindow, TextWindow, VideoWindow,
+    WindowOpts, WindowPool, WindowType,
 };
 
 /// The main app.
@@ -53,6 +53,12 @@ pub struct LewdwareApp {
 enum WindowSizeBehaviour {
     ResizeWithMedia { width: u32, height: u32 },
     UseDefaults { width: u32, height: u32 },
+    MeasureText {
+        text: String,
+        font: TextFont,
+        font_size: FontSize,
+        border_width: f32,
+    },
 }
 
 #[derive(Debug)]
@@ -166,6 +172,21 @@ impl LewdwareApp {
                     .map(|h| h.to_pixels(monitor_size.height).max(0) as u32)
                     .unwrap_or(height),
             ),
+            WindowSizeBehaviour::MeasureText {
+                text,
+                font,
+                font_size,
+                border_width,
+            } => calculate_text_popup_size(
+                spawn_opts.width.clone(),
+                spawn_opts.height.clone(),
+                &text,
+                font,
+                font_size.to_pixels(monitor_size.height),
+                border_width,
+                monitor_size.width,
+                monitor_size.height,
+            ),
         };
 
         let (mut outer_width, mut outer_height) = (width, height);
@@ -217,6 +238,7 @@ impl LewdwareApp {
             title: spawn_opts.title,
             closeable: spawn_opts.closeable,
             monitor,
+            background_color: spawn_opts.background_color,
         })
     }
 
@@ -262,6 +284,13 @@ impl LewdwareApp {
     /// the KWin strut relayout freeze on Dock-type windows.
     fn close_window(&mut self, window_type: WindowType) {
         let transparent = window_type.inner_window().transparent();
+        // Move offscreen before dropping InnerWindow so the surface is still alive when KWin
+        // processes the XMoveWindow. Without this, transparent (wgpu) windows flash black at
+        // their visible position between surface drop and the pool's -32000 move.
+        window_type
+            .inner_window()
+            .window()
+            .set_outer_position(LogicalPosition::new(-32000i32, -32000i32));
         let arc_window = window_type.into_inner_window().into_arc_window();
         self.window_pool.release(arc_window, transparent);
     }
@@ -290,12 +319,19 @@ impl LewdwareApp {
         let mut image_window =
             ImageWindow::new(inner_window, data).map_err(|err| LewdwareError::WindowError(err))?;
 
-        // Render the image while the window is still offscreen so the compositor already has the
-        // correct pixels before XMoveWindow fires. X11 protocol ordering guarantees XShmPutImage
-        // is processed before XMoveWindow, so KWin composites with the image, not a blank frame.
-        if let Err(e) = image_window.draw() {
-            tracing::warn!("image pre-draw failed: {e}");
-        }
+        // Render the image while still offscreen so the compositor has valid pixels before
+        // XMoveWindow fires. For CPU (softbuffer) windows, X11 protocol ordering guarantees
+        // XShmPutImage is processed before XMoveWindow. For GPU windows, pre_show() submits a
+        // clear and blocks until the DRI3 present lands, so XMoveWindow follows in the X11 stream.
+        let idx = match image_window.draw() {
+            Ok(idx) => idx,
+            Err(e) => {
+                tracing::warn!("image pre-draw failed: {e}");
+                None
+            }
+        };
+        // gpu_sync blocks on the specific submission so XMoveWindow follows the DRI3 present.
+        image_window.inner_window.gpu_sync(idx);
 
         if visible {
             image_window.inner_window.set_visible(true);
@@ -332,10 +368,13 @@ impl LewdwareApp {
 
         window.request_redraw();
 
-        let video_window = VideoWindow::new(window, video_player, loop_video)
+        let mut video_window = VideoWindow::new(window, video_player, loop_video)
             .map_err(|err| LewdwareError::WindowError(err))?;
 
         if visible {
+            if let Err(e) = video_window.inner_window.pre_show() {
+                tracing::warn!("video pre-show failed: {e}");
+            }
             video_window.inner_window.set_visible(true);
         }
 
@@ -370,10 +409,13 @@ impl LewdwareApp {
         let (window, props) = self.create_window(resolved, event_loop)?;
         let visible = props.visible;
 
-        let prompt_window = PromptWindow::new(window, text, placeholder, initial_value)
+        let mut prompt_window = PromptWindow::new(window, text, placeholder, initial_value)
             .map_err(|err| LewdwareError::WindowError(err))?;
 
         if visible {
+            if let Err(e) = prompt_window.inner_window.pre_show() {
+                tracing::warn!("prompt pre-show failed: {e}");
+            }
             prompt_window.inner_window.set_visible(true);
         }
 
@@ -405,15 +447,69 @@ impl LewdwareApp {
         let (window, props) = self.create_window(resolved, event_loop)?;
         let visible = props.visible;
 
-        let choice_window = ChoiceWindow::new(window, text, options)
+        let mut choice_window = ChoiceWindow::new(window, text, options)
             .map_err(|err| LewdwareError::WindowError(err))?;
 
         if visible {
+            if let Err(e) = choice_window.inner_window.pre_show() {
+                tracing::warn!("choice pre-show failed: {e}");
+            }
             choice_window.inner_window.set_visible(true);
         }
 
         self.windows
             .insert(props.window_id.clone(), WindowType::Choice(choice_window));
+
+        Ok(props)
+    }
+
+    fn spawn_text(
+        &mut self,
+        text: String,
+        style: TextStyle,
+        window_opts: SpawnWindowOpts,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<WindowProps> {
+        // Unlike other popup types, text defaults to a transparent (GPU-rendered) window, since
+        // text is usually meant to float over the desktop rather than sit in an opaque panel.
+        let transparent = window_opts.transparent.unwrap_or(true);
+        let resolved = self.resolve_window_opts(
+            window_opts,
+            WindowSizeBehaviour::MeasureText {
+                text: text.clone(),
+                font: style.font,
+                font_size: style.font_size,
+                border_width: if style.border_color.is_some() {
+                    style.border_width
+                } else {
+                    0.0
+                },
+            },
+            transparent,
+            transparent,
+            event_loop,
+        )?;
+        // Resolve a percentage font size to a concrete point size now that the monitor (and so
+        // its height, the basis for `FontSize::Percent`) is known. From here on `font_size` is
+        // always `FontSize::Value`.
+        let mut style = style;
+        style.font_size = FontSize::Value(style.font_size.to_pixels(resolved.monitor.height));
+
+        let (window, props) = self.create_window(resolved, event_loop)?;
+        let visible = props.visible;
+
+        let mut text_window =
+            TextWindow::new(window, text, style).map_err(|err| LewdwareError::WindowError(err))?;
+
+        if visible {
+            if let Err(e) = text_window.inner_window.pre_show() {
+                tracing::warn!("choice pre-show failed: {e}");
+            }
+            text_window.inner_window.set_visible(true);
+        }
+
+        self.windows
+            .insert(props.window_id.clone(), WindowType::Text(text_window));
 
         Ok(props)
     }
@@ -523,6 +619,14 @@ impl LewdwareApp {
             } => tx
                 .send(self.spawn_choice(text, options, window_opts, event_loop))
                 .is_ok(),
+            LuaRequest::SpawnText {
+                text,
+                style,
+                window_opts,
+                tx,
+            } => tx
+                .send(self.spawn_text(text, style, window_opts, event_loop))
+                .is_ok(),
             LuaRequest::SpawnAudio {
                 audio_player: data,
                 tx,
@@ -588,6 +692,15 @@ impl LewdwareApp {
                                     choice.set_text(text);
                                     Ok(())
                                 }
+                                WindowType::Text(text_window) => match text {
+                                    Some(text) => {
+                                        text_window.set_text(text);
+                                        Ok(())
+                                    }
+                                    None => Err(LewdwareError::Internal(
+                                        "Text windows require non-nil text",
+                                    )),
+                                },
                                 _ => Err(LewdwareError::Internal("Invalid window type")),
                             })
                             .is_ok(),
@@ -689,9 +802,11 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
         if let Entry::Occupied(mut entry) = self.windows.entry(window_id) {
             match entry.get_mut() {
                 WindowType::Image(window) => match event {
-                    WindowEvent::RedrawRequested => window.draw().unwrap_or_else(|err| {
-                        tracing::error!("Error drawing image window: {}", err);
-                    }),
+                    WindowEvent::RedrawRequested => {
+                        if let Err(err) = window.draw() {
+                            tracing::error!("Error drawing image window: {}", err);
+                        }
+                    }
                     _ => {}
                 },
                 // Video windows are driven directly from `about_to_wait` instead of through
@@ -701,6 +816,16 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                     WindowEvent::RedrawRequested => {
                         window.render().unwrap_or_else(|err| {
                             tracing::error!("Error rendering prompt window: {}", err);
+                        });
+                    }
+                    event => {
+                        window.handle_event(event);
+                    }
+                },
+                WindowType::Text(window) => match &event {
+                    WindowEvent::RedrawRequested => {
+                        window.render().unwrap_or_else(|err| {
+                            tracing::error!("Error rendering text window: {}", err);
                         });
                     }
                     event => {

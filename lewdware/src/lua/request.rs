@@ -9,7 +9,7 @@ use crate::{
     error::{LewdwareError, Result},
     lua::{
         WindowProps,
-        api::{Notification, SpawnWindowOpts, WallpaperMode},
+        api::{Notification, SpawnWindowOpts, TextStyle, WallpaperMode},
         window::{ChoiceWindowOption, FadeOpts, MoveOpts},
     },
     media::{FileOrPath, ImageData},
@@ -130,6 +130,21 @@ impl RequestSender {
         self.send(|tx| LuaRequest::SpawnChoice {
             text,
             options,
+            window_opts,
+            tx,
+        })
+        .await?
+    }
+
+    pub async fn spawn_text(
+        &self,
+        text: String,
+        style: TextStyle,
+        window_opts: SpawnWindowOpts,
+    ) -> Result<WindowProps> {
+        self.send(|tx| LuaRequest::SpawnText {
+            text,
+            style,
             window_opts,
             tx,
         })
@@ -339,6 +354,12 @@ pub enum LuaRequest {
     SpawnChoice {
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
+        window_opts: SpawnWindowOpts,
+        tx: oneshot::Sender<Result<WindowProps>>,
+    },
+    SpawnText {
+        text: String,
+        style: TextStyle,
         window_opts: SpawnWindowOpts,
         tx: oneshot::Sender<Result<WindowProps>>,
     },

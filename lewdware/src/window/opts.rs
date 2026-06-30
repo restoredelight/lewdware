@@ -1,5 +1,6 @@
 use winit::dpi::LogicalPosition;
 
+use crate::lua::Color;
 use crate::monitor::Monitor;
 
 /// Fully resolved options for creating or reconfiguring a window.
@@ -37,4 +38,6 @@ pub struct WindowOpts {
     pub title: Option<String>,
     pub closeable: bool,
     pub monitor: Monitor,
+    /// The panel/window fill colour requested via `SpawnWindowOpts.background_color`, if any.
+    pub background_color: Option<Color>,
 }

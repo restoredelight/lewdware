@@ -1,5 +1,31 @@
 local config = lewdware.config
 
+
+local text_items = {
+	"FOCUS",
+	"ON",
+	"FEET"
+}
+local index = 1
+
+lewdware.every(500, function ()
+	local text = text_items[index]
+	index = (index % #text_items) + 1
+
+	local popup = lewdware.spawn_text_popup(text, {
+		font = "display",
+		font_size = { percent = 15 },
+		color = "#FFFFFF",
+		border_color = "#000000",
+		border_width = 5,
+		decorations = false,
+	})
+
+	lewdware.after(500, function ()
+		popup:close()
+	end)
+end)
+
 ---@cast config {
 ---    popup_frequency: number,
 ---    max_popups: number,

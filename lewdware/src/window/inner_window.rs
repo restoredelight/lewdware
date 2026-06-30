@@ -39,6 +39,7 @@ pub struct InnerWindow {
     force_opaque: bool,
     current_fade: Option<Fade>,
     pub opacity: f32,
+    background_color: Option<lua::Color>,
 }
 
 struct Move {
@@ -180,11 +181,16 @@ impl InnerWindow {
             force_opaque,
             current_fade: None,
             opacity: opts.opacity,
+            background_color: opts.background_color,
         })
     }
 
     pub fn set_opacity(&mut self, opacity: f32) {
         self.opacity = opacity;
+    }
+
+    pub fn background_color(&self) -> Option<lua::Color> {
+        self.background_color
     }
 
     pub fn wgpu_state(&self) -> &Arc<WgpuState> {
@@ -240,6 +246,37 @@ impl InnerWindow {
         Ok(())
     }
 
+    /// For GPU windows: block until the GPU finishes all submitted work and the DRI3 present
+    /// has been submitted to the X server. Call this after a real content draw (e.g. image) so
+    /// that XMoveWindow arrives after the frame, ensuring KWin composites content not black.
+    ///
+    /// For CPU windows this is a no-op — XShmPutImage and XMoveWindow share the X11 connection
+    /// so ordering is already guaranteed.
+    /// Block until the GPU finishes the submission identified by `idx` and the DRI3 present has
+    /// been submitted to the X server. If `idx` is `None` (no submission was made, e.g. due to a
+    /// swapchain timeout) this is a no-op.
+    pub fn gpu_sync(&self, idx: Option<wgpu::SubmissionIndex>) {
+        if let (Some(wgpu), Some(idx)) = (&self.wgpu_state, idx) {
+            let _ = wgpu.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(idx),
+                timeout: None,
+            });
+        }
+    }
+
+    /// For GPU windows: submit a transparent clear frame, then sync (see [`Self::gpu_sync`]).
+    /// Use before `set_visible(true)` for windows that have not rendered any real content yet
+    /// (video, prompt, choice) so KWin sees transparent pixels rather than uninitialized black.
+    ///
+    /// For CPU windows this is a no-op.
+    pub fn pre_show(&mut self) -> Result<()> {
+        if self.is_gpu() {
+            let idx = self.draw_wgpu(|_, _, _| {})?;
+            self.gpu_sync(idx);
+        }
+        Ok(())
+    }
+
     pub fn with_header_pixmap<F: FnOnce(&tiny_skia::Pixmap)>(&mut self, f: F) {
         if let Some(pixmap) = self.header.as_mut().and_then(|h| h.draw()) {
             f(pixmap);
@@ -249,7 +286,7 @@ impl InnerWindow {
     pub fn draw_wgpu(
         &mut self,
         draw_fn: impl FnOnce(&mut wgpu::RenderPass<'static>, u32, u32),
-    ) -> Result<()> {
+    ) -> Result<Option<wgpu::SubmissionIndex>> {
         let (x, y) = self.inner_offset();
         match &mut self.surface {
             Surface::Wgpu {
@@ -264,19 +301,19 @@ impl InnerWindow {
                 let output = match surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
                     wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => surface_texture,
-                    wgpu::CurrentSurfaceTexture::Timeout => return Ok(()),
+                    wgpu::CurrentSurfaceTexture::Timeout => return Ok(None),
                     wgpu::CurrentSurfaceTexture::Outdated => {
                         surface.configure(&wgpu.device, surface_config);
                         self.window.request_redraw();
-                        return Ok(());
+                        return Ok(None);
                     }
                     wgpu::CurrentSurfaceTexture::Lost => {
                         *surface = wgpu.instance.create_surface(self.window.clone())?;
                         surface.configure(&wgpu.device, surface_config);
                         self.window.request_redraw();
-                        return Ok(());
+                        return Ok(None);
                     }
-                    wgpu::CurrentSurfaceTexture::Occluded => return Ok(()),
+                    wgpu::CurrentSurfaceTexture::Occluded => return Ok(None),
                     wgpu::CurrentSurfaceTexture::Validation => {
                         bail!("Validation error")
                     }
@@ -329,13 +366,12 @@ impl InnerWindow {
                     draw_fn(&mut rpass, x, y);
                 }
 
-                wgpu.queue.submit(Some(encoder.finish()));
+                let idx = wgpu.queue.submit(Some(encoder.finish()));
                 output.present();
+                Ok(Some(idx))
             }
             _ => bail!("Called draw_wgpu on a non-GPU surface"),
         }
-
-        Ok(())
     }
 
     pub fn draw_softbuffer(&mut self, draw_fn: impl FnOnce(&mut Buffer)) -> Result<()> {
@@ -630,6 +666,9 @@ impl InnerWindow {
                     self.monitor_position.y + self.position.y,
                 ));
                 self.window.set_visible(true);
+                // Recycled (always-mapped) windows are moved with XMoveWindow, which does not
+                // restack. Raise explicitly so the window appears above other windows in its layer.
+                x11_raise(&self.window);
             } else {
                 // XUnmapWindow on a Dock window triggers KWin strut relayout (same freeze as
                 // XDestroyWindow). Move offscreen instead of unmapping.
@@ -703,4 +742,30 @@ fn init_softbuffer(
         softbuffer::Surface::new(&context, window.clone()).map_err(|err| anyhow!("{}", err))?;
 
     Ok((context, surface))
+}
+
+/// Raise `window` to the top of the X11 stacking order without unmapping it.
+///
+/// `XMoveWindow` (used to park/unpark pooled windows) does not restack, so recycled windows
+/// would silently sit below any window mapped since they were last visible. `XRaiseWindow`
+/// fixes this without triggering the KWin strut relayout that XMapWindow/XUnmapWindow does.
+#[cfg(target_os = "linux")]
+fn x11_raise(window: &Window) {
+    use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+
+    let (Ok(wh), Ok(dh)) = (window.window_handle(), window.display_handle()) else {
+        return;
+    };
+    let (RawWindowHandle::Xlib(xlib_win), RawDisplayHandle::Xlib(xlib_dpy)) =
+        (wh.as_raw(), dh.as_raw())
+    else {
+        return;
+    };
+    let Some(display) = xlib_dpy.display else { return };
+
+    let Ok(xlib) = x11_dl::xlib::Xlib::open() else { return };
+    unsafe {
+        (xlib.XRaiseWindow)(display.as_ptr().cast(), xlib_win.window);
+        (xlib.XFlush)(display.as_ptr().cast());
+    }
 }

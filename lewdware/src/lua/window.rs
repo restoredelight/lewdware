@@ -22,6 +22,7 @@ pub enum Window {
     Video(Rc<VideoWindow>),
     Prompt(Rc<PromptWindow>),
     Choice(Rc<ChoiceWindow>),
+    Text(Rc<TextWindow>),
 }
 
 impl Window {
@@ -31,6 +32,7 @@ impl Window {
             Window::Video(video) => &video.inner_window,
             Window::Prompt(prompt) => &prompt.inner_window,
             Window::Choice(choice) => &choice.inner_window,
+            Window::Text(text) => &text.inner_window,
         }
     }
 }
@@ -324,6 +326,51 @@ impl ChoiceWindow {
     }
 }
 
+pub struct TextWindow {
+    inner_window: InnerWindow,
+    state: RefCell<TextWindowState>,
+}
+
+struct TextWindowState {
+    text: String,
+}
+
+impl UserData for TextWindow {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        InnerWindow::add_fields(fields);
+
+        fields.add_field("type", "text");
+
+        fields.add_field_method_get("text", |_, this| {
+            Ok(this.state.try_borrow().into_lua_err()?.text.clone())
+        });
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        InnerWindow::add_methods(methods);
+
+        methods.add_async_method("set_text", async |_, this, text: String| {
+            this.inner_window
+                .request_sender
+                .set_text(Some(text.clone()))
+                .await?;
+
+            this.state.try_borrow_mut().into_lua_err()?.text = text;
+
+            Ok(())
+        });
+    }
+}
+
+impl TextWindow {
+    pub fn new(props: WindowProps, text: String, request_sender: WindowRequestSender) -> Self {
+        Self {
+            inner_window: InnerWindow::new(props, request_sender),
+            state: RefCell::new(TextWindowState { text }),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChoiceWindowOption {
     pub id: String,
@@ -388,6 +435,12 @@ impl HasInnerWindow for PromptWindow {
 }
 
 impl HasInnerWindow for ChoiceWindow {
+    fn inner_window(&self) -> &InnerWindow {
+        &self.inner_window
+    }
+}
+
+impl HasInnerWindow for TextWindow {
     fn inner_window(&self) -> &InnerWindow {
         &self.inner_window
     }

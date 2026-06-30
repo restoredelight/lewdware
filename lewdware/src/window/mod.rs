@@ -10,4 +10,4 @@ pub use header::HEADER_HEIGHT;
 pub use inner_window::InnerWindow;
 pub use opts::WindowOpts;
 pub use pool::WindowPool;
-pub use window_type::{ChoiceWindow, ImageWindow, PromptWindow, VideoWindow, WindowType};
+pub use window_type::{ChoiceWindow, ImageWindow, PromptWindow, TextWindow, VideoWindow, WindowType};

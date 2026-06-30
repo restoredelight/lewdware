@@ -173,6 +173,15 @@ function ChoiceWindow:set_text(text) end
 ---@param options? { id: string, label: string }[]
 function ChoiceWindow:set_options(options) end
 
+---@class TextWindow : Window
+---@field type "'text'"
+---@field text string The text currently displayed.
+TextWindow = {}
+
+---Set the text displayed.
+---@param text string
+function TextWindow:set_text(text) end
+
 ---@class LewdwareMedia
 lewdware.media = {}
 
@@ -294,11 +303,12 @@ function lewdware.spawn_image_popup(image, opts) end
 ---  [Window:fade()](lua::Window.fade) to change it later. Set it to `false` explicitly if an
 ---  image or video is transparent but you want to make the window opaque.
 ---@field background_color? string The background colour of the window as a hex string. Accepts
----  `"#rrggbb"` (opaque) or `"#rrggbbaa"` (with alpha). For prompt and choice windows this sets
----  the panel fill colour; for image and video windows it sets the colour shown in transparent
----  areas. If the alpha is less than 1, the window is automatically made transparent. When not
----  set, the default egui light-theme background (`"#f8f8f8"`) is used for prompt/choice windows,
----  and transparent areas on image/video windows fall back to the `transparent` flag behaviour.
+---  `"#rrggbb"` (opaque) or `"#rrggbbaa"` (with alpha). For prompt, choice and text windows this
+---  sets the panel fill colour; for image and video windows it sets the colour shown in
+---  transparent areas. If the alpha is less than 1, the window is automatically made transparent.
+---  When not set, the default egui light-theme background (`"#f8f8f8"`) is used for prompt/choice
+---  windows, text windows default to a fully transparent background, and transparent areas on
+---  image/video windows fall back to the `transparent` flag behaviour.
 
 ---@class SpawnImageOpts : SpawnWindowOpts
 ---Options for `spawn_image()`.
@@ -374,6 +384,45 @@ function lewdware.spawn_choice(opts) end
 ---@field text? string
 ---@field options { id: string, label: string }[] The list of options, which determine the buttons
 ---  to present to the user. Only the label is displayed, the id is used in `on_select()`.
+
+---Spawn a popup displaying text.
+---@param text string
+---@param opts? SpawnTextOpts
+---@return TextWindow
+function lewdware.spawn_text_popup(text, opts) end
+
+---@alias TextFont
+---| "default" Ubuntu-Light, matching the window header/chrome. The default.
+---| "mono" A monospace/typewriter font (bundled with egui, at no extra cost).
+---| "display" A bold, high-impact font intended for emphasis/title-style text.
+
+---@alias FontSize number | { percent: number } A font size in points, or a percentage of the
+---  monitor's height (e.g. `{ percent = 3 }` for 3% of the screen height) — useful for text that
+---  should occupy roughly the same proportion of the screen regardless of resolution. Unlike
+---  `width`/`height`/`opacity`, there's no natural "100%" reference point for a font size (100%
+---  would mean text as tall as the entire screen), so percentages here are typically small
+---  (low single digits).
+
+---@class SpawnTextOpts : SpawnWindowOpts
+---Options for `spawn_text_popup()`.
+---
+---If `width`/`height` are omitted, the window is sized to fit the text at the chosen `font_size`
+---(wrapping rather than shrinking the font if it would otherwise be wider than a third of the
+---monitor's width) — similar in spirit to how `spawn_image_popup()`/`spawn_video_popup()` size
+---themselves from the media's dimensions.
+---
+---@field font? TextFont Which bundled font to use. Defaults to `"default"`.
+---@field font_size? FontSize The font size. Defaults to 32.
+---@field color? string The text colour as a hex string (`"#rrggbb"` or `"#rrggbbaa"`). Defaults
+---  to black.
+---@field bold? boolean Whether to render the text in (synthetic) bold. Defaults to false.
+---@field align? "left" | "center" | "right" Horizontal alignment of the text. Defaults to
+---  `"center"`. Text is always centered vertically.
+---@field border_color? string Outline colour for the text, as a hex string. If set, the text is
+---  drawn with a stroke in this colour — useful for keeping text legible against a transparent or
+---  unpredictable background.
+---@field border_width? number The width of the text outline, in pixels. Defaults to 2. Only used
+---  if `border_color` is set.
 
 ---Open a URL in the browser
 ---@param url string

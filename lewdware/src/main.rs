@@ -21,6 +21,7 @@ mod inner_window;
 mod lua;
 mod media;
 mod monitor;
+mod text_font;
 mod utils;
 mod video;
 mod wgpu;

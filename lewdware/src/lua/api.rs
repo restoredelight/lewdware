@@ -71,7 +71,9 @@ use crate::{
         audio::AudioHandle,
         interval::{Interval, Timer},
         request::RequestSender,
-        window::{ChoiceWindow, ChoiceWindowOption, ImageWindow, PromptWindow, VideoWindow},
+        window::{
+            ChoiceWindow, ChoiceWindowOption, ImageWindow, PromptWindow, TextWindow, VideoWindow,
+        },
     },
     media::{MediaManager, MediaTypes},
     monitor::Monitor,
@@ -284,6 +286,18 @@ pub fn create_api(
             "spawn_choice",
             lua.create_async_function(move |lua, args| {
                 spawn_choice(lua, args, request_sender.clone(), windows.clone())
+            })?,
+        )?;
+    }
+
+    {
+        let request_sender = request_sender.clone();
+        let windows = windows.clone();
+
+        api_table.set(
+            "spawn_text_popup",
+            lua.create_async_function(move |lua, args| {
+                spawn_text_popup(lua, args, request_sender.clone(), windows.clone())
             })?,
         )?;
     }
@@ -603,6 +617,27 @@ impl Coord {
     }
 }
 
+/// A font size: either a literal point size, or a percentage of the monitor's (logical) height.
+/// Kept separate from `Coord` so literal values keep `f32` precision rather than rounding to a
+/// whole pixel.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[serde(untagged)]
+pub enum FontSize {
+    Value(f32),
+    Percent { percent: f64 },
+}
+
+impl FontSize {
+    /// Resolve to a concrete point size. `monitor_height` (logical) is the basis for `Percent`
+    /// and is ignored for `Value`.
+    pub fn to_pixels(&self, monitor_height: u32) -> f32 {
+        match self {
+            FontSize::Value(size) => *size,
+            FontSize::Percent { percent } => (percent / 100.0) as f32 * monitor_height as f32,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
 pub enum Anchor {
     #[serde(rename = "top-left")]
@@ -673,6 +708,119 @@ impl Default for SpawnWindowOpts {
             clamp: true,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextFont {
+    #[serde(rename = "default")]
+    #[default]
+    Default,
+    #[serde(rename = "mono")]
+    Mono,
+    #[serde(rename = "display")]
+    Display,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlign {
+    #[serde(rename = "left")]
+    Left,
+    #[serde(rename = "center")]
+    #[default]
+    Center,
+    #[serde(rename = "right")]
+    Right,
+}
+
+fn default_text_color() -> Color {
+    Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    }
+}
+
+fn default_font_size() -> FontSize {
+    FontSize::Value(32.0)
+}
+
+fn default_border_width() -> f32 {
+    2.0
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub struct TextStyle {
+    #[serde(default)]
+    pub font: TextFont,
+    #[serde(default = "default_font_size")]
+    pub font_size: FontSize,
+    #[serde(default = "default_text_color")]
+    pub color: Color,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub align: TextAlign,
+    #[serde(default)]
+    pub border_color: Option<Color>,
+    #[serde(default = "default_border_width")]
+    pub border_width: f32,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            font: TextFont::default(),
+            font_size: default_font_size(),
+            color: default_text_color(),
+            bold: false,
+            align: TextAlign::default(),
+            border_color: None,
+            border_width: default_border_width(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct SpawnTextOpts {
+    #[serde(flatten)]
+    style: TextStyle,
+    #[serde(flatten)]
+    window_opts: SpawnWindowOpts,
+}
+
+impl FromLua for SpawnTextOpts {
+    fn from_lua(value: mlua::Value, lua: &Lua) -> mlua::Result<Self> {
+        lua.from_value(value)
+    }
+}
+
+async fn spawn_text_popup(
+    _: Lua,
+    (text, opts): (String, Option<SpawnTextOpts>),
+    request_sender: RequestSender,
+    windows: Windows,
+) -> mlua::Result<Rc<TextWindow>> {
+    let opts = opts.unwrap_or_default();
+
+    let props = request_sender
+        .spawn_text(text.clone(), opts.style, opts.window_opts)
+        .await?;
+
+    let id = props.window_id;
+
+    let window = Rc::new(TextWindow::new(
+        props,
+        text,
+        request_sender.window_sender(id),
+    ));
+
+    windows
+        .try_borrow_mut()
+        .into_lua_err()?
+        .insert(id, Window::Text(window.clone()));
+
+    Ok(window)
 }
 
 #[derive(Serialize, Deserialize, Default)]
