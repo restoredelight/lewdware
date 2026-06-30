@@ -30,7 +30,8 @@ together, while `pack-editor` is distributed separately (since it's quite a
 large application).
 
 `docs/` contains the code for the [website](https://lewdware.net), written in
-Astro and Starlight, and hosted on Cloudflare.
+Astro and Starlight, and hosted on Cloudflare. The Lua mode API can be found
+at `docs/src/data/config.schema.json`.
 
 `default-modes/` contains the code for the modes included by default in
 Lewdware.
