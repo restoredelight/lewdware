@@ -38,6 +38,7 @@ pub struct InnerWindow {
     premultiplied_alpha: bool,
     force_opaque: bool,
     current_fade: Option<Fade>,
+    last_fade_update: Instant,
     pub opacity: f32,
     background_color: Option<lua::Color>,
 }
@@ -180,6 +181,7 @@ impl InnerWindow {
             premultiplied_alpha,
             force_opaque,
             current_fade: None,
+            last_fade_update: Instant::now(),
             opacity: opts.opacity,
             background_color: opts.background_color,
         })
@@ -596,7 +598,7 @@ impl InnerWindow {
     }
 
     pub fn update_fade(&mut self) {
-        let (new_opacity, _percent, is_finished, fade_id) =
+        let (new_opacity, is_finished, fade_id) =
             if let Some(current_fade) = &self.current_fade {
                 let percent = current_fade
                     .start
@@ -609,13 +611,18 @@ impl InnerWindow {
                 let new_opacity = current_fade.from
                     + ((current_fade.to - current_fade.from) as f64 * eased_percent) as f32;
 
-                (new_opacity, percent, percent >= 1.0, current_fade.id)
+                (new_opacity, percent >= 1.0, current_fade.id)
             } else {
                 return;
             };
 
-        if new_opacity != self.opacity {
+        if new_opacity != self.opacity
+            && (is_finished
+                || self.last_fade_update.elapsed() >= Duration::from_millis(33))
+        {
             self.set_opacity(new_opacity);
+            self.window.request_redraw();
+            self.last_fade_update = Instant::now();
         }
 
         if is_finished {
