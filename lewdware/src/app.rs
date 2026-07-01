@@ -19,8 +19,9 @@ use winit::{
 use crate::audio::AudioPlayer;
 use crate::error::{LewdwareError, MonitorError, Result};
 use crate::lua::{
-    self, AudioAction, ChoiceWindowOption, FontSize, LuaRequest, Notification, SpawnWindowOpts,
-    TextFont, TextStyle, WallpaperMode, WindowAction, WindowProps, start_lua_thread,
+    self, AudioAction, ChoiceWindowOption, FontSize, LuaRequest, LuaThreadHandle, Notification,
+    SpawnWindowOpts, TextFont, TextStyle, WallpaperMode, WindowAction, WindowProps,
+    start_lua_thread,
 };
 use crate::media::{FileOrPath, ImageData};
 use crate::monitor::Monitors;
@@ -46,6 +47,7 @@ pub struct LewdwareApp {
     default_wallpaper: Option<String>,
     lua_request_rx: tokio::sync::mpsc::Receiver<lua::LuaRequest>,
     lua_event_tx: tokio::sync::mpsc::UnboundedSender<lua::Event>,
+    lua_thread_handle: LuaThreadHandle,
     monitors: Monitors,
     window_pool: WindowPool,
 }
@@ -105,7 +107,7 @@ impl LewdwareApp {
         //     end)
         // end)
 
-        let (lua_event_tx, lua_request_rx) = start_lua_thread(
+        let (lua_event_tx, lua_request_rx, lua_thread_handle) = start_lua_thread(
             event_loop_proxy,
             config.clone(),
             wgpu_state.as_ref().map(|s| s.device.clone()),
@@ -123,6 +125,7 @@ impl LewdwareApp {
             default_wallpaper: wallpaper,
             lua_request_rx,
             lua_event_tx,
+            lua_thread_handle,
             monitors,
             window_pool: WindowPool::new(),
         })
@@ -976,6 +979,11 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
 
 impl Drop for LewdwareApp {
     fn drop(&mut self) {
+        // Blocks until the Lua thread (and the media manager thread it owns) actually finish,
+        // so their temp files (extracted pack index, any in-flight media) get cleaned up via
+        // `Drop` instead of being silently killed along with the process when `main` returns.
+        self.lua_thread_handle.shutdown();
+
         if let Some(wallpaper) = &self.default_wallpaper {
             if let Err(err) = wallpaper::set_from_path(wallpaper) {
                 tracing::error!("Error setting wallpaper back to default: {}", err);

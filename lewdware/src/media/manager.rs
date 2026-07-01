@@ -30,15 +30,20 @@ pub type Result<T, E = MediaError> = std::result::Result<T, E>;
 
 impl MediaManager {
     /// Start up the media manager thread, opening the specified pack file. Returns the pack
-    /// metadata.
+    /// metadata and a handle for the spawned thread.
+    ///
+    /// The returned `JoinHandle` should be joined once every clone of this `MediaManager` has
+    /// been dropped, so the thread's request channel closes and it can shut down, running the
+    /// `Drop` impl of its `MediaPack` (which owns a `NamedTempFile` for the pack's extracted
+    /// index). Otherwise that temp file is never cleaned up.
     pub fn open(
         pack_path: &Path,
         event_loop_proxy: EventLoopProxy<UserEvent>,
         wgpu_device: Option<Arc<wgpu::Device>>,
-    ) -> anyhow::Result<(Self, Metadata)> {
-        let (tx, metadata) = spawn_media_manager_thread(pack_path, event_loop_proxy)?;
+    ) -> anyhow::Result<(Self, Metadata, thread::JoinHandle<()>)> {
+        let (tx, metadata, handle) = spawn_media_manager_thread(pack_path, event_loop_proxy)?;
 
-        Ok((Self { tx, wgpu_device }, metadata))
+        Ok((Self { tx, wgpu_device }, metadata, handle))
     }
 
     async fn send<T>(
@@ -160,13 +165,13 @@ impl MediaManager {
 fn spawn_media_manager_thread(
     pack_path: &Path,
     event_loop_proxy: EventLoopProxy<UserEvent>,
-) -> anyhow::Result<(Sender<MediaRequest>, Metadata)> {
+) -> anyhow::Result<(Sender<MediaRequest>, Metadata, thread::JoinHandle<()>)> {
     let (req_tx, mut req_rx) = channel(20);
 
     let file = MediaPack::open(pack_path)?;
     let metadata = file.metadata().clone();
 
-    thread::spawn(move || {
+    let handle = thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -184,12 +189,17 @@ fn spawn_media_manager_thread(
                     handle_request(manager, request, event_loop_proxy).await;
                 });
             }
+
+            // Dropping `manager` here (rather than leaving it to fall out of scope with the
+            // task) makes it explicit: once the request channel closes, the pack's temp files
+            // (e.g. its extracted SQLite index) are cleaned up before the thread exits.
+            drop(manager);
         });
 
         rt.block_on(local);
     });
 
-    Ok((req_tx, metadata))
+    Ok((req_tx, metadata, handle))
 }
 
 async fn handle_request(
@@ -262,7 +272,10 @@ async fn handle_request(
             response_tx.send(pack.get_mode(id)).is_ok()
         }
     } {
-        tracing::error!("Failed to send response");
+        // The requester's oneshot receiver was dropped before we could respond. Normal when a
+        // request is abandoned mid-flight, e.g. during shutdown when in-flight Lua tasks get
+        // cancelled, so this isn't logged as an error.
+        tracing::debug!("Failed to send response: receiver dropped");
     }
 }
 

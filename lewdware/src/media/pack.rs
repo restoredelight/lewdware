@@ -70,7 +70,7 @@ impl MediaPack {
         let mut db_data = vec![0u8; header.index_length as usize];
         file.read_exact(&mut db_data)?;
 
-        let mut db_file = NamedTempFile::new()?;
+        let mut db_file = NamedTempFile::new_in(crate::utils::temp_dir())?;
         db_file.write_all(&db_data)?;
 
         let connection = Connection::open(db_file.path())?;
@@ -348,7 +348,7 @@ impl MediaPack {
         length: u64,
         suffix: &str,
     ) -> Result<NamedTempFile> {
-        let mut tempfile = NamedTempFile::with_suffix(suffix)?;
+        let mut tempfile = NamedTempFile::with_suffix_in(suffix, crate::utils::temp_dir())?;
         let mut buffer = vec![0u8; length as usize];
 
         let mut file = File::open(&self.path).await?;

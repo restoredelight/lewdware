@@ -1,4 +1,4 @@
-use std::{collections::HashSet, thread};
+use std::{collections::HashSet, path::PathBuf, thread};
 
 use anyhow::Result;
 use shared::user_config::{Key, Modifiers};
@@ -507,3 +507,32 @@ pub fn raise_fd_limit() {
 
 #[cfg(not(unix))]
 pub fn raise_fd_limit() {}
+
+/// The directory lewdware extracts media (images/video/audio, the pack's SQLite index) into
+/// while running. A subdirectory of the regular system temp dir (`$TMPDIR`/`/tmp`), *not*
+/// `$XDG_RUNTIME_DIR` (used for the lock file) — the runtime dir is conventionally sized for
+/// small runtime objects like sockets, and is typically much smaller than `/tmp` (on this
+/// machine: ~1.6GB vs. ~6GB), which matters since these extracted files can be large (whole
+/// video/audio files, a pack's full SQLite index). Kept in its own subdirectory so leftovers
+/// from a previous run can be identified and swept away, see [`prepare_temp_dir`].
+pub fn temp_dir() -> PathBuf {
+    std::env::temp_dir().join("lewdware-tmp")
+}
+
+/// Clears out [`temp_dir`] and recreates it. Only safe to call while holding the single-instance
+/// lock: if a previous session crashed or was force-killed, its `NamedTempFile`s never got a
+/// chance to run their `Drop` cleanup. Sweeping the directory on the next startup, once we know
+/// no other instance is running, reclaims that space instead of letting it grow across sessions.
+pub fn prepare_temp_dir() -> std::io::Result<PathBuf> {
+    let dir = temp_dir();
+
+    if let Err(err) = std::fs::remove_dir_all(&dir) {
+        if err.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!("Failed to clear stale temp dir {}: {err}", dir.display());
+        }
+    }
+
+    std::fs::create_dir_all(&dir)?;
+
+    Ok(dir)
+}

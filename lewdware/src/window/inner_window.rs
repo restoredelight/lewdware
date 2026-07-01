@@ -732,7 +732,9 @@ impl Drop for InnerWindow {
         if let Err(_) = self.lua_event_tx.send(lua::Event::WindowClosed {
             id: self.window.id(),
         }) {
-            tracing::error!("Event receiver closed");
+            // The Lua thread has already shut down (e.g. we're in the middle of quitting the
+            // app), so there's nothing listening for this event. Not an error.
+            tracing::debug!("Couldn't send WindowClosed event: Lua thread has shut down");
         }
     }
 }

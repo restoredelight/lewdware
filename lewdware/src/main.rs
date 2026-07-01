@@ -40,6 +40,12 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Now that we know we're the only instance running, it's safe to clear out any temp files
+    // left behind by a previous session (see `utils::prepare_temp_dir`).
+    if let Err(err) = utils::prepare_temp_dir() {
+        tracing::warn!("Failed to prepare temp dir: {err}");
+    }
+
     utils::raise_fd_limit();
     let mut args = args_os();
 

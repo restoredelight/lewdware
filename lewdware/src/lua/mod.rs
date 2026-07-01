@@ -15,7 +15,10 @@ use shared::{
     user_config::AppConfig,
 };
 use tokio::{
-    sync::mpsc::{Receiver, UnboundedSender, channel, unbounded_channel},
+    sync::{
+        mpsc::{Receiver, UnboundedSender, channel, unbounded_channel},
+        oneshot,
+    },
     task::LocalSet,
 };
 use winit::{event_loop::EventLoopProxy, window::WindowId};
@@ -66,21 +69,64 @@ pub struct WindowProps {
 pub type Windows = Rc<RefCell<HashMap<WindowId, Window>>>;
 pub type AudioHandles = Rc<RefCell<HashMap<u64, Rc<AudioHandle>>>>;
 
+/// Handles used to shut the Lua thread (and the media manager thread it starts) down cleanly,
+/// so their temp files get a chance to be deleted via `Drop` instead of being abandoned when the
+/// process exits. See [`start_lua_thread`].
+pub struct LuaThreadHandle {
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    join_handle: Option<thread::JoinHandle<()>>,
+}
+
+/// How long [`LuaThreadHandle::shutdown`] waits for a clean shutdown before giving up. This
+/// exists purely as a safety net (e.g. a mode script stuck in a synchronous loop that never
+/// yields) so a slow shutdown can never turn into the app failing to quit.
+const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+impl LuaThreadHandle {
+    /// Signals the Lua thread to stop and waits (up to [`SHUTDOWN_TIMEOUT`]) for it, and the
+    /// media manager thread it owns, to finish, running their `Drop` impls.
+    pub fn shutdown(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+
+        if let Some(handle) = self.join_handle.take() {
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+            // `JoinHandle::join` has no timeout, so join it from a throwaway watcher thread and
+            // wait on that with a timeout instead.
+            thread::spawn(move || {
+                let _ = done_tx.send(handle.join());
+            });
+
+            match done_rx.recv_timeout(SHUTDOWN_TIMEOUT) {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => tracing::error!("Lua thread panicked"),
+                Err(_) => tracing::warn!(
+                    "Lua thread did not shut down within {SHUTDOWN_TIMEOUT:?}; \
+                     some temp files may not be cleaned up"
+                ),
+            }
+        }
+    }
+}
+
 pub fn start_lua_thread(
     event_loop_proxy: EventLoopProxy<UserEvent>,
     config: Arc<AppConfig>,
     wgpu_device: Option<Arc<wgpu::Device>>,
-) -> (UnboundedSender<Event>, Receiver<LuaRequest>) {
+) -> (UnboundedSender<Event>, Receiver<LuaRequest>, LuaThreadHandle) {
     let (event_tx, mut event_rx) = unbounded_channel();
     let (request_tx, request_rx) = channel(20);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    thread::spawn(move || {
+    let join_handle = thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("Failed to build tokio runtime");
 
-        let (media_manager, _) = match MediaManager::open(
+        let (media_manager, _, media_manager_handle) = match MediaManager::open(
             &config.pack_path.clone().unwrap(),
             event_loop_proxy.clone(),
             wgpu_device,
@@ -162,7 +208,7 @@ pub fn start_lua_thread(
 
         let mode = Mode::new(file, files);
 
-        let local = LocalSet::new();
+        let mut local = LocalSet::new();
 
         let runtime = match LuaRuntime::new(
             mode,
@@ -199,12 +245,35 @@ pub fn start_lua_thread(
             }
         });
 
-        rt.block_on(local);
+        rt.block_on(async {
+            tokio::select! {
+                _ = &mut local => {}
+                _ = shutdown_rx => {
+                    tracing::info!("Lua thread received shutdown signal");
+                }
+            }
+        });
+
+        // Cancels any tasks still spawned on `local` (mode scripts almost always have at least
+        // one `every`/`after` timer running forever, so we get here via the shutdown signal
+        // rather than `local` finishing on its own). This drops the last references to
+        // `LuaRuntime` and its `MediaManager` handle, closing the media manager thread's request
+        // channel so it can shut down and clean up its temp files too.
+        drop(local);
+
+        if media_manager_handle.join().is_err() {
+            tracing::error!("Media manager thread panicked");
+        }
 
         tracing::info!("Thread killed");
     });
 
-    (event_tx, request_rx)
+    let handle = LuaThreadHandle {
+        shutdown_tx: Some(shutdown_tx),
+        join_handle: Some(join_handle),
+    };
+
+    (event_tx, request_rx, handle)
 }
 
 struct LuaRuntime {
