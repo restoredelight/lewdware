@@ -1075,7 +1075,8 @@ fn paint_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
 
         if let Some(border_color) = style.border_color {
             let border_color = to_color32(border_color);
-            for offset in text_font::OUTLINE_OFFSETS {
+            let count = text_font::outline_sample_count(style.border_width);
+            for offset in text_font::outline_offsets(count) {
                 painter.galley_with_override_text_color(
                     pos + offset * style.border_width,
                     galley.clone(),
@@ -1086,7 +1087,7 @@ fn paint_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
 
         if style.bold {
             const BOLD_OFFSET: f32 = 0.6;
-            for offset in text_font::OUTLINE_OFFSETS {
+            for offset in text_font::outline_offsets(8) {
                 painter.galley_with_override_text_color(
                     pos + offset * BOLD_OFFSET,
                     galley.clone(),

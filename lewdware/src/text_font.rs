@@ -79,15 +79,22 @@ pub fn measure(text: &str, font: TextFont, font_size: f32, wrap_width: f32) -> V
     ctx.fonts_mut(|f| f.layout_job(job)).size()
 }
 
-/// The offsets (relative to the un-shifted glyph position, in logical points before scaling by a
-/// stroke width) used to fake an outline/bold effect by repainting the same galley multiple times.
-pub const OUTLINE_OFFSETS: [Vec2; 8] = [
-    Vec2::new(-1.0, -1.0),
-    Vec2::new(0.0, -1.0),
-    Vec2::new(1.0, -1.0),
-    Vec2::new(-1.0, 0.0),
-    Vec2::new(1.0, 0.0),
-    Vec2::new(-1.0, 1.0),
-    Vec2::new(0.0, 1.0),
-    Vec2::new(1.0, 1.0),
-];
+/// Unit vectors evenly spaced around a circle, used to fake a stroke/outline by repainting the
+/// same galley at `radius * offset` for each one. Unlike a fixed 8-direction (N/S/E/W + diagonal)
+/// set, these are normalized to a consistent radius — un-normalized diagonals (e.g. `(1, 1)`,
+/// magnitude √2) land further from the glyph than cardinal ones, which is visible as a lumpy,
+/// octagon-ish stroke rather than a round one, and gets worse the larger the radius is.
+pub fn outline_offsets(count: usize) -> impl Iterator<Item = Vec2> {
+    (0..count).map(move |i| {
+        let angle = (i as f32 / count as f32) * std::f32::consts::TAU;
+        Vec2::new(angle.cos(), angle.sin())
+    })
+}
+
+/// How many outline samples to use for a stroke of the given radius (in logical points). Thin
+/// strokes look fine with few samples, but the gap between samples (arc length ≈
+/// `2π · radius / count`) grows with the radius, so thicker strokes need more of them to avoid
+/// visible faceting between samples.
+pub fn outline_sample_count(radius: f32) -> usize {
+    ((radius * 4.2).ceil() as usize).clamp(8, 24)
+}
