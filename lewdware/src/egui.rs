@@ -48,9 +48,11 @@ impl EguiGpuRenderer {
             None,
         );
 
+        // egui_wgpu's own internal blending assumes a non-sRGB target (see `create_egui_texture`
+        // for the full explanation of the dual-view setup this implies).
         let renderer = egui_wgpu::Renderer::new(
             &wgpu_state.device,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
+            wgpu::TextureFormat::Rgba8Unorm,
             RendererOptions::default(),
         );
 
@@ -243,6 +245,17 @@ impl EguiGpuRenderer {
     }
 }
 
+/// Creates the intermediate texture egui_wgpu renders into, along with the view used to blit it
+/// into the window surface afterwards (`rgba.wgsl`, via `bind_group`).
+///
+/// The texture itself is `Rgba8Unorm`: egui_wgpu's own internal blending (anti-aliased glyph
+/// edges, overlapping shapes) assumes it's drawing into a plain, non-sRGB target and does its own
+/// gamma handling — pointing it at an `*Srgb` target skews that blending math (this is what the
+/// "egui prefers Rgba8Unorm or Bgra8Unorm" warning was about). But the rest of the pipeline
+/// (images, video, the decoration overlay) deliberately blends in linear space via sRGB-format
+/// textures that auto-decode on sample. To get both: the texture is created with an extra
+/// `Rgba8UnormSrgb` view format, so it can be reinterpreted as sRGB *only* for the later
+/// blit-sampling step, without affecting how egui_wgpu renders into it.
 fn create_egui_texture(
     wgpu_state: &WgpuState,
     width: u32,
@@ -258,12 +271,20 @@ fn create_egui_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
+        view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
     });
 
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    // egui_wgpu's render target: the texture's native (non-sRGB) format.
+    let render_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // Sampling view for the blit pass: reinterpreted as sRGB so `rgba.wgsl` gets an
+    // automatically-decoded linear-space sample, matching image/video textures.
+    let sample_view = texture.create_view(&wgpu::TextureViewDescriptor {
+        format: Some(wgpu::TextureFormat::Rgba8UnormSrgb),
+        ..Default::default()
+    });
 
     let bind_group = wgpu_state
         .device
@@ -273,7 +294,7 @@ fn create_egui_texture(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
+                    resource: wgpu::BindingResource::TextureView(&sample_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -282,7 +303,7 @@ fn create_egui_texture(
             ],
         });
 
-    (texture, view, bind_group)
+    (texture, render_view, bind_group)
 }
 
 pub struct EguiCPUWindow {
