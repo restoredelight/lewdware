@@ -51,8 +51,14 @@ pub struct LewdwareApp {
 }
 
 enum WindowSizeBehaviour {
-    ResizeWithMedia { width: u32, height: u32 },
-    UseDefaults { width: u32, height: u32 },
+    ResizeWithMedia {
+        width: u32,
+        height: u32,
+    },
+    UseDefaults {
+        width: u32,
+        height: u32,
+    },
     MeasureText {
         text: String,
         font: TextFont,
@@ -198,10 +204,15 @@ impl LewdwareApp {
         let x: i32 = {
             let v = spawn_opts
                 .x
-                .map(|c| spawn_opts.anchor.resolve(c.to_pixels(monitor_size.width), outer_width))
+                .map(|c| {
+                    spawn_opts
+                        .anchor
+                        .resolve(c.to_pixels(monitor_size.width), outer_width)
+                })
                 .unwrap_or_else(|| random_position(outer_width, monitor_size.width));
             if spawn_opts.clamp {
-                v.max(0).min(monitor_size.width.saturating_sub(outer_width) as i32)
+                v.max(0)
+                    .min(monitor_size.width.saturating_sub(outer_width) as i32)
             } else {
                 v
             }
@@ -209,10 +220,15 @@ impl LewdwareApp {
         let y: i32 = {
             let v = spawn_opts
                 .y
-                .map(|c| spawn_opts.anchor.resolve(c.to_pixels(monitor_size.height), outer_height))
+                .map(|c| {
+                    spawn_opts
+                        .anchor
+                        .resolve(c.to_pixels(monitor_size.height), outer_height)
+                })
                 .unwrap_or_else(|| random_position(outer_height, monitor_size.height));
             if spawn_opts.clamp {
-                v.max(0).min(monitor_size.height.saturating_sub(outer_height) as i32)
+                v.max(0)
+                    .min(monitor_size.height.saturating_sub(outer_height) as i32)
             } else {
                 v
             }
@@ -547,6 +563,16 @@ impl LewdwareApp {
         Ok(())
     }
 
+    fn reset_wallpaper(&self) {
+        if let Some(wallpaper) = &self.default_wallpaper {
+            if let Err(err) = wallpaper::set_from_path(wallpaper) {
+                tracing::error!("Error setting wallpaper back to default: {}", err);
+            }
+        } else {
+            tracing::error!("No default wallpaper found; leaving wallpaper as is");
+        }
+    }
+
     fn open_link(&self, url: String) -> Result<()> {
         let url = Url::parse(&url).map_err(|err| LewdwareError::OpenLinkError(err.into()))?;
 
@@ -634,6 +660,7 @@ impl LewdwareApp {
             LuaRequest::SetWallpaper { file, mode, tx } => {
                 tx.send(self.set_wallpaper(file, mode)).is_ok()
             }
+            LuaRequest::ResetWallpaper { tx } => tx.send(self.reset_wallpaper()).is_ok(),
             LuaRequest::OpenLink { url, tx } => tx.send(self.open_link(url)).is_ok(),
             LuaRequest::ShowNotification { notification, tx } => {
                 tx.send(self.show_notification(notification)).is_ok()

@@ -155,6 +155,10 @@ impl RequestSender {
         self.send(|tx| LuaRequest::SetWallpaper { file, mode, tx })
             .await?
     }
+    
+    pub async fn reset_wallpaper(&self) -> Result<()> {
+        Ok(self.send(|tx| LuaRequest::ResetWallpaper { tx }).await?)
+    }
 
     pub async fn spawn_audio(&self, audio_player: AudioPlayer) -> Result<u64> {
         Ok(self
@@ -371,6 +375,9 @@ pub enum LuaRequest {
         file: FileOrPath,
         mode: Option<WallpaperMode>,
         tx: oneshot::Sender<Result<()>>,
+    },
+    ResetWallpaper {
+        tx: oneshot::Sender<()>,
     },
     OpenLink {
         url: String,

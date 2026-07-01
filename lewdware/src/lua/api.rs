@@ -315,6 +315,17 @@ pub fn create_api(
     }
 
     {
+        let request_sender = request_sender.clone();
+
+        api_table.set(
+            "reset_wallpaper",
+            lua.create_async_function(move |lua, args| {
+                reset_wallpaper(lua, args, request_sender.clone())
+            })?,
+        )?;
+    }
+
+    {
         let media_manager = media_manager.clone();
         let request_sender = request_sender.clone();
         let audio_handles = audio_handles.clone();
@@ -856,7 +867,10 @@ async fn spawn_image_popup(
     if opts.window_opts.transparent.is_none() {
         let needs_transparent = media_transparent
             || opts.window_opts.opacity.map_or(false, |o| o < 1.0)
-            || opts.window_opts.background_color.map_or(false, |c| c.a < 1.0);
+            || opts
+                .window_opts
+                .background_color
+                .map_or(false, |c| c.a < 1.0);
         if needs_transparent {
             opts.window_opts.transparent = Some(true);
         }
@@ -955,7 +969,10 @@ async fn spawn_video_popup(
     if opts.window_opts.transparent.is_none() {
         let needs_transparent = media_transparent
             || opts.window_opts.opacity.map_or(false, |o| o < 1.0)
-            || opts.window_opts.background_color.map_or(false, |c| c.a < 1.0);
+            || opts
+                .window_opts
+                .background_color
+                .map_or(false, |c| c.a < 1.0);
         if needs_transparent {
             opts.window_opts.transparent = Some(true);
         }
@@ -1127,6 +1144,10 @@ async fn set_wallpaper(
         .set_wallpaper(file, opts.mode)
         .await
         .into_lua_err()
+}
+
+async fn reset_wallpaper(_: Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> {
+    request_sender.reset_wallpaper().await.into_lua_err()
 }
 
 #[derive(Serialize, Deserialize, Default)]

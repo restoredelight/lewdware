@@ -8,7 +8,7 @@ local text_items = {
 }
 local index = 1
 
-lewdware.every(500, function ()
+lewdware.every(500, function()
 	local text = text_items[index]
 	index = (index % #text_items) + 1
 
@@ -21,7 +21,7 @@ lewdware.every(500, function ()
 		decorations = false,
 	})
 
-	lewdware.after(500, function ()
+	lewdware.after(500, function()
 		popup:close()
 	end)
 end)
@@ -62,6 +62,8 @@ end
 local popup_count = 0
 local dormant = false
 local audio_active = false
+---@type Window[]
+local windows = {}
 
 -- Current spawn interval in ms; only meaningful for constant/accelerating modes.
 local current_interval
@@ -156,6 +158,10 @@ end
 
 -- ── Spawning ───────────────────────────────────────────────────────────────
 
+local function should_spawn()
+	return not (#popup_types == 0 or dormant or (config.max_popups and popup_count >= config.max_popups))
+end
+
 -- spawn_opts: optional table with x, y (center coords), monitor.
 -- When provided, spawns near that position; otherwise picks a random spot.
 local function open_popup(spawn_opts, close_trigger)
@@ -163,11 +169,10 @@ local function open_popup(spawn_opts, close_trigger)
 		close_trigger = true
 	end
 
-	if #popup_types == 0 then return end
-	if config.max_popups and popup_count >= config.max_popups then return end
+	if not should_spawn() then return end
 
 	local media = lewdware.media.random({ type = popup_types })
-	if not media then return end
+	if not media or not should_spawn() then return end
 
 	local window
 	if media.type == "image" then
@@ -176,14 +181,20 @@ local function open_popup(spawn_opts, close_trigger)
 		window = lewdware.spawn_video_popup(media, spawn_opts)
 	end
 
+	if not window then return end
+
 	popup_count = popup_count + 1
 
-	if window and config.movement_enabled then
+	if config.dormancy_enabled then
+		table.insert(windows, window)
+	end
+
+	if config.movement_enabled then
 		local speed = math.random(config.movement_speed_min, config.movement_speed_max)
 		start_movement(window, speed)
 	end
 
-	if window and close_trigger then
+	if close_trigger then
 		window:on_close(function()
 			popup_count = popup_count - 1
 
@@ -261,6 +272,10 @@ local function schedule_dormancy()
 		-- go dormant
 		dormant = true
 		audio_active = false
+
+		for _, window in ipairs(windows) do
+			window:close()
+		end
 
 		local dormant_ms = secs(math.random(config.dormant_min, config.dormant_max))
 		lewdware.after(dormant_ms, function()

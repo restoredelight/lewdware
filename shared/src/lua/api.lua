@@ -357,6 +357,9 @@ function AudioHandle:play() end
 ---@param opts? SetWallpaperOpts
 function lewdware.set_wallpaper(image, opts) end
 
+---Set the current wallpaper to the user's default.
+function lewdware.reset_wallpaper() end
+
 ---@class SetWallpaperOpts
 ---@field mode? "center" | "crop" | "fit" | "span" | "stretch" | "tile"
 
