@@ -241,9 +241,9 @@ async fn handle_request(
             wgpu_device,
             response_tx,
         } => response_tx
-            .send(pack.get_video_data(id).await.and_then(|data| {
+            .send(pack.get_video_data(id).and_then(|data| {
                 VideoDecoder::new(
-                    data.file,
+                    data.source,
                     play_audio,
                     loop_video,
                     data.transparent,
@@ -258,9 +258,9 @@ async fn handle_request(
             loop_audio,
             response_tx,
         } => response_tx
-            .send(pack.get_audio_data(id).await.and_then(|file| {
+            .send(pack.get_audio_data(id).and_then(|source| {
                 AudioPlayer::new(
-                    file.path().to_path_buf(),
+                    source,
                     loop_audio,
                     Some(audio_id),
                     Some(event_loop_proxy),

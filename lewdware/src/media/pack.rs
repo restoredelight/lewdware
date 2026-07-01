@@ -6,7 +6,7 @@ use std::{
 };
 
 use image::{ImageFormat, ImageReader};
-use rusqlite::{Connection, Row, params, params_from_iter};
+use rusqlite::{Connection, MAIN_DB, Row, params, params_from_iter};
 use shared::{
     db::migrate,
     read_pack::{Header, Metadata, read_pack_metadata},
@@ -23,7 +23,7 @@ use crate::{
     media::{
         VideoData,
         manager::{MediaError, MediaTypes, Result},
-        types::{FileOrPath, ImageData},
+        types::{FileOrPath, ImageData, MediaSource},
     },
 };
 
@@ -45,7 +45,6 @@ pub struct MediaPack {
     db: Connection,
     #[allow(unused)]
     header: Header,
-    _db_file: NamedTempFile,
     metadata: Metadata,
     tag_map: HashMap<String, u64>,
 }
@@ -65,15 +64,15 @@ impl MediaPack {
 
         let (header, metadata) = read_pack_metadata(&mut file)?;
 
-        // Extract the SQLite database to a temporary location
+        // Load the SQLite database straight into memory (no temp file: `deserialize_read_exact`
+        // hands the bytes we just read directly to SQLite's own in-memory representation via
+        // `sqlite3_deserialize`).
         file.seek(SeekFrom::Start(header.index_offset))?;
         let mut db_data = vec![0u8; header.index_length as usize];
         file.read_exact(&mut db_data)?;
 
-        let mut db_file = NamedTempFile::new_in(crate::utils::temp_dir())?;
-        db_file.write_all(&db_data)?;
-
-        let connection = Connection::open(db_file.path())?;
+        let mut connection = Connection::open_in_memory()?;
+        connection.deserialize_read_exact(MAIN_DB, db_data.as_slice(), db_data.len(), false)?;
 
         migrate(&connection)?;
 
@@ -92,7 +91,6 @@ impl MediaPack {
         Ok(MediaPack {
             path,
             db: connection,
-            _db_file: db_file,
             header,
             metadata,
             tag_map,
@@ -247,7 +245,7 @@ impl MediaPack {
         ))
     }
 
-    pub async fn get_video_data(&self, id: u64) -> Result<VideoData> {
+    pub fn get_video_data(&self, id: u64) -> Result<VideoData> {
         let (offset, length, width, height, transparent) = self.db.query_row(
             "SELECT offset, length, width, height, transparent FROM media WHERE id = ?",
             params![id],
@@ -263,19 +261,25 @@ impl MediaPack {
         )?;
 
         Ok(VideoData {
-            file: FileOrPath::File(self.write_to_temp_file(offset, length, ".mp4").await?),
+            source: self.media_source(offset, length),
             width,
             height,
             transparent,
         })
     }
 
-    pub async fn get_audio_data(&self, id: u64) -> Result<FileOrPath> {
+    pub fn get_audio_data(&self, id: u64) -> Result<MediaSource> {
         let (offset, length) = self.get_offset_length(id)?;
 
-        Ok(FileOrPath::File(
-            self.write_to_temp_file(offset, length, ".opus").await?,
-        ))
+        Ok(self.media_source(offset, length))
+    }
+
+    fn media_source(&self, offset: u64, length: u64) -> MediaSource {
+        MediaSource {
+            path: self.path.clone(),
+            offset,
+            length,
+        }
     }
 
     fn get_offset_length(&self, id: u64) -> Result<(u64, u64)> {
@@ -391,4 +395,185 @@ fn parse_media(row: &Row<'_>) -> Result<Media> {
         name: row.get("file_name")?,
         media_data,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write as _;
+
+    use ffmpeg_next as ffmpeg;
+    use shared::read_pack::HEADER_SIZE;
+
+    use super::*;
+
+    /// The pack-editor (`pack-editor/src-tauri/src/pack.rs`, `Pack::save`) doesn't build the
+    /// index via `rusqlite`'s `serialize()` -- it runs `VACUUM` on a plain on-disk connection
+    /// opened through `SqliteConnectionManager::file(...)` (default journal mode, no WAL), then
+    /// copies the file's raw bytes into the pack. Confirms that byte stream -- not just the
+    /// output of `Connection::serialize()` -- is exactly what `deserialize_read_exact` expects.
+    #[test]
+    fn deserializes_a_vacuumed_on_disk_file_copy_like_pack_editor_produces() {
+        let db_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        let db_path = db_path.to_path_buf();
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            migrate(&conn).unwrap();
+            conn.execute("INSERT INTO tags (name) VALUES ('from-disk')", [])
+                .unwrap();
+            // Mirrors `Pack::save`: VACUUM then treat the file as done, no explicit close/flush
+            // beyond what VACUUM itself guarantees.
+            conn.execute("VACUUM", []).unwrap();
+        }
+
+        // Raw file copy, exactly like `tokio::io::copy(&mut dbf, &mut file)` in pack-editor --
+        // deliberately not using `Connection::serialize()`.
+        let db_bytes = std::fs::read(&db_path).unwrap();
+
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .deserialize_read_exact(MAIN_DB, db_bytes.as_slice(), db_bytes.len(), false)
+            .unwrap();
+
+        let name: String = connection
+            .query_row("SELECT name FROM tags", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name, "from-disk");
+    }
+
+    /// Builds a pack file on disk with a real (migrated) SQLite index, to check that
+    /// `MediaPack::open`'s `deserialize_read_exact` round-trip actually produces a working,
+    /// queryable database rather than just satisfying the type checker.
+    #[test]
+    fn open_reads_deserialized_index() {
+        let db = Connection::open_in_memory().unwrap();
+        migrate(&db).unwrap();
+
+        db.execute("INSERT INTO tags (name) VALUES ('test-tag')", [])
+            .unwrap();
+        db.execute(
+            "INSERT INTO media (file_name, file_type, width, height, transparent, hash)
+             VALUES ('pic.avif', 'image', 64, 32, 1, x'00')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO media_tags (media_id, tag_id) VALUES (1, 1)",
+            [],
+        )
+        .unwrap();
+
+        let db_bytes = db.serialize(MAIN_DB).unwrap();
+
+        let metadata = Metadata {
+            name: "test-pack".to_string(),
+            ..Default::default()
+        };
+        let metadata_bytes = metadata.to_buf().unwrap();
+
+        let mut header = Header::new();
+        header.metadata_offset = HEADER_SIZE as u64;
+        header.metadata_length = metadata_bytes.len() as u64;
+        header.index_offset = header.metadata_offset + header.metadata_length;
+        header.index_length = db_bytes.len() as u64;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&header.to_buf().unwrap()).unwrap();
+        file.write_all(&metadata_bytes).unwrap();
+        file.write_all(&db_bytes).unwrap();
+        file.flush().unwrap();
+
+        let pack = MediaPack::open(file.path()).unwrap();
+
+        assert_eq!(pack.metadata().name, "test-pack");
+
+        let results = pack
+            .list_media(MediaTypes::ALL, Some(vec!["test-tag".to_string()]))
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "pic.avif");
+        assert!(matches!(
+            results[0].media_data,
+            MediaData::Image {
+                width: 64,
+                height: 32,
+                transparent: true,
+            }
+        ));
+
+        // Also confirm a tag that doesn't exist is rejected rather than silently ignored.
+        assert!(matches!(
+            pack.list_media(MediaTypes::ALL, Some(vec!["nonexistent".to_string()])),
+            Err(MediaError::InvalidTag(_))
+        ));
+    }
+
+    /// End-to-end check of the zero-copy video path: builds a pack file with a real embedded
+    /// video (offset/length recorded in the index, exactly like a real pack), then confirms
+    /// `get_video_data` produces a `MediaSource` that ffmpeg can actually open and decode --
+    /// exercising the same offset/length plumbing `MediaManager`/`VideoDecoder` rely on, not
+    /// just the isolated `open_bounded` helper.
+    #[test]
+    fn get_video_data_opens_embedded_clip() {
+        const TEST_CLIP: &[u8] = include_bytes!("test_fixtures/test_clip.mp4");
+
+        ffmpeg::init().unwrap();
+
+        let db = Connection::open_in_memory().unwrap();
+        migrate(&db).unwrap();
+        db.execute(
+            "INSERT INTO media (file_name, file_type, width, height, transparent, duration, hash)
+             VALUES ('clip.mp4', 'video', 64, 48, 0, 1.0, x'00')",
+            [],
+        )
+        .unwrap();
+
+        let db_bytes = db.serialize(MAIN_DB).unwrap();
+
+        let metadata = Metadata {
+            name: "test-pack".to_string(),
+            ..Default::default()
+        };
+        let metadata_bytes = metadata.to_buf().unwrap();
+
+        let mut header = Header::new();
+        header.metadata_offset = HEADER_SIZE as u64;
+        header.metadata_length = metadata_bytes.len() as u64;
+        header.index_offset = header.metadata_offset + header.metadata_length;
+        header.index_length = db_bytes.len() as u64;
+        let video_offset = header.index_offset + header.index_length;
+
+        // The row's `offset`/`length` columns are set after building the header above, so we
+        // need a second pass over the DB to update them before serializing -- keep it simple and
+        // just build the DB again, now that `video_offset` is known.
+        db.execute(
+            "UPDATE media SET offset = ?, length = ? WHERE file_name = 'clip.mp4'",
+            params![video_offset, TEST_CLIP.len() as u64],
+        )
+        .unwrap();
+        let db_bytes = db.serialize(MAIN_DB).unwrap();
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&header.to_buf().unwrap()).unwrap();
+        file.write_all(&metadata_bytes).unwrap();
+        file.write_all(&db_bytes).unwrap();
+        file.write_all(TEST_CLIP).unwrap();
+        file.flush().unwrap();
+
+        let pack = MediaPack::open(file.path()).unwrap();
+        let media = pack
+            .list_media(MediaTypes::VIDEO, None)
+            .unwrap()
+            .pop()
+            .unwrap();
+
+        let data = pack.get_video_data(media.id).unwrap();
+        assert_eq!(data.source.offset, video_offset);
+        assert_eq!(data.source.length, TEST_CLIP.len() as u64);
+
+        let ictx = data.source.open().unwrap();
+        assert!(ictx.streams().best(ffmpeg::media::Type::Video).is_some());
+        assert!(ictx.streams().best(ffmpeg::media::Type::Audio).is_some());
+    }
 }

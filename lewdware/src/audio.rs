@@ -5,18 +5,12 @@ use ffmpeg_next::{
     format::{Sample, sample},
     frame,
 };
-use std::{
-    num::NonZero,
-    path::PathBuf,
-    sync::Arc,
-    thread::{self},
-    time::Duration,
-};
+use std::{num::NonZero, sync::Arc, thread::{self}, time::Duration};
 use winit::event_loop::EventLoopProxy;
 
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source, buffer::SamplesBuffer};
 
-use crate::app::UserEvent;
+use crate::{app::UserEvent, media::MediaSource};
 
 pub struct AudioPlayer {
     _stream: MixerDeviceSink,
@@ -25,12 +19,12 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new(
-        path: PathBuf,
+        source: MediaSource,
         loop_audio: bool,
         id: Option<u64>,
         event_loop_proxy: Option<EventLoopProxy<UserEvent>>,
     ) -> Result<Self> {
-        let (stream, sink) = setup_decoder(path, loop_audio)?;
+        let (stream, sink) = setup_decoder(source, loop_audio)?;
         let sink = Arc::new(sink);
 
         if let (Some(id), Some(event_loop_proxy)) = (id, event_loop_proxy) {
@@ -63,9 +57,9 @@ impl AudioPlayer {
     }
 }
 
-pub fn setup_decoder(path: PathBuf, loop_audio: bool) -> Result<(MixerDeviceSink, Player)> {
+pub fn setup_decoder(source: MediaSource, loop_audio: bool) -> Result<(MixerDeviceSink, Player)> {
     ffmpeg::init()?;
-    let mut ictx = ffmpeg::format::input(&path)?;
+    let mut ictx = source.open()?;
     let audio_stream_index = match ictx.streams().best(ffmpeg::media::Type::Audio) {
         Some(stream) => stream.index(),
         None => bail!("No audio stream available"),

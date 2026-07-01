@@ -1,6 +1,5 @@
 use std::{
     cell::Cell,
-    path::PathBuf,
     sync::{
         Arc,
         mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
@@ -10,12 +9,12 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use ffmpeg::{codec, format};
+use ffmpeg::codec;
 use ffmpeg_next::{self as ffmpeg, ffi, frame::Video};
 
 use crate::{
     audio::AudioPlayer,
-    media::FileOrPath,
+    media::MediaSource,
     zero_copy::{HardwareFrame, initialize_hardware_device, preferred_hw_type},
 };
 
@@ -105,7 +104,6 @@ unsafe fn try_hw_setup(
 /// * If the video is behind the audio, frames will be skipped until the video is back in sync.
 pub struct VideoDecoder {
     receiver: Receiver<Option<VideoFrame>>,
-    _video: FileOrPath,
     audio_player: Option<AudioPlayer>,
     tolerance: Duration,
     last_frame_time: Instant,
@@ -117,7 +115,6 @@ pub struct VideoDecoder {
     pixel_format: VideoPixelFormat,
     packed_alpha: bool,
     paused: bool,
-    _video_duration: Duration,
     pub lag_count: u32,
 }
 
@@ -141,19 +138,17 @@ impl Drop for VideoFrame {
 
 impl VideoDecoder {
     pub fn new(
-        video: FileOrPath,
+        source: MediaSource,
         play_audio: bool,
         loop_video: bool,
         packed_alpha: bool,
         wgpu_device: Option<Arc<wgpu::Device>>,
     ) -> Result<Self> {
-        let path = video.path();
-
-        let (receiver, video_duration, native_width, native_height, full_range, pixel_format) =
-            spawn_video_stream(path.to_path_buf(), loop_video, packed_alpha, wgpu_device)?;
+        let (receiver, native_width, native_height, full_range, pixel_format) =
+            spawn_video_stream(source.clone(), loop_video, packed_alpha, wgpu_device)?;
 
         let audio_player = if play_audio {
-            match AudioPlayer::new(path.to_path_buf(), loop_video, None, None) {
+            match AudioPlayer::new(source, loop_video, None, None) {
                 Ok(audio_player) => Some(audio_player),
                 Err(err) => {
                     tracing::error!("{err}");
@@ -176,9 +171,7 @@ impl VideoDecoder {
             frame_duration: Duration::ZERO,
             video_clock: Duration::ZERO,
             tolerance: Duration::from_millis(200),
-            _video: video,
             paused: true,
-            _video_duration: video_duration,
             lag_count: 0,
         })
     }
@@ -311,7 +304,6 @@ pub enum NextFrame {
 }
 
 struct VideoMetadata {
-    duration: Duration,
     native_width: u32,
     native_height: u32,
     full_range: bool,
@@ -320,13 +312,12 @@ struct VideoMetadata {
 
 /// Spawn a thread to decode frames from a video.
 fn spawn_video_stream(
-    path: PathBuf,
+    source: MediaSource,
     loop_video: bool,
     packed_alpha: bool,
     wgpu_device: Option<Arc<wgpu::Device>>,
 ) -> Result<(
     Receiver<Option<VideoFrame>>,
-    Duration,
     u32,
     u32,
     bool,
@@ -337,20 +328,11 @@ fn spawn_video_stream(
     let (recycle_tx, recycle_rx) = sync_channel::<Video>(5);
 
     thread::spawn(move || {
-        let video_duration_inner = match get_video_duration(&path) {
-            Ok(duration) => duration,
-            Err(err) => {
-                tracing::error!("Failed to get video duration: {err}");
-                return;
-            }
-        };
-
         if let Err(err) = decode_video(
-            path,
+            source,
             tx,
             loop_video,
             packed_alpha,
-            video_duration_inner,
             meta_tx,
             recycle_rx,
             recycle_tx.clone(),
@@ -366,23 +348,11 @@ fn spawn_video_stream(
 
     Ok((
         rx,
-        meta.duration,
         meta.native_width,
         meta.native_height,
         meta.full_range,
         meta.pixel_format,
     ))
-}
-
-// New helper function to get video duration
-fn get_video_duration(path: &PathBuf) -> Result<Duration> {
-    ffmpeg::init()?;
-    let ictx = format::input(path)?;
-    let duration_us = ictx.duration(); // Duration in microseconds
-
-    // ffmpeg's duration is in AV_TIME_BASE units, which is 1,000,000 (microseconds).
-    let duration_seconds = duration_us as f64 / 1_000_000.0;
-    Ok(Duration::from_secs_f64(duration_seconds))
 }
 
 /// Converts a hardware-decoded frame to a `VideoFrame`.
@@ -419,18 +389,18 @@ fn hw_frame_to_video_frame(
 }
 
 fn decode_video(
-    path: PathBuf,
+    source: MediaSource,
     tx: SyncSender<Option<VideoFrame>>,
     loop_video: bool,
     packed_alpha: bool,
-    video_duration: Duration,
     meta_tx: SyncSender<VideoMetadata>,
     recycle_rx: Receiver<Video>,
     recycle_tx: SyncSender<Video>,
     wgpu_device: Option<Arc<wgpu::Device>>,
 ) -> Result<()> {
     ffmpeg::init()?;
-    let mut ictx = format::input(&path)?;
+    let mut ictx = source.open()?;
+
     let stream_index = ictx
         .streams()
         .best(ffmpeg::media::Type::Video)
@@ -487,7 +457,6 @@ fn decode_video(
 
     if meta_tx
         .send(VideoMetadata {
-            duration: video_duration,
             native_width,
             native_height,
             full_range,

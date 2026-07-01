@@ -1,3 +1,4 @@
+mod bounded_input;
 mod dev_pack;
 mod dir;
 mod manager;
@@ -7,4 +8,4 @@ mod types;
 
 pub use manager::{MediaError, MediaManager, MediaTypes};
 
-pub use types::{Audio, FileOrPath, Image, ImageData, VideoData};
+pub use types::{Audio, FileOrPath, Image, ImageData, MediaSource, VideoData};
