@@ -40,18 +40,80 @@ fn current_asset() -> anyhow::Result<(String, &'static str)> {
 }
 
 #[cfg(target_os = "linux")]
+const DEB_LIKE_IDS: &[&str] = &[
+    "debian",
+    "ubuntu",
+    "linuxmint",
+    "pop",
+    "elementary",
+    "raspbian",
+    "kali",
+    "zorin",
+    "mx",
+    "deepin",
+];
+
+#[cfg(target_os = "linux")]
+const RPM_LIKE_IDS: &[&str] = &[
+    "fedora",
+    "rhel",
+    "centos",
+    "rocky",
+    "almalinux",
+    "ol",
+    "opensuse",
+    "opensuse-leap",
+    "opensuse-tumbleweed",
+    "suse",
+    "sles",
+    "mageia",
+    "mandriva",
+    "amzn",
+];
+
+// Reads ID and ID_LIKE from /etc/os-release to determine the distro family.
+#[cfg(target_os = "linux")]
+fn os_release_family() -> Option<&'static str> {
+    let contents = fs::read_to_string("/etc/os-release").ok()?;
+
+    for line in contents.lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            if key == "ID" || key == "ID_LIKE" {
+                let cleaned_value = value
+                    .trim()
+                    .trim_matches(|c| c == '"' || c == '\'')
+                    .to_lowercase();
+
+                for word in cleaned_value.split_whitespace() {
+                    if DEB_LIKE_IDS.contains(&word) {
+                        return Some("deb");
+                    } else if RPM_LIKE_IDS.contains(&word) {
+                        return Some("rpm");
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "linux")]
 fn linux_asset() -> (String, &'static str) {
     let arch = if cfg!(target_arch = "x86_64") {
         "x64"
     } else {
         "arm64"
     };
-    if which::which("dpkg").is_ok() {
-        (format!("linux-{arch}-deb"), ".deb")
-    } else if which::which("rpm").is_ok() {
-        (format!("linux-{arch}-rpm"), ".rpm")
-    } else {
-        (format!("linux-{arch}-tar"), ".tar.gz")
+
+    // Deliberately no fallback to probing for dpkg/rpm binaries here: their
+    // presence says nothing about distro lineage (e.g. an Arch user can have
+    // dpkg installed for AUR tooling). If os-release doesn't declare a
+    // deb/rpm family, treat the distro as neither and ship the tarball.
+    match os_release_family() {
+        Some("deb") => (format!("linux-{arch}-deb"), ".deb"),
+        Some("rpm") => (format!("linux-{arch}-rpm"), ".rpm"),
+        _ => (format!("linux-{arch}-tar"), ".tar.gz"),
     }
 }
 
