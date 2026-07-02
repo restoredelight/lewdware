@@ -9,6 +9,7 @@ export interface MediaFile {
   file_name: string;
   hash: string;
   tags: string[];
+  size: number;
 }
 
 export interface MetadataDto {

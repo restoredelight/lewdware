@@ -198,7 +198,7 @@ pub fn explore_folder(path: &Path, recursive: bool) -> Vec<PathBuf> {
         .collect()
 }
 
-fn is_media_path(path: &Path) -> anyhow::Result<bool> {
+pub fn is_media_path(path: &Path) -> anyhow::Result<bool> {
     let guess = mime_guess::from_path(path);
     if guess.iter().any(|m| {
         let t = m.type_();
@@ -722,7 +722,6 @@ fn resize_dimensions(w: u64, h: u64, max: u64, truncate: bool) -> (u64, u64) {
 pub async fn process_files(
     pack_state: crate::PackState,
     paths: Vec<PathBuf>,
-    skip_duplicates: bool,
     app: tauri::AppHandle,
     encoder: HardwareEncoder,
     upload_lock: Arc<RwLock<()>>,
@@ -757,7 +756,7 @@ pub async fn process_files(
                 // Hold read lock for duration of file processing so save can acquire
                 // the write lock and run exclusively between file uploads.
                 let _read_guard = upload_lock.read().await;
-                match process_one_file(&pack_state, &path, &dir, skip_duplicates, encoder).await {
+                match process_one_file(&pack_state, &path, &dir, encoder).await {
                     Ok(Some(media_file)) => {
                         let _ = app.emit("upload:added", &media_file);
                     }
@@ -787,7 +786,6 @@ async fn process_one_file(
     pack_state: &crate::PackState,
     path: &Path,
     dir: &Path,
-    skip_duplicates: bool,
     encoder: HardwareEncoder,
 ) -> Result<Option<MediaFile>, ProcessErrorKind> {
     let path_owned = path.to_path_buf();
@@ -796,7 +794,10 @@ async fn process_one_file(
         .map_err(|e| ProcessErrorKind::Other(e.into()))?
         .map_err(ProcessErrorKind::HashError)?;
 
-    if skip_duplicates {
+    // Duplicates are always rejected (add_file enforces this with a DB-level
+    // constraint, so this can't be turned off) - checking here just avoids
+    // wasting an encode on a file we already know will be rejected.
+    {
         let lock = pack_state.lock().await;
         if let Some(pack) = lock.as_ref() {
             if pack
@@ -839,7 +840,14 @@ async fn process_one_file(
             .add_file(encoded, path, hash)
             .await
             .map_err(ProcessErrorKind::PackError)?;
-        Ok(Some(media))
+        match media {
+            // The pre-check above already handles the common case; this only
+            // fires when a race let a since-inserted duplicate through, and the
+            // DB's own uniqueness constraint caught it - treat it the same as
+            // the pre-check's skip.
+            Some(media) => Ok(Some(media)),
+            None => Err(ProcessErrorKind::Skipped),
+        }
     } else {
         Err(ProcessErrorKind::Other(anyhow!("Pack was closed")))
     }

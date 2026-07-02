@@ -3,7 +3,7 @@
   import { store } from "./store.svelte.js";
 
   const file = $derived(store.openedFile);
-  const files = $derived(store.files);
+  const files = $derived(store.filteredFiles);
 
   let newTag = $state("");
   let editingName = $state(false);

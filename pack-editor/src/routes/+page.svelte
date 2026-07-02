@@ -50,7 +50,13 @@
   async function onCloseSave() {
     showCloseDialog = false;
     pendingClose = true;
-    await api.savePack();
+    try {
+      await api.savePack();
+    } catch (err) {
+      pendingClose = false;
+      store.saveActive = false;
+      alert(`Save failed: ${err}\n\nThe pack was not closed.`);
+    }
   }
 
   async function onCloseDiscard() {

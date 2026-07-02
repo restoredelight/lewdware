@@ -10,25 +10,38 @@
     return `${m}:${String(sec).padStart(2, "0")}`;
   }
 
-  function infoRows(info: FileInfo): { label: string; value: string }[] {
-    if (info.type === "image") {
-      return [
-        { label: "Type", value: info.transparent ? "Image (transparent)" : "Image" },
-        { label: "Size", value: `${info.width} × ${info.height}` },
-      ];
-    }
-    if (info.type === "video") {
-      return [
-        { label: "Type", value: info.transparent ? "Video (transparent)" : "Video" },
-        { label: "Size", value: `${info.width} × ${info.height}` },
-        { label: "Duration", value: formatDuration(info.duration) },
-        { label: "Audio", value: info.audio ? "Yes" : "No" },
-      ];
-    }
-    return [
-      { label: "Type", value: "Audio" },
-      { label: "Duration", value: formatDuration(info.duration) },
-    ];
+  function formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ["KB", "MB", "GB"];
+    let value = bytes;
+    let unit = -1;
+    do {
+      value /= 1024;
+      unit++;
+    } while (value >= 1024 && unit < units.length - 1);
+    return `${value.toFixed(value < 10 ? 2 : 1)} ${units[unit]}`;
+  }
+
+  function infoRows(info: FileInfo, size: number): { label: string; value: string }[] {
+    const rows =
+      info.type === "image"
+        ? [
+            { label: "Type", value: info.transparent ? "Image (transparent)" : "Image" },
+            { label: "Dimensions", value: `${info.width} × ${info.height}` },
+          ]
+        : info.type === "video"
+          ? [
+              { label: "Type", value: info.transparent ? "Video (transparent)" : "Video" },
+              { label: "Dimensions", value: `${info.width} × ${info.height}` },
+              { label: "Duration", value: formatDuration(info.duration) },
+              { label: "Audio", value: info.audio ? "Yes" : "No" },
+            ]
+          : [
+              { label: "Type", value: "Audio" },
+              { label: "Duration", value: formatDuration(info.duration) },
+            ];
+    rows.push({ label: "File size", value: formatFileSize(size) });
+    return rows;
   }
 
   const selCount = $derived(store.selectedIds.size);
@@ -69,7 +82,7 @@
       <!-- File info rows -->
       <table class="text-xs w-full">
         <tbody>
-          {#each infoRows(primary.file_info) as row}
+          {#each infoRows(primary.file_info, primary.size) as row}
             <tr>
               <td class="text-muted pr-2 whitespace-nowrap">{row.label}</td>
               <td class="text-text">{row.value}</td>

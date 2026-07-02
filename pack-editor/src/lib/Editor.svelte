@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { api } from "./api.js";
   import { store } from "./store.svelte.js";
   import MediaGrid from "./MediaGrid.svelte";
@@ -9,18 +11,49 @@
 
   let showAddMenu = $state(false);
   let showTagFilter = $state(false);
-  let skipDuplicates = $state(true);
   let saving = $state(false);
+  let saveError = $state<string | null>(null);
+
+  onMount(() => {
+    const unlisten = getCurrentWebview().onDragDropEvent((e) => {
+      if (e.payload.type === "enter" || e.payload.type === "over") {
+        store.dragActive = true;
+      } else if (e.payload.type === "leave") {
+        store.dragActive = false;
+      } else if (e.payload.type === "drop") {
+        store.dragActive = false;
+        api.addPaths(e.payload.paths);
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+      store.dragActive = false;
+    };
+  });
 
   async function save() {
     saving = true;
-    await api.savePack();
-    saving = false;
+    saveError = null;
+    try {
+      await api.savePack();
+    } catch (err) {
+      // The backend only emits save:done on success, so a failed save would
+      // otherwise leave the "Saving… X/Y" progress bar stuck on screen forever.
+      store.saveActive = false;
+      saveError = String(err);
+    } finally {
+      saving = false;
+    }
   }
 
   async function saveAs() {
-    const info = await api.savePackAsDialog();
-    if (info) store.packName = info.name;
+    saveError = null;
+    try {
+      const info = await api.savePackAsDialog();
+      if (info) store.packName = info.name;
+    } catch (err) {
+      saveError = String(err);
+    }
   }
 
   async function discard() {
@@ -43,12 +76,12 @@
 
   function addFiles() {
     showAddMenu = false;
-    api.addFilesDialog(skipDuplicates);
+    api.addFilesDialog();
   }
 
   function addFolder(recursive: boolean) {
     showAddMenu = false;
-    api.addFolderDialog(recursive, skipDuplicates);
+    api.addFolderDialog(recursive);
   }
 </script>
 
@@ -59,6 +92,9 @@
   >
     <span class="text-sm font-medium text-text px-1">
       {store.packName}{#if !store.packSaved}*{/if}
+    </span>
+    <span class="text-xs text-muted px-1">
+      {store.files.length} file{store.files.length === 1 ? "" : "s"}
     </span>
 
     <div class="w-px h-5 bg-border mx-1"></div>
@@ -111,6 +147,25 @@
       <option value="video">Videos</option>
       <option value="audio">Audio</option>
     </select>
+
+    <!-- Sort -->
+    <select
+      bind:value={store.sortBy}
+      class="text-xs px-1.5 py-1 rounded border border-border bg-surface text-text
+        focus:outline-none focus:border-accent"
+    >
+      <option value="created">Date added</option>
+      <option value="name">Name</option>
+      <option value="size">File size</option>
+    </select>
+    <button
+      onclick={() => (store.sortDir = store.sortDir === "asc" ? "desc" : "asc")}
+      title={store.sortDir === "asc" ? "Ascending" : "Descending"}
+      class="flex items-center justify-center w-6 h-6 rounded border border-border bg-surface
+        text-text hover:bg-bg transition-colors text-xs"
+    >
+      {store.sortDir === "asc" ? "↑" : "↓"}
+    </button>
 
     <!-- Tag filter -->
     <div class="relative">
@@ -217,11 +272,6 @@
           >
             Add folder (recursive)…
           </button>
-          <div class="border-t border-border"></div>
-          <label class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer hover:bg-bg">
-            <input type="checkbox" bind:checked={skipDuplicates} class="accent-accent" />
-            Skip duplicates
-          </label>
         </div>
       {/if}
     </div>
@@ -302,9 +352,31 @@
       Saving… {store.saveDone} / {store.saveTotal}
     </div>
   {/if}
+
+  <!-- Save error -->
+  {#if saveError}
+    <div class="flex items-center gap-2 px-3 h-8 bg-red-50 border-t border-red-200 text-xs text-red-700 shrink-0">
+      <span class="flex-1 truncate">Save failed: {saveError}</span>
+      <button
+        onclick={() => (saveError = null)}
+        class="text-red-700 hover:text-red-900 transition-colors"
+      >Dismiss</button>
+    </div>
+  {/if}
 </div>
 
 <!-- Media viewer overlay -->
 {#if store.openedId !== null}
   <MediaViewer />
+{/if}
+
+<!-- Drag and drop overlay -->
+{#if store.dragActive}
+  <div
+    class="fixed inset-0 z-[60] flex items-center justify-center bg-accent/10 border-4 border-dashed border-accent pointer-events-none"
+  >
+    <span class="text-lg font-medium text-accent bg-surface/90 rounded px-4 py-2 shadow-lg">
+      Drop to import
+    </span>
+  </div>
 {/if}

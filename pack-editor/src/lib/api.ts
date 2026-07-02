@@ -28,10 +28,9 @@ export const api = {
   savePackMetadata: () => invoke<void>("save_pack_metadata"),
   markPackUnsaved: () => invoke<void>("mark_pack_unsaved"),
 
-  addFilesDialog: (skipDuplicates: boolean) =>
-    invoke<void>("add_files_dialog", { skipDuplicates }),
-  addFolderDialog: (recursive: boolean, skipDuplicates: boolean) =>
-    invoke<void>("add_folder_dialog", { recursive, skipDuplicates }),
+  addFilesDialog: () => invoke<void>("add_files_dialog"),
+  addFolderDialog: (recursive: boolean) => invoke<void>("add_folder_dialog", { recursive }),
+  addPaths: (paths: string[]) => invoke<void>("add_paths", { paths }),
   cancelUpload: () => invoke<void>("cancel_upload"),
 
   getMediaPort: () => invoke<number>("get_media_port"),

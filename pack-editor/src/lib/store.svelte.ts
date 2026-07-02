@@ -1,5 +1,9 @@
 import type { MediaFile, MetadataDto, UploadError } from "./types.js";
 
+// Reused across sorts: constructing a Collator per comparison (e.g. via
+// a.localeCompare(b, undefined, opts)) is drastically slower at scale.
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
 class AppStore {
   // Media server
   mediaPort = $state(0);
@@ -29,6 +33,13 @@ class AppStore {
   mediaTypeFilter = $state<"all" | "image" | "video" | "audio">("all");
   tagFilter = $state(new Set<string>());
 
+  // Sorting
+  sortBy = $state<"created" | "name" | "size">("created");
+  sortDir = $state<"asc" | "desc">("asc");
+
+  // Drag and drop
+  dragActive = $state(false);
+
   // Upload
   uploadTotal = $state(0);
   uploadDone = $state(0);
@@ -55,12 +66,25 @@ class AppStore {
     const query = this.searchQuery.toLowerCase();
     const typeFilter = this.mediaTypeFilter;
     const tagFilter = this.tagFilter;
-    return files.filter((f) => {
+    const sortBy = this.sortBy;
+    const dirMul = this.sortDir === "asc" ? 1 : -1;
+
+    const filtered = files.filter((f) => {
       if (typeFilter !== "all" && f.file_info.type !== typeFilter) return false;
       if (query && !f.file_name.toLowerCase().includes(query)) return false;
       if (tagFilter.size > 0 && !f.tags.some((t) => tagFilter.has(t))) return false;
       return true;
     });
+
+    filtered.sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === "created") cmp = a.id - b.id;
+      else if (sortBy === "name") cmp = nameCollator.compare(a.file_name, b.file_name);
+      else if (sortBy === "size") cmp = a.size - b.size;
+      return cmp * dirMul;
+    });
+
+    return filtered;
   });
 
   primaryFile = $derived.by(() => {

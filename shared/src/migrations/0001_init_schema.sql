@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS media (
     transparent INTEGER,
     duration REAL,
     audio INTEGER,
-    hash BLOB NOT NULL,
+    hash BLOB NOT NULL UNIQUE,
     thumbnail BLOB
 ) STRICT;
 

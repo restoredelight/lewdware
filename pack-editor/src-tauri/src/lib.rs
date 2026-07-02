@@ -417,11 +417,7 @@ async fn mark_pack_unsaved(state: State<'_, AppState>) -> Result<(), String> {
 // ── Upload ───────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-async fn add_files_dialog(
-    state: State<'_, AppState>,
-    app: AppHandle,
-    skip_duplicates: bool,
-) -> Result<(), String> {
+async fn add_files_dialog(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     use tauri_plugin_dialog::DialogExt;
     let app_c = app.clone();
     let files = tokio::task::spawn_blocking(move || {
@@ -456,7 +452,6 @@ async fn add_files_dialog(
     tauri::async_runtime::spawn(encode::process_files(
         pack_state,
         paths,
-        skip_duplicates,
         app,
         encoder,
         upload_lock,
@@ -470,7 +465,6 @@ async fn add_folder_dialog(
     state: State<'_, AppState>,
     app: AppHandle,
     recursive: bool,
-    skip_duplicates: bool,
 ) -> Result<(), String> {
     use tauri_plugin_dialog::DialogExt;
     let app_c = app.clone();
@@ -507,7 +501,50 @@ async fn add_folder_dialog(
     tauri::async_runtime::spawn(encode::process_files(
         pack_state,
         paths,
-        skip_duplicates,
+        app,
+        encoder,
+        upload_lock,
+        cancel,
+    ));
+    Ok(())
+}
+
+#[tauri::command]
+async fn add_paths(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    paths: Vec<PathBuf>,
+) -> Result<(), String> {
+    let paths = tokio::task::spawn_blocking(move || {
+        let mut result = Vec::new();
+        for path in paths {
+            if path.is_dir() {
+                result.extend(encode::explore_folder(&path, false));
+            } else if encode::is_media_path(&path).unwrap_or(false) {
+                result.push(path);
+            }
+        }
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let pack_state = state.pack.clone();
+    let encoder = state
+        .hardware_encoder
+        .get()
+        .cloned()
+        .unwrap_or(HardwareEncoder::SoftwareFallback);
+    let upload_lock = state.upload_lock.clone();
+    let cancel = state.cancel_flag.clone();
+    cancel.store(false, Ordering::SeqCst);
+    tauri::async_runtime::spawn(encode::process_files(
+        pack_state,
+        paths,
         app,
         encoder,
         upload_lock,
@@ -615,6 +652,7 @@ pub fn run() {
             mark_pack_unsaved,
             add_files_dialog,
             add_folder_dialog,
+            add_paths,
             cancel_upload,
             get_media_port,
             check_for_update,
