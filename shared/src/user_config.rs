@@ -104,10 +104,7 @@ impl Default for AppConfig {
 pub fn load_config() -> Result<AppConfig> {
     let path = config_path()?;
 
-    Ok(fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default())
+    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
 }
 
 pub fn save_config(config: &AppConfig) -> Result<()> {
