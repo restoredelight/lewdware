@@ -8,7 +8,7 @@ use crate::mode::{ModeCommand, handle_mode_command};
 
 #[derive(Parser)]
 #[command(name = "lw")]
-#[command(about = "Lewdware mode and pack management tool", long_about = None)]
+#[command(version, about = "Lewdware mode and pack management tool", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

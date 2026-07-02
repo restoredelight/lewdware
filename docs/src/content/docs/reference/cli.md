@@ -36,7 +36,7 @@ lw mode dev [mode]
 ```
 
 Builds the mode and launches it with Lewdware, watching `config.jsonc` and
-`src/` for changes. Whenever a file changes, the running instance is
+your Lua files for changes. Whenever a file changes, the running instance is
 restarted with a fresh build, so you can iterate without leaving your editor.
 
 - `mode` - the key of the mode (as defined under `modes` in `config.jsonc`) to

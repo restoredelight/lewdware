@@ -8,9 +8,10 @@ use std::{env, fs, io, thread};
 
 use anyhow::{Context, bail};
 use clap::Args;
-use notify::{Event, EventKind, Watcher};
+use notify::{Event, EventKind, RecommendedWatcher, Watcher};
 
 use crate::mode::build::build_to;
+use crate::mode::config::Config;
 use crate::mode::{find_root, read_config, types::write_type_stubs};
 
 #[derive(Args)]
@@ -39,10 +40,6 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
         &Path::new(&root.join("config.jsonc")),
         notify::RecursiveMode::NonRecursive,
     )?;
-    watcher.watch(
-        &Path::new(&root.join("src")),
-        notify::RecursiveMode::Recursive,
-    )?;
 
     write_type_stubs(&root)?;
 
@@ -50,6 +47,11 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
     fs::create_dir_all(&build_dir)?;
 
     let config = read_config(&root)?;
+
+    let mut watched_dirs = include_dirs(&root, &config);
+    for dir in &watched_dirs {
+        watcher.watch(dir, notify::RecursiveMode::Recursive)?;
+    }
 
     let path = build_dir.join(format!("{}.lwmode", config.name));
     let mut file = BuildFile::new(path)?;
@@ -92,6 +94,10 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
 
         let config = read_config(&root)?;
 
+        let new_watched_dirs = include_dirs(&root, &config);
+        update_watches(&mut watcher, &watched_dirs, &new_watched_dirs);
+        watched_dirs = new_watched_dirs;
+
         let mode = args
             .mode
             .clone()
@@ -109,6 +115,43 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+// Resolves config.include entries (paths relative to root) to canonical,
+// existing directory paths. Entries that don't exist are silently skipped,
+// matching the behaviour of the equivalent logic in build.rs.
+fn include_dirs(root: &Path, config: &Config) -> Vec<PathBuf> {
+    config
+        .include
+        .iter()
+        .filter_map(|path| {
+            root.join(path)
+                .canonicalize()
+                .inspect_err(|err| eprintln!("{err}"))
+                .ok()
+        })
+        .collect()
+}
+
+// Diffs `current` against `desired` and adjusts the watcher so it ends up
+// watching exactly `desired`, so a change to config.include takes effect
+// without restarting `lw dev`.
+fn update_watches(watcher: &mut RecommendedWatcher, current: &[PathBuf], desired: &[PathBuf]) {
+    for dir in current {
+        if !desired.contains(dir) {
+            if let Err(err) = watcher.unwatch(dir) {
+                eprintln!("{err}");
+            }
+        }
+    }
+
+    for dir in desired {
+        if !current.contains(dir) {
+            if let Err(err) = watcher.watch(dir, notify::RecursiveMode::Recursive) {
+                eprintln!("{err}");
+            }
+        }
+    }
 }
 
 fn spawn_lewdware(path: &Path, mode: &str) -> anyhow::Result<Child> {
