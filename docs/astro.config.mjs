@@ -42,6 +42,7 @@ export default defineConfig({
 					items: [
 						{ label: "Lua API", link: "reference/lua-api/" },
 						{ label: "Mode Config", slug: "reference/mode-config" },
+						{ label: "lw CLI", slug: "reference/cli" },
 					],
 				},
 			],
