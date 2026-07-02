@@ -1,16 +1,16 @@
 {
-  "version": "0.0.1",
-  "pub_date": "2026-06-19T16:45:47Z",
+  "version": "0.0.2",
+  "pub_date": "2026-07-02T15:22:56Z",
   "download_page": "https://lewdware.net/download/pack-editor",
   "assets": {
-    "windows-x64": "https://github.com/restoredelight/lewdware/releases/download/v0.0.1/lewdware-pack-editor_0.0.1_x64-setup.msi",
-    "macos-arm64": "https://github.com/restoredelight/lewdware/releases/download/v0.0.1/lewdware-pack-editor_0.0.1_aarch64.dmg",
-    "macos-x64": "https://github.com/restoredelight/lewdware/releases/download/v0.0.1/lewdware-pack-editor_0.0.1_x64.dmg",
-    "linux-x64-deb": "https://github.com/restoredelight/lewdware/releases/download/v0.0.1/lewdware-pack-editor_0.0.1_amd64.deb",
-    "linux-x64-rpm": "https://github.com/restoredelight/lewdware/releases/download/v0.0.1/lewdware-pack-editor_0.0.1_amd64.rpm",
-    "linux-x64-appimage": "https://github.com/restoredelight/lewdware/releases/download/v0.0.1/lewdware-pack-editor_0.0.1_amd64.AppImage",
-    "linux-arm64-deb": "https://github.com/restoredelight/lewdware/releases/download/v0.0.1/lewdware-pack-editor_0.0.1_arm64.deb",
-    "linux-arm64-rpm": "https://github.com/restoredelight/lewdware/releases/download/v0.0.1/lewdware-pack-editor_0.0.1_arm64.rpm",
-    "linux-arm64-appimage": "https://github.com/restoredelight/lewdware/releases/download/v0.0.1/lewdware-pack-editor_0.0.1_arm64.AppImage"
+    "windows-x64": "https://github.com/restoredelight/lewdware/releases/download/v0.0.2/lewdware-pack-editor_0.0.2_x86_64.msi",
+    "macos-arm64": "https://github.com/restoredelight/lewdware/releases/download/v0.0.2/lewdware-pack-editor_0.0.2_arm64.dmg",
+    "macos-x64": "https://github.com/restoredelight/lewdware/releases/download/v0.0.2/lewdware-pack-editor_0.0.2_x86_64.dmg",
+    "linux-x64-deb": "https://github.com/restoredelight/lewdware/releases/download/v0.0.2/lewdware-pack-editor_0.0.2_x86_64.deb",
+    "linux-x64-rpm": "https://github.com/restoredelight/lewdware/releases/download/v0.0.2/lewdware-pack-editor_0.0.2_x86_64.rpm",
+    "linux-x64-appimage": "https://github.com/restoredelight/lewdware/releases/download/v0.0.2/lewdware-pack-editor_0.0.2_x86_64.AppImage",
+    "linux-arm64-deb": "https://github.com/restoredelight/lewdware/releases/download/v0.0.2/lewdware-pack-editor_0.0.2_arm64.deb",
+    "linux-arm64-rpm": "https://github.com/restoredelight/lewdware/releases/download/v0.0.2/lewdware-pack-editor_0.0.2_arm64.rpm",
+    "linux-arm64-appimage": "https://github.com/restoredelight/lewdware/releases/download/v0.0.2/lewdware-pack-editor_0.0.2_arm64.AppImage"
   }
 }
