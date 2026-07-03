@@ -3634,6 +3634,7 @@ dependencies = [
  "tempfile",
  "tiny-skia 0.12.0",
  "tokio",
+ "tokio-util",
  "tracing",
  "tray-icon",
  "url",
@@ -7622,6 +7623,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

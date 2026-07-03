@@ -1,19 +1,17 @@
 use std::{cell::RefCell, rc::Rc};
 
 use mlua::{
-    ExternalResult, FromLua, IntoLua, LuaSerdeExt, SerializeOptions, UserData, UserDataFields,
-    UserDataMethods,
+    ExternalError, ExternalResult, FromLua, IntoLua, LuaSerdeExt, SerializeOptions, UserData, UserDataFields, UserDataMethods,
 };
 use serde::{Deserialize, Serialize};
 use winit::window::WindowId;
 
 use crate::{
-    lua::{
+    error::LewdwareError, lua::{
         Media, WindowProps,
         api::{Anchor, Coord},
         request::WindowRequestSender,
-    },
-    monitor::Monitor,
+    }, monitor::Monitor,
 };
 
 #[derive(Clone)]
@@ -497,7 +495,10 @@ impl InnerWindow {
         methods.add_async_method("close", async |_, this, _: ()| {
             let inner_window = this.inner_window();
 
-            inner_window.request_sender.close().await.into_lua_err()?;
+            match inner_window.request_sender.close().await {
+                Ok(()) | Err(LewdwareError::WindowNotFound) => {},
+                Err(err) => return Err(err.into_lua_err()),
+            };
 
             Ok(())
         });

@@ -51,7 +51,8 @@ lewdware.config = {}
 ---@field visible boolean Whether the window is currently visible.
 Window = {}
 
----Close the window
+---Close the window. Unlike other methods, this will not fail if the window
+---is already closed.
 function Window:close() end
 
 ---Execute a function when the window is closed.
@@ -449,10 +450,19 @@ function lewdware.after(duration, fun) end
 ---@field duration number
 Timer = {}
 
----Stop a timer from running
+---Stop a timer from running, if it hasn't already.
+---
+---Note that if you are planning to run code after calling this, the timer
+---could be in the middle of running the scheduled function as you call this
+---function (which will not be stopped). You probably want to use
+---[Timer:wait()](lua://Timer.wait) to make sure that any tasks spawned by the
+---timer have finished.
 function Timer:stop() end
 
----Periodically run a function
+---Wait for the timer, and any tasks spawned by the timer, to finish running.
+function Timer:wait() end
+
+---Periodically run a function.
 ---@param duration number The function will be run every `duration` milliseconds.
 ---@param fun fun() The function to run.
 ---@return Interval
@@ -463,7 +473,16 @@ function lewdware.every(duration, fun) end
 Interval = {}
 
 ---Stop/cancel an interval from running.
+---
+---Note that this function stops the interval from running, but it does not stop
+---tasks that have already been spawned. If you are planning to run code after
+---calling this, you probably want to use [Interval:wait()](lua://Interval.wait)
+---to wait for any tasks spawned by the interval to finish.
 function Interval:stop() end
+
+---Wait for an interval, and any tasks spawned by that interval. If you call this and
+---never call [Interval:stop()](lua://Interval.stop), this function will wait forever.
+function Interval:wait() end
 
 ---Change the duration of an interval (e.g. to speed up or slow down how often the function is
 ---called).
