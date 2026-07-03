@@ -1,31 +1,5 @@
 local config = lewdware.config
 
-
-local text_items = {
-	"FOCUS",
-	"ON",
-	"FEET"
-}
-local index = 1
-
-lewdware.every(500, function()
-	local text = text_items[index]
-	index = (index % #text_items) + 1
-
-	local popup = lewdware.spawn_text_popup(text, {
-		font = "display",
-		font_size = { percent = 15 },
-		color = "#FFFFFF",
-		border_color = "#000000",
-		border_width = 5,
-		decorations = false,
-	})
-
-	lewdware.after(500, function()
-		popup:close()
-	end)
-end)
-
 ---@cast config {
 ---    popup_frequency: number,
 ---    max_popups: number,
@@ -145,7 +119,12 @@ local function start_movement(window, speed)
 		local duration_ms = math.max(1, math.floor(t_min * 1000))
 
 		window:move(
-			{ x = target_x, y = target_y, duration = duration_ms, easing = "linear", clamp = false },
+			{
+				x = target_x,
+				y = target_y,
+				duration = duration_ms,
+				clamp = false,
+			},
 			function()
 				if hit_axis == "x" then dx = -dx else dy = -dy end
 				move_to_wall()
@@ -181,7 +160,10 @@ local function open_popup(spawn_opts, close_trigger)
 		window = lewdware.spawn_video_popup(media, spawn_opts)
 	end
 
-	if not window then return end
+	if not should_spawn() then
+		window:close()
+		return
+	end
 
 	popup_count = popup_count + 1
 
@@ -276,6 +258,7 @@ local function schedule_dormancy()
 		for _, window in ipairs(windows) do
 			window:close()
 		end
+		windows = {}
 
 		local dormant_ms = secs(math.random(config.dormant_min, config.dormant_max))
 		lewdware.after(dormant_ms, function()

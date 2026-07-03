@@ -17,9 +17,15 @@ spawned by [`lewdware.after()`](/reference/lua-api/#lewdware-after) and callback
 registered by methods like
 [`Window:on_close()`](/reference/lua-api/#window-on_close).
 
+Such non-blocking functions (where Lua can run other code when the function is
+executed) are marked `(async)` in the [Lua docs](/reference/lua-api/) - and
+you should be able to see these annotations when hovering over a non-blocking
+function in your code editor as well.
+
 ## Race conditions
 
-This can lead to subtle bugs. Consider the following piece of code.
+Non-blocking functions can lead to subtle bugs. Consider the following piece of
+code.
 
 ```lua
 local stopped = false
@@ -53,17 +59,16 @@ have passed close all the windows and stop spawning. However, consider the
 following series of events:
 
 1. The function inside `lewdware.every()` starts, and calls
-   `lewdware.media.random_image()`.
-2. While Lewdware is waiting for the image to be fetched/the window to be
-   spawned, it sees that 20 seconds have passed, and starts the
-   `lewdware.after()` function, which closes all the existing windows and
-   sets `stopped` to `true`.
+   `lewdware.media.random_image()` (a non-blocking function).
+2. While Lewdware is waiting for the image to be fetched, it sees that 20
+   seconds have passed, and starts the `lewdware.after()` function, which
+closes all the existing windows and sets `stopped` to `true`.
 3. The `lewdware.media.random_image()` call gets its result, and returns. The
    first callback continues, spawns the window, and adds it to `windows`.
 
 This is called a _race condition_. In this case, it has resulted in us
 "missing" a window when trying to close them all. Note that the same problem
-can happen with the `lewdware.spawn_image_popup()` call.
+can happen with the call to `lewdware.spawn_image_popup()`.
 
 In this case, there are two solutions. The first is to check `stopped` after
 every call that could have resulted in it changing:
@@ -173,9 +178,9 @@ local function spawn_window()
   if image then
     local window = lewdware.spawn_image_popup(image)
 
-    window:on_close(spawn_window)
+    table.insert(windows, window)
 
-    list.insert(windows, window)
+    window:on_close(spawn_window)
   end
 end
 
@@ -200,7 +205,6 @@ wait for all `window:on_close()` callbacks to complete. The only option here is
 to use a `stopped` variable, and be mindful of the fact that `stopped` could be
 changed.
 
-
 ```lua
 local windows = {}
 local stopped = false
@@ -220,9 +224,10 @@ local function spawn_window()
       return
     end
 
-    -- Once the window has been added to the table, the race condition has been
-    -- averted, since the `lewdware.after()` callback will close the window.
-    list.insert(windows, window)
+    -- Once the window has been added to the table, we no longer need to worry
+    -- about the race condition, since the `lewdware.after()` callback will
+    -- close the window.
+    table.insert(windows, window)
 
     window:on_close(spawn_window)
   end
@@ -239,4 +244,6 @@ lewdware.after(1000 * 20, function()
 end)
 ```
 
-
+The pattern here is the same as before - we check `stopped` before and after
+`lewdware.spawn_image_popup()`, and in the unlikely case that `stopped` has
+changed while we're spawning a window, we simply close the window.

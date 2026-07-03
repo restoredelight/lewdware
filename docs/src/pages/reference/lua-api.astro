@@ -109,7 +109,18 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 			{ns.functions.map((func) => (
 				<div class="api-entry">
 					<h4 id={funcSlug(func.fullName)} class="fn-heading">{func.name}()</h4>
-					<div class="api-sig" set:html={highlight(buildSignature(func))} />
+					<div class="api-sig-row">
+						{func.async && (
+							<a
+								class="async-tag"
+								href="/dev-guides/mode-tasks/"
+								title="Non-blocking: calling this can let other Lua code run before it returns."
+							>
+								(async)
+							</a>
+						)}
+						<div class="api-sig" set:html={highlight(buildSignature(func))} />
+					</div>
 
 					{func.desc && (
 						<p class="api-desc" set:html={func.desc.replace(/\n/g, '<br>')} />
@@ -203,7 +214,18 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 					<h4 class="subsection-heading">Methods</h4>
 					{cls.methods.map((method) => (
 						<div id={funcSlug(method.fullName)} class="api-entry api-method">
-							<div class="api-sig" set:html={highlight(buildSignature(method))} />
+							<div class="api-sig-row">
+								{method.async && (
+									<a
+										class="async-tag"
+										href="/dev-guides/mode-tasks/"
+										title="Non-blocking: calling this can let other Lua code run before it returns."
+									>
+										(async)
+									</a>
+								)}
+								<div class="api-sig" set:html={highlight(buildSignature(method))} />
+							</div>
 
 							{method.desc && (
 								<p class="api-desc" set:html={linkTypes(method.desc).replace(/\n/g, '<br>')} />
@@ -290,26 +312,27 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 		margin-block: 1rem 1.5rem;
 	}
 
-	/* Shiki-highlighted signature block */
+	/* Shiki-highlighted signature block. The border/background/padding live on
+	   `.api-sig-row` so the `(async)` tag can sit inside the same box; the
+	   `pre` itself is transparent and unpadded. */
 	.api-sig :global(pre.shiki) {
-		border: 1px solid var(--sl-color-hairline);
-		border-radius: 0.375rem;
-		padding: 0.625rem 1rem;
-		overflow-x: auto;
-		margin: 0 0 0.5rem;
+		margin: 0;
+		padding: 0;
+		border: none;
+		background: transparent !important;
 		font-size: 0.875rem;
 	}
 
-	/* Dual-theme color switching — Starlight sets data-theme on <html> */
+	/* Dual-theme text color switching — Starlight sets data-theme on <html>.
+	   (The background lives on `.api-sig-row` below, hardcoded to match the
+	   'github-dark'/'github-light' shiki themes used for every signature.) */
 	:root[data-theme='light'] .api-sig :global(.shiki) {
-		background-color: var(--shiki-light-bg) !important;
 		color: var(--shiki-light) !important;
 	}
 	:root[data-theme='light'] .api-sig :global(.shiki span) {
 		color: var(--shiki-light) !important;
 	}
 	:root[data-theme='dark'] .api-sig :global(.shiki) {
-		background-color: var(--shiki-dark-bg) !important;
 		color: var(--shiki-dark) !important;
 	}
 	:root[data-theme='dark'] .api-sig :global(.shiki span) {
@@ -329,6 +352,45 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 	.api-desc {
 		margin-block: 0.25rem 0.75rem;
 		color: var(--sl-color-text);
+	}
+
+	/* Row containing the optional `(async)` tag and the signature — this is
+	   the bordered/backgrounded box the signature used to have on its own,
+	   moved here so the tag renders inside it rather than beside it. */
+	.api-sig-row {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.375rem;
+		padding: 0.625rem 1rem;
+		margin: 0 0 0.5rem;
+		overflow-x: auto;
+	}
+
+	:root[data-theme='light'] .api-sig-row {
+		background-color: #fff;
+	}
+	:root[data-theme='dark'] .api-sig-row {
+		background-color: #24292e;
+	}
+
+	.api-sig-row .api-sig {
+		flex: 1;
+	}
+
+	/* `(async)` tag preceding non-blocking functions/methods, editor-hover style */
+	.async-tag {
+		flex-shrink: 0;
+		font-family: var(--sl-font-mono, monospace);
+		font-size: 0.85rem;
+		font-weight: 600;
+		color: var(--sl-color-orange);
+		text-decoration: none;
+	}
+
+	.async-tag:hover {
+		text-decoration: underline;
 	}
 
 	.api-return {

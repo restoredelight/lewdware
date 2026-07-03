@@ -124,7 +124,8 @@ end)
   "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
   "runtime.version": "Lua 5.5",
   "workspace.library": ["src", ".types/lewdware.d.lua"],
-  "diagnostics.globals": ["lewdware"]
+  "diagnostics.globals": ["lewdware"],
+  "hint.awaitPropagate": true
 }"#;
     fs::write(base_path.join(".luarc.json"), luarc_content)?;
 

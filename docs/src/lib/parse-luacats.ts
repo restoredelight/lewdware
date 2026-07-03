@@ -27,6 +27,7 @@ export interface Func {
 	params: Param[];
 	returnType?: string;
 	desc?: string;
+	async: boolean; // set by an `@async` annotation — the call is non-blocking
 }
 
 export interface Class {
@@ -315,6 +316,7 @@ function parseFuncBlock(block: Block & { codeLine: string }): Func | null {
 
 	const params: Param[] = [];
 	let returnType: string | undefined;
+	let isAsync = false;
 	const descLines: string[] = [];
 
 	for (const line of lines) {
@@ -325,6 +327,10 @@ function parseFuncBlock(block: Block & { codeLine: string }): Func | null {
 		}
 		if (line.startsWith('@return ')) {
 			returnType = line.slice('@return '.length).trim();
+			continue;
+		}
+		if (line === '@async') {
+			isAsync = true;
 			continue;
 		}
 		if (!line.startsWith('@') && line !== '') {
@@ -340,6 +346,7 @@ function parseFuncBlock(block: Block & { codeLine: string }): Func | null {
 		params,
 		returnType,
 		desc: descLines.join('\n').trim() || undefined,
+		async: isAsync,
 	};
 }
 

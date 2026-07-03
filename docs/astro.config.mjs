@@ -6,7 +6,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: "Lewdware",
-			customCss: ['./src/styles/custom.css'],
+			customCss: ["./src/styles/custom.css"],
 			social: [
 				{
 					icon: "github",
@@ -26,15 +26,18 @@ export default defineConfig({
 				{
 					label: "User Guides",
 					items: [
-						{ label: "Get started", slug: "user-guides/get-started"},
-						{ label: "Comparison to Edgeware++", slug: "user-guides/comparison-to-edgeware"},
+						{ label: "Get started", slug: "user-guides/get-started" },
+						{
+							label: "Comparison to Edgeware++",
+							slug: "user-guides/comparison-to-edgeware",
+						},
 					],
 				},
 				{
 					label: "Developer Guides",
 					items: [
-						{ label: "Create a pack", slug: "dev-guides/create-pack"},
-						{ label: "Create a mode", slug: "dev-guides/create-mode"},
+						{ label: "Create a pack", slug: "dev-guides/create-pack" },
+						{ label: "Create a mode", slug: "dev-guides/create-mode" },
 						{ label: "Managing mode tasks", slug: "dev-guides/mode-tasks" },
 					],
 				},

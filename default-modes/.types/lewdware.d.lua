@@ -48,11 +48,12 @@ lewdware.config = {}
 ---@field y number The y coordinate (in pixels) of the top left coordinate of the window.
 ---@field monitor Monitor The monitor that the window is located on.
 ---@field closed boolean Whether the window is currently closed.
----@field visible boolean Whether the window is currently visible.
 Window = {}
 
 ---Close the window. Unlike other methods, this will not fail if the window
 ---is already closed.
+---
+---@async
 function Window:close() end
 
 ---Execute a function when the window is closed.
@@ -84,6 +85,8 @@ function Window:on_close(cb) end
 ---
 ---Calling this function will cancel any existing move operations.
 ---This means you can call this function with no arguments to stop moving a window.
+---
+---@async
 function Window:move(opts, cb) end
 
 ---@class FadeOpts
@@ -99,20 +102,14 @@ function Window:move(opts, cb) end
 ---
 ---For a window's opacity to be changeable, it must have been created with
 ---`transparent = true` (this is done automatically in some cases, see [SpawnWindowOpts.transparent](lua://SpawnWindowOpts.transparent)).
+---
+---@async
 function Window:fade(opts, cb) end
-
----Set the visibility of a window.
----@param visible boolean
----
----Making a window invisible instead of closing it can be a good idea if you want to use it again.
----
----Making a window invisible will stop the user from interacting with it, but e.g. video windows
----will continue to play, so you should consider calling [VideoWindow:pause()](lua://VideoWindow.pause). Always remember
----to close windows that you are no longer using.
-function Window:set_visible(visible) end
 
 ---Set the text displayed in the header.
 ---@param title string?
+---
+---@async
 function Window:set_title(title) end
 
 ---@class ImageWindow : Window
@@ -125,14 +122,20 @@ function Window:set_title(title) end
 VideoWindow = {}
 
 ---Pause the video being played on the window.
+---
+---@async
 function VideoWindow:pause() end
 
 ---Resume playback of the video on the window.
+---
+---@async
 function VideoWindow:play() end
 
 ---Set whether a video window should loop when the video ends (see also the `loop` option in
 ---`spawn_video_popup()`). Non-looping videos close when they end.
 ---@param loop any
+---
+---@async
 function VideoWindow:set_loop(loop) end
 
 ---@class PromptWindow : Window
@@ -168,10 +171,14 @@ function ChoiceWindow:on_select(cb) end
 
 ---Set the text/subtitle of the window.
 ---@param text? string
+---
+---@async
 function ChoiceWindow:set_text(text) end
 
 ---Set the choices that the user has to choose from.
 ---@param options? { id: string, label: string }[]
+---
+---@async
 function ChoiceWindow:set_options(options) end
 
 ---@class TextWindow : Window
@@ -181,6 +188,8 @@ TextWindow = {}
 
 ---Set the text displayed.
 ---@param text string
+---
+---@async
 function TextWindow:set_text(text) end
 
 ---@class LewdwareMedia
@@ -189,21 +198,29 @@ lewdware.media = {}
 ---Get a specific file.
 ---@param name string The name of the file.
 ---@return Image | Video | Audio | nil
+---
+---@async
 function lewdware.media.get(name) end
 
 ---Get a specific image file.
 ---@param name string The name of the file.
 ---@return Image | nil
+---
+---@async
 function lewdware.media.get_image(name) end
 
 ---Get a specific video file.
 ---@param name string The name of the file.
 ---@return Video | nil
+---
+---@async
 function lewdware.media.get_video(name) end
 
 ---Get a specific audio file.
 ---@param name string The name of the file.
 ---@return Audio | nil
+---
+---@async
 function lewdware.media.get_audio(name) end
 
 ---@class QueryMediaOpts
@@ -214,6 +231,8 @@ function lewdware.media.get_audio(name) end
 ---List all files in the pack.
 ---@param opts? QueryMediaOpts
 ---@return (Image | Video | Audio)[]
+---
+---@async
 function lewdware.media.list(opts) end
 
 ---List all image files in the pack.
@@ -221,6 +240,8 @@ function lewdware.media.list(opts) end
 ---   tags?: string[],
 ---}
 ---@return Image[]
+---
+---@async
 function lewdware.media.list_images(opts) end
 
 ---List all video files in the pack.
@@ -228,6 +249,8 @@ function lewdware.media.list_images(opts) end
 ---   tags?: string[],
 ---}
 ---@return Video[]
+---
+---@async
 function lewdware.media.list_videos(opts) end
 
 ---List all audio files in the pack.
@@ -235,16 +258,22 @@ function lewdware.media.list_videos(opts) end
 ---   tags?: string[],
 ---}
 ---@return Audio[]
+---
+---@async
 function lewdware.media.list_audio(opts) end
 
 ---Get a random media file.
 ---@param opts? QueryMediaOpts
 ---@return Image | Video | Audio | nil
+---
+---@async
 function lewdware.media.random(opts) end
 
 ---Get a random image file
 ---@param opts? QueryMediaOpts
 ---@return Image | nil
+---
+---@async
 function lewdware.media.random_image(opts) end
 
 ---Get a random video file
@@ -252,6 +281,8 @@ function lewdware.media.random_image(opts) end
 ---   tags?: string[],
 ---}
 ---@return Video | nil
+---
+---@async
 function lewdware.media.random_video(opts) end
 
 ---Get a random audio file
@@ -259,12 +290,16 @@ function lewdware.media.random_video(opts) end
 ---   tags?: string[],
 ---}
 ---@return Audio | nil
+---
+---@async
 function lewdware.media.random_audio(opts) end
 
 ---Spawn a popup displaying an image.
 ---@param image Image
 ---@param opts? SpawnImageOpts
 ---@return ImageWindow
+---
+---@async
 function lewdware.spawn_image_popup(image, opts) end
 
 ---@class SpawnWindowOpts
@@ -293,8 +328,6 @@ function lewdware.spawn_image_popup(image, opts) end
 ---@field closeable? boolean Whether the header should include a close button. Defaults to true.
 ---  If this is false, then the user will not be able to close the window manually. If
 ---  `decorations` is false, this will be ignored.
----@field visible? boolean Whether to make the window start off visible (defaults to true). See
----  `Window:set_visible()`.
 ---@field opacity? number A number between 0 and 1, where 0 is fully
 ---  transparent and 1 is opaque. Use [Window:fade()](lua::Window.fade) to set this value.
 ---@field transparent? boolean Setting this to true allows the window to become transparent.
@@ -318,6 +351,8 @@ function lewdware.spawn_image_popup(image, opts) end
 ---@param video Video
 ---@param opts? SpawnVideoOpts
 ---@return VideoWindow
+---
+---@async
 function lewdware.spawn_video_popup(video, opts) end
 
 ---@class SpawnVideoOpts : SpawnWindowOpts
@@ -331,6 +366,8 @@ function lewdware.spawn_video_popup(video, opts) end
 ---@param audio Audio
 ---@param opts? PlayAudioOpts
 ---@return AudioHandle
+---
+---@async
 function lewdware.play_audio(audio, opts) end
 
 ---@class PlayAudioOpts
@@ -348,17 +385,25 @@ AudioHandle = {}
 function AudioHandle:on_finish(cb) end
 
 ---Pause the audio track.
+---
+---@async
 function AudioHandle:pause() end
 
 ---Resume the audio track.
+---
+---@async
 function AudioHandle:play() end
 
 ---Set the current wallpaper.
 ---@param image Image
 ---@param opts? SetWallpaperOpts
+---
+---@async
 function lewdware.set_wallpaper(image, opts) end
 
 ---Set the current wallpaper to the user's default.
+---
+---@async
 function lewdware.reset_wallpaper() end
 
 ---@class SetWallpaperOpts
@@ -380,6 +425,8 @@ function lewdware.spawn_prompt(opts) end
 ---Spawn a choice popup. This will present the user with one or more options to click.
 ---@param opts? SpawnChoiceOpts
 ---@return ChoiceWindow
+---
+---@async
 function lewdware.spawn_choice(opts) end
 
 ---@class SpawnChoiceOpts : SpawnWindowOpts
@@ -393,6 +440,8 @@ function lewdware.spawn_choice(opts) end
 ---@param text string
 ---@param opts? SpawnTextOpts
 ---@return TextWindow
+---
+---@async
 function lewdware.spawn_text_popup(text, opts) end
 
 ---@alias TextFont
@@ -430,6 +479,8 @@ function lewdware.spawn_text_popup(text, opts) end
 
 ---Open a URL in the browser
 ---@param url string
+---
+---@async
 function lewdware.open_link(url) end
 
 ---@class Notification
@@ -438,6 +489,8 @@ function lewdware.open_link(url) end
 
 ---Show a notification
 ---@param notification Notification
+---
+---@async
 function lewdware.show_notification(notification) end
 
 ---Call a function after a certain period of time.
@@ -460,6 +513,8 @@ Timer = {}
 function Timer:stop() end
 
 ---Wait for the timer, and any tasks spawned by the timer, to finish running.
+---
+---@async
 function Timer:wait() end
 
 ---Periodically run a function.
@@ -482,6 +537,8 @@ function Interval:stop() end
 
 ---Wait for an interval, and any tasks spawned by that interval. If you call this and
 ---never call [Interval:stop()](lua://Interval.stop), this function will wait forever.
+---
+---@async
 function Interval:wait() end
 
 ---Change the duration of an interval (e.g. to speed up or slow down how often the function is
@@ -490,6 +547,8 @@ function Interval:wait() end
 function Interval:set_duration(duration) end
 
 ---Stop completely.
+---
+---@async
 function lewdware.exit() end
 
 ---@class Monitor
@@ -504,6 +563,8 @@ lewdware.monitors = {}
 ---
 ---The available monitors may change while a mode is running. Try not to store this value for too
 ---long.
+---
+---@async
 function lewdware.monitors.list() end
 
 ---Get the user's primary monitor
@@ -511,4 +572,6 @@ function lewdware.monitors.list() end
 ---
 ---The primary monitor may change while a mode is running. Try not to store this value for too
 ---long.
+---
+---@async
 function lewdware.monitors.primary() end
