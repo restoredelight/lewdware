@@ -98,8 +98,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Lua 5.4
-        run: sudo apt-get install -y lua5.4
+      - name: Install Lua 5.5
+        run: sudo apt-get install -y lua5.5
 
       - name: Check syntax
-        run: find default-modes/src -name '*.lua' -exec luac5.4 -p {} +
+        run: find default-modes/src -name '*.lua' -exec luac5.5 -p {} +
