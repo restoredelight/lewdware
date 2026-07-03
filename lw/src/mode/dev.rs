@@ -37,7 +37,7 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
     })?;
 
     watcher.watch(
-        &Path::new(&root.join("config.jsonc")),
+        Path::new(&root.join("config.jsonc")),
         notify::RecursiveMode::NonRecursive,
     )?;
 
@@ -80,13 +80,9 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
         println!("Oh?");
         while let Ok(()) = rx.try_recv() {}
         thread::sleep(Duration::from_millis(200));
-        loop {
-            if let Ok(()) = rx.try_recv() {
-                thread::sleep(Duration::from_millis(200));
-                while let Ok(()) = rx.try_recv() {}
-            } else {
-                break;
-            }
+        while let Ok(()) = rx.try_recv() {
+            thread::sleep(Duration::from_millis(200));
+            while let Ok(()) = rx.try_recv() {}
         }
 
         terminate(&mut process);
@@ -138,19 +134,17 @@ fn include_dirs(root: &Path, config: &Config) -> Vec<PathBuf> {
 // without restarting `lw dev`.
 fn update_watches(watcher: &mut RecommendedWatcher, current: &[PathBuf], desired: &[PathBuf]) {
     for dir in current {
-        if !desired.contains(dir) {
-            if let Err(err) = watcher.unwatch(dir) {
+        if !desired.contains(dir)
+            && let Err(err) = watcher.unwatch(dir) {
                 eprintln!("{err}");
             }
-        }
     }
 
     for dir in desired {
-        if !current.contains(dir) {
-            if let Err(err) = watcher.watch(dir, notify::RecursiveMode::Recursive) {
+        if !current.contains(dir)
+            && let Err(err) = watcher.watch(dir, notify::RecursiveMode::Recursive) {
                 eprintln!("{err}");
             }
-        }
     }
 }
 
@@ -204,17 +198,15 @@ fn find_lewdware_binary() -> Option<Command> {
         "lewdware-engine"
     };
 
-    if let Ok(current_exe) = env::current_exe() {
-        if let Ok(real_lw_path) = fs::canonicalize(current_exe) {
-            if let Some(bin_dir) = real_lw_path.parent() {
+    if let Ok(current_exe) = env::current_exe()
+        && let Ok(real_lw_path) = fs::canonicalize(current_exe)
+            && let Some(bin_dir) = real_lw_path.parent() {
                 let neighbor = bin_dir.join(bin_name);
                 if neighbor.exists() {
                     println!("Found executable: {}", neighbor.display());
                     return Some(Command::new(neighbor));
                 }
             }
-        }
-    }
 
     #[cfg(debug_assertions)]
     {

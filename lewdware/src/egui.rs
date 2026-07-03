@@ -27,6 +27,7 @@ pub struct EguiGpuRenderer {
 }
 
 impl EguiGpuRenderer {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         wgpu_state: &WgpuState,
         window: &Arc<Window>,

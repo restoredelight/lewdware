@@ -22,7 +22,7 @@ pub fn build(_args: BuildArgs) -> Result<()> {
     let root = find_root()?;
 
     let root: &Path = &root;
-    let config = read_config(&root)?;
+    let config = read_config(root)?;
 
     let build_dir = root.join("build");
     fs::create_dir_all(&build_dir)?;
@@ -123,6 +123,72 @@ fn write_files(
     Ok(result)
 }
 
+fn create_metadata(
+    Config {
+        include: _,
+        name,
+        version,
+        author,
+        modes,
+    }: Config,
+    source_files: HashMap<String, SourceFile>,
+) -> Result<mode::Metadata> {
+    let modes = modes
+        .into_iter()
+        .map(
+            |(
+                key,
+                Mode {
+                    name,
+                    entrypoint,
+                    options,
+                },
+            )| {
+                let mut entrypoint_path = PathBuf::from(&entrypoint);
+
+                // Make sure e.g. "./src/..." is resolved correctly
+                while let Ok(path) = entrypoint_path.strip_prefix(".") {
+                    entrypoint_path = path.to_path_buf();
+                }
+
+                let entrypoint = if let Ok(path) = entrypoint_path.strip_prefix("src") {
+                    let path_str = path
+                        .to_str()
+                        .ok_or_else(|| anyhow!("Internal error: invalid UTF-8"))?;
+
+                    if !source_files.contains_key(path_str) {
+                        bail!("Couldn't find entrypoint '{entrypoint}'");
+                    }
+
+                    path_str.to_string()
+                } else {
+                    bail!("Entrypoint '{entrypoint}' must start with `src/`");
+                };
+
+                let entries = config::parse_entries(options)
+                    .with_context(|| format!("Error in mode '{name}'"))?;
+
+                Ok((
+                    key,
+                    mode::Mode {
+                        name,
+                        entrypoint,
+                        entries,
+                    },
+                ))
+            },
+        )
+        .collect::<Result<_>>()?;
+
+    Ok(mode::Metadata {
+        name,
+        version,
+        author,
+        modes,
+        files: source_files,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Seek, SeekFrom};
@@ -203,70 +269,4 @@ mod tests {
         let mut tmp = tempfile().unwrap();
         assert!(build_to(&mut tmp, root, config).is_err());
     }
-}
-
-fn create_metadata(
-    Config {
-        include: _,
-        name,
-        version,
-        author,
-        modes,
-    }: Config,
-    source_files: HashMap<String, SourceFile>,
-) -> Result<mode::Metadata> {
-    let modes = modes
-        .into_iter()
-        .map(
-            |(
-                key,
-                Mode {
-                    name,
-                    entrypoint,
-                    options,
-                },
-            )| {
-                let mut entrypoint_path = PathBuf::from(&entrypoint);
-
-                // Make sure e.g. "./src/..." is resolved correctly
-                while let Ok(path) = entrypoint_path.strip_prefix(".") {
-                    entrypoint_path = path.to_path_buf();
-                }
-
-                let entrypoint = if let Ok(path) = entrypoint_path.strip_prefix("src") {
-                    let path_str = path
-                        .to_str()
-                        .ok_or_else(|| anyhow!("Internal error: invalid UTF-8"))?;
-
-                    if source_files.get(path_str).is_none() {
-                        bail!("Couldn't find entrypoint '{entrypoint}'");
-                    }
-
-                    path_str.to_string()
-                } else {
-                    bail!("Entrypoint '{entrypoint}' must start with `src/`");
-                };
-
-                let entries = config::parse_entries(options)
-                    .with_context(|| format!("Error in mode '{name}'"))?;
-
-                Ok((
-                    key,
-                    mode::Mode {
-                        name,
-                        entrypoint,
-                        entries,
-                    },
-                ))
-            },
-        )
-        .collect::<Result<_>>()?;
-
-    Ok(mode::Metadata {
-        name,
-        version,
-        author,
-        modes,
-        files: source_files,
-    })
 }

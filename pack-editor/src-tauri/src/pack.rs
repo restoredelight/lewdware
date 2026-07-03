@@ -220,7 +220,7 @@ impl MediaPack {
             .join(header.id.to_string());
 
         create_dir_all(&dir)?;
-        create_dir_all(&dir.join("media"))?;
+        create_dir_all(dir.join("media"))?;
 
         let metadata_path = dir.join("Metadata");
         File::create(&metadata_path)
@@ -274,7 +274,7 @@ impl MediaPack {
             .join(header.id.to_string());
 
         create_dir_all(&dir)?;
-        create_dir_all(&dir.join("media"))?;
+        create_dir_all(dir.join("media"))?;
 
         let db_path = dir.join("index.db");
         let has_unsaved = fs::exists(dir.join("UNSAVED"))? && fs::exists(&db_path)?;
@@ -706,7 +706,7 @@ impl MediaPack {
         path: &Path,
         on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
     ) -> Result<Option<Self>> {
-        if path == &self.path {
+        if path == self.path {
             self.save(on_progress).await?;
             return Ok(None);
         }
@@ -1121,9 +1121,7 @@ impl MediaPackView {
                             row.get::<_, Option<bool>>("transparent")?.unwrap_or(false),
                         ))
                     },
-                )
-                .map_err(Into::into)
-            })
+                )})
             .await?;
 
         let mut file = self.open_read().await?;
@@ -1191,9 +1189,7 @@ impl MediaPackView {
                             row.get::<_, String>("file_type")?.parse()?,
                         ))
                     },
-                )
-                .map_err(Into::into)
-            })
+                )})
             .await?;
 
         let mut file = self.open_read().await?;

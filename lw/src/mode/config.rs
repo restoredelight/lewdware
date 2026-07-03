@@ -273,11 +273,10 @@ impl TryFrom<OptionType> for mode::OptionType {
                 default: default.unwrap_or(false),
             },
             OptionType::Enum { default, values } => {
-                if let Some(ref d) = default {
-                    if !values.keys().any(|key| key == d) {
+                if let Some(ref d) = default
+                    && !values.keys().any(|key| key == d) {
                         bail!("`default` ('{d}') is not a valid option");
                     }
-                }
                 Self::Enum {
                     default: default.unwrap_or_default(),
                     values,
@@ -289,13 +288,11 @@ impl TryFrom<OptionType> for mode::OptionType {
 
 impl OptionType {
     pub fn validate(&self) -> Result<()> {
-        if let Self::Enum { default, values } = self {
-            if let Some(d) = default {
-                if !values.keys().any(|key| key == d) {
+        if let Self::Enum { default, values } = self
+            && let Some(d) = default
+                && !values.keys().any(|key| key == d) {
                     bail!("`default` ('{d}') does not match any options");
                 }
-            }
-        }
         Ok(())
     }
 }

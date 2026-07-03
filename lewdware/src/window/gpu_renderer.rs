@@ -30,7 +30,7 @@ pub enum GpuRendererType {
         texture: wgpu::Texture,
         bind_group: wgpu::BindGroup,
     },
-    Video(VideoRenderer),
+    Video(Box<VideoRenderer>),
 }
 
 impl GpuRenderer {
@@ -103,6 +103,7 @@ impl GpuRenderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_video(
         wgpu_state: &WgpuState,
         format: wgpu::TextureFormat,
@@ -153,7 +154,7 @@ impl GpuRenderer {
         Self {
             opacity_buffer,
             window_bind_group,
-            renderer_type: GpuRendererType::Video(video_renderer),
+            renderer_type: GpuRendererType::Video(Box::new(video_renderer)),
         }
     }
 
@@ -243,6 +244,7 @@ fn make_rg8_texture(device: &wgpu::Device, label: &str, width: u32, height: u32)
 }
 
 impl VideoRenderer {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         wgpu_state: &WgpuState,
         format: wgpu::TextureFormat,
@@ -261,8 +263,8 @@ impl VideoRenderer {
         } else {
             video_height
         };
-        let chroma_w = (video_width + 1) / 2;
-        let chroma_h = (decoded_height + 1) / 2;
+        let chroma_w = video_width.div_ceil(2);
+        let chroma_h = decoded_height.div_ceil(2);
 
         let frame_textures = match pixel_format {
             VideoPixelFormat::Yuv420p => {
@@ -431,8 +433,8 @@ impl VideoRenderer {
         let queue = &wgpu_state.queue;
         let w = frame.frame.width();
         let h = frame.frame.height();
-        let chroma_w = (w + 1) / 2;
-        let chroma_h = (h + 1) / 2;
+        let chroma_w = w.div_ceil(2);
+        let chroma_h = h.div_ceil(2);
 
         match &self.frame_textures {
             VideoFrameTextures::Yuv420p {
@@ -571,7 +573,7 @@ pub fn upload_texture_data(
             let src_start = (i * source_stride) as usize;
             let src_end = src_start + unpadded_bytes_per_row as usize;
             padded_data.extend_from_slice(&data[src_start..src_end]);
-            padded_data.extend(std::iter::repeat(0).take(padded_bytes_per_row_padding as usize));
+            padded_data.extend(std::iter::repeat_n(0, padded_bytes_per_row_padding as usize));
         }
 
         queue.write_texture(
@@ -744,7 +746,7 @@ impl DecorationOverlay {
             let mut v = Vec::with_capacity((padded_bpr * height) as usize);
             for row in data.chunks_exact(bytes_per_row as usize) {
                 v.extend_from_slice(row);
-                v.extend(std::iter::repeat(0u8).take(padding as usize));
+                v.extend(std::iter::repeat_n(0u8, padding as usize));
             }
             v
         };

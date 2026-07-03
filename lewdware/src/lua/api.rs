@@ -505,7 +505,7 @@ async fn list_media(
 ) -> mlua::Result<Vec<Media>> {
     let (types, tags) = match opts {
         Some(QueryMediaOpts { types, tags }) => {
-            (types.map_or(MediaTypes::ALL, |t| MediaTypes::from(t)), tags)
+            (types.map_or(MediaTypes::ALL, MediaTypes::from), tags)
         }
         None => (MediaTypes::ALL, None),
     };
@@ -529,7 +529,7 @@ async fn list_images(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
-    let tags = opts.map_or(None, |x| x.tags);
+    let tags = opts.and_then(|x| x.tags);
 
     list_media_type(MediaTypes::IMAGE, tags, media_manager).await
 }
@@ -539,7 +539,7 @@ async fn list_videos(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
-    let tags = opts.map_or(None, |x| x.tags);
+    let tags = opts.and_then(|x| x.tags);
 
     list_media_type(MediaTypes::VIDEO, tags, media_manager).await
 }
@@ -549,7 +549,7 @@ async fn list_audio(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
-    let tags = opts.map_or(None, |x| x.tags);
+    let tags = opts.and_then(|x| x.tags);
 
     list_media_type(MediaTypes::AUDIO, tags, media_manager).await
 }
@@ -573,7 +573,7 @@ async fn random_media(
 ) -> mlua::Result<Option<Media>> {
     let (types, tags) = match opts {
         Some(QueryMediaOpts { types, tags }) => {
-            (types.map_or(MediaTypes::ALL, |t| MediaTypes::from(t)), tags)
+            (types.map_or(MediaTypes::ALL, MediaTypes::from), tags)
         }
         None => (MediaTypes::ALL, None),
     };
@@ -586,7 +586,7 @@ async fn random_image(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    let tags = opts.map_or(None, |x| x.tags);
+    let tags = opts.and_then(|x| x.tags);
 
     random_media_type(lua, MediaTypes::IMAGE, tags, media_manager).await
 }
@@ -596,7 +596,7 @@ async fn random_video(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    let tags = opts.map_or(None, |x| x.tags);
+    let tags = opts.and_then(|x| x.tags);
 
     random_media_type(lua, MediaTypes::VIDEO, tags, media_manager).await
 }
@@ -606,7 +606,7 @@ async fn random_audio(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    let tags = opts.map_or(None, |x| x.tags);
+    let tags = opts.and_then(|x| x.tags);
 
     random_media_type(lua, MediaTypes::AUDIO, tags, media_manager).await
 }
@@ -641,9 +641,9 @@ pub enum FontSize {
 impl FontSize {
     /// Resolve to a concrete point size. `monitor_height` (logical) is the basis for `Percent`
     /// and is ignored for `Value`.
-    pub fn to_pixels(&self, monitor_height: u32) -> f32 {
+    pub fn to_pixels(self, monitor_height: u32) -> f32 {
         match self {
-            FontSize::Value(size) => *size,
+            FontSize::Value(size) => size,
             FontSize::Percent { percent } => (percent / 100.0) as f32 * monitor_height as f32,
         }
     }
@@ -866,11 +866,11 @@ async fn spawn_image_popup(
 
     if opts.window_opts.transparent.is_none() {
         let needs_transparent = media_transparent
-            || opts.window_opts.opacity.map_or(false, |o| o < 1.0)
+            || opts.window_opts.opacity.is_some_and(|o| o < 1.0)
             || opts
                 .window_opts
                 .background_color
-                .map_or(false, |c| c.a < 1.0);
+                .is_some_and(|c| c.a < 1.0);
         if needs_transparent {
             opts.window_opts.transparent = Some(true);
         }
@@ -968,11 +968,11 @@ async fn spawn_video_popup(
 
     if opts.window_opts.transparent.is_none() {
         let needs_transparent = media_transparent
-            || opts.window_opts.opacity.map_or(false, |o| o < 1.0)
+            || opts.window_opts.opacity.is_some_and(|o| o < 1.0)
             || opts
                 .window_opts
                 .background_color
-                .map_or(false, |c| c.a < 1.0);
+                .is_some_and(|c| c.a < 1.0);
         if needs_transparent {
             opts.window_opts.transparent = Some(true);
         }

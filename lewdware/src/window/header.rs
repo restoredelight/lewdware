@@ -70,7 +70,7 @@ impl Header {
         let grey = Color::from_rgba8(227, 229, 231, 255);
 
         let mut paint = Paint::default();
-        paint.set_color(grey.clone());
+        paint.set_color(grey);
 
         let transform = Transform::from_scale(self.scale_factor as f32, self.scale_factor as f32);
 
@@ -78,7 +78,7 @@ impl Header {
             Rect::from_xywh(0.0, 0.0, self.size.width as f32, self.size.height as f32).unwrap();
 
         self.pixmap
-            .fill_rect(header_rect, &paint, transform.clone(), None);
+            .fill_rect(header_rect, &paint, transform, None);
 
         self.background_drawn = true;
     }
@@ -183,12 +183,12 @@ impl Header {
                 paint.set_color(Color::from_rgba(1.0, 0.0, 0.0, 1.0).unwrap());
             }
             (false, false) => {
-                paint.set_color(grey.clone());
+                paint.set_color(grey);
             }
         };
 
         self.pixmap
-            .fill_rect(close_rect, &paint, transform.clone(), None);
+            .fill_rect(close_rect, &paint, transform, None);
 
         if self.clicked || self.hover {
             paint.set_color(Color::WHITE);
@@ -208,7 +208,7 @@ impl Header {
         let path = left_line.finish().unwrap();
 
         self.pixmap
-            .stroke_path(&path, &paint, &Stroke::default(), transform.clone(), None);
+            .stroke_path(&path, &paint, &Stroke::default(), transform, None);
 
         let mut right_line = PathBuilder::new();
         right_line.move_to(cross_middle_x - cross_offset, cross_middle_y + cross_offset);
@@ -217,7 +217,7 @@ impl Header {
         let path = right_line.finish().unwrap();
 
         self.pixmap
-            .stroke_path(&path, &paint, &Stroke::default(), transform.clone(), None);
+            .stroke_path(&path, &paint, &Stroke::default(), transform, None);
     }
 
     pub fn draw(&mut self) -> Option<&Pixmap> {
@@ -281,24 +281,21 @@ impl Header {
     }
 
     pub fn handle_cursor_left(&mut self) {
-        if self.closeable {
-            if self.hover || self.clicked {
+        if self.closeable
+            && (self.hover || self.clicked) {
                 self.hover = false;
                 self.clicked = false;
                 self.request_redraw();
             }
-        }
     }
 
     pub fn handle_mouse_down(&mut self) {
-        if self.closeable {
-            if self.hover {
-                if !self.clicked {
+        if self.closeable
+            && self.hover
+                && !self.clicked {
                     self.clicked = true;
                     self.request_redraw();
                 }
-            }
-        }
     }
 
     pub fn handle_mouse_up(&mut self) -> bool {

@@ -144,11 +144,10 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_ke
                 if key == rdev_key {
                     let modifiers = rdev_keys_to_modifiers(&keys);
 
-                    if modifier_matches(&modifiers, &target_key.modifiers) {
-                        if let Err(err) = event_loop_proxy.send_event(UserEvent::Exit) {
+                    if modifier_matches(&modifiers, &target_key.modifiers)
+                        && let Err(err) = event_loop_proxy.send_event(UserEvent::Exit) {
                             tracing::error!("Could not send panic button event: {}", err);
                         }
-                    }
                 }
             } else if let rdev::EventType::KeyRelease(key) = event.event_type {
                 keys.remove(&key);
@@ -358,6 +357,7 @@ pub fn calculate_media_popup_size(
 /// `border_width` (0 if the text has no border/outline) is added as padding on auto-computed
 /// dimensions, since the border is drawn by repainting the text offset by up to `border_width`
 /// pixels in every direction — without this, the stroke would be clipped by the window bounds.
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_text_popup_size(
     width: Option<Coord>,
     height: Option<Coord>,
@@ -471,13 +471,10 @@ pub fn opt_in_secure_restorable_state() {
 pub fn handle_sigterm(event_loop_proxy: EventLoopProxy<UserEvent>) {
     std::thread::spawn(move || {
         if let Ok(mut signals) =
-            signal_hook::iterator::Signals::new(&[signal_hook::consts::signal::SIGTERM])
-        {
-            for _sig in signals.forever() {
+            signal_hook::iterator::Signals::new([signal_hook::consts::signal::SIGTERM])
+            && signals.forever().next().is_some() {
                 let _ = event_loop_proxy.send_event(UserEvent::Exit);
-                break;
             }
-        }
     });
 }
 
@@ -526,11 +523,10 @@ pub fn temp_dir() -> PathBuf {
 pub fn prepare_temp_dir() -> std::io::Result<PathBuf> {
     let dir = temp_dir();
 
-    if let Err(err) = std::fs::remove_dir_all(&dir) {
-        if err.kind() != std::io::ErrorKind::NotFound {
+    if let Err(err) = std::fs::remove_dir_all(&dir)
+        && err.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!("Failed to clear stale temp dir {}: {err}", dir.display());
         }
-    }
 
     std::fs::create_dir_all(&dir)?;
 

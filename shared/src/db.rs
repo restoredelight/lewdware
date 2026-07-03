@@ -21,8 +21,8 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
         MIGRATIONS.len()
     );
 
-    for i in value.unwrap_or(0)..MIGRATIONS.len() {
-        db.execute_batch(MIGRATIONS[i])?;
+    for migration in &MIGRATIONS[value.unwrap_or(0)..] {
+        db.execute_batch(migration)?;
     }
 
     tracing::info!("Executed migrations");

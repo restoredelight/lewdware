@@ -65,8 +65,8 @@ impl DrmImportedTextures {
         frame: &VideoFrame,
         opts: ImportOpts,
     ) -> Option<Self> {
-        if let Some(hardware_frame) = &frame.hardware_frame {
-            if opts.pix_fmt == VideoPixelFormat::Nv12 {
+        if let Some(hardware_frame) = &frame.hardware_frame
+            && opts.pix_fmt == VideoPixelFormat::Nv12 {
                 return try_import_drm_prime(
                     &wgpu_state.device,
                     &hardware_frame.0,
@@ -76,7 +76,6 @@ impl DrmImportedTextures {
                     &wgpu_state.sampler,
                 );
             }
-        }
 
         None
     }
@@ -205,8 +204,8 @@ fn try_import_drm_prime(
     let fd = desc.objects[0].fd;
     let total_size = desc.objects[0].size as u64;
 
-    let chroma_w = (video_width + 1) / 2;
-    let chroma_h = (video_height + 1) / 2;
+    let chroma_w = video_width.div_ceil(2);
+    let chroma_h = video_height.div_ceil(2);
 
     let is_linear = modifier == 0 || modifier == 0x00FF_FFFF_FFFF_FFFF;
 
@@ -263,7 +262,7 @@ fn try_import_drm_prime(
             return None;
         }
 
-        let y = VkImage::new(&ash_device, unsafe {
+        let y = VkImage::new(ash_device, unsafe {
             create_linear_image(ash_device, vk::Format::R8_UNORM, video_width, video_height)
         }?);
 
@@ -277,14 +276,14 @@ fn try_import_drm_prime(
                 },
             )
         }
-        .row_pitch as u64;
+        .row_pitch;
 
         if y_row_pitch != y_pitch {
             tracing::error!("[drm_import] Y stride mismatch: Vulkan={y_row_pitch} DRM={y_pitch}");
             return None;
         }
 
-        let uv = VkImage::new(&ash_device, unsafe {
+        let uv = VkImage::new(ash_device, unsafe {
             create_linear_image(ash_device, vk::Format::R8G8_UNORM, chroma_w, chroma_h)
         }?);
 
@@ -298,7 +297,7 @@ fn try_import_drm_prime(
                 },
             )
         }
-        .row_pitch as u64;
+        .row_pitch;
 
         if uv_row_pitch != uv_pitch {
             tracing::error!(
@@ -311,7 +310,7 @@ fn try_import_drm_prime(
     } else {
         // Tiled format: use VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT with explicit plane layouts.
         // Plane offsets are baked into the modifier create-info; we bind memory at offset 0.
-        let y = VkImage::new(&ash_device, unsafe {
+        let y = VkImage::new(ash_device, unsafe {
             create_modifier_image(
                 ash_device,
                 vk::Format::R8_UNORM,
@@ -323,7 +322,7 @@ fn try_import_drm_prime(
             )
         }?);
 
-        let uv = VkImage::new(&ash_device, unsafe {
+        let uv = VkImage::new(ash_device, unsafe {
             create_modifier_image(
                 ash_device,
                 vk::Format::R8G8_UNORM,

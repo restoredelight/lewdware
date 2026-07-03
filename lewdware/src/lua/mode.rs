@@ -116,5 +116,5 @@ impl Mode {
 fn decode_require(module: &str) -> Vec<String> {
     let path = module.replace(".", "/");
 
-    return vec![format!("{path}.lua"), format!("{path}/init.lua")];
+    vec![format!("{path}.lua"), format!("{path}/init.lua")]
 }

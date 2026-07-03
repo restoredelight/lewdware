@@ -177,6 +177,9 @@ pub fn start_lua_thread(
         };
         tracing::info!("Read header and metadata");
 
+        // VERSION_MAJOR is currently 0, so this is a no-op until the engine's major
+        // version is bumped, at which point it starts warning about stale modes.
+        #[allow(clippy::absurd_extreme_comparisons)]
         if header.version_major < VERSION_MAJOR {
             tracing::warn!(
                 "Mode was built for API v{}.x; this engine provides API v{}.x. \

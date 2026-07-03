@@ -260,13 +260,12 @@ impl VideoWindow {
 
             match self.video_player.next_frame() {
                 NextFrame::Ready(frame) => {
-                    if let Some(gpu_renderer) = &mut self.gpu_renderer {
-                        if let GpuRendererType::Video(video_renderer) =
+                    if let Some(gpu_renderer) = &mut self.gpu_renderer
+                        && let GpuRendererType::Video(video_renderer) =
                             &mut gpu_renderer.renderer_type
                         {
                             video_renderer.update_video(self.inner_window.wgpu_state(), &frame);
                         }
-                    }
                     render = true;
                 }
                 NextFrame::Finish => return Ok(true),
@@ -279,8 +278,8 @@ impl VideoWindow {
                 let outer_w = outer_size.width as f32;
                 let outer_h = outer_size.height as f32;
                 self.inner_window.draw_wgpu(|rpass, x, y| {
-                    if let Some(gpu_renderer) = gpu_renderer {
-                        if let GpuRendererType::Video(video) = &gpu_renderer.renderer_type {
+                    if let Some(gpu_renderer) = gpu_renderer
+                        && let GpuRendererType::Video(video) = &gpu_renderer.renderer_type {
                             let (vid_pipeline, vid_bind_group) =
                                 video.video_pipeline_and_bind_group();
                             rpass.set_pipeline(vid_pipeline);
@@ -302,7 +301,6 @@ impl VideoWindow {
                             rpass.set_viewport(0.0, 0.0, outer_w, outer_h, 0.0, 1.0);
                             rpass.draw(0..4, 0..1);
                         }
-                    }
                 })?;
             }
         } else {
@@ -465,14 +463,14 @@ impl PromptWindow {
         let (ox, oy) = self.inner_window.inner_offset();
         let opacity = self.inner_window.opacity;
 
-        if self.egui_gpu.is_some() {
+        if let Some(egui_gpu) = &mut self.egui_gpu {
             let wgpu_state = self.inner_window.wgpu_state().clone();
             let window = self.inner_window.window().clone();
 
             // Render egui into the intermediate texture.
             let text = self.text.clone();
             let placeholder = self.placeholder.clone();
-            self.egui_gpu.as_mut().unwrap().render_to_texture(
+            egui_gpu.render_to_texture(
                 &wgpu_state,
                 &window,
                 inner_size,
@@ -495,14 +493,13 @@ impl PromptWindow {
 
                             ui.add_space(ui.available_height() - 50.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                if ui.add(egui::Button::new("Submit")).clicked() {
-                                    if let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
+                                if ui.add(egui::Button::new("Submit")).clicked()
+                                    && let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
                                         id,
                                         text: self.value.clone(),
                                     }) {
                                         tracing::error!("{err}");
                                     }
-                                }
                             });
                         });
                     });
@@ -521,16 +518,13 @@ impl PromptWindow {
             if let Some(overlay) = &self.decoration_overlay {
                 overlay.set_opacity(&wgpu_state.queue, opacity);
             }
-            self.egui_gpu
-                .as_ref()
-                .unwrap()
-                .set_opacity(&wgpu_state.queue, opacity);
+            egui_gpu.set_opacity(&wgpu_state.queue, opacity);
 
             // Blit egui texture and decoration overlay into the surface.
             let surface_format = self.inner_window.surface_format().unwrap();
             let pipeline = wgpu_state.get_pipeline(surface_format);
-            let egui_bind_group = &self.egui_gpu.as_ref().unwrap().bind_group;
-            let egui_window_bind_group = &self.egui_gpu.as_ref().unwrap().window_bind_group;
+            let egui_bind_group = &egui_gpu.bind_group;
+            let egui_window_bind_group = &egui_gpu.window_bind_group;
             let decoration_overlay = self.decoration_overlay.as_ref();
 
             self.inner_window.draw_wgpu(|rpass, x, y| {
@@ -583,14 +577,13 @@ impl PromptWindow {
 
                             ui.add_space(ui.available_height() - 50.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                if ui.add(egui::Button::new("Submit")).clicked() {
-                                    if let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
+                                if ui.add(egui::Button::new("Submit")).clicked()
+                                    && let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
                                         id,
                                         text: self.value.clone(),
                                     }) {
                                         tracing::error!("{err}");
                                     }
-                                }
                             });
                         });
                     });
@@ -702,13 +695,13 @@ impl ChoiceWindow {
         let (ox, oy) = self.inner_window.inner_offset();
         let opacity = self.inner_window.opacity;
 
-        if self.egui_gpu.is_some() {
+        if let Some(egui_gpu) = &mut self.egui_gpu {
             let wgpu_state = self.inner_window.wgpu_state().clone();
             let window = self.inner_window.window().clone();
 
             let text = self.text.clone();
             let options = self.options.clone();
-            self.egui_gpu.as_mut().unwrap().render_to_texture(
+            egui_gpu.render_to_texture(
                 &wgpu_state,
                 &window,
                 inner_size,
@@ -755,15 +748,12 @@ impl ChoiceWindow {
             if let Some(overlay) = &self.decoration_overlay {
                 overlay.set_opacity(&wgpu_state.queue, opacity);
             }
-            self.egui_gpu
-                .as_ref()
-                .unwrap()
-                .set_opacity(&wgpu_state.queue, opacity);
+            egui_gpu.set_opacity(&wgpu_state.queue, opacity);
 
             let surface_format = self.inner_window.surface_format().unwrap();
             let pipeline = wgpu_state.get_pipeline(surface_format);
-            let egui_bind_group = &self.egui_gpu.as_ref().unwrap().bind_group;
-            let egui_window_bind_group = &self.egui_gpu.as_ref().unwrap().window_bind_group;
+            let egui_bind_group = &egui_gpu.bind_group;
+            let egui_window_bind_group = &egui_gpu.window_bind_group;
             let decoration_overlay = self.decoration_overlay.as_ref();
 
             self.inner_window.draw_wgpu(|rpass, x, y| {
@@ -941,13 +931,13 @@ impl TextWindow {
         let (ox, oy) = self.inner_window.inner_offset();
         let opacity = self.inner_window.opacity;
 
-        if self.egui_gpu.is_some() {
+        if let Some(egui_gpu) = &mut self.egui_gpu {
             let wgpu_state = self.inner_window.wgpu_state().clone();
             let window = self.inner_window.window().clone();
 
             let text = self.text.clone();
             let style = self.style;
-            self.egui_gpu.as_mut().unwrap().render_to_texture(
+            egui_gpu.render_to_texture(
                 &wgpu_state,
                 &window,
                 inner_size,
@@ -964,15 +954,12 @@ impl TextWindow {
             if let Some(overlay) = &self.decoration_overlay {
                 overlay.set_opacity(&wgpu_state.queue, opacity);
             }
-            self.egui_gpu
-                .as_ref()
-                .unwrap()
-                .set_opacity(&wgpu_state.queue, opacity);
+            egui_gpu.set_opacity(&wgpu_state.queue, opacity);
 
             let surface_format = self.inner_window.surface_format().unwrap();
             let pipeline = wgpu_state.get_pipeline(surface_format);
-            let egui_bind_group = &self.egui_gpu.as_ref().unwrap().bind_group;
-            let egui_window_bind_group = &self.egui_gpu.as_ref().unwrap().window_bind_group;
+            let egui_bind_group = &egui_gpu.bind_group;
+            let egui_window_bind_group = &egui_gpu.window_bind_group;
             let decoration_overlay = self.decoration_overlay.as_ref();
 
             self.inner_window.draw_wgpu(|rpass, x, y| {
@@ -1140,7 +1127,7 @@ fn translate_position(position: PhysicalPosition<f64>, scale_factor: f64) -> Phy
     logical_position.x -= 1.0;
     logical_position.y -= 1.0 + HEADER_HEIGHT as f64;
 
-    return logical_position.to_physical(scale_factor);
+    logical_position.to_physical(scale_factor)
 }
 
 // BT.709 YCbCr → linear RGB (clipped). Limited range scales Y from [16,235] and Cb/Cr from
@@ -1167,6 +1154,7 @@ fn yuv_to_argb(y: u8, cb: u8, cr: u8, alpha: u8, full_range: bool) -> u32 {
 
 /// Convert a YUV420P `VideoFrame` into ARGB u32 pixels scaled to `(dst_w, dst_h)`.
 /// `packed_alpha`: top half = colour, bottom half = alpha-as-luma (same layout as packed MP4).
+#[allow(clippy::too_many_arguments)]
 fn render_yuv420p_to_argb(
     frame: &VideoFrame,
     dst: &mut [u32],
@@ -1181,9 +1169,9 @@ fn render_yuv420p_to_argb(
     let y_data = f.data(0);
     let cb_data = f.data(1);
     let cr_data = f.data(2);
-    let y_stride = f.stride(0) as usize;
-    let cb_stride = f.stride(1) as usize;
-    let cr_stride = f.stride(2) as usize;
+    let y_stride = f.stride(0);
+    let cb_stride = f.stride(1);
+    let cr_stride = f.stride(2);
 
     let sw = src_display_w as usize;
     let sh = src_display_h as usize;
@@ -1212,6 +1200,7 @@ fn render_yuv420p_to_argb(
 
 /// Convert an NV12 `VideoFrame` into ARGB u32 pixels scaled to `(dst_w, dst_h)`.
 /// Handles both software NV12 (from `av_hwframe_transfer_data`) and the packed-alpha layout.
+#[allow(clippy::too_many_arguments)]
 fn render_nv12_to_argb(
     frame: &VideoFrame,
     dst: &mut [u32],
@@ -1225,8 +1214,8 @@ fn render_nv12_to_argb(
     let f = &frame.frame;
     let y_data = f.data(0);
     let uv_data = f.data(1);
-    let y_stride = f.stride(0) as usize;
-    let uv_stride = f.stride(1) as usize;
+    let y_stride = f.stride(0);
+    let uv_stride = f.stride(1);
 
     let sw = src_display_w as usize;
     let sh = src_display_h as usize;

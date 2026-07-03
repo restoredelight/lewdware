@@ -152,7 +152,7 @@ pub fn setup_decoder(source: MediaSource, loop_audio: bool) -> Result<(MixerDevi
 
     sink.append(source);
 
-    return Ok((stream, sink));
+    Ok((stream, sink))
 }
 
 fn convert_audio_frame(frame: &frame::Audio) -> Result<Vec<f32>> {

@@ -133,6 +133,19 @@ pub async fn save_config_async(config: AppConfig) -> Result<()> {
     Ok(())
 }
 
+fn config_path() -> Result<PathBuf> {
+    let mut config_path = dirs::config_dir()
+        .ok_or_else(|| anyhow!("Could not find a valid config dir for this OS"))?;
+
+    config_path.push("lewdware");
+
+    fs::create_dir_all(&config_path)?;
+
+    config_path.push("config.json");
+
+    Ok(config_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,17 +206,4 @@ mod tests {
         assert!(config.panic_button.modifiers.shift);
         assert!(!config.panic_button.modifiers.ctrl);
     }
-}
-
-fn config_path() -> Result<PathBuf> {
-    let mut config_path = dirs::config_dir()
-        .ok_or_else(|| anyhow!("Could not find a valid config dir for this OS"))?;
-
-    config_path.push("lewdware");
-
-    fs::create_dir_all(&config_path)?;
-
-    config_path.push("config.json");
-
-    Ok(config_path)
 }

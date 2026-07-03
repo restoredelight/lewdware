@@ -41,13 +41,7 @@ impl ImportedTextures {
         frame: &VideoFrame,
         opts: ImportOpts,
     ) -> Option<Self> {
-        if let Some(textures) =
-            PlatformImportedTextures::try_import_from_frame(wgpu_state, frame, opts)
-        {
-            Some(Self(textures))
-        } else {
-            None
-        }
+        PlatformImportedTextures::try_import_from_frame(wgpu_state, frame, opts).map(Self)
     }
 
     pub fn bind_group(&self) -> &wgpu::BindGroup {

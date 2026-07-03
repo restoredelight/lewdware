@@ -409,14 +409,14 @@ mod tests {
             ),
             (
                 OptionType::Number {
-                    default: 3.14,
+                    default: 3.15,
                     min: None,
                     max: None,
                     step: None,
                     clamp: false,
                     slider: false,
                 },
-                OptionValue::Number(3.14),
+                OptionValue::Number(3.15),
             ),
             (
                 OptionType::String {

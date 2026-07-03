@@ -50,7 +50,6 @@ use shared::{
 };
 use tauri::{AppHandle, Manager};
 use tempfile::NamedTempFile;
-use tokio::sync::oneshot;
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 

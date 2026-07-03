@@ -90,7 +90,7 @@ impl Interval {
                             });
                         },
                         result = interval_rx.changed() => {
-                            if !result.is_err() {
+                            if result.is_ok() {
                                 let duration = *interval_rx.borrow();
                                 interval =
                                     tokio::time::interval_at(last_tick + duration, duration);

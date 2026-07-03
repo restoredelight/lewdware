@@ -118,7 +118,7 @@ impl LewdwareApp {
         Ok(Self {
             running: false,
             _config: config,
-            wgpu_state: wgpu_state,
+            wgpu_state,
             windows: HashMap::new(),
             audio_players: HashMap::new(),
             current_audio_id: 0,
@@ -336,7 +336,7 @@ impl LewdwareApp {
         let visible = props.visible;
 
         let mut image_window =
-            ImageWindow::new(inner_window, data).map_err(|err| LewdwareError::WindowError(err))?;
+            ImageWindow::new(inner_window, data).map_err(LewdwareError::WindowError)?;
 
         // Render the image while still offscreen so the compositor has valid pixels before
         // XMoveWindow fires. For CPU (softbuffer) windows, X11 protocol ordering guarantees
@@ -357,7 +357,7 @@ impl LewdwareApp {
         }
 
         self.windows
-            .insert(props.window_id.clone(), WindowType::Image(image_window));
+            .insert(props.window_id, WindowType::Image(image_window));
 
         Ok(props)
     }
@@ -370,13 +370,13 @@ impl LewdwareApp {
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
         let auto_transparent =
-            video_player.packed_alpha() || opts.opacity.map_or(false, |o| o < 1.0);
+            video_player.packed_alpha() || opts.opacity.is_some_and(|o| o < 1.0);
         let transparent = opts.transparent.unwrap_or(auto_transparent);
         let window_opts = self.resolve_window_opts(
             opts,
             WindowSizeBehaviour::ResizeWithMedia {
-                width: video_player.width() as u32,
-                height: video_player.height() as u32,
+                width: video_player.width(),
+                height: video_player.height(),
             },
             true,
             transparent,
@@ -388,7 +388,7 @@ impl LewdwareApp {
         window.request_redraw();
 
         let mut video_window = VideoWindow::new(window, video_player, loop_video)
-            .map_err(|err| LewdwareError::WindowError(err))?;
+            .map_err(LewdwareError::WindowError)?;
 
         if visible {
             if let Err(e) = video_window.inner_window.pre_show() {
@@ -398,7 +398,7 @@ impl LewdwareApp {
         }
 
         self.windows
-            .insert(props.window_id.clone(), WindowType::Video(video_window));
+            .insert(props.window_id, WindowType::Video(video_window));
 
         tracing::info!("{}", self.windows.len());
 
@@ -413,7 +413,7 @@ impl LewdwareApp {
         window_opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
-        let auto_transparent = window_opts.opacity.map_or(false, |o| o < 1.0);
+        let auto_transparent = window_opts.opacity.is_some_and(|o| o < 1.0);
         let transparent = window_opts.transparent.unwrap_or(auto_transparent);
         let resolved = self.resolve_window_opts(
             window_opts,
@@ -429,7 +429,7 @@ impl LewdwareApp {
         let visible = props.visible;
 
         let mut prompt_window = PromptWindow::new(window, text, placeholder, initial_value)
-            .map_err(|err| LewdwareError::WindowError(err))?;
+            .map_err(LewdwareError::WindowError)?;
 
         if visible {
             if let Err(e) = prompt_window.inner_window.pre_show() {
@@ -439,7 +439,7 @@ impl LewdwareApp {
         }
 
         self.windows
-            .insert(props.window_id.clone(), WindowType::Prompt(prompt_window));
+            .insert(props.window_id, WindowType::Prompt(prompt_window));
 
         Ok(props)
     }
@@ -451,7 +451,7 @@ impl LewdwareApp {
         window_opts: SpawnWindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
-        let auto_transparent = window_opts.opacity.map_or(false, |o| o < 1.0);
+        let auto_transparent = window_opts.opacity.is_some_and(|o| o < 1.0);
         let transparent = window_opts.transparent.unwrap_or(auto_transparent);
         let resolved = self.resolve_window_opts(
             window_opts,
@@ -467,7 +467,7 @@ impl LewdwareApp {
         let visible = props.visible;
 
         let mut choice_window = ChoiceWindow::new(window, text, options)
-            .map_err(|err| LewdwareError::WindowError(err))?;
+            .map_err(LewdwareError::WindowError)?;
 
         if visible {
             if let Err(e) = choice_window.inner_window.pre_show() {
@@ -477,7 +477,7 @@ impl LewdwareApp {
         }
 
         self.windows
-            .insert(props.window_id.clone(), WindowType::Choice(choice_window));
+            .insert(props.window_id, WindowType::Choice(choice_window));
 
         Ok(props)
     }
@@ -518,7 +518,7 @@ impl LewdwareApp {
         let visible = props.visible;
 
         let mut text_window =
-            TextWindow::new(window, text, style).map_err(|err| LewdwareError::WindowError(err))?;
+            TextWindow::new(window, text, style).map_err(LewdwareError::WindowError)?;
 
         if visible {
             if let Err(e) = text_window.inner_window.pre_show() {
@@ -528,7 +528,7 @@ impl LewdwareApp {
         }
 
         self.windows
-            .insert(props.window_id.clone(), WindowType::Text(text_window));
+            .insert(props.window_id, WindowType::Text(text_window));
 
         Ok(props)
     }
@@ -663,7 +663,10 @@ impl LewdwareApp {
             LuaRequest::SetWallpaper { file, mode, tx } => {
                 tx.send(self.set_wallpaper(file, mode)).is_ok()
             }
-            LuaRequest::ResetWallpaper { tx } => tx.send(self.reset_wallpaper()).is_ok(),
+            LuaRequest::ResetWallpaper { tx } => {
+                self.reset_wallpaper();
+                tx.send(())
+            }.is_ok(),
             LuaRequest::OpenLink { url, tx } => tx.send(self.open_link(url)).is_ok(),
             LuaRequest::ShowNotification { notification, tx } => {
                 tx.send(self.show_notification(notification)).is_ok()
@@ -752,11 +755,17 @@ impl LewdwareApp {
                                 _ => Err(LewdwareError::Internal("Invalid window type")),
                             })
                             .is_ok(),
-                        WindowAction::SetVisible { tx, visible } => tx
-                            .send(entry.get().inner_window().set_visible(visible))
+                        WindowAction::SetVisible { tx, visible } => {
+                            let _: () = entry.get().inner_window().set_visible(visible);
+                            tx
+                            .send(())
+                        }
                             .is_ok(),
-                        WindowAction::SetTitle { tx, title } => tx
-                            .send(entry.get_mut().inner_window_mut().set_title(title))
+                        WindowAction::SetTitle { tx, title } => {
+                            let _: () = entry.get_mut().inner_window_mut().set_title(title);
+                            tx
+                            .send(())
+                        }
                             .is_ok(),
                         WindowAction::SetOpacity { tx, opacity } => {
                             let window = entry.get_mut();
@@ -795,8 +804,14 @@ impl LewdwareApp {
             LuaRequest::AudioAction { id, action } => {
                 if let Entry::Occupied(entry) = self.audio_players.entry(id) {
                     match action {
-                        AudioAction::Pause { tx } => tx.send(entry.get().pause()).is_ok(),
-                        AudioAction::Play { tx } => tx.send(entry.get().play()).is_ok(),
+                        AudioAction::Pause { tx } => {
+                            let _: () = entry.get().pause();
+                            tx.send(())
+                        }.is_ok(),
+                        AudioAction::Play { tx } => {
+                            let _: () = entry.get().play();
+                            tx.send(())
+                        }.is_ok(),
                     }
                 } else {
                     true
@@ -831,14 +846,10 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
     ) {
         if let Entry::Occupied(mut entry) = self.windows.entry(window_id) {
             match entry.get_mut() {
-                WindowType::Image(window) => match event {
-                    WindowEvent::RedrawRequested => {
-                        if let Err(err) = window.draw() {
-                            tracing::error!("Error drawing image window: {}", err);
-                        }
-                    }
-                    _ => {}
-                },
+                WindowType::Image(window) => if event == WindowEvent::RedrawRequested
+                    && let Err(err) = window.draw() {
+                        tracing::error!("Error drawing image window: {}", err);
+                    },
                 // Video windows are driven directly from `about_to_wait` instead of through
                 // `RedrawRequested` — see the comment there for why.
                 WindowType::Video(_) => {}
@@ -900,13 +911,11 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                     state: ElementState::Released,
                     button: MouseButton::Left,
                     ..
-                } => {
-                    if entry.get_mut().inner_window_mut().handle_mouse_up() {
+                }
+                    if entry.get_mut().inner_window_mut().handle_mouse_up() => {
                         let window_type = entry.remove();
                         self.close_window(window_type);
-                        return;
                     }
-                }
                 _ => {}
             }
         }
@@ -923,11 +932,10 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                 self.process_lua_requests(event_loop);
             }
             UserEvent::AudioFinish { id } => {
-                if self.audio_players.remove(&id).is_some() {
-                    if let Err(err) = self.lua_event_tx.send(lua::Event::AudioFinish { id }) {
+                if self.audio_players.remove(&id).is_some()
+                    && let Err(err) = self.lua_event_tx.send(lua::Event::AudioFinish { id }) {
                         tracing::error!("{err}");
                     }
-                }
             }
         }
     }

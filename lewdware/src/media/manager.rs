@@ -52,7 +52,7 @@ impl MediaManager {
     ) -> Result<T> {
         let (tx, rx) = oneshot::channel();
 
-        if let Err(_) = self.tx.send(request_builder(tx)).await {
+        if self.tx.send(request_builder(tx)).await.is_err() {
             return Err(MediaError::Internal(
                 "The media manager receiver was dropped",
             ));
@@ -249,7 +249,7 @@ async fn handle_request(
                     data.transparent,
                     wgpu_device,
                 )
-                .map_err(|err| MediaError::VideoError(err))
+                .map_err(MediaError::VideoError)
             }))
             .is_ok(),
         MediaRequest::GetAudioData {
@@ -265,7 +265,7 @@ async fn handle_request(
                     Some(audio_id),
                     Some(event_loop_proxy),
                 )
-                .map_err(|err| MediaError::AudioError(err))
+                .map_err(MediaError::AudioError)
             }))
             .is_ok(),
         MediaRequest::GetModeData { id, response_tx } => {

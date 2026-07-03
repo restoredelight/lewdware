@@ -25,7 +25,7 @@ pub enum VideoPixelFormat {
 }
 
 thread_local! {
-    static HW_PIX_FMT: Cell<i32> = Cell::new(ffi::AVPixelFormat::AV_PIX_FMT_NONE as i32);
+    static HW_PIX_FMT: Cell<i32> = const { Cell::new(ffi::AVPixelFormat::AV_PIX_FMT_NONE as i32) };
 }
 
 // fmts is a list terminated by AV_PIX_FMT_NONE. Loop through and try to find our desired format
@@ -100,7 +100,7 @@ unsafe fn try_hw_setup(
 /// Audio is used as the master clock for synchronization.
 ///
 /// * If the video is ahead of the audio, playback will pause on the current frame until the audio
-/// catches up.
+///   catches up.
 /// * If the video is behind the audio, frames will be skipped until the video is back in sync.
 pub struct VideoDecoder {
     receiver: Receiver<Option<VideoFrame>>,
@@ -258,13 +258,12 @@ impl VideoDecoder {
 
         let next_pts = frame.pts;
 
-        if self.audio_player.is_none() {
-            if self.video_clock > Duration::ZERO {
+        if self.audio_player.is_none()
+            && self.video_clock > Duration::ZERO {
                 self.frame_duration = next_pts.saturating_sub(self.video_clock);
             }
             // For the very first frame, frame_duration will be zero, but last_frame_time was
             // set at creation, so needs_next_frame will return true immediately.
-        }
 
         self.video_clock = next_pts;
         self.last_frame_time = Instant::now();
@@ -310,19 +309,17 @@ struct VideoMetadata {
     pixel_format: VideoPixelFormat,
 }
 
+/// The receiver for decoded frames, plus the video's native dimensions, full-range flag, and
+/// pixel format.
+type VideoStream = (Receiver<Option<VideoFrame>>, u32, u32, bool, VideoPixelFormat);
+
 /// Spawn a thread to decode frames from a video.
 fn spawn_video_stream(
     source: MediaSource,
     loop_video: bool,
     packed_alpha: bool,
     wgpu_device: Option<Arc<wgpu::Device>>,
-) -> Result<(
-    Receiver<Option<VideoFrame>>,
-    u32,
-    u32,
-    bool,
-    VideoPixelFormat,
-)> {
+) -> Result<VideoStream> {
     let (tx, rx) = sync_channel(2);
     let (meta_tx, meta_rx) = sync_channel(1);
     let (recycle_tx, recycle_rx) = sync_channel::<Video>(5);
@@ -388,6 +385,7 @@ fn hw_frame_to_video_frame(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn decode_video(
     source: MediaSource,
     tx: SyncSender<Option<VideoFrame>>,

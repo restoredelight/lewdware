@@ -56,18 +56,16 @@ pub fn apply_wayland_preload_safeguards() {
         let mut found_path = None;
         for path in &candidate_paths {
             let p = std::path::Path::new(path);
-            if p.is_file() {
-                if let Ok(mut file) = std::fs::File::open(p) {
+            if p.is_file()
+                && let Ok(mut file) = std::fs::File::open(p) {
                     use std::io::Read;
                     let mut header = [0u8; 5];
-                    if file.read_exact(&mut header).is_ok() {
-                        if header[..4] == *b"\x7FELF" && header[4] == process_elf_class {
+                    if file.read_exact(&mut header).is_ok()
+                        && header[..4] == *b"\x7FELF" && header[4] == process_elf_class {
                             found_path = Some(*path);
                             break;
                         }
-                    }
                 }
-            }
         }
 
         if let Some(preload_path) = found_path {

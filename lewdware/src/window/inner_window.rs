@@ -149,7 +149,7 @@ impl InnerWindow {
         let header = decorations.then(|| {
             Header::new(
                 window.clone(),
-                inner_size.clone(),
+                inner_size,
                 scale_factor,
                 opts.title.clone(),
                 opts.closeable,
@@ -510,8 +510,8 @@ impl InnerWindow {
         tracing::info!("{:?}", self.position);
 
         let move_obj = Move {
-            id: id,
-            from: self.position.clone(),
+            id,
+            from: self.position,
             to: new_position,
             duration: Duration::from_millis(opts.duration),
             start: Instant::now(),
@@ -729,9 +729,9 @@ impl InnerWindow {
 
 impl Drop for InnerWindow {
     fn drop(&mut self) {
-        if let Err(_) = self.lua_event_tx.send(lua::Event::WindowClosed {
+        if self.lua_event_tx.send(lua::Event::WindowClosed {
             id: self.window.id(),
-        }) {
+        }).is_err() {
             // The Lua thread has already shut down (e.g. we're in the middle of quitting the
             // app), so there's nothing listening for this event. Not an error.
             tracing::debug!("Couldn't send WindowClosed event: Lua thread has shut down");
@@ -740,12 +740,12 @@ impl Drop for InnerWindow {
 }
 
 
-fn init_softbuffer(
-    window: Arc<Window>,
-) -> Result<(
+type SoftbufferContextAndSurface = (
     softbuffer::Context<Arc<Window>>,
     softbuffer::Surface<Arc<Window>, Arc<Window>>,
-)> {
+);
+
+fn init_softbuffer(window: Arc<Window>) -> Result<SoftbufferContextAndSurface> {
     let context = softbuffer::Context::new(window.clone()).map_err(|err| anyhow!("{}", err))?;
     let surface =
         softbuffer::Surface::new(&context, window.clone()).map_err(|err| anyhow!("{}", err))?;

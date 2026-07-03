@@ -58,7 +58,7 @@ impl FileOrPath {
     pub fn path(&self) -> &Path {
         match self {
             FileOrPath::File(file) => file.path(),
-            FileOrPath::Path(path_buf) => &path_buf,
+            FileOrPath::Path(path_buf) => path_buf,
         }
     }
 }

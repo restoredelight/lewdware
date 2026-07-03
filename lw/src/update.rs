@@ -77,8 +77,8 @@ fn os_release_family() -> Option<&'static str> {
     let contents = fs::read_to_string("/etc/os-release").ok()?;
 
     for line in contents.lines() {
-        if let Some((key, value)) = line.split_once('=') {
-            if key == "ID" || key == "ID_LIKE" {
+        if let Some((key, value)) = line.split_once('=')
+            && (key == "ID" || key == "ID_LIKE") {
                 let cleaned_value = value
                     .trim()
                     .trim_matches(|c| c == '"' || c == '\'')
@@ -92,7 +92,6 @@ fn os_release_family() -> Option<&'static str> {
                     }
                 }
             }
-        }
     }
 
     None

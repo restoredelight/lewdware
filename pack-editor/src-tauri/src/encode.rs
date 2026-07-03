@@ -132,8 +132,8 @@ impl HardwareEncoder {
     }
 
     pub fn test(self) -> Self {
-        if self != Self::SoftwareFallback {
-            if new_command(get_ffmpeg_path())
+        if self != Self::SoftwareFallback
+            && new_command(get_ffmpeg_path())
                 .args([
                     "-f",
                     "lavfi",
@@ -149,7 +149,6 @@ impl HardwareEncoder {
             {
                 return self;
             }
-        }
 
         Self::SoftwareFallback
     }
@@ -421,7 +420,7 @@ fn encode_image(
         stderr_buf.push('\n');
 
         if line.contains("lavfi.signalstats.YMIN=") {
-            if let Some(val_str) = line.split('=').last() {
+            if let Some(val_str) = line.split('=').next_back() {
                 if let Ok(y_min) = val_str.trim().parse::<f64>() {
                     if y_min < 255.0 {
                         transparent = true;
@@ -501,7 +500,7 @@ fn encode_video(
         stderr_buf.push('\n');
 
         if line.contains("lavfi.signalstats.YMIN=") {
-            if let Some(val_str) = line.split('=').last() {
+            if let Some(val_str) = line.split('=').next_back() {
                 if let Ok(y_min) = val_str.trim().parse::<f64>() {
                     if y_min < 255.0 {
                         let _ = child.kill();
@@ -803,7 +802,7 @@ async fn process_one_file(
             if pack
                 .check_hash(&hash)
                 .await
-                .map_err(|e| ProcessErrorKind::Other(e))?
+                .map_err(ProcessErrorKind::Other)?
             {
                 return Err(ProcessErrorKind::Skipped);
             }

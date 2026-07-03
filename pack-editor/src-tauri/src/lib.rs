@@ -104,7 +104,6 @@ impl From<MetadataDto> for Metadata {
             creator: d.creator,
             description: d.description,
             version: d.version,
-            ..Default::default()
         }
     }
 }

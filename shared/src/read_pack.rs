@@ -158,11 +158,51 @@ impl Header {
     }
 
     pub fn is_default(&self) -> bool {
-        return self.index_offset == 0
+        self.index_offset == 0
             && self.index_length == 0
             && self.metadata_offset == 0
-            && self.metadata_length == 0;
+            && self.metadata_length == 0
     }
+}
+
+/// Read the header and metadata of a pack file.
+pub fn read_pack_metadata<F: Read + Seek>(mut file: F) -> anyhow::Result<(Header, Metadata)> {
+    let mut buf = [0u8; HEADER_SIZE];
+    file.read_exact(&mut buf)?;
+
+    let header = Header::from_buf(buf)?;
+
+    tracing::info!("{:?}", header);
+
+    file.seek(SeekFrom::Start(header.metadata_offset))?;
+
+    let mut buf = vec![0u8; header.metadata_length as usize];
+    file.read_exact(&mut buf)?;
+
+    let metadata = Metadata::from_buf(&buf)?;
+
+    Ok((header, metadata))
+}
+
+pub async fn read_pack_metadata_async<F: AsyncRead + AsyncSeek + Unpin>(
+    mut file: F,
+) -> anyhow::Result<(Header, Metadata)> {
+    // Only import here since tokio implements these traits for `Cursor`
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let mut buf = [0u8; HEADER_SIZE];
+    file.read_exact(&mut buf).await?;
+
+    let header = Header::from_buf(buf)?;
+
+    file.seek(SeekFrom::Start(header.metadata_offset)).await?;
+
+    let mut buf = vec![0u8; header.metadata_length as usize];
+    file.read_exact(&mut buf).await?;
+
+    let metadata = Metadata::from_buf(&buf)?;
+
+    Ok((header, metadata))
 }
 
 #[cfg(test)]
@@ -265,44 +305,4 @@ mod tests {
         assert!(decoded.creator.is_none());
         assert!(decoded.version.is_none());
     }
-}
-
-/// Read the header and metadata of a pack file.
-pub fn read_pack_metadata<F: Read + Seek>(mut file: F) -> anyhow::Result<(Header, Metadata)> {
-    let mut buf = [0u8; HEADER_SIZE];
-    file.read_exact(&mut buf)?;
-
-    let header = Header::from_buf(buf)?;
-
-    tracing::info!("{:?}", header);
-
-    file.seek(SeekFrom::Start(header.metadata_offset))?;
-
-    let mut buf = vec![0u8; header.metadata_length as usize];
-    file.read_exact(&mut buf)?;
-
-    let metadata = Metadata::from_buf(&buf)?;
-
-    Ok((header, metadata))
-}
-
-pub async fn read_pack_metadata_async<F: AsyncRead + AsyncSeek + Unpin>(
-    mut file: F,
-) -> anyhow::Result<(Header, Metadata)> {
-    // Only import here since tokio implements these traits for `Cursor`
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
-
-    let mut buf = [0u8; HEADER_SIZE];
-    file.read_exact(&mut buf).await?;
-
-    let header = Header::from_buf(buf)?;
-
-    file.seek(SeekFrom::Start(header.metadata_offset)).await?;
-
-    let mut buf = vec![0u8; header.metadata_length as usize];
-    file.read_exact(&mut buf).await?;
-
-    let metadata = Metadata::from_buf(&buf)?;
-
-    Ok((header, metadata))
 }

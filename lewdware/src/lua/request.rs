@@ -65,11 +65,11 @@ impl RequestSender {
     ) -> Result<T, SendError> {
         let (tx, rx) = oneshot::channel();
 
-        if let Err(_) = self.request_tx.send(request_builder(tx)).await {
+        if self.request_tx.send(request_builder(tx)).await.is_err() {
             return Err(SendError::RequestReceiverClosed);
         }
 
-        if let Err(_) = self.event_loop_proxy.send_event(UserEvent::LuaRequest) {
+        if self.event_loop_proxy.send_event(UserEvent::LuaRequest).is_err() {
             return Err(SendError::EventLoopClosed);
         }
 
@@ -223,7 +223,7 @@ impl WindowRequestSender {
         match self
             .sender
             .send(|tx| LuaRequest::WindowAction {
-                id: self.id.clone(),
+                id: self.id,
                 action: action_builder(tx),
             })
             .await
