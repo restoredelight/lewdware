@@ -7,6 +7,20 @@ on:
     branches: [main]
 
 jobs:
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --check
+
   rust:
     name: Rust tests
     runs-on: ubuntu-latest
@@ -15,6 +29,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -25,6 +41,9 @@ jobs:
       - name: Run tests
         run: cargo test -p shared -p lw
 
+      - name: Clippy
+        run: cargo clippy -p shared -p lw --all-targets -- -D warnings
+
   rust-pack-editor:
     name: pack-editor Rust tests
     runs-on: ubuntu-latest
@@ -33,6 +52,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -59,6 +80,54 @@ jobs:
 
       - name: Run tests
         run: cargo test -p lewdware-pack-editor
+
+      - name: Clippy
+        run: cargo clippy -p lewdware-pack-editor -p lewdware-config --all-targets -- -D warnings
+
+  rust-engine:
+    name: Engine Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libx11-dev \
+            libxi-dev \
+            libxtst-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libdav1d-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
+
+      - name: Build default modes
+        run: cargo run -p lw -- mode build
+        working-directory: default-modes
+
+      - name: Run tests
+        run: cargo test -p lewdware
+
+      - name: Clippy
+        run: cargo clippy -p lewdware --all-targets -- -D warnings
 
   frontend:
     name: Frontend type check
