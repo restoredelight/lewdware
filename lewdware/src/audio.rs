@@ -11,11 +11,13 @@ use std::{
     thread::{self},
     time::Duration,
 };
-use winit::event_loop::EventLoopProxy;
 
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source, buffer::SamplesBuffer};
 
-use crate::{app::UserEvent, media::MediaSource};
+use crate::{
+    app::{EventPoster, UserEvent},
+    media::MediaSource,
+};
 
 pub struct AudioPlayer {
     _stream: MixerDeviceSink,
@@ -27,16 +29,16 @@ impl AudioPlayer {
         source: MediaSource,
         loop_audio: bool,
         id: Option<u64>,
-        event_loop_proxy: Option<EventLoopProxy<UserEvent>>,
+        event_poster: Option<EventPoster>,
     ) -> Result<Self> {
         let (stream, sink) = setup_decoder(source, loop_audio)?;
         let sink = Arc::new(sink);
 
-        if let (Some(id), Some(event_loop_proxy)) = (id, event_loop_proxy) {
+        if let (Some(id), Some(event_poster)) = (id, event_poster) {
             let sink_clone = sink.clone();
             thread::spawn(move || {
                 sink_clone.sleep_until_end();
-                let _ = event_loop_proxy.send_event(UserEvent::AudioFinish { id });
+                event_poster(UserEvent::AudioFinish { id });
             });
         }
 

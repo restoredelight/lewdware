@@ -1,4 +1,4 @@
-use crate::app::UserEvent;
+use crate::app::{EventPoster, UserEvent};
 use shared::read_pack::Metadata;
 use std::{
     error::Error,
@@ -9,7 +9,6 @@ use std::{
     sync::{Arc, mpsc as std_mpsc},
     thread,
 };
-use winit::event_loop::EventLoopProxy;
 
 use tokio::{sync::mpsc::channel, task::LocalSet};
 
@@ -40,10 +39,10 @@ impl MediaManager {
     /// index). Otherwise that temp file is never cleaned up.
     pub fn open(
         pack_path: &Path,
-        event_loop_proxy: EventLoopProxy<UserEvent>,
+        event_poster: EventPoster,
         wgpu_device: Option<Arc<wgpu::Device>>,
     ) -> anyhow::Result<(Self, Metadata, thread::JoinHandle<()>)> {
-        let (tx, metadata, handle) = spawn_media_manager_thread(pack_path, event_loop_proxy)?;
+        let (tx, metadata, handle) = spawn_media_manager_thread(pack_path, event_poster)?;
 
         Ok((Self { tx, wgpu_device }, metadata, handle))
     }
@@ -169,7 +168,7 @@ impl MediaManager {
 
 fn spawn_media_manager_thread(
     pack_path: &Path,
-    event_loop_proxy: EventLoopProxy<UserEvent>,
+    event_poster: EventPoster,
 ) -> anyhow::Result<(
     std_mpsc::SyncSender<MediaRequest>,
     Metadata,
@@ -207,10 +206,10 @@ fn spawn_media_manager_thread(
 
             while let Some(request) = async_rx.recv().await {
                 let manager = manager.clone();
-                let event_loop_proxy = event_loop_proxy.clone();
+                let event_poster = event_poster.clone();
 
                 tokio::task::spawn_local(async move {
-                    handle_request(manager, request, event_loop_proxy).await;
+                    handle_request(manager, request, event_poster).await;
                 });
             }
 
@@ -226,11 +225,7 @@ fn spawn_media_manager_thread(
     Ok((req_tx, metadata, handle))
 }
 
-async fn handle_request(
-    pack: Rc<MediaPack>,
-    request: MediaRequest,
-    event_loop_proxy: EventLoopProxy<UserEvent>,
-) {
+async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster: EventPoster) {
     if !match request {
         MediaRequest::GetMedia {
             types,
@@ -254,9 +249,7 @@ async fn handle_request(
             height,
         } => {
             let result = pack.get_image_data(media_id, width, height).await;
-            event_loop_proxy
-                .send_event(UserEvent::ImageResolved { id, result })
-                .is_ok()
+            event_poster(UserEvent::ImageResolved { id, result })
         }
         MediaRequest::GetImageFile { id, response_tx } => {
             response_tx.send(pack.get_image_file(id).await).is_ok()
@@ -278,9 +271,7 @@ async fn handle_request(
                 )
                 .map_err(MediaError::VideoError)
             });
-            event_loop_proxy
-                .send_event(UserEvent::VideoResolved { id, result })
-                .is_ok()
+            event_poster(UserEvent::VideoResolved { id, result })
         }
         MediaRequest::GetAudioData {
             id,
@@ -288,12 +279,10 @@ async fn handle_request(
             loop_audio,
         } => {
             let result = pack.get_audio_data(media_id).and_then(|source| {
-                AudioPlayer::new(source, loop_audio, Some(id), Some(event_loop_proxy.clone()))
+                AudioPlayer::new(source, loop_audio, Some(id), Some(event_poster.clone()))
                     .map_err(MediaError::AudioError)
             });
-            event_loop_proxy
-                .send_event(UserEvent::AudioResolved { id, result })
-                .is_ok()
+            event_poster(UserEvent::AudioResolved { id, result })
         }
         MediaRequest::GetModeData { id, response_tx } => {
             response_tx.send(pack.get_mode(id)).is_ok()

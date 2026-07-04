@@ -143,6 +143,17 @@ pub enum UserEvent {
     },
 }
 
+/// A way to notify the main event loop that something is ready to process, decoupled from a
+/// concrete winit `EventLoopProxy` so the Lua thread and media manager thread (which only ever
+/// need to post an event, never to pump the loop themselves) can be exercised without a real
+/// windowing system — see the `lua::tests` harness.
+pub type EventPoster = Arc<dyn Fn(UserEvent) -> bool + Send + Sync>;
+
+/// Wrap a real winit `EventLoopProxy` as an [`EventPoster`].
+pub fn event_loop_poster(proxy: EventLoopProxy<UserEvent>) -> EventPoster {
+    Arc::new(move |event| proxy.send_event(event).is_ok())
+}
+
 impl LewdwareApp {
     pub fn new(
         wgpu_state: Option<std::sync::Arc<WgpuState>>,
@@ -184,11 +195,12 @@ impl LewdwareApp {
         // Opened here rather than on the Lua thread, so the main thread has its own clone to
         // resolve popup media asynchronously (see `spawn_image`/`spawn_video`/`spawn_audio`). A
         // clone is also handed to the Lua thread below.
+        let event_poster = event_loop_poster(event_loop_proxy);
         let (media_manager, _metadata, media_manager_handle) =
-            MediaManager::open(pack_path, event_loop_proxy.clone(), wgpu_device)?;
+            MediaManager::open(pack_path, event_poster.clone(), wgpu_device)?;
 
         let (lua_event_tx, lua_request_rx, lua_thread_handle) =
-            start_lua_thread(event_loop_proxy, config.clone(), media_manager.clone());
+            start_lua_thread(event_poster, config.clone(), media_manager.clone());
 
         let monitors = Monitors::new(config.disabled_monitors.clone());
 

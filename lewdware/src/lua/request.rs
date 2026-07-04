@@ -1,10 +1,8 @@
 use std::error::Error;
 use std::sync::mpsc::{self, SyncSender};
 
-use winit::event_loop::EventLoopProxy;
-
 use crate::{
-    app::UserEvent,
+    app::{EventPoster, UserEvent},
     error::{LewdwareError, Result},
     lua::{
         PopupId, WindowProps,
@@ -18,7 +16,7 @@ use crate::{
 #[derive(Clone)]
 pub struct RequestSender {
     request_tx: SyncSender<LuaRequest>,
-    event_loop_proxy: EventLoopProxy<UserEvent>,
+    event_poster: EventPoster,
 }
 
 #[derive(Debug)]
@@ -47,13 +45,10 @@ impl std::fmt::Display for SendError {
 }
 
 impl RequestSender {
-    pub fn new(
-        request_tx: SyncSender<LuaRequest>,
-        event_loop_proxy: EventLoopProxy<UserEvent>,
-    ) -> Self {
+    pub fn new(request_tx: SyncSender<LuaRequest>, event_poster: EventPoster) -> Self {
         Self {
             request_tx,
-            event_loop_proxy,
+            event_poster,
         }
     }
 
@@ -67,11 +62,7 @@ impl RequestSender {
             return Err(SendError::RequestReceiverClosed);
         }
 
-        if self
-            .event_loop_proxy
-            .send_event(UserEvent::LuaRequest)
-            .is_err()
-        {
+        if !(self.event_poster)(UserEvent::LuaRequest) {
             return Err(SendError::EventLoopClosed);
         }
 

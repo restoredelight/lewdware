@@ -3644,6 +3644,7 @@ dependencies = [
  "windows 0.62.2",
  "winit",
  "x11-dl",
+ "zstd",
 ]
 
 [[package]]
