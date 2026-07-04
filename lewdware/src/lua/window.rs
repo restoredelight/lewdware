@@ -4,11 +4,10 @@ use mlua::{
     ExternalError, ExternalResult, FromLua, IntoLua, LuaSerdeExt, SerializeOptions, UserData, UserDataFields, UserDataMethods,
 };
 use serde::{Deserialize, Serialize};
-use winit::window::WindowId;
 
 use crate::{
     error::LewdwareError, lua::{
-        Media, WindowProps,
+        Media, PopupId, WindowProps,
         api::{Anchor, Coord},
         request::WindowRequestSender,
     }, monitor::Monitor,
@@ -78,21 +77,19 @@ impl UserData for VideoWindow {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         InnerWindow::add_methods(methods);
 
-        methods.add_async_method("pause", async |_, this, _: ()| {
+        methods.add_method("pause", |_, this, _: ()| {
             this.inner_window
                 .request_sender
                 .pause_video()
-                .await
                 .into_lua_err()?;
 
             Ok(())
         });
 
-        methods.add_async_method("play", async |_, this, _: ()| {
+        methods.add_method("play", |_, this, _: ()| {
             this.inner_window
                 .request_sender
                 .play_video()
-                .await
                 .into_lua_err()?;
 
             Ok(())
@@ -157,22 +154,18 @@ impl UserData for PromptWindow {
             Ok(())
         });
 
-        methods.add_async_method("set_text", async |_, this, text: Option<String>| {
-            this.inner_window
-                .request_sender
-                .set_text(text.clone())
-                .await?;
+        methods.add_method("set_text", |_, this, text: Option<String>| {
+            this.inner_window.request_sender.set_text(text.clone())?;
 
             this.state.try_borrow_mut().into_lua_err()?.text = text;
 
             Ok(())
         });
 
-        methods.add_async_method("set_value", async |_, this, value: Option<String>| {
+        methods.add_method("set_value", |_, this, value: Option<String>| {
             this.inner_window
                 .request_sender
-                .set_value(value.clone())
-                .await?;
+                .set_value(value.clone())?;
 
             this.state.try_borrow_mut().into_lua_err()?.value = value.unwrap_or_default();
 
@@ -201,13 +194,9 @@ impl PromptWindow {
         };
 
         for cb in callbacks {
-            let text = text.clone();
-
-            tokio::task::spawn_local(async move {
-                if let Err(err) = cb.call_async::<()>(text).await {
-                    tracing::error!("{err}");
-                }
-            });
+            if let Err(err) = cb.call::<()>(text.clone()) {
+                tracing::error!("{err}");
+            }
         }
 
         Ok(())
@@ -262,26 +251,22 @@ impl UserData for ChoiceWindow {
             Ok(())
         });
 
-        methods.add_async_method("set_text", async |_, this, text: Option<String>| {
-            this.inner_window
-                .request_sender
-                .set_text(text.clone())
-                .await?;
+        methods.add_method("set_text", |_, this, text: Option<String>| {
+            this.inner_window.request_sender.set_text(text.clone())?;
 
             this.state.try_borrow_mut().into_lua_err()?.text = text;
 
             Ok(())
         });
 
-        methods.add_async_method(
+        methods.add_method(
             "set_options",
-            async |_, this, options: Option<Vec<ChoiceWindowOption>>| {
+            |_, this, options: Option<Vec<ChoiceWindowOption>>| {
                 let options = options.unwrap_or_default();
 
                 this.inner_window
                     .request_sender
-                    .set_options(options.clone())
-                    .await?;
+                    .set_options(options.clone())?;
 
                 this.state.try_borrow_mut().into_lua_err()?.options = options;
 
@@ -311,13 +296,9 @@ impl ChoiceWindow {
         };
 
         for cb in callbacks {
-            let id = id.clone();
-
-            tokio::task::spawn_local(async move {
-                if let Err(err) = cb.call_async::<()>(id).await {
-                    tracing::error!("{err}");
-                }
-            });
+            if let Err(err) = cb.call::<()>(id.clone()) {
+                tracing::error!("{err}");
+            }
         }
 
         Ok(())
@@ -347,11 +328,10 @@ impl UserData for TextWindow {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         InnerWindow::add_methods(methods);
 
-        methods.add_async_method("set_text", async |_, this, text: String| {
+        methods.add_method("set_text", |_, this, text: String| {
             this.inner_window
                 .request_sender
-                .set_text(Some(text.clone()))
-                .await?;
+                .set_text(Some(text.clone()))?;
 
             this.state.try_borrow_mut().into_lua_err()?.text = text;
 
@@ -388,7 +368,7 @@ impl FromLua for ChoiceWindowOption {
 }
 
 pub struct InnerWindow {
-    id: WindowId,
+    id: PopupId,
     width: u32,
     height: u32,
     outer_width: u32,
@@ -492,10 +472,10 @@ impl InnerWindow {
     }
 
     fn add_methods<T: HasInnerWindow + 'static, M: UserDataMethods<T>>(methods: &mut M) {
-        methods.add_async_method("close", async |_, this, _: ()| {
+        methods.add_method("close", |_, this, _: ()| {
             let inner_window = this.inner_window();
 
-            match inner_window.request_sender.close().await {
+            match inner_window.request_sender.close() {
                 Ok(()) | Err(LewdwareError::WindowNotFound) => {},
                 Err(err) => return Err(err.into_lua_err()),
             };
@@ -514,9 +494,9 @@ impl InnerWindow {
             Ok(())
         });
 
-        methods.add_async_method(
+        methods.add_method(
             "move",
-            async |_, this, (opts, cb): (Option<MoveOpts>, Option<mlua::Function>)| {
+            |_, this, (opts, cb): (Option<MoveOpts>, Option<mlua::Function>)| {
                 let inner_window = this.inner_window();
                 let opts = opts.unwrap_or_default();
 
@@ -538,16 +518,15 @@ impl InnerWindow {
                 inner_window
                     .request_sender
                     .move_window(id, opts)
-                    .await
                     .into_lua_err()?;
 
                 Ok(())
             },
         );
 
-        methods.add_async_method(
+        methods.add_method(
             "fade",
-            async |_, this, (opts, cb): (Option<FadeOpts>, Option<mlua::Function>)| {
+            |_, this, (opts, cb): (Option<FadeOpts>, Option<mlua::Function>)| {
                 let inner_window = this.inner_window();
                 let opts = opts.unwrap_or_default();
 
@@ -569,18 +548,16 @@ impl InnerWindow {
                 inner_window
                     .request_sender
                     .fade_window(id, opts)
-                    .await
                     .into_lua_err()?;
 
                 Ok(())
             },
         );
 
-        methods.add_async_method("set_visible", async |_, this, visible: bool| {
+        methods.add_method("set_visible", |_, this, visible: bool| {
             this.inner_window()
                 .request_sender
                 .set_visible(visible)
-                .await
                 .into_lua_err()?;
 
             this.inner_window()
@@ -592,21 +569,19 @@ impl InnerWindow {
             Ok(())
         });
 
-        methods.add_async_method("set_title", async |_, this, title: Option<String>| {
+        methods.add_method("set_title", |_, this, title: Option<String>| {
             this.inner_window()
                 .request_sender
                 .set_title(title)
-                .await
                 .into_lua_err()?;
 
             Ok(())
         });
 
-        methods.add_async_method("set_opacity", async |_, this, opacity: f32| {
+        methods.add_method("set_opacity", |_, this, opacity: f32| {
             this.inner_window()
                 .request_sender
                 .set_opacity(opacity)
-                .await
                 .into_lua_err()?;
 
             Ok(())
@@ -622,11 +597,9 @@ impl InnerWindow {
         };
 
         for cb in callbacks {
-            tokio::task::spawn_local(async move {
-                if let Err(err) = cb.call_async::<()>(()).await {
-                    tracing::error!("{err}");
-                }
-            });
+            if let Err(err) = cb.call::<()>(()) {
+                tracing::error!("{err}");
+            }
         }
 
         Ok(())
@@ -643,12 +616,10 @@ impl InnerWindow {
             }
         };
 
-        if let Some(cb) = cb {
-            tokio::task::spawn_local(async move {
-                if let Err(err) = cb.call_async::<()>(()).await {
-                    tracing::error!("{err}");
-                }
-            });
+        if let Some(cb) = cb
+            && let Err(err) = cb.call::<()>(())
+        {
+            tracing::error!("{err}");
         }
 
         Ok(())
@@ -664,12 +635,10 @@ impl InnerWindow {
             }
         };
 
-        if let Some(cb) = cb {
-            tokio::task::spawn_local(async move {
-                if let Err(err) = cb.call_async::<()>(()).await {
-                    tracing::error!("{err}");
-                }
-            });
+        if let Some(cb) = cb
+            && let Err(err) = cb.call::<()>(())
+        {
+            tracing::error!("{err}");
         }
 
         Ok(())

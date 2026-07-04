@@ -1,35 +1,22 @@
 use mlua::{ExternalError, UserData, UserDataFields, UserDataMethods};
 use tokio::{select, sync::watch, task::JoinHandle, time::Instant};
-use tokio_util::task::TaskTracker;
 
 pub struct Timer {
-    tracker: TaskTracker,
     task: JoinHandle<()>,
     duration: tokio::time::Duration,
 }
 
 impl Timer {
     pub fn new(duration: tokio::time::Duration, function: mlua::Function) -> Self {
-        let tracker = TaskTracker::new();
-        let tracker_clone = tracker.clone();
-
-        let task = tracker.spawn_local(async move {
+        let task = tokio::task::spawn_local(async move {
             tokio::time::sleep(duration).await;
 
-            tracker_clone.spawn_local(async move {
-                if let Err(err) = function.call_async::<()>(()).await {
-                    tracing::error!("{err}");
-                };
-            });
-
-            tracker_clone.close();
+            if let Err(err) = function.call::<()>(()) {
+                tracing::error!("{err}");
+            }
         });
 
-        Self {
-            duration,
-            tracker,
-            task,
-        }
+        Self { duration, task }
     }
 }
 
@@ -41,13 +28,6 @@ impl UserData for Timer {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("stop", |_, this, _: ()| {
             this.task.abort();
-            this.tracker.close();
-
-            Ok(())
-        });
-
-        methods.add_async_method("wait", async |_, this, _: ()| {
-            this.tracker.wait().await;
 
             Ok(())
         });
@@ -55,7 +35,6 @@ impl UserData for Timer {
 }
 
 pub struct Interval {
-    tracker: TaskTracker,
     task: JoinHandle<()>,
     duration: tokio::time::Duration,
     interval_tx: watch::Sender<tokio::time::Duration>,
@@ -63,8 +42,6 @@ pub struct Interval {
 
 impl Interval {
     pub fn new(duration: tokio::time::Duration, function: mlua::Function) -> Self {
-        let tracker = TaskTracker::new();
-        let tracker_clone = tracker.clone();
         let (interval_tx, mut interval_rx) = watch::channel(duration);
         interval_rx.mark_unchanged();
 
@@ -82,12 +59,9 @@ impl Interval {
                         tick = interval.tick() => {
                             last_tick = tick;
 
-                            let function = function.clone();
-                            tracker_clone.spawn_local(async move {
-                                if let Err(err) = function.call_async::<()>(()).await {
-                                    tracing::error!("{err}");
-                                };
-                            });
+                            if let Err(err) = function.call::<()>(()) {
+                                tracing::error!("{err}");
+                            }
                         },
                         result = interval_rx.changed() => {
                             if result.is_ok() {
@@ -104,18 +78,14 @@ impl Interval {
                 } else {
                     interval.tick().await;
 
-                    let function = function.clone();
-                    tracker_clone.spawn_local(async move {
-                        if let Err(err) = function.call_async::<()>(()).await {
-                            tracing::error!("{err}");
-                        };
-                    });
+                    if let Err(err) = function.call::<()>(()) {
+                        tracing::error!("{err}");
+                    }
                 }
             }
         });
 
         Self {
-            tracker,
             task,
             duration,
             interval_tx,
@@ -131,13 +101,6 @@ impl UserData for Interval {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("stop", |_, this, _: ()| {
             this.task.abort();
-            this.tracker.close();
-
-            Ok(())
-        });
-
-        methods.add_async_method("wait", async |_, this, _: ()| -> mlua::Result<()> {
-            this.tracker.wait().await;
 
             Ok(())
         });

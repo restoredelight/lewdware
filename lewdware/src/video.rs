@@ -176,14 +176,6 @@ impl VideoDecoder {
         })
     }
 
-    pub fn width(&self) -> u32 {
-        self.native_width
-    }
-
-    pub fn height(&self) -> u32 {
-        self.native_height
-    }
-
     pub fn native_width(&self) -> u32 {
         self.native_width
     }

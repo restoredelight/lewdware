@@ -1,28 +1,30 @@
 use crate::app::UserEvent;
 use shared::read_pack::Metadata;
-use std::{error::Error, fmt::Display, io, path::Path, rc::Rc, sync::Arc, thread};
+use std::{
+    error::Error,
+    fmt::Display,
+    io,
+    path::Path,
+    rc::Rc,
+    sync::{Arc, mpsc as std_mpsc},
+    thread,
+};
 use winit::event_loop::EventLoopProxy;
 
-use tokio::{
-    sync::{
-        mpsc::{Sender, channel},
-        oneshot,
-    },
-    task::LocalSet,
-};
+use tokio::{sync::mpsc::channel, task::LocalSet};
 
 use crate::{
     audio::AudioPlayer,
     error::LewdwareError,
-    lua::{Media, MediaType},
-    media::{FileOrPath, pack::MediaPack, types::ImageData},
+    lua::{Media, MediaType, PopupId},
+    media::{FileOrPath, pack::MediaPack},
     video::VideoDecoder,
 };
 
 /// Manages all the media (images, audio, videos). Trivially clonable.
 #[derive(Clone)]
 pub struct MediaManager {
-    tx: Sender<MediaRequest>,
+    tx: std_mpsc::SyncSender<MediaRequest>,
     wgpu_device: Option<Arc<wgpu::Device>>,
 }
 
@@ -46,38 +48,45 @@ impl MediaManager {
         Ok((Self { tx, wgpu_device }, metadata, handle))
     }
 
-    async fn send<T>(
+    /// Enqueue a request and block the calling thread until a response arrives. Safe to call from
+    /// the Lua thread even though it's already driving its own Tokio runtime: this uses
+    /// `std::sync::mpsc`, not Tokio's channels, so there's no risk of the "blocking call from
+    /// within a runtime" panic that `Sender::blocking_send`/`Receiver::blocking_recv` would raise.
+    fn send<T>(
         &self,
-        request_builder: impl FnOnce(oneshot::Sender<T>) -> MediaRequest,
+        request_builder: impl FnOnce(std_mpsc::Sender<T>) -> MediaRequest,
     ) -> Result<T> {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = std_mpsc::channel();
 
-        if self.tx.send(request_builder(tx)).await.is_err() {
+        if self.tx.send(request_builder(tx)).is_err() {
             return Err(MediaError::Internal(
                 "The media manager receiver was dropped",
             ));
         }
 
-        rx.await
+        rx.recv()
             .map_err(|_| MediaError::Internal("The response sender was dropped"))
     }
 
-    // async fn send(&self, request: MediaRequest) {
-    //     if let Err(_) = self.tx.send(request).await {
-    //         tracing::error!("Media request channel closed");
-    //     }
-    // }
+    /// Enqueue a request that doesn't wait for a response — the manager thread delivers the
+    /// result later by sending a `UserEvent` directly (see `get_image_data`/`get_video_data`/
+    /// `get_audio_data` and `handle_request`). Non-blocking, so it's safe to call from the main
+    /// (winit) thread.
+    fn try_send(&self, request: MediaRequest) -> Result<()> {
+        self.tx
+            .try_send(request)
+            .map_err(|_| MediaError::Internal("The media manager receiver was dropped or full"))
+    }
 
-    pub async fn get_media(&self, name: String, types: MediaTypes) -> Result<Option<Media>> {
+    pub fn get_media(&self, name: String, types: MediaTypes) -> Result<Option<Media>> {
         self.send(|tx| MediaRequest::GetMedia {
             types,
             name,
             response_tx: tx,
-        })
-        .await?
+        })?
     }
 
-    pub async fn random_media(
+    pub fn random_media(
         &self,
         types: MediaTypes,
         tags: Option<Vec<String>>,
@@ -86,87 +95,77 @@ impl MediaManager {
             types,
             tags,
             response_tx: tx,
-        })
-        .await?
+        })?
     }
 
-    pub async fn list_media(
-        &self,
-        types: MediaTypes,
-        tags: Option<Vec<String>>,
-    ) -> Result<Vec<Media>> {
+    pub fn list_media(&self, types: MediaTypes, tags: Option<Vec<String>>) -> Result<Vec<Media>> {
         self.send(|tx| MediaRequest::ListMedia {
             types,
             tags,
             response_tx: tx,
-        })
-        .await?
+        })?
     }
 
-    pub async fn get_image_data(&self, id: u64, width: u32, height: u32) -> Result<ImageData> {
-        self.send(|tx| MediaRequest::GetImageData {
+    /// Request an image be decoded/resized to `(width, height)`. Returns as soon as the request
+    /// is enqueued — the result arrives later as a `UserEvent::ImageResolved { id, .. }`.
+    pub fn get_image_data(&self, id: PopupId, media_id: u64, width: u32, height: u32) -> Result<()> {
+        self.try_send(MediaRequest::GetImageData {
             id,
+            media_id,
             width,
             height,
-            response_tx: tx,
         })
-        .await?
     }
 
-    pub async fn get_image_file(&self, id: u64) -> Result<FileOrPath> {
+    pub fn get_image_file(&self, id: u64) -> Result<FileOrPath> {
         self.send(|tx| MediaRequest::GetImageFile {
             id,
             response_tx: tx,
-        })
-        .await?
+        })?
     }
 
-    pub async fn get_video_data(
+    /// Request a video decoder be set up. Returns as soon as the request is enqueued — the
+    /// result arrives later as a `UserEvent::VideoResolved { id, .. }`.
+    pub fn get_video_data(
         &self,
-        id: u64,
+        id: PopupId,
+        media_id: u64,
         loop_video: bool,
         play_audio: bool,
-    ) -> Result<VideoDecoder> {
+    ) -> Result<()> {
         let wgpu_device = self.wgpu_device.clone();
-        self.send(|tx| MediaRequest::GetVideoData {
+        self.try_send(MediaRequest::GetVideoData {
             id,
-            response_tx: tx,
+            media_id,
             loop_video,
             play_audio,
             wgpu_device,
         })
-        .await?
     }
 
-    pub async fn get_audio_data(
-        &self,
-        id: u64,
-        audio_id: u64,
-        loop_audio: bool,
-    ) -> Result<AudioPlayer> {
-        self.send(|tx| MediaRequest::GetAudioData {
+    /// Request an audio decoder be set up. Returns as soon as the request is enqueued — the
+    /// result arrives later as a `UserEvent::AudioResolved { id, .. }`.
+    pub fn get_audio_data(&self, id: u64, media_id: u64, loop_audio: bool) -> Result<()> {
+        self.try_send(MediaRequest::GetAudioData {
             id,
-            audio_id,
+            media_id,
             loop_audio,
-            response_tx: tx,
         })
-        .await?
     }
 
-    pub async fn get_mode(&self, id: u64) -> anyhow::Result<Vec<u8>> {
+    pub fn get_mode(&self, id: u64) -> anyhow::Result<Vec<u8>> {
         self.send(|tx| MediaRequest::GetModeData {
             id,
             response_tx: tx,
-        })
-        .await?
+        })?
     }
 }
 
 fn spawn_media_manager_thread(
     pack_path: &Path,
     event_loop_proxy: EventLoopProxy<UserEvent>,
-) -> anyhow::Result<(Sender<MediaRequest>, Metadata, thread::JoinHandle<()>)> {
-    let (req_tx, mut req_rx) = channel(20);
+) -> anyhow::Result<(std_mpsc::SyncSender<MediaRequest>, Metadata, thread::JoinHandle<()>)> {
+    let (req_tx, req_rx) = std_mpsc::sync_channel(20);
 
     let file = MediaPack::open(pack_path)?;
     let metadata = file.metadata().clone();
@@ -177,11 +176,26 @@ fn spawn_media_manager_thread(
             .build()
             .expect("Failed to build tokio runtime");
 
+        // `send`/`try_send` above use `std::sync::mpsc` so they can block the Lua thread (which
+        // is busy driving its own Tokio runtime) without risking the "blocking call from within a
+        // runtime" panic that `Sender::blocking_send` guards against. That means `req_rx` can't be
+        // awaited directly by the async loop below, so this thread bridges it into a Tokio channel
+        // first. This bridge thread has no Tokio runtime of its own entered, so `blocking_send` is
+        // safe here.
+        let (async_tx, mut async_rx) = channel(20);
+        thread::spawn(move || {
+            while let Ok(request) = req_rx.recv() {
+                if async_tx.blocking_send(request).is_err() {
+                    break;
+                }
+            }
+        });
+
         let local = LocalSet::new();
         local.spawn_local(async move {
             let manager = Rc::new(file);
 
-            while let Some(request) = req_rx.recv().await {
+            while let Some(request) = async_rx.recv().await {
                 let manager = manager.clone();
                 let event_loop_proxy = event_loop_proxy.clone();
 
@@ -225,23 +239,26 @@ async fn handle_request(
         } => response_tx.send(pack.list_media(types, tags)).is_ok(),
         MediaRequest::GetImageData {
             id,
+            media_id,
             width,
             height,
-            response_tx,
-        } => response_tx
-            .send(pack.get_image_data(id, width, height).await)
-            .is_ok(),
+        } => {
+            let result = pack.get_image_data(media_id, width, height).await;
+            event_loop_proxy
+                .send_event(UserEvent::ImageResolved { id, result })
+                .is_ok()
+        }
         MediaRequest::GetImageFile { id, response_tx } => {
             response_tx.send(pack.get_image_file(id).await).is_ok()
         }
         MediaRequest::GetVideoData {
             id,
+            media_id,
             play_audio,
             loop_video,
             wgpu_device,
-            response_tx,
-        } => response_tx
-            .send(pack.get_video_data(id).and_then(|data| {
+        } => {
+            let result = pack.get_video_data(media_id).and_then(|data| {
                 VideoDecoder::new(
                     data.source,
                     play_audio,
@@ -250,32 +267,32 @@ async fn handle_request(
                     wgpu_device,
                 )
                 .map_err(MediaError::VideoError)
-            }))
-            .is_ok(),
+            });
+            event_loop_proxy
+                .send_event(UserEvent::VideoResolved { id, result })
+                .is_ok()
+        }
         MediaRequest::GetAudioData {
             id,
-            audio_id,
+            media_id,
             loop_audio,
-            response_tx,
-        } => response_tx
-            .send(pack.get_audio_data(id).and_then(|source| {
-                AudioPlayer::new(
-                    source,
-                    loop_audio,
-                    Some(audio_id),
-                    Some(event_loop_proxy),
-                )
-                .map_err(MediaError::AudioError)
-            }))
-            .is_ok(),
+        } => {
+            let result = pack.get_audio_data(media_id).and_then(|source| {
+                AudioPlayer::new(source, loop_audio, Some(id), Some(event_loop_proxy.clone()))
+                    .map_err(MediaError::AudioError)
+            });
+            event_loop_proxy
+                .send_event(UserEvent::AudioResolved { id, result })
+                .is_ok()
+        }
         MediaRequest::GetModeData { id, response_tx } => {
             response_tx.send(pack.get_mode(id)).is_ok()
         }
     } {
-        // The requester's oneshot receiver was dropped before we could respond. Normal when a
-        // request is abandoned mid-flight, e.g. during shutdown when in-flight Lua tasks get
-        // cancelled, so this isn't logged as an error.
-        tracing::debug!("Failed to send response: receiver dropped");
+        // Either the requester's oneshot receiver was dropped, or (for the `*Resolved` events)
+        // the event loop is gone. Normal when a request is abandoned mid-flight, e.g. during
+        // shutdown, so this isn't logged as an error.
+        tracing::debug!("Failed to deliver response: receiver gone");
     }
 }
 
@@ -342,44 +359,43 @@ enum MediaRequest {
     GetMedia {
         types: MediaTypes,
         name: String,
-        response_tx: oneshot::Sender<Result<Option<Media>>>,
+        response_tx: std_mpsc::Sender<Result<Option<Media>>>,
     },
     RandomMedia {
         types: MediaTypes,
         tags: Option<Vec<String>>,
-        response_tx: oneshot::Sender<Result<Option<Media>>>,
+        response_tx: std_mpsc::Sender<Result<Option<Media>>>,
     },
     ListMedia {
         types: MediaTypes,
         tags: Option<Vec<String>>,
-        response_tx: oneshot::Sender<Result<Vec<Media>>>,
+        response_tx: std_mpsc::Sender<Result<Vec<Media>>>,
     },
     GetImageData {
-        id: u64,
+        id: PopupId,
+        media_id: u64,
         width: u32,
         height: u32,
-        response_tx: oneshot::Sender<Result<ImageData>>,
     },
     GetImageFile {
         id: u64,
-        response_tx: oneshot::Sender<Result<FileOrPath>>,
+        response_tx: std_mpsc::Sender<Result<FileOrPath>>,
     },
     GetVideoData {
-        id: u64,
+        id: PopupId,
+        media_id: u64,
         play_audio: bool,
         loop_video: bool,
         wgpu_device: Option<Arc<wgpu::Device>>,
-        response_tx: oneshot::Sender<Result<VideoDecoder>>,
     },
     GetAudioData {
         id: u64,
-        audio_id: u64,
+        media_id: u64,
         loop_audio: bool,
-        response_tx: oneshot::Sender<Result<AudioPlayer>>,
     },
     GetModeData {
         id: u64,
-        response_tx: oneshot::Sender<anyhow::Result<Vec<u8>>>,
+        response_tx: std_mpsc::Sender<anyhow::Result<Vec<u8>>>,
     },
 }
 

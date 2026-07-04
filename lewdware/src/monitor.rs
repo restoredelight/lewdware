@@ -57,16 +57,6 @@ impl Monitors {
             .find(|monitor| platform_id(monitor) == *monitor_id)
     }
 
-    pub fn get(&mut self, id: u64, event_loop: &ActiveEventLoop) -> Result<Monitor> {
-        self.refresh(event_loop);
-
-        self.by_id
-            .get(&id)
-            .and_then(|platform_id| self.by_platform.get(platform_id))
-            .cloned()
-            .ok_or(MonitorError::MonitorNotFound)
-    }
-
     pub fn primary(&mut self, event_loop: &ActiveEventLoop) -> Result<Monitor> {
         self.refresh(event_loop);
 

@@ -457,7 +457,7 @@ impl PromptWindow {
     pub fn render(&mut self) -> Result<()> {
         self.inner_window.start_render()?;
 
-        let id = self.inner_window.window().id();
+        let id = self.inner_window.popup_id();
         let lua_event_tx = self.inner_window.lua_event_tx().clone();
         let inner_size = self.inner_window.inner_size();
         let (ox, oy) = self.inner_window.inner_offset();
@@ -689,7 +689,7 @@ impl ChoiceWindow {
     pub fn render(&mut self) -> Result<()> {
         self.inner_window.start_render()?;
 
-        let id = self.inner_window.window().id();
+        let id = self.inner_window.popup_id();
         let lua_event_tx = self.inner_window.lua_event_tx().clone();
         let inner_size = self.inner_window.inner_size();
         let (ox, oy) = self.inner_window.inner_offset();

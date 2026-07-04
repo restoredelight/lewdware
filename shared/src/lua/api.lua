@@ -52,8 +52,6 @@ Window = {}
 
 ---Close the window. Unlike other methods, this will not fail if the window
 ---is already closed.
----
----@async
 function Window:close() end
 
 ---Execute a function when the window is closed.
@@ -85,8 +83,6 @@ function Window:on_close(cb) end
 ---
 ---Calling this function will cancel any existing move operations.
 ---This means you can call this function with no arguments to stop moving a window.
----
----@async
 function Window:move(opts, cb) end
 
 ---@class FadeOpts
@@ -102,14 +98,10 @@ function Window:move(opts, cb) end
 ---
 ---For a window's opacity to be changeable, it must have been created with
 ---`transparent = true` (this is done automatically in some cases, see [SpawnWindowOpts.transparent](lua://SpawnWindowOpts.transparent)).
----
----@async
 function Window:fade(opts, cb) end
 
 ---Set the text displayed in the header.
 ---@param title string?
----
----@async
 function Window:set_title(title) end
 
 ---@class ImageWindow : Window
@@ -122,20 +114,14 @@ function Window:set_title(title) end
 VideoWindow = {}
 
 ---Pause the video being played on the window.
----
----@async
 function VideoWindow:pause() end
 
 ---Resume playback of the video on the window.
----
----@async
 function VideoWindow:play() end
 
 ---Set whether a video window should loop when the video ends (see also the `loop` option in
 ---`spawn_video_popup()`). Non-looping videos close when they end.
 ---@param loop any
----
----@async
 function VideoWindow:set_loop(loop) end
 
 ---@class PromptWindow : Window
@@ -171,14 +157,10 @@ function ChoiceWindow:on_select(cb) end
 
 ---Set the text/subtitle of the window.
 ---@param text? string
----
----@async
 function ChoiceWindow:set_text(text) end
 
 ---Set the choices that the user has to choose from.
 ---@param options? { id: string, label: string }[]
----
----@async
 function ChoiceWindow:set_options(options) end
 
 ---@class TextWindow : Window
@@ -188,8 +170,6 @@ TextWindow = {}
 
 ---Set the text displayed.
 ---@param text string
----
----@async
 function TextWindow:set_text(text) end
 
 ---@class LewdwareMedia
@@ -198,29 +178,21 @@ lewdware.media = {}
 ---Get a specific file.
 ---@param name string The name of the file.
 ---@return Image | Video | Audio | nil
----
----@async
 function lewdware.media.get(name) end
 
 ---Get a specific image file.
 ---@param name string The name of the file.
 ---@return Image | nil
----
----@async
 function lewdware.media.get_image(name) end
 
 ---Get a specific video file.
 ---@param name string The name of the file.
 ---@return Video | nil
----
----@async
 function lewdware.media.get_video(name) end
 
 ---Get a specific audio file.
 ---@param name string The name of the file.
 ---@return Audio | nil
----
----@async
 function lewdware.media.get_audio(name) end
 
 ---@class QueryMediaOpts
@@ -231,8 +203,6 @@ function lewdware.media.get_audio(name) end
 ---List all files in the pack.
 ---@param opts? QueryMediaOpts
 ---@return (Image | Video | Audio)[]
----
----@async
 function lewdware.media.list(opts) end
 
 ---List all image files in the pack.
@@ -240,8 +210,6 @@ function lewdware.media.list(opts) end
 ---   tags?: string[],
 ---}
 ---@return Image[]
----
----@async
 function lewdware.media.list_images(opts) end
 
 ---List all video files in the pack.
@@ -249,8 +217,6 @@ function lewdware.media.list_images(opts) end
 ---   tags?: string[],
 ---}
 ---@return Video[]
----
----@async
 function lewdware.media.list_videos(opts) end
 
 ---List all audio files in the pack.
@@ -258,22 +224,16 @@ function lewdware.media.list_videos(opts) end
 ---   tags?: string[],
 ---}
 ---@return Audio[]
----
----@async
 function lewdware.media.list_audio(opts) end
 
 ---Get a random media file.
 ---@param opts? QueryMediaOpts
 ---@return Image | Video | Audio | nil
----
----@async
 function lewdware.media.random(opts) end
 
 ---Get a random image file
 ---@param opts? QueryMediaOpts
 ---@return Image | nil
----
----@async
 function lewdware.media.random_image(opts) end
 
 ---Get a random video file
@@ -281,8 +241,6 @@ function lewdware.media.random_image(opts) end
 ---   tags?: string[],
 ---}
 ---@return Video | nil
----
----@async
 function lewdware.media.random_video(opts) end
 
 ---Get a random audio file
@@ -290,16 +248,12 @@ function lewdware.media.random_video(opts) end
 ---   tags?: string[],
 ---}
 ---@return Audio | nil
----
----@async
 function lewdware.media.random_audio(opts) end
 
 ---Spawn a popup displaying an image.
 ---@param image Image
 ---@param opts? SpawnImageOpts
 ---@return ImageWindow
----
----@async
 function lewdware.spawn_image_popup(image, opts) end
 
 ---@class SpawnWindowOpts
@@ -351,8 +305,6 @@ function lewdware.spawn_image_popup(image, opts) end
 ---@param video Video
 ---@param opts? SpawnVideoOpts
 ---@return VideoWindow
----
----@async
 function lewdware.spawn_video_popup(video, opts) end
 
 ---@class SpawnVideoOpts : SpawnWindowOpts
@@ -366,8 +318,6 @@ function lewdware.spawn_video_popup(video, opts) end
 ---@param audio Audio
 ---@param opts? PlayAudioOpts
 ---@return AudioHandle
----
----@async
 function lewdware.play_audio(audio, opts) end
 
 ---@class PlayAudioOpts
@@ -385,25 +335,17 @@ AudioHandle = {}
 function AudioHandle:on_finish(cb) end
 
 ---Pause the audio track.
----
----@async
 function AudioHandle:pause() end
 
 ---Resume the audio track.
----
----@async
 function AudioHandle:play() end
 
 ---Set the current wallpaper.
 ---@param image Image
 ---@param opts? SetWallpaperOpts
----
----@async
 function lewdware.set_wallpaper(image, opts) end
 
 ---Set the current wallpaper to the user's default.
----
----@async
 function lewdware.reset_wallpaper() end
 
 ---@class SetWallpaperOpts
@@ -425,8 +367,6 @@ function lewdware.spawn_prompt(opts) end
 ---Spawn a choice popup. This will present the user with one or more options to click.
 ---@param opts? SpawnChoiceOpts
 ---@return ChoiceWindow
----
----@async
 function lewdware.spawn_choice(opts) end
 
 ---@class SpawnChoiceOpts : SpawnWindowOpts
@@ -440,8 +380,6 @@ function lewdware.spawn_choice(opts) end
 ---@param text string
 ---@param opts? SpawnTextOpts
 ---@return TextWindow
----
----@async
 function lewdware.spawn_text_popup(text, opts) end
 
 ---@alias TextFont
@@ -479,8 +417,6 @@ function lewdware.spawn_text_popup(text, opts) end
 
 ---Open a URL in the browser
 ---@param url string
----
----@async
 function lewdware.open_link(url) end
 
 ---@class Notification
@@ -489,8 +425,6 @@ function lewdware.open_link(url) end
 
 ---Show a notification
 ---@param notification Notification
----
----@async
 function lewdware.show_notification(notification) end
 
 ---Call a function after a certain period of time.
@@ -505,17 +439,9 @@ Timer = {}
 
 ---Stop a timer from running, if it hasn't already.
 ---
----Note that if you are planning to run code after calling this, the timer
----could be in the middle of running the scheduled function as you call this
----function (which will not be stopped). You probably want to use
----[Timer:wait()](lua://Timer.wait) to make sure that any tasks spawned by the
----timer have finished.
+---Once this returns, the timer's function is guaranteed not to run — even if
+---the timer had already fired and its function was queued.
 function Timer:stop() end
-
----Wait for the timer, and any tasks spawned by the timer, to finish running.
----
----@async
-function Timer:wait() end
 
 ---Periodically run a function.
 ---@param duration number The function will be run every `duration` milliseconds.
@@ -529,17 +455,9 @@ Interval = {}
 
 ---Stop/cancel an interval from running.
 ---
----Note that this function stops the interval from running, but it does not stop
----tasks that have already been spawned. If you are planning to run code after
----calling this, you probably want to use [Interval:wait()](lua://Interval.wait)
----to wait for any tasks spawned by the interval to finish.
+---Once this returns, the interval's function is guaranteed not to run again —
+---even if a firing was already queued.
 function Interval:stop() end
-
----Wait for an interval, and any tasks spawned by that interval. If you call this and
----never call [Interval:stop()](lua://Interval.stop), this function will wait forever.
----
----@async
-function Interval:wait() end
 
 ---Change the duration of an interval (e.g. to speed up or slow down how often the function is
 ---called).
@@ -547,8 +465,6 @@ function Interval:wait() end
 function Interval:set_duration(duration) end
 
 ---Stop completely.
----
----@async
 function lewdware.exit() end
 
 ---@class Monitor
@@ -563,8 +479,6 @@ lewdware.monitors = {}
 ---
 ---The available monitors may change while a mode is running. Try not to store this value for too
 ---long.
----
----@async
 function lewdware.monitors.list() end
 
 ---Get the user's primary monitor
@@ -572,6 +486,4 @@ function lewdware.monitors.list() end
 ---
 ---The primary monitor may change while a mode is running. Try not to store this value for too
 ---long.
----
----@async
 function lewdware.monitors.primary() end

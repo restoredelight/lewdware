@@ -1,25 +1,23 @@
 use std::error::Error;
+use std::sync::mpsc::{self, SyncSender};
 
-use tokio::sync::{mpsc::Sender, oneshot};
-use winit::{event_loop::EventLoopProxy, window::WindowId};
+use winit::event_loop::EventLoopProxy;
 
 use crate::{
     app::UserEvent,
-    audio::AudioPlayer,
     error::{LewdwareError, Result},
     lua::{
-        WindowProps,
+        PopupId, WindowProps,
         api::{Notification, SpawnWindowOpts, TextStyle, WallpaperMode},
         window::{ChoiceWindowOption, FadeOpts, MoveOpts},
     },
-    media::{FileOrPath, ImageData},
+    media::FileOrPath,
     monitor::Monitor,
-    video::VideoDecoder,
 };
 
 #[derive(Clone)]
 pub struct RequestSender {
-    request_tx: Sender<LuaRequest>,
+    request_tx: SyncSender<LuaRequest>,
     event_loop_proxy: EventLoopProxy<UserEvent>,
 }
 
@@ -50,7 +48,7 @@ impl std::fmt::Display for SendError {
 
 impl RequestSender {
     pub fn new(
-        request_tx: Sender<LuaRequest>,
+        request_tx: SyncSender<LuaRequest>,
         event_loop_proxy: EventLoopProxy<UserEvent>,
     ) -> Self {
         Self {
@@ -59,13 +57,13 @@ impl RequestSender {
         }
     }
 
-    async fn send<T>(
+    fn send<T>(
         &self,
-        request_builder: impl FnOnce(oneshot::Sender<T>) -> LuaRequest,
+        request_builder: impl FnOnce(mpsc::Sender<T>) -> LuaRequest,
     ) -> Result<T, SendError> {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpsc::channel();
 
-        if self.request_tx.send(request_builder(tx)).await.is_err() {
+        if self.request_tx.send(request_builder(tx)).is_err() {
             return Err(SendError::RequestReceiverClosed);
         }
 
@@ -73,38 +71,46 @@ impl RequestSender {
             return Err(SendError::EventLoopClosed);
         }
 
-        rx.await.map_err(|_| SendError::SenderDropped)
+        rx.recv().map_err(|_| SendError::SenderDropped)
     }
 
-    pub async fn spawn_image(
+    pub fn spawn_image(
         &self,
-        data: ImageData,
+        media_id: u64,
+        width: u32,
+        height: u32,
         window_opts: SpawnWindowOpts,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnImage {
-            data,
+            media_id,
+            width,
+            height,
             window_opts,
             tx,
-        })
-        .await?
+        })?
     }
 
-    pub async fn spawn_video(
+    pub fn spawn_video(
         &self,
-        video_player: VideoDecoder,
+        media_id: u64,
+        width: u32,
+        height: u32,
         loop_video: bool,
+        audio: bool,
         window_opts: SpawnWindowOpts,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnVideo {
-            video_player,
+            media_id,
+            width,
+            height,
             loop_video,
+            audio,
             window_opts,
             tx,
-        })
-        .await?
+        })?
     }
 
-    pub async fn spawn_prompt(
+    pub fn spawn_prompt(
         &self,
         text: Option<String>,
         placeholder: Option<String>,
@@ -117,11 +123,10 @@ impl RequestSender {
             initial_value,
             window_opts,
             tx,
-        })
-        .await?
+        })?
     }
 
-    pub async fn spawn_choice(
+    pub fn spawn_choice(
         &self,
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
@@ -132,11 +137,10 @@ impl RequestSender {
             options,
             window_opts,
             tx,
-        })
-        .await?
+        })?
     }
 
-    pub async fn spawn_text(
+    pub fn spawn_text(
         &self,
         text: String,
         style: TextStyle,
@@ -147,55 +151,46 @@ impl RequestSender {
             style,
             window_opts,
             tx,
-        })
-        .await?
+        })?
     }
 
-    pub async fn set_wallpaper(&self, file: FileOrPath, mode: Option<WallpaperMode>) -> Result<()> {
-        self.send(|tx| LuaRequest::SetWallpaper { file, mode, tx })
-            .await?
-    }
-    
-    pub async fn reset_wallpaper(&self) -> Result<()> {
-        Ok(self.send(|tx| LuaRequest::ResetWallpaper { tx }).await?)
+    pub fn set_wallpaper(&self, file: FileOrPath, mode: Option<WallpaperMode>) -> Result<()> {
+        self.send(|tx| LuaRequest::SetWallpaper { file, mode, tx })?
     }
 
-    pub async fn spawn_audio(&self, audio_player: AudioPlayer) -> Result<u64> {
-        Ok(self
-            .send(|tx| LuaRequest::SpawnAudio { audio_player, tx })
-            .await?)
+    pub fn reset_wallpaper(&self) -> Result<()> {
+        Ok(self.send(|tx| LuaRequest::ResetWallpaper { tx })?)
     }
 
-    pub async fn open_link(&self, url: String) -> Result<()> {
-        self.send(|tx| LuaRequest::OpenLink { url, tx }).await?
+    pub fn spawn_audio(&self, media_id: u64, loop_audio: bool) -> Result<u64> {
+        Ok(self.send(|tx| LuaRequest::SpawnAudio {
+            media_id,
+            loop_audio,
+            tx,
+        })?)
     }
 
-    pub async fn show_notification(&self, notification: Notification) -> Result<()> {
-        self.send(|tx| LuaRequest::ShowNotification { notification, tx })
-            .await?
+    pub fn open_link(&self, url: String) -> Result<()> {
+        self.send(|tx| LuaRequest::OpenLink { url, tx })?
     }
 
-    pub async fn list_monitors(&self) -> Result<Vec<Monitor>> {
-        Ok(self.send(|tx| LuaRequest::ListMonitors { tx }).await?)
+    pub fn show_notification(&self, notification: Notification) -> Result<()> {
+        self.send(|tx| LuaRequest::ShowNotification { notification, tx })?
     }
 
-    pub async fn primary_monitor(&self) -> Result<Monitor> {
-        self.send(|tx| LuaRequest::PrimaryMonitor { tx }).await?
+    pub fn list_monitors(&self) -> Result<Vec<Monitor>> {
+        Ok(self.send(|tx| LuaRequest::ListMonitors { tx })?)
     }
 
-    pub async fn get_monitor(&self, id: u64) -> Result<Monitor> {
-        self.send(|tx| LuaRequest::GetMonitor { id, tx }).await?
+    pub fn primary_monitor(&self) -> Result<Monitor> {
+        self.send(|tx| LuaRequest::PrimaryMonitor { tx })?
     }
 
-    pub async fn random_monitor(&self) -> Result<Monitor> {
-        self.send(|tx| LuaRequest::RandomMonitor { tx }).await?
+    pub fn exit(&self) -> Result<()> {
+        Ok(self.send(|tx| LuaRequest::Exit { tx })?)
     }
 
-    pub async fn exit(&self) -> Result<()> {
-        Ok(self.send(|tx| LuaRequest::Exit { tx }).await?)
-    }
-
-    pub fn window_sender(&self, id: WindowId) -> WindowRequestSender {
+    pub fn window_sender(&self, id: PopupId) -> WindowRequestSender {
         WindowRequestSender {
             sender: self.clone(),
             id,
@@ -212,93 +207,74 @@ impl RequestSender {
 
 pub struct WindowRequestSender {
     sender: RequestSender,
-    id: WindowId,
+    id: PopupId,
 }
 
 impl WindowRequestSender {
-    async fn send<T>(
-        &self,
-        action_builder: impl FnOnce(oneshot::Sender<T>) -> WindowAction,
-    ) -> Result<T> {
-        match self
-            .sender
-            .send(|tx| LuaRequest::WindowAction {
-                id: self.id,
-                action: action_builder(tx),
-            })
-            .await
-        {
+    fn send<T>(&self, action_builder: impl FnOnce(mpsc::Sender<T>) -> WindowAction) -> Result<T> {
+        match self.sender.send(|tx| LuaRequest::WindowAction {
+            id: self.id,
+            action: action_builder(tx),
+        }) {
             Err(SendError::SenderDropped) => Err(LewdwareError::WindowNotFound),
             x => x.map_err(|err| err.into()),
         }
     }
 
-    pub async fn close(&self) -> Result<()> {
-        self.send(|tx| WindowAction::CloseWindow { tx }).await
+    pub fn close(&self) -> Result<()> {
+        self.send(|tx| WindowAction::CloseWindow { tx })
     }
 
-    pub async fn move_window(&self, move_id: u64, opts: MoveOpts) -> Result<()> {
+    pub fn move_window(&self, move_id: u64, opts: MoveOpts) -> Result<()> {
         self.send(|tx| WindowAction::Move {
             id: move_id,
             tx,
             opts,
         })
-        .await
         .flatten()
     }
 
-    pub async fn fade_window(&self, fade_id: u64, opts: FadeOpts) -> Result<()> {
+    pub fn fade_window(&self, fade_id: u64, opts: FadeOpts) -> Result<()> {
         self.send(|tx| WindowAction::Fade {
             id: fade_id,
             tx,
             opts,
         })
-        .await
         .flatten()
     }
 
-    pub async fn pause_video(&self) -> Result<()> {
-        self.send(|tx| WindowAction::PauseVideo { tx })
-            .await
-            .flatten()
+    pub fn pause_video(&self) -> Result<()> {
+        self.send(|tx| WindowAction::PauseVideo { tx }).flatten()
     }
 
-    pub async fn play_video(&self) -> Result<()> {
-        self.send(|tx| WindowAction::PlayVideo { tx })
-            .await
-            .flatten()
+    pub fn play_video(&self) -> Result<()> {
+        self.send(|tx| WindowAction::PlayVideo { tx }).flatten()
     }
 
-    pub async fn set_text(&self, text: Option<String>) -> Result<()> {
-        self.send(|tx| WindowAction::SetText { tx, text })
-            .await
-            .flatten()
+    pub fn set_text(&self, text: Option<String>) -> Result<()> {
+        self.send(|tx| WindowAction::SetText { tx, text }).flatten()
     }
 
-    pub async fn set_value(&self, value: Option<String>) -> Result<()> {
+    pub fn set_value(&self, value: Option<String>) -> Result<()> {
         self.send(|tx| WindowAction::SetValue { tx, value })
-            .await
             .flatten()
     }
 
-    pub async fn set_options(&self, options: Vec<ChoiceWindowOption>) -> Result<()> {
+    pub fn set_options(&self, options: Vec<ChoiceWindowOption>) -> Result<()> {
         self.send(|tx| WindowAction::SetOptions { tx, options })
-            .await
             .flatten()
     }
 
-    pub async fn set_visible(&self, visible: bool) -> Result<()> {
+    pub fn set_visible(&self, visible: bool) -> Result<()> {
         self.send(|tx| WindowAction::SetVisible { tx, visible })
-            .await
     }
 
-    pub async fn set_title(&self, title: Option<String>) -> Result<()> {
-        self.send(|tx| WindowAction::SetTitle { tx, title }).await
+    pub fn set_title(&self, title: Option<String>) -> Result<()> {
+        self.send(|tx| WindowAction::SetTitle { tx, title })
     }
 
-    pub async fn set_opacity(&self, opacity: f32) -> Result<()> {
+    pub fn set_opacity(&self, opacity: f32) -> Result<()> {
         self.send(|tx| WindowAction::SetOpacity { tx, opacity })
-            .await
             .flatten()
     }
 }
@@ -310,198 +286,150 @@ pub struct AudioRequestSender {
 }
 
 impl AudioRequestSender {
-    async fn send<T>(
-        &self,
-        action_builder: impl FnOnce(oneshot::Sender<T>) -> AudioAction,
-    ) -> Result<T> {
-        match self
-            .sender
-            .send(|tx| LuaRequest::AudioAction {
-                id: self.id,
-                action: action_builder(tx),
-            })
-            .await
-        {
+    fn send<T>(&self, action_builder: impl FnOnce(mpsc::Sender<T>) -> AudioAction) -> Result<T> {
+        match self.sender.send(|tx| LuaRequest::AudioAction {
+            id: self.id,
+            action: action_builder(tx),
+        }) {
             Err(SendError::SenderDropped) => Err(LewdwareError::AudioHandleNotFound),
             x => x.map_err(|err| err.into()),
         }
     }
 
-    pub async fn pause(&self) -> Result<()> {
-        self.send(|tx| AudioAction::Pause { tx }).await
+    pub fn pause(&self) -> Result<()> {
+        self.send(|tx| AudioAction::Pause { tx })
     }
 
-    pub async fn play(&self) -> Result<()> {
-        self.send(|tx| AudioAction::Play { tx }).await
+    pub fn play(&self) -> Result<()> {
+        self.send(|tx| AudioAction::Play { tx })
     }
 }
 
 pub enum LuaRequest {
     SpawnImage {
-        data: ImageData,
+        media_id: u64,
+        width: u32,
+        height: u32,
         window_opts: SpawnWindowOpts,
-        tx: oneshot::Sender<Result<WindowProps>>,
+        tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnVideo {
-        video_player: VideoDecoder,
+        media_id: u64,
+        width: u32,
+        height: u32,
         loop_video: bool,
+        audio: bool,
         window_opts: SpawnWindowOpts,
-        tx: oneshot::Sender<Result<WindowProps>>,
+        tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnPrompt {
         text: Option<String>,
         placeholder: Option<String>,
         initial_value: Option<String>,
         window_opts: SpawnWindowOpts,
-        tx: oneshot::Sender<Result<WindowProps>>,
+        tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnChoice {
         text: Option<String>,
         options: Vec<ChoiceWindowOption>,
         window_opts: SpawnWindowOpts,
-        tx: oneshot::Sender<Result<WindowProps>>,
+        tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnText {
         text: String,
         style: TextStyle,
         window_opts: SpawnWindowOpts,
-        tx: oneshot::Sender<Result<WindowProps>>,
+        tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnAudio {
-        audio_player: AudioPlayer,
-        tx: oneshot::Sender<u64>,
+        media_id: u64,
+        loop_audio: bool,
+        tx: mpsc::Sender<u64>,
     },
     SetWallpaper {
         file: FileOrPath,
         mode: Option<WallpaperMode>,
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
     },
     ResetWallpaper {
-        tx: oneshot::Sender<()>,
+        tx: mpsc::Sender<()>,
     },
     OpenLink {
         url: String,
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
     },
     ShowNotification {
         notification: Notification,
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
     },
     ListMonitors {
-        tx: oneshot::Sender<Vec<Monitor>>,
+        tx: mpsc::Sender<Vec<Monitor>>,
     },
     PrimaryMonitor {
-        tx: oneshot::Sender<Result<Monitor>>,
-    },
-    GetMonitor {
-        id: u64,
-        tx: oneshot::Sender<Result<Monitor>>,
-    },
-    RandomMonitor {
-        tx: oneshot::Sender<Result<Monitor>>,
+        tx: mpsc::Sender<Result<Monitor>>,
     },
     Exit {
-        tx: oneshot::Sender<()>,
+        tx: mpsc::Sender<()>,
     },
     WindowAction {
-        id: WindowId,
+        id: PopupId,
         action: WindowAction,
     },
     AudioAction {
         id: u64,
         action: AudioAction,
     },
-    // CloseWindow {
-    //     id: WindowId,
-    // },
-    // SpawnImage {
-    //     tx: oneshot::Sender<WindowProps>,
-    //     name: String,
-    // },
-    // SpawnVideo {
-    //     tx: oneshot::Sender<WindowProps>,
-    //     name: String,
-    // },
-    // SpawnRandomPopup {
-    //     tx: oneshot::Sender<(PopupResultType, WindowProps)>,
-    //     popup_type: PopupType,
-    //     tags: Option<Vec<String>>,
-    // },
-    // SpawnPrompt {
-    //     tx: oneshot::Sender<WindowProps>,
-    //     text: String,
-    // },
-    // OpenLink {
-    //     url: String,
-    // },
-    // Exit,
-    // PauseVideo {
-    //     id: WindowId,
-    // },
-    // ResumeVideo {
-    //     id: WindowId,
-    // },
-    // PauseAudio {
-    //     id: u64,
-    // },
-    // ResumeAudio {
-    //     id: u64,
-    // },
-    // SetSpawnerEnabled {
-    //     spawner_type: SpawnerType,
-    //     enabled: bool,
-    // },
 }
 
 #[derive(Debug)]
 pub enum WindowAction {
     CloseWindow {
-        tx: oneshot::Sender<()>,
+        tx: mpsc::Sender<()>,
     },
     PauseVideo {
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
     },
     PlayVideo {
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
     },
     Move {
         id: u64,
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
         opts: MoveOpts,
     },
     Fade {
         id: u64,
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
         opts: FadeOpts,
     },
     SetText {
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
         text: Option<String>,
     },
     SetValue {
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
         value: Option<String>,
     },
     SetOptions {
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
         options: Vec<ChoiceWindowOption>,
     },
     SetVisible {
-        tx: oneshot::Sender<()>,
+        tx: mpsc::Sender<()>,
         visible: bool,
     },
     SetTitle {
-        tx: oneshot::Sender<()>,
+        tx: mpsc::Sender<()>,
         title: Option<String>,
     },
     SetOpacity {
-        tx: oneshot::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<()>>,
         opacity: f32,
     },
 }
 
 #[derive(Debug)]
 pub enum AudioAction {
-    Pause { tx: oneshot::Sender<()> },
-    Play { tx: oneshot::Sender<()> },
+    Pause { tx: mpsc::Sender<()> },
+    Play { tx: mpsc::Sender<()> },
 }

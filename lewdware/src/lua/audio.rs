@@ -41,14 +41,14 @@ impl UserData for AudioHandle {
             Ok(())
         });
 
-        methods.add_async_method("pause", async |_, this, _: ()| {
-            this.request_sender.pause().await.into_lua_err()?;
+        methods.add_method("pause", |_, this, _: ()| {
+            this.request_sender.pause().into_lua_err()?;
 
             Ok(())
         });
 
-        methods.add_async_method("play", async |_, this, _: ()| {
-            this.request_sender.play().await.into_lua_err()?;
+        methods.add_method("play", |_, this, _: ()| {
+            this.request_sender.play().into_lua_err()?;
 
             Ok(())
         });
@@ -78,11 +78,9 @@ impl AudioHandle {
         };
 
         for cb in callbacks {
-            tokio::task::spawn_local(async move {
-                if let Err(err) = cb.call_async::<()>(()).await {
-                    tracing::error!("{err}");
-                }
-            });
+            if let Err(err) = cb.call::<()>(()) {
+                tracing::error!("{err}");
+            }
         }
 
         Ok(())

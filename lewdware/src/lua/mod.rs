@@ -15,13 +15,10 @@ use shared::{
     user_config::AppConfig,
 };
 use tokio::{
-    sync::{
-        mpsc::{Receiver, UnboundedSender, channel, unbounded_channel},
-        oneshot,
-    },
+    sync::{mpsc::UnboundedSender, oneshot},
     task::LocalSet,
 };
-use winit::{event_loop::EventLoopProxy, window::WindowId};
+use winit::event_loop::EventLoopProxy;
 
 use crate::{
     app::UserEvent,
@@ -46,17 +43,29 @@ pub use request::{AudioAction, LuaRequest, WindowAction};
 pub use window::{ChoiceWindowOption, Easing, FadeOpts, MoveOpts};
 
 pub enum Event {
-    WindowClosed { id: WindowId },
-    MoveFinish { id: WindowId, move_id: u64, x: i32, y: i32 },
+    WindowClosed { id: PopupId },
+    MoveFinish { id: PopupId, move_id: u64, x: i32, y: i32 },
     AudioFinish { id: u64 },
-    PromptSubmit { id: WindowId, text: String },
-    ChoiceSelect { id: WindowId, option_id: String },
-    FadeFinish { id: WindowId, fade_id: u64 },
+    PromptSubmit { id: PopupId, text: String },
+    ChoiceSelect { id: PopupId, option_id: String },
+    FadeFinish { id: PopupId, fade_id: u64 },
+}
+
+/// Identifies a popup (window) from the Lua API's perspective. Assigned by the main thread the
+/// moment it acks a spawn request, which may happen before the underlying winit window (and its
+/// own, unrelated `WindowId`) actually exists — see `spawn_image`/`spawn_video` in `app.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PopupId(pub u64);
+
+impl From<PopupId> for u64 {
+    fn from(value: PopupId) -> Self {
+        value.0
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct WindowProps {
-    pub window_id: WindowId,
+    pub window_id: PopupId,
     pub width: u32,
     pub height: u32,
     pub outer_width: u32,
@@ -67,12 +76,11 @@ pub struct WindowProps {
     pub visible: bool,
 }
 
-pub type Windows = Rc<RefCell<HashMap<WindowId, Window>>>;
+pub type Windows = Rc<RefCell<HashMap<PopupId, Window>>>;
 pub type AudioHandles = Rc<RefCell<HashMap<u64, Rc<AudioHandle>>>>;
 
-/// Handles used to shut the Lua thread (and the media manager thread it starts) down cleanly,
-/// so their temp files get a chance to be deleted via `Drop` instead of being abandoned when the
-/// process exits. See [`start_lua_thread`].
+/// Handle used to shut the Lua thread down cleanly, so its temp files get a chance to be deleted
+/// via `Drop` instead of being abandoned when the process exits. See [`start_lua_thread`].
 pub struct LuaThreadHandle {
     shutdown_tx: Option<oneshot::Sender<()>>,
     join_handle: Option<thread::JoinHandle<()>>,
@@ -84,8 +92,8 @@ pub struct LuaThreadHandle {
 const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl LuaThreadHandle {
-    /// Signals the Lua thread to stop and waits (up to [`SHUTDOWN_TIMEOUT`]) for it, and the
-    /// media manager thread it owns, to finish, running their `Drop` impls.
+    /// Signals the Lua thread to stop and waits (up to [`SHUTDOWN_TIMEOUT`]) for it to finish,
+    /// running its `Drop` impls.
     pub fn shutdown(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
@@ -112,13 +120,20 @@ impl LuaThreadHandle {
     }
 }
 
+/// Starts the Lua thread using the given `media_manager` — already opened by the caller (see
+/// `LewdwareApp::new` in `app.rs`), which also keeps its own clone to resolve media for popups
+/// asynchronously (see `App::spawn_image`/`spawn_video`/`spawn_audio`).
 pub fn start_lua_thread(
     event_loop_proxy: EventLoopProxy<UserEvent>,
     config: Arc<AppConfig>,
-    wgpu_device: Option<Arc<wgpu::Device>>,
-) -> (UnboundedSender<Event>, Receiver<LuaRequest>, LuaThreadHandle) {
-    let (event_tx, mut event_rx) = unbounded_channel();
-    let (request_tx, request_rx) = channel(20);
+    media_manager: MediaManager,
+) -> (
+    UnboundedSender<Event>,
+    std::sync::mpsc::Receiver<LuaRequest>,
+    LuaThreadHandle,
+) {
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (request_tx, request_rx) = std::sync::mpsc::sync_channel(20);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
     let join_handle = thread::spawn(move || {
@@ -127,25 +142,6 @@ pub fn start_lua_thread(
             .build()
             .expect("Failed to build tokio runtime");
 
-        let pack_path = match config.pack_path.clone() {
-            Some(path) => path,
-            None => {
-                report_fatal_startup_error(
-                    "No pack is configured, but the engine requires one to start",
-                );
-                return;
-            }
-        };
-
-        let (media_manager, _, media_manager_handle) =
-            match MediaManager::open(&pack_path, event_loop_proxy.clone(), wgpu_device) {
-                Ok(x) => x,
-                Err(err) => {
-                    report_fatal_startup_error(err);
-                    return;
-                }
-            };
-
         let (mut file, mode): (Box<dyn ReadSeek>, _) = match config.mode.clone() {
             shared::user_config::Mode::Default(default_mode) => {
                 let mode_data = include_bytes!("../../../default-modes/build/Default Modes.lwmode");
@@ -153,7 +149,7 @@ pub fn start_lua_thread(
                 (Box::new(Cursor::new(mode_data)), default_mode)
             }
             shared::user_config::Mode::Pack { id, mode } => {
-                let mode_data = match rt.block_on(media_manager.get_mode(id)) {
+                let mode_data = match media_manager.get_mode(id) {
                     Ok(data) => data,
                     Err(err) => {
                         report_fatal_startup_error(err);
@@ -255,7 +251,7 @@ pub fn start_lua_thread(
         let runtime_clone = runtime.clone();
 
         local.spawn_local(async move {
-            if let Err(err) = runtime_clone.run_entrypoint(entrypoint).await {
+            if let Err(err) = runtime_clone.run_entrypoint(entrypoint) {
                 tracing::error!("{err}");
                 if let Err(err) = shared::status::set_last_runtime_error(err.to_string()) {
                     tracing::warn!("Failed to write engine status: {err}");
@@ -267,17 +263,12 @@ pub fn start_lua_thread(
 
         local.spawn_local(async move {
             while let Some(event) = event_rx.recv().await {
-                let runtime = runtime.clone();
-
-                tokio::task::spawn_local(async move {
-                    if let Err(err) = runtime.handle_event(event).await {
-                        tracing::error!("{err}");
-                        if let Err(err) = shared::status::set_last_runtime_error(err.to_string())
-                        {
-                            tracing::warn!("Failed to write engine status: {err}");
-                        }
+                if let Err(err) = runtime.handle_event(event) {
+                    tracing::error!("{err}");
+                    if let Err(err) = shared::status::set_last_runtime_error(err.to_string()) {
+                        tracing::warn!("Failed to write engine status: {err}");
                     }
-                });
+                }
             }
         });
 
@@ -293,13 +284,11 @@ pub fn start_lua_thread(
         // Cancels any tasks still spawned on `local` (mode scripts almost always have at least
         // one `every`/`after` timer running forever, so we get here via the shutdown signal
         // rather than `local` finishing on its own). This drops the last references to
-        // `LuaRuntime` and its `MediaManager` handle, closing the media manager thread's request
-        // channel so it can shut down and clean up its temp files too.
+        // `LuaRuntime` and this thread's `MediaManager` clone. The main thread opened the media
+        // manager and holds its own clone too (see `LewdwareApp::new`), so the manager's request
+        // channel — and hence its thread's shutdown/temp-file cleanup — is the main thread's
+        // responsibility to wait on, not ours.
         drop(local);
-
-        if media_manager_handle.join().is_err() {
-            tracing::error!("Media manager thread panicked");
-        }
 
         if let Err(err) = shared::status::set_state(shared::status::EngineState::Exited) {
             tracing::warn!("Failed to write engine status: {err}");
@@ -348,15 +337,11 @@ impl LuaRuntime {
         Ok(runtime)
     }
 
-    async fn run_entrypoint(&self, entrypoint: String) -> mlua::Result<()> {
-        self.mode
-            .load(&self.lua, entrypoint)
-            .into_lua_err()?
-            .eval_async()
-            .await
+    fn run_entrypoint(&self, entrypoint: String) -> mlua::Result<()> {
+        self.mode.load(&self.lua, entrypoint).into_lua_err()?.eval()
     }
 
-    async fn handle_event(&self, event: Event) -> anyhow::Result<()> {
+    fn handle_event(&self, event: Event) -> anyhow::Result<()> {
         match event {
             Event::WindowClosed { id } => {
                 if let Some(window) = self.windows.try_borrow_mut()?.remove(&id) {
@@ -423,11 +408,8 @@ impl LuaRuntime {
         let mode = self.mode.clone();
         self.lua.globals().set(
             "require",
-            self.lua.create_async_function(move |lua, module| {
-                let mode = mode.clone();
-
-                async move { mode.require(lua, module).await.into_lua_err() }
-            })?,
+            self.lua
+                .create_function(move |lua, module| mode.require(lua, module).into_lua_err())?,
         )?;
 
         Ok(())

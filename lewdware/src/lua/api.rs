@@ -1,9 +1,8 @@
-use std::{cell::Cell, collections::HashMap, rc::Rc, time::Duration};
+use std::{collections::HashMap, rc::Rc, time::Duration};
 
 use mlua::{ExternalError, ExternalResult, FromLua, IntoLua, Lua, LuaSerdeExt};
 use serde::{Deserialize, Serialize};
 use shared::mode::OptionValue;
-use winit::dpi::LogicalSize;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Color {
@@ -77,7 +76,6 @@ use crate::{
     },
     media::{MediaManager, MediaTypes},
     monitor::Monitor,
-    utils::calculate_media_popup_size,
 };
 
 pub fn create_api(
@@ -99,7 +97,7 @@ pub fn create_api(
 
         media_table.set(
             "get",
-            lua.create_async_function(move |lua, name| {
+            lua.create_function(move |lua, name| {
                 get_media(lua, name, media_manager.clone())
             })?,
         )?;
@@ -110,7 +108,7 @@ pub fn create_api(
 
         media_table.set(
             "get_image",
-            lua.create_async_function(move |lua, name| {
+            lua.create_function(move |lua, name| {
                 get_image(lua, name, media_manager.clone())
             })?,
         )?;
@@ -121,7 +119,7 @@ pub fn create_api(
 
         media_table.set(
             "get_video",
-            lua.create_async_function(move |lua, name| {
+            lua.create_function(move |lua, name| {
                 get_video(lua, name, media_manager.clone())
             })?,
         )?;
@@ -132,7 +130,7 @@ pub fn create_api(
 
         media_table.set(
             "get_audio",
-            lua.create_async_function(move |lua, name| {
+            lua.create_function(move |lua, name| {
                 get_audio(lua, name, media_manager.clone())
             })?,
         )?;
@@ -143,7 +141,7 @@ pub fn create_api(
 
         media_table.set(
             "list",
-            lua.create_async_function(move |lua, opts| {
+            lua.create_function(move |lua, opts| {
                 list_media(lua, opts, media_manager.clone())
             })?,
         )?;
@@ -154,7 +152,7 @@ pub fn create_api(
 
         media_table.set(
             "list_images",
-            lua.create_async_function(move |lua, opts| {
+            lua.create_function(move |lua, opts| {
                 list_images(lua, opts, media_manager.clone())
             })?,
         )?;
@@ -165,7 +163,7 @@ pub fn create_api(
 
         media_table.set(
             "list_videos",
-            lua.create_async_function(move |lua, opts| {
+            lua.create_function(move |lua, opts| {
                 list_videos(lua, opts, media_manager.clone())
             })?,
         )?;
@@ -176,7 +174,7 @@ pub fn create_api(
 
         media_table.set(
             "list_audio",
-            lua.create_async_function(move |lua, opts| {
+            lua.create_function(move |lua, opts| {
                 list_audio(lua, opts, media_manager.clone())
             })?,
         )?;
@@ -187,7 +185,7 @@ pub fn create_api(
 
         media_table.set(
             "random",
-            lua.create_async_function(move |lua, opts| {
+            lua.create_function(move |lua, opts| {
                 random_media(lua, opts, media_manager.clone())
             })?,
         )?;
@@ -198,7 +196,7 @@ pub fn create_api(
 
         media_table.set(
             "random_image",
-            lua.create_async_function(move |lua, opts| {
+            lua.create_function(move |lua, opts| {
                 random_image(lua, opts, media_manager.clone())
             })?,
         )?;
@@ -209,7 +207,7 @@ pub fn create_api(
 
         media_table.set(
             "random_video",
-            lua.create_async_function(move |lua, opts| {
+            lua.create_function(move |lua, opts| {
                 random_video(lua, opts, media_manager.clone())
             })?,
         )?;
@@ -220,7 +218,7 @@ pub fn create_api(
 
         media_table.set(
             "random_audio",
-            lua.create_async_function(move |lua, opts| {
+            lua.create_function(move |lua, opts| {
                 random_audio(lua, opts, media_manager.clone())
             })?,
         )?;
@@ -229,39 +227,25 @@ pub fn create_api(
     api_table.set("media", media_table)?;
 
     {
-        let media_manager = media_manager.clone();
         let request_sender = request_sender.clone();
         let windows = windows.clone();
 
         api_table.set(
             "spawn_image_popup",
-            lua.create_async_function(move |lua, args| {
-                spawn_image_popup(
-                    lua,
-                    args,
-                    media_manager.clone(),
-                    request_sender.clone(),
-                    windows.clone(),
-                )
+            lua.create_function(move |lua, args| {
+                spawn_image_popup(lua, args, request_sender.clone(), windows.clone())
             })?,
         )?;
     }
 
     {
-        let media_manager = media_manager.clone();
         let request_sender = request_sender.clone();
         let windows = windows.clone();
 
         api_table.set(
             "spawn_video_popup",
-            lua.create_async_function(move |lua, args| {
-                spawn_video_popup(
-                    lua,
-                    args,
-                    media_manager.clone(),
-                    request_sender.clone(),
-                    windows.clone(),
-                )
+            lua.create_function(move |lua, args| {
+                spawn_video_popup(lua, args, request_sender.clone(), windows.clone())
             })?,
         )?;
     }
@@ -272,7 +256,7 @@ pub fn create_api(
 
         api_table.set(
             "spawn_prompt",
-            lua.create_async_function(move |lua, args| {
+            lua.create_function(move |lua, args| {
                 spawn_prompt(lua, args, request_sender.clone(), windows.clone())
             })?,
         )?;
@@ -284,7 +268,7 @@ pub fn create_api(
 
         api_table.set(
             "spawn_choice",
-            lua.create_async_function(move |lua, args| {
+            lua.create_function(move |lua, args| {
                 spawn_choice(lua, args, request_sender.clone(), windows.clone())
             })?,
         )?;
@@ -296,7 +280,7 @@ pub fn create_api(
 
         api_table.set(
             "spawn_text_popup",
-            lua.create_async_function(move |lua, args| {
+            lua.create_function(move |lua, args| {
                 spawn_text_popup(lua, args, request_sender.clone(), windows.clone())
             })?,
         )?;
@@ -308,7 +292,7 @@ pub fn create_api(
 
         api_table.set(
             "set_wallpaper",
-            lua.create_async_function(move |lua, args| {
+            lua.create_function(move |lua, args| {
                 set_wallpaper(lua, args, media_manager.clone(), request_sender.clone())
             })?,
         )?;
@@ -319,32 +303,20 @@ pub fn create_api(
 
         api_table.set(
             "reset_wallpaper",
-            lua.create_async_function(move |lua, args| {
+            lua.create_function(move |lua, args| {
                 reset_wallpaper(lua, args, request_sender.clone())
             })?,
         )?;
     }
 
     {
-        let media_manager = media_manager.clone();
         let request_sender = request_sender.clone();
         let audio_handles = audio_handles.clone();
 
-        let audio_id: Cell<u64> = Cell::new(0);
-
         api_table.set(
             "play_audio",
-            lua.create_async_function(move |lua, args| {
-                let id = audio_id.get();
-                audio_id.set(id + 1);
-                play_audio(
-                    lua,
-                    args,
-                    id,
-                    media_manager.clone(),
-                    request_sender.clone(),
-                    audio_handles.clone(),
-                )
+            lua.create_function(move |lua, args| {
+                play_audio(lua, args, request_sender.clone(), audio_handles.clone())
             })?,
         )?;
     }
@@ -354,7 +326,7 @@ pub fn create_api(
 
         api_table.set(
             "open_link",
-            lua.create_async_function(move |lua, url| open_link(lua, url, request_sender.clone()))?,
+            lua.create_function(move |lua, url| open_link(lua, url, request_sender.clone()))?,
         )?;
     }
 
@@ -363,7 +335,7 @@ pub fn create_api(
 
         api_table.set(
             "show_notification",
-            lua.create_async_function(move |lua, notification| {
+            lua.create_function(move |lua, notification| {
                 show_notification(lua, notification, request_sender.clone())
             })?,
         )?;
@@ -376,7 +348,7 @@ pub fn create_api(
 
         monitors_table.set(
             "list",
-            lua.create_async_function(move |lua, args| {
+            lua.create_function(move |lua, args| {
                 list_monitors(lua, args, request_sender.clone())
             })?,
         )?;
@@ -387,7 +359,7 @@ pub fn create_api(
 
         monitors_table.set(
             "primary",
-            lua.create_async_function(move |lua, args| {
+            lua.create_function(move |lua, args| {
                 primary_monitor(lua, args, request_sender.clone())
             })?,
         )?;
@@ -400,7 +372,7 @@ pub fn create_api(
 
         api_table.set(
             "exit",
-            lua.create_async_function(move |lua, x| exit(lua, x, request_sender.clone()))?,
+            lua.create_function(move |lua, x| exit(lua, x, request_sender.clone()))?,
         )?;
     }
 
@@ -413,57 +385,55 @@ pub fn create_api(
     Ok(())
 }
 
-async fn get_media_type(
+fn get_media_type(
     name: String,
     types: MediaTypes,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
     media_manager
         .get_media(name, types)
-        .await
         .map_err(|err| err.into_lua_err())
 }
 
-async fn get_media(
-    _: Lua,
+fn get_media(
+    _: &Lua,
     name: String,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    get_media_type(name, MediaTypes::ALL, media_manager).await
+    get_media_type(name, MediaTypes::ALL, media_manager)
 }
 
-async fn get_image(
-    _: Lua,
+fn get_image(
+    _: &Lua,
     name: String,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    get_media_type(name, MediaTypes::IMAGE, media_manager).await
+    get_media_type(name, MediaTypes::IMAGE, media_manager)
 }
 
-async fn get_video(
-    _: Lua,
+fn get_video(
+    _: &Lua,
     name: String,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    get_media_type(name, MediaTypes::VIDEO, media_manager).await
+    get_media_type(name, MediaTypes::VIDEO, media_manager)
 }
 
-async fn get_audio(
-    _: Lua,
+fn get_audio(
+    _: &Lua,
     name: String,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    get_media_type(name, MediaTypes::AUDIO, media_manager).await
+    get_media_type(name, MediaTypes::AUDIO, media_manager)
 }
 
-async fn list_media_type(
+fn list_media_type(
     types: MediaTypes,
     tags: Option<Vec<String>>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
     media_manager
         .list_media(types, tags)
-        .await
         .map_err(|err| err.into_lua_err())
 }
 
@@ -498,8 +468,8 @@ impl FromLua for QueryMediaOpts {
     }
 }
 
-async fn list_media(
-    _: Lua,
+fn list_media(
+    _: &Lua,
     opts: Option<QueryMediaOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
@@ -510,7 +480,7 @@ async fn list_media(
         None => (MediaTypes::ALL, None),
     };
 
-    list_media_type(types, tags, media_manager).await
+    list_media_type(types, tags, media_manager)
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -524,50 +494,49 @@ impl FromLua for QueryMediaTypeOpts {
     }
 }
 
-async fn list_images(
-    _: Lua,
+fn list_images(
+    _: &Lua,
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
     let tags = opts.and_then(|x| x.tags);
 
-    list_media_type(MediaTypes::IMAGE, tags, media_manager).await
+    list_media_type(MediaTypes::IMAGE, tags, media_manager)
 }
 
-async fn list_videos(
-    _: Lua,
+fn list_videos(
+    _: &Lua,
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
     let tags = opts.and_then(|x| x.tags);
 
-    list_media_type(MediaTypes::VIDEO, tags, media_manager).await
+    list_media_type(MediaTypes::VIDEO, tags, media_manager)
 }
 
-async fn list_audio(
-    _: Lua,
+fn list_audio(
+    _: &Lua,
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
     let tags = opts.and_then(|x| x.tags);
 
-    list_media_type(MediaTypes::AUDIO, tags, media_manager).await
+    list_media_type(MediaTypes::AUDIO, tags, media_manager)
 }
 
-async fn random_media_type(
-    _: Lua,
+fn random_media_type(
+    _: &Lua,
     types: MediaTypes,
     tags: Option<Vec<String>>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
     media_manager
         .random_media(types, tags)
-        .await
         .map_err(|err| err.into_lua_err())
 }
 
-async fn random_media(
-    lua: Lua,
+fn random_media(
+    lua: &Lua,
     opts: Option<QueryMediaOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
@@ -578,37 +547,37 @@ async fn random_media(
         None => (MediaTypes::ALL, None),
     };
 
-    random_media_type(lua, types, tags, media_manager).await
+    random_media_type(lua, types, tags, media_manager)
 }
 
-async fn random_image(
-    lua: Lua,
+fn random_image(
+    lua: &Lua,
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
     let tags = opts.and_then(|x| x.tags);
 
-    random_media_type(lua, MediaTypes::IMAGE, tags, media_manager).await
+    random_media_type(lua, MediaTypes::IMAGE, tags, media_manager)
 }
 
-async fn random_video(
-    lua: Lua,
+fn random_video(
+    lua: &Lua,
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
     let tags = opts.and_then(|x| x.tags);
 
-    random_media_type(lua, MediaTypes::VIDEO, tags, media_manager).await
+    random_media_type(lua, MediaTypes::VIDEO, tags, media_manager)
 }
 
-async fn random_audio(
-    lua: Lua,
+fn random_audio(
+    lua: &Lua,
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
     let tags = opts.and_then(|x| x.tags);
 
-    random_media_type(lua, MediaTypes::AUDIO, tags, media_manager).await
+    random_media_type(lua, MediaTypes::AUDIO, tags, media_manager)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -806,8 +775,8 @@ impl FromLua for SpawnTextOpts {
     }
 }
 
-async fn spawn_text_popup(
-    _: Lua,
+fn spawn_text_popup(
+    _: &Lua,
     (text, opts): (String, Option<SpawnTextOpts>),
     request_sender: RequestSender,
     windows: Windows,
@@ -815,8 +784,7 @@ async fn spawn_text_popup(
     let opts = opts.unwrap_or_default();
 
     let props = request_sender
-        .spawn_text(text.clone(), opts.style, opts.window_opts)
-        .await?;
+        .spawn_text(text.clone(), opts.style, opts.window_opts)?;
 
     let id = props.window_id;
 
@@ -846,10 +814,9 @@ impl FromLua for SpawnImageOpts {
     }
 }
 
-async fn spawn_image_popup(
-    _: Lua,
+fn spawn_image_popup(
+    _: &Lua,
     (image, opts): (Media, Option<SpawnImageOpts>),
-    media_manager: MediaManager,
     request_sender: RequestSender,
     windows: Windows,
 ) -> mlua::Result<Rc<ImageWindow>> {
@@ -876,34 +843,11 @@ async fn spawn_image_popup(
         }
     }
 
-    let monitor = match &opts.window_opts.monitor {
-        Some(monitor) => request_sender
-            .get_monitor(monitor.id)
-            .await
-            .into_lua_err()?,
-        None => request_sender.random_monitor().await.into_lua_err()?,
-    };
-
-    let (width, height) = calculate_media_popup_size(
-        opts.window_opts.width.clone(),
-        opts.window_opts.height.clone(),
-        image_width,
-        image_height,
-        monitor.width,
-        monitor.height,
-    );
-    let physical_size = LogicalSize::new(width, height).to_physical(monitor.scale_factor);
-
-    let data = media_manager
-        .get_image_data(image.id, physical_size.width, physical_size.height)
-        .await
-        .into_lua_err()?;
-
-    opts.window_opts.monitor = Some(monitor);
-    opts.window_opts.width = Some(Coord::Pixel(width as i32));
-    opts.window_opts.height = Some(Coord::Pixel(height as i32));
-
-    let props = request_sender.spawn_image(data, opts.window_opts).await?;
+    // Monitor pick, size resolution, and the actual (slow) decode all now happen on the main
+    // thread, which acks the spawn — with a fully accurate `WindowProps` — before the decode
+    // even starts. See `App::spawn_image` in `app.rs`.
+    let props = request_sender
+        .spawn_image(image.id, image_width, image_height, opts.window_opts)?;
 
     let id = props.window_id;
 
@@ -952,17 +896,21 @@ impl FromLua for SpawnVideoOpts {
     }
 }
 
-async fn spawn_video_popup(
-    _: Lua,
+fn spawn_video_popup(
+    _: &Lua,
     (video, opts): (Media, Option<SpawnVideoOpts>),
-    media_manager: MediaManager,
     request_sender: RequestSender,
     windows: Windows,
 ) -> mlua::Result<Rc<VideoWindow>> {
     let mut opts = opts.unwrap_or_default();
 
-    let media_transparent = match video.media_data {
-        MediaData::Video { transparent, .. } => transparent,
+    let (video_width, video_height, media_transparent) = match video.media_data {
+        MediaData::Video {
+            width,
+            height,
+            transparent,
+            ..
+        } => (width, height, transparent),
         _ => return Err("`video` is not an video".into_lua_err()),
     };
 
@@ -978,14 +926,17 @@ async fn spawn_video_popup(
         }
     }
 
-    let data = media_manager
-        .get_video_data(video.id, opts.loop_video, opts.audio)
-        .await
-        .into_lua_err()?;
-
+    // As with images, monitor pick / size resolution / decode all happen on the main thread
+    // now — see `App::spawn_video` in `app.rs`.
     let props = request_sender
-        .spawn_video(data, opts.loop_video, opts.window_opts)
-        .await?;
+        .spawn_video(
+            video.id,
+            video_width,
+            video_height,
+            opts.loop_video,
+            opts.audio,
+            opts.window_opts,
+        )?;
 
     let id = props.window_id;
 
@@ -1018,8 +969,8 @@ impl FromLua for SpawnPromptOpts {
     }
 }
 
-async fn spawn_prompt(
-    _: Lua,
+fn spawn_prompt(
+    _: &Lua,
     opts: Option<SpawnPromptOpts>,
     request_sender: RequestSender,
     windows: Windows,
@@ -1032,8 +983,7 @@ async fn spawn_prompt(
             opts.placeholder,
             opts.initial_value.clone(),
             opts.window_opts,
-        )
-        .await?;
+        )?;
 
     let id = props.window_id;
 
@@ -1067,8 +1017,8 @@ impl FromLua for SpawnChoiceOpts {
     }
 }
 
-async fn spawn_choice(
-    _: Lua,
+fn spawn_choice(
+    _: &Lua,
     opts: Option<SpawnChoiceOpts>,
     request_sender: RequestSender,
     windows: Windows,
@@ -1076,8 +1026,7 @@ async fn spawn_choice(
     let opts = opts.unwrap_or_default();
 
     let props = request_sender
-        .spawn_choice(opts.text.clone(), opts.options.clone(), opts.window_opts)
-        .await?;
+        .spawn_choice(opts.text.clone(), opts.options.clone(), opts.window_opts)?;
 
     let id = props.window_id;
 
@@ -1123,8 +1072,8 @@ impl FromLua for SetWallpaperOpts {
     }
 }
 
-async fn set_wallpaper(
-    _: Lua,
+fn set_wallpaper(
+    _: &Lua,
     (image, opts): (Media, Option<SetWallpaperOpts>),
     media_manager: MediaManager,
     request_sender: RequestSender,
@@ -1137,17 +1086,15 @@ async fn set_wallpaper(
 
     let file = media_manager
         .get_image_file(image.id)
-        .await
         .into_lua_err()?;
 
     request_sender
         .set_wallpaper(file, opts.mode)
-        .await
         .into_lua_err()
 }
 
-async fn reset_wallpaper(_: Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> {
-    request_sender.reset_wallpaper().await.into_lua_err()
+fn reset_wallpaper(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> {
+    request_sender.reset_wallpaper().into_lua_err()
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -1162,11 +1109,9 @@ impl FromLua for PlayAudioOpts {
     }
 }
 
-async fn play_audio(
-    _: Lua,
+fn play_audio(
+    _: &Lua,
     (audio, opts): (Media, Option<PlayAudioOpts>),
-    id: u64,
-    media_manager: MediaManager,
     request_sender: RequestSender,
     audio_handles: AudioHandles,
 ) -> mlua::Result<Rc<AudioHandle>> {
@@ -1176,12 +1121,8 @@ async fn play_audio(
         return Err("`audio` is not a audio".into_lua_err());
     }
 
-    let data = media_manager
-        .get_audio_data(audio.id, id, opts.loop_audio)
-        .await
-        .into_lua_err()?;
-
-    let id = request_sender.spawn_audio(data).await?;
+    // Decode happens on the main thread now, after the ack — see `App::spawn_audio`.
+    let id = request_sender.spawn_audio(audio.id, opts.loop_audio)?;
 
     let audio_handle = Rc::new(AudioHandle::new(
         id,
@@ -1198,8 +1139,8 @@ async fn play_audio(
     Ok(audio_handle)
 }
 
-async fn open_link(_: Lua, url: String, request_sender: RequestSender) -> mlua::Result<()> {
-    request_sender.open_link(url).await.into_lua_err()
+fn open_link(_: &Lua, url: String, request_sender: RequestSender) -> mlua::Result<()> {
+    request_sender.open_link(url).into_lua_err()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1214,27 +1155,26 @@ impl FromLua for Notification {
     }
 }
 
-async fn show_notification(
-    _: Lua,
+fn show_notification(
+    _: &Lua,
     notification: Notification,
     request_sender: RequestSender,
 ) -> mlua::Result<()> {
     request_sender
         .show_notification(notification)
-        .await
         .into_lua_err()
 }
 
-async fn list_monitors(_: Lua, _: (), request_sender: RequestSender) -> mlua::Result<Vec<Monitor>> {
-    request_sender.list_monitors().await.into_lua_err()
+fn list_monitors(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<Vec<Monitor>> {
+    request_sender.list_monitors().into_lua_err()
 }
 
-async fn primary_monitor(_: Lua, _: (), request_sender: RequestSender) -> mlua::Result<Monitor> {
-    request_sender.primary_monitor().await.into_lua_err()
+fn primary_monitor(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<Monitor> {
+    request_sender.primary_monitor().into_lua_err()
 }
 
-async fn exit(_: Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> {
-    request_sender.exit().await.into_lua_err()
+fn exit(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> {
+    request_sender.exit().into_lua_err()
 }
 
 fn after(_: &Lua, (ms, function): (u64, mlua::Function)) -> mlua::Result<Timer> {

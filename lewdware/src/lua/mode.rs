@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{Read, Seek},
 };
 
@@ -15,7 +15,12 @@ pub struct Mode {
     file: RefCell<Box<dyn ReadSeek>>,
     files: HashMap<String, SourceFile>,
     cache: RefCell<HashMap<String, mlua::Value>>,
-    loading: RefCell<HashMap<String, tokio::sync::broadcast::WeakSender<()>>>,
+    /// Modules currently being evaluated, so a circular `require` chain fails fast with a clear
+    /// error instead of recursing until the stack overflows. Since Lua execution is fully
+    /// synchronous — only one `require` call is ever in flight on this thread at a time — this
+    /// can only be hit by genuine recursion (A requires B requires A), never by two unrelated
+    /// callbacks racing to load the same module.
+    loading: RefCell<HashSet<String>>,
 }
 
 impl Mode {
@@ -24,7 +29,7 @@ impl Mode {
             file: RefCell::new(file),
             files,
             cache: RefCell::new(HashMap::new()),
-            loading: RefCell::new(HashMap::new()),
+            loading: RefCell::new(HashSet::new()),
         }
     }
 
@@ -35,62 +40,40 @@ impl Mode {
         Ok(metadata)
     }
 
-    fn get_module_receiver(
-        &self,
-        module: &str,
-    ) -> anyhow::Result<Option<tokio::sync::broadcast::Receiver<()>>> {
-        if let Some(weak_sender) = self.loading.try_borrow()?.get(module) {
-            if let Some(sender) = weak_sender.upgrade() {
-                Ok(Some(sender.subscribe()))
-            } else {
-                bail!("Module {module} previously returned an error");
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub async fn require(&self, lua: mlua::Lua, module: String) -> anyhow::Result<mlua::Value> {
+    pub fn require(&self, lua: &mlua::Lua, module: String) -> anyhow::Result<mlua::Value> {
         for path in decode_require(&module) {
             if let Some(source_file) = self.files.get(&path) {
-                if let Some(mut receiver) = self.get_module_receiver(&path)? {
-                    match receiver.recv().await {
-                        Ok(()) => {}
-                        Err(_) => bail!("Module {module} previously returned an error"),
-                    }
-                }
-
                 if let Some(value) = self.cache.try_borrow()?.get(&path) {
                     return Ok(value.clone());
                 }
 
-                let (sender, _) = tokio::sync::broadcast::channel(1);
+                if !self.loading.try_borrow_mut()?.insert(path.clone()) {
+                    bail!("circular require of module '{module}'");
+                }
 
-                self.loading
-                    .try_borrow_mut()?
-                    .insert(path.clone(), sender.clone().downgrade());
+                let result = (|| -> anyhow::Result<mlua::Value> {
+                    let file: String =
+                        read_source_file(&mut *self.file.try_borrow_mut()?, source_file)?;
 
-                let file: String =
-                    read_source_file(&mut *self.file.try_borrow_mut()?, source_file)?;
+                    let result: mlua::Value = lua
+                        .load(file)
+                        .set_mode(mlua::ChunkMode::Text)
+                        .set_name(format!("@{path}"))
+                        .eval()?;
 
-                let result: mlua::Value = lua
-                    .load(file)
-                    .set_mode(mlua::ChunkMode::Text)
-                    .set_name(format!("@{path}"))
-                    .eval_async()
-                    .await?;
+                    Ok(result)
+                })();
 
-                let final_value = if result.is_nil() {
-                    mlua::Value::Boolean(true)
-                } else {
-                    result
+                self.loading.try_borrow_mut()?.remove(&path);
+
+                let final_value = match result? {
+                    mlua::Value::Nil => mlua::Value::Boolean(true),
+                    result => result,
                 };
 
                 self.cache
                     .try_borrow_mut()?
                     .insert(path, final_value.clone());
-
-                let _ = sender.send(());
 
                 return Ok(final_value);
             }

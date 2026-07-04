@@ -10,7 +10,7 @@ use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, P
 use winit::window::Window;
 
 use crate::error::LewdwareError;
-use crate::lua::{self, Coord, Easing, FadeOpts, MoveOpts};
+use crate::lua::{self, Coord, Easing, FadeOpts, MoveOpts, PopupId};
 use crate::wgpu::WgpuState;
 use crate::window::header::HEADER_HEIGHT;
 use crate::window::opts::WindowOpts;
@@ -19,6 +19,10 @@ use crate::window::{header::Header, surface::Surface};
 
 pub struct InnerWindow {
     window: Arc<winit::window::Window>,
+    /// The Lua-facing identifier for this popup — distinct from `window.id()` since it was
+    /// allocated (and already handed to Lua) before this `InnerWindow` necessarily existed. Used
+    /// for every event sent to the Lua thread instead of the winit `WindowId`.
+    popup_id: PopupId,
     surface: Surface,
     decorations: bool,
     border_rendered: bool,
@@ -67,6 +71,7 @@ impl InnerWindow {
         opts: &WindowOpts,
         wgpu_state: Option<Arc<WgpuState>>,
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
+        popup_id: PopupId,
     ) -> Result<Self> {
         let decorations = opts.decorations;
         let gpu = opts.gpu;
@@ -164,6 +169,7 @@ impl InnerWindow {
 
         Ok(Self {
             window,
+            popup_id,
             surface,
             decorations,
             border_rendered: false,
@@ -563,7 +569,7 @@ impl InnerWindow {
 
             if complete {
                 if let Err(err) = self.lua_event_tx.send(lua::Event::MoveFinish {
-                    id: self.window.id(),
+                    id: self.popup_id,
                     move_id: current_move.id,
                     x: self.position.x,
                     y: self.position.y,
@@ -627,7 +633,7 @@ impl InnerWindow {
 
         if is_finished {
             if let Err(err) = self.lua_event_tx.send(lua::Event::FadeFinish {
-                id: self.window.id(),
+                id: self.popup_id,
                 fade_id,
             }) {
                 tracing::error!("{err}");
@@ -697,6 +703,10 @@ impl InnerWindow {
         &self.window
     }
 
+    pub fn popup_id(&self) -> PopupId {
+        self.popup_id
+    }
+
     pub fn transparent(&self) -> bool {
         self.transparent
     }
@@ -730,7 +740,7 @@ impl InnerWindow {
 impl Drop for InnerWindow {
     fn drop(&mut self) {
         if self.lua_event_tx.send(lua::Event::WindowClosed {
-            id: self.window.id(),
+            id: self.popup_id,
         }).is_err() {
             // The Lua thread has already shut down (e.g. we're in the middle of quitting the
             // app), so there's nothing listening for this event. Not an error.
