@@ -782,12 +782,57 @@ fn stop_lewdware(state: State<'_>) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct EngineStatusDto {
+    running: bool,
+    /// Why the engine failed to start, if the last launch we made died before reaching a
+    /// running state (e.g. a bad pack, a stale mode reference, a mode-script error).
+    error: Option<String>,
+    /// A non-fatal issue noticed at startup (e.g. a mode built for an older API version). Only
+    /// set while `running` is true.
+    warning: Option<String>,
+}
+
 #[tauri::command]
-fn lewdware_running(state: State<'_>) -> bool {
+fn lewdware_running(state: State<'_>) -> EngineStatusDto {
     let mut guard = state.lewdware_process.lock().unwrap();
-    match guard.as_mut() {
-        Some(child) => matches!(child.try_wait(), Ok(None)),
-        None => false,
+
+    let Some(child) = guard.as_mut() else {
+        return EngineStatusDto {
+            running: false,
+            error: None,
+            warning: None,
+        };
+    };
+
+    // Only trust status.json if it's actually this child's — otherwise it could be a stale
+    // leftover from an earlier run that happens to still be sitting on disk.
+    let pid = child.id();
+    let still_running = matches!(child.try_wait(), Ok(None));
+    let status = shared::status::read_status()
+        .ok()
+        .filter(|status| status.pid == pid);
+
+    if still_running {
+        EngineStatusDto {
+            running: true,
+            error: None,
+            warning: status.and_then(|status| status.warning),
+        }
+    } else {
+        // The process is gone; drop it so a future fatal error isn't reported over and over.
+        *guard = None;
+
+        let error = status.and_then(|status| match status.state {
+            shared::status::EngineState::FailedToStart(err) => Some(err),
+            _ => None,
+        });
+
+        EngineStatusDto {
+            running: false,
+            error,
+            warning: None,
+        }
     }
 }
 

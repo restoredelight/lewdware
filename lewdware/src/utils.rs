@@ -505,6 +505,29 @@ pub fn raise_fd_limit() {
 #[cfg(not(unix))]
 pub fn raise_fd_limit() {}
 
+/// Reports a fatal startup error: logs it (as before), records it in `status.json` so anything
+/// polling it (e.g. the config app) can explain why the launch produced nothing, and fires a
+/// desktop notification directly, since the engine can be started without the config app running
+/// (e.g. `lw mode dev`, or launching the binary directly) and would otherwise fail silently.
+pub fn report_fatal_startup_error(err: impl std::fmt::Display) {
+    let message = err.to_string();
+    tracing::error!("{message}");
+
+    if let Err(err) =
+        shared::status::set_state(shared::status::EngineState::FailedToStart(message.clone()))
+    {
+        tracing::warn!("Failed to write engine status: {err}");
+    }
+
+    if let Err(err) = notify_rust::Notification::new()
+        .summary("Lewdware failed to start")
+        .body(&message)
+        .show()
+    {
+        tracing::warn!("Failed to show startup-failure notification: {err}");
+    }
+}
+
 /// The directory lewdware extracts media (images/video/audio, the pack's SQLite index) into
 /// while running. A subdirectory of the regular system temp dir (`$TMPDIR`/`/tmp`), *not*
 /// `$XDG_RUNTIME_DIR` (used for the lock file) — the runtime dir is conventionally sized for

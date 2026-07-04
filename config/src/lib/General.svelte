@@ -5,12 +5,17 @@
   import type { Key } from "./types";
 
   let running = $state(false);
+  let launchError = $state<string | null>(null);
+  let launchWarning = $state<string | null>(null);
   let pollInterval: ReturnType<typeof setInterval>;
   let inputMonitoringGranted = $state(true);
   let inputMonitoringPromptFailed = $state(false);
 
   async function checkRunning() {
-    running = await api.lewdwareRunning();
+    const status = await api.lewdwareRunning();
+    running = status.running;
+    launchError = status.error;
+    launchWarning = status.warning;
   }
 
   async function checkInputMonitoringGranted() {
@@ -28,11 +33,15 @@
     await store.saveConfig();
     await api.launchLewdware();
     running = true;
+    launchError = null;
+    launchWarning = null;
   }
 
   async function stop() {
     await api.stopLewdware();
     running = false;
+    launchError = null;
+    launchWarning = null;
   }
 
   async function openInputMonitoringSettings() {
@@ -131,6 +140,16 @@
         >
           Pack &amp; Mode settings
         </button>
+      </div>
+    {/if}
+    {#if !running && launchError}
+      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[#fdecea] border border-[#e74c3c] text-sm text-[#a02c22]">
+        <span>Lewdware failed to start: {launchError}</span>
+      </div>
+    {/if}
+    {#if running && launchWarning}
+      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[#fef3cd] border border-[#f0ad4e] text-sm text-[#8a6d3b]">
+        <span>{launchWarning}</span>
       </div>
     {/if}
   </div>

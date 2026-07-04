@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ConfigDto,
+  EngineStatusDto,
   Key,
   ModeGroupDto,
   ModeId,
@@ -38,7 +39,7 @@ export const api = {
 
   stopLewdware: () => invoke<void>("stop_lewdware"),
 
-  lewdwareRunning: () => invoke<boolean>("lewdware_running"),
+  lewdwareRunning: () => invoke<EngineStatusDto>("lewdware_running"),
 
   openLogs: () => invoke<void>("open_logs"),
 

@@ -9,7 +9,7 @@ use winit::event_loop::EventLoop;
 
 use crate::{
     app::LewdwareApp,
-    utils::{create_tray_icon, handle_sigterm, spawn_panic_thread},
+    utils::{create_tray_icon, handle_sigterm, report_fatal_startup_error, spawn_panic_thread},
     wgpu::WgpuState,
 };
 
@@ -40,6 +40,12 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Reset status.json for this run so a previous session's warning/error can't leak into this
+    // one; anything polling it (e.g. the config app) should only ever see this run's state.
+    if let Err(err) = shared::status::write_status(&shared::status::EngineStatus::starting()) {
+        tracing::warn!("Failed to write engine status: {err}");
+    }
+
     // Now that we know we're the only instance running, it's safe to clear out any temp files
     // left behind by a previous session (see `utils::prepare_temp_dir`).
     if let Err(err) = utils::prepare_temp_dir() {
@@ -67,7 +73,7 @@ fn main() -> Result<()> {
         }
     }
 
-    let mut config = load_config()?;
+    let mut config = load_config().inspect_err(|err| report_fatal_startup_error(err))?;
 
     if let (Some(mode_path), Some(mode)) = (mode_path, mode) {
         config.mode = Mode::File {
@@ -89,7 +95,9 @@ fn main() -> Result<()> {
         event_loop_builder.with_x11();
     }
 
-    let event_loop = event_loop_builder.build()?;
+    let event_loop = event_loop_builder
+        .build()
+        .inspect_err(|err| report_fatal_startup_error(err))?;
 
     #[cfg(target_vendor = "apple")]
     utils::opt_in_secure_restorable_state();
@@ -107,9 +115,10 @@ fn main() -> Result<()> {
     handle_sigterm(proxy.clone());
 
     spawn_panic_thread(proxy.clone(), config.panic_button.clone());
-    create_tray_icon(proxy.clone())?;
+    create_tray_icon(proxy.clone()).inspect_err(|err| report_fatal_startup_error(err))?;
 
-    let mut app = LewdwareApp::new(wgpu_state, proxy, config)?;
+    let mut app = LewdwareApp::new(wgpu_state, proxy, config)
+        .inspect_err(|err| report_fatal_startup_error(err))?;
     event_loop.run_app(&mut app)?;
 
     Ok(())

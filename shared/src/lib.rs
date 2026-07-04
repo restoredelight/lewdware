@@ -4,6 +4,7 @@ pub mod logging;
 pub mod mode;
 mod once;
 pub mod read_pack;
+pub mod status;
 pub mod user_config;
 pub mod utils;
 

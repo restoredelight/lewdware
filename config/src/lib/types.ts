@@ -16,6 +16,14 @@ export interface ConfigDto {
   disabled_monitors: string[];
 }
 
+export interface EngineStatusDto {
+  running: boolean;
+  /** Why the last launch failed to start, if it died before reaching a running state. */
+  error: string | null;
+  /** A non-fatal issue noticed at startup (e.g. a mode built for an older API version). */
+  warning: string | null;
+}
+
 export interface Key {
   name: string;
   code: string;

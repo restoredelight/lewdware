@@ -34,6 +34,7 @@ use crate::{
     },
     media::MediaManager,
     monitor::Monitor,
+    utils::report_fatal_startup_error,
 };
 
 pub use api::{
@@ -126,17 +127,24 @@ pub fn start_lua_thread(
             .build()
             .expect("Failed to build tokio runtime");
 
-        let (media_manager, _, media_manager_handle) = match MediaManager::open(
-            &config.pack_path.clone().unwrap(),
-            event_loop_proxy.clone(),
-            wgpu_device,
-        ) {
-            Ok(x) => x,
-            Err(err) => {
-                tracing::error!("{err}");
+        let pack_path = match config.pack_path.clone() {
+            Some(path) => path,
+            None => {
+                report_fatal_startup_error(
+                    "No pack is configured, but the engine requires one to start",
+                );
                 return;
             }
         };
+
+        let (media_manager, _, media_manager_handle) =
+            match MediaManager::open(&pack_path, event_loop_proxy.clone(), wgpu_device) {
+                Ok(x) => x,
+                Err(err) => {
+                    report_fatal_startup_error(err);
+                    return;
+                }
+            };
 
         let (mut file, mode): (Box<dyn ReadSeek>, _) = match config.mode.clone() {
             shared::user_config::Mode::Default(default_mode) => {
@@ -148,7 +156,7 @@ pub fn start_lua_thread(
                 let mode_data = match rt.block_on(media_manager.get_mode(id)) {
                     Ok(data) => data,
                     Err(err) => {
-                        tracing::error!("{err}");
+                        report_fatal_startup_error(err);
                         return;
                     }
                 };
@@ -159,7 +167,7 @@ pub fn start_lua_thread(
                 let file = match File::open(path) {
                     Ok(file) => file,
                     Err(err) => {
-                        tracing::error!("{err}");
+                        report_fatal_startup_error(err);
                         return;
                     }
                 };
@@ -171,7 +179,7 @@ pub fn start_lua_thread(
         let (header, Metadata { modes, files, .. }) = match read_mode_metadata(&mut file) {
             Ok(x) => x,
             Err(err) => {
-                tracing::error!("{err}");
+                report_fatal_startup_error(err);
                 return;
             }
         };
@@ -181,15 +189,27 @@ pub fn start_lua_thread(
         // version is bumped, at which point it starts warning about stale modes.
         #[allow(clippy::absurd_extreme_comparisons)]
         if header.version_major < VERSION_MAJOR {
-            tracing::warn!(
+            let warning = format!(
                 "Mode was built for API v{}.x; this engine provides API v{}.x. \
                  Rebuild the mode with `lw mode build` for best compatibility.",
-                header.version_major,
-                VERSION_MAJOR
+                header.version_major, VERSION_MAJOR
             );
+            tracing::warn!("{warning}");
+            if let Err(err) = shared::status::set_warning(warning) {
+                tracing::warn!("Failed to write engine status: {err}");
+            }
         }
 
-        let mode_obj = modes.get(&mode).unwrap();
+        let mode_obj = match modes.get(&mode) {
+            Some(mode_obj) => mode_obj,
+            None => {
+                report_fatal_startup_error(format!(
+                    "Mode '{mode}' was not found in this mode file \
+                     (the configuration may be stale)"
+                ));
+                return;
+            }
+        };
 
         let entrypoint = mode_obj.entrypoint.clone();
 
@@ -221,16 +241,25 @@ pub fn start_lua_thread(
         ) {
             Ok(x) => Rc::new(x),
             Err(err) => {
-                tracing::error!("{err}");
+                report_fatal_startup_error(err);
                 return;
             }
         };
+
+        // Everything needed to run the mode is in place; from here on a failure is a runtime
+        // error rather than a reason the engine never started.
+        if let Err(err) = shared::status::set_state(shared::status::EngineState::Running) {
+            tracing::warn!("Failed to write engine status: {err}");
+        }
 
         let runtime_clone = runtime.clone();
 
         local.spawn_local(async move {
             if let Err(err) = runtime_clone.run_entrypoint(entrypoint).await {
                 tracing::error!("{err}");
+                if let Err(err) = shared::status::set_last_runtime_error(err.to_string()) {
+                    tracing::warn!("Failed to write engine status: {err}");
+                }
             }
 
             tracing::info!("Code finished");
@@ -243,6 +272,10 @@ pub fn start_lua_thread(
                 tokio::task::spawn_local(async move {
                     if let Err(err) = runtime.handle_event(event).await {
                         tracing::error!("{err}");
+                        if let Err(err) = shared::status::set_last_runtime_error(err.to_string())
+                        {
+                            tracing::warn!("Failed to write engine status: {err}");
+                        }
                     }
                 });
             }
@@ -266,6 +299,10 @@ pub fn start_lua_thread(
 
         if media_manager_handle.join().is_err() {
             tracing::error!("Media manager thread panicked");
+        }
+
+        if let Err(err) = shared::status::set_state(shared::status::EngineState::Exited) {
+            tracing::warn!("Failed to write engine status: {err}");
         }
 
         tracing::info!("Thread killed");
