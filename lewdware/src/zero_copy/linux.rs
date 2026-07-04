@@ -66,16 +66,17 @@ impl DrmImportedTextures {
         opts: ImportOpts,
     ) -> Option<Self> {
         if let Some(hardware_frame) = &frame.hardware_frame
-            && opts.pix_fmt == VideoPixelFormat::Nv12 {
-                return try_import_drm_prime(
-                    &wgpu_state.device,
-                    &hardware_frame.0,
-                    opts.video_width,
-                    opts.video_height,
-                    &wgpu_state.nv12_bind_group_layout,
-                    &wgpu_state.sampler,
-                );
-            }
+            && opts.pix_fmt == VideoPixelFormat::Nv12
+        {
+            return try_import_drm_prime(
+                &wgpu_state.device,
+                &hardware_frame.0,
+                opts.video_width,
+                opts.video_height,
+                &wgpu_state.nv12_bind_group_layout,
+                &wgpu_state.sampler,
+            );
+        }
 
         None
     }

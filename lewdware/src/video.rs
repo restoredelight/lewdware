@@ -250,12 +250,11 @@ impl VideoDecoder {
 
         let next_pts = frame.pts;
 
-        if self.audio_player.is_none()
-            && self.video_clock > Duration::ZERO {
-                self.frame_duration = next_pts.saturating_sub(self.video_clock);
-            }
-            // For the very first frame, frame_duration will be zero, but last_frame_time was
-            // set at creation, so needs_next_frame will return true immediately.
+        if self.audio_player.is_none() && self.video_clock > Duration::ZERO {
+            self.frame_duration = next_pts.saturating_sub(self.video_clock);
+        }
+        // For the very first frame, frame_duration will be zero, but last_frame_time was
+        // set at creation, so needs_next_frame will return true immediately.
 
         self.video_clock = next_pts;
         self.last_frame_time = Instant::now();
@@ -303,7 +302,13 @@ struct VideoMetadata {
 
 /// The receiver for decoded frames, plus the video's native dimensions, full-range flag, and
 /// pixel format.
-type VideoStream = (Receiver<Option<VideoFrame>>, u32, u32, bool, VideoPixelFormat);
+type VideoStream = (
+    Receiver<Option<VideoFrame>>,
+    u32,
+    u32,
+    bool,
+    VideoPixelFormat,
+);
 
 /// Spawn a thread to decode frames from a video.
 fn spawn_video_stream(

@@ -108,7 +108,13 @@ impl MediaManager {
 
     /// Request an image be decoded/resized to `(width, height)`. Returns as soon as the request
     /// is enqueued — the result arrives later as a `UserEvent::ImageResolved { id, .. }`.
-    pub fn get_image_data(&self, id: PopupId, media_id: u64, width: u32, height: u32) -> Result<()> {
+    pub fn get_image_data(
+        &self,
+        id: PopupId,
+        media_id: u64,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
         self.try_send(MediaRequest::GetImageData {
             id,
             media_id,
@@ -164,7 +170,11 @@ impl MediaManager {
 fn spawn_media_manager_thread(
     pack_path: &Path,
     event_loop_proxy: EventLoopProxy<UserEvent>,
-) -> anyhow::Result<(std_mpsc::SyncSender<MediaRequest>, Metadata, thread::JoinHandle<()>)> {
+) -> anyhow::Result<(
+    std_mpsc::SyncSender<MediaRequest>,
+    Metadata,
+    thread::JoinHandle<()>,
+)> {
     let (req_tx, req_rx) = std_mpsc::sync_channel(20);
 
     let file = MediaPack::open(pack_path)?;

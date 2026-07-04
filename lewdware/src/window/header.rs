@@ -77,8 +77,7 @@ impl Header {
         let header_rect =
             Rect::from_xywh(0.0, 0.0, self.size.width as f32, self.size.height as f32).unwrap();
 
-        self.pixmap
-            .fill_rect(header_rect, &paint, transform, None);
+        self.pixmap.fill_rect(header_rect, &paint, transform, None);
 
         self.background_drawn = true;
     }
@@ -187,8 +186,7 @@ impl Header {
             }
         };
 
-        self.pixmap
-            .fill_rect(close_rect, &paint, transform, None);
+        self.pixmap.fill_rect(close_rect, &paint, transform, None);
 
         if self.clicked || self.hover {
             paint.set_color(Color::WHITE);
@@ -281,21 +279,18 @@ impl Header {
     }
 
     pub fn handle_cursor_left(&mut self) {
-        if self.closeable
-            && (self.hover || self.clicked) {
-                self.hover = false;
-                self.clicked = false;
-                self.request_redraw();
-            }
+        if self.closeable && (self.hover || self.clicked) {
+            self.hover = false;
+            self.clicked = false;
+            self.request_redraw();
+        }
     }
 
     pub fn handle_mouse_down(&mut self) {
-        if self.closeable
-            && self.hover
-                && !self.clicked {
-                    self.clicked = true;
-                    self.request_redraw();
-                }
+        if self.closeable && self.hover && !self.clicked {
+            self.clicked = true;
+            self.request_redraw();
+        }
     }
 
     pub fn handle_mouse_up(&mut self) -> bool {

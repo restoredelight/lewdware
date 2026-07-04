@@ -169,12 +169,17 @@ fn run_db_writer(
 /// and acknowledged - so callers only consider a file "done" once its row is
 /// actually durable, matching the immediate-per-file write the sequential code
 /// used to do directly.
-fn send_db_update(db_tx: &std::sync::mpsc::Sender<DbUpdateRequest>, kind: DbUpdateKind) -> Result<()> {
+fn send_db_update(
+    db_tx: &std::sync::mpsc::Sender<DbUpdateRequest>,
+    kind: DbUpdateKind,
+) -> Result<()> {
     let (ack_tx, ack_rx) = std::sync::mpsc::channel();
     db_tx
         .send(DbUpdateRequest { kind, ack: ack_tx })
         .map_err(|_| anyhow!("db writer thread is gone"))?;
-    ack_rx.recv().map_err(|_| anyhow!("db writer thread is gone"))?
+    ack_rx
+        .recv()
+        .map_err(|_| anyhow!("db writer thread is gone"))?
 }
 
 pub enum FileData {
@@ -1121,7 +1126,8 @@ impl MediaPackView {
                             row.get::<_, Option<bool>>("transparent")?.unwrap_or(false),
                         ))
                     },
-                )})
+                )
+            })
             .await?;
 
         let mut file = self.open_read().await?;
@@ -1189,7 +1195,8 @@ impl MediaPackView {
                             row.get::<_, String>("file_type")?.parse()?,
                         ))
                     },
-                )})
+                )
+            })
             .await?;
 
         let mut file = self.open_read().await?;
@@ -1550,7 +1557,10 @@ mod tests {
                 continue;
             }
             let (data, _) = view.get_file_data(ids[i]).await.unwrap();
-            assert_eq!(&data, content, "content mismatch for surviving file index {i}");
+            assert_eq!(
+                &data, content,
+                "content mismatch for surviving file index {i}"
+            );
         }
     }
 
@@ -1654,21 +1664,15 @@ mod tests {
                 .unwrap();
 
             // Delete a scattered ~10% of whatever remains.
-            let remaining = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                pack.get_files(),
-            )
-            .await
-            .unwrap()
-            .unwrap();
+            let remaining =
+                tokio::time::timeout(std::time::Duration::from_secs(10), pack.get_files())
+                    .await
+                    .unwrap()
+                    .unwrap();
             if remaining.len() < 20 {
                 break;
             }
-            let to_delete: Vec<u64> = remaining
-                .iter()
-                .step_by(9)
-                .map(|f| f.id)
-                .collect();
+            let to_delete: Vec<u64> = remaining.iter().step_by(9).map(|f| f.id).collect();
             pack.remove_files(to_delete).await.unwrap();
         }
         let _ = ids;
@@ -1709,7 +1713,10 @@ mod tests {
             .add_file(encoded_1, Path::new("a.wav"), hash)
             .await
             .unwrap();
-        assert!(first.is_some(), "first upload of new content should succeed");
+        assert!(
+            first.is_some(),
+            "first upload of new content should succeed"
+        );
 
         let second = pack
             .add_file(encoded_2, Path::new("b.wav"), hash)

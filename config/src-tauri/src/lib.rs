@@ -40,11 +40,11 @@ async fn check_for_update() -> Result<Option<String>, String> {
         Ok(None)
     }
 }
-use serde_json::Value as JsonValue;
 use indexmap::IndexMap;
+use serde_json::Value as JsonValue;
 use shared::{
     db::migrate,
-    mode::{self, ModeEntry, Metadata, OptionType, OptionValue, ShowWhen},
+    mode::{self, Metadata, ModeEntry, OptionType, OptionValue, ShowWhen},
     read_pack::read_pack_metadata,
     user_config::{self, AppConfig, Key, Mode},
 };

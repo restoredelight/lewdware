@@ -5,7 +5,12 @@ use ffmpeg_next::{
     format::{Sample, sample},
     frame,
 };
-use std::{num::NonZero, sync::Arc, thread::{self}, time::Duration};
+use std::{
+    num::NonZero,
+    sync::Arc,
+    thread::{self},
+    time::Duration,
+};
 use winit::event_loop::EventLoopProxy;
 
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source, buffer::SamplesBuffer};

@@ -145,9 +145,10 @@ pub fn spawn_panic_thread(event_loop_proxy: EventLoopProxy<UserEvent>, target_ke
                     let modifiers = rdev_keys_to_modifiers(&keys);
 
                     if modifier_matches(&modifiers, &target_key.modifiers)
-                        && let Err(err) = event_loop_proxy.send_event(UserEvent::Exit) {
-                            tracing::error!("Could not send panic button event: {}", err);
-                        }
+                        && let Err(err) = event_loop_proxy.send_event(UserEvent::Exit)
+                    {
+                        tracing::error!("Could not send panic button event: {}", err);
+                    }
                 }
             } else if let rdev::EventType::KeyRelease(key) = event.event_type {
                 keys.remove(&key);
@@ -472,9 +473,10 @@ pub fn handle_sigterm(event_loop_proxy: EventLoopProxy<UserEvent>) {
     std::thread::spawn(move || {
         if let Ok(mut signals) =
             signal_hook::iterator::Signals::new([signal_hook::consts::signal::SIGTERM])
-            && signals.forever().next().is_some() {
-                let _ = event_loop_proxy.send_event(UserEvent::Exit);
-            }
+            && signals.forever().next().is_some()
+        {
+            let _ = event_loop_proxy.send_event(UserEvent::Exit);
+        }
     });
 }
 
@@ -547,9 +549,10 @@ pub fn prepare_temp_dir() -> std::io::Result<PathBuf> {
     let dir = temp_dir();
 
     if let Err(err) = std::fs::remove_dir_all(&dir)
-        && err.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!("Failed to clear stale temp dir {}: {err}", dir.display());
-        }
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!("Failed to clear stale temp dir {}: {err}", dir.display());
+    }
 
     std::fs::create_dir_all(&dir)?;
 

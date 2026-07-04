@@ -126,10 +126,21 @@ enum WindowSizeBehaviour {
 pub enum UserEvent {
     Exit,
     LuaRequest,
-    AudioFinish { id: u64 },
-    ImageResolved { id: PopupId, result: std::result::Result<ImageData, MediaError> },
-    VideoResolved { id: PopupId, result: std::result::Result<VideoDecoder, MediaError> },
-    AudioResolved { id: u64, result: std::result::Result<AudioPlayer, MediaError> },
+    AudioFinish {
+        id: u64,
+    },
+    ImageResolved {
+        id: PopupId,
+        result: std::result::Result<ImageData, MediaError>,
+    },
+    VideoResolved {
+        id: PopupId,
+        result: std::result::Result<VideoDecoder, MediaError>,
+    },
+    AudioResolved {
+        id: u64,
+        result: std::result::Result<AudioPlayer, MediaError>,
+    },
 }
 
 impl LewdwareApp {
@@ -396,7 +407,8 @@ impl LewdwareApp {
     /// Release a window back to the pool. Moving offscreen rather than unmapping avoids
     /// the KWin strut relayout freeze on Dock-type windows.
     fn close_window(&mut self, window_type: WindowType) {
-        self.window_ids.remove(&window_type.inner_window().window().id());
+        self.window_ids
+            .remove(&window_type.inner_window().window().id());
         let transparent = window_type.inner_window().transparent();
         // Move offscreen before dropping InnerWindow so the surface is still alive when KWin
         // processes the XMoveWindow. Without this, transparent (wgpu) windows flash black at
@@ -435,7 +447,12 @@ impl LewdwareApp {
 
         // Enqueues the decode and returns immediately — the media manager thread delivers the
         // result later via `UserEvent::ImageResolved`, handled in `handle_image_resolved`.
-        media_manager.get_image_data(popup_id, media_id, physical_size.width, physical_size.height)?;
+        media_manager.get_image_data(
+            popup_id,
+            media_id,
+            physical_size.width,
+            physical_size.height,
+        )?;
 
         let props = Self::window_props(popup_id, &window_opts);
         self.windows.insert(
@@ -539,8 +556,10 @@ impl LewdwareApp {
             prompt_window.inner_window.set_visible(true);
         }
 
-        self.windows
-            .insert(popup_id, PopupSlot::Ready(WindowType::Prompt(prompt_window)));
+        self.windows.insert(
+            popup_id,
+            PopupSlot::Ready(WindowType::Prompt(prompt_window)),
+        );
 
         Ok(props)
     }
@@ -569,8 +588,8 @@ impl LewdwareApp {
         let window = self.create_window(popup_id, resolved, event_loop)?;
         let visible = props.visible;
 
-        let mut choice_window = ChoiceWindow::new(window, text, options)
-            .map_err(LewdwareError::WindowError)?;
+        let mut choice_window =
+            ChoiceWindow::new(window, text, options).map_err(LewdwareError::WindowError)?;
 
         if visible {
             if let Err(e) = choice_window.inner_window.pre_show() {
@@ -579,8 +598,10 @@ impl LewdwareApp {
             choice_window.inner_window.set_visible(true);
         }
 
-        self.windows
-            .insert(popup_id, PopupSlot::Ready(WindowType::Choice(choice_window)));
+        self.windows.insert(
+            popup_id,
+            PopupSlot::Ready(WindowType::Choice(choice_window)),
+        );
 
         Ok(props)
     }
@@ -647,10 +668,13 @@ impl LewdwareApp {
         // gracefully rather than panic: the id is still returned, but no slot is inserted, so
         // any later action on it is a harmless no-op (same as acting on an already-closed id).
         match self.media_manager().and_then(|media_manager| {
-            media_manager.get_audio_data(id, media_id, loop_audio).map_err(Into::into)
+            media_manager
+                .get_audio_data(id, media_id, loop_audio)
+                .map_err(Into::into)
         }) {
             Ok(()) => {
-                self.audio_players.insert(id, AudioSlot::Pending { paused: false });
+                self.audio_players
+                    .insert(id, AudioSlot::Pending { paused: false });
             }
             Err(err) => tracing::error!("Failed to request audio decode: {err}"),
         }
@@ -749,7 +773,15 @@ impl LewdwareApp {
                 window_opts,
                 tx,
             } => tx
-                .send(self.spawn_video(media_id, width, height, loop_video, audio, window_opts, event_loop))
+                .send(self.spawn_video(
+                    media_id,
+                    width,
+                    height,
+                    loop_video,
+                    audio,
+                    window_opts,
+                    event_loop,
+                ))
                 .is_ok(),
             LuaRequest::SpawnPrompt {
                 text,
@@ -787,7 +819,8 @@ impl LewdwareApp {
             LuaRequest::ResetWallpaper { tx } => {
                 self.reset_wallpaper();
                 tx.send(())
-            }.is_ok(),
+            }
+            .is_ok(),
             LuaRequest::OpenLink { url, tx } => tx.send(self.open_link(url)).is_ok(),
             LuaRequest::ShowNotification { notification, tx } => {
                 tx.send(self.show_notification(notification)).is_ok()
@@ -1037,7 +1070,11 @@ impl LewdwareApp {
     /// `on_close` callback Lua would otherwise get from a real close.
     fn pending_window_failed(&mut self, id: PopupId, context: &str, err: impl std::fmt::Display) {
         tracing::error!("{context}: {err}");
-        if self.lua_event_tx.send(lua::Event::WindowClosed { id }).is_err() {
+        if self
+            .lua_event_tx
+            .send(lua::Event::WindowClosed { id })
+            .is_err()
+        {
             tracing::debug!("Couldn't send WindowClosed event: Lua thread has shut down");
         }
     }
@@ -1095,7 +1132,9 @@ impl LewdwareApp {
 
         let inner_window = match self.create_window(id, opts, event_loop) {
             Ok(w) => w,
-            Err(err) => return self.pending_window_failed(id, "Failed to create image window", err),
+            Err(err) => {
+                return self.pending_window_failed(id, "Failed to create image window", err);
+            }
         };
 
         let mut image_window = match ImageWindow::new(inner_window, data) {
@@ -1169,7 +1208,9 @@ impl LewdwareApp {
 
         let window = match self.create_window(id, opts, event_loop) {
             Ok(w) => w,
-            Err(err) => return self.pending_window_failed(id, "Failed to create video window", err),
+            Err(err) => {
+                return self.pending_window_failed(id, "Failed to create video window", err);
+            }
         };
 
         window.request_redraw();
@@ -1224,11 +1265,16 @@ impl LewdwareApp {
                 if !paused {
                     audio_player.play();
                 }
-                self.audio_players.insert(id, AudioSlot::Ready(audio_player));
+                self.audio_players
+                    .insert(id, AudioSlot::Ready(audio_player));
             }
             Err(err) => {
                 tracing::error!("Failed to decode audio: {err}");
-                if self.lua_event_tx.send(lua::Event::AudioFinish { id }).is_err() {
+                if self
+                    .lua_event_tx
+                    .send(lua::Event::AudioFinish { id })
+                    .is_err()
+                {
                     tracing::debug!("Couldn't send AudioFinish event: Lua thread has shut down");
                 }
             }
@@ -1259,10 +1305,13 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
             };
 
             match window_type {
-                WindowType::Image(window) => if event == WindowEvent::RedrawRequested
-                    && let Err(err) = window.draw() {
+                WindowType::Image(window) => {
+                    if event == WindowEvent::RedrawRequested
+                        && let Err(err) = window.draw()
+                    {
                         tracing::error!("Error drawing image window: {}", err);
-                    },
+                    }
+                }
                 // Video windows are driven directly from `about_to_wait` instead of through
                 // `RedrawRequested` — see the comment there for why.
                 WindowType::Video(_) => {}
@@ -1335,9 +1384,7 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                         }
                         PopupSlot::Pending(_) => false,
                     };
-                    if should_close
-                        && let PopupSlot::Ready(window_type) = entry.remove()
-                    {
+                    if should_close && let PopupSlot::Ready(window_type) = entry.remove() {
                         self.close_window(window_type);
                     }
                 }
@@ -1358,9 +1405,10 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
             }
             UserEvent::AudioFinish { id } => {
                 if self.audio_players.remove(&id).is_some()
-                    && let Err(err) = self.lua_event_tx.send(lua::Event::AudioFinish { id }) {
-                        tracing::error!("{err}");
-                    }
+                    && let Err(err) = self.lua_event_tx.send(lua::Event::AudioFinish { id })
+                {
+                    tracing::error!("{err}");
+                }
             }
             UserEvent::ImageResolved { id, result } => {
                 self.handle_image_resolved(id, result, event_loop);

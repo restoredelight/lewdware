@@ -263,9 +263,9 @@ impl VideoWindow {
                     if let Some(gpu_renderer) = &mut self.gpu_renderer
                         && let GpuRendererType::Video(video_renderer) =
                             &mut gpu_renderer.renderer_type
-                        {
-                            video_renderer.update_video(self.inner_window.wgpu_state(), &frame);
-                        }
+                    {
+                        video_renderer.update_video(self.inner_window.wgpu_state(), &frame);
+                    }
                     render = true;
                 }
                 NextFrame::Finish => return Ok(true),
@@ -279,28 +279,28 @@ impl VideoWindow {
                 let outer_h = outer_size.height as f32;
                 self.inner_window.draw_wgpu(|rpass, x, y| {
                     if let Some(gpu_renderer) = gpu_renderer
-                        && let GpuRendererType::Video(video) = &gpu_renderer.renderer_type {
-                            let (vid_pipeline, vid_bind_group) =
-                                video.video_pipeline_and_bind_group();
-                            rpass.set_pipeline(vid_pipeline);
-                            rpass.set_bind_group(0, vid_bind_group, &[]);
-                            rpass.set_bind_group(1, &gpu_renderer.window_bind_group, &[]);
-                            rpass.set_viewport(
-                                x as f32,
-                                y as f32,
-                                inner_size.width as f32,
-                                inner_size.height as f32,
-                                0.0,
-                                1.0,
-                            );
-                            rpass.draw(0..4, 0..1);
+                        && let GpuRendererType::Video(video) = &gpu_renderer.renderer_type
+                    {
+                        let (vid_pipeline, vid_bind_group) = video.video_pipeline_and_bind_group();
+                        rpass.set_pipeline(vid_pipeline);
+                        rpass.set_bind_group(0, vid_bind_group, &[]);
+                        rpass.set_bind_group(1, &gpu_renderer.window_bind_group, &[]);
+                        rpass.set_viewport(
+                            x as f32,
+                            y as f32,
+                            inner_size.width as f32,
+                            inner_size.height as f32,
+                            0.0,
+                            1.0,
+                        );
+                        rpass.draw(0..4, 0..1);
 
-                            rpass.set_pipeline(video.ui_pipeline());
-                            rpass.set_bind_group(0, video.ui_bind_group(), &[]);
-                            rpass.set_bind_group(1, &gpu_renderer.window_bind_group, &[]);
-                            rpass.set_viewport(0.0, 0.0, outer_w, outer_h, 0.0, 1.0);
-                            rpass.draw(0..4, 0..1);
-                        }
+                        rpass.set_pipeline(video.ui_pipeline());
+                        rpass.set_bind_group(0, video.ui_bind_group(), &[]);
+                        rpass.set_bind_group(1, &gpu_renderer.window_bind_group, &[]);
+                        rpass.set_viewport(0.0, 0.0, outer_w, outer_h, 0.0, 1.0);
+                        rpass.draw(0..4, 0..1);
+                    }
                 })?;
             }
         } else {
@@ -470,41 +470,37 @@ impl PromptWindow {
             // Render egui into the intermediate texture.
             let text = self.text.clone();
             let placeholder = self.placeholder.clone();
-            egui_gpu.render_to_texture(
-                &wgpu_state,
-                &window,
-                inner_size,
-                |ui| {
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui_gpu.render_to_texture(&wgpu_state, &window, inner_size, |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                        ui.heading("Repeat after me");
+                        ui.add_space(20.0);
+
+                        if let Some(text) = &text {
+                            ui.label(RichText::new(text).heading());
+                        }
+
+                        let mut prompt = TextEdit::singleline(&mut self.value);
+                        if let Some(placeholder) = &placeholder {
+                            prompt = prompt.hint_text(placeholder);
+                        }
+                        let response = ui.add(prompt);
+                        response.request_focus();
+
+                        ui.add_space(ui.available_height() - 50.0);
                         ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                            ui.heading("Repeat after me");
-                            ui.add_space(20.0);
-
-                            if let Some(text) = &text {
-                                ui.label(RichText::new(text).heading());
+                            if ui.add(egui::Button::new("Submit")).clicked()
+                                && let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
+                                    id,
+                                    text: self.value.clone(),
+                                })
+                            {
+                                tracing::error!("{err}");
                             }
-
-                            let mut prompt = TextEdit::singleline(&mut self.value);
-                            if let Some(placeholder) = &placeholder {
-                                prompt = prompt.hint_text(placeholder);
-                            }
-                            let response = ui.add(prompt);
-                            response.request_focus();
-
-                            ui.add_space(ui.available_height() - 50.0);
-                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                if ui.add(egui::Button::new("Submit")).clicked()
-                                    && let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
-                                        id,
-                                        text: self.value.clone(),
-                                    }) {
-                                        tracing::error!("{err}");
-                                    }
-                            });
                         });
                     });
-                },
-            )?;
+                });
+            })?;
 
             // Upload header pixmap to decoration overlay if it changed.
             let decoration_overlay = &mut self.decoration_overlay;
@@ -581,9 +577,10 @@ impl PromptWindow {
                                     && let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
                                         id,
                                         text: self.value.clone(),
-                                    }) {
-                                        tracing::error!("{err}");
-                                    }
+                                    })
+                                {
+                                    tracing::error!("{err}");
+                                }
                             });
                         });
                     });
@@ -701,42 +698,37 @@ impl ChoiceWindow {
 
             let text = self.text.clone();
             let options = self.options.clone();
-            egui_gpu.render_to_texture(
-                &wgpu_state,
-                &window,
-                inner_size,
-                |ui| {
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
-                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                            ui.add_space(20.0);
+            egui_gpu.render_to_texture(&wgpu_state, &window, inner_size, |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                        ui.add_space(20.0);
 
-                            if let Some(text) = &text {
-                                ui.label(RichText::new(text).heading());
-                            }
+                        if let Some(text) = &text {
+                            ui.label(RichText::new(text).heading());
+                        }
 
-                            ui.add_space(ui.available_height() - 100.0);
+                        ui.add_space(ui.available_height() - 100.0);
 
-                            ui.with_layout(
-                                egui::Layout::left_to_right(egui::Align::Center)
-                                    .with_main_wrap(true)
-                                    .with_main_align(egui::Align::Center)
-                                    .with_main_justify(true),
-                                |ui| {
-                                    for option in &options {
-                                        if ui.button(&option.label).clicked() {
-                                            let _ = lua_event_tx.send(lua::Event::ChoiceSelect {
-                                                id,
-                                                option_id: option.id.clone(),
-                                            });
-                                        }
-                                        ui.add_space(5.0);
+                        ui.with_layout(
+                            egui::Layout::left_to_right(egui::Align::Center)
+                                .with_main_wrap(true)
+                                .with_main_align(egui::Align::Center)
+                                .with_main_justify(true),
+                            |ui| {
+                                for option in &options {
+                                    if ui.button(&option.label).clicked() {
+                                        let _ = lua_event_tx.send(lua::Event::ChoiceSelect {
+                                            id,
+                                            option_id: option.id.clone(),
+                                        });
                                     }
-                                },
-                            );
-                        });
+                                    ui.add_space(5.0);
+                                }
+                            },
+                        );
                     });
-                },
-            )?;
+                });
+            })?;
 
             let decoration_overlay = &mut self.decoration_overlay;
             self.inner_window.with_header_pixmap(|pixmap| {
@@ -937,12 +929,9 @@ impl TextWindow {
 
             let text = self.text.clone();
             let style = self.style;
-            egui_gpu.render_to_texture(
-                &wgpu_state,
-                &window,
-                inner_size,
-                |ui| paint_text(ui, &text, &style),
-            )?;
+            egui_gpu.render_to_texture(&wgpu_state, &window, inner_size, |ui| {
+                paint_text(ui, &text, &style)
+            })?;
 
             let decoration_overlay = &mut self.decoration_overlay;
             self.inner_window.with_header_pixmap(|pixmap| {
@@ -990,8 +979,9 @@ impl TextWindow {
                     inner_size.height as usize,
                 );
 
-                let _ =
-                    egui_cpu.redraw(&mut buffer_ref, |ui| paint_text(ui, &self.text, &self.style));
+                let _ = egui_cpu.redraw(&mut buffer_ref, |ui| {
+                    paint_text(ui, &self.text, &self.style)
+                });
 
                 buffer.copy_from_u32_buf(&egui_buffer, inner_size.width, ox, oy);
             })?;
@@ -1017,74 +1007,79 @@ fn paint_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
     // to wrap (or clip) when it shouldn't.
     let frame = egui::Frame::central_panel(ui.style()).inner_margin(0);
 
-    egui::CentralPanel::default().frame(frame).show_inside(ui, |ui| {
-        let available = ui.available_rect_before_wrap();
-        // `style.font_size` is always `FontSize::Value` by the time it reaches here — percentage
-        // sizes are resolved once in `App::spawn_text`, while the monitor is known — so the
-        // argument here is unused.
-        let font_size = style.font_size.to_pixels(0);
-        let font_id = egui::FontId::new(font_size, text_font::font_family(style.font));
-        let color = to_color32(style.color);
+    egui::CentralPanel::default()
+        .frame(frame)
+        .show_inside(ui, |ui| {
+            let available = ui.available_rect_before_wrap();
+            // `style.font_size` is always `FontSize::Value` by the time it reaches here — percentage
+            // sizes are resolved once in `App::spawn_text`, while the monitor is known — so the
+            // argument here is unused.
+            let font_size = style.font_size.to_pixels(0);
+            let font_id = egui::FontId::new(font_size, text_font::font_family(style.font));
+            let color = to_color32(style.color);
 
-        // The window was sized (see `calculate_text_popup_size`) with `2 * border_width` of extra
-        // room baked in so the border stroke (drawn offset from the text on every side) doesn't
-        // get clipped by the window bounds. Mirror that padding here so wrapping/positioning
-        // match what was actually measured.
-        let border_width = if style.border_color.is_some() {
-            style.border_width
-        } else {
-            0.0
-        };
-        let wrap_width = (available.width() - border_width * 2.0).max(0.0);
+            // The window was sized (see `calculate_text_popup_size`) with `2 * border_width` of extra
+            // room baked in so the border stroke (drawn offset from the text on every side) doesn't
+            // get clipped by the window bounds. Mirror that padding here so wrapping/positioning
+            // match what was actually measured.
+            let border_width = if style.border_color.is_some() {
+                style.border_width
+            } else {
+                0.0
+            };
+            let wrap_width = (available.width() - border_width * 2.0).max(0.0);
 
-        let mut job = egui::text::LayoutJob::single_section(text.to_owned(), egui::TextFormat {
-            font_id,
-            color,
-            ..Default::default()
-        });
-        job.wrap.max_width = wrap_width;
-        job.halign = text_font::to_egui_align(style.align);
-
-        let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
-
-        // `halign` positions each row *relative to x=0* (LEFT: [0,w], Center: [-w/2,w/2],
-        // RIGHT: [-w,0]), not within `[0, wrap_width]` — so the anchor we paint at has to shift
-        // depending on alignment, not just sit at the left edge. Left/right also inset by
-        // `border_width` so the border has room on the outer edge (center is already symmetric).
-        let pos_x = match style.align {
-            lua::TextAlign::Left => available.left() + border_width,
-            lua::TextAlign::Center => available.center().x,
-            lua::TextAlign::Right => available.right() - border_width,
-        };
-        let pos = egui::pos2(pos_x, available.center().y - galley.size().y / 2.0);
-
-        let painter = ui.painter();
-
-        if let Some(border_color) = style.border_color {
-            let border_color = to_color32(border_color);
-            let count = text_font::outline_sample_count(style.border_width);
-            for offset in text_font::outline_offsets(count) {
-                painter.galley_with_override_text_color(
-                    pos + offset * style.border_width,
-                    galley.clone(),
-                    border_color,
-                );
-            }
-        }
-
-        if style.bold {
-            const BOLD_OFFSET: f32 = 0.6;
-            for offset in text_font::outline_offsets(8) {
-                painter.galley_with_override_text_color(
-                    pos + offset * BOLD_OFFSET,
-                    galley.clone(),
+            let mut job = egui::text::LayoutJob::single_section(
+                text.to_owned(),
+                egui::TextFormat {
+                    font_id,
                     color,
-                );
-            }
-        }
+                    ..Default::default()
+                },
+            );
+            job.wrap.max_width = wrap_width;
+            job.halign = text_font::to_egui_align(style.align);
 
-        painter.galley_with_override_text_color(pos, galley, color);
-    });
+            let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
+
+            // `halign` positions each row *relative to x=0* (LEFT: [0,w], Center: [-w/2,w/2],
+            // RIGHT: [-w,0]), not within `[0, wrap_width]` — so the anchor we paint at has to shift
+            // depending on alignment, not just sit at the left edge. Left/right also inset by
+            // `border_width` so the border has room on the outer edge (center is already symmetric).
+            let pos_x = match style.align {
+                lua::TextAlign::Left => available.left() + border_width,
+                lua::TextAlign::Center => available.center().x,
+                lua::TextAlign::Right => available.right() - border_width,
+            };
+            let pos = egui::pos2(pos_x, available.center().y - galley.size().y / 2.0);
+
+            let painter = ui.painter();
+
+            if let Some(border_color) = style.border_color {
+                let border_color = to_color32(border_color);
+                let count = text_font::outline_sample_count(style.border_width);
+                for offset in text_font::outline_offsets(count) {
+                    painter.galley_with_override_text_color(
+                        pos + offset * style.border_width,
+                        galley.clone(),
+                        border_color,
+                    );
+                }
+            }
+
+            if style.bold {
+                const BOLD_OFFSET: f32 = 0.6;
+                for offset in text_font::outline_offsets(8) {
+                    painter.galley_with_override_text_color(
+                        pos + offset * BOLD_OFFSET,
+                        galley.clone(),
+                        color,
+                    );
+                }
+            }
+
+            painter.galley_with_override_text_color(pos, galley, color);
+        });
 }
 
 fn to_color32(c: lua::Color) -> egui::Color32 {

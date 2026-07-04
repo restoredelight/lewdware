@@ -146,9 +146,9 @@ impl HardwareEncoder {
                 .args(["-f", "null", "-"])
                 .status()
                 .is_ok_and(|status| status.success())
-            {
-                return self;
-            }
+        {
+            return self;
+        }
 
         Self::SoftwareFallback
     }

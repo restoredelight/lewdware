@@ -43,12 +43,30 @@ pub use request::{AudioAction, LuaRequest, WindowAction};
 pub use window::{ChoiceWindowOption, Easing, FadeOpts, MoveOpts};
 
 pub enum Event {
-    WindowClosed { id: PopupId },
-    MoveFinish { id: PopupId, move_id: u64, x: i32, y: i32 },
-    AudioFinish { id: u64 },
-    PromptSubmit { id: PopupId, text: String },
-    ChoiceSelect { id: PopupId, option_id: String },
-    FadeFinish { id: PopupId, fade_id: u64 },
+    WindowClosed {
+        id: PopupId,
+    },
+    MoveFinish {
+        id: PopupId,
+        move_id: u64,
+        x: i32,
+        y: i32,
+    },
+    AudioFinish {
+        id: u64,
+    },
+    PromptSubmit {
+        id: PopupId,
+        text: String,
+    },
+    ChoiceSelect {
+        id: PopupId,
+        option_id: String,
+    },
+    FadeFinish {
+        id: PopupId,
+        fade_id: u64,
+    },
 }
 
 /// Identifies a popup (window) from the Lua API's perspective. Assigned by the main thread the

@@ -161,10 +161,8 @@ impl InnerWindow {
             )
         });
 
-        let monitor_position = LogicalPosition::new(
-            opts.position.x - opts.x,
-            opts.position.y - opts.y,
-        );
+        let monitor_position =
+            LogicalPosition::new(opts.position.x - opts.x, opts.position.y - opts.y);
         let monitor_size = LogicalSize::new(opts.monitor.width, opts.monitor.height);
 
         Ok(Self {
@@ -503,13 +501,29 @@ impl InnerWindow {
         let clamp = opts.clamp;
         let new_position = if opts.relative {
             LogicalPosition::new(
-                if clamp { (self.position.x + x.unwrap_or(0)).max(0) } else { self.position.x + x.unwrap_or(0) },
-                if clamp { (self.position.y + y.unwrap_or(0)).max(0) } else { self.position.y + y.unwrap_or(0) },
+                if clamp {
+                    (self.position.x + x.unwrap_or(0)).max(0)
+                } else {
+                    self.position.x + x.unwrap_or(0)
+                },
+                if clamp {
+                    (self.position.y + y.unwrap_or(0)).max(0)
+                } else {
+                    self.position.y + y.unwrap_or(0)
+                },
             )
         } else {
             LogicalPosition::new(
-                if clamp { x.map(|v| v.max(0)).unwrap_or(self.position.x) } else { x.unwrap_or(self.position.x) },
-                if clamp { y.map(|v| v.max(0)).unwrap_or(self.position.y) } else { y.unwrap_or(self.position.y) },
+                if clamp {
+                    x.map(|v| v.max(0)).unwrap_or(self.position.x)
+                } else {
+                    x.unwrap_or(self.position.x)
+                },
+                if clamp {
+                    y.map(|v| v.max(0)).unwrap_or(self.position.y)
+                } else {
+                    y.unwrap_or(self.position.y)
+                },
             )
         };
 
@@ -556,8 +570,7 @@ impl InnerWindow {
             // Throttle visual updates to ~30 fps; always apply the final position on completion
             // so the window lands exactly on the wall edge before the next move starts.
             if new_position != self.position
-                && (complete
-                    || self.last_move_update.elapsed() >= Duration::from_millis(33))
+                && (complete || self.last_move_update.elapsed() >= Duration::from_millis(33))
             {
                 self.window.set_outer_position(LogicalPosition::new(
                     self.monitor_position.x + new_position.x,
@@ -604,27 +617,25 @@ impl InnerWindow {
     }
 
     pub fn update_fade(&mut self) {
-        let (new_opacity, is_finished, fade_id) =
-            if let Some(current_fade) = &self.current_fade {
-                let percent = current_fade
-                    .start
-                    .elapsed()
-                    .div_duration_f64(current_fade.duration)
-                    .min(1.0);
+        let (new_opacity, is_finished, fade_id) = if let Some(current_fade) = &self.current_fade {
+            let percent = current_fade
+                .start
+                .elapsed()
+                .div_duration_f64(current_fade.duration)
+                .min(1.0);
 
-                let eased_percent = current_fade.easing.apply(percent);
+            let eased_percent = current_fade.easing.apply(percent);
 
-                let new_opacity = current_fade.from
-                    + ((current_fade.to - current_fade.from) as f64 * eased_percent) as f32;
+            let new_opacity = current_fade.from
+                + ((current_fade.to - current_fade.from) as f64 * eased_percent) as f32;
 
-                (new_opacity, percent >= 1.0, current_fade.id)
-            } else {
-                return;
-            };
+            (new_opacity, percent >= 1.0, current_fade.id)
+        } else {
+            return;
+        };
 
         if new_opacity != self.opacity
-            && (is_finished
-                || self.last_fade_update.elapsed() >= Duration::from_millis(33))
+            && (is_finished || self.last_fade_update.elapsed() >= Duration::from_millis(33))
         {
             self.set_opacity(new_opacity);
             self.window.request_redraw();
@@ -739,16 +750,17 @@ impl InnerWindow {
 
 impl Drop for InnerWindow {
     fn drop(&mut self) {
-        if self.lua_event_tx.send(lua::Event::WindowClosed {
-            id: self.popup_id,
-        }).is_err() {
+        if self
+            .lua_event_tx
+            .send(lua::Event::WindowClosed { id: self.popup_id })
+            .is_err()
+        {
             // The Lua thread has already shut down (e.g. we're in the middle of quitting the
             // app), so there's nothing listening for this event. Not an error.
             tracing::debug!("Couldn't send WindowClosed event: Lua thread has shut down");
         }
     }
 }
-
 
 type SoftbufferContextAndSurface = (
     softbuffer::Context<Arc<Window>>,
@@ -770,7 +782,9 @@ fn init_softbuffer(window: Arc<Window>) -> Result<SoftbufferContextAndSurface> {
 /// fixes this without triggering the KWin strut relayout that XMapWindow/XUnmapWindow does.
 #[cfg(target_os = "linux")]
 fn x11_raise(window: &Window) {
-    use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+    use winit::raw_window_handle::{
+        HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
+    };
 
     let (Ok(wh), Ok(dh)) = (window.window_handle(), window.display_handle()) else {
         return;
@@ -780,9 +794,13 @@ fn x11_raise(window: &Window) {
     else {
         return;
     };
-    let Some(display) = xlib_dpy.display else { return };
+    let Some(display) = xlib_dpy.display else {
+        return;
+    };
 
-    let Ok(xlib) = x11_dl::xlib::Xlib::open() else { return };
+    let Ok(xlib) = x11_dl::xlib::Xlib::open() else {
+        return;
+    };
     unsafe {
         (xlib.XRaiseWindow)(display.as_ptr().cast(), xlib_win.window);
         (xlib.XFlush)(display.as_ptr().cast());

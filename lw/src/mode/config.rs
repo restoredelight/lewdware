@@ -92,8 +92,8 @@ pub fn parse_entries(
     let entries = raw
         .into_iter()
         .map(|(key, value)| {
-            let entry = parse_entry(&key, value)
-                .with_context(|| format!("Error in entry `{key}`"))?;
+            let entry =
+                parse_entry(&key, value).with_context(|| format!("Error in entry `{key}`"))?;
             Ok((key, entry))
         })
         .collect::<Result<IndexMap<_, _>>>()?;
@@ -118,8 +118,7 @@ fn parse_entry(key: &str, value: JsonValue) -> Result<mode::ModeEntry> {
             .options
             .into_iter()
             .map(|(k, v)| {
-                let entry = parse_entry(&k, v)
-                    .with_context(|| format!("Error in entry `{k}`"))?;
+                let entry = parse_entry(&k, v).with_context(|| format!("Error in entry `{k}`"))?;
                 Ok((k, entry))
             })
             .collect::<Result<IndexMap<_, _>>>()?;
@@ -141,8 +140,15 @@ fn parse_entry(key: &str, value: JsonValue) -> Result<mode::ModeEntry> {
         } = serde_json::from_value(value)
             .with_context(|| format!("Error parsing option `{key}`"))?;
         let show_when = parse_show_when(raw_show_when)?;
-        let meta_opt =
-            convert_option(key, label, description, optional, enabled_by_default, option_type, show_when)?;
+        let meta_opt = convert_option(
+            key,
+            label,
+            description,
+            optional,
+            enabled_by_default,
+            option_type,
+            show_when,
+        )?;
         Ok(mode::ModeEntry::Option(meta_opt))
     }
 }
@@ -181,9 +187,7 @@ fn convert_option(
     })
 }
 
-fn parse_show_when(
-    raw: Option<IndexMap<String, JsonValue>>,
-) -> Result<Option<mode::ShowWhen>> {
+fn parse_show_when(raw: Option<IndexMap<String, JsonValue>>) -> Result<Option<mode::ShowWhen>> {
     let Some(raw) = raw else {
         return Ok(None);
     };
@@ -274,9 +278,10 @@ impl TryFrom<OptionType> for mode::OptionType {
             },
             OptionType::Enum { default, values } => {
                 if let Some(ref d) = default
-                    && !values.keys().any(|key| key == d) {
-                        bail!("`default` ('{d}') is not a valid option");
-                    }
+                    && !values.keys().any(|key| key == d)
+                {
+                    bail!("`default` ('{d}') is not a valid option");
+                }
                 Self::Enum {
                     default: default.unwrap_or_default(),
                     values,
@@ -290,9 +295,10 @@ impl OptionType {
     pub fn validate(&self) -> Result<()> {
         if let Self::Enum { default, values } = self
             && let Some(d) = default
-                && !values.keys().any(|key| key == d) {
-                    bail!("`default` ('{d}') does not match any options");
-                }
+            && !values.keys().any(|key| key == d)
+        {
+            bail!("`default` ('{d}') does not match any options");
+        }
         Ok(())
     }
 }

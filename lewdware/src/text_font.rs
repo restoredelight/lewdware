@@ -70,10 +70,13 @@ pub fn measure(text: &str, font: TextFont, font_size: f32, wrap_width: f32) -> V
     let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
 
     let font_id = FontId::new(font_size, font_family(font));
-    let mut job = LayoutJob::single_section(text.to_owned(), egui::TextFormat {
-        font_id,
-        ..Default::default()
-    });
+    let mut job = LayoutJob::single_section(
+        text.to_owned(),
+        egui::TextFormat {
+            font_id,
+            ..Default::default()
+        },
+    );
     job.wrap.max_width = wrap_width;
 
     ctx.fonts_mut(|f| f.layout_job(job)).size()

@@ -78,20 +78,21 @@ fn os_release_family() -> Option<&'static str> {
 
     for line in contents.lines() {
         if let Some((key, value)) = line.split_once('=')
-            && (key == "ID" || key == "ID_LIKE") {
-                let cleaned_value = value
-                    .trim()
-                    .trim_matches(|c| c == '"' || c == '\'')
-                    .to_lowercase();
+            && (key == "ID" || key == "ID_LIKE")
+        {
+            let cleaned_value = value
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .to_lowercase();
 
-                for word in cleaned_value.split_whitespace() {
-                    if DEB_LIKE_IDS.contains(&word) {
-                        return Some("deb");
-                    } else if RPM_LIKE_IDS.contains(&word) {
-                        return Some("rpm");
-                    }
+            for word in cleaned_value.split_whitespace() {
+                if DEB_LIKE_IDS.contains(&word) {
+                    return Some("deb");
+                } else if RPM_LIKE_IDS.contains(&word) {
+                    return Some("rpm");
                 }
             }
+        }
     }
 
     None

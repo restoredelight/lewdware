@@ -1,16 +1,19 @@
 use std::{cell::RefCell, rc::Rc};
 
 use mlua::{
-    ExternalError, ExternalResult, FromLua, IntoLua, LuaSerdeExt, SerializeOptions, UserData, UserDataFields, UserDataMethods,
+    ExternalError, ExternalResult, FromLua, IntoLua, LuaSerdeExt, SerializeOptions, UserData,
+    UserDataFields, UserDataMethods,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    error::LewdwareError, lua::{
+    error::LewdwareError,
+    lua::{
         Media, PopupId, WindowProps,
         api::{Anchor, Coord},
         request::WindowRequestSender,
-    }, monitor::Monitor,
+    },
+    monitor::Monitor,
 };
 
 #[derive(Clone)]
@@ -163,9 +166,7 @@ impl UserData for PromptWindow {
         });
 
         methods.add_method("set_value", |_, this, value: Option<String>| {
-            this.inner_window
-                .request_sender
-                .set_value(value.clone())?;
+            this.inner_window.request_sender.set_value(value.clone())?;
 
             this.state.try_borrow_mut().into_lua_err()?.value = value.unwrap_or_default();
 
@@ -476,7 +477,7 @@ impl InnerWindow {
             let inner_window = this.inner_window();
 
             match inner_window.request_sender.close() {
-                Ok(()) | Err(LewdwareError::WindowNotFound) => {},
+                Ok(()) | Err(LewdwareError::WindowNotFound) => {}
                 Err(err) => return Err(err.into_lua_err()),
             };
 

@@ -214,10 +214,7 @@ pub fn open_bounded(path: &Path, offset: u64, length: u64) -> anyhow::Result<Bou
             // NULL), but leaves `pb` alone because of AVFMT_FLAG_CUSTOM_IO, so avio_ctx is still
             // ours to free.
             free_avio_ctx(avio_ctx);
-            anyhow::bail!(
-                "avformat_open_input failed: {}",
-                ffmpeg::Error::from(ret)
-            );
+            anyhow::bail!("avformat_open_input failed: {}", ffmpeg::Error::from(ret));
         }
 
         let ret = ffi::avformat_find_stream_info(fmt_ctx, ptr::null_mut());
@@ -289,7 +286,10 @@ mod tests {
         let direct = ffmpeg::format::input(&direct_file.path()).unwrap();
 
         assert_eq!(bounded.nb_streams(), direct.nb_streams());
-        assert!(bounded.nb_streams() >= 2, "expected a video and audio stream");
+        assert!(
+            bounded.nb_streams() >= 2,
+            "expected a video and audio stream"
+        );
 
         assert_eq!(stream_summary(&bounded), stream_summary(&direct));
 
@@ -345,7 +345,10 @@ mod tests {
                 break;
             }
         }
-        assert!(frames_after_seek > 0, "expected packets after seeking back to start");
+        assert!(
+            frames_after_seek > 0,
+            "expected packets after seeking back to start"
+        );
     }
 
     #[test]
@@ -364,14 +367,24 @@ mod tests {
         unsafe {
             // Test that AVSEEK_SIZE returns the length
             assert_eq!(seek(opaque as *mut c_void, 0, ffi::AVSEEK_SIZE), 11);
-            assert_eq!(seek(opaque as *mut c_void, 0, ffi::AVSEEK_SIZE | ffi::AVSEEK_FORCE), 11);
+            assert_eq!(
+                seek(
+                    opaque as *mut c_void,
+                    0,
+                    ffi::AVSEEK_SIZE | ffi::AVSEEK_FORCE
+                ),
+                11
+            );
 
             // Test standard SEEK_SET
             assert_eq!(seek(opaque as *mut c_void, 2, libc::SEEK_SET), 2);
             assert_eq!((*opaque).pos, 2);
 
             // Test SEEK_SET with AVSEEK_FORCE
-            assert_eq!(seek(opaque as *mut c_void, 4, libc::SEEK_SET | ffi::AVSEEK_FORCE), 4);
+            assert_eq!(
+                seek(opaque as *mut c_void, 4, libc::SEEK_SET | ffi::AVSEEK_FORCE),
+                4
+            );
             assert_eq!((*opaque).pos, 4);
 
             // Clean up

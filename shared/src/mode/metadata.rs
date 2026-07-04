@@ -71,9 +71,7 @@ impl ConditionValue {
             (Self::Bool(b), OptionValue::Boolean(v)) => b == v,
             (Self::Int(i), OptionValue::Integer(v)) => i == v,
             (Self::Float(f), OptionValue::Number(v)) => f == v,
-            (Self::Str(s), OptionValue::Enum(v)) | (Self::Str(s), OptionValue::String(v)) => {
-                s == v
-            }
+            (Self::Str(s), OptionValue::Enum(v)) | (Self::Str(s), OptionValue::String(v)) => s == v,
             _ => false,
         }
     }
@@ -100,10 +98,7 @@ impl Mode {
 
     /// Looks up an option by its key, searching within groups.
     pub fn get_option(&self, key: &str) -> Option<&ModeOption> {
-        fn find<'a>(
-            entries: &'a IndexMap<String, ModeEntry>,
-            key: &str,
-        ) -> Option<&'a ModeOption> {
+        fn find<'a>(entries: &'a IndexMap<String, ModeEntry>, key: &str) -> Option<&'a ModeOption> {
             for (k, entry) in entries {
                 match entry {
                     ModeEntry::Option(opt) if k == key => return Some(opt),

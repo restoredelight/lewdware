@@ -39,7 +39,8 @@ impl WindowPool {
             &mut self.opaque
         };
         if let Some(window) = pool.pop() {
-            let _ = window.request_inner_size(LogicalSize::new(opts.outer_width, opts.outer_height));
+            let _ =
+                window.request_inner_size(LogicalSize::new(opts.outer_width, opts.outer_height));
             Ok(window)
         } else {
             new_window(opts, event_loop)

@@ -135,16 +135,18 @@ fn include_dirs(root: &Path, config: &Config) -> Vec<PathBuf> {
 fn update_watches(watcher: &mut RecommendedWatcher, current: &[PathBuf], desired: &[PathBuf]) {
     for dir in current {
         if !desired.contains(dir)
-            && let Err(err) = watcher.unwatch(dir) {
-                eprintln!("{err}");
-            }
+            && let Err(err) = watcher.unwatch(dir)
+        {
+            eprintln!("{err}");
+        }
     }
 
     for dir in desired {
         if !current.contains(dir)
-            && let Err(err) = watcher.watch(dir, notify::RecursiveMode::Recursive) {
-                eprintln!("{err}");
-            }
+            && let Err(err) = watcher.watch(dir, notify::RecursiveMode::Recursive)
+        {
+            eprintln!("{err}");
+        }
     }
 }
 
@@ -200,13 +202,14 @@ fn find_lewdware_binary() -> Option<Command> {
 
     if let Ok(current_exe) = env::current_exe()
         && let Ok(real_lw_path) = fs::canonicalize(current_exe)
-            && let Some(bin_dir) = real_lw_path.parent() {
-                let neighbor = bin_dir.join(bin_name);
-                if neighbor.exists() {
-                    println!("Found executable: {}", neighbor.display());
-                    return Some(Command::new(neighbor));
-                }
-            }
+        && let Some(bin_dir) = real_lw_path.parent()
+    {
+        let neighbor = bin_dir.join(bin_name);
+        if neighbor.exists() {
+            println!("Found executable: {}", neighbor.display());
+            return Some(Command::new(neighbor));
+        }
+    }
 
     #[cfg(debug_assertions)]
     {

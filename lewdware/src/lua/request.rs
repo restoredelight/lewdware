@@ -67,7 +67,11 @@ impl RequestSender {
             return Err(SendError::RequestReceiverClosed);
         }
 
-        if self.event_loop_proxy.send_event(UserEvent::LuaRequest).is_err() {
+        if self
+            .event_loop_proxy
+            .send_event(UserEvent::LuaRequest)
+            .is_err()
+        {
             return Err(SendError::EventLoopClosed);
         }
 

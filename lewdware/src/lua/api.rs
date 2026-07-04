@@ -97,9 +97,7 @@ pub fn create_api(
 
         media_table.set(
             "get",
-            lua.create_function(move |lua, name| {
-                get_media(lua, name, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, name| get_media(lua, name, media_manager.clone()))?,
         )?;
     }
 
@@ -108,9 +106,7 @@ pub fn create_api(
 
         media_table.set(
             "get_image",
-            lua.create_function(move |lua, name| {
-                get_image(lua, name, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, name| get_image(lua, name, media_manager.clone()))?,
         )?;
     }
 
@@ -119,9 +115,7 @@ pub fn create_api(
 
         media_table.set(
             "get_video",
-            lua.create_function(move |lua, name| {
-                get_video(lua, name, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, name| get_video(lua, name, media_manager.clone()))?,
         )?;
     }
 
@@ -130,9 +124,7 @@ pub fn create_api(
 
         media_table.set(
             "get_audio",
-            lua.create_function(move |lua, name| {
-                get_audio(lua, name, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, name| get_audio(lua, name, media_manager.clone()))?,
         )?;
     }
 
@@ -141,9 +133,7 @@ pub fn create_api(
 
         media_table.set(
             "list",
-            lua.create_function(move |lua, opts| {
-                list_media(lua, opts, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, opts| list_media(lua, opts, media_manager.clone()))?,
         )?;
     }
 
@@ -152,9 +142,7 @@ pub fn create_api(
 
         media_table.set(
             "list_images",
-            lua.create_function(move |lua, opts| {
-                list_images(lua, opts, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, opts| list_images(lua, opts, media_manager.clone()))?,
         )?;
     }
 
@@ -163,9 +151,7 @@ pub fn create_api(
 
         media_table.set(
             "list_videos",
-            lua.create_function(move |lua, opts| {
-                list_videos(lua, opts, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, opts| list_videos(lua, opts, media_manager.clone()))?,
         )?;
     }
 
@@ -174,9 +160,7 @@ pub fn create_api(
 
         media_table.set(
             "list_audio",
-            lua.create_function(move |lua, opts| {
-                list_audio(lua, opts, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, opts| list_audio(lua, opts, media_manager.clone()))?,
         )?;
     }
 
@@ -185,9 +169,7 @@ pub fn create_api(
 
         media_table.set(
             "random",
-            lua.create_function(move |lua, opts| {
-                random_media(lua, opts, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, opts| random_media(lua, opts, media_manager.clone()))?,
         )?;
     }
 
@@ -196,9 +178,7 @@ pub fn create_api(
 
         media_table.set(
             "random_image",
-            lua.create_function(move |lua, opts| {
-                random_image(lua, opts, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, opts| random_image(lua, opts, media_manager.clone()))?,
         )?;
     }
 
@@ -207,9 +187,7 @@ pub fn create_api(
 
         media_table.set(
             "random_video",
-            lua.create_function(move |lua, opts| {
-                random_video(lua, opts, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, opts| random_video(lua, opts, media_manager.clone()))?,
         )?;
     }
 
@@ -218,9 +196,7 @@ pub fn create_api(
 
         media_table.set(
             "random_audio",
-            lua.create_function(move |lua, opts| {
-                random_audio(lua, opts, media_manager.clone())
-            })?,
+            lua.create_function(move |lua, opts| random_audio(lua, opts, media_manager.clone()))?,
         )?;
     }
 
@@ -348,9 +324,7 @@ pub fn create_api(
 
         monitors_table.set(
             "list",
-            lua.create_function(move |lua, args| {
-                list_monitors(lua, args, request_sender.clone())
-            })?,
+            lua.create_function(move |lua, args| list_monitors(lua, args, request_sender.clone()))?,
         )?;
     }
 
@@ -395,35 +369,19 @@ fn get_media_type(
         .map_err(|err| err.into_lua_err())
 }
 
-fn get_media(
-    _: &Lua,
-    name: String,
-    media_manager: MediaManager,
-) -> mlua::Result<Option<Media>> {
+fn get_media(_: &Lua, name: String, media_manager: MediaManager) -> mlua::Result<Option<Media>> {
     get_media_type(name, MediaTypes::ALL, media_manager)
 }
 
-fn get_image(
-    _: &Lua,
-    name: String,
-    media_manager: MediaManager,
-) -> mlua::Result<Option<Media>> {
+fn get_image(_: &Lua, name: String, media_manager: MediaManager) -> mlua::Result<Option<Media>> {
     get_media_type(name, MediaTypes::IMAGE, media_manager)
 }
 
-fn get_video(
-    _: &Lua,
-    name: String,
-    media_manager: MediaManager,
-) -> mlua::Result<Option<Media>> {
+fn get_video(_: &Lua, name: String, media_manager: MediaManager) -> mlua::Result<Option<Media>> {
     get_media_type(name, MediaTypes::VIDEO, media_manager)
 }
 
-fn get_audio(
-    _: &Lua,
-    name: String,
-    media_manager: MediaManager,
-) -> mlua::Result<Option<Media>> {
+fn get_audio(_: &Lua, name: String, media_manager: MediaManager) -> mlua::Result<Option<Media>> {
     get_media_type(name, MediaTypes::AUDIO, media_manager)
 }
 
@@ -783,8 +741,7 @@ fn spawn_text_popup(
 ) -> mlua::Result<Rc<TextWindow>> {
     let opts = opts.unwrap_or_default();
 
-    let props = request_sender
-        .spawn_text(text.clone(), opts.style, opts.window_opts)?;
+    let props = request_sender.spawn_text(text.clone(), opts.style, opts.window_opts)?;
 
     let id = props.window_id;
 
@@ -834,10 +791,7 @@ fn spawn_image_popup(
     if opts.window_opts.transparent.is_none() {
         let needs_transparent = media_transparent
             || opts.window_opts.opacity.is_some_and(|o| o < 1.0)
-            || opts
-                .window_opts
-                .background_color
-                .is_some_and(|c| c.a < 1.0);
+            || opts.window_opts.background_color.is_some_and(|c| c.a < 1.0);
         if needs_transparent {
             opts.window_opts.transparent = Some(true);
         }
@@ -846,8 +800,8 @@ fn spawn_image_popup(
     // Monitor pick, size resolution, and the actual (slow) decode all now happen on the main
     // thread, which acks the spawn — with a fully accurate `WindowProps` — before the decode
     // even starts. See `App::spawn_image` in `app.rs`.
-    let props = request_sender
-        .spawn_image(image.id, image_width, image_height, opts.window_opts)?;
+    let props =
+        request_sender.spawn_image(image.id, image_width, image_height, opts.window_opts)?;
 
     let id = props.window_id;
 
@@ -917,10 +871,7 @@ fn spawn_video_popup(
     if opts.window_opts.transparent.is_none() {
         let needs_transparent = media_transparent
             || opts.window_opts.opacity.is_some_and(|o| o < 1.0)
-            || opts
-                .window_opts
-                .background_color
-                .is_some_and(|c| c.a < 1.0);
+            || opts.window_opts.background_color.is_some_and(|c| c.a < 1.0);
         if needs_transparent {
             opts.window_opts.transparent = Some(true);
         }
@@ -928,15 +879,14 @@ fn spawn_video_popup(
 
     // As with images, monitor pick / size resolution / decode all happen on the main thread
     // now — see `App::spawn_video` in `app.rs`.
-    let props = request_sender
-        .spawn_video(
-            video.id,
-            video_width,
-            video_height,
-            opts.loop_video,
-            opts.audio,
-            opts.window_opts,
-        )?;
+    let props = request_sender.spawn_video(
+        video.id,
+        video_width,
+        video_height,
+        opts.loop_video,
+        opts.audio,
+        opts.window_opts,
+    )?;
 
     let id = props.window_id;
 
@@ -977,13 +927,12 @@ fn spawn_prompt(
 ) -> mlua::Result<Rc<PromptWindow>> {
     let opts = opts.unwrap_or_default();
 
-    let props = request_sender
-        .spawn_prompt(
-            opts.text.clone(),
-            opts.placeholder,
-            opts.initial_value.clone(),
-            opts.window_opts,
-        )?;
+    let props = request_sender.spawn_prompt(
+        opts.text.clone(),
+        opts.placeholder,
+        opts.initial_value.clone(),
+        opts.window_opts,
+    )?;
 
     let id = props.window_id;
 
@@ -1025,8 +974,8 @@ fn spawn_choice(
 ) -> mlua::Result<Rc<ChoiceWindow>> {
     let opts = opts.unwrap_or_default();
 
-    let props = request_sender
-        .spawn_choice(opts.text.clone(), opts.options.clone(), opts.window_opts)?;
+    let props =
+        request_sender.spawn_choice(opts.text.clone(), opts.options.clone(), opts.window_opts)?;
 
     let id = props.window_id;
 
@@ -1084,13 +1033,9 @@ fn set_wallpaper(
         return Err("`image` is not an image".into_lua_err());
     }
 
-    let file = media_manager
-        .get_image_file(image.id)
-        .into_lua_err()?;
+    let file = media_manager.get_image_file(image.id).into_lua_err()?;
 
-    request_sender
-        .set_wallpaper(file, opts.mode)
-        .into_lua_err()
+    request_sender.set_wallpaper(file, opts.mode).into_lua_err()
 }
 
 fn reset_wallpaper(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> {

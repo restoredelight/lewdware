@@ -573,7 +573,10 @@ pub fn upload_texture_data(
             let src_start = (i * source_stride) as usize;
             let src_end = src_start + unpadded_bytes_per_row as usize;
             padded_data.extend_from_slice(&data[src_start..src_end]);
-            padded_data.extend(std::iter::repeat_n(0, padded_bytes_per_row_padding as usize));
+            padded_data.extend(std::iter::repeat_n(
+                0,
+                padded_bytes_per_row_padding as usize,
+            ));
         }
 
         queue.write_texture(

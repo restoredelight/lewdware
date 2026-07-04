@@ -36,7 +36,10 @@ impl fmt::Display for ReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReadError::InvalidMagic => write!(f, "invalid magic bytes — not a .lwmode file"),
-            ReadError::UnsupportedVersion { mode_major, mode_minor } => write!(
+            ReadError::UnsupportedVersion {
+                mode_major,
+                mode_minor,
+            } => write!(
                 f,
                 "mode requires API v{mode_major}.{mode_minor}, \
                  this engine provides API v{VERSION_MAJOR}.{VERSION_MINOR} — \
