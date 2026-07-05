@@ -842,7 +842,7 @@ fn lewdware_running(state: State<'_>) -> EngineStatusDto {
 async fn input_monitoring_granted(#[allow(unused)] app_handle: AppHandle) -> Result<bool, String> {
     #[cfg(target_vendor = "apple")]
     {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = tokio::sync::oneshot::channel();
 
         app_handle
             .run_on_main_thread(move || {
