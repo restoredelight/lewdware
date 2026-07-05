@@ -126,6 +126,7 @@ impl Monitors {
                 scale_factor,
             };
 
+            #[allow(clippy::clone_on_copy)]
             by_platform.insert(platform_id.clone(), monitor);
             by_id.insert(id, platform_id);
         }
@@ -146,6 +147,8 @@ impl Monitors {
                 self.primary_monitor.as_ref().and_then(|(platform_id, _)| {
                     self.by_platform.get_mut(platform_id).map(|monitor| {
                         monitor.primary = true;
+
+                        #[allow(clippy::clone_on_copy)]
                         (platform_id.clone(), monitor.clone())
                     })
                 })
@@ -156,6 +159,8 @@ impl Monitors {
                     .next()
                     .map(|(platform_id, monitor)| {
                         monitor.primary = true;
+
+                        #[allow(clippy::clone_on_copy)]
                         (platform_id.clone(), monitor.clone())
                     })
             })
