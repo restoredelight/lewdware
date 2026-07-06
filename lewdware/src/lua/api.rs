@@ -74,7 +74,7 @@ use crate::{
             ChoiceWindow, ChoiceWindowOption, ImageWindow, PromptWindow, TextWindow, VideoWindow,
         },
     },
-    media::{MediaManager, MediaTypes},
+    media::{MediaManager, MediaTypes, TagFilter},
     monitor::Monitor,
 };
 
@@ -387,7 +387,7 @@ fn get_audio(_: &Lua, name: String, media_manager: MediaManager) -> mlua::Result
 
 fn list_media_type(
     types: MediaTypes,
-    tags: Option<Vec<String>>,
+    tags: Option<TagFilter>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
     media_manager
@@ -413,11 +413,37 @@ impl From<OneOrMore<MediaType>> for MediaTypes {
     }
 }
 
+/// The Lua-facing shape of a tag filter: either a plain list of tags (shorthand for `any`) or
+/// a table with `any`/`all`/`none` lists.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum TagFilterInput {
+    Any(Vec<String>),
+    Filter {
+        any: Option<Vec<String>>,
+        all: Option<Vec<String>>,
+        none: Option<Vec<String>>,
+    },
+}
+
+impl From<TagFilterInput> for TagFilter {
+    fn from(value: TagFilterInput) -> Self {
+        match value {
+            TagFilterInput::Any(tags) => TagFilter::any_of(tags),
+            TagFilterInput::Filter { any, all, none } => TagFilter {
+                any: any.unwrap_or_default(),
+                all: all.unwrap_or_default(),
+                none: none.unwrap_or_default(),
+            },
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct QueryMediaOpts {
     #[serde(rename = "type")]
     types: Option<OneOrMore<MediaType>>,
-    tags: Option<Vec<String>>,
+    tags: Option<TagFilterInput>,
 }
 
 impl FromLua for QueryMediaOpts {
@@ -432,9 +458,10 @@ fn list_media(
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
     let (types, tags) = match opts {
-        Some(QueryMediaOpts { types, tags }) => {
-            (types.map_or(MediaTypes::ALL, MediaTypes::from), tags)
-        }
+        Some(QueryMediaOpts { types, tags }) => (
+            types.map_or(MediaTypes::ALL, MediaTypes::from),
+            tags.map(TagFilter::from),
+        ),
         None => (MediaTypes::ALL, None),
     };
 
@@ -443,7 +470,7 @@ fn list_media(
 
 #[derive(Serialize, Deserialize, Default)]
 struct QueryMediaTypeOpts {
-    tags: Option<Vec<String>>,
+    tags: Option<TagFilterInput>,
 }
 
 impl FromLua for QueryMediaTypeOpts {
@@ -457,7 +484,7 @@ fn list_images(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
-    let tags = opts.and_then(|x| x.tags);
+    let tags = opts.and_then(|x| x.tags).map(TagFilter::from);
 
     list_media_type(MediaTypes::IMAGE, tags, media_manager)
 }
@@ -467,7 +494,7 @@ fn list_videos(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
-    let tags = opts.and_then(|x| x.tags);
+    let tags = opts.and_then(|x| x.tags).map(TagFilter::from);
 
     list_media_type(MediaTypes::VIDEO, tags, media_manager)
 }
@@ -477,7 +504,7 @@ fn list_audio(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
-    let tags = opts.and_then(|x| x.tags);
+    let tags = opts.and_then(|x| x.tags).map(TagFilter::from);
 
     list_media_type(MediaTypes::AUDIO, tags, media_manager)
 }
@@ -485,7 +512,7 @@ fn list_audio(
 fn random_media_type(
     _: &Lua,
     types: MediaTypes,
-    tags: Option<Vec<String>>,
+    tags: Option<TagFilter>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
     media_manager
@@ -499,9 +526,10 @@ fn random_media(
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
     let (types, tags) = match opts {
-        Some(QueryMediaOpts { types, tags }) => {
-            (types.map_or(MediaTypes::ALL, MediaTypes::from), tags)
-        }
+        Some(QueryMediaOpts { types, tags }) => (
+            types.map_or(MediaTypes::ALL, MediaTypes::from),
+            tags.map(TagFilter::from),
+        ),
         None => (MediaTypes::ALL, None),
     };
 
@@ -513,7 +541,7 @@ fn random_image(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    let tags = opts.and_then(|x| x.tags);
+    let tags = opts.and_then(|x| x.tags).map(TagFilter::from);
 
     random_media_type(lua, MediaTypes::IMAGE, tags, media_manager)
 }
@@ -523,7 +551,7 @@ fn random_video(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    let tags = opts.and_then(|x| x.tags);
+    let tags = opts.and_then(|x| x.tags).map(TagFilter::from);
 
     random_media_type(lua, MediaTypes::VIDEO, tags, media_manager)
 }
@@ -533,7 +561,7 @@ fn random_audio(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    let tags = opts.and_then(|x| x.tags);
+    let tags = opts.and_then(|x| x.tags).map(TagFilter::from);
 
     random_media_type(lua, MediaTypes::AUDIO, tags, media_manager)
 }

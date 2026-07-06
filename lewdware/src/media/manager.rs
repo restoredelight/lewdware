@@ -88,7 +88,7 @@ impl MediaManager {
     pub fn random_media(
         &self,
         types: MediaTypes,
-        tags: Option<Vec<String>>,
+        tags: Option<TagFilter>,
     ) -> Result<Option<Media>> {
         self.send(|tx| MediaRequest::RandomMedia {
             types,
@@ -97,7 +97,7 @@ impl MediaManager {
         })?
     }
 
-    pub fn list_media(&self, types: MediaTypes, tags: Option<Vec<String>>) -> Result<Vec<Media>> {
+    pub fn list_media(&self, types: MediaTypes, tags: Option<TagFilter>) -> Result<Vec<Media>> {
         self.send(|tx| MediaRequest::ListMedia {
             types,
             tags,
@@ -354,6 +354,28 @@ impl MediaTypes {
     }
 }
 
+/// A tag-based filter for media queries. Empty lists impose no constraint, so the default
+/// value matches everything. Tags the pack doesn't define never match: they are ignored in
+/// `any` and `none`, while an unknown tag in `all` means nothing can satisfy the filter.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TagFilter {
+    /// Match media with at least one of these tags.
+    pub any: Vec<String>,
+    /// Match media with every one of these tags.
+    pub all: Vec<String>,
+    /// Exclude media with any of these tags.
+    pub none: Vec<String>,
+}
+
+impl TagFilter {
+    pub fn any_of(tags: Vec<String>) -> Self {
+        Self {
+            any: tags,
+            ..Default::default()
+        }
+    }
+}
+
 enum MediaRequest {
     GetMedia {
         types: MediaTypes,
@@ -362,12 +384,12 @@ enum MediaRequest {
     },
     RandomMedia {
         types: MediaTypes,
-        tags: Option<Vec<String>>,
+        tags: Option<TagFilter>,
         response_tx: std_mpsc::Sender<Result<Option<Media>>>,
     },
     ListMedia {
         types: MediaTypes,
-        tags: Option<Vec<String>>,
+        tags: Option<TagFilter>,
         response_tx: std_mpsc::Sender<Result<Vec<Media>>>,
     },
     GetImageData {
@@ -401,7 +423,6 @@ enum MediaRequest {
 #[derive(Debug)]
 pub enum MediaError {
     DbError(rusqlite::Error),
-    InvalidTag(String),
     IoError(io::Error),
     ImageError(image::error::ImageError),
     VideoError(anyhow::Error),
@@ -415,9 +436,6 @@ impl Display for MediaError {
             MediaError::DbError(error) => {
                 writeln!(f, "Error querying database")?;
                 error.fmt(f)
-            }
-            MediaError::InvalidTag(tag) => {
-                write!(f, "Invalid tag '{tag}'")
             }
             MediaError::IoError(err) => err.fmt(f),
             MediaError::ImageError(err) => err.fmt(f),

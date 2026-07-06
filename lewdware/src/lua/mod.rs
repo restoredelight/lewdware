@@ -520,6 +520,13 @@ mod tests {
                 [],
             )
             .unwrap();
+            db.execute("INSERT INTO tags (name) VALUES ('red'), ('blue')", [])
+                .unwrap();
+            db.execute(
+                "INSERT INTO media_tags (media_id, tag_id) VALUES (1, 1), (1, 2)",
+                [],
+            )
+            .unwrap();
         }
 
         let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
@@ -847,6 +854,39 @@ mod tests {
                         Recorded::CloseWindow { id: PopupId(0) },
                     ]
                 );
+            })
+            .await;
+    }
+
+    /// The fixture image carries the tags `red` and `blue`. Exercises the Lua-facing `tags`
+    /// argument end-to-end: the plain-list shorthand (= `any`), the `{ any, all, none }` table
+    /// form, and the unknown-tag semantics documented in `QueryMediaOpts`.
+    #[tokio::test(start_paused = true)]
+    async fn tag_filters_accept_shorthand_and_table_forms() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local function count(filter)
+                                return #lewdware.media.list_images({ tags = filter })
+                            end
+
+                            assert(count({ "red" }) == 1, "shorthand list = any")
+                            assert(count({ "unknown" }) == 0, "unknown tag matches nothing")
+                            assert(count({ any = { "red", "unknown" } }) == 1, "any table form")
+                            assert(count({ all = { "red", "blue" } }) == 1, "all satisfied")
+                            assert(count({ all = { "red", "unknown" } }) == 0, "unknown all tag matches nothing")
+                            assert(count({ none = { "blue" } }) == 0, "none excludes")
+                            assert(count({ none = { "unknown" } }) == 1, "unknown none tag excludes nothing")
+                            assert(count({ any = { "red" }, none = { "blue" } }) == 0, "fields combine")
+                        "#,
+                    )],
+                    true,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
             })
             .await;
     }

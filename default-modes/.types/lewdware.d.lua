@@ -195,10 +195,17 @@ function lewdware.media.get_video(name) end
 ---@return Audio | nil
 function lewdware.media.get_audio(name) end
 
+---@class TagFilter
+---@field any? string[] Match media with at least one of these tags.
+---@field all? string[] Match media with every one of these tags.
+---@field none? string[] Exclude media with any of these tags.
+
 ---@class QueryMediaOpts
 ---@field type? MediaType | (MediaType)[] The type of media to include in the result. By default,
 ---  all media will be included (including audio).
----@field tags? string[] If specified, only media with these tags will be included in the result.
+---@field tags? string[] | TagFilter Filter media by tag; a plain list is shorthand for
+---  `{ any = ... }`. Tags the pack doesn't define never match: they are ignored in `any` and
+---  `none`, while an unknown tag in `all` means nothing can satisfy the filter.
 
 ---List all files in the pack.
 ---@param opts? QueryMediaOpts
@@ -207,21 +214,21 @@ function lewdware.media.list(opts) end
 
 ---List all image files in the pack.
 ---@param opts? {
----   tags?: string[],
+---   tags?: string[] | TagFilter,
 ---}
 ---@return Image[]
 function lewdware.media.list_images(opts) end
 
 ---List all video files in the pack.
 ---@param opts? {
----   tags?: string[],
+---   tags?: string[] | TagFilter,
 ---}
 ---@return Video[]
 function lewdware.media.list_videos(opts) end
 
 ---List all audio files in the pack.
 ---@param opts? {
----   tags?: string[],
+---   tags?: string[] | TagFilter,
 ---}
 ---@return Audio[]
 function lewdware.media.list_audio(opts) end
@@ -238,14 +245,14 @@ function lewdware.media.random_image(opts) end
 
 ---Get a random video file
 ---@param opts? {
----   tags?: string[],
+---   tags?: string[] | TagFilter,
 ---}
 ---@return Video | nil
 function lewdware.media.random_video(opts) end
 
 ---Get a random audio file
 ---@param opts? {
----   tags?: string[],
+---   tags?: string[] | TagFilter,
 ---}
 ---@return Audio | nil
 function lewdware.media.random_audio(opts) end

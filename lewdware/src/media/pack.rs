@@ -22,7 +22,7 @@ use crate::{
     lua::{Media, MediaData},
     media::{
         VideoData,
-        manager::{MediaError, MediaTypes, Result},
+        manager::{MediaError, MediaTypes, Result, TagFilter},
         types::{FileOrPath, ImageData, MediaSource},
     },
 };
@@ -52,7 +52,7 @@ pub struct MediaPack {
 struct MediaOpts {
     name: Option<String>,
     types: MediaTypes,
-    tags: Option<Vec<String>>,
+    tags: Option<TagFilter>,
     random: bool,
     single: bool,
 }
@@ -97,7 +97,7 @@ impl MediaPack {
         })
     }
 
-    fn build_sql(&self, opts: MediaOpts) -> Result<(String, Vec<Box<dyn rusqlite::ToSql + '_>>)> {
+    fn build_sql(&self, opts: MediaOpts) -> (String, Vec<Box<dyn rusqlite::ToSql + '_>>) {
         let mut sql = "
             SELECT id, file_name, file_type, offset, length, width, height, duration, audio, transparent
             FROM media
@@ -105,10 +105,6 @@ impl MediaPack {
         .to_string();
 
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-        if opts.tags.is_some() {
-            sql.push_str(" LEFT JOIN media_tags ON media.id = media_tags.media_id ");
-        }
 
         let mut where_queries = Vec::new();
 
@@ -121,23 +117,69 @@ impl MediaPack {
             where_queries.push(query);
         }
 
-        if let Some(tags) = &opts.tags {
-            let tag_ids = tags
+        if let Some(filter) = &opts.tags {
+            // Tag conditions are expressed as EXISTS subqueries rather than a join, so a file
+            // matching several requested tags still yields a single row (no DISTINCT needed,
+            // and `ORDER BY RANDOM() LIMIT 1` stays uniform across files).
+            //
+            // Tags the pack doesn't define never match anything; they're dropped rather than
+            // treated as errors, since callers (e.g. the default mode) routinely probe for
+            // optional tags like `hypno` or `wallpaper` that a given pack may simply not have.
+
+            if !filter.any.is_empty() {
+                let tag_ids: Vec<u64> = filter
+                    .any
+                    .iter()
+                    .filter_map(|tag| self.tag_map.get(tag).copied())
+                    .collect();
+
+                if tag_ids.is_empty() {
+                    // None of the requested tags exist in this pack, so nothing can match.
+                    where_queries.push("FALSE".to_string());
+                } else {
+                    where_queries.push(format!(
+                        "EXISTS (SELECT 1 FROM media_tags
+                         WHERE media_id = media.id AND tag_id IN ({}))",
+                        repeat_vars(tag_ids.len())
+                    ));
+
+                    for id in tag_ids {
+                        params.push(Box::new(id));
+                    }
+                }
+            }
+
+            for tag in &filter.all {
+                match self.tag_map.get(tag) {
+                    Some(id) => {
+                        where_queries.push(
+                            "EXISTS (SELECT 1 FROM media_tags
+                             WHERE media_id = media.id AND tag_id = ?)"
+                                .to_string(),
+                        );
+                        params.push(Box::new(*id));
+                    }
+                    // A required tag the pack doesn't define can never be satisfied.
+                    None => where_queries.push("FALSE".to_string()),
+                }
+            }
+
+            let none_ids: Vec<u64> = filter
+                .none
                 .iter()
-                .map(|tag| {
-                    self.tag_map
-                        .get(tag)
-                        .ok_or(MediaError::InvalidTag(tag.clone()))
-                })
-                .collect::<Result<Vec<_>>>()?;
+                .filter_map(|tag| self.tag_map.get(tag).copied())
+                .collect();
 
-            where_queries.push(format!(
-                "media_tags.tag_id IN ({})",
-                repeat_vars(tag_ids.len())
-            ));
+            if !none_ids.is_empty() {
+                where_queries.push(format!(
+                    "NOT EXISTS (SELECT 1 FROM media_tags
+                     WHERE media_id = media.id AND tag_id IN ({}))",
+                    repeat_vars(none_ids.len())
+                ));
 
-            for id in tag_ids {
-                params.push(Box::new(id));
+                for id in none_ids {
+                    params.push(Box::new(id));
+                }
             }
         }
 
@@ -153,7 +195,7 @@ impl MediaPack {
             sql.push_str(" LIMIT 1 ");
         }
 
-        Ok((sql, params))
+        (sql, params)
     }
 
     pub fn get_media(&self, name: String, types: MediaTypes) -> Result<Option<Media>> {
@@ -163,7 +205,7 @@ impl MediaPack {
             tags: None,
             random: false,
             single: true,
-        })?;
+        });
 
         let mut stmt = self.db.prepare(&sql)?;
 
@@ -175,7 +217,7 @@ impl MediaPack {
     pub fn random_media(
         &self,
         types: MediaTypes,
-        tags: Option<Vec<String>>,
+        tags: Option<TagFilter>,
     ) -> Result<Option<Media>> {
         let (sql, params) = self.build_sql(MediaOpts {
             name: None,
@@ -183,7 +225,7 @@ impl MediaPack {
             tags,
             random: true,
             single: true,
-        })?;
+        });
 
         let mut stmt = self.db.prepare(&sql)?;
 
@@ -192,14 +234,14 @@ impl MediaPack {
             .transpose()
     }
 
-    pub fn list_media(&self, types: MediaTypes, tags: Option<Vec<String>>) -> Result<Vec<Media>> {
+    pub fn list_media(&self, types: MediaTypes, tags: Option<TagFilter>) -> Result<Vec<Media>> {
         let (sql, params) = self.build_sql(MediaOpts {
             name: None,
             types,
             tags,
             random: false,
             single: false,
-        })?;
+        });
 
         let mut stmt = self.db.prepare(&sql)?;
 
@@ -451,6 +493,10 @@ mod tests {
 
         db.execute("INSERT INTO tags (name) VALUES ('test-tag')", [])
             .unwrap();
+        db.execute("INSERT INTO tags (name) VALUES ('second-tag')", [])
+            .unwrap();
+        // `pic.avif` carries both tags, `other.avif` only the first — enough to distinguish
+        // any/all/none semantics (and duplicate rows) in the assertions below.
         db.execute(
             "INSERT INTO media (file_name, file_type, width, height, transparent, hash)
              VALUES ('pic.avif', 'image', 64, 32, 1, x'00')",
@@ -458,7 +504,13 @@ mod tests {
         )
         .unwrap();
         db.execute(
-            "INSERT INTO media_tags (media_id, tag_id) VALUES (1, 1)",
+            "INSERT INTO media (file_name, file_type, width, height, transparent, hash)
+             VALUES ('other.avif', 'image', 16, 16, 0, x'01')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO media_tags (media_id, tag_id) VALUES (1, 1), (1, 2), (2, 1)",
             [],
         )
         .unwrap();
@@ -488,7 +540,10 @@ mod tests {
         assert_eq!(pack.metadata().name, "test-pack");
 
         let results = pack
-            .list_media(MediaTypes::ALL, Some(vec!["test-tag".to_string()]))
+            .list_media(
+                MediaTypes::ALL,
+                Some(TagFilter::any_of(vec!["second-tag".to_string()])),
+            )
             .unwrap();
 
         assert_eq!(results.len(), 1);
@@ -502,11 +557,81 @@ mod tests {
             }
         ));
 
-        // Also confirm a tag that doesn't exist is rejected rather than silently ignored.
-        assert!(matches!(
-            pack.list_media(MediaTypes::ALL, Some(vec!["nonexistent".to_string()])),
-            Err(MediaError::InvalidTag(_))
-        ));
+        // A tag that doesn't exist in this pack matches no media rather than erroring, since
+        // callers routinely probe for optional tags a given pack may not define.
+        assert_eq!(
+            pack.list_media(
+                MediaTypes::ALL,
+                Some(TagFilter::any_of(vec!["nonexistent".to_string()]))
+            )
+            .unwrap()
+            .len(),
+            0
+        );
+
+        // Media matching more than one of the requested `any` tags must still appear exactly
+        // once, not once per matching tag.
+        let names: Vec<_> = pack
+            .list_media(
+                MediaTypes::ALL,
+                Some(TagFilter::any_of(vec![
+                    "test-tag".to_string(),
+                    "second-tag".to_string(),
+                ])),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
+        assert_eq!(names, vec!["pic.avif", "other.avif"]);
+
+        // `all` requires every tag; only pic.avif carries both.
+        let results = pack
+            .list_media(
+                MediaTypes::ALL,
+                Some(TagFilter {
+                    all: vec!["test-tag".to_string(), "second-tag".to_string()],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "pic.avif");
+
+        // An `all` tag the pack doesn't define can never be satisfied.
+        assert_eq!(
+            pack.list_media(
+                MediaTypes::ALL,
+                Some(TagFilter {
+                    all: vec!["test-tag".to_string(), "nonexistent".to_string()],
+                    ..Default::default()
+                }),
+            )
+            .unwrap()
+            .len(),
+            0
+        );
+
+        // `none` excludes matching media; an unknown tag in `none` excludes nothing.
+        let results = pack
+            .list_media(
+                MediaTypes::ALL,
+                Some(TagFilter {
+                    none: vec!["second-tag".to_string(), "nonexistent".to_string()],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "other.avif");
+
+        // An empty filter imposes no constraint.
+        assert_eq!(
+            pack.list_media(MediaTypes::ALL, Some(TagFilter::default()))
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     /// End-to-end check of the zero-copy video path: builds a pack file with a real embedded

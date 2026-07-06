@@ -6,6 +6,6 @@ mod pack;
 mod process;
 mod types;
 
-pub use manager::{MediaError, MediaManager, MediaTypes};
+pub use manager::{MediaError, MediaManager, MediaTypes, TagFilter};
 
 pub use types::{Audio, FileOrPath, Image, ImageData, MediaSource, VideoData};
