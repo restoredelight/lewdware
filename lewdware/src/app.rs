@@ -86,7 +86,6 @@ struct PendingWindow {
     /// Already fully resolved — position/size/monitor/transparency never depended on the
     /// decoded media, only its (already-known) native dimensions.
     opts: WindowOpts,
-    visible: bool,
     opacity: f32,
     title: Option<String>,
     pending_move: Option<(u64, MoveOpts)>,
@@ -171,19 +170,6 @@ impl LewdwareApp {
         };
 
         tracing::info!("{:?}", config);
-        // local video = lewdware.media.random_video()
-        // local video_window = lewdware.spawn_video_popup(video, {
-        //     width = { percent = 100 },
-        //     height = { percent = 100 },
-        //     decorations = false,
-        //     visible = false,
-        // })
-        // lewdware.every(10000, function()
-        //     video_window:set_visible(true)
-        //     lewdware.after(500, function()
-        //         video_window:set_visible(false)
-        //     end)
-        // end)
 
         let pack_path = config
             .pack_path
@@ -361,7 +347,6 @@ impl LewdwareApp {
             force_opaque,
             opacity: spawn_opts.opacity.unwrap_or(1.0),
             click_through: spawn_opts.click_through,
-            visible: spawn_opts.visible,
             decorations: spawn_opts.decorations,
             title: spawn_opts.title,
             closeable: spawn_opts.closeable,
@@ -412,7 +397,6 @@ impl LewdwareApp {
             x: opts.x,
             y: opts.y,
             monitor: opts.monitor.clone(),
-            visible: opts.visible,
         }
     }
 
@@ -471,7 +455,6 @@ impl LewdwareApp {
             popup_id,
             PopupSlot::Pending(PendingWindow {
                 kind: PendingKind::Image,
-                visible: window_opts.visible,
                 opacity: window_opts.opacity,
                 title: window_opts.title.clone(),
                 pending_move: None,
@@ -520,7 +503,6 @@ impl LewdwareApp {
             popup_id,
             PopupSlot::Pending(PendingWindow {
                 kind: PendingKind::Video { loop_video },
-                visible: window_opts.visible,
                 opacity: window_opts.opacity,
                 title: window_opts.title.clone(),
                 pending_move: None,
@@ -556,17 +538,14 @@ impl LewdwareApp {
         let popup_id = self.next_popup_id();
         let props = Self::window_props(popup_id, &resolved);
         let window = self.create_window(popup_id, resolved, event_loop)?;
-        let visible = props.visible;
 
         let mut prompt_window = PromptWindow::new(window, text, placeholder, initial_value)
             .map_err(LewdwareError::WindowError)?;
 
-        if visible {
-            if let Err(e) = prompt_window.inner_window.pre_show() {
-                tracing::warn!("prompt pre-show failed: {e}");
-            }
-            prompt_window.inner_window.set_visible(true);
+        if let Err(e) = prompt_window.inner_window.pre_show() {
+            tracing::warn!("prompt pre-show failed: {e}");
         }
+        prompt_window.inner_window.show();
 
         self.windows.insert(
             popup_id,
@@ -598,17 +577,14 @@ impl LewdwareApp {
         let popup_id = self.next_popup_id();
         let props = Self::window_props(popup_id, &resolved);
         let window = self.create_window(popup_id, resolved, event_loop)?;
-        let visible = props.visible;
 
         let mut choice_window =
             ChoiceWindow::new(window, text, options).map_err(LewdwareError::WindowError)?;
 
-        if visible {
-            if let Err(e) = choice_window.inner_window.pre_show() {
-                tracing::warn!("choice pre-show failed: {e}");
-            }
-            choice_window.inner_window.set_visible(true);
+        if let Err(e) = choice_window.inner_window.pre_show() {
+            tracing::warn!("choice pre-show failed: {e}");
         }
+        choice_window.inner_window.show();
 
         self.windows.insert(
             popup_id,
@@ -653,17 +629,14 @@ impl LewdwareApp {
         let popup_id = self.next_popup_id();
         let props = Self::window_props(popup_id, &resolved);
         let window = self.create_window(popup_id, resolved, event_loop)?;
-        let visible = props.visible;
 
         let mut text_window =
             TextWindow::new(window, text, style).map_err(LewdwareError::WindowError)?;
 
-        if visible {
-            if let Err(e) = text_window.inner_window.pre_show() {
-                tracing::warn!("choice pre-show failed: {e}");
-            }
-            text_window.inner_window.set_visible(true);
+        if let Err(e) = text_window.inner_window.pre_show() {
+            tracing::warn!("text pre-show failed: {e}");
         }
+        text_window.inner_window.show();
 
         self.windows
             .insert(popup_id, PopupSlot::Ready(WindowType::Text(text_window)));
@@ -954,15 +927,6 @@ impl LewdwareApp {
                                 _ => Err(LewdwareError::Internal("Invalid window type")),
                             })
                             .is_ok(),
-                        WindowAction::SetVisible { tx, visible } => {
-                            match entry.get_mut() {
-                                PopupSlot::Ready(window_type) => {
-                                    window_type.inner_window().set_visible(visible)
-                                }
-                                PopupSlot::Pending(pending) => pending.visible = visible,
-                            }
-                            tx.send(()).is_ok()
-                        }
                         WindowAction::SetTitle { tx, title } => {
                             match entry.get_mut() {
                                 PopupSlot::Ready(window_type) => {
@@ -1134,7 +1098,6 @@ impl LewdwareApp {
 
         let PendingWindow {
             opts,
-            visible,
             opacity,
             title,
             pending_move,
@@ -1175,9 +1138,7 @@ impl LewdwareApp {
         };
         image_window.inner_window.gpu_sync(idx);
 
-        if visible {
-            image_window.inner_window.set_visible(true);
-        }
+        image_window.inner_window.show();
 
         self.windows
             .insert(id, PopupSlot::Ready(WindowType::Image(image_window)));
@@ -1207,7 +1168,6 @@ impl LewdwareApp {
         let PendingWindow {
             kind,
             opts,
-            visible,
             opacity,
             title,
             pending_move,
@@ -1246,12 +1206,10 @@ impl LewdwareApp {
             video_window.pause();
         }
 
-        if visible {
-            if let Err(e) = video_window.inner_window.pre_show() {
-                tracing::warn!("video pre-show failed: {e}");
-            }
-            video_window.inner_window.set_visible(true);
+        if let Err(e) = video_window.inner_window.pre_show() {
+            tracing::warn!("video pre-show failed: {e}");
         }
+        video_window.inner_window.show();
 
         self.windows
             .insert(id, PopupSlot::Ready(WindowType::Video(video_window)));

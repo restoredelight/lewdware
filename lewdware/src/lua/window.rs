@@ -382,9 +382,10 @@ pub struct InnerWindow {
 struct InnerWindowState {
     x: i32,
     y: i32,
-    visible: bool,
     closed: bool,
     close_callbacks: Vec<mlua::Function>,
+    spawned: bool,
+    spawn_callbacks: Vec<mlua::Function>,
     move_callback: Option<(u64, mlua::Function)>,
     current_move_id: u64,
     fade_callback: Option<(u64, mlua::Function)>,
@@ -433,7 +434,7 @@ impl InnerWindow {
             height: props.height,
             outer_width: props.outer_width,
             outer_height: props.outer_height,
-            state: RefCell::new(InnerWindowState::new(props.x, props.y, props.visible)),
+            state: RefCell::new(InnerWindowState::new(props.x, props.y)),
             monitor: props.monitor,
             request_sender: request_tx,
         }
@@ -462,13 +463,13 @@ impl InnerWindow {
                 .into_lua_err()?
                 .closed)
         });
-        fields.add_field_method_get("visible", |_, this| {
+        fields.add_field_method_get("spawned", |_, this| {
             Ok(this
                 .inner_window()
                 .state
                 .try_borrow()
                 .into_lua_err()?
-                .visible)
+                .spawned)
         });
     }
 
@@ -491,6 +492,34 @@ impl InnerWindow {
                 .into_lua_err()?
                 .close_callbacks
                 .push(cb);
+
+            Ok(())
+        });
+
+        methods.add_method("on_spawn", |_, this, cb: mlua::Function| {
+            let spawned = this
+                .inner_window()
+                .state
+                .try_borrow()
+                .into_lua_err()?
+                .spawned;
+
+            if spawned {
+                // Already spawned: still fire `cb`, but queued rather than inline — a Lewdware
+                // function must never call back into Lua synchronously (execution model rule 1).
+                tokio::task::spawn_local(async move {
+                    if let Err(err) = cb.call::<()>(()) {
+                        tracing::error!("{err}");
+                    }
+                });
+            } else {
+                this.inner_window()
+                    .state
+                    .try_borrow_mut()
+                    .into_lua_err()?
+                    .spawn_callbacks
+                    .push(cb);
+            }
 
             Ok(())
         });
@@ -555,21 +584,6 @@ impl InnerWindow {
             },
         );
 
-        methods.add_method("set_visible", |_, this, visible: bool| {
-            this.inner_window()
-                .request_sender
-                .set_visible(visible)
-                .into_lua_err()?;
-
-            this.inner_window()
-                .state
-                .try_borrow_mut()
-                .into_lua_err()?
-                .visible = visible;
-
-            Ok(())
-        });
-
         methods.add_method("set_title", |_, this, title: Option<String>| {
             this.inner_window()
                 .request_sender
@@ -595,6 +609,28 @@ impl InnerWindow {
         let callbacks = {
             let state = self.state.try_borrow()?;
             state.close_callbacks.clone()
+        };
+
+        for cb in callbacks {
+            if let Err(err) = cb.call::<()>(()) {
+                tracing::error!("{err}");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn on_spawn(&self) -> anyhow::Result<()> {
+        let callbacks = {
+            let mut state = self.state.try_borrow_mut()?;
+
+            if state.spawned {
+                // Already fired — a window is only ever shown once.
+                return Ok(());
+            }
+
+            state.spawned = true;
+            state.spawn_callbacks.clone()
         };
 
         for cb in callbacks {
@@ -647,13 +683,14 @@ impl InnerWindow {
 }
 
 impl InnerWindowState {
-    fn new(x: i32, y: i32, visible: bool) -> Self {
+    fn new(x: i32, y: i32) -> Self {
         Self {
             x,
             y,
-            visible,
             closed: false,
             close_callbacks: Vec::new(),
+            spawned: false,
+            spawn_callbacks: Vec::new(),
             move_callback: None,
             current_move_id: 0,
             fade_callback: None,

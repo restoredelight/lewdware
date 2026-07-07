@@ -640,8 +640,6 @@ pub struct SpawnWindowOpts {
     pub title: Option<String>,
     #[serde(default = "return_true")]
     pub closeable: bool,
-    #[serde(default = "return_true")]
-    pub visible: bool,
     #[serde(default)]
     pub opacity: Option<f32>,
     #[serde(default)]
@@ -666,7 +664,6 @@ impl Default for SpawnWindowOpts {
             decorations: true,
             title: None,
             closeable: true,
-            visible: true,
             opacity: None,
             transparent: None,
             background_color: None,

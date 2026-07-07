@@ -271,8 +271,8 @@ impl InnerWindow {
     }
 
     /// For GPU windows: submit a transparent clear frame, then sync (see [`Self::gpu_sync`]).
-    /// Use before `set_visible(true)` for windows that have not rendered any real content yet
-    /// (video, prompt, choice) so KWin sees transparent pixels rather than uninitialized black.
+    /// Use before `show()` for windows that have not rendered any real content yet (video,
+    /// prompt, choice) so KWin sees transparent pixels rather than uninitialized black.
     ///
     /// For CPU windows this is a no-op.
     pub fn pre_show(&mut self) -> Result<()> {
@@ -680,28 +680,34 @@ impl InnerWindow {
         }
     }
 
-    pub fn set_visible(&self, visible: bool) {
+    /// Reveal the window for the first (and only) time. Windows are created invisible (or
+    /// parked offscreen, on Linux) and shown once here, when their content is ready to display —
+    /// this is the moment `Window.spawned`/`Window:on_spawn()` observe from Lua.
+    pub fn show(&self) {
+        if self
+            .lua_event_tx
+            .send(lua::Event::WindowSpawned {
+                id: self.popup_id,
+            })
+            .is_err()
+        {
+            tracing::debug!("Couldn't send WindowSpawned event: Lua thread has shut down");
+        }
+
         #[cfg(target_os = "linux")]
         {
-            if visible {
-                // Move back to the correct absolute position before showing.
-                self.window.set_outer_position(LogicalPosition::new(
-                    self.monitor_position.x + self.position.x,
-                    self.monitor_position.y + self.position.y,
-                ));
-                self.window.set_visible(true);
-                // Recycled (always-mapped) windows are moved with XMoveWindow, which does not
-                // restack. Raise explicitly so the window appears above other windows in its layer.
-                x11_raise(&self.window);
-            } else {
-                // XUnmapWindow on a Dock window triggers KWin strut relayout (same freeze as
-                // XDestroyWindow). Move offscreen instead of unmapping.
-                self.window
-                    .set_outer_position(LogicalPosition::new(-32000i32, -32000i32));
-            }
+            // Move back to the correct absolute position before showing.
+            self.window.set_outer_position(LogicalPosition::new(
+                self.monitor_position.x + self.position.x,
+                self.monitor_position.y + self.position.y,
+            ));
+            self.window.set_visible(true);
+            // Recycled (always-mapped) windows are moved with XMoveWindow, which does not
+            // restack. Raise explicitly so the window appears above other windows in its layer.
+            x11_raise(&self.window);
         }
         #[cfg(not(target_os = "linux"))]
-        self.window.set_visible(visible);
+        self.window.set_visible(true);
     }
 
     pub fn set_title(&mut self, text: Option<String>) {

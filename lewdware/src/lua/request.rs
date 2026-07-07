@@ -260,10 +260,6 @@ impl WindowRequestSender {
             .flatten()
     }
 
-    pub fn set_visible(&self, visible: bool) -> Result<()> {
-        self.send(|tx| WindowAction::SetVisible { tx, visible })
-    }
-
     pub fn set_title(&self, title: Option<String>) -> Result<()> {
         self.send(|tx| WindowAction::SetTitle { tx, title })
     }
@@ -408,10 +404,6 @@ pub enum WindowAction {
     SetOptions {
         tx: mpsc::Sender<Result<()>>,
         options: Vec<ChoiceWindowOption>,
-    },
-    SetVisible {
-        tx: mpsc::Sender<()>,
-        visible: bool,
     },
     SetTitle {
         tx: mpsc::Sender<()>,

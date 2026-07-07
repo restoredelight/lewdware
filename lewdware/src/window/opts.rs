@@ -33,7 +33,6 @@ pub struct WindowOpts {
     /// Initial opacity, in [0, 1].
     pub opacity: f32,
     pub click_through: bool,
-    pub visible: bool,
     pub decorations: bool,
     pub title: Option<String>,
     pub closeable: bool,

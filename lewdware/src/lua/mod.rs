@@ -45,6 +45,9 @@ pub enum Event {
     WindowClosed {
         id: PopupId,
     },
+    WindowSpawned {
+        id: PopupId,
+    },
     MoveFinish {
         id: PopupId,
         move_id: u64,
@@ -90,7 +93,6 @@ pub struct WindowProps {
     pub x: i32,
     pub y: i32,
     pub monitor: Monitor,
-    pub visible: bool,
 }
 
 pub type Windows = Rc<RefCell<HashMap<PopupId, Window>>>;
@@ -365,6 +367,11 @@ impl LuaRuntime {
                     window.inner_window().on_close()?;
                 }
             }
+            Event::WindowSpawned { id } => {
+                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
+                    window.inner_window().on_spawn()?;
+                }
+            }
             Event::MoveFinish { id, move_id, x, y } => {
                 if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
                     window.inner_window().on_move_finished(move_id, x, y)?;
@@ -607,7 +614,6 @@ mod tests {
             x: 0,
             y: 0,
             monitor: fake_monitor(),
-            visible: true,
         }
     }
 
@@ -728,9 +734,6 @@ mod tests {
                         WindowAction::SetOptions { tx, .. } => {
                             let _ = tx.send(Ok(()));
                         }
-                        WindowAction::SetVisible { tx, .. } => {
-                            let _ = tx.send(());
-                        }
                         WindowAction::SetTitle { tx, .. } => {
                             let _ = tx.send(());
                         }
@@ -754,6 +757,11 @@ mod tests {
     struct Harness {
         runtime: Rc<LuaRuntime>,
         event_rx: tokio::sync::mpsc::UnboundedReceiver<Event>,
+        /// Lets a test simulate an `Event` the real main thread would send but that the fake
+        /// handler doesn't model — e.g. `WindowSpawned`, which (unlike `WindowClosed`) is never
+        /// the reply to a `LuaRequest`: in the real app it fires from `InnerWindow::show()` once
+        /// a popup's media finishes decoding, which this harness has no equivalent of.
+        event_tx: UnboundedSender<Event>,
         recorded: Arc<Mutex<Vec<Recorded>>>,
         _pack_file: NamedTempFile,
     }
@@ -770,6 +778,7 @@ mod tests {
             let request_sender = RequestSender::new(request_tx, event_poster);
 
             let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+            let event_tx_clone = event_tx.clone();
             let recorded = Arc::new(Mutex::new(Vec::new()));
             {
                 let recorded = recorded.clone();
@@ -784,9 +793,16 @@ mod tests {
             Self {
                 runtime,
                 event_rx,
+                event_tx: event_tx_clone,
                 recorded,
                 _pack_file: pack_file,
             }
+        }
+
+        /// Simulate an `Event` the fake handler doesn't produce itself — see the field doc on
+        /// [`Harness::event_tx`].
+        fn send_event(&self, event: Event) {
+            let _ = self.event_tx.send(event);
         }
 
         fn run_entrypoint(&mut self, entrypoint: &str) -> mlua::Result<()> {
@@ -1039,6 +1055,70 @@ mod tests {
                 );
 
                 harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    /// Exercises `Window.spawned`/`Window:on_spawn()` end to end: the field flips only once the
+    /// (here, manually injected) `WindowSpawned` event is delivered, callbacks registered before
+    /// that fire in registration order, and a callback registered *after* the window has already
+    /// spawned still fires -- but queued via `tokio::task::spawn_local`, not inline (execution
+    /// model rule 1: no Lewdware function may call back into Lua synchronously).
+    #[tokio::test(start_paused = true)]
+    async fn window_spawn_fires_callbacks_and_queues_late_registration() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[
+                        (
+                            "main.lua",
+                            r#"
+                                local image = lewdware.media.get_image("pic.avif")
+                                WINDOW = lewdware.spawn_image_popup(image)
+                                ORDER = {}
+
+                                assert(WINDOW.spawned == false, "not spawned before the event arrives")
+
+                                WINDOW:on_spawn(function() table.insert(ORDER, "first") end)
+                                WINDOW:on_spawn(function() table.insert(ORDER, "second") end)
+                            "#,
+                        ),
+                        (
+                            "after_spawn.lua",
+                            r#"
+                                assert(WINDOW.spawned == true, "spawned once the event is delivered")
+                                assert(#ORDER == 2, "both callbacks should have fired")
+                                assert(
+                                    ORDER[1] == "first" and ORDER[2] == "second",
+                                    "callbacks fire in registration order"
+                                )
+
+                                WINDOW:on_spawn(function() table.insert(ORDER, "late") end)
+                                assert(#ORDER == 2, "a late on_spawn callback must not fire inline")
+                            "#,
+                        ),
+                        (
+                            "after_queue_runs.lua",
+                            r#"
+                                assert(#ORDER == 3, "the late callback fires once queued")
+                                assert(ORDER[3] == "late")
+                            "#,
+                        ),
+                    ],
+                    true,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+
+                harness.send_event(Event::WindowSpawned { id: PopupId(0) });
+                harness.pump_events();
+
+                harness.run_entrypoint("after_spawn.lua").unwrap();
+
+                // Let the `spawn_local`'d late callback actually run.
+                harness.advance(Duration::from_millis(10)).await;
+
+                harness.run_entrypoint("after_queue_runs.lua").unwrap();
             })
             .await;
     }
