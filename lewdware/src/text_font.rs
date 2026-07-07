@@ -5,8 +5,9 @@ use egui::{Align, FontData, FontDefinitions, FontFamily, FontId, Vec2, text::Lay
 use crate::lua::{TextAlign, TextFont};
 
 static DISPLAY_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/Anton-Regular.ttf");
-
 const DISPLAY_FAMILY_NAME: &str = "lewdware-display";
+static PIXEL_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/W95FA.otf");
+const PIXEL_FAMILY_NAME: &str = "lewdware-pixel";
 
 /// Returns the custom font definitions needed to render `font`, or `None` if the egui defaults
 /// (used unmodified for `TextFont::Default` and `TextFont::Mono`) are sufficient.
@@ -21,7 +22,6 @@ pub fn build_font_definitions(font: TextFont) -> Option<FontDefinitions> {
                 Arc::new(FontData::from_static(DISPLAY_FONT_BYTES)),
             );
 
-            // Fall back to the default proportional font for glyphs Anton doesn't cover.
             let mut fallback = definitions
                 .families
                 .get(&FontFamily::Proportional)
@@ -35,6 +35,27 @@ pub fn build_font_definitions(font: TextFont) -> Option<FontDefinitions> {
 
             Some(definitions)
         }
+        TextFont::Pixel => {
+            let mut definitions = FontDefinitions::default();
+
+            definitions.font_data.insert(
+                "W95FA".to_owned(),
+                Arc::new(FontData::from_static(PIXEL_FONT_BYTES)),
+            );
+
+            let mut fallback = definitions
+                .families
+                .get(&FontFamily::Proportional)
+                .cloned()
+                .unwrap_or_default();
+            fallback.insert(0, "W95FA".to_owned());
+
+            definitions
+                .families
+                .insert(FontFamily::Name(PIXEL_FAMILY_NAME.into()), fallback);
+
+            Some(definitions)
+        }
     }
 }
 
@@ -43,6 +64,7 @@ pub fn font_family(font: TextFont) -> FontFamily {
         TextFont::Default => FontFamily::Proportional,
         TextFont::Mono => FontFamily::Monospace,
         TextFont::Display => FontFamily::Name(DISPLAY_FAMILY_NAME.into()),
+        TextFont::Pixel => FontFamily::Name(PIXEL_FAMILY_NAME.into()),
     }
 }
 

@@ -685,6 +685,8 @@ pub enum TextFont {
     Mono,
     #[serde(rename = "display")]
     Display,
+    #[serde(rename = "pixel")]
+    Pixel,
 }
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
