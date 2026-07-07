@@ -73,17 +73,18 @@ impl InnerWindow {
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
         popup_id: PopupId,
     ) -> Result<Self> {
-        let decorations = opts.decorations;
-        let gpu = opts.gpu;
-        let transparent = opts.transparent;
-        let force_opaque = opts.force_opaque;
+        let decorations = opts.popup.decorations;
+        let gpu = opts.popup.gpu;
+        let transparent = opts.popup.transparent;
+        let force_opaque = opts.popup.force_opaque;
         // Use opts directly rather than window.inner_size(): request_inner_size() is
         // async on X11, so a recycled pool window still reports its previous size here.
         let scale_factor = window.scale_factor();
         let outer_size: PhysicalSize<u32> =
-            LogicalSize::new(opts.outer_width, opts.outer_height).to_physical(scale_factor);
+            LogicalSize::new(opts.popup.outer_width, opts.popup.outer_height)
+                .to_physical(scale_factor);
         let inner_size: PhysicalSize<u32> =
-            LogicalSize::new(opts.width, opts.height).to_physical(scale_factor);
+            LogicalSize::new(opts.popup.width, opts.popup.height).to_physical(scale_factor);
 
         let mut premultiplied_alpha = false;
 
@@ -156,13 +157,15 @@ impl InnerWindow {
                 window.clone(),
                 inner_size,
                 scale_factor,
-                opts.title.clone(),
-                opts.closeable,
+                opts.popup.title.clone(),
+                opts.popup.closeable,
             )
         });
 
-        let monitor_position =
-            LogicalPosition::new(opts.position.x - opts.x, opts.position.y - opts.y);
+        let monitor_position = LogicalPosition::new(
+            opts.position.x - opts.popup.x,
+            opts.position.y - opts.popup.y,
+        );
         let monitor_size = LogicalSize::new(opts.monitor.width, opts.monitor.height);
 
         Ok(Self {
@@ -176,7 +179,7 @@ impl InnerWindow {
             outer_size,
             monitor_position,
             monitor_size,
-            position: LogicalPosition::new(opts.x, opts.y),
+            position: LogicalPosition::new(opts.popup.x, opts.popup.y),
             lua_event_tx,
             current_move: None,
             last_move_update: Instant::now(),
@@ -186,8 +189,8 @@ impl InnerWindow {
             force_opaque,
             current_fade: None,
             last_fade_update: Instant::now(),
-            opacity: opts.opacity,
-            background_color: opts.background_color,
+            opacity: opts.popup.opacity,
+            background_color: opts.popup.background_color,
         })
     }
 

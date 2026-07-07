@@ -1,42 +1,18 @@
 use winit::dpi::LogicalPosition;
 
-use crate::lua::Color;
+use crate::lua::PopupSpawnOpts;
 use crate::monitor::Monitor;
 
-/// Fully resolved options for creating or reconfiguring a window.
-///
-/// Computed from [`SpawnWindowOpts`](crate::lua::SpawnWindowOpts) and other spawn-time inputs
-/// once the monitor, sizes, and GPU availability are all known.
+/// Fully resolved options for creating or reconfiguring a window: everything already resolved
+/// against a monitor snapshot on the Lua thread (`popup` -- sizes, anchor math, clamping), plus
+/// the two things that can only be read fresh on the main thread: which physical [`Monitor`]
+/// `popup.monitor_id` currently refers to, and its current absolute `position` (combined with
+/// `popup.x`/`popup.y` to place the window). See
+/// [`LewdwareApp::finalize_window_opts`](crate::app::LewdwareApp::finalize_window_opts).
 pub struct WindowOpts {
-    /// Absolute screen position (monitor offset + x + y). Used for initial placement and for
-    /// repositioning a pooled window.
-    pub position: LogicalPosition<i32>,
-    /// Monitor-relative x offset. Stored in `InnerWindow` for the move/animation system.
-    pub x: i32,
-    /// Monitor-relative y offset.
-    pub y: i32,
-    /// Inner content width (excluding decoration border).
-    pub width: u32,
-    /// Inner content height (excluding decoration border and header).
-    pub height: u32,
-    /// Outer width (including decoration border).
-    pub outer_width: u32,
-    /// Outer height (including decoration border and header).
-    pub outer_height: u32,
-    /// Whether to use GPU (wgpu) rendering. Already AND'd with wgpu availability.
-    pub gpu: bool,
-    /// Whether to request an alpha-capable surface. Already AND'd with `gpu`.
-    pub transparent: bool,
-    /// Whether to force opaque rendering even if the surface has alpha (`transparent = Some(false)`
-    /// was set explicitly in Lua).
-    pub force_opaque: bool,
-    /// Initial opacity, in [0, 1].
-    pub opacity: f32,
-    pub click_through: bool,
-    pub decorations: bool,
-    pub title: Option<String>,
-    pub closeable: bool,
+    pub popup: PopupSpawnOpts,
     pub monitor: Monitor,
-    /// The panel/window fill colour requested via `SpawnWindowOpts.background_color`, if any.
-    pub background_color: Option<Color>,
+    /// Absolute screen position (monitor offset + `popup.x`/`popup.y`). Used for initial
+    /// placement and for repositioning a pooled window.
+    pub position: LogicalPosition<i32>,
 }

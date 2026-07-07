@@ -355,9 +355,10 @@ pub fn calculate_media_popup_size(
 /// aspect ratio to scale, so an omitted width/height wraps the text to fit rather than scaling a
 /// font size the caller explicitly chose.
 ///
-/// `border_width` (0 if the text has no border/outline) is added as padding on auto-computed
-/// dimensions, since the border is drawn by repainting the text offset by up to `border_width`
-/// pixels in every direction — without this, the stroke would be clipped by the window bounds.
+/// `outline_width` (0 if the text has no outline) is added as padding on auto-computed
+/// dimensions, since the outline is drawn by repainting the text offset by up to
+/// `outline_width` pixels in every direction — without this, the stroke would be clipped by the
+/// window bounds.
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_text_popup_size(
     width: Option<Coord>,
@@ -365,14 +366,14 @@ pub fn calculate_text_popup_size(
     text: &str,
     font: TextFont,
     font_size: f32,
-    border_width: f32,
+    outline_width: f32,
     monitor_width: u32,
     monitor_height: u32,
 ) -> (u32, u32) {
     let width = width.map(|width| width.to_pixels(monitor_width).max(0) as u32);
     let height = height.map(|height| height.to_pixels(monitor_height).max(0) as u32);
 
-    let padding = border_width * 2.0;
+    let padding = outline_width * 2.0;
 
     match (width, height) {
         (Some(width), Some(height)) => (width, height),
@@ -419,6 +420,16 @@ fn default_media_popup_size(
     let height = (height * scale).round();
 
     (width as u32, height as u32)
+}
+
+/// Pick a random coordinate (within `[0, total_size]`) at which a window of `window_size` fits
+/// entirely on screen — or 0 if the window is bigger than the available space.
+pub fn random_position(window_size: u32, total_size: u32) -> i32 {
+    if window_size > total_size {
+        0
+    } else {
+        rand::random_range(0i32..=(total_size - window_size) as i32)
+    }
 }
 
 // Silence the "Secure coding is automatically enabled for restorable state" warning by explicitly

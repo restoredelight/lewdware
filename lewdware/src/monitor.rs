@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use mlua::{IntoLua, LuaSerdeExt, SerializeOptions};
-use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};
 use winit::{event_loop::ActiveEventLoop, monitor::MonitorHandle};
 
@@ -72,16 +71,6 @@ impl Monitors {
         self.refresh(event_loop);
 
         self.by_platform.values().cloned().collect()
-    }
-
-    pub fn random(&mut self, event_loop: &ActiveEventLoop) -> Result<Monitor> {
-        let monitors = self.list(event_loop);
-
-        let mut rng = rand::rng();
-        monitors
-            .choose(&mut rng)
-            .ok_or(MonitorError::NoAvailableMonitors)
-            .cloned()
     }
 
     fn refresh(&mut self, event_loop: &ActiveEventLoop) {

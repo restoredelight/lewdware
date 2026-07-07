@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::mpsc::{self, SyncSender};
 
@@ -6,8 +7,11 @@ use crate::{
     error::{LewdwareError, Result},
     lua::{
         PopupId, WindowProps,
-        api::{Notification, SpawnWindowOpts, TextStyle, WallpaperMode},
-        window::{ChoiceWindowOption, FadeOpts, MoveOpts},
+        api::{
+            DialogElement, DialogElementUpdate, Notification, PopupSpawnOpts, TextStyle,
+            WallpaperMode,
+        },
+        window::{FadeOpts, MoveOpts},
     },
     media::FileOrPath,
     monitor::Monitor,
@@ -69,17 +73,9 @@ impl RequestSender {
         rx.recv().map_err(|_| SendError::SenderDropped)
     }
 
-    pub fn spawn_image(
-        &self,
-        media_id: u64,
-        width: u32,
-        height: u32,
-        window_opts: SpawnWindowOpts,
-    ) -> Result<WindowProps> {
+    pub fn spawn_image(&self, media_id: u64, window_opts: PopupSpawnOpts) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnImage {
             media_id,
-            width,
-            height,
             window_opts,
             tx,
         })?
@@ -88,16 +84,12 @@ impl RequestSender {
     pub fn spawn_video(
         &self,
         media_id: u64,
-        width: u32,
-        height: u32,
         loop_video: bool,
         audio: bool,
-        window_opts: SpawnWindowOpts,
+        window_opts: PopupSpawnOpts,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnVideo {
             media_id,
-            width,
-            height,
             loop_video,
             audio,
             window_opts,
@@ -105,31 +97,13 @@ impl RequestSender {
         })?
     }
 
-    pub fn spawn_prompt(
+    pub fn spawn_dialog(
         &self,
-        text: Option<String>,
-        placeholder: Option<String>,
-        initial_value: Option<String>,
-        window_opts: SpawnWindowOpts,
+        elements: Vec<DialogElement>,
+        window_opts: PopupSpawnOpts,
     ) -> Result<WindowProps> {
-        self.send(|tx| LuaRequest::SpawnPrompt {
-            text,
-            placeholder,
-            initial_value,
-            window_opts,
-            tx,
-        })?
-    }
-
-    pub fn spawn_choice(
-        &self,
-        text: Option<String>,
-        options: Vec<ChoiceWindowOption>,
-        window_opts: SpawnWindowOpts,
-    ) -> Result<WindowProps> {
-        self.send(|tx| LuaRequest::SpawnChoice {
-            text,
-            options,
+        self.send(|tx| LuaRequest::SpawnDialog {
+            elements,
             window_opts,
             tx,
         })?
@@ -139,7 +113,7 @@ impl RequestSender {
         &self,
         text: String,
         style: TextStyle,
-        window_opts: SpawnWindowOpts,
+        window_opts: PopupSpawnOpts,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnText {
             text,
@@ -250,14 +224,34 @@ impl WindowRequestSender {
         self.send(|tx| WindowAction::SetText { tx, text }).flatten()
     }
 
-    pub fn set_value(&self, value: Option<String>) -> Result<()> {
-        self.send(|tx| WindowAction::SetValue { tx, value })
-            .flatten()
+    /// Returns `false` (rather than erroring) for a closed window, matching the "no element has
+    /// the given id" case — both are just "nothing to update" as far as this method is
+    /// concerned. Built fresh for `update()`, so it gets the v1 no-op-returns-false convention
+    /// from the start rather than the pre-v1 hard-error-on-dead-window behaviour older methods
+    /// (like `set_opacity`) still have.
+    pub fn update_dialog_element(&self, id: String, props: DialogElementUpdate) -> Result<bool> {
+        match self.send(|tx| WindowAction::UpdateDialogElement { tx, id, props }) {
+            Err(LewdwareError::WindowNotFound) => Ok(false),
+            x => x,
+        }
     }
 
-    pub fn set_options(&self, options: Vec<ChoiceWindowOption>) -> Result<()> {
-        self.send(|tx| WindowAction::SetOptions { tx, options })
-            .flatten()
+    /// `Ok(None)` means the window is closed (per `DialogWindow:values()`'s documented nil
+    /// return) rather than an error — the request layer's usual `WindowNotFound` is folded into
+    /// that here, matching the draft's "returns nil" contract instead of every other method's
+    /// "no-op returning false".
+    pub fn get_dialog_values(&self) -> Result<Option<HashMap<String, String>>> {
+        match self.send(|tx| WindowAction::GetDialogValues { tx }) {
+            Err(LewdwareError::WindowNotFound) => Ok(None),
+            x => x.map(Some),
+        }
+    }
+
+    pub fn get_dialog_value(&self, id: String) -> Result<Option<String>> {
+        match self.send(|tx| WindowAction::GetDialogValue { id, tx }) {
+            Err(LewdwareError::WindowNotFound) => Ok(None),
+            x => x,
+        }
     }
 
     pub fn set_title(&self, title: Option<String>) -> Result<()> {
@@ -299,37 +293,25 @@ impl AudioRequestSender {
 pub enum LuaRequest {
     SpawnImage {
         media_id: u64,
-        width: u32,
-        height: u32,
-        window_opts: SpawnWindowOpts,
+        window_opts: PopupSpawnOpts,
         tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnVideo {
         media_id: u64,
-        width: u32,
-        height: u32,
         loop_video: bool,
         audio: bool,
-        window_opts: SpawnWindowOpts,
+        window_opts: PopupSpawnOpts,
         tx: mpsc::Sender<Result<WindowProps>>,
     },
-    SpawnPrompt {
-        text: Option<String>,
-        placeholder: Option<String>,
-        initial_value: Option<String>,
-        window_opts: SpawnWindowOpts,
-        tx: mpsc::Sender<Result<WindowProps>>,
-    },
-    SpawnChoice {
-        text: Option<String>,
-        options: Vec<ChoiceWindowOption>,
-        window_opts: SpawnWindowOpts,
+    SpawnDialog {
+        elements: Vec<DialogElement>,
+        window_opts: PopupSpawnOpts,
         tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnText {
         text: String,
         style: TextStyle,
-        window_opts: SpawnWindowOpts,
+        window_opts: PopupSpawnOpts,
         tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnAudio {
@@ -397,13 +379,17 @@ pub enum WindowAction {
         tx: mpsc::Sender<Result<()>>,
         text: Option<String>,
     },
-    SetValue {
-        tx: mpsc::Sender<Result<()>>,
-        value: Option<String>,
+    UpdateDialogElement {
+        tx: mpsc::Sender<bool>,
+        id: String,
+        props: DialogElementUpdate,
     },
-    SetOptions {
-        tx: mpsc::Sender<Result<()>>,
-        options: Vec<ChoiceWindowOption>,
+    GetDialogValues {
+        tx: mpsc::Sender<HashMap<String, String>>,
+    },
+    GetDialogValue {
+        id: String,
+        tx: mpsc::Sender<Option<String>>,
     },
     SetTitle {
         tx: mpsc::Sender<()>,

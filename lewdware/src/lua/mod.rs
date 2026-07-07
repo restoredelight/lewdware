@@ -34,12 +34,12 @@ use crate::{
 };
 
 pub use api::{
-    Color, Coord, FontSize, Notification, SpawnWindowOpts, TextAlign, TextFont, TextStyle,
-    WallpaperMode,
+    Color, Coord, DialogButton, DialogElement, DialogElementUpdate, Notification, PopupSpawnOpts,
+    TextAlign, TextFont, TextStyle, WallpaperMode,
 };
 pub use media::{Media, MediaData, MediaType};
 pub use request::{AudioAction, LuaRequest, WindowAction};
-pub use window::{ChoiceWindowOption, Easing, FadeOpts, MoveOpts};
+pub use window::{Easing, FadeOpts, MoveOpts};
 
 pub enum Event {
     WindowClosed {
@@ -57,13 +57,15 @@ pub enum Event {
     AudioFinish {
         id: u64,
     },
-    PromptSubmit {
+    DialogClick {
         id: PopupId,
-        text: String,
+        button_id: String,
+        values: HashMap<String, String>,
     },
-    ChoiceSelect {
+    DialogSubmit {
         id: PopupId,
-        option_id: String,
+        element_id: String,
+        values: HashMap<String, String>,
     },
     FadeFinish {
         id: PopupId,
@@ -146,6 +148,7 @@ pub fn start_lua_thread(
     event_poster: EventPoster,
     config: Arc<AppConfig>,
     media_manager: MediaManager,
+    gpu_available: bool,
 ) -> (
     UnboundedSender<Event>,
     std::sync::mpsc::Receiver<LuaRequest>,
@@ -253,6 +256,7 @@ pub fn start_lua_thread(
             RequestSender::new(request_tx, event_poster),
             media_manager,
             mode_config,
+            gpu_available,
         ) {
             Ok(x) => Rc::new(x),
             Err(err) => {
@@ -339,6 +343,7 @@ impl LuaRuntime {
         request_tx: RequestSender,
         media_manager: MediaManager,
         config: HashMap<String, OptionValue>,
+        gpu_available: bool,
     ) -> anyhow::Result<Self> {
         let lua = create_sandboxed_lua()?;
 
@@ -351,7 +356,7 @@ impl LuaRuntime {
             lua,
         };
 
-        runtime.create_api(config)?;
+        runtime.create_api(config, gpu_available)?;
 
         Ok(runtime)
     }
@@ -387,26 +392,31 @@ impl LuaRuntime {
                     audio.on_finish()?;
                 }
             }
-            Event::PromptSubmit { id, text } => {
-                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
-                    match window {
-                        Window::Prompt(prompt) => {
-                            prompt.on_submit(text)?;
-                        }
-                        _ => bail!("Video finish event for a non-video window"),
-                    }
-                }
-            }
-            Event::ChoiceSelect {
+            Event::DialogClick {
                 id,
-                option_id: choice_id,
+                button_id,
+                values,
             } => {
                 if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
                     match window {
-                        Window::Choice(prompt) => {
-                            prompt.on_select(choice_id)?;
+                        Window::Dialog(dialog) => {
+                            dialog.on_click(button_id, values)?;
                         }
-                        _ => bail!("Video finish event for a non-video window"),
+                        _ => bail!("Dialog click event for a non-dialog window"),
+                    }
+                }
+            }
+            Event::DialogSubmit {
+                id,
+                element_id,
+                values,
+            } => {
+                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
+                    match window {
+                        Window::Dialog(dialog) => {
+                            dialog.on_submit(element_id, values)?;
+                        }
+                        _ => bail!("Dialog submit event for a non-dialog window"),
                     }
                 }
             }
@@ -415,7 +425,11 @@ impl LuaRuntime {
         Ok(())
     }
 
-    fn create_api(&mut self, config: HashMap<String, OptionValue>) -> mlua::Result<()> {
+    fn create_api(
+        &mut self,
+        config: HashMap<String, OptionValue>,
+        gpu_available: bool,
+    ) -> mlua::Result<()> {
         create_api(
             &self.lua,
             self.request_sender.clone(),
@@ -423,6 +437,7 @@ impl LuaRuntime {
             self.windows.clone(),
             self.audio_handles.clone(),
             config,
+            gpu_available,
         )?;
 
         self.lua
@@ -586,8 +601,7 @@ mod tests {
     enum Recorded {
         SpawnImage { media_id: u64 },
         SpawnVideo { media_id: u64 },
-        SpawnPrompt,
-        SpawnChoice,
+        SpawnDialog,
         SpawnText,
         CloseWindow { id: PopupId },
         OpenLink { url: String },
@@ -632,6 +646,9 @@ mod tests {
     ) {
         let mut next_id = 0u64;
         let mut closed_windows = HashSet::new();
+        // Stands in for the real `DialogWindow`'s input-element state (see `window_type.rs`),
+        // just enough for `values`/`value`/`update` to round-trip in tests.
+        let mut dialog_values: HashMap<PopupId, HashMap<String, String>> = HashMap::new();
 
         while let Ok(request) = request_rx.recv() {
             match request {
@@ -653,16 +670,22 @@ mod tests {
                         .push(Recorded::SpawnVideo { media_id });
                     let _ = tx.send(Ok(fake_window_props(id)));
                 }
-                LuaRequest::SpawnPrompt { tx, .. } => {
+                LuaRequest::SpawnDialog { elements, tx, .. } => {
                     let id = PopupId(next_id);
                     next_id += 1;
-                    recorded.lock().unwrap().push(Recorded::SpawnPrompt);
-                    let _ = tx.send(Ok(fake_window_props(id)));
-                }
-                LuaRequest::SpawnChoice { tx, .. } => {
-                    let id = PopupId(next_id);
-                    next_id += 1;
-                    recorded.lock().unwrap().push(Recorded::SpawnChoice);
+                    recorded.lock().unwrap().push(Recorded::SpawnDialog);
+                    let values = elements
+                        .into_iter()
+                        .filter_map(|element| match element {
+                            DialogElement::Input {
+                                id,
+                                initial_value: value,
+                                ..
+                            } => Some((id, value.unwrap_or_default())),
+                            _ => None,
+                        })
+                        .collect();
+                    dialog_values.insert(id, values);
                     let _ = tx.send(Ok(fake_window_props(id)));
                 }
                 LuaRequest::SpawnText { tx, .. } => {
@@ -688,7 +711,9 @@ mod tests {
                     let _ = tx.send(Ok(()));
                 }
                 LuaRequest::ListMonitors { tx } => {
-                    let _ = tx.send(vec![]);
+                    // Non-empty: popup spawns that don't specify a monitor now pick a random one
+                    // from this list on the Lua thread (see `resolve_monitor` in `lua/api.rs`).
+                    let _ = tx.send(vec![fake_monitor()]);
                 }
                 LuaRequest::PrimaryMonitor { tx } => {
                     let _ = tx.send(Ok(fake_monitor()));
@@ -728,11 +753,35 @@ mod tests {
                         WindowAction::SetText { tx, .. } => {
                             let _ = tx.send(Ok(()));
                         }
-                        WindowAction::SetValue { tx, .. } => {
-                            let _ = tx.send(Ok(()));
+                        WindowAction::UpdateDialogElement {
+                            tx,
+                            id: element_id,
+                            props,
+                        } => {
+                            let updated = dialog_values
+                                .get_mut(&id)
+                                .and_then(|values| values.get_mut(&element_id))
+                                .map(|value| {
+                                    if let Some(new_value) = props.value {
+                                        *value = new_value;
+                                    }
+                                })
+                                .is_some();
+                            let _ = tx.send(updated);
                         }
-                        WindowAction::SetOptions { tx, .. } => {
-                            let _ = tx.send(Ok(()));
+                        WindowAction::GetDialogValues { tx } => {
+                            let values = dialog_values.get(&id).cloned().unwrap_or_default();
+                            let _ = tx.send(values);
+                        }
+                        WindowAction::GetDialogValue {
+                            id: element_id,
+                            tx,
+                        } => {
+                            let value = dialog_values
+                                .get(&id)
+                                .and_then(|values| values.get(&element_id))
+                                .cloned();
+                            let _ = tx.send(value);
                         }
                         WindowAction::SetTitle { tx, .. } => {
                             let _ = tx.send(());
@@ -787,7 +836,8 @@ mod tests {
 
             let mode = make_mode(sources);
             let runtime = Rc::new(
-                LuaRuntime::new(mode, request_sender, media_manager, HashMap::new()).unwrap(),
+                LuaRuntime::new(mode, request_sender, media_manager, HashMap::new(), false)
+                    .unwrap(),
             );
 
             Self {
@@ -854,7 +904,7 @@ mod tests {
                         r#"
                             local image = lewdware.media.get_image("pic.avif")
                             assert(image ~= nil, "expected fixture image")
-                            local window = lewdware.spawn_image_popup(image)
+                            local window = lewdware.popup.image(image)
                             window:close()
                         "#,
                     )],
@@ -1040,7 +1090,7 @@ mod tests {
                         "main.lua",
                         r#"
                             local image = lewdware.media.get_image("pic.avif")
-                            local window = lewdware.spawn_image_popup(image)
+                            local window = lewdware.popup.image(image)
                             window:close()
                             -- Closing twice is documented as a safe no-op.
                             window:close()
@@ -1074,7 +1124,7 @@ mod tests {
                             "main.lua",
                             r#"
                                 local image = lewdware.media.get_image("pic.avif")
-                                WINDOW = lewdware.spawn_image_popup(image)
+                                WINDOW = lewdware.popup.image(image)
                                 ORDER = {}
 
                                 assert(WINDOW.spawned == false, "not spawned before the event arrives")
@@ -1119,6 +1169,124 @@ mod tests {
                 harness.advance(Duration::from_millis(10)).await;
 
                 harness.run_entrypoint("after_queue_runs.lua").unwrap();
+            })
+            .await;
+    }
+
+    /// Exercises the `lewdware.popup.dialog()` binding end to end: `values()`/`value()` reflect
+    /// `initial_value`, `update()` changes a live value (and reports whether the target id
+    /// existed), and `on_click`/`on_submit` (fired here via manually injected events, since the
+    /// fake handler doesn't model real button clicks/Enter presses) receive the button/element id
+    /// alongside a snapshot of every input's current value.
+    #[tokio::test(start_paused = true)]
+    async fn dialog_values_update_and_callbacks() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[
+                        (
+                            "main.lua",
+                            r#"
+                                DIALOG = lewdware.popup.dialog({
+                                    elements = {
+                                        { type = "text", text = "Confirm?" },
+                                        { type = "input", id = "name", initial_value = "Bob" },
+                                        { type = "buttons", options = {
+                                            { id = "yes", label = "Yes", default = true },
+                                            { id = "no", label = "No" },
+                                        }},
+                                    },
+                                })
+
+                                CLICKS = {}
+                                DIALOG:on_click(function(button_id, values)
+                                    table.insert(CLICKS, { button_id, values.name })
+                                end)
+
+                                SUBMITS = {}
+                                DIALOG:on_submit(function(element_id, values)
+                                    table.insert(SUBMITS, { element_id, values.name })
+                                end)
+                            "#,
+                        ),
+                        (
+                            "check_values.lua",
+                            r#"
+                                assert(DIALOG:values().name == "Bob", "initial_value seeds values()")
+                                assert(DIALOG:value("name") == "Bob")
+                                assert(DIALOG:value("missing") == nil)
+
+                                assert(DIALOG:update("name", { value = "Alice" }) == true)
+                                assert(DIALOG:value("name") == "Alice")
+
+                                assert(DIALOG:update("missing", { value = "x" }) == false)
+                            "#,
+                        ),
+                        (
+                            "check_callbacks.lua",
+                            r#"
+                                assert(#CLICKS == 1, "on_click should have fired once")
+                                assert(CLICKS[1][1] == "yes")
+                                assert(CLICKS[1][2] == "Alice", "click payload carries live values")
+
+                                assert(#SUBMITS == 1, "on_submit should have fired once")
+                                assert(SUBMITS[1][1] == "name")
+                            "#,
+                        ),
+                    ],
+                    false,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+                assert_eq!(harness.recorded(), vec![Recorded::SpawnDialog]);
+
+                harness.run_entrypoint("check_values.lua").unwrap();
+
+                harness.send_event(Event::DialogClick {
+                    id: PopupId(0),
+                    button_id: "yes".to_string(),
+                    values: HashMap::from([("name".to_string(), "Alice".to_string())]),
+                });
+                harness.send_event(Event::DialogSubmit {
+                    id: PopupId(0),
+                    element_id: "name".to_string(),
+                    values: HashMap::from([("name".to_string(), "Alice".to_string())]),
+                });
+                harness.pump_events();
+
+                harness.run_entrypoint("check_callbacks.lua").unwrap();
+            })
+            .await;
+    }
+
+    /// `spawn_dialog` validates the "at most one default button" invariant up front (rather than
+    /// only at render time), so a mode author gets a clear error instead of ambiguous Enter-key
+    /// routing.
+    #[tokio::test(start_paused = true)]
+    async fn dialog_rejects_more_than_one_default_button() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local ok = pcall(function()
+                                lewdware.popup.dialog({
+                                    elements = {
+                                        { type = "buttons", options = {
+                                            { id = "a", label = "A", default = true },
+                                            { id = "b", label = "B", default = true },
+                                        }},
+                                    },
+                                })
+                            end)
+                            assert(not ok, "a second default button should be rejected")
+                        "#,
+                    )],
+                    false,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
             })
             .await;
     }

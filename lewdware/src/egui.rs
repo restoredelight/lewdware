@@ -136,6 +136,12 @@ impl EguiGpuRenderer {
         queue.write_buffer(&self.opacity_buffer, 0, bytemuck::cast_slice(&[opacity]));
     }
 
+    /// Cheap to clone -- `egui::Context` is an `Arc` handle internally. Used to load textures
+    /// (e.g. for a dialog's `image` elements) outside of the render closure.
+    pub fn context(&self) -> egui::Context {
+        self.context.clone()
+    }
+
     /// Handle a window event. The caller is responsible for translating cursor positions to the
     /// egui content area before calling this (subtract the inner offset from cursor events).
     pub fn handle_event(&mut self, window: &Arc<Window>, event: &WindowEvent) {
@@ -363,6 +369,12 @@ impl EguiCPUWindow {
             state,
             renderer,
         })
+    }
+
+    /// Cheap to clone -- `egui::Context` is an `Arc` handle internally. Used to load textures
+    /// (e.g. for a dialog's `image` elements) outside of the render closure.
+    pub fn context(&self) -> egui::Context {
+        self.context.clone()
     }
 
     /// Handle a window event. Cursor positions should already be translated to the egui content

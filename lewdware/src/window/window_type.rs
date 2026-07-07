@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use egui::{RichText, TextEdit};
+use egui::TextEdit;
 use tiny_skia::{IntSize, Pixmap, PixmapMut};
+use tokio::sync::mpsc::UnboundedSender;
 use winit::{
     dpi::{LogicalPosition, PhysicalPosition},
     event::{Touch, WindowEvent},
@@ -10,7 +12,7 @@ use winit::{
 
 use crate::{
     egui::{EguiCPUWindow, EguiGpuRenderer},
-    lua::{self, ChoiceWindowOption, TextStyle},
+    lua::{self, DialogButton, DialogElementUpdate, PopupId, TextStyle},
     media::ImageData,
     text_font,
     video::{NextFrame, VideoDecoder, VideoFrame, VideoPixelFormat},
@@ -25,8 +27,7 @@ use crate::{
 pub enum WindowType {
     Image(ImageWindow),
     Video(VideoWindow),
-    Prompt(PromptWindow),
-    Choice(ChoiceWindow),
+    Dialog(DialogWindow),
     Text(TextWindow),
 }
 
@@ -35,8 +36,7 @@ impl WindowType {
         match self {
             Self::Image(image_window) => &image_window.inner_window,
             Self::Video(video_window) => &video_window.inner_window,
-            Self::Prompt(prompt_window) => &prompt_window.inner_window,
-            Self::Choice(choice_window) => &choice_window.inner_window,
+            Self::Dialog(dialog_window) => &dialog_window.inner_window,
             Self::Text(text_window) => &text_window.inner_window,
         }
     }
@@ -45,8 +45,7 @@ impl WindowType {
         match self {
             Self::Image(image_window) => &mut image_window.inner_window,
             Self::Video(video_window) => &mut video_window.inner_window,
-            Self::Prompt(prompt_window) => &mut prompt_window.inner_window,
-            Self::Choice(choice_window) => &mut choice_window.inner_window,
+            Self::Dialog(dialog_window) => &mut dialog_window.inner_window,
             Self::Text(text_window) => &mut text_window.inner_window,
         }
     }
@@ -58,8 +57,7 @@ impl WindowType {
         match self {
             Self::Image(w) => w.inner_window,
             Self::Video(w) => w.inner_window,
-            Self::Prompt(w) => w.inner_window,
-            Self::Choice(w) => w.inner_window,
+            Self::Dialog(w) => w.inner_window,
             Self::Text(w) => w.inner_window,
         }
     }
@@ -370,463 +368,549 @@ impl VideoWindow {
     }
 }
 
-pub struct PromptWindow {
-    text: Option<String>,
-    placeholder: Option<String>,
-    value: String,
-    egui_cpu: Option<EguiCPUWindow>,
-    egui_gpu: Option<EguiGpuRenderer>,
-    decoration_overlay: Option<DecorationOverlay>,
-    // Declared last so it drops last: egui's Arc<Window> clone is released first.
-    pub inner_window: InnerWindow,
-}
-
-impl PromptWindow {
-    pub fn new(
-        inner_window: InnerWindow,
-        text: Option<String>,
+/// A dialog element, fully resolved and ready to render — built by `app.rs`'s
+/// `PendingDialogElement::into_resolved` once any `image` element's data has decoded (see
+/// `PendingKind::Dialog`).
+pub enum DialogElementSpec {
+    Text {
+        id: Option<String>,
+        text: String,
+        style: TextStyle,
+    },
+    Image {
+        id: Option<String>,
+        data: ImageData,
+    },
+    Input {
+        id: String,
         placeholder: Option<String>,
-        initial_value: Option<String>,
-    ) -> Result<Self> {
-        let (egui_cpu, egui_gpu, decoration_overlay) = if inner_window.is_gpu() {
-            let surface_format = inner_window.surface_format().unwrap();
-            let inner_size = inner_window.inner_size();
-            let egui_gpu = EguiGpuRenderer::new(
-                inner_window.wgpu_state(),
-                inner_window.window(),
-                inner_size,
-                inner_window.opacity,
-                inner_window.premultiplied_alpha(),
-                inner_window.force_opaque(),
-                inner_window.background_color(),
-                None,
-            )?;
-            let decoration_overlay = if inner_window.decorations() {
-                let outer_size = inner_window.outer_size();
-                Some(DecorationOverlay::new(
-                    inner_window.wgpu_state(),
-                    outer_size.width,
-                    outer_size.height,
-                    inner_window.premultiplied_alpha(),
-                    inner_window.opacity,
-                    inner_window.force_opaque(),
-                ))
-            } else {
-                None
-            };
-            let _ = surface_format; // only needed to confirm surface is GPU
-            (None, Some(egui_gpu), decoration_overlay)
-        } else {
-            let egui_cpu = EguiCPUWindow::new(
-                inner_window.window().clone(),
-                inner_window.background_color(),
-                None,
-            )?;
-            (Some(egui_cpu), None, None)
-        };
+        value: String,
+    },
+    Buttons {
+        id: Option<String>,
+        options: Vec<DialogButton>,
+    },
+}
 
-        Ok(Self {
-            text,
-            placeholder,
-            value: initial_value.unwrap_or_default(),
-            egui_cpu,
-            egui_gpu,
-            decoration_overlay,
-            inner_window,
-        })
-    }
+/// The render-time state of one dialog element — like `DialogElementSpec`, but an `image`
+/// element's pixels have been uploaded to an egui texture, and an `input` element's `value` is
+/// live (mutated in place as the user types).
+enum DialogElementState {
+    Text {
+        id: Option<String>,
+        text: String,
+        style: TextStyle,
+    },
+    Image {
+        id: Option<String>,
+        texture: egui::TextureHandle,
+    },
+    Input {
+        id: String,
+        placeholder: Option<String>,
+        value: String,
+    },
+    Buttons {
+        id: Option<String>,
+        options: Vec<DialogButton>,
+    },
+}
 
-    pub fn handle_event(&mut self, event: &WindowEvent) {
-        let translated = if self.inner_window.decorations() {
-            Some(translate_event_position(
-                event.clone(),
-                self.inner_window.window().scale_factor(),
-            ))
-        } else {
-            None
-        };
-        let translated_ref = translated.as_ref().unwrap_or(event);
-
-        if let Some(egui_gpu) = &mut self.egui_gpu {
-            egui_gpu.handle_event(self.inner_window.window(), translated_ref);
-        } else if let Some(egui_cpu) = &mut self.egui_cpu {
-            egui_cpu.handle_event(translated_ref);
+impl DialogElementState {
+    fn id(&self) -> Option<&str> {
+        match self {
+            Self::Text { id, .. } | Self::Image { id, .. } | Self::Buttons { id, .. } => {
+                id.as_deref()
+            }
+            Self::Input { id, .. } => Some(id),
         }
     }
+}
 
-    pub fn render(&mut self) -> Result<()> {
-        self.inner_window.start_render()?;
+/// What happened during one `render()` pass, resolved into a `lua::Event::DialogClick`/
+/// `DialogSubmit` once the element loop (which borrows `elements` mutably, to track live input
+/// text) has finished — building the values snapshot needs a fresh immutable borrow.
+enum DialogInteraction {
+    Click(String),
+    Submit(String),
+}
 
-        let id = self.inner_window.popup_id();
-        let lua_event_tx = self.inner_window.lua_event_tx().clone();
-        let inner_size = self.inner_window.inner_size();
-        let (ox, oy) = self.inner_window.inner_offset();
-        let opacity = self.inner_window.opacity;
+/// The default button id, cached and recomputed whenever a `buttons` element's `options` change
+/// (spawn time, and `update_element`) — pressing Enter in an input element clicks it instead of
+/// firing `on_submit`. At most one across the whole dialog; if `update_element` is ever handed a
+/// second one, the earlier button silently keeps the role rather than erroring (the strict check
+/// only runs once, at spawn, in the Lua binding — see `spawn_dialog`).
+fn find_default_button_id(elements: &[DialogElementState]) -> Option<String> {
+    elements.iter().find_map(|element| match element {
+        DialogElementState::Buttons { options, .. } => {
+            options.iter().find(|o| o.default).map(|o| o.id.clone())
+        }
+        _ => None,
+    })
+}
 
-        if let Some(egui_gpu) = &mut self.egui_gpu {
-            let wgpu_state = self.inner_window.wgpu_state().clone();
-            let window = self.inner_window.window().clone();
+fn collect_dialog_values(elements: &[DialogElementState]) -> HashMap<String, String> {
+    elements
+        .iter()
+        .filter_map(|element| match element {
+            DialogElementState::Input { id, value, .. } => Some((id.clone(), value.clone())),
+            _ => None,
+        })
+        .collect()
+}
 
-            // Render egui into the intermediate texture.
-            let text = self.text.clone();
-            let placeholder = self.placeholder.clone();
-            egui_gpu.render_to_texture(&wgpu_state, &window, inner_size, |ui| {
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.heading("Repeat after me");
-                        ui.add_space(20.0);
+fn send_dialog_interaction(
+    lua_event_tx: &UnboundedSender<lua::Event>,
+    id: PopupId,
+    interaction: DialogInteraction,
+    elements: &[DialogElementState],
+) {
+    let values = collect_dialog_values(elements);
+    let event = match interaction {
+        DialogInteraction::Click(button_id) => lua::Event::DialogClick {
+            id,
+            button_id,
+            values,
+        },
+        DialogInteraction::Submit(element_id) => lua::Event::DialogSubmit {
+            id,
+            element_id,
+            values,
+        },
+    };
+    if lua_event_tx.send(event).is_err() {
+        tracing::debug!("Couldn't send dialog interaction event: Lua thread has shut down");
+    }
+}
 
-                        if let Some(text) = &text {
-                            ui.label(RichText::new(text).heading());
+/// Paint the dialog's elements as a vertical stack, in order. Returns the button click / input
+/// submit that occurred this frame, if any (at most one is handled per frame — egui only reports
+/// one click/submit per widget per frame anyway).
+fn paint_dialog(
+    ui: &mut egui::Ui,
+    elements: &mut [DialogElementState],
+    default_button_id: Option<&str>,
+) -> Option<DialogInteraction> {
+    let mut interaction = None;
+
+    egui::Frame::central_panel(ui.style())
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                for element in elements.iter_mut() {
+                    match element {
+                        DialogElementState::Text { text, style, .. } => {
+                            paint_dialog_text(ui, text, style);
                         }
-
-                        let mut prompt = TextEdit::singleline(&mut self.value);
-                        if let Some(placeholder) = &placeholder {
-                            prompt = prompt.hint_text(placeholder);
+                        DialogElementState::Image { texture, .. } => {
+                            ui.add(
+                                egui::Image::from_texture((texture.id(), texture.size_vec2()))
+                                    .max_width(ui.available_width())
+                                    .shrink_to_fit(),
+                            );
                         }
-                        let response = ui.add(prompt);
-                        response.request_focus();
-
-                        ui.add_space(ui.available_height() - 50.0);
-                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new("Submit")).clicked()
-                                && let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
-                                    id,
-                                    text: self.value.clone(),
-                                })
+                        DialogElementState::Input {
+                            id,
+                            placeholder,
+                            value,
+                        } => {
+                            let mut input = TextEdit::singleline(value);
+                            if let Some(placeholder) = placeholder {
+                                input = input.hint_text(placeholder.as_str());
+                            }
+                            let response = ui.add(input);
+                            if response.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
                             {
-                                tracing::error!("{err}");
-                            }
-                        });
-                    });
-                });
-            })?;
-
-            // Upload header pixmap to decoration overlay if it changed.
-            let decoration_overlay = &mut self.decoration_overlay;
-            self.inner_window.with_header_pixmap(|pixmap| {
-                if let Some(overlay) = decoration_overlay {
-                    overlay.upload_header(&wgpu_state.queue, pixmap, ox, ox);
-                }
-            });
-
-            // Update opacity for both layers.
-            if let Some(overlay) = &self.decoration_overlay {
-                overlay.set_opacity(&wgpu_state.queue, opacity);
-            }
-            egui_gpu.set_opacity(&wgpu_state.queue, opacity);
-
-            // Blit egui texture and decoration overlay into the surface.
-            let surface_format = self.inner_window.surface_format().unwrap();
-            let pipeline = wgpu_state.get_pipeline(surface_format);
-            let egui_bind_group = &egui_gpu.bind_group;
-            let egui_window_bind_group = &egui_gpu.window_bind_group;
-            let decoration_overlay = self.decoration_overlay.as_ref();
-
-            self.inner_window.draw_wgpu(|rpass, x, y| {
-                // Egui layer: inner viewport.
-                rpass.set_pipeline(&pipeline);
-                rpass.set_bind_group(0, egui_bind_group, &[]);
-                rpass.set_bind_group(1, egui_window_bind_group, &[]);
-                rpass.set_viewport(
-                    x as f32,
-                    y as f32,
-                    inner_size.width as f32,
-                    inner_size.height as f32,
-                    0.0,
-                    1.0,
-                );
-                rpass.draw(0..4, 0..1);
-
-                // Decoration overlay: full outer viewport.
-                if let Some(overlay) = decoration_overlay {
-                    overlay.render(rpass, &pipeline);
-                }
-            })?;
-        } else {
-            // CPU (softbuffer) path — unchanged behaviour.
-            let egui_cpu = self.egui_cpu.as_mut().unwrap();
-            self.inner_window.draw_softbuffer(|buffer| {
-                let mut egui_buffer = vec![0u32; (inner_size.width * inner_size.height) as usize];
-                let mut buffer_ref = egui_software_backend::BufferMutRef::new(
-                    bytemuck::cast_slice_mut(&mut egui_buffer),
-                    inner_size.width as usize,
-                    inner_size.height as usize,
-                );
-
-                let _ = egui_cpu.redraw(&mut buffer_ref, |ui| {
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
-                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                            ui.heading("Repeat after me");
-                            ui.add_space(20.0);
-
-                            if let Some(text) = &self.text {
-                                ui.label(RichText::new(text).heading());
-                            }
-
-                            let mut prompt = TextEdit::singleline(&mut self.value);
-                            if let Some(placeholder) = &self.placeholder {
-                                prompt = prompt.hint_text(placeholder);
-                            }
-                            let response = ui.add(prompt);
-                            response.request_focus();
-
-                            ui.add_space(ui.available_height() - 50.0);
-                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                if ui.add(egui::Button::new("Submit")).clicked()
-                                    && let Err(err) = lua_event_tx.send(lua::Event::PromptSubmit {
-                                        id,
-                                        text: self.value.clone(),
-                                    })
-                                {
-                                    tracing::error!("{err}");
-                                }
-                            });
-                        });
-                    });
-                });
-
-                buffer.copy_from_u32_buf(&egui_buffer, inner_size.width, ox, oy);
-            })?;
-        }
-
-        Ok(())
-    }
-
-    pub fn set_text(&mut self, text: Option<String>) {
-        self.text = text;
-        self.inner_window.window().request_redraw();
-    }
-
-    pub fn set_value(&mut self, value: Option<String>) {
-        self.value = value.unwrap_or_default();
-        self.inner_window.window().request_redraw();
-    }
-}
-
-pub struct ChoiceWindow {
-    text: Option<String>,
-    options: Vec<ChoiceWindowOption>,
-    egui_cpu: Option<EguiCPUWindow>,
-    egui_gpu: Option<EguiGpuRenderer>,
-    decoration_overlay: Option<DecorationOverlay>,
-    // Declared last so it drops last: egui's Arc<Window> clone is released first.
-    pub inner_window: InnerWindow,
-}
-
-impl ChoiceWindow {
-    pub fn new(
-        inner_window: InnerWindow,
-        text: Option<String>,
-        options: Vec<ChoiceWindowOption>,
-    ) -> Result<Self> {
-        let (egui_cpu, egui_gpu, decoration_overlay) = if inner_window.is_gpu() {
-            let inner_size = inner_window.inner_size();
-            let egui_gpu = EguiGpuRenderer::new(
-                inner_window.wgpu_state(),
-                inner_window.window(),
-                inner_size,
-                inner_window.opacity,
-                inner_window.premultiplied_alpha(),
-                inner_window.force_opaque(),
-                inner_window.background_color(),
-                None,
-            )?;
-            let decoration_overlay = if inner_window.decorations() {
-                let outer_size = inner_window.outer_size();
-                Some(DecorationOverlay::new(
-                    inner_window.wgpu_state(),
-                    outer_size.width,
-                    outer_size.height,
-                    inner_window.premultiplied_alpha(),
-                    inner_window.opacity,
-                    inner_window.force_opaque(),
-                ))
-            } else {
-                None
-            };
-            (None, Some(egui_gpu), decoration_overlay)
-        } else {
-            let egui_cpu = EguiCPUWindow::new(
-                inner_window.window().clone(),
-                inner_window.background_color(),
-                None,
-            )?;
-            (Some(egui_cpu), None, None)
-        };
-
-        Ok(Self {
-            text,
-            options,
-            egui_cpu,
-            egui_gpu,
-            decoration_overlay,
-            inner_window,
-        })
-    }
-
-    pub fn handle_event(&mut self, event: &WindowEvent) {
-        let translated = if self.inner_window.decorations() {
-            Some(translate_event_position(
-                event.clone(),
-                self.inner_window.window().scale_factor(),
-            ))
-        } else {
-            None
-        };
-        let translated_ref = translated.as_ref().unwrap_or(event);
-
-        if let Some(egui_gpu) = &mut self.egui_gpu {
-            egui_gpu.handle_event(self.inner_window.window(), translated_ref);
-        } else if let Some(egui_cpu) = &mut self.egui_cpu {
-            egui_cpu.handle_event(translated_ref);
-        }
-    }
-
-    pub fn render(&mut self) -> Result<()> {
-        self.inner_window.start_render()?;
-
-        let id = self.inner_window.popup_id();
-        let lua_event_tx = self.inner_window.lua_event_tx().clone();
-        let inner_size = self.inner_window.inner_size();
-        let (ox, oy) = self.inner_window.inner_offset();
-        let opacity = self.inner_window.opacity;
-
-        if let Some(egui_gpu) = &mut self.egui_gpu {
-            let wgpu_state = self.inner_window.wgpu_state().clone();
-            let window = self.inner_window.window().clone();
-
-            let text = self.text.clone();
-            let options = self.options.clone();
-            egui_gpu.render_to_texture(&wgpu_state, &window, inner_size, |ui| {
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.add_space(20.0);
-
-                        if let Some(text) = &text {
-                            ui.label(RichText::new(text).heading());
-                        }
-
-                        ui.add_space(ui.available_height() - 100.0);
-
-                        ui.with_layout(
-                            egui::Layout::left_to_right(egui::Align::Center)
-                                .with_main_wrap(true)
-                                .with_main_align(egui::Align::Center)
-                                .with_main_justify(true),
-                            |ui| {
-                                for option in &options {
-                                    if ui.button(&option.label).clicked() {
-                                        let _ = lua_event_tx.send(lua::Event::ChoiceSelect {
-                                            id,
-                                            option_id: option.id.clone(),
-                                        });
+                                interaction = Some(match default_button_id {
+                                    Some(button_id) => {
+                                        DialogInteraction::Click(button_id.to_string())
                                     }
-                                    ui.add_space(5.0);
-                                }
-                            },
-                        );
-                    });
-                });
-            })?;
-
-            let decoration_overlay = &mut self.decoration_overlay;
-            self.inner_window.with_header_pixmap(|pixmap| {
-                if let Some(overlay) = decoration_overlay {
-                    overlay.upload_header(&wgpu_state.queue, pixmap, ox, ox);
-                }
-            });
-
-            if let Some(overlay) = &self.decoration_overlay {
-                overlay.set_opacity(&wgpu_state.queue, opacity);
-            }
-            egui_gpu.set_opacity(&wgpu_state.queue, opacity);
-
-            let surface_format = self.inner_window.surface_format().unwrap();
-            let pipeline = wgpu_state.get_pipeline(surface_format);
-            let egui_bind_group = &egui_gpu.bind_group;
-            let egui_window_bind_group = &egui_gpu.window_bind_group;
-            let decoration_overlay = self.decoration_overlay.as_ref();
-
-            self.inner_window.draw_wgpu(|rpass, x, y| {
-                rpass.set_pipeline(&pipeline);
-                rpass.set_bind_group(0, egui_bind_group, &[]);
-                rpass.set_bind_group(1, egui_window_bind_group, &[]);
-                rpass.set_viewport(
-                    x as f32,
-                    y as f32,
-                    inner_size.width as f32,
-                    inner_size.height as f32,
-                    0.0,
-                    1.0,
-                );
-                rpass.draw(0..4, 0..1);
-
-                if let Some(overlay) = decoration_overlay {
-                    overlay.render(rpass, &pipeline);
-                }
-            })?;
-        } else {
-            let egui_cpu = self.egui_cpu.as_mut().unwrap();
-            self.inner_window.draw_softbuffer(|buffer| {
-                let mut egui_buffer = vec![0u32; (inner_size.width * inner_size.height) as usize];
-                let mut buffer_ref = egui_software_backend::BufferMutRef::new(
-                    bytemuck::cast_slice_mut(&mut egui_buffer),
-                    inner_size.width as usize,
-                    inner_size.height as usize,
-                );
-
-                let _ = egui_cpu.redraw(&mut buffer_ref, |ui| {
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
-                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                            ui.add_space(20.0);
-
-                            if let Some(text) = &self.text {
-                                ui.label(RichText::new(text).heading());
+                                    None => DialogInteraction::Submit(id.clone()),
+                                });
                             }
-
-                            ui.add_space(ui.available_height() - 100.0);
-
+                        }
+                        DialogElementState::Buttons { options, .. } => {
                             ui.with_layout(
                                 egui::Layout::left_to_right(egui::Align::Center)
                                     .with_main_wrap(true)
                                     .with_main_align(egui::Align::Center)
                                     .with_main_justify(true),
                                 |ui| {
-                                    for option in &self.options {
+                                    for option in options.iter() {
                                         if ui.button(&option.label).clicked() {
-                                            let _ = lua_event_tx.send(lua::Event::ChoiceSelect {
-                                                id,
-                                                option_id: option.id.clone(),
-                                            });
+                                            interaction =
+                                                Some(DialogInteraction::Click(option.id.clone()));
                                         }
                                         ui.add_space(5.0);
                                     }
                                 },
                             );
-                        });
-                    });
+                        }
+                    }
+                    ui.add_space(10.0);
+                }
+            });
+        });
+
+    interaction
+}
+
+/// Paint one `text` element inline within the dialog's vertical stack (unlike `paint_text`,
+/// which centers within the whole window for a standalone text popup).
+fn paint_dialog_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
+    let font_size = style.font_size.to_pixels(0);
+    let font_id = egui::FontId::new(font_size, text_font::font_family(style.font));
+    let color = to_color32(style.color);
+
+    let outline_width = if style.outline_color.is_some() {
+        style.outline_width
+    } else {
+        0.0
+    };
+    let wrap_width = (ui.available_width() - outline_width * 2.0).max(0.0);
+
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_owned(),
+        egui::TextFormat {
+            font_id,
+            color,
+            ..Default::default()
+        },
+    );
+    job.wrap.max_width = wrap_width;
+    job.halign = text_font::to_egui_align(style.align);
+
+    let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
+
+    let size = egui::vec2(ui.available_width(), galley.size().y + outline_width * 2.0);
+    let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
+
+    let pos_x = match style.align {
+        lua::TextAlign::Left => rect.left() + outline_width,
+        lua::TextAlign::Center => rect.center().x,
+        lua::TextAlign::Right => rect.right() - outline_width,
+    };
+    let pos = egui::pos2(pos_x, rect.top() + outline_width);
+
+    let painter = ui.painter();
+
+    if let Some(outline_color) = style.outline_color {
+        let outline_color = to_color32(outline_color);
+        let count = text_font::outline_sample_count(style.outline_width);
+        for offset in text_font::outline_offsets(count) {
+            painter.galley_with_override_text_color(
+                pos + offset * style.outline_width,
+                galley.clone(),
+                outline_color,
+            );
+        }
+    }
+
+    if style.bold {
+        const BOLD_OFFSET: f32 = 0.6;
+        for offset in text_font::outline_offsets(8) {
+            painter.galley_with_override_text_color(
+                pos + offset * BOLD_OFFSET,
+                galley.clone(),
+                color,
+            );
+        }
+    }
+
+    painter.galley_with_override_text_color(pos, galley, color);
+}
+
+pub struct DialogWindow {
+    elements: Vec<DialogElementState>,
+    default_button_id: Option<String>,
+    egui_cpu: Option<EguiCPUWindow>,
+    egui_gpu: Option<EguiGpuRenderer>,
+    decoration_overlay: Option<DecorationOverlay>,
+    // Declared last so it drops last: egui's Arc<Window> clone is released first.
+    pub inner_window: InnerWindow,
+}
+
+impl DialogWindow {
+    pub fn new(inner_window: InnerWindow, elements: Vec<DialogElementSpec>) -> Result<Self> {
+        let (egui_cpu, egui_gpu, decoration_overlay) = if inner_window.is_gpu() {
+            let inner_size = inner_window.inner_size();
+            let egui_gpu = EguiGpuRenderer::new(
+                inner_window.wgpu_state(),
+                inner_window.window(),
+                inner_size,
+                inner_window.opacity,
+                inner_window.premultiplied_alpha(),
+                inner_window.force_opaque(),
+                inner_window.background_color(),
+                None,
+            )?;
+            let decoration_overlay = if inner_window.decorations() {
+                let outer_size = inner_window.outer_size();
+                Some(DecorationOverlay::new(
+                    inner_window.wgpu_state(),
+                    outer_size.width,
+                    outer_size.height,
+                    inner_window.premultiplied_alpha(),
+                    inner_window.opacity,
+                    inner_window.force_opaque(),
+                ))
+            } else {
+                None
+            };
+            (None, Some(egui_gpu), decoration_overlay)
+        } else {
+            let egui_cpu = EguiCPUWindow::new(
+                inner_window.window().clone(),
+                inner_window.background_color(),
+                None,
+            )?;
+            (Some(egui_cpu), None, None)
+        };
+
+        let context = match (&egui_gpu, &egui_cpu) {
+            (Some(gpu), _) => gpu.context(),
+            (None, Some(cpu)) => cpu.context(),
+            (None, None) => unreachable!("one of egui_cpu/egui_gpu is always Some"),
+        };
+
+        let elements: Vec<_> = elements
+            .into_iter()
+            .enumerate()
+            .map(|(index, spec)| Self::load_element(&context, index, spec))
+            .collect();
+        let default_button_id = find_default_button_id(&elements);
+
+        Ok(Self {
+            elements,
+            default_button_id,
+            egui_cpu,
+            egui_gpu,
+            decoration_overlay,
+            inner_window,
+        })
+    }
+
+    /// Turn a resolved element spec into render-ready state, uploading an `image` element's
+    /// pixels as an egui texture (named uniquely per element, since texture names must be
+    /// distinct within a `Context`).
+    fn load_element(context: &egui::Context, index: usize, spec: DialogElementSpec) -> DialogElementState {
+        match spec {
+            DialogElementSpec::Text { id, text, style } => {
+                DialogElementState::Text { id, text, style }
+            }
+            DialogElementSpec::Image { id, data } => {
+                let width = data.width() as usize;
+                let height = data.height() as usize;
+                let color_image =
+                    egui::ColorImage::from_rgba_unmultiplied([width, height], &data.into_vec());
+                let texture = context.load_texture(
+                    format!("dialog-image-{index}"),
+                    color_image,
+                    egui::TextureOptions::default(),
+                );
+                DialogElementState::Image { id, texture }
+            }
+            DialogElementSpec::Input {
+                id,
+                placeholder,
+                value,
+            } => DialogElementState::Input {
+                id,
+                placeholder,
+                value,
+            },
+            DialogElementSpec::Buttons { id, options } => {
+                DialogElementState::Buttons { id, options }
+            }
+        }
+    }
+
+    pub fn handle_event(&mut self, event: &WindowEvent) {
+        let translated = if self.inner_window.decorations() {
+            Some(translate_event_position(
+                event.clone(),
+                self.inner_window.window().scale_factor(),
+            ))
+        } else {
+            None
+        };
+        let translated_ref = translated.as_ref().unwrap_or(event);
+
+        if let Some(egui_gpu) = &mut self.egui_gpu {
+            egui_gpu.handle_event(self.inner_window.window(), translated_ref);
+        } else if let Some(egui_cpu) = &mut self.egui_cpu {
+            egui_cpu.handle_event(translated_ref);
+        }
+    }
+
+    pub fn render(&mut self) -> Result<()> {
+        self.inner_window.start_render()?;
+
+        let id = self.inner_window.popup_id();
+        let lua_event_tx = self.inner_window.lua_event_tx().clone();
+        let inner_size = self.inner_window.inner_size();
+        let (ox, oy) = self.inner_window.inner_offset();
+        let opacity = self.inner_window.opacity;
+        let default_button_id = self.default_button_id.clone();
+
+        if let Some(egui_gpu) = &mut self.egui_gpu {
+            let wgpu_state = self.inner_window.wgpu_state().clone();
+            let window = self.inner_window.window().clone();
+
+            let mut interaction = None;
+            let elements = &mut self.elements;
+            egui_gpu.render_to_texture(&wgpu_state, &window, inner_size, |ui| {
+                interaction = paint_dialog(ui, elements, default_button_id.as_deref());
+            })?;
+
+            if let Some(interaction) = interaction {
+                send_dialog_interaction(&lua_event_tx, id, interaction, &self.elements);
+            }
+
+            let decoration_overlay = &mut self.decoration_overlay;
+            self.inner_window.with_header_pixmap(|pixmap| {
+                if let Some(overlay) = decoration_overlay {
+                    overlay.upload_header(&wgpu_state.queue, pixmap, ox, ox);
+                }
+            });
+
+            if let Some(overlay) = &self.decoration_overlay {
+                overlay.set_opacity(&wgpu_state.queue, opacity);
+            }
+            egui_gpu.set_opacity(&wgpu_state.queue, opacity);
+
+            let surface_format = self.inner_window.surface_format().unwrap();
+            let pipeline = wgpu_state.get_pipeline(surface_format);
+            let egui_bind_group = &egui_gpu.bind_group;
+            let egui_window_bind_group = &egui_gpu.window_bind_group;
+            let decoration_overlay = self.decoration_overlay.as_ref();
+
+            self.inner_window.draw_wgpu(|rpass, x, y| {
+                rpass.set_pipeline(&pipeline);
+                rpass.set_bind_group(0, egui_bind_group, &[]);
+                rpass.set_bind_group(1, egui_window_bind_group, &[]);
+                rpass.set_viewport(
+                    x as f32,
+                    y as f32,
+                    inner_size.width as f32,
+                    inner_size.height as f32,
+                    0.0,
+                    1.0,
+                );
+                rpass.draw(0..4, 0..1);
+
+                if let Some(overlay) = decoration_overlay {
+                    overlay.render(rpass, &pipeline);
+                }
+            })?;
+        } else {
+            let egui_cpu = self.egui_cpu.as_mut().unwrap();
+            let mut interaction = None;
+            let elements = &mut self.elements;
+            self.inner_window.draw_softbuffer(|buffer| {
+                let mut egui_buffer = vec![0u32; (inner_size.width * inner_size.height) as usize];
+                let mut buffer_ref = egui_software_backend::BufferMutRef::new(
+                    bytemuck::cast_slice_mut(&mut egui_buffer),
+                    inner_size.width as usize,
+                    inner_size.height as usize,
+                );
+
+                let _ = egui_cpu.redraw(&mut buffer_ref, |ui| {
+                    interaction = paint_dialog(ui, elements, default_button_id.as_deref());
                 });
 
                 buffer.copy_from_u32_buf(&egui_buffer, inner_size.width, ox, oy);
             })?;
+
+            if let Some(interaction) = interaction {
+                send_dialog_interaction(&lua_event_tx, id, interaction, &self.elements);
+            }
         }
 
         Ok(())
     }
 
-    pub fn set_text(&mut self, text: Option<String>) {
-        self.text = text;
+    /// Applies whichever fields in `props` are relevant to the target element's type, ignoring
+    /// the rest (e.g. `options` on a `text` element is a no-op, not an error). Returns whether an
+    /// element with `id` was found — `image` updates aren't supported yet (see
+    /// `DialogElementUpdate`'s doc comment), so an `image` element is found but never changed.
+    pub fn update_element(&mut self, id: &str, props: DialogElementUpdate) -> bool {
+        let Some(element) = self.elements.iter_mut().find(|e| e.id() == Some(id)) else {
+            return false;
+        };
+
+        match element {
+            DialogElementState::Text { text, style, .. } => {
+                if let Some(new_text) = props.text {
+                    *text = new_text;
+                }
+                if let Some(font) = props.font {
+                    style.font = font;
+                }
+                if let Some(font_size) = props.font_size {
+                    style.font_size = font_size;
+                }
+                if let Some(color) = props.color {
+                    style.color = color;
+                }
+                if let Some(bold) = props.bold {
+                    style.bold = bold;
+                }
+                if let Some(align) = props.align {
+                    style.align = align;
+                }
+                if let Some(outline_color) = props.outline_color {
+                    style.outline_color = Some(outline_color);
+                }
+                if let Some(outline_width) = props.outline_width {
+                    style.outline_width = outline_width;
+                }
+            }
+            DialogElementState::Image { .. } => {}
+            DialogElementState::Input {
+                placeholder, value, ..
+            } => {
+                if let Some(new_placeholder) = props.placeholder {
+                    *placeholder = Some(new_placeholder);
+                }
+                if let Some(new_value) = props.value {
+                    *value = new_value;
+                }
+            }
+            DialogElementState::Buttons { options, .. } => {
+                if let Some(new_options) = props.options {
+                    *options = new_options;
+                }
+            }
+        }
+
+        self.default_button_id = find_default_button_id(&self.elements);
         self.inner_window.window().request_redraw();
+
+        true
     }
 
-    pub fn set_options(&mut self, options: Vec<ChoiceWindowOption>) {
-        self.options = options;
-        self.inner_window.window().request_redraw();
+    /// `None` if `id` doesn't name an `input` element (including if the window is closed, since
+    /// the caller — `WindowRequestSender::get_dialog_value` — folds that case into the same
+    /// `None` as `DialogWindow:values()`).
+    pub fn value(&self, id: &str) -> Option<String> {
+        self.elements.iter().find_map(|element| match element {
+            DialogElementState::Input {
+                id: element_id,
+                value,
+                ..
+            } if element_id == id => Some(value.clone()),
+            _ => None,
+        })
+    }
+
+    pub fn values(&self) -> HashMap<String, String> {
+        collect_dialog_values(&self.elements)
     }
 }
 
-/// A window displaying static text. Unlike `PromptWindow`/`ChoiceWindow`, the egui content has
+/// A window displaying static text. Unlike `DialogWindow`, the egui content has
 /// no interactive widgets, so (per egui's repaint-on-demand model) it only ever redraws when
 /// `set_text()` is called or the window is first shown — the same one-shot behaviour as
 /// `ImageWindow`.
@@ -997,7 +1081,7 @@ impl TextWindow {
 }
 
 /// Paint `text` styled by `style`, centred vertically and horizontally-aligned per
-/// `style.align` within the available area. `border_color`/`bold` are faked by repainting the
+/// `style.align` within the available area. `outline_color`/`bold` are faked by repainting the
 /// same laid-out `Galley` at small offsets before the crisp final draw, since egui has no native
 /// stroked-text support.
 fn paint_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
@@ -1018,16 +1102,16 @@ fn paint_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
             let font_id = egui::FontId::new(font_size, text_font::font_family(style.font));
             let color = to_color32(style.color);
 
-            // The window was sized (see `calculate_text_popup_size`) with `2 * border_width` of extra
-            // room baked in so the border stroke (drawn offset from the text on every side) doesn't
-            // get clipped by the window bounds. Mirror that padding here so wrapping/positioning
-            // match what was actually measured.
-            let border_width = if style.border_color.is_some() {
-                style.border_width
+            // The window was sized (see `calculate_text_popup_size`) with `2 * outline_width` of
+            // extra room baked in so the outline stroke (drawn offset from the text on every
+            // side) doesn't get clipped by the window bounds. Mirror that padding here so
+            // wrapping/positioning match what was actually measured.
+            let outline_width = if style.outline_color.is_some() {
+                style.outline_width
             } else {
                 0.0
             };
-            let wrap_width = (available.width() - border_width * 2.0).max(0.0);
+            let wrap_width = (available.width() - outline_width * 2.0).max(0.0);
 
             let mut job = egui::text::LayoutJob::single_section(
                 text.to_owned(),
@@ -1045,24 +1129,25 @@ fn paint_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
             // `halign` positions each row *relative to x=0* (LEFT: [0,w], Center: [-w/2,w/2],
             // RIGHT: [-w,0]), not within `[0, wrap_width]` — so the anchor we paint at has to shift
             // depending on alignment, not just sit at the left edge. Left/right also inset by
-            // `border_width` so the border has room on the outer edge (center is already symmetric).
+            // `outline_width` so the outline has room on the outer edge (center is already
+            // symmetric).
             let pos_x = match style.align {
-                lua::TextAlign::Left => available.left() + border_width,
+                lua::TextAlign::Left => available.left() + outline_width,
                 lua::TextAlign::Center => available.center().x,
-                lua::TextAlign::Right => available.right() - border_width,
+                lua::TextAlign::Right => available.right() - outline_width,
             };
             let pos = egui::pos2(pos_x, available.center().y - galley.size().y / 2.0);
 
             let painter = ui.painter();
 
-            if let Some(border_color) = style.border_color {
-                let border_color = to_color32(border_color);
-                let count = text_font::outline_sample_count(style.border_width);
+            if let Some(outline_color) = style.outline_color {
+                let outline_color = to_color32(outline_color);
+                let count = text_font::outline_sample_count(style.outline_width);
                 for offset in text_font::outline_offsets(count) {
                     painter.galley_with_override_text_color(
-                        pos + offset * style.border_width,
+                        pos + offset * style.outline_width,
                         galley.clone(),
-                        border_color,
+                        outline_color,
                     );
                 }
             }

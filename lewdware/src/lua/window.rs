@@ -1,15 +1,14 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use mlua::{
-    ExternalError, ExternalResult, FromLua, IntoLua, LuaSerdeExt, SerializeOptions, UserData,
-    UserDataFields, UserDataMethods,
+    ExternalError, ExternalResult, FromLua, LuaSerdeExt, UserData, UserDataFields, UserDataMethods,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
     error::LewdwareError,
     lua::{
-        Media, PopupId, WindowProps,
+        DialogElementUpdate, Media, PopupId, WindowProps,
         api::{Anchor, Coord},
         request::WindowRequestSender,
     },
@@ -20,8 +19,7 @@ use crate::{
 pub enum Window {
     Image(Rc<ImageWindow>),
     Video(Rc<VideoWindow>),
-    Prompt(Rc<PromptWindow>),
-    Choice(Rc<ChoiceWindow>),
+    Dialog(Rc<DialogWindow>),
     Text(Rc<TextWindow>),
 }
 
@@ -30,8 +28,7 @@ impl Window {
         match self {
             Window::Image(image) => &image.inner_window,
             Window::Video(video) => &video.inner_window,
-            Window::Prompt(prompt) => &prompt.inner_window,
-            Window::Choice(choice) => &choice.inner_window,
+            Window::Dialog(dialog) => &dialog.inner_window,
             Window::Text(text) => &text.inner_window,
         }
     }
@@ -109,43 +106,44 @@ impl VideoWindow {
     }
 }
 
-pub struct PromptWindow {
+pub struct DialogWindow {
     inner_window: InnerWindow,
-    state: RefCell<PromptWindowState>,
+    state: RefCell<DialogWindowState>,
 }
 
-struct PromptWindowState {
-    text: Option<String>,
-    value: String,
+struct DialogWindowState {
+    click_callbacks: Vec<mlua::Function>,
     submit_callbacks: Vec<mlua::Function>,
 }
 
-impl PromptWindowState {
-    fn new(text: Option<String>, value: String) -> Self {
+impl DialogWindowState {
+    fn new() -> Self {
         Self {
-            text,
-            value,
+            click_callbacks: Vec::new(),
             submit_callbacks: Vec::new(),
         }
     }
 }
 
-impl UserData for PromptWindow {
+impl UserData for DialogWindow {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         InnerWindow::add_fields(fields);
 
-        fields.add_field("type", "prompt");
-
-        fields.add_field_method_get("text", |_, this| {
-            Ok(this.state.try_borrow().into_lua_err()?.text.clone())
-        });
-        fields.add_field_method_get("value", |_, this| {
-            Ok(this.state.try_borrow().into_lua_err()?.value.clone())
-        });
+        fields.add_field("type", "dialog");
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         InnerWindow::add_methods(methods);
+
+        methods.add_method("on_click", |_, this, cb: mlua::Function| {
+            this.state
+                .try_borrow_mut()
+                .into_lua_err()?
+                .click_callbacks
+                .push(cb);
+
+            Ok(())
+        });
 
         methods.add_method("on_submit", |_, this, cb: mlua::Function| {
             this.state
@@ -157,147 +155,62 @@ impl UserData for PromptWindow {
             Ok(())
         });
 
-        methods.add_method("set_text", |_, this, text: Option<String>| {
-            this.inner_window.request_sender.set_text(text.clone())?;
-
-            this.state.try_borrow_mut().into_lua_err()?.text = text;
-
-            Ok(())
+        // Nil if the window is closed -- documented as a deliberate exception to the usual
+        // no-op-returns-false convention, since "no values" (an empty table) is itself a
+        // meaningful reply for a still-open dialog with no input elements.
+        methods.add_method("values", |_, this, _: ()| {
+            Ok(this.inner_window.request_sender.get_dialog_values()?)
         });
 
-        methods.add_method("set_value", |_, this, value: Option<String>| {
-            this.inner_window.request_sender.set_value(value.clone())?;
-
-            this.state.try_borrow_mut().into_lua_err()?.value = value.unwrap_or_default();
-
-            Ok(())
+        // Nil for a closed window OR an id that isn't a live input element -- both just mean
+        // "no value to report" from the caller's perspective.
+        methods.add_method("value", |_, this, id: String| {
+            Ok(this.inner_window.request_sender.get_dialog_value(id)?)
         });
+
+        methods.add_method(
+            "update",
+            |_, this, (id, props): (String, DialogElementUpdate)| {
+                Ok(this
+                    .inner_window
+                    .request_sender
+                    .update_dialog_element(id, props)?)
+            },
+        );
     }
 }
 
-impl PromptWindow {
-    pub fn new(
-        props: WindowProps,
-        text: Option<String>,
-        value: String,
-        request_sender: WindowRequestSender,
-    ) -> Self {
+impl DialogWindow {
+    pub fn new(props: WindowProps, request_sender: WindowRequestSender) -> Self {
         Self {
             inner_window: InnerWindow::new(props, request_sender),
-            state: RefCell::new(PromptWindowState::new(text, value)),
+            state: RefCell::new(DialogWindowState::new()),
         }
     }
 
-    pub fn on_submit(&self, text: String) -> anyhow::Result<()> {
+    pub fn on_click(&self, button_id: String, values: HashMap<String, String>) -> anyhow::Result<()> {
         let callbacks = {
             let state = self.state.try_borrow()?;
-            state.submit_callbacks.clone()
+            state.click_callbacks.clone()
         };
 
         for cb in callbacks {
-            if let Err(err) = cb.call::<()>(text.clone()) {
+            if let Err(err) = cb.call::<()>((button_id.clone(), values.clone())) {
                 tracing::error!("{err}");
             }
         }
 
         Ok(())
     }
-}
 
-pub struct ChoiceWindow {
-    inner_window: InnerWindow,
-    state: RefCell<ChoiceWindowState>,
-}
-
-struct ChoiceWindowState {
-    text: Option<String>,
-    options: Vec<ChoiceWindowOption>,
-    select_callbacks: Vec<mlua::Function>,
-}
-
-impl ChoiceWindowState {
-    fn new(text: Option<String>, options: Vec<ChoiceWindowOption>) -> Self {
-        Self {
-            text,
-            options,
-            select_callbacks: Vec::new(),
-        }
-    }
-}
-
-impl UserData for ChoiceWindow {
-    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        InnerWindow::add_fields(fields);
-
-        fields.add_field("type", "choice");
-
-        fields.add_field_method_get("text", |_, this| {
-            Ok(this.state.try_borrow().into_lua_err()?.text.clone())
-        });
-        fields.add_field_method_get("options", |_, this| {
-            Ok(this.state.try_borrow().into_lua_err()?.options.clone())
-        });
-    }
-
-    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        InnerWindow::add_methods(methods);
-
-        methods.add_method("on_select", |_, this, cb: mlua::Function| {
-            this.state
-                .try_borrow_mut()
-                .into_lua_err()?
-                .select_callbacks
-                .push(cb);
-
-            Ok(())
-        });
-
-        methods.add_method("set_text", |_, this, text: Option<String>| {
-            this.inner_window.request_sender.set_text(text.clone())?;
-
-            this.state.try_borrow_mut().into_lua_err()?.text = text;
-
-            Ok(())
-        });
-
-        methods.add_method(
-            "set_options",
-            |_, this, options: Option<Vec<ChoiceWindowOption>>| {
-                let options = options.unwrap_or_default();
-
-                this.inner_window
-                    .request_sender
-                    .set_options(options.clone())?;
-
-                this.state.try_borrow_mut().into_lua_err()?.options = options;
-
-                Ok(())
-            },
-        );
-    }
-}
-
-impl ChoiceWindow {
-    pub fn new(
-        props: WindowProps,
-        text: Option<String>,
-        options: Vec<ChoiceWindowOption>,
-        request_sender: WindowRequestSender,
-    ) -> Self {
-        Self {
-            inner_window: InnerWindow::new(props, request_sender),
-            state: RefCell::new(ChoiceWindowState::new(text, options)),
-        }
-    }
-
-    pub fn on_select(&self, id: String) -> anyhow::Result<()> {
+    pub fn on_submit(&self, element_id: String, values: HashMap<String, String>) -> anyhow::Result<()> {
         let callbacks = {
             let state = self.state.try_borrow()?;
-            state.select_callbacks.clone()
+            state.submit_callbacks.clone()
         };
 
         for cb in callbacks {
-            if let Err(err) = cb.call::<()>(id.clone()) {
+            if let Err(err) = cb.call::<()>((element_id.clone(), values.clone())) {
                 tracing::error!("{err}");
             }
         }
@@ -350,24 +263,6 @@ impl TextWindow {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ChoiceWindowOption {
-    pub id: String,
-    pub label: String,
-}
-
-impl IntoLua for ChoiceWindowOption {
-    fn into_lua(self, lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
-        lua.to_value_with(&self, SerializeOptions::new().serialize_none_to_null(false))
-    }
-}
-
-impl FromLua for ChoiceWindowOption {
-    fn from_lua(value: mlua::Value, lua: &mlua::Lua) -> mlua::Result<Self> {
-        lua.from_value(value)
-    }
-}
-
 pub struct InnerWindow {
     id: PopupId,
     width: u32,
@@ -408,13 +303,7 @@ impl HasInnerWindow for VideoWindow {
     }
 }
 
-impl HasInnerWindow for PromptWindow {
-    fn inner_window(&self) -> &InnerWindow {
-        &self.inner_window
-    }
-}
-
-impl HasInnerWindow for ChoiceWindow {
+impl HasInnerWindow for DialogWindow {
     fn inner_window(&self) -> &InnerWindow {
         &self.inner_window
     }

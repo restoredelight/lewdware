@@ -64,18 +64,20 @@ impl<'de> Deserialize<'de> for Color {
     }
 }
 
+use rand::seq::IndexedRandom;
+
 use crate::{
     lua::{
         AudioHandles, Media, MediaData, MediaType, Window, Windows,
         audio::AudioHandle,
         interval::{Interval, Timer},
         request::RequestSender,
-        window::{
-            ChoiceWindow, ChoiceWindowOption, ImageWindow, PromptWindow, TextWindow, VideoWindow,
-        },
+        window::{DialogWindow, ImageWindow, TextWindow, VideoWindow},
     },
     media::{MediaManager, MediaTypes, TagFilter},
     monitor::Monitor,
+    utils::{calculate_media_popup_size, calculate_text_popup_size, random_position},
+    window::HEADER_HEIGHT,
 };
 
 pub fn create_api(
@@ -85,6 +87,7 @@ pub fn create_api(
     windows: Windows,
     audio_handles: AudioHandles,
     config: HashMap<String, OptionValue>,
+    gpu_available: bool,
 ) -> mlua::Result<()> {
     let api_table = lua.create_table()?;
 
@@ -202,14 +205,16 @@ pub fn create_api(
 
     api_table.set("media", media_table)?;
 
+    let popup_table = lua.create_table()?;
+
     {
         let request_sender = request_sender.clone();
         let windows = windows.clone();
 
-        api_table.set(
-            "spawn_image_popup",
+        popup_table.set(
+            "image",
             lua.create_function(move |lua, args| {
-                spawn_image_popup(lua, args, request_sender.clone(), windows.clone())
+                spawn_image_popup(lua, args, request_sender.clone(), windows.clone(), gpu_available)
             })?,
         )?;
     }
@@ -218,10 +223,10 @@ pub fn create_api(
         let request_sender = request_sender.clone();
         let windows = windows.clone();
 
-        api_table.set(
-            "spawn_video_popup",
+        popup_table.set(
+            "video",
             lua.create_function(move |lua, args| {
-                spawn_video_popup(lua, args, request_sender.clone(), windows.clone())
+                spawn_video_popup(lua, args, request_sender.clone(), windows.clone(), gpu_available)
             })?,
         )?;
     }
@@ -230,10 +235,10 @@ pub fn create_api(
         let request_sender = request_sender.clone();
         let windows = windows.clone();
 
-        api_table.set(
-            "spawn_prompt",
+        popup_table.set(
+            "text",
             lua.create_function(move |lua, args| {
-                spawn_prompt(lua, args, request_sender.clone(), windows.clone())
+                spawn_text_popup(lua, args, request_sender.clone(), windows.clone(), gpu_available)
             })?,
         )?;
     }
@@ -242,25 +247,15 @@ pub fn create_api(
         let request_sender = request_sender.clone();
         let windows = windows.clone();
 
-        api_table.set(
-            "spawn_choice",
+        popup_table.set(
+            "dialog",
             lua.create_function(move |lua, args| {
-                spawn_choice(lua, args, request_sender.clone(), windows.clone())
+                spawn_dialog(lua, args, request_sender.clone(), windows.clone(), gpu_available)
             })?,
         )?;
     }
 
-    {
-        let request_sender = request_sender.clone();
-        let windows = windows.clone();
-
-        api_table.set(
-            "spawn_text_popup",
-            lua.create_function(move |lua, args| {
-                spawn_text_popup(lua, args, request_sender.clone(), windows.clone())
-            })?,
-        )?;
-    }
+    api_table.set("popup", popup_table)?;
 
     {
         let media_manager = media_manager.clone();
@@ -673,6 +668,187 @@ impl Default for SpawnWindowOpts {
     }
 }
 
+/// A window's size, before it's known whether media dimensions, an explicit default, or a text
+/// measurement should drive it.
+pub enum WindowSizeBehaviour {
+    ResizeWithMedia {
+        width: u32,
+        height: u32,
+    },
+    UseDefaults {
+        width: u32,
+        height: u32,
+    },
+    MeasureText {
+        text: String,
+        font: TextFont,
+        font_size: FontSize,
+        outline_width: f32,
+    },
+}
+
+/// A `SpawnWindowOpts` resolved against a monitor snapshot. Sizes, anchor math and clamping are
+/// pure computation, so they happen here, on the Lua thread -- but a monitor's *current* absolute
+/// position can only be read on the main thread (winit's `MonitorHandle` isn't `Send`, and can
+/// change between this resolution and the window's actual, possibly much later, creation if
+/// media is still decoding). So this carries `monitor_id` rather than a resolved position;
+/// `LewdwareApp::finalize_window_opts` does that last step, fresh, right before the real window
+/// is built.
+#[derive(Debug, Clone)]
+pub struct PopupSpawnOpts {
+    pub monitor_id: u64,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub outer_width: u32,
+    pub outer_height: u32,
+    pub gpu: bool,
+    pub transparent: bool,
+    pub force_opaque: bool,
+    pub opacity: f32,
+    pub click_through: bool,
+    pub decorations: bool,
+    pub title: Option<String>,
+    pub closeable: bool,
+    pub background_color: Option<Color>,
+}
+
+impl PopupSpawnOpts {
+    pub fn resolve(
+        spawn_opts: SpawnWindowOpts,
+        size_behaviour: WindowSizeBehaviour,
+        monitor: &Monitor,
+        gpu_available: bool,
+        mut gpu: bool,
+        transparent: bool,
+    ) -> Self {
+        if !gpu_available {
+            gpu = false;
+        }
+        let transparent = transparent && gpu;
+        let force_opaque = spawn_opts.transparent == Some(false);
+
+        let monitor_width = monitor.width;
+        let monitor_height = monitor.height;
+
+        let (width, height) = match size_behaviour {
+            WindowSizeBehaviour::ResizeWithMedia { width, height } => calculate_media_popup_size(
+                spawn_opts.width,
+                spawn_opts.height,
+                width,
+                height,
+                monitor_width,
+                monitor_height,
+            ),
+            WindowSizeBehaviour::UseDefaults { width, height } => (
+                spawn_opts
+                    .width
+                    .map(|w| w.to_pixels(monitor_width).max(0) as u32)
+                    .unwrap_or(width),
+                spawn_opts
+                    .height
+                    .map(|h| h.to_pixels(monitor_height).max(0) as u32)
+                    .unwrap_or(height),
+            ),
+            WindowSizeBehaviour::MeasureText {
+                text,
+                font,
+                font_size,
+                outline_width,
+            } => calculate_text_popup_size(
+                spawn_opts.width.clone(),
+                spawn_opts.height.clone(),
+                &text,
+                font,
+                font_size.to_pixels(monitor_height),
+                outline_width,
+                monitor_width,
+                monitor_height,
+            ),
+        };
+
+        let (mut outer_width, mut outer_height) = (width, height);
+        if spawn_opts.decorations {
+            outer_width += 2;
+            outer_height += HEADER_HEIGHT + 2;
+        }
+
+        let x: i32 = {
+            let v = spawn_opts
+                .x
+                .map(|c| {
+                    spawn_opts
+                        .anchor
+                        .resolve(c.to_pixels(monitor_width), outer_width)
+                })
+                .unwrap_or_else(|| random_position(outer_width, monitor_width));
+            if spawn_opts.clamp {
+                v.max(0)
+                    .min(monitor_width.saturating_sub(outer_width) as i32)
+            } else {
+                v
+            }
+        };
+        let y: i32 = {
+            let v = spawn_opts
+                .y
+                .map(|c| {
+                    spawn_opts
+                        .anchor
+                        .resolve(c.to_pixels(monitor_height), outer_height)
+                })
+                .unwrap_or_else(|| random_position(outer_height, monitor_height));
+            if spawn_opts.clamp {
+                v.max(0)
+                    .min(monitor_height.saturating_sub(outer_height) as i32)
+            } else {
+                v
+            }
+        };
+
+        Self {
+            monitor_id: monitor.id,
+            x,
+            y,
+            width,
+            height,
+            outer_width,
+            outer_height,
+            gpu,
+            transparent,
+            force_opaque,
+            opacity: spawn_opts.opacity.unwrap_or(1.0),
+            click_through: spawn_opts.click_through,
+            decorations: spawn_opts.decorations,
+            title: spawn_opts.title,
+            closeable: spawn_opts.closeable,
+            background_color: spawn_opts.background_color,
+        }
+    }
+}
+
+/// Pick the monitor a popup should spawn on: the one the mode explicitly asked for (from an
+/// earlier `lewdware.monitors.list()`/`primary()` call), or a random one from a fresh
+/// `list_monitors()` snapshot. Either way, only `.id` is trusted past this point -- see
+/// `PopupSpawnOpts`'s doc comment.
+fn resolve_monitor(
+    spawn_opts: &SpawnWindowOpts,
+    request_sender: &RequestSender,
+) -> mlua::Result<Monitor> {
+    match &spawn_opts.monitor {
+        Some(monitor) => Ok(monitor.clone()),
+        None => {
+            let monitors = request_sender.list_monitors().into_lua_err()?;
+            let mut rng = rand::rng();
+            monitors
+                .choose(&mut rng)
+                .cloned()
+                .ok_or_else(|| mlua::Error::runtime("no monitors available"))
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextFont {
     #[serde(rename = "default")]
@@ -710,7 +886,7 @@ fn default_font_size() -> FontSize {
     FontSize::Value(32.0)
 }
 
-fn default_border_width() -> f32 {
+fn default_outline_width() -> f32 {
     2.0
 }
 
@@ -727,9 +903,9 @@ pub struct TextStyle {
     #[serde(default)]
     pub align: TextAlign,
     #[serde(default)]
-    pub border_color: Option<Color>,
-    #[serde(default = "default_border_width")]
-    pub border_width: f32,
+    pub outline_color: Option<Color>,
+    #[serde(default = "default_outline_width")]
+    pub outline_width: f32,
 }
 
 impl Default for TextStyle {
@@ -740,8 +916,8 @@ impl Default for TextStyle {
             color: default_text_color(),
             bold: false,
             align: TextAlign::default(),
-            border_color: None,
-            border_width: default_border_width(),
+            outline_color: None,
+            outline_width: default_outline_width(),
         }
     }
 }
@@ -765,10 +941,41 @@ fn spawn_text_popup(
     (text, opts): (String, Option<SpawnTextOpts>),
     request_sender: RequestSender,
     windows: Windows,
+    gpu_available: bool,
 ) -> mlua::Result<Rc<TextWindow>> {
-    let opts = opts.unwrap_or_default();
+    let mut opts = opts.unwrap_or_default();
 
-    let props = request_sender.spawn_text(text.clone(), opts.style, opts.window_opts)?;
+    let monitor = resolve_monitor(&opts.window_opts, &request_sender)?;
+
+    // Unlike other popup types, text defaults to a transparent (GPU-rendered) window, since
+    // text is usually meant to float over the desktop rather than sit in an opaque panel.
+    let transparent = opts.window_opts.transparent.unwrap_or(true);
+
+    // Resolve a percentage font size to a concrete point size now that the monitor (and so its
+    // height, the basis for `FontSize::Percent`) is known. From here on `font_size` is always
+    // `FontSize::Value`.
+    opts.style.font_size = FontSize::Value(opts.style.font_size.to_pixels(monitor.height));
+    let outline_width = if opts.style.outline_color.is_some() {
+        opts.style.outline_width
+    } else {
+        0.0
+    };
+
+    let window_opts = PopupSpawnOpts::resolve(
+        opts.window_opts,
+        WindowSizeBehaviour::MeasureText {
+            text: text.clone(),
+            font: opts.style.font,
+            font_size: opts.style.font_size,
+            outline_width,
+        },
+        &monitor,
+        gpu_available,
+        transparent,
+        transparent,
+    );
+
+    let props = request_sender.spawn_text(text.clone(), opts.style, window_opts)?;
 
     let id = props.window_id;
 
@@ -803,6 +1010,7 @@ fn spawn_image_popup(
     (image, opts): (Media, Option<SpawnImageOpts>),
     request_sender: RequestSender,
     windows: Windows,
+    gpu_available: bool,
 ) -> mlua::Result<Rc<ImageWindow>> {
     let mut opts = opts.unwrap_or_default();
 
@@ -824,11 +1032,24 @@ fn spawn_image_popup(
         }
     }
 
-    // Monitor pick, size resolution, and the actual (slow) decode all now happen on the main
-    // thread, which acks the spawn — with a fully accurate `WindowProps` — before the decode
-    // even starts. See `App::spawn_image` in `app.rs`.
-    let props =
-        request_sender.spawn_image(image.id, image_width, image_height, opts.window_opts)?;
+    let monitor = resolve_monitor(&opts.window_opts, &request_sender)?;
+    let transparent = opts.window_opts.transparent.unwrap_or(false);
+    let window_opts = PopupSpawnOpts::resolve(
+        opts.window_opts,
+        WindowSizeBehaviour::ResizeWithMedia {
+            width: image_width,
+            height: image_height,
+        },
+        &monitor,
+        gpu_available,
+        transparent,
+        transparent,
+    );
+
+    // Monitor pick and size resolution happen here, on the Lua thread; only the actual window
+    // creation and (slow) decode happen on the main thread, which still acks the spawn — with a
+    // fully accurate `WindowProps` — before the decode even starts. See `App::spawn_image`.
+    let props = request_sender.spawn_image(image.id, window_opts)?;
 
     let id = props.window_id;
 
@@ -882,6 +1103,7 @@ fn spawn_video_popup(
     (video, opts): (Media, Option<SpawnVideoOpts>),
     request_sender: RequestSender,
     windows: Windows,
+    gpu_available: bool,
 ) -> mlua::Result<Rc<VideoWindow>> {
     let mut opts = opts.unwrap_or_default();
 
@@ -904,16 +1126,25 @@ fn spawn_video_popup(
         }
     }
 
-    // As with images, monitor pick / size resolution / decode all happen on the main thread
-    // now — see `App::spawn_video` in `app.rs`.
-    let props = request_sender.spawn_video(
-        video.id,
-        video_width,
-        video_height,
-        opts.loop_video,
-        opts.audio,
+    let monitor = resolve_monitor(&opts.window_opts, &request_sender)?;
+    let transparent = opts.window_opts.transparent.unwrap_or(false);
+    // Always wants GPU rendering (unlike images, not conditional on transparency) -- see the
+    // original comment on `App::spawn_video`.
+    let window_opts = PopupSpawnOpts::resolve(
         opts.window_opts,
-    )?;
+        WindowSizeBehaviour::ResizeWithMedia {
+            width: video_width,
+            height: video_height,
+        },
+        &monitor,
+        gpu_available,
+        true,
+        transparent,
+    );
+
+    // As with images, monitor pick / size resolution happen here, on the Lua thread; only the
+    // actual window creation / decode happen on the main thread -- see `App::spawn_video`.
+    let props = request_sender.spawn_video(video.id, opts.loop_video, opts.audio, window_opts)?;
 
     let id = props.window_id;
 
@@ -931,92 +1162,161 @@ fn spawn_video_popup(
     Ok(window)
 }
 
-#[derive(Serialize, Deserialize, Default)]
-struct SpawnPromptOpts {
-    text: Option<String>,
-    placeholder: Option<String>,
-    initial_value: Option<String>,
-    #[serde(flatten)]
-    window_opts: SpawnWindowOpts,
-}
-
-impl FromLua for SpawnPromptOpts {
-    fn from_lua(value: mlua::Value, lua: &Lua) -> mlua::Result<Self> {
-        lua.from_value(value)
-    }
-}
-
-fn spawn_prompt(
-    _: &Lua,
-    opts: Option<SpawnPromptOpts>,
-    request_sender: RequestSender,
-    windows: Windows,
-) -> mlua::Result<Rc<PromptWindow>> {
-    let opts = opts.unwrap_or_default();
-
-    let props = request_sender.spawn_prompt(
-        opts.text.clone(),
-        opts.placeholder,
-        opts.initial_value.clone(),
-        opts.window_opts,
-    )?;
-
-    let id = props.window_id;
-
-    let window = Rc::new(PromptWindow::new(
-        props,
-        opts.text,
-        opts.initial_value.unwrap_or_default(),
-        request_sender.window_sender(id),
-    ));
-
-    windows
-        .try_borrow_mut()
-        .into_lua_err()?
-        .insert(id, Window::Prompt(window.clone()));
-
-    Ok(window)
-}
-
-#[derive(Serialize, Deserialize, Default)]
-struct SpawnChoiceOpts {
-    text: Option<String>,
+/// A button offered by a `ButtonsElement`. `default` marks the button that pressing Enter in an
+/// input element acts as a click on — at most one per dialog, checked in `spawn_dialog`/
+/// `update_dialog_element`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DialogButton {
+    pub id: String,
+    pub label: String,
     #[serde(default)]
-    options: Vec<ChoiceWindowOption>,
-    #[serde(flatten)]
-    window_opts: SpawnWindowOpts,
+    pub default: bool,
 }
 
-impl FromLua for SpawnChoiceOpts {
+impl FromLua for DialogButton {
     fn from_lua(value: mlua::Value, lua: &Lua) -> mlua::Result<Self> {
         lua.from_value(value)
     }
 }
 
-fn spawn_choice(
+/// One element of a dialog's vertical stack. Mirrors `TextElement`/`ImageElement`/
+/// `InputElement`/`ButtonsElement` in the v1 draft — a deliberately closed vocabulary.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "type")]
+pub enum DialogElement {
+    #[serde(rename = "text")]
+    Text {
+        id: Option<String>,
+        text: String,
+        #[serde(flatten)]
+        style: TextStyle,
+    },
+    #[serde(rename = "image")]
+    Image { id: Option<String>, image: Media },
+    #[serde(rename = "input")]
+    Input {
+        id: String,
+        placeholder: Option<String>,
+        initial_value: Option<String>,
+    },
+    #[serde(rename = "buttons")]
+    Buttons {
+        id: Option<String>,
+        #[serde(default)]
+        options: Vec<DialogButton>,
+    },
+}
+
+impl FromLua for DialogElement {
+    fn from_lua(value: mlua::Value, lua: &Lua) -> mlua::Result<Self> {
+        lua.from_value(value)
+    }
+}
+
+/// A partial update to one dialog element, via `DialogWindow:update(id, props)`. Fields not
+/// relevant to the target element's type are ignored. `image` updates aren't supported yet (the
+/// release plan's cut line already flags dialog image polish as a first-to-cut item) — the
+/// element keeps its original image.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct DialogElementUpdate {
+    pub text: Option<String>,
+    pub font: Option<TextFont>,
+    pub font_size: Option<FontSize>,
+    pub color: Option<Color>,
+    pub bold: Option<bool>,
+    pub align: Option<TextAlign>,
+    pub outline_color: Option<Color>,
+    pub outline_width: Option<f32>,
+    pub placeholder: Option<String>,
+    pub value: Option<String>,
+    pub options: Option<Vec<DialogButton>>,
+}
+
+impl FromLua for DialogElementUpdate {
+    fn from_lua(value: mlua::Value, lua: &Lua) -> mlua::Result<Self> {
+        lua.from_value(value)
+    }
+}
+
+fn dialog_has_more_than_one_default_button(elements: &[DialogElement]) -> bool {
+    elements
+        .iter()
+        .filter_map(|element| match element {
+            DialogElement::Buttons { options, .. } => {
+                Some(options.iter().filter(|o| o.default).count())
+            }
+            _ => None,
+        })
+        .sum::<usize>()
+        > 1
+}
+
+#[derive(Serialize, Deserialize)]
+struct SpawnDialogOpts {
+    elements: Vec<DialogElement>,
+    #[serde(flatten)]
+    window_opts: SpawnWindowOpts,
+}
+
+impl FromLua for SpawnDialogOpts {
+    fn from_lua(value: mlua::Value, lua: &Lua) -> mlua::Result<Self> {
+        lua.from_value(value)
+    }
+}
+
+fn spawn_dialog(
     _: &Lua,
-    opts: Option<SpawnChoiceOpts>,
+    opts: SpawnDialogOpts,
     request_sender: RequestSender,
     windows: Windows,
-) -> mlua::Result<Rc<ChoiceWindow>> {
-    let opts = opts.unwrap_or_default();
+    gpu_available: bool,
+) -> mlua::Result<Rc<DialogWindow>> {
+    if dialog_has_more_than_one_default_button(&opts.elements) {
+        return Err(mlua::Error::runtime(
+            "at most one button in a dialog may be marked `default`",
+        ));
+    }
 
-    let props =
-        request_sender.spawn_choice(opts.text.clone(), opts.options.clone(), opts.window_opts)?;
+    // Validated here (rather than deep in `app.rs`) so the rest of the spawn/decode pipeline can
+    // assume every `image` element's `Media` is actually an image.
+    for element in &opts.elements {
+        if let DialogElement::Image { image, .. } = element {
+            let type_name = match image.media_data {
+                MediaData::Image { .. } => continue,
+                MediaData::Video { .. } => "video",
+                MediaData::Audio { .. } => "audio",
+            };
+            return Err(mlua::Error::runtime(format!(
+                "dialog image element's `image` must be an image, not {type_name}"
+            )));
+        }
+    }
+
+    let monitor = resolve_monitor(&opts.window_opts, &request_sender)?;
+    let auto_transparent = opts.window_opts.opacity.is_some_and(|o| o < 1.0);
+    let transparent = opts.window_opts.transparent.unwrap_or(auto_transparent);
+    let window_opts = PopupSpawnOpts::resolve(
+        opts.window_opts,
+        WindowSizeBehaviour::UseDefaults {
+            width: 400,
+            height: 400,
+        },
+        &monitor,
+        gpu_available,
+        transparent,
+        transparent,
+    );
+
+    let props = request_sender.spawn_dialog(opts.elements, window_opts)?;
 
     let id = props.window_id;
 
-    let window = Rc::new(ChoiceWindow::new(
-        props,
-        opts.text,
-        opts.options.clone(),
-        request_sender.window_sender(id),
-    ));
+    let window = Rc::new(DialogWindow::new(props, request_sender.window_sender(id)));
 
     windows
         .try_borrow_mut()
         .into_lua_err()?
-        .insert(id, Window::Choice(window.clone()));
+        .insert(id, Window::Dialog(window.clone()));
 
     Ok(window)
 }
