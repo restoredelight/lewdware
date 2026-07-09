@@ -38,7 +38,6 @@ export default defineConfig({
 					items: [
 						{ label: "Create a pack", slug: "dev-guides/create-pack" },
 						{ label: "Create a mode", slug: "dev-guides/create-mode" },
-						{ label: "Managing mode tasks", slug: "dev-guides/mode-tasks" },
 					],
 				},
 				{

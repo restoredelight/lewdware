@@ -8,6 +8,7 @@
   let newTag = $state("");
   let editingName = $state(false);
   let nameValue = $state("");
+  let nameError = $state<string | null>(null);
 
   $effect(() => {
     if (file) nameValue = file.file_name;
@@ -18,6 +19,7 @@
   function close() {
     store.openedId = null;
     editingName = false;
+    nameError = null;
   }
 
   function navigate(dir: -1 | 1) {
@@ -29,9 +31,16 @@
 
   async function saveName() {
     if (!file || !nameValue.trim()) return;
-    await api.setFileTitle(file.id, nameValue.trim());
-    store.updateFileName(file.id, nameValue.trim());
-    editingName = false;
+    try {
+      await api.setFileTitle(file.id, nameValue.trim());
+      store.updateFileName(file.id, nameValue.trim());
+      editingName = false;
+      nameError = null;
+    } catch (err) {
+      // Stay in edit mode so the user can pick a different name -- reverting to the old
+      // name here would silently discard what they just typed.
+      nameError = String(err);
+    }
   }
 
   async function addTag() {
@@ -167,8 +176,11 @@
             bind:value={nameValue}
             class="text-sm font-medium border border-accent rounded px-1.5 py-0.5 w-full focus:outline-none"
             onblur={saveName}
-            onkeydown={(e) => { if (e.key === "Enter") saveName(); if (e.key === "Escape") { editingName = false; nameValue = file!.file_name; } }}
+            onkeydown={(e) => { if (e.key === "Enter") saveName(); if (e.key === "Escape") { editingName = false; nameError = null; nameValue = file!.file_name; } }}
           />
+          {#if nameError}
+            <p class="text-xs text-red-600">{nameError}</p>
+          {/if}
         {:else}
           <button
             class="text-sm font-medium text-text text-left hover:text-accent break-all leading-snug"

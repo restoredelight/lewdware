@@ -151,18 +151,13 @@ local function open_popup(spawn_opts, close_trigger)
 	if not should_spawn() then return end
 
 	local media = lewdware.media.random({ type = popup_types })
-	if not media or not should_spawn() then return end
+	if not media then return end
 
 	local window
 	if media.type == "image" then
-		window = lewdware.spawn_image_popup(media, spawn_opts)
+		window = lewdware.popup.image(media, spawn_opts)
 	elseif media.type == "video" then
-		window = lewdware.spawn_video_popup(media, spawn_opts)
-	end
-
-	if not should_spawn() then
-		window:close()
-		return
+		window = lewdware.popup.video(media, spawn_opts)
 	end
 
 	popup_count = popup_count + 1
@@ -235,15 +230,11 @@ spawn_audio = function()
 	local audio = lewdware.media.random_audio()
 	if not audio then return end
 
-	local ok, result = pcall(lewdware.play_audio, audio)
-	if ok then
-		result:on_finish(function()
-			spawn_audio()
-		end)
-	else
-		lewdware.after(100, spawn_audio)
-		error(result, 0)
-	end
+	-- No pcall needed: play_audio() always returns a handle immediately. If playback turns out
+	-- to be impossible, the handle becomes finished shortly after and on_finish still fires,
+	-- naturally continuing this loop.
+	local handle = lewdware.play_audio(audio)
+	handle:on_finish(spawn_audio)
 end
 
 -- ── Dormancy ───────────────────────────────────────────────────────────────

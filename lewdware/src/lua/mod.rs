@@ -1,10 +1,12 @@
 mod api;
 mod audio;
+mod dev_log;
 mod interval;
 mod media;
 mod mode;
 mod request;
 mod storage;
+mod watchdog;
 mod window;
 
 use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, sync::Arc, thread};
@@ -12,7 +14,7 @@ use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, syn
 use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
-    mode::{OptionValue, VERSION_MAJOR, read_mode_metadata},
+    mode::{VERSION_MAJOR, read_mode_metadata},
     user_config::AppConfig,
 };
 use tokio::{
@@ -59,7 +61,10 @@ pub enum Event {
     AudioFinish {
         id: u64,
     },
-    DialogClick {
+    WindowClicked {
+        id: PopupId,
+    },
+    DialogSelect {
         id: PopupId,
         button_id: String,
         values: HashMap<String, String>,
@@ -159,6 +164,7 @@ pub fn start_lua_thread(
     media_manager: MediaManager,
     pack_info: PackInfo,
     gpu_available: bool,
+    dev_mode: bool,
 ) -> (
     UnboundedSender<Event>,
     std::sync::mpsc::Receiver<LuaRequest>,
@@ -281,10 +287,14 @@ pub fn start_lua_thread(
             mode,
             RequestSender::new(request_tx, event_poster),
             media_manager,
-            pack_info,
             storage,
-            mode_config,
-            gpu_available,
+            api::ApiOptions {
+                pack_info,
+                config: mode_config,
+                gpu_available,
+                dev_mode,
+            },
+            dev_mode,
         ) {
             Ok(x) => Rc::new(x),
             Err(err) => {
@@ -382,12 +392,15 @@ impl LuaRuntime {
         mode: Mode,
         request_tx: RequestSender,
         media_manager: MediaManager,
-        pack_info: Option<PackInfo>,
         storage: storage::Storage,
-        config: HashMap<String, OptionValue>,
-        gpu_available: bool,
+        options: api::ApiOptions,
+        dev_mode: bool,
     ) -> anyhow::Result<Self> {
         let lua = create_sandboxed_lua()?;
+
+        if dev_mode {
+            watchdog::install(&lua)?;
+        }
 
         let mut runtime = Self {
             mode: Rc::new(mode),
@@ -399,7 +412,7 @@ impl LuaRuntime {
             lua,
         };
 
-        runtime.create_api(pack_info, config, gpu_available)?;
+        runtime.create_api(options)?;
 
         Ok(runtime)
     }
@@ -440,7 +453,12 @@ impl LuaRuntime {
                     audio.on_finish()?;
                 }
             }
-            Event::DialogClick {
+            Event::WindowClicked { id } => {
+                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
+                    window.inner_window().on_click()?;
+                }
+            }
+            Event::DialogSelect {
                 id,
                 button_id,
                 values,
@@ -448,9 +466,9 @@ impl LuaRuntime {
                 if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
                     match window {
                         Window::Dialog(dialog) => {
-                            dialog.on_click(button_id, values)?;
+                            dialog.on_select(button_id, values)?;
                         }
-                        _ => bail!("Dialog click event for a non-dialog window"),
+                        _ => bail!("Dialog select event for a non-dialog window"),
                     }
                 }
             }
@@ -473,12 +491,7 @@ impl LuaRuntime {
         Ok(())
     }
 
-    fn create_api(
-        &mut self,
-        pack_info: Option<PackInfo>,
-        config: HashMap<String, OptionValue>,
-        gpu_available: bool,
-    ) -> mlua::Result<()> {
+    fn create_api(&mut self, options: api::ApiOptions) -> mlua::Result<()> {
         create_api(
             &self.lua,
             self.request_sender.clone(),
@@ -486,11 +499,7 @@ impl LuaRuntime {
             self.windows.clone(),
             self.audio_handles.clone(),
             self.storage.clone(),
-            api::ApiOptions {
-                pack_info,
-                config,
-                gpu_available,
-            },
+            options,
         )?;
 
         self.lua
@@ -806,6 +815,9 @@ mod tests {
                         WindowAction::SetVideoVolume { tx, .. } => {
                             let _ = tx.send(Ok(()));
                         }
+                        WindowAction::SetVideoLoop { tx, .. } => {
+                            let _ = tx.send(Ok(()));
+                        }
                         WindowAction::SetText { tx, .. } => {
                             let _ = tx.send(Ok(()));
                         }
@@ -906,9 +918,13 @@ mod tests {
                     mode,
                     request_sender,
                     media_manager,
-                    None,
                     storage,
-                    HashMap::new(),
+                    api::ApiOptions {
+                        pack_info: None,
+                        config: HashMap::new(),
+                        gpu_available: false,
+                        dev_mode: false,
+                    },
                     false,
                 )
                 .unwrap(),
@@ -1022,6 +1038,35 @@ mod tests {
                             assert(count({ none = { "blue" } }) == 0, "none excludes")
                             assert(count({ none = { "unknown" } }) == 1, "unknown none tag excludes nothing")
                             assert(count({ any = { "red" }, none = { "blue" } }) == 0, "fields combine")
+                        "#,
+                    )],
+                    true,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn media_tags_and_list_tags() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local image = lewdware.media.get_image("pic.avif")
+                            table.sort(image.tags)
+                            assert(#image.tags == 2, "expected 2 tags, got " .. #image.tags)
+                            assert(image.tags[1] == "blue")
+                            assert(image.tags[2] == "red")
+
+                            local tags = lewdware.media.list_tags()
+                            table.sort(tags)
+                            assert(#tags == 2, "expected the pack's full vocabulary")
+                            assert(tags[1] == "blue")
+                            assert(tags[2] == "red")
                         "#,
                     )],
                     true,
@@ -1211,9 +1256,13 @@ mod tests {
                     mode,
                     request_sender,
                     media_manager,
-                    Some(pack_info),
                     storage,
-                    HashMap::new(),
+                    api::ApiOptions {
+                        pack_info: Some(pack_info),
+                        config: HashMap::new(),
+                        gpu_available: false,
+                        dev_mode: false,
+                    },
                     false,
                 )
                 .unwrap();
@@ -1232,6 +1281,60 @@ mod tests {
                         .unwrap(),
                     pack_id.to_string()
                 );
+            })
+            .await;
+    }
+
+    /// Exercises the dev-mode no-op logging path (execution model rule 3) for real, inside an
+    /// actual `LuaRuntime` -- not just `watchdog.rs`'s isolated `Lua::new()` tests. The main risk
+    /// here isn't the logging itself (fire-and-forget, can't be observed without a tracing
+    /// subscriber -- which is racy across parallel test threads, see `watchdog.rs`'s test module
+    /// doc comment) but whether `dev_log::log_noop`'s `Lua::inspect_stack` call could itself
+    /// error or panic inside a real callback and turn a no-op into a hard failure.
+    #[tokio::test(start_paused = true)]
+    async fn dev_mode_no_op_logging_does_not_break_the_call() {
+        LocalSet::new()
+            .run_until(async {
+                let pack_file = pack_fixture(false);
+                let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
+
+                let (media_manager, _metadata, _pack_id, _handle) =
+                    MediaManager::open(pack_file.path(), event_poster.clone(), None).unwrap();
+
+                // Timer:stop() never touches the request sender, so this can go nowhere -- no
+                // fake handler thread needed for this test.
+                let (request_tx, _request_rx) = std::sync::mpsc::sync_channel(20);
+                let request_sender = RequestSender::new(request_tx, event_poster);
+
+                let mode = make_mode(&[(
+                    "main.lua",
+                    r#"
+                        local timer = lewdware.after(1000, function() end)
+                        assert(timer:stop() == true, "first stop should succeed")
+                        assert(timer:stop() == false, "second stop is a no-op, logged in dev mode")
+                    "#,
+                )]);
+
+                let storage_dir = tempfile::tempdir().unwrap();
+                let storage =
+                    storage::Storage::open_at(storage_dir.path().join("test.db")).unwrap();
+
+                let runtime = LuaRuntime::new(
+                    mode,
+                    request_sender,
+                    media_manager,
+                    storage,
+                    api::ApiOptions {
+                        pack_info: None,
+                        config: HashMap::new(),
+                        gpu_available: false,
+                        dev_mode: true,
+                    },
+                    true,
+                )
+                .unwrap();
+
+                runtime.run_entrypoint("main.lua".to_string()).unwrap();
             })
             .await;
     }
@@ -1392,6 +1495,37 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn video_window_set_loop_succeeds() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local video = {
+                                id = 0,
+                                name = "test",
+                                type = "video",
+                                width = 64,
+                                height = 64,
+                                duration = 1.0,
+                                transparent = false,
+                            }
+                            local window = lewdware.popup.video(video)
+                            assert(window:set_loop(false) == true)
+                            assert(window:close() == true)
+                            assert(window:set_loop(true) == false, "set_loop on a closed window is a no-op")
+                        "#,
+                    )],
+                    false,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn video_window_set_volume_succeeds() {
         LocalSet::new()
             .run_until(async {
@@ -1430,20 +1564,90 @@ mod tests {
                         r#"
                             local image = lewdware.media.get_image("pic.avif")
                             local window = lewdware.popup.image(image)
-                            window:close()
-                            -- Closing twice is documented as a safe no-op.
-                            window:close()
 
-                            local ok = pcall(function()
-                                window:set_opacity(0.5)
-                            end)
-                            assert(not ok, "acting on a closed window should currently error")
+                            -- Registering on a still-open window returns true (contrast with the
+                            -- closed-window case below).
+                            assert(window:on_close(function() end) == true, "on_close on open window")
+                            assert(window:on_spawn(function() end) == true, "on_spawn on open window")
+
+                            assert(window:close() == true, "closing an open window returns true")
+
+                            -- `.closed` and on_close()/on_spawn()'s no-op behavior take effect
+                            -- immediately, synchronously with close() -- not only once the
+                            -- WindowClosed event this also triggers is later processed.
+                            assert(window.closed == true, "closed flips synchronously with close()")
+
+                            assert(
+                                window:close() == false,
+                                "closing an already-closed window is a no-op returning false"
+                            )
+
+                            -- Acting on a closed window is a no-op that returns false, not an
+                            -- error -- matching AudioHandle's finished convention.
+                            assert(window:set_opacity(0.5) == false)
+                            assert(window:set_title("new title") == false)
+                            assert(window:move({ x = 10 }) == false)
+                            assert(window:fade({ opacity = 0.5 }) == false)
+
+                            -- Registering a callback on an already-closed window is also a no-op:
+                            -- it returns false and never runs cb.
+                            local ran = false
+                            assert(window:on_close(function() ran = true end) == false)
+                            assert(window:on_spawn(function() ran = true end) == false)
+                            assert(not ran)
                         "#,
                     )],
                     true,
                 );
 
                 harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    /// Exercises the Lua-facing side of `Window:on_click()`: registration, fan-out to multiple
+    /// callbacks (fires every time, unlike `on_spawn`), and the no-op-on-closed convention.
+    /// `WindowClicked` events are injected manually here -- the actual physical hit-testing (press
+    /// + release inside the content area, decorations excluded) lives in the winit/egui rendering
+    /// layer (`window/inner_window.rs`, `window/window_type.rs`), which this Lua-only harness
+    /// doesn't exercise.
+    #[tokio::test(start_paused = true)]
+    async fn window_on_click_fires_and_is_a_no_op_when_closed() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[
+                        (
+                            "main.lua",
+                            r#"
+                                local image = lewdware.media.get_image("pic.avif")
+                                WINDOW = lewdware.popup.image(image)
+                                CLICKS = 0
+
+                                assert(WINDOW:on_click(function() CLICKS = CLICKS + 1 end) == true)
+                                assert(WINDOW:on_click(function() CLICKS = CLICKS + 1 end) == true)
+                            "#,
+                        ),
+                        (
+                            "after_clicks.lua",
+                            r#"
+                                assert(CLICKS == 4, "both callbacks should fire on every click")
+
+                                assert(WINDOW:close() == true)
+                                assert(WINDOW:on_click(function() CLICKS = CLICKS + 1 end) == false)
+                            "#,
+                        ),
+                    ],
+                    true,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+
+                harness.send_event(Event::WindowClicked { id: PopupId(0) });
+                harness.send_event(Event::WindowClicked { id: PopupId(0) });
+                harness.pump_events();
+
+                harness.run_entrypoint("after_clicks.lua").unwrap();
             })
             .await;
     }
@@ -1514,7 +1718,7 @@ mod tests {
 
     /// Exercises the `lewdware.popup.dialog()` binding end to end: `values()`/`value()` reflect
     /// `initial_value`, `update()` changes a live value (and reports whether the target id
-    /// existed), and `on_click`/`on_submit` (fired here via manually injected events, since the
+    /// existed), and `on_select`/`on_submit` (fired here via manually injected events, since the
     /// fake handler doesn't model real button clicks/Enter presses) receive the button/element id
     /// alongside a snapshot of every input's current value.
     #[tokio::test(start_paused = true)]
@@ -1538,7 +1742,7 @@ mod tests {
                                 })
 
                                 CLICKS = {}
-                                DIALOG:on_click(function(button_id, values)
+                                DIALOG:on_select(function(button_id, values)
                                     table.insert(CLICKS, { button_id, values.name })
                                 end)
 
@@ -1564,7 +1768,7 @@ mod tests {
                         (
                             "check_callbacks.lua",
                             r#"
-                                assert(#CLICKS == 1, "on_click should have fired once")
+                                assert(#CLICKS == 1, "on_select should have fired once")
                                 assert(CLICKS[1][1] == "yes")
                                 assert(CLICKS[1][2] == "Alice", "click payload carries live values")
 
@@ -1581,7 +1785,7 @@ mod tests {
 
                 harness.run_entrypoint("check_values.lua").unwrap();
 
-                harness.send_event(Event::DialogClick {
+                harness.send_event(Event::DialogSelect {
                     id: PopupId(0),
                     button_id: "yes".to_string(),
                     values: HashMap::from([("name".to_string(), "Alice".to_string())]),

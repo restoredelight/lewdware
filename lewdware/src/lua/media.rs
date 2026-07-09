@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub struct Media {
     pub id: u64,
     pub name: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
     #[serde(flatten)]
     pub media_data: MediaData,
 }

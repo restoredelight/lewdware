@@ -1,8 +1,13 @@
+export interface AliasVariant {
+	value: string; // e.g. '"linear"'
+	desc?: string; // e.g. the "Ubuntu-Light, matching..." text after `"default"` in TextFont
+}
+
 export interface Alias {
 	name: string;
 	desc?: string;
 	type?: string; // simple type, e.g. "number | { percent: number }"
-	variants?: string[]; // union literal values, e.g. ['"linear"', '"ease_in"', ...]
+	variants?: AliasVariant[];
 }
 
 export interface Field {
@@ -19,6 +24,12 @@ export interface Param {
 	desc?: string;
 }
 
+// A description as a sequence of blocks -- a blank doc-comment line starts a new paragraph, and a
+// fenced ```lang ... ``` block is preserved verbatim (for syntax highlighting) instead of being
+// reflowed. Consecutive non-blank lines within a paragraph are joined with spaces, since they're
+// just word-wrapped for source readability, not meaningful line breaks.
+export type DescBlock = { type: 'paragraph'; text: string } | { type: 'code'; lang: string; code: string };
+
 export interface Func {
 	name: string;
 	fullName: string; // e.g. "lewdware.spawn_image_popup" or "Window:close"
@@ -26,14 +37,13 @@ export interface Func {
 	sep?: '.' | ':';
 	params: Param[];
 	returnType?: string;
-	desc?: string;
-	async: boolean; // set by an `@async` annotation — the call is non-blocking
+	desc: DescBlock[];
 }
 
 export interface Class {
 	name: string;
-	parent?: string;
-	desc?: string;
+	parents: string[];
+	desc: DescBlock[];
 	fields: Field[];
 	methods: Func[];
 }
@@ -90,11 +100,25 @@ function getBlocks(source: string): Block[] {
 //   - indented (starts with a space, meaning the `---` was followed by spaces), OR
 //   - part of an open bracket group from a previous line (e.g. the closing `}` in
 //     a multiline `---@param opts? {\n---   key: type,\n---}` block)
+// Lines inside a fenced ```lang ... ``` code block are passed through verbatim and never merged
+// or bracket-tracked -- indentation and braces there are code formatting, not continuation markup.
 function joinContinuations(lines: string[]): string[] {
 	const result: string[] = [];
 	let openDepth = 0;
+	let inFence = false;
 
 	for (const line of lines) {
+		if (/^```(\w*)\s*$/.test(line)) {
+			inFence = !inFence;
+			result.push(line);
+			continue;
+		}
+
+		if (inFence) {
+			result.push(line);
+			continue;
+		}
+
 		if ((openDepth > 0 || line.startsWith(' ')) && result.length > 0) {
 			result[result.length - 1] += ' ' + line.trim();
 		} else {
@@ -152,6 +176,63 @@ function readType(s: string): { type: string; rest: string } {
 }
 
 // ---------------------------------------------------------------------------
+// Description blocks -- paragraphs and fenced code blocks
+// ---------------------------------------------------------------------------
+
+// `lines` is a run of doc-comment lines (blank lines included) with all `@tag` lines already
+// excluded by the caller.
+function parseDescriptionBlocks(lines: string[]): DescBlock[] {
+	const blocks: DescBlock[] = [];
+	let paragraph: string[] = [];
+	let codeLines: string[] | null = null;
+	let codeLang = '';
+
+	function flushParagraph() {
+		if (paragraph.length > 0) {
+			blocks.push({ type: 'paragraph', text: paragraph.join(' ') });
+			paragraph = [];
+		}
+	}
+
+	for (const line of lines) {
+		const fence = line.match(/^```(\w*)\s*$/);
+
+		if (codeLines) {
+			if (fence && !fence[1]) {
+				blocks.push({ type: 'code', lang: codeLang, code: codeLines.join('\n') });
+				codeLines = null;
+			} else {
+				codeLines.push(line);
+			}
+			continue;
+		}
+
+		if (fence) {
+			flushParagraph();
+			codeLines = [];
+			// Every fenced block in this API reference is Lua; default to that rather than an
+			// unregistered Shiki language if a fence is ever left unlabeled.
+			codeLang = fence[1] || 'lua';
+			continue;
+		}
+
+		if (line === '') {
+			flushParagraph();
+			continue;
+		}
+
+		paragraph.push(line);
+	}
+
+	flushParagraph();
+	// An unterminated fence shouldn't happen, but flush whatever was gathered rather than
+	// silently dropping it.
+	if (codeLines) blocks.push({ type: 'code', lang: codeLang, code: codeLines.join('\n') });
+
+	return blocks;
+}
+
+// ---------------------------------------------------------------------------
 // Individual annotation parsers
 // ---------------------------------------------------------------------------
 
@@ -186,7 +267,8 @@ function parseClassBlock(block: Block): Class | null {
 	const lines = joinContinuations(block.comments);
 
 	let name = '';
-	let parent: string | undefined;
+	// A class may extend more than one parent, e.g. `@class TextPopupOpts : PopupOpts, TextStyle`.
+	let parents: string[] = [];
 	const fields: Field[] = [];
 	const descLines: string[] = [];
 	let gatheringDesc = false;
@@ -194,10 +276,12 @@ function parseClassBlock(block: Block): Class | null {
 
 	for (const line of lines) {
 		if (line.startsWith('@class ')) {
-			const m = line.match(/^@class\s+(\w+)(?:\s*:\s*(\w+))?/);
+			const m = line.match(/^@class\s+(\w+)(?:\s*:\s*([\w\s,]+))?/);
 			if (!m) continue;
 			name = m[1];
-			parent = m[2];
+			parents = m[2]
+				? m[2].split(',').map((p) => p.trim()).filter(Boolean)
+				: [];
 			found = true;
 			gatheringDesc = true;
 			continue;
@@ -217,7 +301,7 @@ function parseClassBlock(block: Block): Class | null {
 			continue;
 		}
 
-		if (gatheringDesc && line !== '') {
+		if (gatheringDesc) {
 			descLines.push(line);
 		}
 	}
@@ -225,8 +309,8 @@ function parseClassBlock(block: Block): Class | null {
 	if (!found) return null;
 	return {
 		name,
-		parent,
-		desc: descLines.join(' ').trim() || undefined,
+		parents,
+		desc: parseDescriptionBlocks(descLines),
 		fields,
 		methods: [],
 	};
@@ -239,7 +323,7 @@ function parseAliasBlock(block: Block): Alias[] {
 	let name = '';
 	let type = '';
 	let desc = '';
-	let variants: string[] = [];
+	let variants: AliasVariant[] = [];
 
 	function flush() {
 		if (!name) return;
@@ -272,7 +356,13 @@ function parseAliasBlock(block: Block): Alias[] {
 		}
 
 		if (line.startsWith('| ')) {
-			variants.push(line.slice(2).trim());
+			// A variant is a quoted string (or bare token) literal, optionally followed by a
+			// description, e.g. `| "default" Ubuntu-Light, matching the window header/chrome.`
+			const rest = line.slice(2).trim();
+			const m = rest.match(/^("(?:[^"\\]|\\.)*"|\S+)\s*(.*)$/);
+			variants.push(
+				m ? { value: m[1], desc: m[2] || undefined } : { value: rest },
+			);
 			continue;
 		}
 
@@ -316,7 +406,6 @@ function parseFuncBlock(block: Block & { codeLine: string }): Func | null {
 
 	const params: Param[] = [];
 	let returnType: string | undefined;
-	let isAsync = false;
 	const descLines: string[] = [];
 
 	for (const line of lines) {
@@ -329,11 +418,7 @@ function parseFuncBlock(block: Block & { codeLine: string }): Func | null {
 			returnType = line.slice('@return '.length).trim();
 			continue;
 		}
-		if (line === '@async') {
-			isAsync = true;
-			continue;
-		}
-		if (!line.startsWith('@') && line !== '') {
+		if (!line.startsWith('@')) {
 			descLines.push(line);
 		}
 	}
@@ -345,8 +430,7 @@ function parseFuncBlock(block: Block & { codeLine: string }): Func | null {
 		sep,
 		params,
 		returnType,
-		desc: descLines.join('\n').trim() || undefined,
-		async: isAsync,
+		desc: parseDescriptionBlocks(descLines),
 	};
 }
 
@@ -367,7 +451,7 @@ export function parseLuaCATS(source: string): ApiDoc {
 		for (const line of block.comments) {
 			const m = line.match(/^@class\s+(\w+)/);
 			if (m && !classMap.has(m[1])) {
-				classMap.set(m[1], { name: m[1], fields: [], methods: [] });
+				classMap.set(m[1], { name: m[1], parents: [], desc: [], fields: [], methods: [] });
 			}
 		}
 	}
@@ -382,8 +466,8 @@ export function parseLuaCATS(source: string): ApiDoc {
 			if (cls) {
 				const existing = classMap.get(cls.name);
 				if (existing) {
-					if (cls.parent) existing.parent = cls.parent;
-					if (cls.desc) existing.desc = cls.desc;
+					if (cls.parents.length > 0) existing.parents = cls.parents;
+					if (cls.desc.length > 0) existing.desc = cls.desc;
 					existing.fields.push(...cls.fields);
 				}
 			}
@@ -396,9 +480,10 @@ export function parseLuaCATS(source: string): ApiDoc {
 			if (func.className && classMap.has(func.className)) {
 				classMap.get(func.className)!.methods.push(func);
 			} else {
-				let nsKey = 'lewdware';
-				if (func.fullName.startsWith('lewdware.media.')) nsKey = 'lewdware.media';
-				else if (func.fullName.startsWith('lewdware.monitors.')) nsKey = 'lewdware.monitors';
+				// Bucket by the function's namespace: everything before the last dot, e.g.
+				// "lewdware.popup.image" -> "lewdware.popup", "lewdware.exit" -> "lewdware".
+				// Handles any `lewdware.x.*` sub-table generically, not just media/monitors.
+				const nsKey = func.fullName.slice(0, func.fullName.lastIndexOf('.'));
 
 				if (!nsFuncsMap.has(nsKey)) nsFuncsMap.set(nsKey, []);
 				nsFuncsMap.get(nsKey)!.push(func);
@@ -406,9 +491,12 @@ export function parseLuaCATS(source: string): ApiDoc {
 		}
 	}
 
-	const namespaces = (['lewdware', 'lewdware.media', 'lewdware.monitors'] as const)
-		.filter((ns) => nsFuncsMap.has(ns))
-		.map((ns) => ({ name: ns, functions: nsFuncsMap.get(ns)! }));
+	// Insertion order follows first appearance in the source, which puts the flat `lewdware`
+	// bucket wherever its first non-namespaced function is declared (not necessarily first) --
+	// reorder so it always leads, then the rest keep source order.
+	const namespaces = [...nsFuncsMap.entries()]
+		.sort(([a], [b]) => (a === 'lewdware' ? -1 : b === 'lewdware' ? 1 : 0))
+		.map(([name, functions]) => ({ name, functions }));
 
 	return {
 		aliases,

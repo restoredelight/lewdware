@@ -130,7 +130,7 @@ fn update_watches(watcher: &mut RecommendedWatcher, current: &[PathBuf], desired
 fn spawn_lewdware(path: &Path) -> anyhow::Result<Child> {
     let mut command = find_lewdware_binary().context("Couldn't find lewdware binary")?;
 
-    Ok(command.arg("--mode-path").arg(path).spawn()?)
+    Ok(command.arg("--mode-path").arg(path).arg("--dev").spawn()?)
 }
 
 struct BuildFile {

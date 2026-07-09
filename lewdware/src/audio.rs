@@ -34,7 +34,7 @@ pub struct AudioPlayer {
 impl AudioPlayer {
     pub fn new(
         source: MediaSource,
-        loop_audio: bool,
+        loop_audio: Arc<AtomicBool>,
         volume: f32,
         id: Option<u64>,
         event_poster: Option<EventPoster>,
@@ -90,7 +90,10 @@ impl AudioPlayer {
     }
 }
 
-pub fn setup_decoder(source: MediaSource, loop_audio: bool) -> Result<(MixerDeviceSink, Player)> {
+pub fn setup_decoder(
+    source: MediaSource,
+    loop_audio: Arc<AtomicBool>,
+) -> Result<(MixerDeviceSink, Player)> {
     ffmpeg::init()?;
     let mut ictx = source.open()?;
     let audio_stream_index = match ictx.streams().best(ffmpeg::media::Type::Audio) {
@@ -170,7 +173,7 @@ pub fn setup_decoder(source: MediaSource, loop_audio: bool) -> Result<(MixerDevi
                 }
             }
 
-            if !loop_audio {
+            if !loop_audio.load(Ordering::Relaxed) {
                 return None;
             }
 

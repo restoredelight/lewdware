@@ -182,6 +182,20 @@ pub struct WindowRequestSender {
     id: PopupId,
 }
 
+/// Maps a closed/missing window (`WindowNotFound`) to `Ok(false)` and success to `Ok(true)` --
+/// the shared shape behind every `WindowRequestSender` method below except the handful with
+/// their own bespoke "closed" return (`values()`/`value()` return nil; `update_dialog_element`
+/// already followed this convention before the others caught up -- see its own doc comment).
+/// Any other error (e.g. `fade`'s opacity/transparency validation) still propagates as a real
+/// Lua error: only "the window is gone" becomes a quiet `false`.
+fn window_found(result: Result<()>) -> Result<bool> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(LewdwareError::WindowNotFound) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 impl WindowRequestSender {
     fn send<T>(&self, action_builder: impl FnOnce(mpsc::Sender<T>) -> WindowAction) -> Result<T> {
         match self.sender.send(|tx| LuaRequest::WindowAction {
@@ -193,50 +207,64 @@ impl WindowRequestSender {
         }
     }
 
-    pub fn close(&self) -> Result<()> {
-        self.send(|tx| WindowAction::CloseWindow { tx })
+    /// Returns whether the window was open and actually got closed just now -- `false` if it was
+    /// already closed, matching every other method here rather than the old "close() is always a
+    /// silent unconditional success" behavior.
+    pub fn close(&self) -> Result<bool> {
+        window_found(self.send(|tx| WindowAction::CloseWindow { tx }))
     }
 
-    pub fn move_window(&self, move_id: u64, opts: MoveOpts) -> Result<()> {
-        self.send(|tx| WindowAction::Move {
-            id: move_id,
-            tx,
-            opts,
-        })
-        .flatten()
+    pub fn move_window(&self, move_id: u64, opts: MoveOpts) -> Result<bool> {
+        window_found(
+            self.send(|tx| WindowAction::Move {
+                id: move_id,
+                tx,
+                opts,
+            })
+            .flatten(),
+        )
     }
 
-    pub fn fade_window(&self, fade_id: u64, opts: FadeOpts) -> Result<()> {
-        self.send(|tx| WindowAction::Fade {
-            id: fade_id,
-            tx,
-            opts,
-        })
-        .flatten()
+    pub fn fade_window(&self, fade_id: u64, opts: FadeOpts) -> Result<bool> {
+        window_found(
+            self.send(|tx| WindowAction::Fade {
+                id: fade_id,
+                tx,
+                opts,
+            })
+            .flatten(),
+        )
     }
 
-    pub fn pause_video(&self) -> Result<()> {
-        self.send(|tx| WindowAction::PauseVideo { tx }).flatten()
+    pub fn pause_video(&self) -> Result<bool> {
+        window_found(self.send(|tx| WindowAction::PauseVideo { tx }).flatten())
     }
 
-    pub fn play_video(&self) -> Result<()> {
-        self.send(|tx| WindowAction::PlayVideo { tx }).flatten()
+    pub fn play_video(&self) -> Result<bool> {
+        window_found(self.send(|tx| WindowAction::PlayVideo { tx }).flatten())
     }
 
-    pub fn set_video_volume(&self, volume: f32) -> Result<()> {
-        self.send(|tx| WindowAction::SetVideoVolume { tx, volume })
-            .flatten()
+    pub fn set_video_volume(&self, volume: f32) -> Result<bool> {
+        window_found(
+            self.send(|tx| WindowAction::SetVideoVolume { tx, volume })
+                .flatten(),
+        )
     }
 
-    pub fn set_text(&self, text: Option<String>) -> Result<()> {
-        self.send(|tx| WindowAction::SetText { tx, text }).flatten()
+    pub fn set_video_loop(&self, loop_video: bool) -> Result<bool> {
+        window_found(
+            self.send(|tx| WindowAction::SetVideoLoop { tx, loop_video })
+                .flatten(),
+        )
+    }
+
+    pub fn set_text(&self, text: Option<String>) -> Result<bool> {
+        window_found(self.send(|tx| WindowAction::SetText { tx, text }).flatten())
     }
 
     /// Returns `false` (rather than erroring) for a closed window, matching the "no element has
     /// the given id" case — both are just "nothing to update" as far as this method is
-    /// concerned. Built fresh for `update()`, so it gets the v1 no-op-returns-false convention
-    /// from the start rather than the pre-v1 hard-error-on-dead-window behaviour older methods
-    /// (like `set_opacity`) still have.
+    /// concerned.
     pub fn update_dialog_element(&self, id: String, props: DialogElementUpdate) -> Result<bool> {
         match self.send(|tx| WindowAction::UpdateDialogElement { tx, id, props }) {
             Err(LewdwareError::WindowNotFound) => Ok(false),
@@ -262,13 +290,15 @@ impl WindowRequestSender {
         }
     }
 
-    pub fn set_title(&self, title: Option<String>) -> Result<()> {
-        self.send(|tx| WindowAction::SetTitle { tx, title })
+    pub fn set_title(&self, title: Option<String>) -> Result<bool> {
+        window_found(self.send(|tx| WindowAction::SetTitle { tx, title }))
     }
 
-    pub fn set_opacity(&self, opacity: f32) -> Result<()> {
-        self.send(|tx| WindowAction::SetOpacity { tx, opacity })
-            .flatten()
+    pub fn set_opacity(&self, opacity: f32) -> Result<bool> {
+        window_found(
+            self.send(|tx| WindowAction::SetOpacity { tx, opacity })
+                .flatten(),
+        )
     }
 }
 
@@ -386,6 +416,10 @@ pub enum WindowAction {
     SetVideoVolume {
         tx: mpsc::Sender<Result<()>>,
         volume: f32,
+    },
+    SetVideoLoop {
+        tx: mpsc::Sender<Result<()>>,
+        loop_video: bool,
     },
     Move {
         id: u64,

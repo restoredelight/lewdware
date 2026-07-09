@@ -98,7 +98,11 @@ impl MediaPack {
 
     fn build_sql(&self, opts: MediaOpts) -> (String, Vec<Box<dyn rusqlite::ToSql + '_>>) {
         let mut sql = "
-            SELECT id, file_name, file_type, offset, length, width, height, duration, audio, transparent
+            SELECT id, file_name, file_type, offset, length, width, height, duration, audio, transparent,
+                (SELECT group_concat(tags.name, char(31))
+                 FROM media_tags
+                 JOIN tags ON tags.id = media_tags.tag_id
+                 WHERE media_tags.media_id = media.id) AS tag_names
             FROM media
         "
         .to_string();
@@ -341,6 +345,15 @@ impl MediaPack {
             .map_err(|err| err.into())
     }
 
+    /// The pack's full tag vocabulary, sorted for a stable order -- not a query, so (unlike
+    /// `list_media`'s tag filtering) this is never affected by the user's tag exclusion list: a
+    /// tag whose every file happens to be excluded is still listed.
+    pub fn list_tags(&self) -> Result<Vec<String>> {
+        let mut tags: Vec<String> = self.tag_map.keys().cloned().collect();
+        tags.sort();
+        Ok(tags)
+    }
+
     async fn read_image_data(
         &self,
         offset: u64,
@@ -435,9 +448,15 @@ fn parse_media(row: &Row<'_>) -> Result<Media> {
         _ => return Err(MediaError::Internal("Invalid file type")),
     };
 
+    let tags = row
+        .get::<_, Option<String>>("tag_names")?
+        .map(|names| names.split('\u{1f}').map(str::to_string).collect())
+        .unwrap_or_default();
+
     Ok(Media {
         id: row.get("id")?,
         name: row.get("file_name")?,
+        tags,
         media_data,
     })
 }
@@ -559,6 +578,13 @@ mod tests {
                 transparent: true,
             }
         ));
+        let mut tags = results[0].tags.clone();
+        tags.sort();
+        assert_eq!(tags, vec!["second-tag", "test-tag"]);
+
+        let mut all_tags = pack.list_tags().unwrap();
+        all_tags.sort();
+        assert_eq!(all_tags, vec!["second-tag", "test-tag"]);
 
         // A tag that doesn't exist in this pack matches no media rather than erroring, since
         // callers routinely probe for optional tags a given pack may not define.
@@ -587,6 +613,14 @@ mod tests {
             .map(|m| m.name)
             .collect();
         assert_eq!(names, vec!["pic.avif", "other.avif"]);
+
+        // `other.avif` carries only the first tag -- confirms the per-row tags subquery is
+        // correctly scoped to `media.id`, not accidentally aggregating every tag in the pack.
+        let other = pack
+            .get_media("other.avif".to_string(), MediaTypes::ALL)
+            .unwrap()
+            .unwrap();
+        assert_eq!(other.tags, vec!["test-tag"]);
 
         // `all` requires every tag; only pic.avif carries both.
         let results = pack

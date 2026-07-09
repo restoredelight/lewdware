@@ -45,6 +45,17 @@ pub struct InnerWindow {
     last_fade_update: Instant,
     pub opacity: f32,
     background_color: Option<lua::Color>,
+    // Track press+release over the content area the same way `Header` tracks the close button --
+    // a "click" requires both to land there, not just the release (see `handle_mouse_up`).
+    content_hover: bool,
+    content_clicked: bool,
+}
+
+/// Returned by `InnerWindow::handle_mouse_up`, since a release can mean two independent things:
+/// the close button was activated (decorations), or a qualifying content click just happened.
+pub struct MouseUpResult {
+    pub should_close: bool,
+    pub content_click: bool,
 }
 
 struct Move {
@@ -191,6 +202,8 @@ impl InnerWindow {
             last_fade_update: Instant::now(),
             opacity: opts.popup.opacity,
             background_color: opts.popup.background_color,
+            content_hover: false,
+            content_clicked: false,
         })
     }
 
@@ -484,8 +497,8 @@ impl InnerWindow {
         let monitor_size = self.monitor_size;
 
         let x: Option<i32> = match opts.x {
-            Some(Coord::Pixel(x)) => Some(opts.anchor.resolve(x, size.width)),
-            Some(Coord::Percent { percent }) => Some(opts.anchor.resolve(
+            Some(Coord::Pixel(x)) => Some(opts.anchor.resolve_x(x, size.width)),
+            Some(Coord::Percent { percent }) => Some(opts.anchor.resolve_x(
                 ((percent * monitor_size.width as f64) / 100.0).round() as i32,
                 size.width,
             )),
@@ -493,8 +506,8 @@ impl InnerWindow {
         };
 
         let y: Option<i32> = match opts.y {
-            Some(Coord::Pixel(y)) => Some(opts.anchor.resolve(y, size.height)),
-            Some(Coord::Percent { percent }) => Some(opts.anchor.resolve(
+            Some(Coord::Pixel(y)) => Some(opts.anchor.resolve_y(y, size.height)),
+            Some(Coord::Percent { percent }) => Some(opts.anchor.resolve_y(
                 ((percent * monitor_size.height as f64) / 100.0).round() as i32,
                 size.height,
             )),
@@ -657,29 +670,53 @@ impl InnerWindow {
         }
     }
 
+    /// Whether `position` (physical, window-relative) falls within the content area -- excludes
+    /// the border and header when `decorations` is on; the whole window otherwise.
+    fn in_content_bounds(&self, position: PhysicalPosition<f64>) -> bool {
+        let (ox, oy) = self.inner_offset();
+        position.x >= ox as f64
+            && position.y >= oy as f64
+            && position.x < (ox + self.inner_size.width) as f64
+            && position.y < (oy + self.inner_size.height) as f64
+    }
+
     pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         if let Some(header) = &mut self.header {
             header.handle_cursor_moved(position);
         }
+        self.content_hover = self.in_content_bounds(position);
     }
 
     pub fn handle_cursor_left(&mut self) {
         if let Some(header) = &mut self.header {
             header.handle_cursor_left();
         }
+        self.content_hover = false;
+        self.content_clicked = false;
     }
 
     pub fn handle_mouse_down(&mut self) {
         if let Some(header) = &mut self.header {
             header.handle_mouse_down();
         }
+        if self.content_hover {
+            self.content_clicked = true;
+        }
     }
 
-    pub fn handle_mouse_up(&mut self) -> bool {
-        if let Some(header) = &mut self.header {
+    pub fn handle_mouse_up(&mut self) -> MouseUpResult {
+        let should_close = if let Some(header) = &mut self.header {
             header.handle_mouse_up()
         } else {
             false
+        };
+
+        let content_click = self.content_hover && self.content_clicked;
+        self.content_clicked = false;
+
+        MouseUpResult {
+            should_close,
+            content_click,
         }
     }
 

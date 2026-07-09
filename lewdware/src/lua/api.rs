@@ -86,6 +86,7 @@ pub struct ApiOptions {
     pub pack_info: Option<crate::lua::PackInfo>,
     pub config: HashMap<String, OptionValue>,
     pub gpu_available: bool,
+    pub dev_mode: bool,
 }
 
 pub fn create_api(
@@ -101,6 +102,7 @@ pub fn create_api(
         pack_info,
         config,
         gpu_available,
+        dev_mode,
     } = options;
 
     let api_table = lua.create_table()?;
@@ -271,6 +273,15 @@ pub fn create_api(
         )?;
     }
 
+    {
+        let media_manager = media_manager.clone();
+
+        media_table.set(
+            "list_tags",
+            lua.create_function(move |lua, ()| list_tags(lua, (), media_manager.clone()))?,
+        )?;
+    }
+
     api_table.set("media", media_table)?;
 
     let popup_table = lua.create_table()?;
@@ -282,7 +293,14 @@ pub fn create_api(
         popup_table.set(
             "image",
             lua.create_function(move |lua, args| {
-                spawn_image_popup(lua, args, request_sender.clone(), windows.clone(), gpu_available)
+                spawn_image_popup(
+                    lua,
+                    args,
+                    request_sender.clone(),
+                    windows.clone(),
+                    gpu_available,
+                    dev_mode,
+                )
             })?,
         )?;
     }
@@ -294,7 +312,14 @@ pub fn create_api(
         popup_table.set(
             "video",
             lua.create_function(move |lua, args| {
-                spawn_video_popup(lua, args, request_sender.clone(), windows.clone(), gpu_available)
+                spawn_video_popup(
+                    lua,
+                    args,
+                    request_sender.clone(),
+                    windows.clone(),
+                    gpu_available,
+                    dev_mode,
+                )
             })?,
         )?;
     }
@@ -306,7 +331,14 @@ pub fn create_api(
         popup_table.set(
             "text",
             lua.create_function(move |lua, args| {
-                spawn_text_popup(lua, args, request_sender.clone(), windows.clone(), gpu_available)
+                spawn_text_popup(
+                    lua,
+                    args,
+                    request_sender.clone(),
+                    windows.clone(),
+                    gpu_available,
+                    dev_mode,
+                )
             })?,
         )?;
     }
@@ -318,19 +350,28 @@ pub fn create_api(
         popup_table.set(
             "dialog",
             lua.create_function(move |lua, args| {
-                spawn_dialog(lua, args, request_sender.clone(), windows.clone(), gpu_available)
+                spawn_dialog(
+                    lua,
+                    args,
+                    request_sender.clone(),
+                    windows.clone(),
+                    gpu_available,
+                    dev_mode,
+                )
             })?,
         )?;
     }
 
     api_table.set("popup", popup_table)?;
 
+    let wallpaper_table = lua.create_table()?;
+
     {
         let media_manager = media_manager.clone();
         let request_sender = request_sender.clone();
 
-        api_table.set(
-            "set_wallpaper",
+        wallpaper_table.set(
+            "set",
             lua.create_function(move |lua, args| {
                 set_wallpaper(lua, args, media_manager.clone(), request_sender.clone())
             })?,
@@ -340,13 +381,15 @@ pub fn create_api(
     {
         let request_sender = request_sender.clone();
 
-        api_table.set(
-            "reset_wallpaper",
+        wallpaper_table.set(
+            "reset",
             lua.create_function(move |lua, args| {
                 reset_wallpaper(lua, args, request_sender.clone())
             })?,
         )?;
     }
+
+    api_table.set("wallpaper", wallpaper_table)?;
 
     {
         let request_sender = request_sender.clone();
@@ -355,7 +398,13 @@ pub fn create_api(
         api_table.set(
             "play_audio",
             lua.create_function(move |lua, args| {
-                play_audio(lua, args, request_sender.clone(), audio_handles.clone())
+                play_audio(
+                    lua,
+                    args,
+                    request_sender.clone(),
+                    audio_handles.clone(),
+                    dev_mode,
+                )
             })?,
         )?;
     }
@@ -413,9 +462,15 @@ pub fn create_api(
         )?;
     }
 
-    api_table.set("after", lua.create_function(after)?)?;
+    api_table.set(
+        "after",
+        lua.create_function(move |lua, args| after(lua, args, dev_mode))?,
+    )?;
 
-    api_table.set("every", lua.create_function(every)?)?;
+    api_table.set(
+        "every",
+        lua.create_function(move |lua, args| every(lua, args, dev_mode))?,
+    )?;
 
     lua.globals().set("lewdware", api_table)?;
 
@@ -629,6 +684,10 @@ fn random_audio(
     random_media_type(lua, MediaTypes::AUDIO, tags, media_manager)
 }
 
+fn list_tags(_: &Lua, _: (), media_manager: MediaManager) -> mlua::Result<Vec<String>> {
+    media_manager.list_tags().into_lua_err()
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum Coord {
@@ -667,24 +726,73 @@ impl FontSize {
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
+/// The full 3x3 grid: horizontal (left/center/right) and vertical (top/center/bottom) are
+/// independent, so e.g. `TopCenter` centers the window horizontally on the given x while leaving
+/// y unadjusted -- see `resolve_x`/`resolve_y`, which each only look at the matching axis.
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
     #[serde(rename = "top-left")]
     #[default]
     TopLeft,
+    #[serde(rename = "top-center")]
+    TopCenter,
+    #[serde(rename = "top-right")]
+    TopRight,
+    #[serde(rename = "center-left")]
+    CenterLeft,
     #[serde(rename = "center")]
     Center,
+    #[serde(rename = "center-right")]
+    CenterRight,
+    #[serde(rename = "bottom-left")]
+    BottomLeft,
+    #[serde(rename = "bottom-center")]
+    BottomCenter,
     #[serde(rename = "bottom-right")]
     BottomRight,
 }
 
-impl Anchor {
-    pub fn resolve(&self, coord: i32, size: u32) -> i32 {
+/// Where a coordinate falls relative to the window's edge along one axis.
+#[derive(Clone, Copy)]
+enum AxisAnchor {
+    Start,
+    Center,
+    End,
+}
+
+impl AxisAnchor {
+    fn resolve(self, coord: i32, size: u32) -> i32 {
         match self {
-            Self::TopLeft => coord,
+            Self::Start => coord,
             Self::Center => coord - (size / 2) as i32,
-            Self::BottomRight => coord - size as i32,
+            Self::End => coord - size as i32,
         }
+    }
+}
+
+impl Anchor {
+    fn horizontal(self) -> AxisAnchor {
+        match self {
+            Self::TopLeft | Self::CenterLeft | Self::BottomLeft => AxisAnchor::Start,
+            Self::TopCenter | Self::Center | Self::BottomCenter => AxisAnchor::Center,
+            Self::TopRight | Self::CenterRight | Self::BottomRight => AxisAnchor::End,
+        }
+    }
+
+    fn vertical(self) -> AxisAnchor {
+        match self {
+            Self::TopLeft | Self::TopCenter | Self::TopRight => AxisAnchor::Start,
+            Self::CenterLeft | Self::Center | Self::CenterRight => AxisAnchor::Center,
+            Self::BottomLeft | Self::BottomCenter | Self::BottomRight => AxisAnchor::End,
+        }
+    }
+
+    pub fn resolve_x(&self, coord: i32, width: u32) -> i32 {
+        self.horizontal().resolve(coord, width)
+    }
+
+    pub fn resolve_y(&self, coord: i32, height: u32) -> i32 {
+        self.vertical().resolve(coord, height)
     }
 }
 
@@ -848,7 +956,7 @@ impl PopupSpawnOpts {
                 .map(|c| {
                     spawn_opts
                         .anchor
-                        .resolve(c.to_pixels(monitor_width), outer_width)
+                        .resolve_x(c.to_pixels(monitor_width), outer_width)
                 })
                 .unwrap_or_else(|| random_position(outer_width, monitor_width));
             if spawn_opts.clamp {
@@ -864,7 +972,7 @@ impl PopupSpawnOpts {
                 .map(|c| {
                     spawn_opts
                         .anchor
-                        .resolve(c.to_pixels(monitor_height), outer_height)
+                        .resolve_y(c.to_pixels(monitor_height), outer_height)
                 })
                 .unwrap_or_else(|| random_position(outer_height, monitor_height));
             if spawn_opts.clamp {
@@ -1010,6 +1118,7 @@ fn spawn_text_popup(
     request_sender: RequestSender,
     windows: Windows,
     gpu_available: bool,
+    dev_mode: bool,
 ) -> mlua::Result<Rc<TextWindow>> {
     let mut opts = opts.unwrap_or_default();
 
@@ -1051,6 +1160,7 @@ fn spawn_text_popup(
         props,
         text,
         request_sender.window_sender(id),
+        dev_mode,
     ));
 
     windows
@@ -1079,6 +1189,7 @@ fn spawn_image_popup(
     request_sender: RequestSender,
     windows: Windows,
     gpu_available: bool,
+    dev_mode: bool,
 ) -> mlua::Result<Rc<ImageWindow>> {
     let mut opts = opts.unwrap_or_default();
 
@@ -1125,6 +1236,7 @@ fn spawn_image_popup(
         props,
         image,
         request_sender.window_sender(id),
+        dev_mode,
     ));
 
     windows
@@ -1179,6 +1291,7 @@ fn spawn_video_popup(
     request_sender: RequestSender,
     windows: Windows,
     gpu_available: bool,
+    dev_mode: bool,
 ) -> mlua::Result<Rc<VideoWindow>> {
     let mut opts = opts.unwrap_or_default();
 
@@ -1233,6 +1346,7 @@ fn spawn_video_popup(
         props,
         video,
         request_sender.window_sender(id),
+        dev_mode,
     ));
 
     windows
@@ -1351,6 +1465,7 @@ fn spawn_dialog(
     request_sender: RequestSender,
     windows: Windows,
     gpu_available: bool,
+    dev_mode: bool,
 ) -> mlua::Result<Rc<DialogWindow>> {
     if dialog_has_more_than_one_default_button(&opts.elements) {
         return Err(mlua::Error::runtime(
@@ -1392,7 +1507,11 @@ fn spawn_dialog(
 
     let id = props.window_id;
 
-    let window = Rc::new(DialogWindow::new(props, request_sender.window_sender(id)));
+    let window = Rc::new(DialogWindow::new(
+        props,
+        request_sender.window_sender(id),
+        dev_mode,
+    ));
 
     windows
         .try_borrow_mut()
@@ -1452,6 +1571,7 @@ fn reset_wallpaper(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Resul
 
 #[derive(Serialize, Deserialize)]
 struct PlayAudioOpts {
+    #[serde(rename = "loop")]
     #[serde(default)]
     loop_audio: bool,
     #[serde(default = "return_one")]
@@ -1478,6 +1598,7 @@ fn play_audio(
     (audio, opts): (Media, Option<PlayAudioOpts>),
     request_sender: RequestSender,
     audio_handles: AudioHandles,
+    dev_mode: bool,
 ) -> mlua::Result<Rc<AudioHandle>> {
     let opts = opts.unwrap_or_default();
 
@@ -1493,6 +1614,7 @@ fn play_audio(
         audio,
         request_sender.audio_sender(id),
         audio_handles.clone(),
+        dev_mode,
     ));
 
     audio_handles
@@ -1541,10 +1663,87 @@ fn exit(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> {
     request_sender.exit().into_lua_err()
 }
 
-fn after(_: &Lua, (ms, function): (u64, mlua::Function)) -> mlua::Result<Timer> {
-    Ok(Timer::new(Duration::from_millis(ms), function))
+fn after(
+    _: &Lua,
+    (ms, function): (u64, mlua::Function),
+    dev_mode: bool,
+) -> mlua::Result<Timer> {
+    Ok(Timer::new(Duration::from_millis(ms), function, dev_mode))
 }
 
-fn every(_: &Lua, (ms, function): (u64, mlua::Function)) -> mlua::Result<Interval> {
-    Ok(Interval::new(Duration::from_millis(ms), function))
+fn every(
+    _: &Lua,
+    (ms, function): (u64, mlua::Function),
+    dev_mode: bool,
+) -> mlua::Result<Interval> {
+    Ok(Interval::new(Duration::from_millis(ms), function, dev_mode))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anchor_resolves_each_axis_independently() {
+        // A 100x50 window at coordinate (200, 80) on each axis.
+        let (coord, width, height) = (200, 100u32, 50u32);
+
+        // Horizontal: left leaves x unadjusted, center subtracts half the width, right
+        // subtracts the full width -- regardless of which vertical anchor it's paired with.
+        assert_eq!(Anchor::TopLeft.resolve_x(coord, width), 200);
+        assert_eq!(Anchor::CenterLeft.resolve_x(coord, width), 200);
+        assert_eq!(Anchor::BottomLeft.resolve_x(coord, width), 200);
+
+        assert_eq!(Anchor::TopCenter.resolve_x(coord, width), 150);
+        assert_eq!(Anchor::Center.resolve_x(coord, width), 150);
+        assert_eq!(Anchor::BottomCenter.resolve_x(coord, width), 150);
+
+        assert_eq!(Anchor::TopRight.resolve_x(coord, width), 100);
+        assert_eq!(Anchor::CenterRight.resolve_x(coord, width), 100);
+        assert_eq!(Anchor::BottomRight.resolve_x(coord, width), 100);
+
+        // Vertical: same shape, independent of which horizontal anchor it's paired with.
+        assert_eq!(Anchor::TopLeft.resolve_y(coord, height), 200);
+        assert_eq!(Anchor::TopCenter.resolve_y(coord, height), 200);
+        assert_eq!(Anchor::TopRight.resolve_y(coord, height), 200);
+
+        assert_eq!(Anchor::CenterLeft.resolve_y(coord, height), 175);
+        assert_eq!(Anchor::Center.resolve_y(coord, height), 175);
+        assert_eq!(Anchor::CenterRight.resolve_y(coord, height), 175);
+
+        assert_eq!(Anchor::BottomLeft.resolve_y(coord, height), 150);
+        assert_eq!(Anchor::BottomCenter.resolve_y(coord, height), 150);
+        assert_eq!(Anchor::BottomRight.resolve_y(coord, height), 150);
+    }
+
+    #[test]
+    fn anchor_mixed_axes_combine_independently() {
+        // "top-center" should behave like TopLeft on y but Center on x -- the actual point of
+        // the 9-point grid over the old 3-point diagonal-only version.
+        let (coord, size) = (200, 100u32);
+        assert_eq!(Anchor::TopCenter.resolve_x(coord, size), Anchor::Center.resolve_x(coord, size));
+        assert_eq!(Anchor::TopCenter.resolve_y(coord, size), Anchor::TopLeft.resolve_y(coord, size));
+    }
+
+    #[test]
+    fn anchor_serializes_to_documented_strings() {
+        let pairs = [
+            (Anchor::TopLeft, "top-left"),
+            (Anchor::TopCenter, "top-center"),
+            (Anchor::TopRight, "top-right"),
+            (Anchor::CenterLeft, "center-left"),
+            (Anchor::Center, "center"),
+            (Anchor::CenterRight, "center-right"),
+            (Anchor::BottomLeft, "bottom-left"),
+            (Anchor::BottomCenter, "bottom-center"),
+            (Anchor::BottomRight, "bottom-right"),
+        ];
+
+        for (anchor, expected) in pairs {
+            let json = serde_json::to_string(&anchor).unwrap();
+            assert_eq!(json, format!("\"{expected}\""));
+            let parsed: Anchor = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, anchor);
+        }
+    }
 }

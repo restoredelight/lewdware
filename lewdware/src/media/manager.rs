@@ -6,7 +6,7 @@ use std::{
     io,
     path::Path,
     rc::Rc,
-    sync::{Arc, mpsc as std_mpsc},
+    sync::{Arc, atomic::AtomicBool, mpsc as std_mpsc},
     thread,
 };
 use uuid::Uuid;
@@ -108,6 +108,13 @@ impl MediaManager {
         })?
     }
 
+    /// The pack's full tag vocabulary -- every tag it defines, not filtered by any query. See
+    /// `MediaPack::list_tags`'s doc comment for why this isn't affected by the user's tag
+    /// exclusion list either.
+    pub fn list_tags(&self) -> Result<Vec<String>> {
+        self.send(|tx| MediaRequest::ListTags { response_tx: tx })?
+    }
+
     /// Request an image be decoded/resized to `(width, height)`. Returns as soon as the request
     /// is enqueued — the result arrives later as a `UserEvent::ImageResolved { id, .. }`.
     pub fn get_image_data(
@@ -138,7 +145,7 @@ impl MediaManager {
         &self,
         id: PopupId,
         media_id: u64,
-        loop_video: bool,
+        loop_video: Arc<AtomicBool>,
         play_audio: bool,
         volume: f32,
     ) -> Result<()> {
@@ -256,6 +263,7 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster
             tags,
             response_tx,
         } => response_tx.send(pack.list_media(types, tags)).is_ok(),
+        MediaRequest::ListTags { response_tx } => response_tx.send(pack.list_tags()).is_ok(),
         MediaRequest::GetImageData {
             id,
             media_id,
@@ -296,8 +304,14 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster
             volume,
         } => {
             let result = pack.get_audio_data(media_id).and_then(|source| {
-                AudioPlayer::new(source, loop_audio, volume, Some(id), Some(event_poster.clone()))
-                    .map_err(MediaError::AudioError)
+                AudioPlayer::new(
+                    source,
+                    Arc::new(AtomicBool::new(loop_audio)),
+                    volume,
+                    Some(id),
+                    Some(event_poster.clone()),
+                )
+                .map_err(MediaError::AudioError)
             });
             event_poster(UserEvent::AudioResolved { id, result })
         }
@@ -409,6 +423,9 @@ enum MediaRequest {
         tags: Option<TagFilter>,
         response_tx: std_mpsc::Sender<Result<Vec<Media>>>,
     },
+    ListTags {
+        response_tx: std_mpsc::Sender<Result<Vec<String>>>,
+    },
     GetImageData {
         id: PopupId,
         media_id: u64,
@@ -423,7 +440,7 @@ enum MediaRequest {
         id: PopupId,
         media_id: u64,
         play_audio: bool,
-        loop_video: bool,
+        loop_video: Arc<AtomicBool>,
         volume: f32,
         wgpu_device: Option<Arc<wgpu::Device>>,
     },

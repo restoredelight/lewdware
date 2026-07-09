@@ -854,6 +854,13 @@ impl MediaPack {
     /// is safe even when two uploads with identical content race each other (the
     /// pre-check alone can't catch that: both can see "not present yet" before
     /// either has inserted its row - the constraint is what actually closes it).
+    ///
+    /// `file_name` is also `UNIQUE`, but a collision there means something different: unlike
+    /// identical *content*, a same-named but distinct file should still be added, just under an
+    /// adjusted name (`"name (1).ext"`, counting up on repeated collisions -- see
+    /// `next_candidate_name`) rather than rejected. The returned `MediaFile.file_name` reflects
+    /// whatever name it actually landed on, which callers should use instead of assuming their
+    /// requested name was applied verbatim.
     pub async fn add_file(
         &self,
         encoded_file: EncodedFile,
@@ -871,41 +878,51 @@ impl MediaPack {
             audio,
         } = encoded_file.info.to_parts();
 
-        let file_name = file_name(path);
+        let mut file_name = file_name(path);
         let file_path = encoded_file.path.to_string_lossy().to_string();
         let file_info = encoded_file.info.clone();
-        let file_name_clone = file_name.clone();
+        let file_type_str = file_type.as_str();
+        let thumbnail = encoded_file.thumbnail.clone();
         let hash_bytes = *hash.as_bytes();
         let size = tokio::fs::metadata(&encoded_file.path).await?.len();
 
-        let insert_result = self
-            .db_execute(move |conn| {
-                conn.query_row(
-                    "INSERT INTO media (file_name, file_type, path, length, width, height, transparent, duration, audio, hash, thumbnail)
-                    VALUES (:file_name, :file_type, :path, :length, :width, :height, :transparent, :duration, :audio, :hash, :thumbnail) RETURNING id",
-                    named_params! {
-                        ":file_name": file_name_clone,
-                        ":file_type": file_type.as_str(),
-                        ":path": file_path,
-                        ":length": size,
-                        ":width": width,
-                        ":height": height,
-                        ":transparent": transparent,
-                        ":duration": duration,
-                        ":audio": audio,
-                        ":hash": hash_bytes,
-                        ":thumbnail": encoded_file.thumbnail,
-                    },
-                    |row| row.get::<_, u64>("id"),
-                )
-                .map_err(|err| err.into())
-            })
-            .await;
+        let id = loop {
+            let file_name_clone = file_name.clone();
+            let file_path = file_path.clone();
+            let thumbnail = thumbnail.clone();
 
-        let id = match insert_result {
-            Ok(id) => id,
-            Err(err) if is_unique_violation(&err) => return Ok(None),
-            Err(err) => return Err(err),
+            let insert_result = self
+                .db_execute(move |conn| {
+                    conn.query_row(
+                        "INSERT INTO media (file_name, file_type, path, length, width, height, transparent, duration, audio, hash, thumbnail)
+                        VALUES (:file_name, :file_type, :path, :length, :width, :height, :transparent, :duration, :audio, :hash, :thumbnail) RETURNING id",
+                        named_params! {
+                            ":file_name": file_name_clone,
+                            ":file_type": file_type_str,
+                            ":path": file_path,
+                            ":length": size,
+                            ":width": width,
+                            ":height": height,
+                            ":transparent": transparent,
+                            ":duration": duration,
+                            ":audio": audio,
+                            ":hash": hash_bytes,
+                            ":thumbnail": thumbnail,
+                        },
+                        |row| row.get::<_, u64>("id"),
+                    )
+                    .map_err(|err| err.into())
+                })
+                .await;
+
+            match insert_result {
+                Ok(id) => break id,
+                Err(err) if violates_unique_constraint(&err, "hash") => return Ok(None),
+                Err(err) if violates_unique_constraint(&err, "file_name") => {
+                    file_name = next_candidate_name(&file_name);
+                }
+                Err(err) => return Err(err),
+            }
         };
 
         self.mark_unsaved().await?;
@@ -1069,16 +1086,31 @@ impl MediaPack {
         .await
     }
 
+    /// Unlike `add_file`, a name collision here is a deliberate user action (renaming an existing
+    /// file to a name they typed), so it's rejected with a clear error rather than silently
+    /// adjusted -- auto-renaming would mean the name shown afterwards isn't the one they asked
+    /// for, with no indication why.
     pub async fn set_title(&self, id: u64, name: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |conn| {
-            conn.execute(
-                "UPDATE media SET file_name = ? WHERE id = ?",
-                params![name, id],
-            )?;
-            Ok(())
-        })
-        .await?;
+        let name_clone = name.clone();
+        let result = self
+            .db_execute(move |conn| {
+                conn.execute(
+                    "UPDATE media SET file_name = ? WHERE id = ?",
+                    params![name_clone, id],
+                )?;
+                Ok(())
+            })
+            .await;
+
+        match result {
+            Ok(()) => {}
+            Err(err) if violates_unique_constraint(&err, "file_name") => {
+                bail!("A file named \"{name}\" already exists");
+            }
+            Err(err) => return Err(err),
+        }
+
         self.mark_unsaved().await
     }
 }
@@ -1337,18 +1369,21 @@ fn copy_new_file_job(
 
 /// Whether `err` (as returned by a query through `db_execute`, which wraps the
 /// underlying `rusqlite::Error` in an `anyhow::Error`) is a `UNIQUE` constraint
-/// violation - in this schema, that only ever means `media.hash` already exists.
-fn is_unique_violation(err: &anyhow::Error) -> bool {
-    matches!(
-        err.downcast_ref::<rusqlite::Error>(),
+/// violation on `media.{column}` specifically -- `media` has two unique columns
+/// (`hash`, `file_name`), which need different handling (see `add_file`/`set_title`), so
+/// the column has to be pulled out of SQLite's own failure message rather than just
+/// checking for "some constraint or other failed".
+fn violates_unique_constraint(err: &anyhow::Error, column: &str) -> bool {
+    match err.downcast_ref::<rusqlite::Error>() {
         Some(rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error {
                 code: rusqlite::ErrorCode::ConstraintViolation,
                 ..
             },
-            _
-        ))
-    )
+            Some(message),
+        )) => message.contains(&format!("media.{column}")),
+        _ => false,
+    }
 }
 
 fn file_name(path: &Path) -> String {
@@ -1356,6 +1391,31 @@ fn file_name(path: &Path) -> String {
         .unwrap_or(path.as_os_str())
         .to_string_lossy()
         .to_string()
+}
+
+/// Produces the next name to try after `name` collided with an existing file: appends
+/// " (1)" before the extension, or bumps an existing " (n)" suffix to " (n+1)" so repeated
+/// collisions count up instead of piling up " (1) (1) (1)"-style.
+fn next_candidate_name(name: &str) -> String {
+    let (base, ext) = match name.rsplit_once('.') {
+        Some((base, ext)) if !base.is_empty() => (base, Some(ext)),
+        _ => (name, None),
+    };
+
+    let (stem, next_n) = match base.rfind(" (") {
+        Some(open)
+            if base.ends_with(')')
+                && let Ok(n) = base[open + 2..base.len() - 1].parse::<u32>() =>
+        {
+            (&base[..open], n + 1)
+        }
+        _ => (base, 1),
+    };
+
+    match ext {
+        Some(ext) => format!("{stem} ({next_n}).{ext}"),
+        None => format!("{stem} ({next_n})"),
+    }
 }
 
 fn repeat_vars(count: usize) -> String {
@@ -1390,7 +1450,9 @@ mod tests {
             .unwrap()
     }
 
-    // Insert a minimal audio row backed by a staging file in dir/media/.
+    // Insert a minimal audio row backed by a staging file in dir/media/. Reuses the (already
+    // unique, UUID-based) staged file name as the DB file_name too, since callers routinely
+    // insert several of these against the same pack and `media.file_name` is UNIQUE.
     // Returns the assigned media id.
     async fn insert_staged_audio(pack: &MediaPack, content: &[u8]) -> u64 {
         let filename = Uuid::new_v4().to_string();
@@ -1399,11 +1461,12 @@ mod tests {
             .unwrap();
 
         let hash_bytes = *blake3::hash(content).as_bytes();
+        let filename_clone = filename.clone();
         pack.db_execute(move |conn| {
             let id: u64 = conn.query_row(
                 "INSERT INTO media (file_name, file_type, path, duration, hash) \
-                 VALUES ('test.wav', 'audio', ?, 1.0, ?) RETURNING id",
-                params![filename, hash_bytes],
+                 VALUES (?, 'audio', ?, 1.0, ?) RETURNING id",
+                params![filename_clone, filename, hash_bytes],
                 |row| row.get("id"),
             )?;
             Ok(id)
@@ -1738,6 +1801,112 @@ mod tests {
         );
     }
 
+    // Two distinct uploads that happen to share a requested file name -- unlike a hash collision
+    // (rejected outright), this should still add the file, just under an adjusted name.
+    #[tokio::test]
+    async fn colliding_file_name_on_add_is_renamed_not_rejected() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Names").await;
+
+        let encoded_path_1 = pack.dir.join("media").join("upload-1");
+        tokio::fs::write(&encoded_path_1, b"first").await.unwrap();
+        let encoded_1 = EncodedFile {
+            info: FileInfo::Audio { duration: 1.0 },
+            thumbnail: None,
+            path: encoded_path_1,
+        };
+
+        let encoded_path_2 = pack.dir.join("media").join("upload-2");
+        tokio::fs::write(&encoded_path_2, b"second").await.unwrap();
+        let encoded_2 = EncodedFile {
+            info: FileInfo::Audio { duration: 1.0 },
+            thumbnail: None,
+            path: encoded_path_2,
+        };
+
+        let encoded_path_3 = pack.dir.join("media").join("upload-3");
+        tokio::fs::write(&encoded_path_3, b"third").await.unwrap();
+        let encoded_3 = EncodedFile {
+            info: FileInfo::Audio { duration: 1.0 },
+            thumbnail: None,
+            path: encoded_path_3,
+        };
+
+        let first = pack
+            .add_file(encoded_1, Path::new("clip.wav"), blake3::hash(b"first"))
+            .await
+            .unwrap()
+            .unwrap();
+        let second = pack
+            .add_file(encoded_2, Path::new("clip.wav"), blake3::hash(b"second"))
+            .await
+            .unwrap()
+            .unwrap();
+        let third = pack
+            .add_file(encoded_3, Path::new("clip.wav"), blake3::hash(b"third"))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(first.file_name, "clip.wav");
+        assert_eq!(second.file_name, "clip (1).wav");
+        assert_eq!(third.file_name, "clip (2).wav");
+
+        let files = pack.get_files().await.unwrap();
+        assert_eq!(files.len(), 3, "all three distinct files should be added");
+    }
+
+    // Unlike add_file's auto-rename, an explicit rename to an existing name is a deliberate user
+    // action and should be rejected with a clear error, not silently adjusted.
+    #[tokio::test]
+    async fn set_title_rejects_a_colliding_name() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Rename").await;
+
+        let encoded_path_1 = pack.dir.join("media").join("upload-1");
+        tokio::fs::write(&encoded_path_1, b"first").await.unwrap();
+        let encoded_1 = EncodedFile {
+            info: FileInfo::Audio { duration: 1.0 },
+            thumbnail: None,
+            path: encoded_path_1,
+        };
+        let first = pack
+            .add_file(encoded_1, Path::new("a.wav"), blake3::hash(b"first"))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let encoded_path_2 = pack.dir.join("media").join("upload-2");
+        tokio::fs::write(&encoded_path_2, b"second").await.unwrap();
+        let encoded_2 = EncodedFile {
+            info: FileInfo::Audio { duration: 1.0 },
+            thumbnail: None,
+            path: encoded_path_2,
+        };
+        let second = pack
+            .add_file(encoded_2, Path::new("b.wav"), blake3::hash(b"second"))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let err = pack
+            .set_title(second.id, first.file_name.clone())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+
+        // The rejected rename must not have applied.
+        let files = pack.get_files().await.unwrap();
+        let renamed = files.iter().find(|f| f.id == second.id).unwrap();
+        assert_eq!(renamed.file_name, "b.wav");
+    }
+
     /// One step of a random add/delete/save sequence exercised by
     /// `save_preserves_every_surviving_files_bytes` below.
     #[derive(Debug, Clone)]
@@ -1759,10 +1928,11 @@ mod tests {
         ]
     }
 
-    /// Like `insert_staged_audio`, but every call is guaranteed a unique hash (the `media` table
-    /// has a UNIQUE constraint on it) by appending a never-repeated counter, regardless of what
-    /// content the caller passes in -- proptest-generated byte vectors are short and likely to
-    /// collide otherwise.
+    /// Like `insert_staged_audio`, but every call is guaranteed a unique hash and file name (the
+    /// `media` table has a UNIQUE constraint on both) by appending a never-repeated counter to
+    /// the content, and reusing the already-unique on-disk staged file name (a fresh UUID) as the
+    /// DB `file_name` too, regardless of what content the caller passes in -- proptest-generated
+    /// byte vectors are short and likely to collide otherwise.
     async fn add_staged_file(pack: &MediaPack, content: &[u8], unique: u64) -> (u64, Vec<u8>) {
         let mut content = content.to_vec();
         content.extend_from_slice(&unique.to_le_bytes());
@@ -1773,12 +1943,13 @@ mod tests {
             .unwrap();
 
         let hash_bytes = *blake3::hash(&content).as_bytes();
+        let filename_clone = filename.clone();
         let id = pack
             .db_execute(move |conn| {
                 let id: u64 = conn.query_row(
                     "INSERT INTO media (file_name, file_type, path, duration, hash) \
-                     VALUES ('test.wav', 'audio', ?, 1.0, ?) RETURNING id",
-                    params![filename, hash_bytes],
+                     VALUES (?, 'audio', ?, 1.0, ?) RETURNING id",
+                    params![filename_clone, filename, hash_bytes],
                     |row| row.get("id"),
                 )?;
                 Ok(id)

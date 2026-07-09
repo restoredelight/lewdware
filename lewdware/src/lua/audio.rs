@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 
-use mlua::{ExternalResult, UserData, UserDataFields, UserDataMethods};
+use mlua::{ExternalResult, Lua, UserData, UserDataFields, UserDataMethods};
 
-use crate::lua::{AudioHandles, Media, request::AudioRequestSender};
+use crate::lua::{AudioHandles, Media, dev_log::log_noop, request::AudioRequestSender};
 
 pub struct AudioHandle {
     id: u64,
@@ -10,6 +10,7 @@ pub struct AudioHandle {
     request_sender: AudioRequestSender,
     audio_handles: AudioHandles,
     state: RefCell<AudioState>,
+    dev_mode: bool,
 }
 
 struct AudioState {
@@ -52,20 +53,26 @@ impl UserData for AudioHandle {
             Ok(())
         });
 
-        methods.add_method("pause", |_, this, _: ()| {
-            this.guarded(|| this.request_sender.pause().into_lua_err())
+        methods.add_method("pause", |lua, this, _: ()| {
+            this.guarded(lua, "AudioHandle:pause()", || {
+                this.request_sender.pause().into_lua_err()
+            })
         });
 
-        methods.add_method("play", |_, this, _: ()| {
-            this.guarded(|| this.request_sender.play().into_lua_err())
+        methods.add_method("play", |lua, this, _: ()| {
+            this.guarded(lua, "AudioHandle:play()", || {
+                this.request_sender.play().into_lua_err()
+            })
         });
 
-        methods.add_method("set_volume", |_, this, volume: f32| {
-            this.guarded(|| this.request_sender.set_volume(volume).into_lua_err())
+        methods.add_method("set_volume", |lua, this, volume: f32| {
+            this.guarded(lua, "AudioHandle:set_volume()", || {
+                this.request_sender.set_volume(volume).into_lua_err()
+            })
         });
 
-        methods.add_method("stop", |_, this, _: ()| {
-            this.guarded(|| {
+        methods.add_method("stop", |lua, this, _: ()| {
+            this.guarded(lua, "AudioHandle:stop()", || {
                 this.request_sender.stop().into_lua_err()?;
                 this.state.try_borrow_mut().into_lua_err()?.finished = true;
                 Ok(())
@@ -80,6 +87,7 @@ impl AudioHandle {
         audio: Media,
         request_sender: AudioRequestSender,
         audio_handles: AudioHandles,
+        dev_mode: bool,
     ) -> Self {
         Self {
             id,
@@ -87,14 +95,23 @@ impl AudioHandle {
             request_sender,
             state: RefCell::new(AudioState::new()),
             audio_handles,
+            dev_mode,
         }
     }
 
     /// Runs `f` unless already `finished`, returning whether it ran -- the shared shape behind
     /// every method above except `on_finish` (a registration, not an action) and the `finished`
     /// field itself.
-    fn guarded(&self, f: impl FnOnce() -> mlua::Result<()>) -> mlua::Result<bool> {
+    fn guarded(
+        &self,
+        lua: &Lua,
+        what: &str,
+        f: impl FnOnce() -> mlua::Result<()>,
+    ) -> mlua::Result<bool> {
         if self.state.try_borrow().into_lua_err()?.finished {
+            if self.dev_mode {
+                log_noop(lua, what);
+            }
             return Ok(false);
         }
         f()?;

@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS media (
     id INTEGER PRIMARY KEY,
-    file_name TEXT NOT NULL,
+    file_name TEXT NOT NULL UNIQUE,
     file_type TEXT CHECK (file_type IN ('image', 'video', 'audio')) NOT NULL,
     "offset" INTEGER,
     length INTEGER,

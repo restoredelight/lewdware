@@ -2,6 +2,7 @@ use std::{
     cell::Cell,
     sync::{
         Arc,
+        atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
     },
     thread,
@@ -116,6 +117,10 @@ pub struct VideoDecoder {
     packed_alpha: bool,
     paused: bool,
     pub lag_count: u32,
+    // Shared with the decode thread (and, via a further clone, the embedded `AudioPlayer`) so
+    // `set_loop()` takes effect immediately, whether or not this decoder has finished probing the
+    // video yet -- see `VideoWindow::set_loop`'s doc comment for the pending-window case.
+    loop_video: Arc<AtomicBool>,
 }
 
 pub struct VideoFrame {
@@ -140,16 +145,20 @@ impl VideoDecoder {
     pub fn new(
         source: MediaSource,
         play_audio: bool,
-        loop_video: bool,
+        loop_video: Arc<AtomicBool>,
         volume: f32,
         packed_alpha: bool,
         wgpu_device: Option<Arc<wgpu::Device>>,
     ) -> Result<Self> {
-        let (receiver, native_width, native_height, full_range, pixel_format) =
-            spawn_video_stream(source.clone(), loop_video, packed_alpha, wgpu_device)?;
+        let (receiver, native_width, native_height, full_range, pixel_format) = spawn_video_stream(
+            source.clone(),
+            loop_video.clone(),
+            packed_alpha,
+            wgpu_device,
+        )?;
 
         let audio_player = if play_audio {
-            match AudioPlayer::new(source, loop_video, volume, None, None) {
+            match AudioPlayer::new(source, loop_video.clone(), volume, None, None) {
                 Ok(audio_player) => Some(audio_player),
                 Err(err) => {
                     tracing::error!("{err}");
@@ -168,6 +177,7 @@ impl VideoDecoder {
             pixel_format,
             packed_alpha,
             audio_player,
+            loop_video,
             last_frame_time: Instant::now(),
             frame_duration: Duration::ZERO,
             video_clock: Duration::ZERO,
@@ -292,6 +302,14 @@ impl VideoDecoder {
             audio_player.set_volume(volume);
         }
     }
+
+    /// Takes effect the next time playback would loop (checked once per full playthrough by the
+    /// decode thread, and separately by the embedded `AudioPlayer` if there is one) -- not
+    /// instantaneous, but there's no meaningful "instant" version of this for media already mid
+    /// playthrough.
+    pub fn set_loop(&self, loop_video: bool) {
+        self.loop_video.store(loop_video, Ordering::Relaxed);
+    }
 }
 
 pub enum NextFrame {
@@ -320,7 +338,7 @@ type VideoStream = (
 /// Spawn a thread to decode frames from a video.
 fn spawn_video_stream(
     source: MediaSource,
-    loop_video: bool,
+    loop_video: Arc<AtomicBool>,
     packed_alpha: bool,
     wgpu_device: Option<Arc<wgpu::Device>>,
 ) -> Result<VideoStream> {
@@ -393,7 +411,7 @@ fn hw_frame_to_video_frame(
 fn decode_video(
     source: MediaSource,
     tx: SyncSender<Option<VideoFrame>>,
-    loop_video: bool,
+    loop_video: Arc<AtomicBool>,
     packed_alpha: bool,
     meta_tx: SyncSender<VideoMetadata>,
     recycle_rx: Receiver<Video>,
@@ -577,7 +595,7 @@ fn decode_video(
             break 'main;
         }
 
-        if !loop_video {
+        if !loop_video.load(Ordering::Relaxed) {
             return Ok(());
         }
 

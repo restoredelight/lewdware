@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use anyhow::{Context, anyhow};
@@ -94,7 +95,11 @@ struct PendingWindow {
 enum PendingKind {
     Image,
     Video {
-        loop_video: bool,
+        // Shared with `MediaManager::get_video_data`'s in-flight request and (once resolved) the
+        // `VideoDecoder` itself -- see `spawn_video`'s doc comment. `set_loop()` while pending
+        // just stores into this directly, unlike `video_paused`/`video_volume` below, which have
+        // to be replayed onto the real decoder once it exists.
+        loop_video: Arc<AtomicBool>,
         video_paused: bool,
         video_volume: f32,
     },
@@ -236,6 +241,7 @@ impl LewdwareApp {
         wgpu_state: Option<std::sync::Arc<WgpuState>>,
         event_loop_proxy: EventLoopProxy<UserEvent>,
         config: AppConfig,
+        dev_mode: bool,
     ) -> anyhow::Result<Self> {
         let config = Arc::new(config);
 
@@ -272,6 +278,7 @@ impl LewdwareApp {
                 metadata: pack_metadata,
             },
             wgpu_state.is_some(),
+            dev_mode,
         );
 
         let monitors = Monitors::new(config.disabled_monitors.clone());
@@ -467,9 +474,13 @@ impl LewdwareApp {
         let media_manager = self.media_manager()?;
         let popup_id = self.next_popup_id();
 
+        // Shared with the request below and (once resolved) the `VideoDecoder` -- see
+        // `PendingKind::Video`'s doc comment.
+        let loop_video = Arc::new(AtomicBool::new(loop_video));
+
         // As with images, this just enqueues the request — see `UserEvent::VideoResolved` /
         // `handle_video_resolved`.
-        media_manager.get_video_data(popup_id, media_id, loop_video, audio, volume)?;
+        media_manager.get_video_data(popup_id, media_id, loop_video.clone(), audio, volume)?;
 
         let props = Self::window_props(popup_id, &window_opts);
         self.windows.insert(
@@ -822,6 +833,22 @@ impl LewdwareApp {
                                     ..
                                 }) => {
                                     *video_volume = volume;
+                                    Ok(())
+                                }
+                                _ => Err(LewdwareError::Internal("Invalid window type")),
+                            })
+                            .is_ok(),
+                        WindowAction::SetVideoLoop { tx, loop_video } => tx
+                            .send(match entry.get_mut() {
+                                PopupSlot::Ready(WindowType::Video(video_window)) => {
+                                    video_window.set_loop(loop_video);
+                                    Ok(())
+                                }
+                                PopupSlot::Pending(PendingWindow {
+                                    kind: PendingKind::Video { loop_video: pending, .. },
+                                    ..
+                                }) => {
+                                    pending.store(loop_video, Ordering::Relaxed);
                                     Ok(())
                                 }
                                 _ => Err(LewdwareError::Internal("Invalid window type")),
@@ -1254,9 +1281,9 @@ impl LewdwareApp {
             pending_fade,
         } = pending;
         let PendingKind::Video {
-            loop_video,
             video_paused,
             video_volume,
+            ..
         } = kind
         else {
             unreachable!("video resolve for a non-video pending slot")
@@ -1271,7 +1298,11 @@ impl LewdwareApp {
 
         window.request_redraw();
 
-        let mut video_window = match VideoWindow::new(window, video_player, loop_video) {
+        // `loop_video` isn't replayed here the way `video_paused`/`video_volume` are just below --
+        // it's the same `Arc<AtomicBool>` already baked into `video_player` at construction (see
+        // `PendingKind::Video`'s doc comment), so any `set_loop()` call made while this window was
+        // still pending already took effect.
+        let mut video_window = match VideoWindow::new(window, video_player) {
             Ok(w) => w,
             Err(err) => {
                 return self.pending_window_failed(id, "Failed to build video window", err);
@@ -1441,14 +1472,47 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                     button: MouseButton::Left,
                     ..
                 } => {
-                    let should_close = match entry.get_mut() {
+                    let click_result = match entry.get_mut() {
                         PopupSlot::Ready(window_type) => {
-                            window_type.inner_window_mut().handle_mouse_up()
+                            Some(window_type.inner_window_mut().handle_mouse_up())
                         }
-                        PopupSlot::Pending(_) => false,
+                        PopupSlot::Pending(_) => None,
                     };
-                    if should_close && let PopupSlot::Ready(window_type) = entry.remove() {
-                        self.close_window(window_type);
+
+                    if let Some(click_result) = click_result {
+                        if click_result.content_click {
+                            match entry.get_mut() {
+                                // Dialogs only fire `Window:on_click()` for clicks not consumed
+                                // by a button/input, which isn't known until the next render pass
+                                // (egui processes the click asynchronously) -- see
+                                // `mark_pending_content_click`.
+                                PopupSlot::Ready(WindowType::Dialog(dialog_window)) => {
+                                    dialog_window.mark_pending_content_click();
+                                }
+                                PopupSlot::Ready(window_type) => {
+                                    let inner_window = window_type.inner_window();
+                                    if inner_window
+                                        .lua_event_tx()
+                                        .send(lua::Event::WindowClicked {
+                                            id: inner_window.popup_id(),
+                                        })
+                                        .is_err()
+                                    {
+                                        tracing::debug!(
+                                            "Couldn't send WindowClicked event: Lua thread has \
+                                             shut down"
+                                        );
+                                    }
+                                }
+                                PopupSlot::Pending(_) => {}
+                            }
+                        }
+
+                        if click_result.should_close
+                            && let PopupSlot::Ready(window_type) = entry.remove()
+                        {
+                            self.close_window(window_type);
+                        }
                     }
                 }
                 _ => {}

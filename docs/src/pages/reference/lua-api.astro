@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import { createHighlighter } from 'shiki';
 import { parseLuaCATS } from '../../lib/parse-luacats';
-import type { Func } from '../../lib/parse-luacats';
+import type { DescBlock, Func } from '../../lib/parse-luacats';
 
 const apiSource = readFileSync(
 	new URL('../../../../shared/src/lua/api.lua', import.meta.url),
@@ -11,12 +11,13 @@ const apiSource = readFileSync(
 );
 const api = parseLuaCATS(apiSource);
 
-// Shiki highlighter for function/method signatures (build-time, no client JS)
+// Shiki highlighter for function/method signatures and fenced code blocks (build-time, no client
+// JS). Signatures are always Lua; fenced blocks carry their own language off the ```lang fence.
 const hl = await createHighlighter({ themes: ['github-dark', 'github-light'], langs: ['lua'] });
 
-function highlight(code: string): string {
+function highlight(code: string, lang: string = 'lua'): string {
 	return hl.codeToHtml(code, {
-		lang: 'lua',
+		lang,
 		themes: { dark: 'github-dark', light: 'github-light' },
 		defaultColor: false,
 	});
@@ -29,32 +30,52 @@ const knownTypes = new Set<string>([
 ]);
 
 // Render a text string:
+// - wraps inline `code` spans in <code>
 // - wraps uppercase type names in anchor links
 // - converts [label](lua://TypeName) LuaCATS reference links to HTML anchors
 // Returns an HTML string safe for use with set:html.
 function linkTypes(text: string): string {
 	const placeholders: string[] = [];
 
-	// Replace explicit [label](lua://TypeName) links with placeholders so the
-	// auto-link pass below cannot match identifiers inside the converted anchors.
-	let result = text.replace(
+	function stash(html: string): string {
+		placeholders.push(html);
+		return `\x00${placeholders.length - 1}\x00`;
+	}
+
+	// Inline code spans first, so neither the link syntax nor the auto-linker below reaches
+	// inside them.
+	let result = text.replace(/`([^`]+)`/g, (_, code) => stash(`<code>${code}</code>`));
+
+	// Explicit [label](lua://TypeName) links.
+	result = result.replace(
 		/\[([^\]]+)\]\(lua:\/\/([^)]+)\)/g,
 		(_, label, target) => {
 			const slug = target.toLowerCase().replace(/[.:]/g, '-');
-			placeholders.push(`<a href="#${slug}">${label}</a>`);
-			return `\x00${placeholders.length - 1}\x00`;
+			return stash(`<a href="#${slug}">${label}</a>`);
 		},
 	);
 
-	// Auto-link bare uppercase identifiers that match known types
+	// Auto-link bare uppercase identifiers that match known types.
 	result = result.replace(/\b([A-Z][a-zA-Z0-9]*)\b/g, (match) =>
 		knownTypes.has(match) ? `<a href="#${match.toLowerCase()}">${match}</a>` : match,
 	);
 
-	// Restore explicit link placeholders
+	// Restore stashed placeholders.
 	result = result.replace(/\x00(\d+)\x00/g, (_, i) => placeholders[Number(i)]);
 
 	return result;
+}
+
+// Render a description (paragraphs reflowed and link/code-span processed; fenced code blocks
+// syntax-highlighted verbatim) to an HTML string safe for use with set:html.
+function renderDesc(blocks: DescBlock[]): string {
+	return blocks
+		.map((b) =>
+			b.type === 'code'
+				? `<div class="api-code-block">${highlight(b.code, b.lang)}</div>`
+				: `<p class="api-desc">${linkTypes(b.text)}</p>`,
+		)
+		.join('');
 }
 
 function buildSignature(func: Func): string {
@@ -110,20 +131,11 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 				<div class="api-entry">
 					<h4 id={funcSlug(func.fullName)} class="fn-heading">{func.name}()</h4>
 					<div class="api-sig-row">
-						{func.async && (
-							<a
-								class="async-tag"
-								href="/dev-guides/mode-tasks/"
-								title="Non-blocking: calling this can let other Lua code run before it returns."
-							>
-								(async)
-							</a>
-						)}
 						<div class="api-sig" set:html={highlight(buildSignature(func))} />
 					</div>
 
-					{func.desc && (
-						<p class="api-desc" set:html={func.desc.replace(/\n/g, '<br>')} />
+					{func.desc.length > 0 && (
+						<Fragment set:html={renderDesc(func.desc)} />
 					)}
 
 					{func.params.length > 0 && (
@@ -171,15 +183,20 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 		<section class="type-section">
 			<h3 id={cls.name.toLowerCase()}>
 				{cls.name}
-				{cls.parent && (
+				{cls.parents.length > 0 && (
 					<span class="type-parent">
 						{' '}extends{' '}
-						<a href={`#${cls.parent.toLowerCase()}`}>{cls.parent}</a>
+						{cls.parents.map((parent, i) => (
+							<>
+								{i > 0 && ', '}
+								<a href={`#${parent.toLowerCase()}`}>{parent}</a>
+							</>
+						))}
 					</span>
 				)}
 			</h3>
 
-			{cls.desc && <p set:html={linkTypes(cls.desc)} />}
+			{cls.desc.length > 0 && <Fragment set:html={renderDesc(cls.desc)} />}
 
 			{cls.fields.length > 0 && (
 				<>
@@ -215,20 +232,11 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 					{cls.methods.map((method) => (
 						<div id={funcSlug(method.fullName)} class="api-entry api-method">
 							<div class="api-sig-row">
-								{method.async && (
-									<a
-										class="async-tag"
-										href="/dev-guides/mode-tasks/"
-										title="Non-blocking: calling this can let other Lua code run before it returns."
-									>
-										(async)
-									</a>
-								)}
 								<div class="api-sig" set:html={highlight(buildSignature(method))} />
 							</div>
 
-							{method.desc && (
-								<p class="api-desc" set:html={linkTypes(method.desc).replace(/\n/g, '<br>')} />
+							{method.desc.length > 0 && (
+								<Fragment set:html={renderDesc(method.desc)} />
 							)}
 
 							{method.params.filter((p) => p.name !== 'self').length > 0 && (
@@ -283,13 +291,24 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 					<code>{alias.name}</code>
 				</dt>
 				<dd>
-					{alias.desc && <p>{alias.desc}</p>}
+					{alias.desc && <p set:html={linkTypes(alias.desc)} />}
 					{alias.variants && alias.variants.length > 0 ? (
-						<div class="alias-variants">
-							{alias.variants.map((v) => (
-								<code class="alias-variant">{v}</code>
-							))}
-						</div>
+						alias.variants.some((v) => v.desc) ? (
+							<dl class="alias-variant-list">
+								{alias.variants.map((v) => (
+									<>
+										<dt><code class="alias-variant">{v.value}</code></dt>
+										<dd>{v.desc && <span set:html={linkTypes(v.desc)} />}</dd>
+									</>
+								))}
+							</dl>
+						) : (
+							<div class="alias-variants">
+								{alias.variants.map((v) => (
+									<code class="alias-variant">{v.value}</code>
+								))}
+							</div>
+						)
 					) : alias.type ? (
 						<code set:html={linkTypes(alias.type)} />
 					) : null}
@@ -313,9 +332,9 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 	}
 
 	/* Shiki-highlighted signature block. The border/background/padding live on
-	   `.api-sig-row` so the `(async)` tag can sit inside the same box; the
-	   `pre` itself is transparent and unpadded. */
-	.api-sig :global(pre.shiki) {
+	   `.api-sig-row`; the `pre` itself is transparent and unpadded. */
+	.api-sig :global(pre.shiki),
+	.api-code-block :global(pre.shiki) {
 		margin: 0;
 		padding: 0;
 		border: none;
@@ -323,19 +342,40 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 		font-size: 0.875rem;
 	}
 
+	/* A fenced code block from a doc comment -- same treatment as `.api-sig-row` (border,
+	   background, scroll), but block-level rather than a single-line flex row, since it may
+	   span multiple lines. */
+	.api-code-block {
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.375rem;
+		padding: 0.625rem 1rem;
+		margin: 0.5rem 0 0.75rem;
+		overflow-x: auto;
+	}
+	:root[data-theme='light'] .api-code-block {
+		background-color: #fff;
+	}
+	:root[data-theme='dark'] .api-code-block {
+		background-color: #24292e;
+	}
+
 	/* Dual-theme text color switching — Starlight sets data-theme on <html>.
-	   (The background lives on `.api-sig-row` below, hardcoded to match the
-	   'github-dark'/'github-light' shiki themes used for every signature.) */
-	:root[data-theme='light'] .api-sig :global(.shiki) {
+	   (The background lives on `.api-sig-row`/`.api-code-block` above, hardcoded to match the
+	   'github-dark'/'github-light' shiki themes used for every signature and code block.) */
+	:root[data-theme='light'] .api-sig :global(.shiki),
+	:root[data-theme='light'] .api-code-block :global(.shiki) {
 		color: var(--shiki-light) !important;
 	}
-	:root[data-theme='light'] .api-sig :global(.shiki span) {
+	:root[data-theme='light'] .api-sig :global(.shiki span),
+	:root[data-theme='light'] .api-code-block :global(.shiki span) {
 		color: var(--shiki-light) !important;
 	}
-	:root[data-theme='dark'] .api-sig :global(.shiki) {
+	:root[data-theme='dark'] .api-sig :global(.shiki),
+	:root[data-theme='dark'] .api-code-block :global(.shiki) {
 		color: var(--shiki-dark) !important;
 	}
-	:root[data-theme='dark'] .api-sig :global(.shiki span) {
+	:root[data-theme='dark'] .api-sig :global(.shiki span),
+	:root[data-theme='dark'] .api-code-block :global(.shiki span) {
 		color: var(--shiki-dark) !important;
 	}
 
@@ -354,9 +394,7 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 		color: var(--sl-color-text);
 	}
 
-	/* Row containing the optional `(async)` tag and the signature — this is
-	   the bordered/backgrounded box the signature used to have on its own,
-	   moved here so the tag renders inside it rather than beside it. */
+	/* Bordered/backgrounded box wrapping each signature. */
 	.api-sig-row {
 		display: flex;
 		align-items: center;
@@ -377,20 +415,6 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 
 	.api-sig-row .api-sig {
 		flex: 1;
-	}
-
-	/* `(async)` tag preceding non-blocking functions/methods, editor-hover style */
-	.async-tag {
-		flex-shrink: 0;
-		font-family: var(--sl-font-mono, monospace);
-		font-size: 0.85rem;
-		font-weight: 600;
-		color: var(--sl-color-orange);
-		text-decoration: none;
-	}
-
-	.async-tag:hover {
-		text-decoration: underline;
 	}
 
 	.api-return {
@@ -486,5 +510,22 @@ const mainClasses = api.classes.filter((c) => !optionsClassNames.has(c.name));
 		border-radius: 0.375rem;
 		padding: 0.125rem 0.5rem;
 		font-size: 0.85rem;
+	}
+
+	/* Used instead of `.alias-variants` when at least one variant has a description (e.g.
+	   TextFont) -- one row per variant, code chip beside its description, rather than a
+	   wrapping row of bare chips. */
+	.alias-variant-list {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 0.375rem 0.75rem;
+		align-items: baseline;
+		margin: 0.375rem 0 0;
+	}
+
+	.alias-variant-list dt,
+	.alias-variant-list dd {
+		margin: 0;
+		padding: 0;
 	}
 </style>

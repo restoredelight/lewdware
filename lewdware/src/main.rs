@@ -56,9 +56,14 @@ fn main() -> Result<()> {
     let mut args = args_os();
 
     let mut mode_path = None;
+    let mut dev_mode = false;
     while let Some(arg) = args.next() {
         if &arg == "--mode-path" {
             mode_path = Some(PathBuf::from(args.next().context("No mode path provided")?));
+        }
+
+        if &arg == "--dev" {
+            dev_mode = true;
         }
     }
 
@@ -103,7 +108,7 @@ fn main() -> Result<()> {
     spawn_panic_thread(proxy.clone(), config.panic_button.clone());
     create_tray_icon(proxy.clone()).inspect_err(|err| report_fatal_startup_error(err))?;
 
-    let mut app = LewdwareApp::new(wgpu_state, proxy, config)
+    let mut app = LewdwareApp::new(wgpu_state, proxy, config, dev_mode)
         .inspect_err(|err| report_fatal_startup_error(err))?;
     event_loop.run_app(&mut app)?;
 

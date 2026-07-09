@@ -1,14 +1,11 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use mlua::{
-    ExternalError, ExternalResult, FromLua, LuaSerdeExt, UserData, UserDataFields, UserDataMethods,
-};
+use mlua::{ExternalResult, FromLua, Lua, LuaSerdeExt, UserData, UserDataFields, UserDataMethods};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    error::LewdwareError,
     lua::{
-        DialogElementUpdate, Media, PopupId, WindowProps,
+        DialogElementUpdate, Media, PopupId, WindowProps, dev_log::log_noop,
         api::{Anchor, Coord},
         request::WindowRequestSender,
     },
@@ -53,9 +50,14 @@ impl UserData for ImageWindow {
 }
 
 impl ImageWindow {
-    pub fn new(props: WindowProps, image: Media, request_sender: WindowRequestSender) -> Self {
+    pub fn new(
+        props: WindowProps,
+        image: Media,
+        request_sender: WindowRequestSender,
+        dev_mode: bool,
+    ) -> Self {
         ImageWindow {
-            inner_window: InnerWindow::new(props, request_sender),
+            inner_window: InnerWindow::new(props, request_sender, dev_mode),
             image,
         }
     }
@@ -77,39 +79,45 @@ impl UserData for VideoWindow {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         InnerWindow::add_methods(methods);
 
-        methods.add_method("pause", |_, this, _: ()| {
-            this.inner_window
-                .request_sender
-                .pause_video()
-                .into_lua_err()?;
-
-            Ok(())
+        methods.add_method("pause", |lua, this, _: ()| {
+            let result = this.inner_window.request_sender.pause_video().into_lua_err()?;
+            Ok(this.inner_window.report_noop(lua, "VideoWindow:pause()", result))
         });
 
-        methods.add_method("play", |_, this, _: ()| {
-            this.inner_window
-                .request_sender
-                .play_video()
-                .into_lua_err()?;
-
-            Ok(())
+        methods.add_method("play", |lua, this, _: ()| {
+            let result = this.inner_window.request_sender.play_video().into_lua_err()?;
+            Ok(this.inner_window.report_noop(lua, "VideoWindow:play()", result))
         });
 
-        methods.add_method("set_volume", |_, this, volume: f32| {
-            this.inner_window
+        methods.add_method("set_volume", |lua, this, volume: f32| {
+            let result = this
+                .inner_window
                 .request_sender
                 .set_video_volume(volume)
                 .into_lua_err()?;
+            Ok(this.inner_window.report_noop(lua, "VideoWindow:set_volume()", result))
+        });
 
-            Ok(())
+        methods.add_method("set_loop", |lua, this, loop_video: bool| {
+            let result = this
+                .inner_window
+                .request_sender
+                .set_video_loop(loop_video)
+                .into_lua_err()?;
+            Ok(this.inner_window.report_noop(lua, "VideoWindow:set_loop()", result))
         });
     }
 }
 
 impl VideoWindow {
-    pub fn new(props: WindowProps, video: Media, request_tx: WindowRequestSender) -> Self {
+    pub fn new(
+        props: WindowProps,
+        video: Media,
+        request_tx: WindowRequestSender,
+        dev_mode: bool,
+    ) -> Self {
         VideoWindow {
-            inner_window: InnerWindow::new(props, request_tx),
+            inner_window: InnerWindow::new(props, request_tx, dev_mode),
             video,
         }
     }
@@ -121,14 +129,14 @@ pub struct DialogWindow {
 }
 
 struct DialogWindowState {
-    click_callbacks: Vec<mlua::Function>,
+    select_callbacks: Vec<mlua::Function>,
     submit_callbacks: Vec<mlua::Function>,
 }
 
 impl DialogWindowState {
     fn new() -> Self {
         Self {
-            click_callbacks: Vec::new(),
+            select_callbacks: Vec::new(),
             submit_callbacks: Vec::new(),
         }
     }
@@ -144,11 +152,14 @@ impl UserData for DialogWindow {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         InnerWindow::add_methods(methods);
 
-        methods.add_method("on_click", |_, this, cb: mlua::Function| {
+        // Fires on selecting a button (by click or, for the `default` one, Enter in an input) --
+        // distinct from the physical `Window:on_click()` content click, which fires only for
+        // clicks not consumed by an interactive element (see `DialogWindow::mark_pending_content_click`).
+        methods.add_method("on_select", |_, this, cb: mlua::Function| {
             this.state
                 .try_borrow_mut()
                 .into_lua_err()?
-                .click_callbacks
+                .select_callbacks
                 .push(cb);
 
             Ok(())
@@ -166,41 +177,49 @@ impl UserData for DialogWindow {
 
         // Nil if the window is closed -- documented as a deliberate exception to the usual
         // no-op-returns-false convention, since "no values" (an empty table) is itself a
-        // meaningful reply for a still-open dialog with no input elements.
-        methods.add_method("values", |_, this, _: ()| {
-            Ok(this.inner_window.request_sender.get_dialog_values()?)
+        // meaningful reply for a still-open dialog with no input elements. Unlike `value()`
+        // below, nil here is unambiguous (always means "closed"), so it's still worth a dev-mode
+        // no-op log.
+        methods.add_method("values", |lua, this, _: ()| {
+            let result = this.inner_window.request_sender.get_dialog_values()?;
+            this.inner_window
+                .report_noop(lua, "DialogWindow:values()", result.is_some());
+            Ok(result)
         });
 
         // Nil for a closed window OR an id that isn't a live input element -- both just mean
-        // "no value to report" from the caller's perspective.
+        // "no value to report" from the caller's perspective, and (unlike `values()`) an
+        // unrecognised id is an entirely normal case, not a dead-object issue -- so this isn't
+        // logged as a no-op.
         methods.add_method("value", |_, this, id: String| {
             Ok(this.inner_window.request_sender.get_dialog_value(id)?)
         });
 
         methods.add_method(
             "update",
-            |_, this, (id, props): (String, DialogElementUpdate)| {
-                Ok(this
+            |lua, this, (id, props): (String, DialogElementUpdate)| {
+                let result = this
                     .inner_window
                     .request_sender
-                    .update_dialog_element(id, props)?)
+                    .update_dialog_element(id, props)?;
+                Ok(this.inner_window.report_noop(lua, "DialogWindow:update()", result))
             },
         );
     }
 }
 
 impl DialogWindow {
-    pub fn new(props: WindowProps, request_sender: WindowRequestSender) -> Self {
+    pub fn new(props: WindowProps, request_sender: WindowRequestSender, dev_mode: bool) -> Self {
         Self {
-            inner_window: InnerWindow::new(props, request_sender),
+            inner_window: InnerWindow::new(props, request_sender, dev_mode),
             state: RefCell::new(DialogWindowState::new()),
         }
     }
 
-    pub fn on_click(&self, button_id: String, values: HashMap<String, String>) -> anyhow::Result<()> {
+    pub fn on_select(&self, button_id: String, values: HashMap<String, String>) -> anyhow::Result<()> {
         let callbacks = {
             let state = self.state.try_borrow()?;
-            state.click_callbacks.clone()
+            state.select_callbacks.clone()
         };
 
         for cb in callbacks {
@@ -251,22 +270,29 @@ impl UserData for TextWindow {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         InnerWindow::add_methods(methods);
 
-        methods.add_method("set_text", |_, this, text: String| {
-            this.inner_window
-                .request_sender
-                .set_text(Some(text.clone()))?;
+        methods.add_method("set_text", |lua, this, text: String| {
+            let changed = this.inner_window.request_sender.set_text(Some(text.clone()))?;
 
-            this.state.try_borrow_mut().into_lua_err()?.text = text;
+            // Only update the local cache if the window was actually open to receive it --
+            // otherwise `text` would report a change that never took effect.
+            if changed {
+                this.state.try_borrow_mut().into_lua_err()?.text = text;
+            }
 
-            Ok(())
+            Ok(this.inner_window.report_noop(lua, "TextWindow:set_text()", changed))
         });
     }
 }
 
 impl TextWindow {
-    pub fn new(props: WindowProps, text: String, request_sender: WindowRequestSender) -> Self {
+    pub fn new(
+        props: WindowProps,
+        text: String,
+        request_sender: WindowRequestSender,
+        dev_mode: bool,
+    ) -> Self {
         Self {
-            inner_window: InnerWindow::new(props, request_sender),
+            inner_window: InnerWindow::new(props, request_sender, dev_mode),
             state: RefCell::new(TextWindowState { text }),
         }
     }
@@ -281,6 +307,7 @@ pub struct InnerWindow {
     state: RefCell<InnerWindowState>,
     monitor: Monitor,
     request_sender: WindowRequestSender,
+    dev_mode: bool,
 }
 
 struct InnerWindowState {
@@ -290,6 +317,7 @@ struct InnerWindowState {
     close_callbacks: Vec<mlua::Function>,
     spawned: bool,
     spawn_callbacks: Vec<mlua::Function>,
+    click_callbacks: Vec<mlua::Function>,
     move_callback: Option<(u64, mlua::Function)>,
     current_move_id: u64,
     fade_callback: Option<(u64, mlua::Function)>,
@@ -325,7 +353,7 @@ impl HasInnerWindow for TextWindow {
 }
 
 impl InnerWindow {
-    pub fn new(props: WindowProps, request_tx: WindowRequestSender) -> Self {
+    pub fn new(props: WindowProps, request_tx: WindowRequestSender, dev_mode: bool) -> Self {
         Self {
             id: props.window_id,
             width: props.width,
@@ -335,7 +363,19 @@ impl InnerWindow {
             state: RefCell::new(InnerWindowState::new(props.x, props.y)),
             monitor: props.monitor,
             request_sender: request_tx,
+            dev_mode,
         }
+    }
+
+    /// Logs a dev-mode warning (with the Lua call site) when `happened` is `false` -- i.e. the
+    /// call was a no-op because the window is already closed (execution model rule 3). Returns
+    /// `happened` unchanged, so call sites can just wrap their result: `Ok(self.report_noop(lua,
+    /// "...", result))`.
+    fn report_noop(&self, lua: &Lua, what: &str, happened: bool) -> bool {
+        if !happened && self.dev_mode {
+            log_noop(lua, what);
+        }
+        happened
     }
 
     fn add_fields<T: HasInnerWindow, F: UserDataFields<T>>(fields: &mut F) {
@@ -372,35 +412,61 @@ impl InnerWindow {
     }
 
     fn add_methods<T: HasInnerWindow + 'static, M: UserDataMethods<T>>(methods: &mut M) {
-        methods.add_method("close", |_, this, _: ()| {
-            let inner_window = this.inner_window();
+        methods.add_method("close", |lua, this, _: ()| {
+            let closed_now = this.inner_window().request_sender.close().into_lua_err()?;
 
-            match inner_window.request_sender.close() {
-                Ok(()) | Err(LewdwareError::WindowNotFound) => {}
-                Err(err) => return Err(err.into_lua_err()),
+            // Set eagerly, rather than waiting for the `WindowClosed` event this also triggers
+            // (asynchronous -- only processed on a later spin of the Lua thread's event loop): a
+            // mode checking `.closed` or calling `on_close()`/`on_spawn()` right after `close()`
+            // returns should already see the window as closed, not a stale snapshot from before
+            // the request round-trip. `on_close`'s callbacks still fire only once the event is
+            // processed, same as before -- this only advances the flag, not callback timing.
+            if closed_now {
+                this.inner_window()
+                    .state
+                    .try_borrow_mut()
+                    .into_lua_err()?
+                    .closed = true;
+            }
+
+            Ok(this.inner_window().report_noop(lua, "Window:close()", closed_now))
+        });
+
+        methods.add_method("on_close", |lua, this, cb: mlua::Function| {
+            let mut state = this.inner_window().state.try_borrow_mut().into_lua_err()?;
+
+            if state.closed {
+                return Ok(this.inner_window().report_noop(lua, "Window:on_close()", false));
+            }
+
+            state.close_callbacks.push(cb);
+            Ok(true)
+        });
+
+        // A physical content-area click -- "the user poked this window" (execution model). Fires
+        // on every qualifying click, not just the first (unlike `on_spawn`). On `DialogWindow`,
+        // only fires for clicks not consumed by a button/input -- see
+        // `DialogWindow::mark_pending_content_click` on the rendering side.
+        methods.add_method("on_click", |lua, this, cb: mlua::Function| {
+            let mut state = this.inner_window().state.try_borrow_mut().into_lua_err()?;
+
+            if state.closed {
+                return Ok(this.inner_window().report_noop(lua, "Window:on_click()", false));
+            }
+
+            state.click_callbacks.push(cb);
+            Ok(true)
+        });
+
+        methods.add_method("on_spawn", |lua, this, cb: mlua::Function| {
+            let (closed, spawned) = {
+                let state = this.inner_window().state.try_borrow().into_lua_err()?;
+                (state.closed, state.spawned)
             };
 
-            Ok(())
-        });
-
-        methods.add_method("on_close", |_, this, cb: mlua::Function| {
-            this.inner_window()
-                .state
-                .try_borrow_mut()
-                .into_lua_err()?
-                .close_callbacks
-                .push(cb);
-
-            Ok(())
-        });
-
-        methods.add_method("on_spawn", |_, this, cb: mlua::Function| {
-            let spawned = this
-                .inner_window()
-                .state
-                .try_borrow()
-                .into_lua_err()?
-                .spawned;
+            if closed {
+                return Ok(this.inner_window().report_noop(lua, "Window:on_spawn()", false));
+            }
 
             if spawned {
                 // Already spawned: still fire `cb`, but queued rather than inline — a Lewdware
@@ -419,12 +485,12 @@ impl InnerWindow {
                     .push(cb);
             }
 
-            Ok(())
+            Ok(true)
         });
 
         methods.add_method(
             "move",
-            |_, this, (opts, cb): (Option<MoveOpts>, Option<mlua::Function>)| {
+            |lua, this, (opts, cb): (Option<MoveOpts>, Option<mlua::Function>)| {
                 let inner_window = this.inner_window();
                 let opts = opts.unwrap_or_default();
 
@@ -443,18 +509,18 @@ impl InnerWindow {
                     id
                 };
 
-                inner_window
+                let moved = inner_window
                     .request_sender
                     .move_window(id, opts)
                     .into_lua_err()?;
 
-                Ok(())
+                Ok(inner_window.report_noop(lua, "Window:move()", moved))
             },
         );
 
         methods.add_method(
             "fade",
-            |_, this, (opts, cb): (Option<FadeOpts>, Option<mlua::Function>)| {
+            |lua, this, (opts, cb): (Option<FadeOpts>, Option<mlua::Function>)| {
                 let inner_window = this.inner_window();
                 let opts = opts.unwrap_or_default();
 
@@ -473,31 +539,31 @@ impl InnerWindow {
                     id
                 };
 
-                inner_window
+                let faded = inner_window
                     .request_sender
                     .fade_window(id, opts)
                     .into_lua_err()?;
 
-                Ok(())
+                Ok(inner_window.report_noop(lua, "Window:fade()", faded))
             },
         );
 
-        methods.add_method("set_title", |_, this, title: Option<String>| {
-            this.inner_window()
+        methods.add_method("set_title", |lua, this, title: Option<String>| {
+            let result = this
+                .inner_window()
                 .request_sender
                 .set_title(title)
                 .into_lua_err()?;
-
-            Ok(())
+            Ok(this.inner_window().report_noop(lua, "Window:set_title()", result))
         });
 
-        methods.add_method("set_opacity", |_, this, opacity: f32| {
-            this.inner_window()
+        methods.add_method("set_opacity", |lua, this, opacity: f32| {
+            let result = this
+                .inner_window()
                 .request_sender
                 .set_opacity(opacity)
                 .into_lua_err()?;
-
-            Ok(())
+            Ok(this.inner_window().report_noop(lua, "Window:set_opacity()", result))
         });
     }
 
@@ -529,6 +595,24 @@ impl InnerWindow {
 
             state.spawned = true;
             state.spawn_callbacks.clone()
+        };
+
+        for cb in callbacks {
+            if let Err(err) = cb.call::<()>(()) {
+                tracing::error!("{err}");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Called for every qualifying content click (see `Window:on_click()`'s registration) -- no
+    /// "already fired" guard, unlike `on_spawn`, since a window can be clicked any number of
+    /// times.
+    pub fn on_click(&self) -> anyhow::Result<()> {
+        let callbacks = {
+            let state = self.state.try_borrow()?;
+            state.click_callbacks.clone()
         };
 
         for cb in callbacks {
@@ -589,6 +673,7 @@ impl InnerWindowState {
             close_callbacks: Vec::new(),
             spawned: false,
             spawn_callbacks: Vec::new(),
+            click_callbacks: Vec::new(),
             move_callback: None,
             current_move_id: 0,
             fade_callback: None,
