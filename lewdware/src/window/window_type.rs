@@ -366,6 +366,10 @@ impl VideoWindow {
 
         self.video_player.play();
     }
+
+    pub fn set_volume(&self, volume: f32) {
+        self.video_player.set_volume(volume);
+    }
 }
 
 /// A dialog element, fully resolved and ready to render — built by `app.rs`'s

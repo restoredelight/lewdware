@@ -94,6 +94,15 @@ impl UserData for VideoWindow {
 
             Ok(())
         });
+
+        methods.add_method("set_volume", |_, this, volume: f32| {
+            this.inner_window
+                .request_sender
+                .set_video_volume(volume)
+                .into_lua_err()?;
+
+            Ok(())
+        });
     }
 }
 

@@ -1,7 +1,7 @@
 export type ModeId =
-  | { type: "Default"; mode: string }
-  | { type: "Pack"; id: number; mode: string }
-  | { type: "File"; path: string; mode: string };
+  | { type: "Default" }
+  | { type: "Pack"; id: number }
+  | { type: "File"; path: string };
 
 export interface ModeOptionsEntry {
   mode: ModeId;

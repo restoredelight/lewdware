@@ -4,6 +4,7 @@ mod interval;
 mod media;
 mod mode;
 mod request;
+mod storage;
 mod window;
 
 use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, sync::Arc, thread};
@@ -11,13 +12,14 @@ use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, syn
 use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
-    mode::{Metadata, OptionValue, VERSION_MAJOR, read_mode_metadata},
+    mode::{OptionValue, VERSION_MAJOR, read_mode_metadata},
     user_config::AppConfig,
 };
 use tokio::{
     sync::{mpsc::UnboundedSender, oneshot},
     task::LocalSet,
 };
+use uuid::Uuid;
 
 use crate::{
     app::EventPoster,
@@ -141,6 +143,13 @@ impl LuaThreadHandle {
     }
 }
 
+/// The currently loaded pack's identity and metadata, exposed to standalone modes as
+/// `lewdware.pack` (see `start_lua_thread` for why pack-embedded modes don't get one).
+pub struct PackInfo {
+    pub id: Uuid,
+    pub metadata: shared::read_pack::Metadata,
+}
+
 /// Starts the Lua thread using the given `media_manager` — already opened by the caller (see
 /// `LewdwareApp::new` in `app.rs`), which also keeps its own clone to resolve media for popups
 /// asynchronously (see `App::spawn_image`/`spawn_video`/`spawn_audio`).
@@ -148,6 +157,7 @@ pub fn start_lua_thread(
     event_poster: EventPoster,
     config: Arc<AppConfig>,
     media_manager: MediaManager,
+    pack_info: PackInfo,
     gpu_available: bool,
 ) -> (
     UnboundedSender<Event>,
@@ -164,13 +174,13 @@ pub fn start_lua_thread(
             .build()
             .expect("Failed to build tokio runtime");
 
-        let (mut file, mode): (Box<dyn ReadSeek>, _) = match config.mode.clone() {
-            shared::user_config::Mode::Default(default_mode) => {
+        let mut file: Box<dyn ReadSeek> = match config.mode.clone() {
+            shared::user_config::Mode::Default => {
                 let mode_data = include_bytes!("../../../default-modes/build/Default Modes.lwmode");
 
-                (Box::new(Cursor::new(mode_data)), default_mode)
+                Box::new(Cursor::new(mode_data))
             }
-            shared::user_config::Mode::Pack { id, mode } => {
+            shared::user_config::Mode::Pack { id } => {
                 let mode_data = match media_manager.get_mode(id) {
                     Ok(data) => data,
                     Err(err) => {
@@ -179,9 +189,9 @@ pub fn start_lua_thread(
                     }
                 };
 
-                (Box::new(Cursor::new(mode_data)), mode)
+                Box::new(Cursor::new(mode_data))
             }
-            shared::user_config::Mode::File { path, mode } => {
+            shared::user_config::Mode::File { path } => {
                 let file = match File::open(path) {
                     Ok(file) => file,
                     Err(err) => {
@@ -190,11 +200,11 @@ pub fn start_lua_thread(
                     }
                 };
 
-                (Box::new(file), mode)
+                Box::new(file)
             }
         };
 
-        let (header, Metadata { modes, files, .. }) = match read_mode_metadata(&mut file) {
+        let (header, metadata) = match read_mode_metadata(&mut file) {
             Ok(x) => x,
             Err(err) => {
                 report_fatal_startup_error(err);
@@ -218,18 +228,7 @@ pub fn start_lua_thread(
             }
         }
 
-        let mode_obj = match modes.get(&mode) {
-            Some(mode_obj) => mode_obj,
-            None => {
-                report_fatal_startup_error(format!(
-                    "Mode '{mode}' was not found in this mode file \
-                     (the configuration may be stale)"
-                ));
-                return;
-            }
-        };
-
-        let entrypoint = mode_obj.entrypoint.clone();
+        let entrypoint = metadata.entrypoint.clone();
 
         let mut mode_config = config
             .mode_options
@@ -238,7 +237,7 @@ pub fn start_lua_thread(
             .unwrap_or_default();
 
         // Make sure the config contains all the correct options
-        for (key, option) in mode_obj.all_options() {
+        for (key, option) in metadata.all_options() {
             if mode_config
                 .get(key)
                 .is_none_or(|value| !option.matches_value(value))
@@ -247,7 +246,34 @@ pub fn start_lua_thread(
             }
         }
 
-        let mode = Mode::new(file, files);
+        let mode = Mode::new(file, metadata.files);
+
+        // A mode embedded in a pack only ever runs against that one pack, so its storage is
+        // scoped by pack UUID + mode UUID combined (so the same mode embedded in two different
+        // packs gets independent storage); a standalone mode's storage is scoped by its own UUID
+        // alone, shared across whichever pack it happens to run against.
+        let scope_key = if matches!(config.mode, shared::user_config::Mode::Pack { .. }) {
+            format!("{}-{}", pack_info.id, header.id)
+        } else {
+            header.id.to_string()
+        };
+
+        let storage = match storage::Storage::open(&scope_key) {
+            Ok(x) => x,
+            Err(err) => {
+                report_fatal_startup_error(err);
+                return;
+            }
+        };
+
+        // A mode embedded in a pack only ever runs against that one pack, so `lewdware.pack`
+        // wouldn't tell it anything it doesn't already know -- and (see above) its storage is
+        // already scoped per-pack, so it doesn't need `pack.id` to compose keys either.
+        let pack_info = if matches!(config.mode, shared::user_config::Mode::Pack { .. }) {
+            None
+        } else {
+            Some(pack_info)
+        };
 
         let mut local = LocalSet::new();
 
@@ -255,6 +281,8 @@ pub fn start_lua_thread(
             mode,
             RequestSender::new(request_tx, event_poster),
             media_manager,
+            pack_info,
+            storage,
             mode_config,
             gpu_available,
         ) {
@@ -284,6 +312,10 @@ pub fn start_lua_thread(
             tracing::info!("Code finished");
         });
 
+        // Kept alive past the two `spawn_local` calls below (which each move their own clone),
+        // so storage can still be flushed synchronously once they're cancelled on shutdown.
+        let runtime_for_shutdown = runtime.clone();
+
         local.spawn_local(async move {
             while let Some(event) = event_rx.recv().await {
                 if let Err(err) = runtime.handle_event(event) {
@@ -303,6 +335,13 @@ pub fn start_lua_thread(
                 }
             }
         });
+
+        // A debounced storage write scheduled on `local` would otherwise never run: `drop(local)`
+        // below cancels every task still spawned on it, silently losing the last write of the
+        // session. Flushing synchronously here, before that drop, guarantees it's persisted.
+        if let Err(err) = runtime_for_shutdown.flush_storage() {
+            tracing::warn!("Failed to flush lewdware.storage on shutdown: {err}");
+        }
 
         // Cancels any tasks still spawned on `local` (mode scripts almost always have at least
         // one `every`/`after` timer running forever, so we get here via the shutdown signal
@@ -334,6 +373,7 @@ struct LuaRuntime {
     media_manager: MediaManager,
     windows: Windows,
     audio_handles: AudioHandles,
+    storage: storage::Storage,
     lua: Lua,
 }
 
@@ -342,6 +382,8 @@ impl LuaRuntime {
         mode: Mode,
         request_tx: RequestSender,
         media_manager: MediaManager,
+        pack_info: Option<PackInfo>,
+        storage: storage::Storage,
         config: HashMap<String, OptionValue>,
         gpu_available: bool,
     ) -> anyhow::Result<Self> {
@@ -353,16 +395,22 @@ impl LuaRuntime {
             media_manager,
             windows: Rc::new(RefCell::new(HashMap::new())),
             audio_handles: Rc::new(RefCell::new(HashMap::new())),
+            storage,
             lua,
         };
 
-        runtime.create_api(config, gpu_available)?;
+        runtime.create_api(pack_info, config, gpu_available)?;
 
         Ok(runtime)
     }
 
     fn run_entrypoint(&self, entrypoint: String) -> mlua::Result<()> {
         self.mode.load(&self.lua, entrypoint).into_lua_err()?.eval()
+    }
+
+    /// See the call site in `start_lua_thread` for why this must run synchronously on shutdown.
+    fn flush_storage(&self) -> anyhow::Result<()> {
+        self.storage.flush_now()
     }
 
     fn handle_event(&self, event: Event) -> anyhow::Result<()> {
@@ -427,6 +475,7 @@ impl LuaRuntime {
 
     fn create_api(
         &mut self,
+        pack_info: Option<PackInfo>,
         config: HashMap<String, OptionValue>,
         gpu_available: bool,
     ) -> mlua::Result<()> {
@@ -436,8 +485,12 @@ impl LuaRuntime {
             self.media_manager.clone(),
             self.windows.clone(),
             self.audio_handles.clone(),
-            config,
-            gpu_available,
+            self.storage.clone(),
+            api::ApiOptions {
+                pack_info,
+                config,
+                gpu_available,
+            },
         )?;
 
         self.lua
@@ -750,6 +803,9 @@ mod tests {
                         WindowAction::PlayVideo { tx } => {
                             let _ = tx.send(Ok(()));
                         }
+                        WindowAction::SetVideoVolume { tx, .. } => {
+                            let _ = tx.send(Ok(()));
+                        }
                         WindowAction::SetText { tx, .. } => {
                             let _ = tx.send(Ok(()));
                         }
@@ -798,6 +854,12 @@ mod tests {
                     AudioAction::Play { tx } => {
                         let _ = tx.send(());
                     }
+                    AudioAction::SetVolume { tx, .. } => {
+                        let _ = tx.send(());
+                    }
+                    AudioAction::Stop { tx } => {
+                        let _ = tx.send(());
+                    }
                 },
             }
         }
@@ -813,6 +875,7 @@ mod tests {
         event_tx: UnboundedSender<Event>,
         recorded: Arc<Mutex<Vec<Recorded>>>,
         _pack_file: NamedTempFile,
+        _storage_dir: tempfile::TempDir,
     }
 
     impl Harness {
@@ -820,7 +883,7 @@ mod tests {
             let pack_file = pack_fixture(with_image);
             let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
 
-            let (media_manager, _metadata, _media_manager_handle) =
+            let (media_manager, _metadata, _pack_id, _media_manager_handle) =
                 MediaManager::open(pack_file.path(), event_poster.clone(), None).unwrap();
 
             let (request_tx, request_rx) = std::sync::mpsc::sync_channel(20);
@@ -834,10 +897,21 @@ mod tests {
                 thread::spawn(move || run_fake_handler(request_rx, recorded, event_tx));
             }
 
+            let storage_dir = tempfile::tempdir().unwrap();
+            let storage = storage::Storage::open_at(storage_dir.path().join("test.db")).unwrap();
+
             let mode = make_mode(sources);
             let runtime = Rc::new(
-                LuaRuntime::new(mode, request_sender, media_manager, HashMap::new(), false)
-                    .unwrap(),
+                LuaRuntime::new(
+                    mode,
+                    request_sender,
+                    media_manager,
+                    None,
+                    storage,
+                    HashMap::new(),
+                    false,
+                )
+                .unwrap(),
             );
 
             Self {
@@ -846,6 +920,7 @@ mod tests {
                 event_tx: event_tx_clone,
                 recorded,
                 _pack_file: pack_file,
+                _storage_dir: storage_dir,
             }
         }
 
@@ -1077,6 +1152,270 @@ mod tests {
                     err.to_string().contains("circular"),
                     "expected a circular-require error, got: {err}"
                 );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn lewdware_pack_absent_for_pack_embedded_modes() {
+        LocalSet::new()
+            .run_until(async {
+                // `Harness::new` always builds its `LuaRuntime` with `pack_info: None` -- the
+                // same as what `start_lua_thread` passes for `Mode::Pack`.
+                let mut harness =
+                    Harness::new(&[("main.lua", r#"assert(lewdware.pack == nil)"#)], false);
+
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn lewdware_pack_reflects_pack_metadata_for_standalone_modes() {
+        LocalSet::new()
+            .run_until(async {
+                let pack_file = pack_fixture(false);
+                let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
+
+                let (media_manager, _metadata, pack_id, _handle) =
+                    MediaManager::open(pack_file.path(), event_poster.clone(), None).unwrap();
+
+                let (request_tx, _request_rx) = std::sync::mpsc::sync_channel(20);
+                let request_sender = RequestSender::new(request_tx, event_poster);
+
+                let pack_info = PackInfo {
+                    id: pack_id,
+                    metadata: shared::read_pack::Metadata {
+                        name: "Test Pack".to_string(),
+                        creator: Some("tester".to_string()),
+                        description: None,
+                        version: Some("2.0.0".to_string()),
+                    },
+                };
+
+                let mode = make_mode(&[(
+                    "main.lua",
+                    r#"
+                        assert(lewdware.pack.name == "Test Pack", "wrong name")
+                        assert(lewdware.pack.author == "tester", "wrong author")
+                        assert(lewdware.pack.version == "2.0.0", "wrong version")
+                        assert(type(lewdware.pack.id) == "string", "id should be a string")
+                    "#,
+                )]);
+
+                let storage_dir = tempfile::tempdir().unwrap();
+                let storage =
+                    storage::Storage::open_at(storage_dir.path().join("test.db")).unwrap();
+
+                let runtime = LuaRuntime::new(
+                    mode,
+                    request_sender,
+                    media_manager,
+                    Some(pack_info),
+                    storage,
+                    HashMap::new(),
+                    false,
+                )
+                .unwrap();
+
+                runtime.run_entrypoint("main.lua".to_string()).unwrap();
+
+                assert_eq!(
+                    runtime
+                        .lua
+                        .globals()
+                        .get::<mlua::Table>("lewdware")
+                        .unwrap()
+                        .get::<mlua::Table>("pack")
+                        .unwrap()
+                        .get::<String>("id")
+                        .unwrap(),
+                    pack_id.to_string()
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn lewdware_storage_get_set_remove_clear_keys_roundtrip() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[(
+                        "main.lua",
+                        r#"
+                            assert(lewdware.storage.get("count") == nil, "should start empty")
+                            assert(#lewdware.storage.keys() == 0)
+
+                            lewdware.storage.set("count", 1)
+                            lewdware.storage.set("name", "test")
+                            lewdware.storage.set("nested", { a = 1, b = { 2, 3 } })
+
+                            assert(lewdware.storage.get("count") == 1)
+                            assert(lewdware.storage.get("name") == "test")
+                            assert(lewdware.storage.get("nested").a == 1)
+                            assert(lewdware.storage.get("nested").b[2] == 3)
+
+                            local keys = lewdware.storage.keys()
+                            table.sort(keys)
+                            assert(keys[1] == "count", "unexpected keys: " .. table.concat(keys, ","))
+                            assert(keys[2] == "name")
+                            assert(keys[3] == "nested")
+
+                            assert(lewdware.storage.remove("count") == true)
+                            assert(lewdware.storage.remove("count") == false)
+                            assert(lewdware.storage.get("count") == nil)
+
+                            lewdware.storage.clear()
+                            assert(#lewdware.storage.keys() == 0)
+                        "#,
+                    )],
+                    false,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn lewdware_storage_rejects_unstorable_values_with_a_lua_error() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local ok, err = pcall(function()
+                                lewdware.storage.set("bad", print)
+                            end)
+                            assert(not ok, "storing a function should error")
+                            assert(
+                                tostring(err):find("booleans, numbers, strings"),
+                                "unexpected error: " .. tostring(err)
+                            )
+                        "#,
+                    )],
+                    false,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn audio_handle_finished_stops_callbacks_from_firing_again() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[
+                        (
+                            "main.lua",
+                            r#"
+                                local audio = lewdware.play_audio(
+                                    { id = 0, name = "test", type = "audio", duration = 1.0 }
+                                )
+
+                                assert(audio.finished == false, "should not start finished")
+                                assert(audio:pause() == true, "pause should run while not finished")
+                                assert(audio:play() == true, "play should run while not finished")
+                                assert(
+                                    audio:set_volume(0.5) == true,
+                                    "set_volume should run while not finished"
+                                )
+
+                                FINISH_COUNT = 0
+                                audio:on_finish(function() FINISH_COUNT = FINISH_COUNT + 1 end)
+
+                                AUDIO = audio
+                            "#,
+                        ),
+                        (
+                            "after_finish.lua",
+                            r#"
+                                assert(AUDIO.finished == true, "finished after AudioFinish event")
+                                assert(FINISH_COUNT == 1, "on_finish should fire exactly once")
+
+                                assert(AUDIO:pause() == false, "no-op once finished")
+                                assert(AUDIO:play() == false, "no-op once finished")
+                                assert(AUDIO:set_volume(0.9) == false, "no-op once finished")
+                                assert(AUDIO:stop() == false, "no-op once finished")
+                            "#,
+                        ),
+                    ],
+                    false,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+
+                // Simulates a natural finish (or, equally, a decode failure -- both go through
+                // this same event) -- see `AudioHandle::on_finish`'s doc comment.
+                harness.send_event(Event::AudioFinish { id: 0 });
+                harness.pump_events();
+
+                harness.run_entrypoint("after_finish.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn audio_handle_stop_is_immediate_and_suppresses_on_finish() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local audio = lewdware.play_audio(
+                                { id = 0, name = "test", type = "audio", duration = 1.0 }
+                            )
+
+                            FINISH_COUNT = 0
+                            audio:on_finish(function() FINISH_COUNT = FINISH_COUNT + 1 end)
+
+                            assert(audio.finished == false)
+                            assert(audio:stop() == true, "stop should run while not finished")
+                            assert(audio.finished == true, "finished immediately after stop()")
+                            assert(FINISH_COUNT == 0, "on_finish must not fire for an explicit stop")
+
+                            assert(audio:stop() == false, "a second stop is a no-op")
+                            assert(audio:pause() == false, "no-op after stop")
+                        "#,
+                    )],
+                    false,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn video_window_set_volume_succeeds() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local video = {
+                                id = 0,
+                                name = "test",
+                                type = "video",
+                                width = 64,
+                                height = 64,
+                                duration = 1.0,
+                                transparent = false,
+                            }
+                            local window = lewdware.popup.video(video)
+                            window:set_volume(0.5)
+                        "#,
+                    )],
+                    false,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
             })
             .await;
     }

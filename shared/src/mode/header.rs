@@ -1,10 +1,12 @@
 use core::fmt;
 use std::io::{self, Cursor, Read, Write};
 
+use uuid::Uuid;
+
 pub const MAGIC: &[u8; 6] = b"LWMODE";
 pub const VERSION_MAJOR: u8 = parse_version_byte(env!("CARGO_PKG_VERSION_MAJOR"));
 pub const VERSION_MINOR: u8 = parse_version_byte(env!("CARGO_PKG_VERSION_MINOR"));
-pub const HEADER_SIZE: usize = 32;
+pub const HEADER_SIZE: usize = 48;
 
 const fn parse_version_byte(s: &str) -> u8 {
     let bytes = s.as_bytes();
@@ -23,6 +25,11 @@ pub struct Header {
     pub metadata_length: u64,
     pub version_major: u8,
     pub version_minor: u8,
+    /// Stable identity for this mode, used to scope `lewdware.storage` across restarts and
+    /// rebuilds. Unlike a pack's UUID (minted fresh by `Header::new` every time a new pack is
+    /// created), a mode's id is minted once by `lw mode new` and lives in `config.jsonc`, not
+    /// here — `lw mode build` just copies it in on every build. See `Header::new`.
+    pub id: Uuid,
 }
 
 #[derive(Debug)]
@@ -58,19 +65,17 @@ impl From<io::Error> for ReadError {
     }
 }
 
-impl Default for Header {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Header {
-    pub fn new() -> Self {
+    /// `id` comes from the mode project's `config.jsonc` (generated once by `lw mode new`, or
+    /// backfilled by `lw mode build` the first time an older project without one is built) —
+    /// never minted fresh here, since it must stay stable across rebuilds.
+    pub fn new(id: Uuid) -> Self {
         Self {
             metadata_offset: 0,
             metadata_length: 0,
             version_major: VERSION_MAJOR,
             version_minor: VERSION_MINOR,
+            id,
         }
     }
 
@@ -83,6 +88,7 @@ impl Header {
         cursor.write_all(&self.version_minor.to_le_bytes())?; // 1 byte
         cursor.write_all(&self.metadata_offset.to_le_bytes())?; // 8 bytes
         cursor.write_all(&self.metadata_length.to_le_bytes())?; // 8 bytes
+        cursor.write_all(self.id.as_bytes())?; // 16 bytes
         // 8 bytes leftover
 
         Ok(buffer)
@@ -122,11 +128,16 @@ impl Header {
         cursor.read_exact(&mut buf8)?;
         let metadata_length = u64::from_le_bytes(buf8);
 
+        let mut buf16 = [0u8; 16];
+        cursor.read_exact(&mut buf16)?;
+        let id = Uuid::from_bytes(buf16);
+
         Ok(Self {
             version_major,
             version_minor,
             metadata_offset,
             metadata_length,
+            id,
         })
     }
 }
@@ -141,6 +152,7 @@ mod tests {
             metadata_length: length,
             version_major: VERSION_MAJOR,
             version_minor: VERSION_MINOR,
+            id: Uuid::nil(),
         }
     }
 
@@ -154,11 +166,22 @@ mod tests {
 
     #[test]
     fn new_has_zero_offsets() {
-        let h = Header::new();
+        let id = Uuid::new_v4();
+        let h = Header::new(id);
         assert_eq!(h.metadata_offset, 0);
         assert_eq!(h.metadata_length, 0);
         assert_eq!(h.version_major, VERSION_MAJOR);
         assert_eq!(h.version_minor, VERSION_MINOR);
+        assert_eq!(h.id, id);
+    }
+
+    #[test]
+    fn id_roundtrips() {
+        let id = Uuid::new_v4();
+        let original = Header::new(id);
+        let buf = original.to_buf().unwrap();
+        let decoded = Header::from_buf(buf).unwrap();
+        assert_eq!(decoded.id, id);
     }
 
     #[test]

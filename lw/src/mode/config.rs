@@ -5,19 +5,19 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use shared::mode;
+use uuid::Uuid;
 
+/// A mode project's `config.jsonc` -- one project is one mode (see
+/// `shared::mode::Metadata`'s doc comment for why).
 #[derive(Serialize, Deserialize)]
 pub struct Config {
     pub include: Vec<PathBuf>,
+    /// Stable identity, used to scope `lewdware.storage`. Minted once by `lw mode new`; `lw mode
+    /// build` just copies it into the compiled `.lwmode` header on every build.
+    pub id: Uuid,
     pub name: String,
     pub version: Option<String>,
     pub author: Option<String>,
-    pub modes: IndexMap<String, Mode>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Mode {
-    pub name: String,
     pub entrypoint: String,
     #[serde(default)]
     pub options: IndexMap<String, JsonValue>,
@@ -433,28 +433,23 @@ mod tests {
         let src = r#"
         {
             include: ["src"],
+            id: "3f6c9b1a-2b4a-4e3a-9c9b-1a2b4a4e3a9c",
             name: "my-mode",
             version: "0.1.0",
             author: "tester",
-            modes: {
-                main: {
-                    name: "Main",
-                    entrypoint: "src/main.lua",
-                    options: {
-                        count: {
-                            label: "Count",
-                            type: "integer",
-                            default: 3,
-                        }
-                    }
+            entrypoint: "src/main.lua",
+            options: {
+                count: {
+                    label: "Count",
+                    type: "integer",
+                    default: 3,
                 }
             }
         }
         "#;
         let config: Config = json5::from_str(src).unwrap();
         assert_eq!(config.name, "my-mode");
-        assert_eq!(config.modes.len(), 1);
-        assert!(config.modes.contains_key("main"));
-        assert_eq!(config.modes["main"].options.len(), 1);
+        assert_eq!(config.entrypoint, "src/main.lua");
+        assert_eq!(config.options.len(), 1);
     }
 }

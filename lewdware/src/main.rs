@@ -56,30 +56,16 @@ fn main() -> Result<()> {
     let mut args = args_os();
 
     let mut mode_path = None;
-    let mut mode = None;
     while let Some(arg) = args.next() {
         if &arg == "--mode-path" {
             mode_path = Some(PathBuf::from(args.next().context("No mode path provided")?));
-        }
-
-        if &arg == "--mode" {
-            mode = Some(
-                args.next()
-                    .context("No mode provided")?
-                    .to_str()
-                    .context("Invalid UTF-8")?
-                    .to_string(),
-            )
         }
     }
 
     let mut config = load_config().inspect_err(|err| report_fatal_startup_error(err))?;
 
-    if let (Some(mode_path), Some(mode)) = (mode_path, mode) {
-        config.mode = Mode::File {
-            path: mode_path,
-            mode,
-        };
+    if let Some(mode_path) = mode_path {
+        config.mode = Mode::File { path: mode_path };
     }
 
     tracing::debug!("{:?}", config);

@@ -21,8 +21,8 @@ use crate::audio::AudioPlayer;
 use crate::error::{LewdwareError, MonitorError, Result};
 use crate::lua::{
     self, AudioAction, DialogButton, DialogElement, FadeOpts, LuaRequest, LuaThreadHandle,
-    MediaData, MoveOpts, Notification, PopupId, PopupSpawnOpts, TextStyle, WallpaperMode,
-    WindowAction, WindowProps, start_lua_thread,
+    MediaData, MoveOpts, Notification, PackInfo, PopupId, PopupSpawnOpts, TextStyle,
+    WallpaperMode, WindowAction, WindowProps, start_lua_thread,
 };
 use crate::media::{FileOrPath, ImageData, MediaError, MediaManager};
 use crate::monitor::Monitors;
@@ -93,7 +93,11 @@ struct PendingWindow {
 
 enum PendingKind {
     Image,
-    Video { loop_video: bool, video_paused: bool },
+    Video {
+        loop_video: bool,
+        video_paused: bool,
+        video_volume: f32,
+    },
     Dialog {
         elements: Vec<PendingDialogElement>,
         /// Indices into `elements` whose image is still decoding, in the order they'll be
@@ -188,7 +192,11 @@ impl PendingDialogElement {
 
 /// An audio slot, analogous to [`PopupSlot`] but with no window involved.
 enum AudioSlot {
-    Pending { paused: bool },
+    Pending {
+        paused: bool,
+        volume: f32,
+        stopped: bool,
+    },
     Ready(AudioPlayer),
 }
 
@@ -252,13 +260,17 @@ impl LewdwareApp {
         // resolve popup media asynchronously (see `spawn_image`/`spawn_video`/`spawn_audio`). A
         // clone is also handed to the Lua thread below.
         let event_poster = event_loop_poster(event_loop_proxy);
-        let (media_manager, _metadata, media_manager_handle) =
+        let (media_manager, pack_metadata, pack_id, media_manager_handle) =
             MediaManager::open(pack_path, event_poster.clone(), wgpu_device)?;
 
         let (lua_event_tx, lua_request_rx, lua_thread_handle) = start_lua_thread(
             event_poster,
             config.clone(),
             media_manager.clone(),
+            PackInfo {
+                id: pack_id,
+                metadata: pack_metadata,
+            },
             wgpu_state.is_some(),
         );
 
@@ -446,6 +458,7 @@ impl LewdwareApp {
         media_id: u64,
         loop_video: bool,
         audio: bool,
+        volume: f32,
         opts: PopupSpawnOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
@@ -456,13 +469,17 @@ impl LewdwareApp {
 
         // As with images, this just enqueues the request — see `UserEvent::VideoResolved` /
         // `handle_video_resolved`.
-        media_manager.get_video_data(popup_id, media_id, loop_video, audio)?;
+        media_manager.get_video_data(popup_id, media_id, loop_video, audio, volume)?;
 
         let props = Self::window_props(popup_id, &window_opts);
         self.windows.insert(
             popup_id,
             PopupSlot::Pending(PendingWindow {
-                kind: PendingKind::Video { loop_video, video_paused: false },
+                kind: PendingKind::Video {
+                    loop_video,
+                    video_paused: false,
+                    video_volume: volume,
+                },
                 opacity: window_opts.popup.opacity,
                 title: window_opts.popup.title.clone(),
                 pending_move: None,
@@ -576,7 +593,7 @@ impl LewdwareApp {
         Ok(props)
     }
 
-    fn spawn_audio(&mut self, media_id: u64, loop_audio: bool) -> u64 {
+    fn spawn_audio(&mut self, media_id: u64, loop_audio: bool, volume: f32) -> u64 {
         let id = self.current_audio_id;
         self.current_audio_id += 1;
 
@@ -586,12 +603,18 @@ impl LewdwareApp {
         // any later action on it is a harmless no-op (same as acting on an already-closed id).
         match self.media_manager().and_then(|media_manager| {
             media_manager
-                .get_audio_data(id, media_id, loop_audio)
+                .get_audio_data(id, media_id, loop_audio, volume)
                 .map_err(Into::into)
         }) {
             Ok(()) => {
-                self.audio_players
-                    .insert(id, AudioSlot::Pending { paused: false });
+                self.audio_players.insert(
+                    id,
+                    AudioSlot::Pending {
+                        paused: false,
+                        volume,
+                        stopped: false,
+                    },
+                );
             }
             Err(err) => tracing::error!("Failed to request audio decode: {err}"),
         }
@@ -683,10 +706,11 @@ impl LewdwareApp {
                 media_id,
                 loop_video,
                 audio,
+                volume,
                 window_opts,
                 tx,
             } => tx
-                .send(self.spawn_video(media_id, loop_video, audio, window_opts, event_loop))
+                .send(self.spawn_video(media_id, loop_video, audio, volume, window_opts, event_loop))
                 .is_ok(),
             LuaRequest::SpawnDialog {
                 elements,
@@ -706,8 +730,11 @@ impl LewdwareApp {
             LuaRequest::SpawnAudio {
                 media_id,
                 loop_audio,
+                volume,
                 tx,
-            } => tx.send(self.spawn_audio(media_id, loop_audio)).is_ok(),
+            } => tx
+                .send(self.spawn_audio(media_id, loop_audio, volume))
+                .is_ok(),
             LuaRequest::SetWallpaper { file, mode, tx } => {
                 tx.send(self.set_wallpaper(file, mode)).is_ok()
             }
@@ -779,6 +806,22 @@ impl LewdwareApp {
                                     ..
                                 }) => {
                                     *video_paused = false;
+                                    Ok(())
+                                }
+                                _ => Err(LewdwareError::Internal("Invalid window type")),
+                            })
+                            .is_ok(),
+                        WindowAction::SetVideoVolume { tx, volume } => tx
+                            .send(match entry.get_mut() {
+                                PopupSlot::Ready(WindowType::Video(video_window)) => {
+                                    video_window.set_volume(volume);
+                                    Ok(())
+                                }
+                                PopupSlot::Pending(PendingWindow {
+                                    kind: PendingKind::Video { video_volume, .. },
+                                    ..
+                                }) => {
+                                    *video_volume = volume;
                                     Ok(())
                                 }
                                 _ => Err(LewdwareError::Internal("Invalid window type")),
@@ -915,14 +958,31 @@ impl LewdwareApp {
                         AudioAction::Pause { tx } => {
                             match entry.get_mut() {
                                 AudioSlot::Ready(player) => player.pause(),
-                                AudioSlot::Pending { paused } => *paused = true,
+                                AudioSlot::Pending { paused, .. } => *paused = true,
                             }
                             tx.send(()).is_ok()
                         }
                         AudioAction::Play { tx } => {
                             match entry.get_mut() {
                                 AudioSlot::Ready(player) => player.play(),
-                                AudioSlot::Pending { paused } => *paused = false,
+                                AudioSlot::Pending { paused, .. } => *paused = false,
+                            }
+                            tx.send(()).is_ok()
+                        }
+                        AudioAction::SetVolume { tx, volume } => {
+                            match entry.get_mut() {
+                                AudioSlot::Ready(player) => player.set_volume(volume),
+                                AudioSlot::Pending {
+                                    volume: pending_volume,
+                                    ..
+                                } => *pending_volume = volume,
+                            }
+                            tx.send(()).is_ok()
+                        }
+                        AudioAction::Stop { tx } => {
+                            match entry.get_mut() {
+                                AudioSlot::Ready(player) => player.stop(),
+                                AudioSlot::Pending { stopped, .. } => *stopped = true,
                             }
                             tx.send(()).is_ok()
                         }
@@ -1193,7 +1253,12 @@ impl LewdwareApp {
             pending_move,
             pending_fade,
         } = pending;
-        let PendingKind::Video { loop_video, video_paused } = kind else {
+        let PendingKind::Video {
+            loop_video,
+            video_paused,
+            video_volume,
+        } = kind
+        else {
             unreachable!("video resolve for a non-video pending slot")
         };
 
@@ -1224,6 +1289,10 @@ impl LewdwareApp {
         if video_paused {
             video_window.pause();
         }
+        // Applied unconditionally (not just when it differs from the volume already baked into
+        // `video_player` at construction) in case `set_volume()` was called while this window was
+        // still pending -- see `WindowAction::SetVideoVolume`'s `PendingKind::Video` arm.
+        video_window.set_volume(video_volume);
 
         if let Err(e) = video_window.inner_window.pre_show() {
             tracing::warn!("video pre-show failed: {e}");
@@ -1245,13 +1314,28 @@ impl LewdwareApp {
         if !matches!(entry.get(), AudioSlot::Pending { .. }) {
             return;
         }
-        let AudioSlot::Pending { paused } = entry.remove() else {
+        let AudioSlot::Pending {
+            paused,
+            volume,
+            stopped,
+        } = entry.remove()
+        else {
             unreachable!()
         };
 
         match result {
             Ok(audio_player) => {
-                if !paused {
+                // Applied unconditionally, same reasoning as `handle_video_resolved`'s
+                // `set_volume()` call: `volume` may have changed via `set_volume()` while this
+                // handle was still pending, after whatever volume was baked into `audio_player`
+                // at construction.
+                audio_player.set_volume(volume);
+                if stopped {
+                    // Suppresses the natural-finish `AudioFinish` post (see `AudioPlayer::stop`),
+                    // matching how a stop while `Ready` behaves -- `on_finish` never fires for an
+                    // explicit stop, whether it lands before or after decode resolves.
+                    audio_player.stop();
+                } else if !paused {
                     audio_player.play();
                 }
                 self.audio_players

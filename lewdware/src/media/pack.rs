@@ -43,7 +43,6 @@ fn repeat_vars(count: usize) -> String {
 pub struct MediaPack {
     path: PathBuf,
     db: Connection,
-    #[allow(unused)]
     header: Header,
     metadata: Metadata,
     tag_map: HashMap<String, u64>,
@@ -410,6 +409,10 @@ impl MediaPack {
 
     pub fn metadata(&self) -> &Metadata {
         &self.metadata
+    }
+
+    pub fn header(&self) -> &Header {
+        &self.header
     }
 }
 

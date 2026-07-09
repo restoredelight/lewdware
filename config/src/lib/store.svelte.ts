@@ -25,9 +25,9 @@ function updateOptionValue(
 
 function modeIdEqual(a: ModeId, b: ModeId): boolean {
   if (a.type !== b.type) return false;
-  if (a.type === "Default" && b.type === "Default") return a.mode === b.mode;
-  if (a.type === "Pack" && b.type === "Pack") return a.id === b.id && a.mode === b.mode;
-  if (a.type === "File" && b.type === "File") return a.path === b.path && a.mode === b.mode;
+  if (a.type === "Default" && b.type === "Default") return true;
+  if (a.type === "Pack" && b.type === "Pack") return a.id === b.id;
+  if (a.type === "File" && b.type === "File") return a.path === b.path;
   return false;
 }
 

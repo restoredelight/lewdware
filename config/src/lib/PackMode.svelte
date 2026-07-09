@@ -11,18 +11,6 @@
   } from "./types";
   import { Icon, ChevronRight } from "svelte-hero-icons";
 
-  function modeLabel(modeId: ModeId): string {
-    switch (modeId.type) {
-      case "Default": return modeId.mode;
-      case "Pack": return modeId.mode;
-      case "File": return modeId.mode;
-    }
-  }
-
-  function uploadedPath(modeId: ModeId): string | null {
-    return modeId.type === "File" ? modeId.path : null;
-  }
-
   function optionTypeKey(opt: ModeOptionDto): string {
     return Object.keys(opt.option_type)[0];
   }

@@ -80,18 +80,86 @@ use crate::{
     window::HEADER_HEIGHT,
 };
 
+/// Data available once, at mode startup, as opposed to `create_api`'s other parameters, which are
+/// live handles used throughout the mode's lifetime.
+pub struct ApiOptions {
+    pub pack_info: Option<crate::lua::PackInfo>,
+    pub config: HashMap<String, OptionValue>,
+    pub gpu_available: bool,
+}
+
 pub fn create_api(
     lua: &Lua,
     request_sender: RequestSender,
     media_manager: MediaManager,
     windows: Windows,
     audio_handles: AudioHandles,
-    config: HashMap<String, OptionValue>,
-    gpu_available: bool,
+    storage: crate::lua::storage::Storage,
+    options: ApiOptions,
 ) -> mlua::Result<()> {
+    let ApiOptions {
+        pack_info,
+        config,
+        gpu_available,
+    } = options;
+
     let api_table = lua.create_table()?;
 
     api_table.set("config", config.into_lua(lua)?)?;
+
+    let storage_table = lua.create_table()?;
+    {
+        let storage = storage.clone();
+        storage_table.set(
+            "get",
+            lua.create_function(move |lua, key: String| storage.get(lua, &key))?,
+        )?;
+    }
+    {
+        let storage = storage.clone();
+        storage_table.set(
+            "set",
+            lua.create_function(move |_, (key, value): (String, mlua::Value)| {
+                storage.set(key, value)
+            })?,
+        )?;
+    }
+    {
+        let storage = storage.clone();
+        storage_table.set(
+            "remove",
+            lua.create_function(move |_, key: String| Ok(storage.remove(&key)))?,
+        )?;
+    }
+    {
+        let storage = storage.clone();
+        storage_table.set(
+            "clear",
+            lua.create_function(move |_, ()| {
+                storage.clear();
+                Ok(())
+            })?,
+        )?;
+    }
+    {
+        let storage = storage.clone();
+        storage_table.set(
+            "keys",
+            lua.create_function(move |_, ()| Ok(storage.keys()))?,
+        )?;
+    }
+    api_table.set("storage", storage_table)?;
+
+    // `None` for a mode embedded in a pack -- see the doc comment on `PackInfo`'s only
+    // constructor call site (`start_lua_thread`) for why.
+    if let Some(pack_info) = pack_info {
+        let pack_table = lua.create_table()?;
+        pack_table.set("id", pack_info.id.to_string())?;
+        pack_table.set("name", pack_info.metadata.name)?;
+        pack_table.set("author", pack_info.metadata.creator)?;
+        pack_table.set("version", pack_info.metadata.version)?;
+        api_table.set("pack", pack_table)?;
+    }
 
     let media_table = lua.create_table()?;
 
@@ -1074,6 +1142,8 @@ pub struct SpawnVideoOpts {
     loop_video: bool,
     #[serde(default = "return_true")]
     audio: bool,
+    #[serde(default = "return_one")]
+    volume: f32,
     #[serde(flatten)]
     window_opts: SpawnWindowOpts,
 }
@@ -1083,6 +1153,7 @@ impl Default for SpawnVideoOpts {
         Self {
             loop_video: true,
             audio: true,
+            volume: 1.0,
             window_opts: Default::default(),
         }
     }
@@ -1090,6 +1161,10 @@ impl Default for SpawnVideoOpts {
 
 fn return_true() -> bool {
     true
+}
+
+fn return_one() -> f32 {
+    1.0
 }
 
 impl FromLua for SpawnVideoOpts {
@@ -1144,7 +1219,13 @@ fn spawn_video_popup(
 
     // As with images, monitor pick / size resolution happen here, on the Lua thread; only the
     // actual window creation / decode happen on the main thread -- see `App::spawn_video`.
-    let props = request_sender.spawn_video(video.id, opts.loop_video, opts.audio, window_opts)?;
+    let props = request_sender.spawn_video(
+        video.id,
+        opts.loop_video,
+        opts.audio,
+        opts.volume,
+        window_opts,
+    )?;
 
     let id = props.window_id;
 
@@ -1369,10 +1450,21 @@ fn reset_wallpaper(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Resul
     request_sender.reset_wallpaper().into_lua_err()
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
 struct PlayAudioOpts {
     #[serde(default)]
     loop_audio: bool,
+    #[serde(default = "return_one")]
+    volume: f32,
+}
+
+impl Default for PlayAudioOpts {
+    fn default() -> Self {
+        Self {
+            loop_audio: false,
+            volume: 1.0,
+        }
+    }
 }
 
 impl FromLua for PlayAudioOpts {
@@ -1394,7 +1486,7 @@ fn play_audio(
     }
 
     // Decode happens on the main thread now, after the ack — see `App::spawn_audio`.
-    let id = request_sender.spawn_audio(audio.id, opts.loop_audio)?;
+    let id = request_sender.spawn_audio(audio.id, opts.loop_audio, opts.volume)?;
 
     let audio_handle = Rc::new(AudioHandle::new(
         id,

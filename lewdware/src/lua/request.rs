@@ -86,12 +86,14 @@ impl RequestSender {
         media_id: u64,
         loop_video: bool,
         audio: bool,
+        volume: f32,
         window_opts: PopupSpawnOpts,
     ) -> Result<WindowProps> {
         self.send(|tx| LuaRequest::SpawnVideo {
             media_id,
             loop_video,
             audio,
+            volume,
             window_opts,
             tx,
         })?
@@ -131,10 +133,11 @@ impl RequestSender {
         Ok(self.send(|tx| LuaRequest::ResetWallpaper { tx })?)
     }
 
-    pub fn spawn_audio(&self, media_id: u64, loop_audio: bool) -> Result<u64> {
+    pub fn spawn_audio(&self, media_id: u64, loop_audio: bool, volume: f32) -> Result<u64> {
         Ok(self.send(|tx| LuaRequest::SpawnAudio {
             media_id,
             loop_audio,
+            volume,
             tx,
         })?)
     }
@@ -220,6 +223,11 @@ impl WindowRequestSender {
         self.send(|tx| WindowAction::PlayVideo { tx }).flatten()
     }
 
+    pub fn set_video_volume(&self, volume: f32) -> Result<()> {
+        self.send(|tx| WindowAction::SetVideoVolume { tx, volume })
+            .flatten()
+    }
+
     pub fn set_text(&self, text: Option<String>) -> Result<()> {
         self.send(|tx| WindowAction::SetText { tx, text }).flatten()
     }
@@ -288,6 +296,14 @@ impl AudioRequestSender {
     pub fn play(&self) -> Result<()> {
         self.send(|tx| AudioAction::Play { tx })
     }
+
+    pub fn set_volume(&self, volume: f32) -> Result<()> {
+        self.send(|tx| AudioAction::SetVolume { tx, volume })
+    }
+
+    pub fn stop(&self) -> Result<()> {
+        self.send(|tx| AudioAction::Stop { tx })
+    }
 }
 
 pub enum LuaRequest {
@@ -300,6 +316,7 @@ pub enum LuaRequest {
         media_id: u64,
         loop_video: bool,
         audio: bool,
+        volume: f32,
         window_opts: PopupSpawnOpts,
         tx: mpsc::Sender<Result<WindowProps>>,
     },
@@ -317,6 +334,7 @@ pub enum LuaRequest {
     SpawnAudio {
         media_id: u64,
         loop_audio: bool,
+        volume: f32,
         tx: mpsc::Sender<u64>,
     },
     SetWallpaper {
@@ -365,6 +383,10 @@ pub enum WindowAction {
     PlayVideo {
         tx: mpsc::Sender<Result<()>>,
     },
+    SetVideoVolume {
+        tx: mpsc::Sender<Result<()>>,
+        volume: f32,
+    },
     Move {
         id: u64,
         tx: mpsc::Sender<Result<()>>,
@@ -405,4 +427,6 @@ pub enum WindowAction {
 pub enum AudioAction {
     Pause { tx: mpsc::Sender<()> },
     Play { tx: mpsc::Sender<()> },
+    SetVolume { tx: mpsc::Sender<()>, volume: f32 },
+    Stop { tx: mpsc::Sender<()> },
 }

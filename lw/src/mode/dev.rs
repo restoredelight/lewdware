@@ -6,7 +6,7 @@ use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::{env, fs, io, thread};
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Args;
 use notify::{Event, EventKind, RecommendedWatcher, Watcher};
 
@@ -15,12 +15,9 @@ use crate::mode::config::Config;
 use crate::mode::{find_root, read_config, types::write_type_stubs};
 
 #[derive(Args)]
-pub struct DevArgs {
-    // The mode to use
-    mode: Option<String>,
-}
+pub struct DevArgs {}
 
-pub fn dev(args: DevArgs) -> anyhow::Result<()> {
+pub fn dev(_args: DevArgs) -> anyhow::Result<()> {
     let root = find_root()?;
 
     let (tx, rx) = channel();
@@ -58,21 +55,11 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
 
     println!("Created build file");
 
-    let mode = args
-        .mode
-        .clone()
-        .or_else(|| config.modes.keys().next().cloned())
-        .context("config.jsonc contains no modes")?;
-
-    if !config.modes.contains_key(&mode) {
-        bail!("Invalid mode '{mode}'");
-    }
-
     build_to(&mut file.file, &root, config)?;
 
     println!("Built");
 
-    let mut process = spawn_lewdware(&file.path, &mode)?;
+    let mut process = spawn_lewdware(&file.path)?;
 
     println!("Spawned");
 
@@ -94,20 +81,10 @@ pub fn dev(args: DevArgs) -> anyhow::Result<()> {
         update_watches(&mut watcher, &watched_dirs, &new_watched_dirs);
         watched_dirs = new_watched_dirs;
 
-        let mode = args
-            .mode
-            .clone()
-            .or_else(|| config.modes.keys().next().cloned())
-            .context("config.jsonc contains no modes")?;
-
-        if !config.modes.contains_key(&mode) {
-            bail!("Invalid mode '{mode}'");
-        }
-
         file.file.seek(SeekFrom::Start(0))?;
         build_to(&mut file.file, &root, config)?;
 
-        process = spawn_lewdware(&file.path, &mode)?;
+        process = spawn_lewdware(&file.path)?;
     }
 
     Ok(())
@@ -150,15 +127,10 @@ fn update_watches(watcher: &mut RecommendedWatcher, current: &[PathBuf], desired
     }
 }
 
-fn spawn_lewdware(path: &Path, mode: &str) -> anyhow::Result<Child> {
+fn spawn_lewdware(path: &Path) -> anyhow::Result<Child> {
     let mut command = find_lewdware_binary().context("Couldn't find lewdware binary")?;
 
-    Ok(command
-        .arg("--mode-path")
-        .arg(path)
-        .arg("--mode")
-        .arg(mode)
-        .spawn()?)
+    Ok(command.arg("--mode-path").arg(path).spawn()?)
 }
 
 struct BuildFile {

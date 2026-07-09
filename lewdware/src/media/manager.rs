@@ -9,6 +9,7 @@ use std::{
     sync::{Arc, mpsc as std_mpsc},
     thread,
 };
+use uuid::Uuid;
 
 use tokio::{sync::mpsc::channel, task::LocalSet};
 
@@ -31,7 +32,8 @@ pub type Result<T, E = MediaError> = std::result::Result<T, E>;
 
 impl MediaManager {
     /// Start up the media manager thread, opening the specified pack file. Returns the pack
-    /// metadata and a handle for the spawned thread.
+    /// metadata, the pack's stable UUID (from its header -- see `lewdware.pack`), and a handle
+    /// for the spawned thread.
     ///
     /// The returned `JoinHandle` should be joined once every clone of this `MediaManager` has
     /// been dropped, so the thread's request channel closes and it can shut down, running the
@@ -41,10 +43,11 @@ impl MediaManager {
         pack_path: &Path,
         event_poster: EventPoster,
         wgpu_device: Option<Arc<wgpu::Device>>,
-    ) -> anyhow::Result<(Self, Metadata, thread::JoinHandle<()>)> {
-        let (tx, metadata, handle) = spawn_media_manager_thread(pack_path, event_poster)?;
+    ) -> anyhow::Result<(Self, Metadata, Uuid, thread::JoinHandle<()>)> {
+        let (tx, metadata, pack_id, handle) =
+            spawn_media_manager_thread(pack_path, event_poster)?;
 
-        Ok((Self { tx, wgpu_device }, metadata, handle))
+        Ok((Self { tx, wgpu_device }, metadata, pack_id, handle))
     }
 
     /// Enqueue a request and block the calling thread until a response arrives. Safe to call from
@@ -137,6 +140,7 @@ impl MediaManager {
         media_id: u64,
         loop_video: bool,
         play_audio: bool,
+        volume: f32,
     ) -> Result<()> {
         let wgpu_device = self.wgpu_device.clone();
         self.try_send(MediaRequest::GetVideoData {
@@ -144,17 +148,25 @@ impl MediaManager {
             media_id,
             loop_video,
             play_audio,
+            volume,
             wgpu_device,
         })
     }
 
     /// Request an audio decoder be set up. Returns as soon as the request is enqueued — the
     /// result arrives later as a `UserEvent::AudioResolved { id, .. }`.
-    pub fn get_audio_data(&self, id: u64, media_id: u64, loop_audio: bool) -> Result<()> {
+    pub fn get_audio_data(
+        &self,
+        id: u64,
+        media_id: u64,
+        loop_audio: bool,
+        volume: f32,
+    ) -> Result<()> {
         self.try_send(MediaRequest::GetAudioData {
             id,
             media_id,
             loop_audio,
+            volume,
         })
     }
 
@@ -172,12 +184,14 @@ fn spawn_media_manager_thread(
 ) -> anyhow::Result<(
     std_mpsc::SyncSender<MediaRequest>,
     Metadata,
+    Uuid,
     thread::JoinHandle<()>,
 )> {
     let (req_tx, req_rx) = std_mpsc::sync_channel(20);
 
     let file = MediaPack::open(pack_path)?;
     let metadata = file.metadata().clone();
+    let pack_id = file.header().id;
 
     let handle = thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -222,7 +236,7 @@ fn spawn_media_manager_thread(
         rt.block_on(local);
     });
 
-    Ok((req_tx, metadata, handle))
+    Ok((req_tx, metadata, pack_id, handle))
 }
 
 async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster: EventPoster) {
@@ -259,6 +273,7 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster
             media_id,
             play_audio,
             loop_video,
+            volume,
             wgpu_device,
         } => {
             let result = pack.get_video_data(media_id).and_then(|data| {
@@ -266,6 +281,7 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster
                     data.source,
                     play_audio,
                     loop_video,
+                    volume,
                     data.transparent,
                     wgpu_device,
                 )
@@ -277,9 +293,10 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster
             id,
             media_id,
             loop_audio,
+            volume,
         } => {
             let result = pack.get_audio_data(media_id).and_then(|source| {
-                AudioPlayer::new(source, loop_audio, Some(id), Some(event_poster.clone()))
+                AudioPlayer::new(source, loop_audio, volume, Some(id), Some(event_poster.clone()))
                     .map_err(MediaError::AudioError)
             });
             event_poster(UserEvent::AudioResolved { id, result })
@@ -407,12 +424,14 @@ enum MediaRequest {
         media_id: u64,
         play_audio: bool,
         loop_video: bool,
+        volume: f32,
         wgpu_device: Option<Arc<wgpu::Device>>,
     },
     GetAudioData {
         id: u64,
         media_id: u64,
         loop_audio: bool,
+        volume: f32,
     },
     GetModeData {
         id: u64,

@@ -19,30 +19,19 @@ pub struct AppConfig {
     pub disabled_monitors: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
-pub enum DefaultMode {
-    Main,
-}
-
-impl DefaultMode {
-    pub fn mode(&self) -> &'static str {
-        match self {
-            DefaultMode::Main => "default",
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+/// Which mode runs, and where its `.lwmode` data comes from. Each variant identifies exactly one
+/// mode -- there's no "which mode within the file" selector, since one `.lwmode` file is now
+/// always exactly one mode (see `shared::mode::Metadata`'s doc comment).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Default)]
 pub enum Mode {
-    Default(String),
-    Pack { id: u64, mode: String },
-    File { path: PathBuf, mode: String },
-}
-
-impl Default for Mode {
-    fn default() -> Self {
-        Mode::Default("default".to_string())
-    }
+    /// The engine-bundled default mode.
+    #[default]
+    Default,
+    /// A mode embedded in the loaded pack. `id` is the row id in the pack's own `modes` table
+    /// (see `MediaPack::get_mode`) -- unrelated to the pack's own UUID or the mode's stable id
+    /// (the latter lives in the embedded `.lwmode` blob's own header).
+    Pack { id: u64 },
+    File { path: PathBuf },
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]

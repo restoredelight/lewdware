@@ -56,19 +56,18 @@ use tempfile::NamedTempFile;
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(tag = "type")]
 pub enum ModeIdDto {
-    Default { mode: String },
-    Pack { id: u64, mode: String },
-    File { path: String, mode: String },
+    Default,
+    Pack { id: u64 },
+    File { path: String },
 }
 
 impl From<Mode> for ModeIdDto {
     fn from(m: Mode) -> Self {
         match m {
-            Mode::Default(mode) => ModeIdDto::Default { mode },
-            Mode::Pack { id, mode } => ModeIdDto::Pack { id, mode },
-            Mode::File { path, mode } => ModeIdDto::File {
+            Mode::Default => ModeIdDto::Default,
+            Mode::Pack { id } => ModeIdDto::Pack { id },
+            Mode::File { path } => ModeIdDto::File {
                 path: path.to_string_lossy().into_owned(),
-                mode,
             },
         }
     }
@@ -77,11 +76,10 @@ impl From<Mode> for ModeIdDto {
 impl From<ModeIdDto> for Mode {
     fn from(dto: ModeIdDto) -> Self {
         match dto {
-            ModeIdDto::Default { mode } => Mode::Default(mode),
-            ModeIdDto::Pack { id, mode } => Mode::Pack { id, mode },
-            ModeIdDto::File { path, mode } => Mode::File {
+            ModeIdDto::Default => Mode::Default,
+            ModeIdDto::Pack { id } => Mode::Pack { id },
+            ModeIdDto::File { path } => Mode::File {
                 path: PathBuf::from(path),
-                mode,
             },
         }
     }
@@ -273,14 +271,9 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
         let entries: Vec<_> = pack
             .modes
             .iter()
-            .flat_map(|m| {
-                m.metadata.modes.iter().map(|(key, mode)| ModeEntryDto {
-                    id: ModeIdDto::Pack {
-                        id: m.id,
-                        mode: key.clone(),
-                    },
-                    name: mode.name.clone(),
-                })
+            .map(|m| ModeEntryDto {
+                id: ModeIdDto::Pack { id: m.id },
+                name: m.metadata.name.clone(),
             })
             .collect();
 
@@ -303,18 +296,10 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
         let label = format!("{} ({})", entry.metadata.name, file_name);
         let path_str = entry.path.to_string_lossy().into_owned();
 
-        let entries: Vec<_> = entry
-            .metadata
-            .modes
-            .iter()
-            .map(|(key, mode)| ModeEntryDto {
-                id: ModeIdDto::File {
-                    path: path_str.clone(),
-                    mode: key.clone(),
-                },
-                name: mode.name.clone(),
-            })
-            .collect();
+        let entries = vec![ModeEntryDto {
+            id: ModeIdDto::File { path: path_str },
+            name: entry.metadata.name.clone(),
+        }];
 
         groups.push(ModeGroupDto {
             label,
@@ -323,20 +308,13 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
         });
     }
 
-    let entries: Vec<_> = state
-        .default_modes
-        .modes
-        .iter()
-        .map(|(key, mode)| ModeEntryDto {
-            id: ModeIdDto::Default { mode: key.clone() },
-            name: mode.name.clone(),
-        })
-        .collect();
-
     groups.push(ModeGroupDto {
         label: state.default_modes.name.clone(),
         source: "builtin".into(),
-        entries,
+        entries: vec![ModeEntryDto {
+            id: ModeIdDto::Default,
+            name: state.default_modes.name.clone(),
+        }],
     });
 
     groups
@@ -344,22 +322,19 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
 
 fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<OptionEntryDto> {
     let mode_meta = match &config.mode {
-        Mode::Default(key) => state.default_modes.modes.get(key).cloned(),
-        Mode::Pack { id, mode } => {
+        Mode::Default => Some(state.default_modes.clone()),
+        Mode::Pack { id } => {
             let pack = state.pack.lock().unwrap();
-            pack.as_ref().and_then(|p| {
-                p.modes
-                    .iter()
-                    .find(|m| m.id == *id)
-                    .and_then(|m| m.metadata.modes.get(mode).cloned())
-            })
+            pack.as_ref()
+                .and_then(|p| p.modes.iter().find(|m| m.id == *id))
+                .map(|m| m.metadata.clone())
         }
-        Mode::File { path, mode } => {
+        Mode::File { path } => {
             let uploaded = state.uploaded.lock().unwrap();
             uploaded
                 .iter()
                 .find(|u| &u.path == path)
-                .and_then(|u| u.metadata.modes.get(mode).cloned())
+                .map(|u| u.metadata.clone())
         }
     };
 
@@ -511,28 +486,19 @@ fn get_option_type_for_key(
     state: &AppState,
 ) -> Option<OptionType> {
     let mode_meta = match mode {
-        Mode::Default(k) => state.default_modes.modes.get(k).cloned(),
-        Mode::Pack { id, mode } => {
+        Mode::Default => Some(state.default_modes.clone()),
+        Mode::Pack { id } => {
             let pack = state.pack.lock().unwrap();
-            pack.as_ref().and_then(|p| {
-                p.modes
-                    .iter()
-                    .find(|m| m.id == *id)?
-                    .metadata
-                    .modes
-                    .get(mode)
-                    .cloned()
-            })
+            pack.as_ref()
+                .and_then(|p| p.modes.iter().find(|m| m.id == *id))
+                .map(|m| m.metadata.clone())
         }
-        Mode::File { path, mode } => {
+        Mode::File { path } => {
             let uploaded = state.uploaded.lock().unwrap();
             uploaded
                 .iter()
-                .find(|u| &u.path == path)?
-                .metadata
-                .modes
-                .get(mode)
-                .cloned()
+                .find(|u| &u.path == path)
+                .map(|u| u.metadata.clone())
         }
     }?;
 
@@ -591,12 +557,10 @@ async fn pick_pack(
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
 
-    let first_mode = loaded.modes.first().and_then(|m| {
-        m.metadata.modes.first().map(|(key, _)| ModeIdDto::Pack {
-            id: m.id,
-            mode: key.clone(),
-        })
-    });
+    let first_mode = loaded
+        .modes
+        .first()
+        .map(|m| ModeIdDto::Pack { id: m.id });
 
     let pack_path_str = path.to_string_lossy().into_owned();
     *state.pack.lock().unwrap() = Some(loaded);

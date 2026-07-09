@@ -6,12 +6,16 @@ use serde::{Deserialize, Serialize};
 
 pub type ShowWhen = IndexMap<String, ConditionValue>;
 
+/// A single mode's metadata -- one `.lwmode` file is exactly one mode (see `Header::id`'s doc
+/// comment for why: a stable per-mode identity, used for `lewdware.storage`, wouldn't have a
+/// clean meaning if one file could contain several).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Metadata {
     pub name: String,
     pub version: Option<String>,
     pub author: Option<String>,
-    pub modes: IndexMap<String, Mode>,
+    pub entrypoint: String,
+    pub entries: IndexMap<String, ModeEntry>,
     pub files: HashMap<String, SourceFile>,
 }
 
@@ -19,13 +23,6 @@ pub struct Metadata {
 pub struct SourceFile {
     pub offset: u64,
     pub length: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Mode {
-    pub name: String,
-    pub entrypoint: String,
-    pub entries: IndexMap<String, ModeEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -77,7 +74,7 @@ impl ConditionValue {
     }
 }
 
-impl Mode {
+impl Metadata {
     /// Returns all options in the mode as a flat list, depth-first through groups.
     pub fn all_options(&self) -> Vec<(&str, &ModeOption)> {
         fn collect<'a>(
@@ -227,7 +224,6 @@ mod tests {
     }
 
     fn sample_metadata() -> Metadata {
-        let mut modes = IndexMap::new();
         let mut entries = IndexMap::new();
 
         entries.insert(
@@ -319,15 +315,6 @@ mod tests {
             }),
         );
 
-        modes.insert(
-            "main".to_string(),
-            Mode {
-                name: "Main".to_string(),
-                entrypoint: "main.lua".to_string(),
-                entries,
-            },
-        );
-
         let mut files = HashMap::new();
         files.insert(
             "main.lua".to_string(),
@@ -341,7 +328,8 @@ mod tests {
             name: "test-mode".to_string(),
             version: Some("1.0.0".to_string()),
             author: Some("tester".to_string()),
-            modes,
+            entrypoint: "main.lua".to_string(),
+            entries,
             files,
         }
     }
@@ -360,7 +348,8 @@ mod tests {
             name: "min".to_string(),
             version: None,
             author: None,
-            modes: IndexMap::new(),
+            entrypoint: "main.lua".to_string(),
+            entries: IndexMap::new(),
             files: HashMap::new(),
         };
         let buf = original.to_buf().unwrap();
@@ -371,8 +360,7 @@ mod tests {
     #[test]
     fn all_options_flattens_groups() {
         let meta = sample_metadata();
-        let mode = meta.modes.get("main").unwrap();
-        let options = mode.all_options();
+        let options = meta.all_options();
         let keys: Vec<&str> = options.iter().map(|(k, _)| *k).collect();
         assert!(keys.contains(&"count"));
         assert!(keys.contains(&"variant")); // inside group
@@ -382,10 +370,9 @@ mod tests {
     #[test]
     fn get_option_finds_in_group() {
         let meta = sample_metadata();
-        let mode = meta.modes.get("main").unwrap();
-        assert!(mode.get_option("variant").is_some());
-        assert!(mode.get_option("count").is_some());
-        assert!(mode.get_option("nonexistent").is_none());
+        assert!(meta.get_option("variant").is_some());
+        assert!(meta.get_option("count").is_some());
+        assert!(meta.get_option("nonexistent").is_none());
     }
 
     #[test]

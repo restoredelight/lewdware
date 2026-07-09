@@ -10,7 +10,7 @@ use clap::Args;
 use shared::mode::{self, Header, SourceFile};
 
 use crate::mode::{
-    config::{self, Config, Mode},
+    config::{self, Config},
     find_root, read_config,
     types::write_type_stubs,
 };
@@ -46,7 +46,7 @@ pub fn build(_args: BuildArgs) -> Result<()> {
 }
 
 pub fn build_to(file: &mut File, root: &Path, config: Config) -> Result<()> {
-    let mut header = Header::new();
+    let mut header = Header::new(config.id);
     file.write_all(&header.to_buf()?)?;
 
     let source_files = write_files(file, root, &config)?;
@@ -126,65 +126,44 @@ fn write_files(
 fn create_metadata(
     Config {
         include: _,
+        id: _,
         name,
         version,
         author,
-        modes,
+        entrypoint,
+        options,
     }: Config,
     source_files: HashMap<String, SourceFile>,
 ) -> Result<mode::Metadata> {
-    let modes = modes
-        .into_iter()
-        .map(
-            |(
-                key,
-                Mode {
-                    name,
-                    entrypoint,
-                    options,
-                },
-            )| {
-                let mut entrypoint_path = PathBuf::from(&entrypoint);
+    let mut entrypoint_path = PathBuf::from(&entrypoint);
 
-                // Make sure e.g. "./src/..." is resolved correctly
-                while let Ok(path) = entrypoint_path.strip_prefix(".") {
-                    entrypoint_path = path.to_path_buf();
-                }
+    // Make sure e.g. "./src/..." is resolved correctly
+    while let Ok(path) = entrypoint_path.strip_prefix(".") {
+        entrypoint_path = path.to_path_buf();
+    }
 
-                let entrypoint = if let Ok(path) = entrypoint_path.strip_prefix("src") {
-                    let path_str = path
-                        .to_str()
-                        .ok_or_else(|| anyhow!("Internal error: invalid UTF-8"))?;
+    let entrypoint = if let Ok(path) = entrypoint_path.strip_prefix("src") {
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| anyhow!("Internal error: invalid UTF-8"))?;
 
-                    if !source_files.contains_key(path_str) {
-                        bail!("Couldn't find entrypoint '{entrypoint}'");
-                    }
+        if !source_files.contains_key(path_str) {
+            bail!("Couldn't find entrypoint '{entrypoint}'");
+        }
 
-                    path_str.to_string()
-                } else {
-                    bail!("Entrypoint '{entrypoint}' must start with `src/`");
-                };
+        path_str.to_string()
+    } else {
+        bail!("Entrypoint '{entrypoint}' must start with `src/`");
+    };
 
-                let entries = config::parse_entries(options)
-                    .with_context(|| format!("Error in mode '{name}'"))?;
-
-                Ok((
-                    key,
-                    mode::Mode {
-                        name,
-                        entrypoint,
-                        entries,
-                    },
-                ))
-            },
-        )
-        .collect::<Result<_>>()?;
+    let entries = config::parse_entries(options).with_context(|| format!("Error in '{name}'"))?;
 
     Ok(mode::Metadata {
         name,
         version,
         author,
-        modes,
+        entrypoint,
+        entries,
         files: source_files,
     })
 }
@@ -212,15 +191,11 @@ mod tests {
 
         let config_src = r#"{
             include: ["src"],
+            id: "3f6c9b1a-2b4a-4e3a-9c9b-1a2b4a4e3a9c",
             name: "roundtrip-test",
             version: "0.1.0",
             author: "tester",
-            modes: {
-                main: {
-                    name: "Main",
-                    entrypoint: "src/main.lua",
-                }
-            }
+            entrypoint: "src/main.lua",
         }"#;
         fs::write(root.join("config.jsonc"), config_src).unwrap();
 
@@ -234,8 +209,7 @@ mod tests {
         assert_eq!(metadata.name, "roundtrip-test");
         assert_eq!(metadata.version.as_deref(), Some("0.1.0"));
         assert_eq!(metadata.author.as_deref(), Some("tester"));
-        assert!(metadata.modes.contains_key("main"));
-        assert_eq!(metadata.modes["main"].entrypoint, "main.lua");
+        assert_eq!(metadata.entrypoint, "main.lua");
         assert!(metadata.files.contains_key("main.lua"));
 
         let source_file = &metadata.files["main.lua"];
@@ -255,13 +229,9 @@ mod tests {
 
         let config_src = r#"{
             include: ["src"],
+            id: "3f6c9b1a-2b4a-4e3a-9c9b-1a2b4a4e3a9c",
             name: "bad-mode",
-            modes: {
-                main: {
-                    name: "Main",
-                    entrypoint: "src/missing.lua",
-                }
-            }
+            entrypoint: "src/missing.lua",
         }"#;
         fs::write(root.join("config.jsonc"), config_src).unwrap();
 

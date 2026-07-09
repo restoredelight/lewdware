@@ -141,6 +141,7 @@ impl VideoDecoder {
         source: MediaSource,
         play_audio: bool,
         loop_video: bool,
+        volume: f32,
         packed_alpha: bool,
         wgpu_device: Option<Arc<wgpu::Device>>,
     ) -> Result<Self> {
@@ -148,7 +149,7 @@ impl VideoDecoder {
             spawn_video_stream(source.clone(), loop_video, packed_alpha, wgpu_device)?;
 
         let audio_player = if play_audio {
-            match AudioPlayer::new(source, loop_video, None, None) {
+            match AudioPlayer::new(source, loop_video, volume, None, None) {
                 Ok(audio_player) => Some(audio_player),
                 Err(err) => {
                     tracing::error!("{err}");
@@ -284,6 +285,12 @@ impl VideoDecoder {
             audio_player.play();
         }
         self.paused = false;
+    }
+
+    pub fn set_volume(&self, volume: f32) {
+        if let Some(audio_player) = &self.audio_player {
+            audio_player.set_volume(volume);
+        }
     }
 }
 

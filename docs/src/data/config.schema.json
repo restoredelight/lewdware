@@ -5,8 +5,13 @@
   "description": "Configuration file for a mode",
   "type": "object",
   "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Stable identity for this mode, used to scope lewdware.storage across restarts and rebuilds. Generated once by `lw mode new` -- never edit this by hand."
+    },
     "name": {
-      "description": "The name of the mode file",
+      "description": "The name of the mode",
       "type": "string"
     },
     "version": {
@@ -21,36 +26,20 @@
         "type": "string"
       }
     },
-    "modes": {
+    "entrypoint": {
+      "type": "string",
+      "description": "The path to the main lua file for the mode"
+    },
+    "options": {
       "type": "object",
       "additionalProperties": {
-        "$ref": "#/$defs/mode"
+        "$ref": "#/$defs/entry"
       }
     }
   },
-  "required": ["name", "modes"],
+  "required": ["id", "name", "entrypoint"],
 
   "$defs": {
-    "mode": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "entrypoint": {
-          "type": "string",
-          "description": "The path to the main lua file for the mode"
-        },
-        "options": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/entry"
-          }
-        }
-      },
-      "required": ["name", "entrypoint"]
-    },
-
     "condition_value": {
       "description": "A primitive value used in a show_when condition",
       "oneOf": [

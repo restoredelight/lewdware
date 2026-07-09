@@ -7,7 +7,10 @@ use ffmpeg_next::{
 };
 use std::{
     num::NonZero,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::{self},
     time::Duration,
 };
@@ -22,29 +25,41 @@ use crate::{
 pub struct AudioPlayer {
     _stream: MixerDeviceSink,
     sink: Arc<Player>,
+    /// Set by `stop()` before the sink is actually stopped, so the background thread spawned
+    /// below (which wakes up when the sink empties, whether from a natural finish or a `stop()`)
+    /// can tell the two apart and only post `AudioFinish` for the former.
+    stopped: Arc<AtomicBool>,
 }
 
 impl AudioPlayer {
     pub fn new(
         source: MediaSource,
         loop_audio: bool,
+        volume: f32,
         id: Option<u64>,
         event_poster: Option<EventPoster>,
     ) -> Result<Self> {
         let (stream, sink) = setup_decoder(source, loop_audio)?;
         let sink = Arc::new(sink);
+        sink.set_volume(volume);
+
+        let stopped = Arc::new(AtomicBool::new(false));
 
         if let (Some(id), Some(event_poster)) = (id, event_poster) {
             let sink_clone = sink.clone();
+            let stopped_clone = stopped.clone();
             thread::spawn(move || {
                 sink_clone.sleep_until_end();
-                event_poster(UserEvent::AudioFinish { id });
+                if !stopped_clone.load(Ordering::SeqCst) {
+                    event_poster(UserEvent::AudioFinish { id });
+                }
             });
         }
 
         Ok(Self {
             _stream: stream,
             sink,
+            stopped,
         })
     }
 
@@ -54,6 +69,17 @@ impl AudioPlayer {
 
     pub fn play(&self) {
         self.sink.play();
+    }
+
+    pub fn set_volume(&self, volume: f32) {
+        self.sink.set_volume(volume);
+    }
+
+    /// Permanently ends playback. Unlike `pause()`, there's no way back from this -- and unlike a
+    /// natural finish, this never posts `AudioFinish` (see the `stopped` field doc).
+    pub fn stop(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        self.sink.stop();
     }
 
     pub fn position(&self) -> Duration {

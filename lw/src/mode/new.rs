@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Result;
 use include_dir::{Dir, DirEntry, include_dir};
+use uuid::Uuid;
 
 use super::types::write_type_stubs;
 
@@ -65,6 +66,11 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
 
     fs::create_dir_all(base_path.join("src"))?;
 
+    // Minted once here, then preserved by every `lw mode build` (it lives in config.jsonc, not
+    // the compiled .lwmode, which is regenerated from scratch every build) -- the stable identity
+    // `lewdware.storage` scopes this mode's data by.
+    let id = Uuid::new_v4();
+
     if from_default {
         let escaped_name = json_escape(&name);
         let escaped_author = json_escape(&author);
@@ -75,6 +81,7 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
                 "\"$schema\": \"../docs/src/data/config.schema.json\",\n  // \"$schema\": \"https://lewdware.github.com/config.schema.json\",",
                 "\"$schema\": \"https://lewdware.net/reference/config.schema.json\",",
             )
+            .replacen("cd5a36d6-ca1c-4381-97b3-0d2f00d1d401", &id.to_string(), 1)
             .replace("\"Default Modes\"", &format!("\"{}\"", escaped_name))
             .replace("\"restoredelight\"", &format!("\"{}\"", escaped_author))
             .replace("\"0.1.0\"", &format!("\"{}\"", escaped_version));
@@ -89,17 +96,13 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
         let config_content = format!(
             r#"{{
   "$schema": "https://lewdware.net/reference/config.schema.json",
+  "id": "{id}",
   "name": "{escaped_name}",
   "version": "{escaped_version}",
   "author": "{escaped_author}",
   "include": ["src"],
-  "modes": {{
-    "default": {{
-      "name": "{escaped_name}",
-      "entrypoint": "src/main.lua",
-      "options": {{}}
-    }}
-  }}
+  "entrypoint": "src/main.lua",
+  "options": {{}}
 }}"#
         );
         fs::write(base_path.join("config.jsonc"), config_content)?;
@@ -108,9 +111,9 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
     local media = lewdware.media.random({ type = {"image", "video"} });
     if media then
         if media.type == "image" then
-            lewdware.spawn_image_popup(media)
+            lewdware.popup.image(media)
         elseif media.type == "video" then
-            lewdware.spawn_video_popup(media)
+            lewdware.popup.video(media)
         end
     end
 end)

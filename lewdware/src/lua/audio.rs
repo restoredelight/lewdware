@@ -13,12 +13,20 @@ pub struct AudioHandle {
 }
 
 struct AudioState {
+    /// True once playback has ended -- because the (non-looping) track finished, decoding turned
+    /// out to be impossible (e.g. no audio device), or `stop()` was called. Never becomes false
+    /// again; every method below becomes a no-op returning `false` once this is set, rather than
+    /// erroring the way most `Window` methods still do on a dead object (see `AudioRequestSender`/
+    /// `WindowRequestSender` request-layer plumbing for that older convention) -- this is meant to
+    /// be the model those eventually move to as well.
+    finished: bool,
     finish_callbacks: Vec<mlua::Function>,
 }
 
 impl AudioState {
     fn new() -> Self {
         Self {
+            finished: false,
             finish_callbacks: Vec::new(),
         }
     }
@@ -28,6 +36,9 @@ impl UserData for AudioHandle {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get("id", |_, this| Ok(this.id));
         fields.add_field_method_get("audio", |_, this| Ok(this.audio.clone()));
+        fields.add_field_method_get("finished", |_, this| {
+            Ok(this.state.try_borrow().into_lua_err()?.finished)
+        });
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
@@ -42,15 +53,23 @@ impl UserData for AudioHandle {
         });
 
         methods.add_method("pause", |_, this, _: ()| {
-            this.request_sender.pause().into_lua_err()?;
-
-            Ok(())
+            this.guarded(|| this.request_sender.pause().into_lua_err())
         });
 
         methods.add_method("play", |_, this, _: ()| {
-            this.request_sender.play().into_lua_err()?;
+            this.guarded(|| this.request_sender.play().into_lua_err())
+        });
 
-            Ok(())
+        methods.add_method("set_volume", |_, this, volume: f32| {
+            this.guarded(|| this.request_sender.set_volume(volume).into_lua_err())
+        });
+
+        methods.add_method("stop", |_, this, _: ()| {
+            this.guarded(|| {
+                this.request_sender.stop().into_lua_err()?;
+                this.state.try_borrow_mut().into_lua_err()?.finished = true;
+                Ok(())
+            })
         });
     }
 }
@@ -71,9 +90,24 @@ impl AudioHandle {
         }
     }
 
+    /// Runs `f` unless already `finished`, returning whether it ran -- the shared shape behind
+    /// every method above except `on_finish` (a registration, not an action) and the `finished`
+    /// field itself.
+    fn guarded(&self, f: impl FnOnce() -> mlua::Result<()>) -> mlua::Result<bool> {
+        if self.state.try_borrow().into_lua_err()?.finished {
+            return Ok(false);
+        }
+        f()?;
+        Ok(true)
+    }
+
+    /// Called for a natural finish (including a non-looping track ending, or decoding turning out
+    /// to be impossible in the first place -- see the doc comment on `AudioState::finished`), but
+    /// never for an explicit `stop()`, which sets `finished` itself without going through here.
     pub fn on_finish(&self) -> anyhow::Result<()> {
         let callbacks = {
-            let state = self.state.try_borrow()?;
+            let mut state = self.state.try_borrow_mut()?;
+            state.finished = true;
             state.finish_callbacks.clone()
         };
 

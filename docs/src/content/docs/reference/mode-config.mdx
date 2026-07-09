@@ -5,33 +5,30 @@ description: Reference for config.jsonc — the configuration file for a mode.
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Each mode is described by a `config.jsonc` file at the root of the mode directory. Config files
-are parsed following the [json5](https://json5.org/) specification (so comments and trailing
-commas are allowed).
+Each mode is described by a `config.jsonc` file at the root of the mode directory. One
+`config.jsonc` (and the `.lwmode` file `lw mode build` produces from it) always describes exactly
+one mode. Config files are parsed following the [json5](https://json5.org/) specification (so
+comments and trailing commas are allowed).
 
 ## Example
 
 ```jsonc
 {
   "$schema": "https://lewdware.github.com/config.schema.json",
+  "id": "5e8f9e0a-6b1c-4d2e-8f3a-9b0c1d2e3f4a",
   "name": "My Mode",
   "version": "1.0.0",
   "author": "your-name",
-  "modes": {
-    "default": {
-      "name": "Default",
-      "entrypoint": "src/main.lua",
-      "options": {
-        "popup_frequency": {
-          "label": "Popup frequency (seconds)",
-          "description": "How often popups appear",
-          "type": "number",
-          "default": 1,
-          "min": 0.1,
-          "max": 10,
-          "step": 0.1
-        }
-      }
+  "entrypoint": "src/main.lua",
+  "options": {
+    "popup_frequency": {
+      "label": "Popup frequency (seconds)",
+      "description": "How often popups appear",
+      "type": "number",
+      "default": 1,
+      "min": 0.1,
+      "max": 10,
+      "step": 0.1
     }
   }
 }
@@ -41,24 +38,13 @@ commas are allowed).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `name` | `string` | Yes | The display name of the mode file. |
+| `id` | `string` (UUID) | Yes | Stable identity for this mode, used to scope `lewdware.storage` across restarts and rebuilds. Generated once by `lw mode new` — don't edit this by hand. |
+| `name` | `string` | Yes | The display name shown to the user in the config app. |
 | `version` | `string` | No | Version string, e.g. `"1.0.0"`. |
 | `author` | `string` | No | Author name. |
 | `include` | `string[]` | No | Paths of directories or files of Lua code to bundle (e.g. `["src"]`). |
-| `modes` | `object` | Yes | Map of mode keys to [mode definitions](#mode). |
-
-## Mode
-
-Each value in `modes` is a mode object:
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | `string` | Yes | The display name shown to the user in the config app. |
 | `entrypoint` | `string` | Yes | Path to the main Lua file, relative to the config file. |
 | `options` | `object` | No | Map of option keys to [option definitions](#options). |
-
-A mode file can define multiple modes in a single `modes` map. Lewdware will present each to the
-user as a separate selectable mode.
 
 ## Options
 
