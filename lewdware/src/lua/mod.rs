@@ -14,7 +14,8 @@ use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, syn
 use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
-    mode::{VERSION_MAJOR, read_mode_metadata},
+    behaviour::{Behaviour, Content, effective_config, effective_options},
+    mode::{Metadata, OptionValue, VERSION_MAJOR, read_mode_metadata},
     user_config::AppConfig,
 };
 use tokio::{
@@ -155,6 +156,65 @@ pub struct PackInfo {
     pub metadata: shared::read_pack::Metadata,
 }
 
+/// Resolves the config a mode actually runs with, and — only for the engine's built-in default
+/// mode — the pack's behaviour.json `content` section, handed to the default-modes library code
+/// as `__lewdware_content` (see `create_api`) for its own query-layer filtering (e.g.
+/// `default-modes/src/lib/media.lua` honoring disabled content groups). Standalone from
+/// `start_lua_thread` so it's unit-testable without a full thread spawn.
+///
+/// Custom modes (`Mode::Pack`/`Mode::File`) never see behaviour data or its synthesized
+/// `content_group.*` options — see `behaviour-design/default-mode.md`'s Ownership section ("the
+/// toggle is only shown where it is honored") — so they keep the plain schema-defaulting walk.
+fn resolve_mode_config(
+    metadata: &Metadata,
+    mode: &shared::user_config::Mode,
+    mode_options: &HashMap<shared::user_config::Mode, HashMap<String, OptionValue>>,
+    media_manager: &MediaManager,
+    dev_mode: bool,
+) -> (HashMap<String, OptionValue>, Content) {
+    let stored = mode_options.get(mode).cloned().unwrap_or_default();
+
+    if !matches!(mode, shared::user_config::Mode::Default) {
+        let mut mode_config = stored;
+
+        for (key, option) in metadata.all_options() {
+            if mode_config
+                .get(key)
+                .is_none_or(|value| !option.matches_value(value))
+            {
+                mode_config.insert(key.to_string(), option.default_value());
+            }
+        }
+
+        return (mode_config, Content::default());
+    }
+
+    let behaviour = media_manager
+        .get_pack_data("behaviour".to_string())
+        .inspect_err(|err| tracing::warn!("Failed to read pack behaviour data: {err}"))
+        .ok()
+        .flatten()
+        .and_then(|bytes| {
+            Behaviour::from_json_bytes(&bytes)
+                .inspect_err(|err| tracing::warn!("Failed to parse pack behaviour.json: {err}"))
+                .ok()
+        })
+        .unwrap_or_default();
+
+    if dev_mode && behaviour.is_from_newer_engine() {
+        tracing::warn!(
+            "This pack's behaviour.json (v{}) is newer than this engine understands (v{})",
+            behaviour.version,
+            shared::behaviour::CURRENT_VERSION
+        );
+    }
+
+    let schema = effective_options(metadata, &behaviour);
+    let resolved = effective_config(&schema, &stored);
+
+    (resolved, behaviour.content)
+}
+
 /// Starts the Lua thread using the given `media_manager` — already opened by the caller (see
 /// `LewdwareApp::new` in `app.rs`), which also keeps its own clone to resolve media for popups
 /// asynchronously (see `App::spawn_image`/`spawn_video`/`spawn_audio`).
@@ -236,21 +296,13 @@ pub fn start_lua_thread(
 
         let entrypoint = metadata.entrypoint.clone();
 
-        let mut mode_config = config
-            .mode_options
-            .get(&config.mode)
-            .cloned()
-            .unwrap_or_default();
-
-        // Make sure the config contains all the correct options
-        for (key, option) in metadata.all_options() {
-            if mode_config
-                .get(key)
-                .is_none_or(|value| !option.matches_value(value))
-            {
-                mode_config.insert(key.to_string(), option.default_value());
-            }
-        }
+        let (mode_config, content) = resolve_mode_config(
+            &metadata,
+            &config.mode,
+            &config.mode_options,
+            &media_manager,
+            dev_mode,
+        );
 
         let mode = Mode::new(file, metadata.files);
 
@@ -291,6 +343,7 @@ pub fn start_lua_thread(
             api::ApiOptions {
                 pack_info,
                 config: mode_config,
+                content,
                 gpu_available,
                 dev_mode,
             },
@@ -658,6 +711,75 @@ mod tests {
         file
     }
 
+    /// Build a `.lwpack` fixture with the given tagged image rows (name, tags) and, if `Some`, a
+    /// `pack_data` row named `"behaviour"` holding the given bytes. Media rows get no real file
+    /// bytes/offsets -- fine for `list`/`random` queries, which never read `offset`/`length` (see
+    /// `MediaPack::parse_media`); only `get_image_data`/`get_image_file` would need that.
+    fn pack_fixture_with_data(
+        media: &[(&str, &[&str])],
+        behaviour_bytes: Option<&[u8]>,
+    ) -> NamedTempFile {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        shared::db::migrate(&db).unwrap();
+
+        let mut tag_ids: HashMap<&str, i64> = HashMap::new();
+        for (index, (file_name, tags)) in media.iter().enumerate() {
+            let hash = vec![index as u8];
+            db.execute(
+                "INSERT INTO media (file_name, file_type, width, height, transparent, hash) \
+                 VALUES (?, 'image', 64, 64, 0, ?)",
+                rusqlite::params![file_name, hash],
+            )
+            .unwrap();
+            let media_id = db.last_insert_rowid();
+
+            for tag in *tags {
+                let tag_id = *tag_ids.entry(tag).or_insert_with(|| {
+                    db.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", [*tag])
+                        .unwrap();
+                    db.query_row("SELECT id FROM tags WHERE name = ?", [*tag], |r| {
+                        r.get::<_, i64>(0)
+                    })
+                    .unwrap()
+                });
+                db.execute(
+                    "INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+                    rusqlite::params![media_id, tag_id],
+                )
+                .unwrap();
+            }
+        }
+
+        if let Some(bytes) = behaviour_bytes {
+            db.execute(
+                "INSERT INTO pack_data (name, blob) VALUES ('behaviour', ?)",
+                rusqlite::params![bytes],
+            )
+            .unwrap();
+        }
+
+        let metadata = shared::read_pack::Metadata {
+            name: "test-pack".to_string(),
+            ..Default::default()
+        };
+        let metadata_bytes = metadata.to_buf().unwrap();
+
+        let mut header = shared::read_pack::Header::new();
+        header.metadata_offset = shared::read_pack::HEADER_SIZE as u64;
+        header.metadata_length = metadata_bytes.len() as u64;
+        header.index_offset = header.metadata_offset + header.metadata_length;
+
+        let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
+        header.index_length = db_bytes.len() as u64;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&header.to_buf().unwrap()).unwrap();
+        file.write_all(&metadata_bytes).unwrap();
+        file.write_all(&db_bytes).unwrap();
+        file.flush().unwrap();
+        file
+    }
+
     /// Build a `Mode` from in-memory Lua source, without needing a real `.lwmode` file.
     /// `SourceFile` offsets index into a buffer of zstd-compressed chunks — the same encoding
     /// `lw mode build` uses for each module (see `lw/src/mode/build.rs::write_files`), since
@@ -974,7 +1096,29 @@ mod tests {
             capabilities: Capabilities,
             volume: Volume,
         ) -> Self {
-            let pack_file = pack_fixture(with_image);
+            Self::with_pack(
+                sources,
+                pack_fixture(with_image),
+                Content::default(),
+                HashMap::new(),
+                capabilities,
+                volume,
+            )
+        }
+
+        /// Like `with_config`, but for tests that need a specific pack fixture (e.g. several
+        /// distinctly-tagged media rows) and/or behaviour-derived `content`/`mode_config` --
+        /// exactly what `resolve_mode_config` would have produced for `Mode::Default`. The
+        /// content-group query-layer tests use this to exercise `lib/media.lua` against real
+        /// media without going through the full pack-behaviour.json resolution path.
+        fn with_pack(
+            sources: &[(&str, &str)],
+            pack_file: NamedTempFile,
+            content: Content,
+            mode_config: HashMap<String, OptionValue>,
+            capabilities: Capabilities,
+            volume: Volume,
+        ) -> Self {
             let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
 
             let (media_manager, _metadata, _pack_id, _media_manager_handle) =
@@ -1005,7 +1149,8 @@ mod tests {
                     storage,
                     api::ApiOptions {
                         pack_info: None,
-                        config: HashMap::new(),
+                        config: mode_config,
+                        content,
                         gpu_available: false,
                         dev_mode: false,
                     },
@@ -1345,6 +1490,7 @@ mod tests {
                     api::ApiOptions {
                         pack_info: Some(pack_info),
                         config: HashMap::new(),
+                        content: Content::default(),
                         gpu_available: false,
                         dev_mode: false,
                     },
@@ -1412,6 +1558,7 @@ mod tests {
                     api::ApiOptions {
                         pack_info: None,
                         config: HashMap::new(),
+                        content: Content::default(),
                         gpu_available: false,
                         dev_mode: true,
                     },
@@ -2009,6 +2156,236 @@ mod tests {
                 // No side effect leaked through -- in particular, the denied `open_link` never
                 // reached the point the fake handler records it.
                 assert_eq!(harness.recorded(), vec![]);
+            })
+            .await;
+    }
+
+    #[test]
+    fn media_manager_get_pack_data_round_trips_a_named_blob() {
+        let pack_file = pack_fixture_with_data(&[], Some(b"hello behaviour"));
+        let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
+        let (media_manager, _metadata, _pack_id, _handle) =
+            MediaManager::open(pack_file.path(), event_poster, None).unwrap();
+
+        assert_eq!(
+            media_manager
+                .get_pack_data("behaviour".to_string())
+                .unwrap(),
+            Some(b"hello behaviour".to_vec())
+        );
+        assert_eq!(
+            media_manager
+                .get_pack_data("nonexistent".to_string())
+                .unwrap(),
+            None
+        );
+    }
+
+    fn empty_default_mode_metadata() -> Metadata {
+        Metadata {
+            name: "test-mode".to_string(),
+            version: None,
+            author: None,
+            entrypoint: "main.lua".to_string(),
+            entries: Default::default(),
+            files: HashMap::new(),
+        }
+    }
+
+    fn behaviour_with_one_content_group() -> Behaviour {
+        Behaviour {
+            content: Content {
+                content_groups: vec![shared::behaviour::ContentGroup {
+                    id: "kinky".to_string(),
+                    label: "Kinky".to_string(),
+                    description: None,
+                    tags: vec!["kinky".to_string()],
+                    enabled_by_default: true,
+                }],
+                ..Default::default()
+            },
+            ..Behaviour::new()
+        }
+    }
+
+    /// The core invariant `resolve_mode_config` exists for: for the built-in default mode, a
+    /// content group synthesizes into the resolved config (falling back to its
+    /// `enabled_by_default`, or a stored override when present) and its tags are handed back via
+    /// `Content` for the query layer -- see `default-modes/src/lib/media.lua`.
+    #[test]
+    fn resolve_mode_config_synthesizes_content_group_toggle_for_default_mode() {
+        let behaviour = behaviour_with_one_content_group();
+        let behaviour_bytes = behaviour.to_json_bytes().unwrap();
+        let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
+
+        let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
+        let (media_manager, _metadata, _pack_id, _handle) =
+            MediaManager::open(pack_file.path(), event_poster, None).unwrap();
+
+        let metadata = empty_default_mode_metadata();
+        let key = format!("{}kinky", shared::behaviour::CONTENT_GROUP_KEY_PREFIX);
+
+        // No stored override -> falls back to the group's `enabled_by_default`.
+        let (config, content) = resolve_mode_config(
+            &metadata,
+            &shared::user_config::Mode::Default,
+            &HashMap::new(),
+            &media_manager,
+            false,
+        );
+        assert_eq!(config.get(&key), Some(&OptionValue::Boolean(true)));
+        assert_eq!(content.content_groups.len(), 1);
+        assert_eq!(content.content_groups[0].tags, vec!["kinky".to_string()]);
+
+        // A stored override wins over the default.
+        let mut stored = HashMap::new();
+        stored.insert(key.clone(), OptionValue::Boolean(false));
+        let mut mode_options = HashMap::new();
+        mode_options.insert(shared::user_config::Mode::Default, stored);
+
+        let (config, _) = resolve_mode_config(
+            &metadata,
+            &shared::user_config::Mode::Default,
+            &mode_options,
+            &media_manager,
+            false,
+        );
+        assert_eq!(config.get(&key), Some(&OptionValue::Boolean(false)));
+    }
+
+    /// The actual "custom modes never see the toggles" invariant (`behaviour-design/
+    /// default-mode.md`, Ownership): even against a pack whose behaviour.json declares content
+    /// groups, a mode embedded in that pack gets neither the synthesized option nor the content
+    /// data.
+    #[test]
+    fn resolve_mode_config_hides_content_groups_from_custom_modes() {
+        let behaviour = behaviour_with_one_content_group();
+        let behaviour_bytes = behaviour.to_json_bytes().unwrap();
+        let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
+
+        let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
+        let (media_manager, _metadata, _pack_id, _handle) =
+            MediaManager::open(pack_file.path(), event_poster, None).unwrap();
+
+        let metadata = empty_default_mode_metadata();
+        let key = format!("{}kinky", shared::behaviour::CONTENT_GROUP_KEY_PREFIX);
+
+        for mode in [
+            shared::user_config::Mode::Pack { id: 1 },
+            shared::user_config::Mode::File {
+                path: "some/mode.lwmode".into(),
+            },
+        ] {
+            let (config, content) =
+                resolve_mode_config(&metadata, &mode, &HashMap::new(), &media_manager, false);
+
+            assert_eq!(config.get(&key), None);
+            assert_eq!(content, Content::default());
+        }
+    }
+
+    /// A pack with no behaviour.json at all (the common case today) shouldn't panic or fail the
+    /// mode -- `resolve_mode_config` falls back to an empty `Behaviour`.
+    #[test]
+    fn resolve_mode_config_default_mode_with_no_behaviour_data() {
+        let pack_file = pack_fixture_with_data(&[], None);
+
+        let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
+        let (media_manager, _metadata, _pack_id, _handle) =
+            MediaManager::open(pack_file.path(), event_poster, None).unwrap();
+
+        let metadata = empty_default_mode_metadata();
+
+        let (config, content) = resolve_mode_config(
+            &metadata,
+            &shared::user_config::Mode::Default,
+            &HashMap::new(),
+            &media_manager,
+            false,
+        );
+
+        assert!(config.is_empty());
+        assert_eq!(content, Content::default());
+    }
+
+    /// Integration-style: exercises the *shipped* `default-modes/src/lib/media.lua` file (not a
+    /// re-implementation of its logic), confirming a disabled content group's tagged media never
+    /// surfaces from `media.list()` -- the "no query path bypasses it" gate from the release
+    /// plan's M3 content-groups bullet.
+    #[tokio::test(start_paused = true)]
+    async fn shared_media_query_layer_honors_disabled_content_groups() {
+        LocalSet::new()
+            .run_until(async {
+                const MEDIA: &[(&str, &[&str])] = &[
+                    ("kinky1.avif", &["kinky"]),
+                    ("kinky2.avif", &["kinky"]),
+                    ("vanilla1.avif", &[]),
+                ];
+
+                let content = Content {
+                    content_groups: vec![shared::behaviour::ContentGroup {
+                        id: "kinky".to_string(),
+                        label: "Kinky".to_string(),
+                        description: None,
+                        tags: vec!["kinky".to_string()],
+                        enabled_by_default: true,
+                    }],
+                    ..Default::default()
+                };
+
+                let sources: &[(&str, &str)] = &[
+                    (
+                        "main.lua",
+                        r#"
+                            local media = require("lib.media")
+                            local items = media.list({ type = { "image" } })
+
+                            local seen = {}
+                            for _, item in ipairs(items) do seen[item.name] = true end
+
+                            assert(seen["vanilla1.avif"], "untagged media should always be present")
+                            if lewdware.config["content_group.kinky"] then
+                                assert(seen["kinky1.avif"], "kinky1 should be present when enabled")
+                                assert(seen["kinky2.avif"], "kinky2 should be present when enabled")
+                            else
+                                assert(not seen["kinky1.avif"], "kinky1 should be excluded when disabled")
+                                assert(not seen["kinky2.avif"], "kinky2 should be excluded when disabled")
+                            end
+                        "#,
+                    ),
+                    (
+                        "lib/media.lua",
+                        include_str!("../../../default-modes/src/lib/media.lua"),
+                    ),
+                ];
+
+                let key = format!("{}kinky", shared::behaviour::CONTENT_GROUP_KEY_PREFIX);
+
+                // Group enabled: all three items present.
+                let mut enabled_config = HashMap::new();
+                enabled_config.insert(key.clone(), OptionValue::Boolean(true));
+                let mut harness = Harness::with_pack(
+                    sources,
+                    pack_fixture_with_data(MEDIA, None),
+                    content.clone(),
+                    enabled_config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                // Group disabled: the kinky-tagged media never surfaces.
+                let mut disabled_config = HashMap::new();
+                disabled_config.insert(key, OptionValue::Boolean(false));
+                let mut harness = Harness::with_pack(
+                    sources,
+                    pack_fixture_with_data(MEDIA, None),
+                    content,
+                    disabled_config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
             })
             .await;
     }

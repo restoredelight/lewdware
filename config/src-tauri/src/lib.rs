@@ -8,6 +8,7 @@ use std::{
 
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 // ─── Update check ─────────────────────────────────────────────────────────────
@@ -43,6 +44,7 @@ async fn check_for_update() -> Result<Option<String>, String> {
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 use shared::{
+    behaviour::{effective_options, Behaviour},
     db::migrate,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, ShowWhen},
     read_pack::read_pack_metadata,
@@ -209,6 +211,10 @@ struct UploadedModeEntry {
 struct LoadedPack {
     _db_file: NamedTempFile,
     modes: Vec<PackModeEntry>,
+    /// The pack's behaviour.json, if it has one -- `Behaviour::new()` (empty) otherwise. Used
+    /// only to synthesize the built-in default mode's content-group toggles (see
+    /// `effective_entries_for_mode`); custom modes never consult this.
+    behaviour: Behaviour,
 }
 
 pub struct AppState {
@@ -249,9 +255,21 @@ fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
         modes.push(PackModeEntry { id, metadata });
     }
 
+    let behaviour_bytes: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT blob FROM pack_data WHERE name = 'behaviour'",
+            [],
+            |row| row.get("blob"),
+        )
+        .optional()?;
+    let behaviour = behaviour_bytes
+        .and_then(|bytes| Behaviour::from_json_bytes(&bytes).ok())
+        .unwrap_or_default();
+
     Ok(LoadedPack {
         _db_file: db_file,
         modes,
+        behaviour,
     })
 }
 
@@ -325,8 +343,18 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
     groups
 }
 
-fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<OptionEntryDto> {
-    let mode_meta = match &config.mode {
+/// Resolves the entries a mode actually presents: for `Mode::Default` (the engine's built-in
+/// default mode) with a pack loaded, the raw schema is passed through
+/// `shared::behaviour::effective_options` alongside that pack's behaviour.json, synthesizing the
+/// content-group checklist (see `behaviour-design/default-mode.md`, Ownership); every other case
+/// (custom modes, or the default mode with no pack loaded) gets the schema's own entries
+/// unchanged -- custom modes never see behaviour-derived toggles. Shared by
+/// `get_mode_options_for` and `get_option_type_for_key` so both agree on what a key resolves to.
+fn effective_entries_for_mode(
+    mode: &Mode,
+    state: &AppState,
+) -> Option<IndexMap<String, ModeEntry>> {
+    let mode_meta = match mode {
         Mode::Default => Some(state.default_modes.clone()),
         Mode::Pack { id } => {
             let pack = state.pack.lock().unwrap();
@@ -341,9 +369,39 @@ fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<OptionEntry
                 .find(|u| &u.path == path)
                 .map(|u| u.metadata.clone())
         }
-    };
+    }?;
 
-    let Some(mode_meta) = mode_meta else {
+    if matches!(mode, Mode::Default) {
+        let behaviour = state
+            .pack
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|p| p.behaviour.clone())
+            .unwrap_or_default();
+        Some(effective_options(&mode_meta, &behaviour).entries)
+    } else {
+        Some(mode_meta.entries)
+    }
+}
+
+fn find_option_type(entries: &IndexMap<String, ModeEntry>, key: &str) -> Option<OptionType> {
+    for (k, entry) in entries {
+        match entry {
+            ModeEntry::Option(opt) if k == key => return Some(opt.option_type.clone()),
+            ModeEntry::Group(group) => {
+                if let Some(t) = find_option_type(&group.entries, key) {
+                    return Some(t);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<OptionEntryDto> {
+    let Some(entries) = effective_entries_for_mode(&config.mode, state) else {
         return Vec::new();
     };
 
@@ -387,7 +445,7 @@ fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<OptionEntry
             .collect()
     }
 
-    build_entries(&mode_meta.entries, &stored)
+    build_entries(&entries, &stored)
 }
 
 fn save_to_disk(config: &AppConfig, uploaded: &[UploadedModeEntry]) -> anyhow::Result<()> {
@@ -489,24 +547,8 @@ fn get_option_type_for_key(
     key: &str,
     state: &AppState,
 ) -> Option<OptionType> {
-    let mode_meta = match mode {
-        Mode::Default => Some(state.default_modes.clone()),
-        Mode::Pack { id } => {
-            let pack = state.pack.lock().unwrap();
-            pack.as_ref()
-                .and_then(|p| p.modes.iter().find(|m| m.id == *id))
-                .map(|m| m.metadata.clone())
-        }
-        Mode::File { path } => {
-            let uploaded = state.uploaded.lock().unwrap();
-            uploaded
-                .iter()
-                .find(|u| &u.path == path)
-                .map(|u| u.metadata.clone())
-        }
-    }?;
-
-    mode_meta.get_option(key).map(|o| o.option_type.clone())
+    let entries = effective_entries_for_mode(mode, state)?;
+    find_option_type(&entries, key)
 }
 
 fn coerce_option_value(value: JsonValue, opt_type: Option<&OptionType>) -> Option<OptionValue> {
@@ -965,4 +1007,154 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shared::behaviour::ContentGroup;
+
+    fn empty_metadata(name: &str) -> Metadata {
+        Metadata {
+            name: name.to_string(),
+            version: None,
+            author: None,
+            entrypoint: "main.lua".to_string(),
+            entries: Default::default(),
+            files: HashMap::new(),
+        }
+    }
+
+    fn behaviour_with_one_content_group() -> Behaviour {
+        Behaviour {
+            content: shared::behaviour::Content {
+                content_groups: vec![ContentGroup {
+                    id: "kinky".to_string(),
+                    label: "Kinky".to_string(),
+                    description: None,
+                    tags: vec!["kinky".to_string()],
+                    enabled_by_default: true,
+                }],
+                ..Default::default()
+            },
+            ..Behaviour::new()
+        }
+    }
+
+    fn loaded_pack(behaviour: Behaviour, modes: Vec<PackModeEntry>) -> LoadedPack {
+        LoadedPack {
+            _db_file: NamedTempFile::new().unwrap(),
+            modes,
+            behaviour,
+        }
+    }
+
+    fn test_state(pack: Option<LoadedPack>) -> AppState {
+        AppState {
+            config: Mutex::new(AppConfig::default()),
+            pack: Mutex::new(pack),
+            uploaded: Mutex::new(Vec::new()),
+            default_modes: empty_metadata("Default Modes"),
+            lewdware_process: Mutex::new(None),
+        }
+    }
+
+    /// Recursively finds an entry by key -- mirrors how `PackMode.svelte` walks the tree.
+    fn find_entry<'a>(entries: &'a [OptionEntryDto], key: &str) -> Option<&'a OptionEntryDto> {
+        for entry in entries {
+            match entry {
+                OptionEntryDto::Option(opt) if opt.key == key => return Some(entry),
+                OptionEntryDto::Group(group) if group.key == key => return Some(entry),
+                OptionEntryDto::Group(group) => {
+                    if let Some(found) = find_entry(&group.entries, key) {
+                        return Some(found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn default_mode_with_pack_content_group_renders_content_checklist() {
+        let state = test_state(Some(loaded_pack(
+            behaviour_with_one_content_group(),
+            vec![],
+        )));
+        let config = AppConfig {
+            mode: Mode::Default,
+            ..Default::default()
+        };
+
+        let entries = get_mode_options_for(&config, &state);
+
+        let content_group_entry = find_entry(&entries, "content_groups")
+            .expect("synthesized \"content_groups\" group should be present");
+        let OptionEntryDto::Group(group) = content_group_entry else {
+            panic!("expected a group entry");
+        };
+        let kinky = find_entry(&group.entries, "content_group.kinky")
+            .expect("synthesized content_group.kinky option should be present");
+        assert!(matches!(kinky, OptionEntryDto::Option(_)));
+    }
+
+    /// The actual invariant under test: a custom mode embedded in the same pack never sees the
+    /// content-group toggle, even though the pack's behaviour.json declares one (`behaviour-
+    /// design/default-mode.md`, Ownership: "the toggle is only shown where it is honored").
+    #[test]
+    fn custom_pack_mode_never_renders_content_checklist() {
+        let mode_id = 1;
+        let state = test_state(Some(loaded_pack(
+            behaviour_with_one_content_group(),
+            vec![PackModeEntry {
+                id: mode_id,
+                metadata: empty_metadata("Custom mode"),
+            }],
+        )));
+        let config = AppConfig {
+            mode: Mode::Pack { id: mode_id },
+            ..Default::default()
+        };
+
+        let entries = get_mode_options_for(&config, &state);
+
+        assert!(find_entry(&entries, "content_groups").is_none());
+    }
+
+    /// `get_option_type_for_key` previously only searched the mode's own raw schema, so it
+    /// couldn't resolve a synthesized `content_group.*` key's type (silently papered over by
+    /// `coerce_option_value`'s untagged-deserialize fallback for booleans specifically). Confirm
+    /// it now resolves correctly via `effective_entries_for_mode`.
+    #[test]
+    fn content_group_key_resolves_its_option_type_for_default_mode() {
+        let state = test_state(Some(loaded_pack(
+            behaviour_with_one_content_group(),
+            vec![],
+        )));
+
+        let opt_type = get_option_type_for_key(
+            &AppConfig::default(),
+            &Mode::Default,
+            "content_group.kinky",
+            &state,
+        );
+
+        assert_eq!(opt_type, Some(OptionType::Boolean { default: true }));
+    }
+
+    /// No pack loaded at all -- `Mode::Default` shouldn't panic, and (with nothing to
+    /// synthesize) shouldn't render a content checklist.
+    #[test]
+    fn default_mode_with_no_pack_loaded_has_no_content_checklist() {
+        let state = test_state(None);
+        let config = AppConfig {
+            mode: Mode::Default,
+            ..Default::default()
+        };
+
+        let entries = get_mode_options_for(&config, &state);
+
+        assert!(find_entry(&entries, "content_groups").is_none());
+    }
 }

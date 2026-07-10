@@ -85,6 +85,12 @@ use crate::{
 pub struct ApiOptions {
     pub pack_info: Option<crate::lua::PackInfo>,
     pub config: HashMap<String, OptionValue>,
+    /// The pack's behaviour.json `content` section (empty for custom modes, or when the pack
+    /// has none) -- handed to Lua as the `__lewdware_content` global, not the public `lewdware`
+    /// table (see `create_api`). Used today by the default-modes library's shared query layer to
+    /// honor disabled content groups; additive fields (captions, prompts, ...) are for the
+    /// "Sandbox mode, full feature set" milestone to consume the same way.
+    pub content: shared::behaviour::Content,
     pub gpu_available: bool,
     pub dev_mode: bool,
 }
@@ -101,11 +107,18 @@ pub fn create_api(
     let ApiOptions {
         pack_info,
         config,
+        content,
         gpu_available,
         dev_mode,
     } = options;
 
     let api_table = lua.create_table()?;
+
+    // Private channel to the default-modes library code (never under the public `lewdware`
+    // table, so it stays out of api.lua/the docs site): the whole behaviour.json `content`
+    // section, empty for custom modes. See `ApiOptions::content`'s doc comment.
+    lua.globals()
+        .set("__lewdware_content", lua.to_value(&content)?)?;
 
     api_table.set("config", config.into_lua(lua)?)?;
 

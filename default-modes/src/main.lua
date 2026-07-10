@@ -1,4 +1,5 @@
 local config = lewdware.config
+local media = require("lib.media")
 
 ---@cast config {
 ---    popup_frequency: number,
@@ -150,14 +151,14 @@ local function open_popup(spawn_opts, close_trigger)
 
 	if not should_spawn() then return end
 
-	local media = lewdware.media.random({ type = popup_types })
-	if not media then return end
+	local item = media.random({ type = popup_types })
+	if not item then return end
 
 	local window
-	if media.type == "image" then
-		window = lewdware.popup.image(media, spawn_opts)
-	elseif media.type == "video" then
-		window = lewdware.popup.video(media, spawn_opts)
+	if item.type == "image" then
+		window = lewdware.popup.image(item, spawn_opts)
+	elseif item.type == "video" then
+		window = lewdware.popup.video(item, spawn_opts)
 	end
 
 	popup_count = popup_count + 1
@@ -227,7 +228,7 @@ local spawn_audio -- forward declared so enter_dormant can reference it
 spawn_audio = function()
 	if not audio_active then return end
 
-	local audio = lewdware.media.random_audio()
+	local audio = media.random_audio()
 	if not audio then return end
 
 	-- No pcall needed: play_audio() always returns a handle immediately. If playback turns out

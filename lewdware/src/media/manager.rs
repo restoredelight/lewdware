@@ -183,6 +183,15 @@ impl MediaManager {
             response_tx: tx,
         })?
     }
+
+    /// Reads a named blob from the pack's `pack_data` table (e.g. `"behaviour"` for
+    /// behaviour.json). `None` if the pack doesn't carry an entry with this name.
+    pub fn get_pack_data(&self, name: String) -> anyhow::Result<Option<Vec<u8>>> {
+        self.send(|tx| MediaRequest::GetPackData {
+            name,
+            response_tx: tx,
+        })?
+    }
 }
 
 fn spawn_media_manager_thread(
@@ -317,6 +326,9 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster
         }
         MediaRequest::GetModeData { id, response_tx } => {
             response_tx.send(pack.get_mode(id)).is_ok()
+        }
+        MediaRequest::GetPackData { name, response_tx } => {
+            response_tx.send(pack.get_pack_data(&name)).is_ok()
         }
     } {
         // Either the requester's oneshot receiver was dropped, or (for the `*Resolved` events)
@@ -453,6 +465,10 @@ enum MediaRequest {
     GetModeData {
         id: u64,
         response_tx: std_mpsc::Sender<anyhow::Result<Vec<u8>>>,
+    },
+    GetPackData {
+        name: String,
+        response_tx: std_mpsc::Sender<anyhow::Result<Option<Vec<u8>>>>,
     },
 }
 
