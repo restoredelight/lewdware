@@ -14,8 +14,11 @@ ChangesEnvironment=yes
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 SetupIconFile=..\..\config\src-tauri\icons\icon.ico
+LicenseFile=..\..\LICENSE
 
 [Files]
+; MIT license - shown during install above, and kept alongside the binaries
+Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 ; Config GUI (user-facing entry point)
 Source: "..\..\target\release\lewdware.exe"; DestDir: "{app}"; DestName: "lewdware.exe"; Flags: ignoreversion
 ; Engine (internal, launched by config app)

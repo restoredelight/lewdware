@@ -20,7 +20,12 @@ mkdir -p "$STAGE_DIR/usr/bin"
 mkdir -p "$STAGE_DIR/usr/lib/lewdware"
 mkdir -p "$STAGE_DIR/usr/share/applications"
 mkdir -p "$STAGE_DIR/usr/share/icons/hicolor/128x128/apps"
+mkdir -p "$STAGE_DIR/usr/share/doc/lewdware"
 mkdir -p "$OUTPUT_DIR"
+
+# Ship the MIT license alongside the binaries - MIT's own terms require the
+# copyright/permission notice to accompany copies of the software.
+cp "LICENSE" "$STAGE_DIR/usr/share/doc/lewdware/copyright"
 
 # 1. Compile all applications
 echo "🔨 Compiling applications..."
@@ -29,9 +34,12 @@ cargo build -p lw --release
 echo "🔨 Building default mode..."
 (cd default-modes && ../target/release/lw mode build)
 
-# Compile lewdware with a relative rpath targeting the bundled libs
+# Compile lewdware with a relative rpath targeting the bundled libs.
+# --features build-ffmpeg vendors and statically links FFmpeg from pristine
+# upstream source (LGPL-only, no --enable-gpl/libx264) instead of linking
+# Ubuntu's GPL-licensed libavcodec.so etc - see lewdware/Cargo.toml.
 echo "   Compiling lewdware with relative rpath..."
-cargo rustc -p lewdware --release -- -C link-args="-Wl,-rpath,\$ORIGIN/../lib/lewdware"
+cargo rustc -p lewdware --release --features build-ffmpeg -- -C link-args="-Wl,-rpath,\$ORIGIN/../lib/lewdware"
 
 # Compile Tauri GUI
 echo "🔨 Building config GUI..."
@@ -49,7 +57,9 @@ cp "target/release/lw" "$STAGE_DIR/usr/bin/lw"
 cp "target/release/lewdware-engine" "$STAGE_DIR/usr/lib/lewdware/lewdware-engine"
 chmod +x "$STAGE_DIR/usr/bin/"* "$STAGE_DIR/usr/lib/lewdware/lewdware-engine"
 
-# 3. Dynamic Library Bundling (FFmpeg, dav1d, and all transitive deps)
+# 3. Dynamic Library Bundling (transitive deps of any dynamically-linked libs).
+# FFmpeg and dav1d are statically linked into lewdware-engine (see the
+# --features build-ffmpeg cargo invocation above), so they won't show up here.
 echo "Bundling dynamic library dependencies..."
 
 # System libraries that must remain as host deps (UI, audio, core runtime).
@@ -148,8 +158,11 @@ if command -v rpmbuild &> /dev/null; then
   mkdir -p "$RPM_STAGE_DIR"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
   cat <<EOF > "$RPM_STAGE_DIR/SPECS/lewdware.spec"
+# FFmpeg/dav1d are statically linked into lewdware-engine (build-ffmpeg
+# feature), so they no longer appear as separate .so files here - these
+# excludes just guard against auto-generated requires/provides for whatever
+# ends up bundled in usr/lib/lewdware/.
 %global __requires_exclude_from /usr/lib/lewdware/
-%global __requires_exclude ^lib(avcodec|avformat|avutil|swscale|swresample|dav1d|avfilter|avdevice)\\.so
 %global __provides_exclude_from /usr/lib/lewdware/
 %global debug_package %{nil}
 %global __strip /bin/true
@@ -169,11 +182,13 @@ mkdir -p %{buildroot}/usr/bin
 mkdir -p %{buildroot}/usr/lib/lewdware
 mkdir -p %{buildroot}/usr/share/applications
 mkdir -p %{buildroot}/usr/share/icons/hicolor/128x128/apps
+mkdir -p %{buildroot}/usr/share/licenses/lewdware
 
 cp -p %{staged_dir}/usr/bin/* %{buildroot}/usr/bin/
 cp -pr %{staged_dir}/usr/lib/lewdware/* %{buildroot}/usr/lib/lewdware/
 cp -p %{staged_dir}/usr/share/applications/* %{buildroot}/usr/share/applications/
 cp -p %{staged_dir}/usr/share/icons/hicolor/128x128/apps/* %{buildroot}/usr/share/icons/hicolor/128x128/apps/
+cp -p %{staged_dir}/usr/share/doc/lewdware/copyright %{buildroot}/usr/share/licenses/lewdware/LICENSE
 
 %files
 /usr/bin/lewdware
@@ -181,6 +196,7 @@ cp -p %{staged_dir}/usr/share/icons/hicolor/128x128/apps/* %{buildroot}/usr/shar
 /usr/lib/lewdware/*
 /usr/share/applications/lewdware.desktop
 /usr/share/icons/hicolor/128x128/apps/lewdware.png
+%license /usr/share/licenses/lewdware/LICENSE
 EOF
 
   rpmbuild -bb \
@@ -218,6 +234,9 @@ fi
 # Copy dynamic libraries and the engine (internal, launched by config app)
 cp "$STAGE_DIR/usr/lib/lewdware/"* "$TAR_ROOT/lib/lewdware/"
 
+# Ship the MIT license alongside the binaries
+cp "LICENSE" "$TAR_ROOT/LICENSE"
+
 # Create a simple setup/run README
 cat << 'EOF' > "$TAR_ROOT/README.md"
 # Lewdware (and tools)
@@ -227,7 +246,8 @@ This portable distribution contains the Lewdware Config app, Engine, and lw CLI.
 ## Structure
 * `bin/lewdware`: Lewdware Config app (AppImage) — start here
 * `bin/lw`: Lewdware CLI
-* `lib/lewdware/`: Engine and bundled dynamic libraries (FFmpeg and dav1d)
+* `lib/lewdware/`: Engine and any bundled dynamic libraries (FFmpeg and dav1d are statically linked into the engine)
+* `LICENSE`: MIT license covering this software
 
 ## Running
 Ensure you have the basic client dependencies installed on your Linux distribution (X11, ALSA, etc.).

@@ -24,7 +24,11 @@ cargo build -p lw --release
 echo "Building default mode..."
 (cd default-modes && ../target/release/lw mode build)
 
-cargo build -p lewdware --release
+# --features build-ffmpeg vendors and statically links FFmpeg from pristine
+# upstream source (LGPL-only, no --enable-gpl/libx264/libx265) instead of
+# linking Homebrew's ffmpeg, whose formula is declared GPL-3.0-or-later -
+# see lewdware/Cargo.toml.
+cargo build -p lewdware --release --features build-ffmpeg
 
 # Compile Tauri GUI
 echo "Building config GUI..."
@@ -43,6 +47,11 @@ cp -R "target/release/bundle/macos/lewdware.app" "$BUILD_DIR/root/Applications/L
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Lewdware" \
   "$BUILD_DIR/root/Applications/Lewdware.app/Contents/Info.plist"
 
+# Ship the MIT license inside the app bundle - MIT's own terms require the
+# copyright/permission notice to accompany copies of the software.
+mkdir -p "$BUILD_DIR/root/Applications/Lewdware.app/Contents/Resources"
+cp "LICENSE" "$BUILD_DIR/root/Applications/Lewdware.app/Contents/Resources/LICENSE"
+
 # Rename internal binary to config-tauri if needed, ensuring the plist matches
 # Tauri usually handles this. Let's make sure our CLI and Engine live in the same directory.
 MAC_BIN_DIR="$BUILD_DIR/root/Applications/Lewdware.app/Contents/MacOS"
@@ -55,7 +64,9 @@ cp "target/release/lewdware-engine" "$MAC_BIN_DIR/lewdware-engine"
 chmod +x "$MAC_BIN_DIR/lw" "$MAC_BIN_DIR/lewdware-engine"
 
 # 3. Dynamic Library Bundling and Relinking (dylib)
-echo "Resolving dynamic library dependencies (FFmpeg & dav1d)..."
+# FFmpeg and dav1d are statically linked into lewdware-engine (see the
+# --features build-ffmpeg cargo invocation above), so they won't show up here.
+echo "Resolving dynamic library dependencies..."
 
 # Recursively copy all non-system dylib deps of $1 into Frameworks/ and relink.
 # Handles transitive deps (libvpx, libopus, libaom, etc.) automatically.

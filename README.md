@@ -55,7 +55,8 @@ Lewdware aims, as much as possible, to be:
 ## Getting started
 
 You will need to install Rust and Cargo, and have dav1d and ffmpeg libraries
-installed.
+installed. (This is just for local development - official release builds of
+the engine vendor their own FFmpeg instead; see [License](#license) below.)
 
 The pack editor requires static `ffmpeg` and `ffprobe` binaries to be downloaded
 into `pack-editor/src-tauri/binaries/`. Run the appropriate script from the
@@ -106,3 +107,26 @@ cargo run -p lw -- <subcommand>
 - [`config/README.md`](config/README.md)
 - [`pack-editor/README.md`](pack-editor/README.md)
 - [`lw/README.md`](lw/README.md)
+
+## License
+
+All of Lewdware's own source code is licensed under the MIT License (see
+[`LICENSE`](LICENSE)). That covers everything you write or change in this
+repository. Some of the binaries we *distribute*, however, also bundle
+third-party components under different licenses, since MIT doesn't override
+what those components require of you when you redistribute them:
+
+- **`pack-editor`** invokes `ffmpeg`/`ffprobe` as subprocesses and bundles
+  prebuilt copies of them (built with GPL-only components like `libx264`) in
+  its installer. pack-editor's own source stays MIT, but the distributed
+  installer as a whole carries GPLv3 obligations for those bundled binaries.
+  See [`pack-editor/THIRD_PARTY_LICENSES.md`](pack-editor/THIRD_PARTY_LICENSES.md).
+- **`lewdware`/`config`/`lw`** (the engine and its companions) link against
+  FFmpeg directly. Official release builds link a vendored, LGPL-only FFmpeg
+  (no GPL/nonfree components), so these releases remain genuinely MIT, with
+  the lighter obligations LGPL imposes on statically-linked code. See
+  [`lewdware/THIRD_PARTY_LICENSES.md`](lewdware/THIRD_PARTY_LICENSES.md).
+
+In short: this repository's code is MIT, but a distributed *binary* can carry
+additional obligations from whatever it links or bundles - check the
+`THIRD_PARTY_LICENSES.md` next to an app if you plan to redistribute it.

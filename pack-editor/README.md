@@ -82,3 +82,16 @@ H.264 for fast decoding (see the `lewdware` README for details).
 We detect when images and videos are transparent (/not opaque), and store
 this information in the database. We use a special encoding method for
 transparent videos (again, see the `lewdware` README for why we do this).
+
+## License
+
+pack-editor's own source code is MIT-licensed, same as the rest of this
+repository. However, the pack editor calls out to `ffmpeg`/`ffprobe` as
+separate subprocesses to encode media (see `src-tauri/src/encode.rs`), and
+the distributed pack-editor installer bundles prebuilt copies of these
+binaries, which are built with GPL-only components (`libx264`) and are
+therefore licensed under **GPLv3**, not MIT.
+
+Redistributing the pack-editor binary means redistributing that bundled
+GPLv3 software alongside it, which carries its own obligations. See
+[`THIRD_PARTY_LICENSES.md`](./THIRD_PARTY_LICENSES.md) for details.

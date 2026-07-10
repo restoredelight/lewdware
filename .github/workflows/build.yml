@@ -36,6 +36,7 @@ jobs:
             wget \
             file \
             rpm \
+            nasm \
             libssl-dev \
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
@@ -47,18 +48,17 @@ jobs:
             libxtst-dev \
             libxrandr-dev \
             libxcursor-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libdav1d-dev \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             patchelf \
             xdg-utils
+      # Note: no libavcodec-dev/libdav1d-dev etc. here on purpose. Ubuntu's
+      # ffmpeg packages are built --enable-gpl (they depend on libx264-dev),
+      # so linking against them would make the distributed lewdware binary a
+      # GPL combined work. Installer A instead builds the `lewdware` crate
+      # with --features build-ffmpeg, which vendors and statically links a
+      # pristine, LGPL-only FFmpeg (see lewdware/Cargo.toml). `nasm` above is
+      # required to build that vendored copy.
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -112,8 +112,16 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install ffmpeg dav1d
-          echo "BREW_DEPS=$(brew ls --versions ffmpeg dav1d | tr '\n' ' ')" >> $GITHUB_ENV
+          brew install nasm
+          echo "BREW_DEPS=$(brew ls --versions nasm | tr '\n' ' ')" >> $GITHUB_ENV
+      # Note: no `brew install ffmpeg` here on purpose. Homebrew's ffmpeg
+      # formula is unconditionally built --enable-gpl --enable-libx264
+      # --enable-libx265 (its declared license is literally GPL-3.0-or-later),
+      # so linking against it would make the distributed lewdware binary a
+      # GPL combined work. Installer A instead builds the `lewdware` crate
+      # with --features build-ffmpeg, which vendors and statically links a
+      # pristine, LGPL-only FFmpeg (see lewdware/Cargo.toml). `nasm` above is
+      # required to build that vendored copy.
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable

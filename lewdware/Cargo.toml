@@ -68,7 +68,12 @@ signal-hook = "0.4.4"
 
 [features]
 static-ffmpeg = ["ffmpeg-next/static"]
-build-ffmpeg = ["ffmpeg-next/build"]
+# Vendors and statically links FFmpeg from pristine upstream source, without
+# --enable-gpl/--enable-nonfree (i.e. no libx264/libx265/etc). This keeps the
+# resulting binary under FFmpeg's default LGPL v2.1+ license instead of GPL,
+# which system-installed FFmpeg (Ubuntu apt, Homebrew) is normally built with.
+# Used for official release builds on Linux/macOS - see .github/workflows/build.yml.
+build-ffmpeg = ["ffmpeg-next/build", "ffmpeg-next/build-lib-dav1d"]
 
 [dev-dependencies]
 zstd = "0.13.3"
