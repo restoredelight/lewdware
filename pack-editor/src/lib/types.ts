@@ -12,11 +12,16 @@ export interface MediaFile {
   size: number;
 }
 
+// Not yet editable from the pack editor UI (no Modes tab) -- see MetadataDto.recommended_mode
+// on the Rust side. Kept here only so the DTO round-trips without dropping the field.
+export type RecommendedMode = "Sandbox" | "Experience" | { Pack: { id: number } };
+
 export interface MetadataDto {
   name: string;
   creator: string | null;
   description: string | null;
   version: string | null;
+  recommended_mode: RecommendedMode | null;
 }
 
 export interface PackInfo {

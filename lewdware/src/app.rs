@@ -44,7 +44,7 @@ use crate::window::{
 /// * `default_wallpaper`: Stores the user's default wallpaper, so we can restore it on panic.
 pub struct LewdwareApp {
     running: bool,
-    _config: Arc<AppConfig>,
+    config: Arc<AppConfig>,
     wgpu_state: Option<Arc<WgpuState>>,
     windows: HashMap<PopupId, PopupSlot>,
     window_ids: HashMap<WindowId, PopupId>,
@@ -285,7 +285,7 @@ impl LewdwareApp {
 
         Ok(Self {
             running: false,
-            _config: config,
+            config,
             wgpu_state,
             windows: HashMap::new(),
             window_ids: HashMap::new(),
@@ -633,11 +633,18 @@ impl LewdwareApp {
         id
     }
 
-    fn set_wallpaper(&mut self, file: FileOrPath, mode: Option<WallpaperMode>) -> Result<()> {
-        wallpaper::set_from_path(file.path().to_str().ok_or(LewdwareError::Internal(
+    fn set_wallpaper(&mut self, file: FileOrPath, mode: Option<WallpaperMode>) -> Result<bool> {
+        if !self.config.capabilities.wallpaper {
+            return Ok(false);
+        }
+
+        let path = file.path().to_str().ok_or(LewdwareError::Internal(
             "Tempfile does not have valid UTF-8 path",
-        ))?)
-        .map_err(|err| LewdwareError::WallpaperError(anyhow!("{err}")))?;
+        ))?;
+
+        if wallpaper::set_from_path(path).is_err() {
+            return Ok(false);
+        }
 
         if let Some(mode) = mode {
             let mode = match mode {
@@ -649,11 +656,12 @@ impl LewdwareApp {
                 WallpaperMode::Tile => wallpaper::Mode::Tile,
             };
 
-            wallpaper::set_mode(mode)
-                .map_err(|err| LewdwareError::WallpaperError(anyhow!("{err}")))?;
+            if wallpaper::set_mode(mode).is_err() {
+                return Ok(false);
+            }
         }
 
-        Ok(())
+        Ok(true)
     }
 
     fn reset_wallpaper(&self) {
@@ -666,7 +674,11 @@ impl LewdwareApp {
         }
     }
 
-    fn open_link(&self, url: String) -> Result<()> {
+    fn open_link(&self, url: String) -> Result<bool> {
+        if !self.config.capabilities.open_link {
+            return Ok(false);
+        }
+
         let url = Url::parse(&url).map_err(|err| LewdwareError::OpenLinkError(err.into()))?;
 
         if url.scheme() != "https" {
@@ -687,10 +699,14 @@ impl LewdwareApp {
             )));
         }
 
-        webbrowser::open(url.as_str()).map_err(|err| LewdwareError::OpenLinkError(err.into()))
+        Ok(webbrowser::open(url.as_str()).is_ok())
     }
 
-    fn show_notification(&self, notification: Notification) -> Result<()> {
+    fn show_notification(&self, notification: Notification) -> Result<bool> {
+        if !self.config.capabilities.notify {
+            return Ok(false);
+        }
+
         let mut notification_builder = notify_rust::Notification::new();
 
         notification_builder.body(&notification.body);
@@ -699,9 +715,7 @@ impl LewdwareApp {
             notification_builder.summary(&summary);
         }
 
-        notification_builder.show()?;
-
-        Ok(())
+        Ok(notification_builder.show().is_ok())
     }
 
     fn process_lua_request(&mut self, request: LuaRequest, event_loop: &ActiveEventLoop) -> bool {

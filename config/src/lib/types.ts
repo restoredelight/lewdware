@@ -14,6 +14,13 @@ export interface ConfigDto {
   mode_options: ModeOptionsEntry[];
   panic_button: Key;
   disabled_monitors: string[];
+  capabilities: Capabilities;
+}
+
+export interface Capabilities {
+  wallpaper: boolean;
+  open_link: boolean;
+  notify: boolean;
 }
 
 export interface EngineStatusDto {

@@ -3,6 +3,7 @@
   import { store } from "$lib/store.svelte";
   import General from "$lib/General.svelte";
   import PackMode from "$lib/PackMode.svelte";
+  import Permissions from "$lib/Permissions.svelte";
 
   onMount(() => {
     store.load();
@@ -11,6 +12,7 @@
   const tabs = [
     { id: "general" as const, label: "General" },
     { id: "pack_mode" as const, label: "Pack & Mode" },
+    { id: "permissions" as const, label: "Permissions" },
   ];
 </script>
 
@@ -47,6 +49,8 @@
       <General />
     {:else if store.activeTab === "pack_mode"}
       <PackMode />
+    {:else if store.activeTab === "permissions"}
+      <Permissions />
     {/if}
   </main>
 </div>

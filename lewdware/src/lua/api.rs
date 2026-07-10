@@ -1553,7 +1553,7 @@ fn set_wallpaper(
     (image, opts): (Media, Option<SetWallpaperOpts>),
     media_manager: MediaManager,
     request_sender: RequestSender,
-) -> mlua::Result<()> {
+) -> mlua::Result<bool> {
     let opts = opts.unwrap_or_default();
 
     if !matches!(image.media_data, MediaData::Image { .. }) {
@@ -1625,7 +1625,7 @@ fn play_audio(
     Ok(audio_handle)
 }
 
-fn open_link(_: &Lua, url: String, request_sender: RequestSender) -> mlua::Result<()> {
+fn open_link(_: &Lua, url: String, request_sender: RequestSender) -> mlua::Result<bool> {
     request_sender.open_link(url).into_lua_err()
 }
 
@@ -1645,7 +1645,7 @@ fn show_notification(
     _: &Lua,
     notification: Notification,
     request_sender: RequestSender,
-) -> mlua::Result<()> {
+) -> mlua::Result<bool> {
     request_sender
         .show_notification(notification)
         .into_lua_err()

@@ -6,7 +6,6 @@ use crate::media::MediaError;
 pub enum LewdwareError {
     MonitorError(MonitorError),
     WindowError(anyhow::Error),
-    WallpaperError(anyhow::Error),
     OpenLinkError(anyhow::Error),
     NotifyError(notify_rust::error::Error),
     MainThreadConnection,
@@ -28,10 +27,6 @@ impl Display for LewdwareError {
             Self::MonitorError(err) => err.fmt(f),
             Self::WindowError(err) => {
                 writeln!(f, "Error creating window:")?;
-                err.fmt(f)
-            }
-            Self::WallpaperError(err) => {
-                writeln!(f, "Error setting wallpaper:")?;
                 err.fmt(f)
             }
             Self::OpenLinkError(err) => {

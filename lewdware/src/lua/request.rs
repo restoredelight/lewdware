@@ -125,7 +125,7 @@ impl RequestSender {
         })?
     }
 
-    pub fn set_wallpaper(&self, file: FileOrPath, mode: Option<WallpaperMode>) -> Result<()> {
+    pub fn set_wallpaper(&self, file: FileOrPath, mode: Option<WallpaperMode>) -> Result<bool> {
         self.send(|tx| LuaRequest::SetWallpaper { file, mode, tx })?
     }
 
@@ -142,11 +142,11 @@ impl RequestSender {
         })?)
     }
 
-    pub fn open_link(&self, url: String) -> Result<()> {
+    pub fn open_link(&self, url: String) -> Result<bool> {
         self.send(|tx| LuaRequest::OpenLink { url, tx })?
     }
 
-    pub fn show_notification(&self, notification: Notification) -> Result<()> {
+    pub fn show_notification(&self, notification: Notification) -> Result<bool> {
         self.send(|tx| LuaRequest::ShowNotification { notification, tx })?
     }
 
@@ -370,18 +370,18 @@ pub enum LuaRequest {
     SetWallpaper {
         file: FileOrPath,
         mode: Option<WallpaperMode>,
-        tx: mpsc::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<bool>>,
     },
     ResetWallpaper {
         tx: mpsc::Sender<()>,
     },
     OpenLink {
         url: String,
-        tx: mpsc::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<bool>>,
     },
     ShowNotification {
         notification: Notification,
-        tx: mpsc::Sender<Result<()>>,
+        tx: mpsc::Sender<Result<bool>>,
     },
     ListMonitors {
         tx: mpsc::Sender<Vec<Monitor>>,

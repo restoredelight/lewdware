@@ -17,6 +17,29 @@ pub struct AppConfig {
     pub tags: Option<Vec<String>>,
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
+    pub capabilities: Capabilities,
+}
+
+/// Consent-critical, user-owned off-switches for actions a mode can take that reach outside its
+/// own windows. Structurally out of a mode's reach (see `behaviour-design/default-mode.md`,
+/// Ownership): there is no schema path from a mode or pack to these fields, only the app-level
+/// config. Enforced main-thread-side; a forbidden call no-ops, returning `false` to Lua rather
+/// than erroring, exactly like any other "could not do it" outcome (e.g. no browser installed).
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct Capabilities {
+    pub wallpaper: bool,
+    pub open_link: bool,
+    pub notify: bool,
+}
+
+impl Default for Capabilities {
+    fn default() -> Self {
+        Self {
+            wallpaper: true,
+            open_link: true,
+            notify: true,
+        }
+    }
 }
 
 /// Which mode runs, and where its `.lwmode` data comes from. Each variant identifies exactly one
@@ -86,6 +109,7 @@ impl Default for AppConfig {
                 },
             },
             disabled_monitors: Vec::new(),
+            capabilities: Capabilities::default(),
         }
     }
 }
@@ -186,6 +210,14 @@ mod tests {
             },
         };
         assert_eq!(key.to_string(), "Ctrl + Alt + Shift + Meta + F1");
+    }
+
+    #[test]
+    fn default_capabilities_allow_everything() {
+        let config = AppConfig::default();
+        assert!(config.capabilities.wallpaper);
+        assert!(config.capabilities.open_link);
+        assert!(config.capabilities.notify);
     }
 
     #[test]

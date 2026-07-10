@@ -4,7 +4,13 @@
   import { store } from "./store.svelte.js";
   import type { MetadataDto } from "./types.js";
 
-  let form = $state<MetadataDto>({ name: "", creator: null, description: null, version: null });
+  let form = $state<MetadataDto>({
+    name: "",
+    creator: null,
+    description: null,
+    version: null,
+    recommended_mode: null,
+  });
   let saving = $state(false);
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 

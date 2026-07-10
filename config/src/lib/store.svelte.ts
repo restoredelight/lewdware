@@ -1,5 +1,6 @@
 import { api } from "./api";
 import type {
+  Capabilities,
   ConfigDto,
   Key,
   ModeGroupDto,
@@ -36,7 +37,7 @@ class AppStore {
   monitors = $state<MonitorDto[]>([]);
   modeGroups = $state<ModeGroupDto[]>([]);
   modeOptions = $state<OptionEntryDto[]>([]);
-  activeTab = $state<"general" | "pack_mode">("general");
+  activeTab = $state<"general" | "pack_mode" | "permissions">("general");
 
   get ready() {
     return this.config !== null;
@@ -79,6 +80,15 @@ class AppStore {
     this.monitors = this.monitors.map((m) =>
       m.id === id ? { ...m, disabled: !enabled } : m
     );
+    this.saveConfig();
+  }
+
+  setCapability(key: keyof Capabilities, enabled: boolean) {
+    if (!this.config) return;
+    this.config = {
+      ...this.config,
+      capabilities: { ...this.config.capabilities, [key]: enabled },
+    };
     this.saveConfig();
   }
 

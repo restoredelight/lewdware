@@ -584,6 +584,7 @@ mod tests {
         time::Duration,
     };
 
+    use shared::user_config::Capabilities;
     use tempfile::NamedTempFile;
     use tokio::sync::mpsc::UnboundedSender;
 
@@ -592,8 +593,14 @@ mod tests {
 
     /// Build a minimal but valid, media-less-by-default `.lwpack` fixture on disk, purely so
     /// `MediaManager::open` has something real to read — mirrors the on-disk layout built (and
-    /// already exercised) in `media/pack.rs`'s `open_reads_deserialized_index` test.
+    /// already exercised) in `media/pack.rs`'s `open_reads_deserialized_index` test. With
+    /// `with_image`, `pic.avif`'s row also gets a real `offset`/`length` pointing at dummy bytes
+    /// appended to the file (content doesn't matter — `get_image_file` is a raw byte copy, never
+    /// decoded here), so `get_image_file`/`wallpaper.set` have real data to read rather than
+    /// erroring on a null offset.
     fn pack_fixture(with_image: bool) -> NamedTempFile {
+        const IMAGE_BYTES: &[u8] = b"not a real avif, just needs to be some bytes";
+
         let db = rusqlite::Connection::open_in_memory().unwrap();
         shared::db::migrate(&db).unwrap();
 
@@ -613,8 +620,6 @@ mod tests {
             .unwrap();
         }
 
-        let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
-
         let metadata = shared::read_pack::Metadata {
             name: "test-pack".to_string(),
             ..Default::default()
@@ -625,12 +630,30 @@ mod tests {
         header.metadata_offset = shared::read_pack::HEADER_SIZE as u64;
         header.metadata_length = metadata_bytes.len() as u64;
         header.index_offset = header.metadata_offset + header.metadata_length;
+
+        // Two-pass, like `media/pack.rs`'s `get_video_data_opens_embedded_clip`: the row's
+        // offset needs the db's own serialized length to compute, so serialize once to size it,
+        // patch the row, then serialize again.
+        let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
         header.index_length = db_bytes.len() as u64;
+        let image_offset = header.index_offset + header.index_length;
+
+        if with_image {
+            db.execute(
+                "UPDATE media SET offset = ?, length = ? WHERE file_name = 'pic.avif'",
+                rusqlite::params![image_offset, IMAGE_BYTES.len() as u64],
+            )
+            .unwrap();
+        }
+        let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
 
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(&header.to_buf().unwrap()).unwrap();
         file.write_all(&metadata_bytes).unwrap();
         file.write_all(&db_bytes).unwrap();
+        if with_image {
+            file.write_all(IMAGE_BYTES).unwrap();
+        }
         file.flush().unwrap();
         file
     }
@@ -705,6 +728,7 @@ mod tests {
         request_rx: std::sync::mpsc::Receiver<LuaRequest>,
         recorded: Arc<Mutex<Vec<Recorded>>>,
         event_tx: UnboundedSender<Event>,
+        capabilities: Capabilities,
     ) {
         let mut next_id = 0u64;
         let mut closed_windows = HashSet::new();
@@ -760,17 +784,21 @@ mod tests {
                     let _ = tx.send(0);
                 }
                 LuaRequest::SetWallpaper { tx, .. } => {
-                    let _ = tx.send(Ok(()));
+                    let _ = tx.send(Ok(capabilities.wallpaper));
                 }
                 LuaRequest::ResetWallpaper { tx } => {
                     let _ = tx.send(());
                 }
                 LuaRequest::OpenLink { url, tx } => {
-                    recorded.lock().unwrap().push(Recorded::OpenLink { url });
-                    let _ = tx.send(Ok(()));
+                    // Mirrors `LewdwareApp::open_link`: a disabled capability is checked before
+                    // anything else happens, so a denied request leaves no trace to record.
+                    if capabilities.open_link {
+                        recorded.lock().unwrap().push(Recorded::OpenLink { url });
+                    }
+                    let _ = tx.send(Ok(capabilities.open_link));
                 }
                 LuaRequest::ShowNotification { tx, .. } => {
-                    let _ = tx.send(Ok(()));
+                    let _ = tx.send(Ok(capabilities.notify));
                 }
                 LuaRequest::ListMonitors { tx } => {
                     // Non-empty: popup spawns that don't specify a monitor now pick a random one
@@ -892,6 +920,17 @@ mod tests {
 
     impl Harness {
         fn new(sources: &[(&str, &str)], with_image: bool) -> Self {
+            Self::with_capabilities(sources, with_image, Capabilities::default())
+        }
+
+        /// Like [`Harness::new`], but with the fake handler gating `SetWallpaper`/`OpenLink`/
+        /// `ShowNotification` on `capabilities` exactly like `LewdwareApp` does -- lets a test
+        /// simulate a hostile mode running with one or more capabilities denied.
+        fn with_capabilities(
+            sources: &[(&str, &str)],
+            with_image: bool,
+            capabilities: Capabilities,
+        ) -> Self {
             let pack_file = pack_fixture(with_image);
             let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
 
@@ -906,7 +945,9 @@ mod tests {
             let recorded = Arc::new(Mutex::new(Vec::new()));
             {
                 let recorded = recorded.clone();
-                thread::spawn(move || run_fake_handler(request_rx, recorded, event_tx));
+                thread::spawn(move || {
+                    run_fake_handler(request_rx, recorded, event_tx, capabilities)
+                });
             }
 
             let storage_dir = tempfile::tempdir().unwrap();
@@ -1235,6 +1276,7 @@ mod tests {
                         creator: Some("tester".to_string()),
                         description: None,
                         version: Some("2.0.0".to_string()),
+                        recommended_mode: None,
                     },
                 };
 
@@ -1830,6 +1872,46 @@ mod tests {
                 );
 
                 harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    /// Capability toggles are the one consent-critical surface the release plan calls out as
+    /// "not cuttable": a hostile mode with every capability denied must see `false` from each
+    /// call (never a thrown error -- these are "could not do it" outcomes, indistinguishable to
+    /// Lua from e.g. no browser being installed) and must leave no side effect, exactly as
+    /// `LewdwareApp::open_link`/`show_notification`/`set_wallpaper` behave for real (see
+    /// `Harness::with_capabilities`, which mirrors that gating in the fake handler).
+    #[tokio::test(start_paused = true)]
+    async fn hostile_mode_sees_every_denied_capability_as_false() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::with_capabilities(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local image = lewdware.media.get_image("pic.avif")
+                            assert(lewdware.wallpaper.set(image) == false,
+                                "wallpaper.set should be denied")
+                            assert(lewdware.open_link("https://should-not-fire.example") == false,
+                                "open_link should be denied")
+                            assert(lewdware.show_notification({ body = "should not fire" }) == false,
+                                "show_notification should be denied")
+                        "#,
+                    )],
+                    true,
+                    Capabilities {
+                        wallpaper: false,
+                        open_link: false,
+                        notify: false,
+                    },
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+
+                // No side effect leaked through -- in particular, the denied `open_link` never
+                // reached the point the fake handler records it.
+                assert_eq!(harness.recorded(), vec![]);
             })
             .await;
     }

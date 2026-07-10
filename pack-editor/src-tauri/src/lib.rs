@@ -44,7 +44,7 @@ async fn check_for_update() -> Result<Option<String>, String> {
         Ok(None)
     }
 }
-use shared::read_pack::Metadata;
+use shared::read_pack::{Metadata, RecommendedMode};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{Mutex, RwLock};
 
@@ -84,6 +84,12 @@ pub struct MetadataDto {
     pub creator: Option<String>,
     pub description: Option<String>,
     pub version: Option<String>,
+    // Not yet editable from the pack editor UI (no Modes tab) -- carried through opaquely so
+    // saving an unrelated metadata edit (e.g. renaming the pack) doesn't clobber a
+    // recommended_mode set by, e.g., the converter. `#[serde(default)]` so the frontend's
+    // pre-Modes-tab payloads (which don't send this key) still deserialize.
+    #[serde(default)]
+    pub recommended_mode: Option<RecommendedMode>,
 }
 
 impl From<Metadata> for MetadataDto {
@@ -93,6 +99,7 @@ impl From<Metadata> for MetadataDto {
             creator: m.creator,
             description: m.description,
             version: m.version,
+            recommended_mode: m.recommended_mode,
         }
     }
 }
@@ -104,6 +111,7 @@ impl From<MetadataDto> for Metadata {
             creator: d.creator,
             description: d.description,
             version: d.version,
+            recommended_mode: d.recommended_mode,
         }
     }
 }

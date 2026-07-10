@@ -6,7 +6,7 @@ use std::{
 };
 
 use image::{ImageFormat, ImageReader};
-use rusqlite::{Connection, MAIN_DB, Row, params, params_from_iter};
+use rusqlite::{Connection, MAIN_DB, OptionalExtension, Row, params, params_from_iter};
 use shared::{
     db::migrate,
     read_pack::{Header, Metadata, read_pack_metadata},
@@ -345,6 +345,19 @@ impl MediaPack {
             .map_err(|err| err.into())
     }
 
+    /// Reads a named blob from the pack's `pack_data` table (e.g. behaviour.json). `None` if the
+    /// pack doesn't carry an entry with this name -- packs predating a given key, or not written
+    /// by a tool that populates it, are expected, not an error.
+    pub fn get_pack_data(&self, name: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT blob FROM pack_data WHERE name = ?")?;
+
+        stmt.query_row(params![name], |row| row.get("blob"))
+            .optional()
+            .map_err(|err| err.into())
+    }
+
     /// The pack's full tag vocabulary, sorted for a stable order -- not a query, so (unlike
     /// `list_media`'s tag filtering) this is never affected by the user's tag exclusion list: a
     /// tag whose every file happens to be excluded is still listed.
@@ -668,6 +681,56 @@ mod tests {
                 .unwrap()
                 .len(),
             2
+        );
+    }
+
+    /// `pack_data` is a generic named-blob table (its first real consumer is behaviour.json,
+    /// M3) -- checks the read path round-trips an arbitrary blob and that a missing name comes
+    /// back `None` rather than erroring, alongside the `recommended_mode` metadata hint that
+    /// ships in the same format batch.
+    #[test]
+    fn get_pack_data_reads_a_named_blob_and_the_recommended_mode_hint() {
+        use shared::read_pack::RecommendedMode;
+
+        let db = Connection::open_in_memory().unwrap();
+        migrate(&db).unwrap();
+        db.execute(
+            "INSERT INTO pack_data (name, blob) VALUES ('behaviour', x'deadbeef')",
+            [],
+        )
+        .unwrap();
+
+        let db_bytes = db.serialize(MAIN_DB).unwrap();
+
+        let metadata = Metadata {
+            name: "test-pack".to_string(),
+            recommended_mode: Some(RecommendedMode::Experience),
+            ..Default::default()
+        };
+        let metadata_bytes = metadata.to_buf().unwrap();
+
+        let mut header = Header::new();
+        header.metadata_offset = HEADER_SIZE as u64;
+        header.metadata_length = metadata_bytes.len() as u64;
+        header.index_offset = header.metadata_offset + header.metadata_length;
+        header.index_length = db_bytes.len() as u64;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&header.to_buf().unwrap()).unwrap();
+        file.write_all(&metadata_bytes).unwrap();
+        file.write_all(&db_bytes).unwrap();
+        file.flush().unwrap();
+
+        let pack = MediaPack::open(file.path()).unwrap();
+
+        assert_eq!(
+            pack.get_pack_data("behaviour").unwrap(),
+            Some(vec![0xde, 0xad, 0xbe, 0xef])
+        );
+        assert_eq!(pack.get_pack_data("nonexistent").unwrap(), None);
+        assert_eq!(
+            pack.metadata().recommended_mode,
+            Some(RecommendedMode::Experience)
         );
     }
 

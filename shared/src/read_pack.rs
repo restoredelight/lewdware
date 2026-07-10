@@ -30,6 +30,27 @@ pub struct Metadata {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Which mode the config app should preselect for this pack. Mostly auto-derived (an
+    /// `experience` section in behaviour.json implies `Experience`, otherwise `Sandbox`) but
+    /// authors can override it, e.g. to point at a custom mode embedded in the pack's own
+    /// `modes` table (see `behaviour-design/behaviour-tab.md`, "Modes tab").
+    ///
+    /// `#[serde(default)]` so a JSON payload predating this field (e.g. a pack editor DTO built
+    /// before the Modes tab exists) deserializes as `None` instead of erroring on a missing key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_mode: Option<RecommendedMode>,
+}
+
+/// A pack-metadata hint for which mode should run by default -- see `Metadata::recommended_mode`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub enum RecommendedMode {
+    /// The engine-bundled Sandbox default mode.
+    Sandbox,
+    /// The engine-bundled Experience default mode.
+    Experience,
+    /// A custom mode embedded in the pack. `id` is the row id in the pack's own `modes` table
+    /// (see `MediaPack::get_mode`), the same shape as `user_config::Mode::Pack`.
+    Pack { id: u64 },
 }
 
 impl Metadata {
@@ -287,6 +308,19 @@ mod tests {
             creator: Some("Alice".to_string()),
             description: Some("A test pack".to_string()),
             version: Some("1.0.0".to_string()),
+            recommended_mode: Some(RecommendedMode::Experience),
+        };
+        let buf = original.to_buf().unwrap();
+        let decoded = Metadata::from_buf(&buf).unwrap();
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn metadata_roundtrip_recommends_a_pack_embedded_mode() {
+        let original = Metadata {
+            name: "test-pack".to_string(),
+            recommended_mode: Some(RecommendedMode::Pack { id: 7 }),
+            ..Default::default()
         };
         let buf = original.to_buf().unwrap();
         let decoded = Metadata::from_buf(&buf).unwrap();
