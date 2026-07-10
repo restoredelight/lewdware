@@ -1,3 +1,4 @@
+pub mod behaviour;
 pub mod db;
 pub mod encode;
 pub mod logging;

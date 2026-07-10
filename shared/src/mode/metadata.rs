@@ -113,6 +113,38 @@ impl Metadata {
     }
 }
 
+/// Resolves stored option values against a schema, filling in a default for anything
+/// missing or no longer matching its option's type. Walks groups depth-first, same as
+/// `Metadata::all_options`.
+pub fn resolve_options(
+    entries: &IndexMap<String, ModeEntry>,
+    stored: &HashMap<String, OptionValue>,
+) -> HashMap<String, OptionValue> {
+    fn walk(
+        entries: &IndexMap<String, ModeEntry>,
+        stored: &HashMap<String, OptionValue>,
+        out: &mut HashMap<String, OptionValue>,
+    ) {
+        for (key, entry) in entries {
+            match entry {
+                ModeEntry::Option(opt) => {
+                    let value = stored
+                        .get(key)
+                        .filter(|v| opt.matches_value(v))
+                        .cloned()
+                        .unwrap_or_else(|| opt.default_value());
+                    out.insert(key.clone(), value);
+                }
+                ModeEntry::Group(group) => walk(&group.entries, stored, out),
+            }
+        }
+    }
+
+    let mut out = HashMap::new();
+    walk(entries, stored, &mut out);
+    out
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum OptionType {
     Integer {
@@ -373,6 +405,48 @@ mod tests {
         assert!(meta.get_option("variant").is_some());
         assert!(meta.get_option("count").is_some());
         assert!(meta.get_option("nonexistent").is_none());
+    }
+
+    #[test]
+    fn resolve_options_prefers_matching_stored_value() {
+        let meta = sample_metadata();
+        let mut stored = HashMap::new();
+        stored.insert("count".to_string(), OptionValue::Integer(42));
+
+        let resolved = resolve_options(&meta.entries, &stored);
+
+        assert_eq!(resolved.get("count"), Some(&OptionValue::Integer(42)));
+    }
+
+    #[test]
+    fn resolve_options_falls_back_to_default_when_missing_or_mismatched() {
+        let meta = sample_metadata();
+        let mut stored = HashMap::new();
+        // "label" is a String option; a Boolean stored value shouldn't match it.
+        stored.insert("label".to_string(), OptionValue::Boolean(true));
+
+        let resolved = resolve_options(&meta.entries, &stored);
+
+        // Missing entirely -> default.
+        assert_eq!(resolved.get("count"), Some(&OptionValue::Integer(5)));
+        // Present but wrong type -> default.
+        assert_eq!(
+            resolved.get("label"),
+            Some(&OptionValue::String("hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_options_walks_into_groups() {
+        let meta = sample_metadata();
+        let resolved = resolve_options(&meta.entries, &HashMap::new());
+
+        // "variant" lives inside the "advanced" group.
+        assert_eq!(
+            resolved.get("variant"),
+            Some(&OptionValue::Enum("a".to_string()))
+        );
+        assert_eq!(resolved.len(), meta.all_options().len());
     }
 
     #[test]
