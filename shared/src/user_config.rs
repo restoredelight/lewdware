@@ -14,7 +14,6 @@ pub struct AppConfig {
     pub mode: Mode,
     #[serde_as(as = "Vec<(_, _)>")]
     pub mode_options: HashMap<Mode, HashMap<String, OptionValue>>,
-    pub tags: Option<Vec<String>>,
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,
@@ -99,7 +98,6 @@ impl Default for AppConfig {
             uploaded_modes: Vec::new(),
             mode: Mode::default(),
             mode_options: HashMap::new(),
-            tags: None,
             panic_button: Key {
                 name: "Escape".to_string(),
                 code: "Escape".to_string(),

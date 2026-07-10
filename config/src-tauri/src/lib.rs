@@ -136,7 +136,6 @@ impl From<ConfigDto> for AppConfig {
             uploaded_modes: Vec::new(),
             mode: dto.mode.into(),
             mode_options,
-            tags: None,
             panic_button: dto.panic_button,
             disabled_monitors: dto.disabled_monitors,
             capabilities: dto.capabilities,
@@ -408,7 +407,6 @@ fn save_config(state: State<'_>, config: ConfigDto) -> Result<(), String> {
 
     // Preserve fields managed separately from the DTO
     new_config.uploaded_modes = current.uploaded_modes.clone();
-    new_config.tags = current.tags.clone();
 
     let uploaded = state.uploaded.lock().unwrap();
     save_to_disk(&new_config, &uploaded).map_err(|e| e.to_string())?;
