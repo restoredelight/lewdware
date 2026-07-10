@@ -469,6 +469,11 @@ impl LewdwareApp {
         opts: PopupSpawnOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
+        // Master volume is applied right here, where the raw value from Lua first enters the
+        // main thread -- everything downstream (the pending slot, the async decode, a later
+        // `set_volume()`) only ever sees this already-scaled effective volume.
+        let volume = volume * self.config.volume.video;
+
         let window_opts = self.finalize_window_opts(opts, event_loop)?;
 
         let media_manager = self.media_manager()?;
@@ -605,6 +610,9 @@ impl LewdwareApp {
     }
 
     fn spawn_audio(&mut self, media_id: u64, loop_audio: bool, volume: f32) -> u64 {
+        // See `spawn_video`'s equivalent comment -- same reasoning, `audio` channel instead.
+        let volume = volume * self.config.volume.audio;
+
         let id = self.current_audio_id;
         self.current_audio_id += 1;
 
@@ -836,8 +844,9 @@ impl LewdwareApp {
                                 _ => Err(LewdwareError::Internal("Invalid window type")),
                             })
                             .is_ok(),
-                        WindowAction::SetVideoVolume { tx, volume } => tx
-                            .send(match entry.get_mut() {
+                        WindowAction::SetVideoVolume { tx, volume } => {
+                            let volume = volume * self.config.volume.video;
+                            tx.send(match entry.get_mut() {
                                 PopupSlot::Ready(WindowType::Video(video_window)) => {
                                     video_window.set_volume(volume);
                                     Ok(())
@@ -851,7 +860,8 @@ impl LewdwareApp {
                                 }
                                 _ => Err(LewdwareError::Internal("Invalid window type")),
                             })
-                            .is_ok(),
+                            .is_ok()
+                        }
                         WindowAction::SetVideoLoop { tx, loop_video } => tx
                             .send(match entry.get_mut() {
                                 PopupSlot::Ready(WindowType::Video(video_window)) => {
@@ -1011,6 +1021,7 @@ impl LewdwareApp {
                             tx.send(()).is_ok()
                         }
                         AudioAction::SetVolume { tx, volume } => {
+                            let volume = volume * self.config.volume.audio;
                             match entry.get_mut() {
                                 AudioSlot::Ready(player) => player.set_volume(volume),
                                 AudioSlot::Pending {

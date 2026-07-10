@@ -584,7 +584,7 @@ mod tests {
         time::Duration,
     };
 
-    use shared::user_config::Capabilities;
+    use shared::user_config::{Capabilities, Volume};
     use tempfile::NamedTempFile;
     use tokio::sync::mpsc::UnboundedSender;
 
@@ -685,7 +685,8 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     enum Recorded {
         SpawnImage { media_id: u64 },
-        SpawnVideo { media_id: u64 },
+        SpawnVideo { media_id: u64, volume: f32 },
+        SpawnAudio { media_id: u64, volume: f32 },
         SpawnDialog,
         SpawnText,
         CloseWindow { id: PopupId },
@@ -729,6 +730,7 @@ mod tests {
         recorded: Arc<Mutex<Vec<Recorded>>>,
         event_tx: UnboundedSender<Event>,
         capabilities: Capabilities,
+        master_volume: Volume,
     ) {
         let mut next_id = 0u64;
         let mut closed_windows = HashSet::new();
@@ -747,13 +749,21 @@ mod tests {
                         .push(Recorded::SpawnImage { media_id });
                     let _ = tx.send(Ok(fake_window_props(id)));
                 }
-                LuaRequest::SpawnVideo { media_id, tx, .. } => {
+                LuaRequest::SpawnVideo {
+                    media_id,
+                    volume,
+                    tx,
+                    ..
+                } => {
                     let id = PopupId(next_id);
                     next_id += 1;
+                    // Mirrors `LewdwareApp::spawn_video`: master volume is applied where the raw
+                    // value first arrives, so what's recorded is the effective volume.
+                    let volume = volume * master_volume.video;
                     recorded
                         .lock()
                         .unwrap()
-                        .push(Recorded::SpawnVideo { media_id });
+                        .push(Recorded::SpawnVideo { media_id, volume });
                     let _ = tx.send(Ok(fake_window_props(id)));
                 }
                 LuaRequest::SpawnDialog { elements, tx, .. } => {
@@ -780,7 +790,19 @@ mod tests {
                     recorded.lock().unwrap().push(Recorded::SpawnText);
                     let _ = tx.send(Ok(fake_window_props(id)));
                 }
-                LuaRequest::SpawnAudio { tx, .. } => {
+                LuaRequest::SpawnAudio {
+                    media_id,
+                    volume,
+                    tx,
+                    ..
+                } => {
+                    // See `LuaRequest::SpawnVideo`'s equivalent comment -- same reasoning, the
+                    // `audio` channel instead.
+                    let volume = volume * master_volume.audio;
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push(Recorded::SpawnAudio { media_id, volume });
                     let _ = tx.send(0);
                 }
                 LuaRequest::SetWallpaper { tx, .. } => {
@@ -920,7 +942,12 @@ mod tests {
 
     impl Harness {
         fn new(sources: &[(&str, &str)], with_image: bool) -> Self {
-            Self::with_capabilities(sources, with_image, Capabilities::default())
+            Self::with_config(
+                sources,
+                with_image,
+                Capabilities::default(),
+                Volume::default(),
+            )
         }
 
         /// Like [`Harness::new`], but with the fake handler gating `SetWallpaper`/`OpenLink`/
@@ -930,6 +957,22 @@ mod tests {
             sources: &[(&str, &str)],
             with_image: bool,
             capabilities: Capabilities,
+        ) -> Self {
+            Self::with_config(sources, with_image, capabilities, Volume::default())
+        }
+
+        /// Like [`Harness::new`], but with the fake handler scaling `SpawnVideo`/`SpawnAudio`
+        /// volume by `volume` exactly like `LewdwareApp` does -- lets a test check master volume
+        /// is applied at spawn time.
+        fn with_volume(sources: &[(&str, &str)], with_image: bool, volume: Volume) -> Self {
+            Self::with_config(sources, with_image, Capabilities::default(), volume)
+        }
+
+        fn with_config(
+            sources: &[(&str, &str)],
+            with_image: bool,
+            capabilities: Capabilities,
+            volume: Volume,
         ) -> Self {
             let pack_file = pack_fixture(with_image);
             let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
@@ -946,7 +989,7 @@ mod tests {
             {
                 let recorded = recorded.clone();
                 thread::spawn(move || {
-                    run_fake_handler(request_rx, recorded, event_tx, capabilities)
+                    run_fake_handler(request_rx, recorded, event_tx, capabilities, volume)
                 });
             }
 
@@ -1592,6 +1635,60 @@ mod tests {
                 );
 
                 harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    /// The user-owned master volume (`AppConfig.volume`) is independent per channel -- video's
+    /// embedded audio track vs. standalone `play_audio` -- mirroring the engine's own API split.
+    /// Applied where the raw spawn-time volume from Lua first enters `LewdwareApp` (see
+    /// `spawn_video`/`spawn_audio`'s comments), reproduced here in the fake handler (see
+    /// `Harness::with_volume`) so the effective volume is exactly what a real session would use.
+    #[tokio::test(start_paused = true)]
+    async fn master_volume_scales_spawn_time_volume_independently_per_channel() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::with_volume(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local video = {
+                                id = 0,
+                                name = "test",
+                                type = "video",
+                                width = 64,
+                                height = 64,
+                                duration = 1.0,
+                                transparent = false,
+                            }
+                            lewdware.popup.video(video, { volume = 0.6 })
+
+                            local audio = { id = 0, name = "test", type = "audio", duration = 1.0 }
+                            lewdware.play_audio(audio, { volume = 0.8 })
+                        "#,
+                    )],
+                    false,
+                    Volume {
+                        video: 0.5,
+                        audio: 0.25,
+                    },
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnVideo {
+                            media_id: 0,
+                            volume: 0.3, // 0.6 requested * 0.5 master
+                        },
+                        Recorded::SpawnAudio {
+                            media_id: 0,
+                            volume: 0.2, // 0.8 requested * 0.25 master
+                        },
+                    ]
+                );
             })
             .await;
     }

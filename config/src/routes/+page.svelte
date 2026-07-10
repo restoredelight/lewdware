@@ -12,7 +12,7 @@
   const tabs = [
     { id: "general" as const, label: "General" },
     { id: "pack_mode" as const, label: "Pack & Mode" },
-    { id: "permissions" as const, label: "Permissions" },
+    { id: "permissions" as const, label: "Permissions & Volume" },
   ];
 </script>
 

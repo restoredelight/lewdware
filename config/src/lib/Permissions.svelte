@@ -1,6 +1,6 @@
 <script lang="ts">
   import { store } from "./store.svelte";
-  import type { Capabilities } from "./types";
+  import type { Capabilities, Volume } from "./types";
 
   const toggles: { key: keyof Capabilities; label: string; description: string }[] = [
     {
@@ -19,6 +19,26 @@
       description: "Allow the pack/mode to show desktop notifications.",
     },
   ];
+
+  const volumeSliders: { key: keyof Volume; label: string; description: string }[] = [
+    {
+      key: "video",
+      label: "Video volume",
+      description: "Master volume for a video popup's embedded audio track.",
+    },
+    {
+      key: "audio",
+      label: "Audio volume",
+      description: "Master volume for standalone audio the pack/mode plays.",
+    },
+  ];
+
+  // Matches PackMode.svelte's slider fill: the track's filled portion is driven by a `--fill`
+  // CSS custom property (see app.css's `input[type="range"]` rules), not the native thumb-only
+  // styling, so it needs recomputing by hand on every input.
+  function fillPercent(value: number): string {
+    return `${Math.max(0, Math.min(100, value * 100))}%`;
+  }
 </script>
 
 <div class="flex flex-col gap-8 p-8 overflow-y-auto flex-1">
@@ -56,6 +76,40 @@
             <span class="text-xs text-muted">{toggle.description}</span>
           </span>
         </label>
+      {/each}
+    </div>
+  </div>
+
+  <div class="flex flex-col gap-2">
+    <span class="text-sm font-semibold text-text">Volume</span>
+    <p class="text-xs text-muted">
+      Master volume, applied on top of whatever volume the pack/mode requests for a track.
+    </p>
+    <div class="flex flex-col gap-4">
+      {#each volumeSliders as slider (slider.key)}
+        <div class="flex flex-col gap-1 px-3 py-2">
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-text">{slider.label}</span>
+            <span class="text-xs text-muted tabular-nums">
+              {Math.round((store.config?.volume[slider.key] ?? 0) * 100)}%
+            </span>
+          </div>
+          <p class="text-xs text-muted">{slider.description}</p>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value={store.config?.volume[slider.key] ?? 0}
+            oninput={(e) => {
+              e.currentTarget.style.setProperty('--fill', fillPercent(e.currentTarget.valueAsNumber));
+              store.previewVolume(slider.key, e.currentTarget.valueAsNumber);
+            }}
+            onchange={() => store.saveConfig()}
+            style="--fill: {fillPercent(store.config?.volume[slider.key] ?? 0)}"
+            class="w-full"
+          />
+        </div>
       {/each}
     </div>
   </div>

@@ -15,12 +15,18 @@ export interface ConfigDto {
   panic_button: Key;
   disabled_monitors: string[];
   capabilities: Capabilities;
+  volume: Volume;
 }
 
 export interface Capabilities {
   wallpaper: boolean;
   open_link: boolean;
   notify: boolean;
+}
+
+export interface Volume {
+  video: number;
+  audio: number;
 }
 
 export interface EngineStatusDto {

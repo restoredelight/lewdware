@@ -46,7 +46,7 @@ use shared::{
     db::migrate,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, ShowWhen},
     read_pack::read_pack_metadata,
-    user_config::{self, AppConfig, Capabilities, Key, Mode},
+    user_config::{self, AppConfig, Capabilities, Key, Mode, Volume},
 };
 use tauri::{AppHandle, Manager};
 use tempfile::NamedTempFile;
@@ -99,6 +99,7 @@ pub struct ConfigDto {
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,
+    pub volume: Volume,
 }
 
 impl From<AppConfig> for ConfigDto {
@@ -119,6 +120,7 @@ impl From<AppConfig> for ConfigDto {
             panic_button: c.panic_button,
             disabled_monitors: c.disabled_monitors,
             capabilities: c.capabilities,
+            volume: c.volume,
         }
     }
 }
@@ -139,6 +141,7 @@ impl From<ConfigDto> for AppConfig {
             panic_button: dto.panic_button,
             disabled_monitors: dto.disabled_monitors,
             capabilities: dto.capabilities,
+            volume: dto.volume,
         }
     }
 }

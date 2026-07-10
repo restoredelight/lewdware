@@ -17,6 +17,7 @@ pub struct AppConfig {
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,
+    pub volume: Volume,
 }
 
 /// Consent-critical, user-owned off-switches for actions a mode can take that reach outside its
@@ -37,6 +38,28 @@ impl Default for Capabilities {
             wallpaper: true,
             open_link: true,
             notify: true,
+        }
+    }
+}
+
+/// User-owned master gain, independent per audio channel -- mirrors the engine's own two-track
+/// split (`VideoWindow`'s embedded audio track vs. standalone `AudioHandle`s from
+/// `lewdware.play_audio`), since packs commonly use them for different purposes (background
+/// loops vs. startle-video audio) that a user may want to balance independently. Multiplies with
+/// whatever per-track volume a mode requests; enforced main-thread-side, at the point a raw
+/// volume value from Lua first enters `LewdwareApp` (spawn time and any later `set_volume()`
+/// call) -- everything downstream only ever sees the already-scaled effective volume.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct Volume {
+    pub video: f32,
+    pub audio: f32,
+}
+
+impl Default for Volume {
+    fn default() -> Self {
+        Self {
+            video: 1.0,
+            audio: 1.0,
         }
     }
 }
@@ -108,6 +131,7 @@ impl Default for AppConfig {
             },
             disabled_monitors: Vec::new(),
             capabilities: Capabilities::default(),
+            volume: Volume::default(),
         }
     }
 }
@@ -208,6 +232,13 @@ mod tests {
             },
         };
         assert_eq!(key.to_string(), "Ctrl + Alt + Shift + Meta + F1");
+    }
+
+    #[test]
+    fn default_volume_is_unattenuated() {
+        let config = AppConfig::default();
+        assert_eq!(config.volume.video, 1.0);
+        assert_eq!(config.volume.audio, 1.0);
     }
 
     #[test]

@@ -8,6 +8,7 @@ import type {
   OptionEntryDto,
   OptionValue,
   MonitorDto,
+  Volume,
 } from "./types";
 
 function updateOptionValue(
@@ -90,6 +91,13 @@ class AppStore {
       capabilities: { ...this.config.capabilities, [key]: enabled },
     };
     this.saveConfig();
+  }
+
+  // Updates local state only, without saving -- meant for a slider's continuous `oninput`, so
+  // dragging doesn't fire an IPC round trip per tick. Pair with `saveConfig()` on `onchange`.
+  previewVolume(key: keyof Volume, value: number) {
+    if (!this.config) return;
+    this.config = { ...this.config, volume: { ...this.config.volume, [key]: value } };
   }
 
   async pickPack() {
