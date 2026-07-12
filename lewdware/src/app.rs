@@ -22,8 +22,8 @@ use crate::audio::AudioPlayer;
 use crate::error::{LewdwareError, MonitorError, Result};
 use crate::lua::{
     self, AudioAction, DialogButton, DialogElement, FadeOpts, LuaRequest, LuaThreadHandle,
-    MediaData, MoveOpts, Notification, PackInfo, PopupId, PopupSpawnOpts, TextStyle,
-    WallpaperMode, WindowAction, WindowProps, start_lua_thread,
+    MediaData, MoveOpts, Notification, PackInfo, PopupId, PopupSpawnOpts, TextStyle, WallpaperMode,
+    WindowAction, WindowProps, start_lua_thread,
 };
 use crate::media::{FileOrPath, ImageData, MediaError, MediaManager};
 use crate::monitor::Monitors;
@@ -572,8 +572,10 @@ impl LewdwareApp {
             }
             dialog_window.inner_window.show();
 
-            self.windows
-                .insert(popup_id, PopupSlot::Ready(WindowType::Dialog(dialog_window)));
+            self.windows.insert(
+                popup_id,
+                PopupSlot::Ready(WindowType::Dialog(dialog_window)),
+            );
         }
 
         Ok(props)
@@ -743,7 +745,14 @@ impl LewdwareApp {
                 window_opts,
                 tx,
             } => tx
-                .send(self.spawn_video(media_id, loop_video, audio, volume, window_opts, event_loop))
+                .send(self.spawn_video(
+                    media_id,
+                    loop_video,
+                    audio,
+                    volume,
+                    window_opts,
+                    event_loop,
+                ))
                 .is_ok(),
             LuaRequest::SpawnDialog {
                 elements,
@@ -869,7 +878,11 @@ impl LewdwareApp {
                                     Ok(())
                                 }
                                 PopupSlot::Pending(PendingWindow {
-                                    kind: PendingKind::Video { loop_video: pending, .. },
+                                    kind:
+                                        PendingKind::Video {
+                                            loop_video: pending,
+                                            ..
+                                        },
                                     ..
                                 }) => {
                                     pending.store(loop_video, Ordering::Relaxed);
@@ -1221,8 +1234,8 @@ impl LewdwareApp {
             else {
                 unreachable!("pending_images only ever indexes Image elements")
             };
-            let request = media_manager
-                .and_then(|m| Ok(m.get_image_data(id, *media_id, *width, *height)?));
+            let request =
+                media_manager.and_then(|m| Ok(m.get_image_data(id, *media_id, *width, *height)?));
             if let Err(err) = request {
                 entry.remove();
                 return self.pending_window_failed(id, "Failed to request next dialog image", err);

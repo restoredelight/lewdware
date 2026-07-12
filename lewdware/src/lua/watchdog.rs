@@ -124,7 +124,10 @@ mod tests {
         assert_eq!(tracker.on_event(DebugEvent::Call, warn_after), Signal::None);
 
         // Not enough time has passed yet.
-        assert_eq!(tracker.on_event(DebugEvent::Count, warn_after), Signal::None);
+        assert_eq!(
+            tracker.on_event(DebugEvent::Count, warn_after),
+            Signal::None
+        );
 
         std::thread::sleep(warn_after * 2);
 
@@ -148,7 +151,10 @@ mod tests {
         let warn_after = Duration::from_secs(60);
 
         tracker.on_event(DebugEvent::Call, warn_after);
-        assert_eq!(tracker.on_event(DebugEvent::Count, warn_after), Signal::None);
+        assert_eq!(
+            tracker.on_event(DebugEvent::Count, warn_after),
+            Signal::None
+        );
         assert_eq!(tracker.on_event(DebugEvent::Ret, warn_after), Signal::None);
     }
 
@@ -187,7 +193,10 @@ mod tests {
 
         tracker.on_event(DebugEvent::Call, warn_after);
         std::thread::sleep(warn_after * 2);
-        assert_eq!(tracker.on_event(DebugEvent::Count, warn_after), Signal::Warn);
+        assert_eq!(
+            tracker.on_event(DebugEvent::Count, warn_after),
+            Signal::Warn
+        );
         tracker.on_event(DebugEvent::Ret, warn_after);
 
         // A second, separate top-level call (e.g. the next timer firing) should be able to warn
@@ -199,7 +208,10 @@ mod tests {
             "fresh call, not enough time has passed yet"
         );
         std::thread::sleep(warn_after * 2);
-        assert_eq!(tracker.on_event(DebugEvent::Count, warn_after), Signal::Warn);
+        assert_eq!(
+            tracker.on_event(DebugEvent::Count, warn_after),
+            Signal::Warn
+        );
         tracker.on_event(DebugEvent::Ret, warn_after);
     }
 
@@ -217,13 +229,22 @@ mod tests {
         tracker.on_event(DebugEvent::TailCall, warn_after);
         tracker.on_event(DebugEvent::Ret, warn_after); // the one return for the whole chain
 
-        assert_eq!(tracker.depth, 0, "depth must return to 0 after the chain unwinds");
+        assert_eq!(
+            tracker.depth, 0,
+            "depth must return to 0 after the chain unwinds"
+        );
 
         // Confirms depth is really back to a clean baseline: a fresh call now starts a new timer.
         tracker.on_event(DebugEvent::Call, warn_after);
-        assert_eq!(tracker.on_event(DebugEvent::Count, warn_after), Signal::None);
+        assert_eq!(
+            tracker.on_event(DebugEvent::Count, warn_after),
+            Signal::None
+        );
         std::thread::sleep(warn_after * 2);
-        assert_eq!(tracker.on_event(DebugEvent::Count, warn_after), Signal::Warn);
+        assert_eq!(
+            tracker.on_event(DebugEvent::Count, warn_after),
+            Signal::Warn
+        );
     }
 
     #[test]

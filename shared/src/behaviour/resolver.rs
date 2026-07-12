@@ -211,10 +211,7 @@ mod tests {
         let ModeEntry::Option(vanilla) = group.entries.get(&vanilla_key).unwrap() else {
             panic!("expected an option entry");
         };
-        assert_eq!(
-            vanilla.option_type,
-            OptionType::Boolean { default: true }
-        );
+        assert_eq!(vanilla.option_type, OptionType::Boolean { default: true });
 
         let ModeEntry::Option(kinky) = group.entries.get(&kinky_key).unwrap() else {
             panic!("expected an option entry");
@@ -373,13 +370,19 @@ mod tests {
 
         // No stored value yet -> falls back to the group's `enabled_by_default`.
         let resolved_default = effective_config(&schema, &HashMap::new());
-        assert_eq!(resolved_default.get(&key), Some(&OptionValue::Boolean(true)));
+        assert_eq!(
+            resolved_default.get(&key),
+            Some(&OptionValue::Boolean(true))
+        );
 
         // User explicitly disabled it -> stored value wins.
         let mut stored = HashMap::new();
         stored.insert(key.clone(), OptionValue::Boolean(false));
         let resolved_stored = effective_config(&schema, &stored);
-        assert_eq!(resolved_stored.get(&key), Some(&OptionValue::Boolean(false)));
+        assert_eq!(
+            resolved_stored.get(&key),
+            Some(&OptionValue::Boolean(false))
+        );
     }
 
     #[test]

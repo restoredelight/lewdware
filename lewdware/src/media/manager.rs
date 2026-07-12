@@ -44,8 +44,7 @@ impl MediaManager {
         event_poster: EventPoster,
         wgpu_device: Option<Arc<wgpu::Device>>,
     ) -> anyhow::Result<(Self, Metadata, Uuid, thread::JoinHandle<()>)> {
-        let (tx, metadata, pack_id, handle) =
-            spawn_media_manager_thread(pack_path, event_poster)?;
+        let (tx, metadata, pack_id, handle) = spawn_media_manager_thread(pack_path, event_poster)?;
 
         Ok((Self { tx, wgpu_device }, metadata, pack_id, handle))
     }

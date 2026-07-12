@@ -80,11 +80,12 @@ fn real_test_pack_converts_without_hard_error() {
     );
 
     // prefix_settings' "guitar": {"chance": 50, "max": 5} -> the max: 5 multi-click tuning
-    // warns (chance is dead in upstream, silently dropped, see `parse::legacy`).
+    // warns (chance is dead in upstream, silently dropped, see `parse::legacy`); levels 1 and 4's
+    // per-level `config` overrides (`promptMod`, `promptMistakes`) have no v1 equivalent and warn
+    // too (see `build_timeline`).
     for kind in [
         converter::WarningKind::UnsupportedFeatureDropped,
         converter::WarningKind::DiscordSkipped,
-        converter::WarningKind::CorruptionNotConverted,
     ] {
         assert!(
             output.warnings.iter().any(|w| w.kind == kind),
@@ -92,13 +93,44 @@ fn real_test_pack_converts_without_hard_error() {
             output.warnings
         );
     }
-    // No config.json in this pack -> no ConfigNotConverted warning.
-    assert!(
-        !output
-            .warnings
-            .iter()
-            .any(|w| w.kind == converter::WarningKind::ConfigNotConverted)
+    // corruption.json's 5 levels now convert into a real timeline -> no config.json in this pack
+    // (so no ConfigNotConverted either) and no "zero levels" CorruptionNotConverted.
+    for kind in [
+        converter::WarningKind::ConfigNotConverted,
+        converter::WarningKind::CorruptionNotConverted,
+    ] {
+        assert!(
+            !output.warnings.iter().any(|w| w.kind == kind),
+            "expected no warning of kind {kind:?}, got {:#?}",
+            output.warnings
+        );
+    }
+
+    let experience = output
+        .behaviour
+        .experience
+        .as_ref()
+        .expect("corruption.json should produce an experience section");
+    assert_eq!(
+        output.metadata.recommended_mode,
+        Some(shared::read_pack::RecommendedMode::Experience)
     );
+    let timeline = experience
+        .timeline
+        .as_ref()
+        .expect("corruption.json's 5 levels should produce a timeline");
+    assert_eq!(timeline.levels.len(), 5);
+    // Level 1 (index 0) applies immediately, matching Edgeware's own "applied at session start"
+    // semantics -- see `build_timeline`. No config.json here, so pacing falls back to Edgeware's
+    // own default corruptionTime (60s).
+    assert_eq!(timeline.levels[0].at_seconds, 0.0);
+    assert_eq!(timeline.levels[4].at_seconds, 4.0 * 60.0);
+    // Cumulative mood folding: level 5 adds "succubus" and removes "guitar" (added at level 2) on
+    // top of levels 1-4's own adds/removes -- see corruption.json's fixture-mirroring content in
+    // `examples/corruption.json`.
+    let level_5_tags = timeline.levels[4].modifiers.tags.as_ref().unwrap();
+    assert!(level_5_tags.contains(&"succubus".to_string()));
+    assert!(!level_5_tags.contains(&"guitar".to_string()));
 
     assert!(!output.media.is_empty());
 }

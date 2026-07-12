@@ -140,11 +140,115 @@ fn default_true() -> bool {
 }
 
 /// The `experience` section: Experience-mode-only data (frequency anchors, non-rate design
-/// values, the transition timeline). Deliberately an empty stub in this milestone — M4 owns
-/// its contents (`design/release-plan.md`). Any fields added later must be `#[serde(default)]`
-/// so this document's shape stays additive-only and never needs restructuring.
+/// values, the transition timeline). Anchors and design values alone already make a
+/// statically-designed pack; `timeline` is optional on top of that
+/// (`behaviour-design/default-mode.md`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct Experience {}
+pub struct Experience {
+    #[serde(default)]
+    pub anchors: FrequencyAnchors,
+    #[serde(default)]
+    pub design: DesignValues,
+    /// Present iff the pack designs a transition arc. Absent means every level-derived getter
+    /// (`shared/lib`'s Lua timeline module) stays at level 0 (baseline) forever -- no timers, no
+    /// tag/wallpaper narrowing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<Timeline>,
+}
+
+/// Author-set events-per-time baselines for Experience's rate-based features, expressed as
+/// seconds-between-events (matching Sandbox's `*_frequency` option convention -- see
+/// `behaviour-design/behaviour-tab.md`). `None` means the pack doesn't drive that feature in
+/// Experience at all: the process never starts, regardless of the user's pacing scalar --
+/// distinct from "runs at some default rate", matching behaviour.json's "no defaults injection"
+/// rule (`behaviour-design/behaviour-tab.md`'s resolver section) and rule 5's "empty means skip"
+/// spirit generalized to "absent means this feature doesn't exist here".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FrequencyAnchors {
+    #[serde(default)]
+    pub popup: Option<f64>,
+    #[serde(default)]
+    pub web: Option<f64>,
+    #[serde(default)]
+    pub notification: Option<f64>,
+    #[serde(default)]
+    pub prompt: Option<f64>,
+    #[serde(default)]
+    pub subliminal: Option<f64>,
+}
+
+/// Author-set non-rate baselines -- values a pacing scalar has no meaning for (movement speed,
+/// mitosis chance/count), consumed by Experience's processes exactly as Sandbox's user-set
+/// equivalents are. `None` means the pack doesn't drive that feature in Experience -- same
+/// absent-means-off convention as `FrequencyAnchors`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct DesignValues {
+    #[serde(default)]
+    pub movement_speed_min: Option<f64>,
+    #[serde(default)]
+    pub movement_speed_max: Option<f64>,
+    #[serde(default)]
+    pub mitosis_chance: Option<f64>,
+    #[serde(default)]
+    pub mitosis_count: Option<u32>,
+}
+
+/// The transition arc: an ordered sequence of levels the Experience timeline advances through
+/// over a session. Progress is session-scoped (no storage dependency) -- a fresh session always
+/// starts at the implicit level 0 (baseline: anchors/design as authored, unrestricted tags,
+/// `Content::wallpaper_tags`), matching Edgeware's corruption semantics. See
+/// `behaviour-design/default-mode.md`, "Transitions v1".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Timeline {
+    /// Ascending by `at_seconds`. Index 0 is "level 1" -- level 0 itself is implicit and needs no
+    /// entry (every `Modifiers` field absent is exactly the baseline).
+    #[serde(default)]
+    pub levels: Vec<Level>,
+}
+
+/// One level of the timeline: a trigger plus the absolute modifier set it applies once reached.
+/// Levels are absolute snapshots relative to *baseline*, never deltas relative to the previous
+/// level -- authoring and testing stay order-independent (see `Modifiers`'s doc comment).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Level {
+    /// Cumulative active-time seconds since session start at which this level is reached at the
+    /// latest. Required (not `Option`) -- structurally guarantees interaction rule 6's "every
+    /// trigger needs a time-based fallback": a level can never hard-depend on popup count alone,
+    /// even if the user has popups entirely disabled.
+    pub at_seconds: f64,
+    /// Optional early-advance trigger: reached once this many cumulative popups have spawned
+    /// (since session start), if that happens before `at_seconds`. `None` means time is the only
+    /// trigger for this level.
+    #[serde(default)]
+    pub at_popups: Option<u32>,
+    #[serde(default)]
+    pub modifiers: Modifiers,
+}
+
+/// A level's modifier set: "tag changes + wallpaper + relative modifiers on baselines + absolute
+/// writes on mode parameters" (`behaviour-design/default-mode.md`, Ownership). Every field is
+/// absolute *relative to baseline* -- an absent field means "same as baseline", not "same as the
+/// previous level" -- so a level's effective params are a pure function of that level alone, with
+/// no dependency on transition history (order-independent: reaching level 3 directly produces the
+/// same params as passing through 1 and 2 first).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Modifiers {
+    /// Multiplies every baseline this level touches: rate anchors (`FrequencyAnchors`) *and*
+    /// non-rate design values (`DesignValues`) alike -- see "Modifier composition" in
+    /// `behaviour-design/default-mode.md`. The user's pacing scalar composes on top for rates only
+    /// (unaffected by this field). `None` => 1.0 (baseline, unmodified).
+    #[serde(default)]
+    pub modifier: Option<f64>,
+    /// Absolute active tag set from this level (mode parameter): an `any`-style eligibility
+    /// restriction on media/content queries, the same mechanism `Content::wallpaper_tags` already
+    /// uses. `None` => unrestricted (baseline: the pack's full tag vocabulary).
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// Absolute wallpaper-tag override for this level (mode parameter). `None` => no override --
+    /// `Content::wallpaper_tags` (baseline) stays in effect.
+    #[serde(default)]
+    pub wallpaper_tags: Option<Vec<String>>,
+}
 
 #[cfg(test)]
 mod tests {
@@ -194,7 +298,43 @@ mod tests {
                 wallpaper_tags: vec!["bg".to_string()],
                 splash_tags: vec![],
             },
-            experience: Some(Experience::default()),
+            experience: Some(Experience {
+                anchors: FrequencyAnchors {
+                    popup: Some(5.0),
+                    web: Some(300.0),
+                    notification: None,
+                    prompt: Some(90.0),
+                    subliminal: None,
+                },
+                design: DesignValues {
+                    movement_speed_min: Some(50.0),
+                    movement_speed_max: Some(150.0),
+                    mitosis_chance: Some(0.5),
+                    mitosis_count: Some(2),
+                },
+                timeline: Some(Timeline {
+                    levels: vec![
+                        Level {
+                            at_seconds: 300.0,
+                            at_popups: Some(20),
+                            modifiers: Modifiers {
+                                modifier: Some(1.5),
+                                tags: Some(vec!["kinky".to_string()]),
+                                wallpaper_tags: None,
+                            },
+                        },
+                        Level {
+                            at_seconds: 900.0,
+                            at_popups: None,
+                            modifiers: Modifiers {
+                                modifier: Some(3.0),
+                                tags: Some(vec!["kinky".to_string(), "hypno".to_string()]),
+                                wallpaper_tags: Some(vec!["corrupted-bg".to_string()]),
+                            },
+                        },
+                    ],
+                }),
+            }),
         }
     }
 
@@ -221,6 +361,70 @@ mod tests {
         assert_eq!(decoded.version, 1);
         assert_eq!(decoded.content, Content::default());
         assert_eq!(decoded.experience, None);
+    }
+
+    #[test]
+    fn experience_anchors_and_design_values_roundtrip() {
+        let original = sample_behaviour().experience.unwrap();
+        let bytes = serde_json::to_vec(&original).unwrap();
+        let decoded: Experience = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(original, decoded);
+        assert_eq!(decoded.anchors.popup, Some(5.0));
+        assert_eq!(decoded.anchors.notification, None);
+        assert_eq!(decoded.design.mitosis_count, Some(2));
+    }
+
+    #[test]
+    fn experience_section_with_no_anchors_or_design_still_present() {
+        // A `experience: {}` document (just enough to be recommended Experience) is a valid,
+        // if inert, statically-designed pack: every anchor absent means every rate feature
+        // simply doesn't run -- not an error (see `FrequencyAnchors`'s doc comment).
+        let decoded = Behaviour::from_json_bytes(br#"{"version":1,"experience":{}}"#).unwrap();
+        let experience = decoded
+            .experience
+            .expect("experience section should be present");
+        assert_eq!(experience.anchors, FrequencyAnchors::default());
+        assert_eq!(experience.design, DesignValues::default());
+        assert_eq!(experience.timeline, None);
+    }
+
+    #[test]
+    fn timeline_roundtrips_with_levels() {
+        let original = sample_behaviour().experience.unwrap().timeline.unwrap();
+        let bytes = serde_json::to_vec(&original).unwrap();
+        let decoded: Timeline = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(original, decoded);
+        assert_eq!(decoded.levels.len(), 2);
+        assert_eq!(decoded.levels[0].at_seconds, 300.0);
+        assert_eq!(decoded.levels[0].at_popups, Some(20));
+        assert_eq!(decoded.levels[1].at_popups, None);
+        assert_eq!(decoded.levels[1].modifiers.modifier, Some(3.0));
+    }
+
+    #[test]
+    fn timeline_absent_by_default_and_survives_roundtrip() {
+        // An experience section with anchors/design but no timeline (the common case pre-Transitions
+        // authoring, or a purely statically-designed pack) must keep `timeline: None`, not
+        // synthesize `Some(Timeline::default())` -- same discipline as `Behaviour::experience`
+        // itself (see `experience_presence_is_distinguishable_from_absence`).
+        let mut experience = sample_behaviour().experience.unwrap();
+        experience.timeline = None;
+        let bytes = serde_json::to_vec(&experience).unwrap();
+        let decoded: Experience = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.timeline, None);
+    }
+
+    #[test]
+    fn level_modifiers_default_to_baseline_when_absent() {
+        // Every `Modifiers` field is absolute-relative-to-baseline, not sticky across levels: a
+        // level that sets nothing is exactly the baseline (modifier 1.0 conceptually, unrestricted
+        // tags, no wallpaper override) -- see `Modifiers`'s doc comment on order-independence.
+        let level: Level = serde_json::from_str(r#"{"at_seconds": 60.0}"#).unwrap();
+        assert_eq!(level.at_popups, None);
+        assert_eq!(level.modifiers, Modifiers::default());
+        assert_eq!(level.modifiers.modifier, None);
+        assert_eq!(level.modifiers.tags, None);
+        assert_eq!(level.modifiers.wallpaper_tags, None);
     }
 
     #[test]

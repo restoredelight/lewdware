@@ -1,0 +1,13 @@
+{
+  "delay": 2000,
+  "popupMod": 100,
+  "vidMod": 0,
+  "webMod": 0,
+  "notificationChance": 0,
+  "promptMod": 0,
+  "capPopChance": 0,
+  "corruptionMode": 1,
+  "corruptionTrigger": "Popup",
+  "corruptionTime": 120,
+  "corruptionPopups": 8
+}

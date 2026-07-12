@@ -1,0 +1,6 @@
+{
+  "name": "Corruption Fixture Pack",
+  "creator": "Test Author",
+  "description": "A small synthetic pack for converter golden tests (corruption.json + config.json -> experience).",
+  "version": "1.0"
+}

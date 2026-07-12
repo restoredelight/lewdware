@@ -12,10 +12,10 @@ use std::{
 
 use anyhow::{Context, Result};
 use converter::{ConversionOutput, PackSource};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use shared::{
     db::migrate,
-    encode::{encode_file, hash_file, HardwareEncoder},
+    encode::{HardwareEncoder, encode_file, hash_file},
     read_pack::Header,
 };
 use uuid::Uuid;
@@ -31,8 +31,8 @@ pub fn write_pack(
     source: &dyn PackSource,
     encoder: &HardwareEncoder,
 ) -> Result<usize> {
-    let mut out = File::create(output_path)
-        .with_context(|| format!("creating {}", output_path.display()))?;
+    let mut out =
+        File::create(output_path).with_context(|| format!("creating {}", output_path.display()))?;
     out.write_all(&Header::new().to_buf()?)?;
 
     let work_dir = tempfile::tempdir()?;
@@ -116,15 +116,11 @@ pub fn write_pack(
         let media_id = db.last_insert_rowid();
 
         for tag in &media.tags {
-            db.execute(
-                "INSERT OR IGNORE INTO tags (name) VALUES (?)",
-                params![tag],
-            )?;
-            let tag_id: i64 = db.query_row(
-                "SELECT id FROM tags WHERE name = ?",
-                params![tag],
-                |row| row.get(0),
-            )?;
+            db.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
+            let tag_id: i64 =
+                db.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
+                    row.get(0)
+                })?;
             db.execute(
                 "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)",
                 params![media_id, tag_id],
@@ -146,8 +142,7 @@ pub fn write_pack(
     drop(db);
 
     let index_offset = out.stream_position()?;
-    let db_bytes =
-        fs::read(&db_path).with_context(|| format!("reading {}", db_path.display()))?;
+    let db_bytes = fs::read(&db_path).with_context(|| format!("reading {}", db_path.display()))?;
     out.write_all(&db_bytes)?;
     let index_length = db_bytes.len() as u64;
 

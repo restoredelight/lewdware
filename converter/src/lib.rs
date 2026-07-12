@@ -1,10 +1,8 @@
 //! Converts Edgeware/Edgeware++ packs (dir or zip, modern `index.json` or legacy
 //! `captions.json`/`media.json`/`prompt.json`/`web.json` layouts) into the pieces a `.lwpack`
-//! needs: a tagged media list, pack metadata, and a behaviour.json `Content` section. See
+//! needs: a tagged media list, pack metadata, and a behaviour.json `Content` + `Experience`
+//! section (`corruption.json` -> transition timeline, `config.json` -> frequency anchors). See
 //! `behaviour-design/edgeware-compat.md` for the full design.
-//!
-//! Scoped to **content only** -- `corruption.json` -> timeline and `config.json` -> frequency
-//! anchors are a later milestone; this crate only notes their presence via a warning.
 //!
 //! ```no_run
 //! use converter::{DirSource, convert};

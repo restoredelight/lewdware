@@ -71,6 +71,24 @@ impl EdgewareIndex {
     }
 }
 
+/// One numbered level from `corruption.json`, mirroring `EdgewarePlusPlus/edgeware/src/pack/
+/// data.py`'s `CorruptionLevel` dataclass and `pack/load.py`'s `load_corruption` (numeric-string
+/// keys `"1".."N"`, `"default"` wallpaper fallback for level 1 only). `added_moods`/
+/// `removed_moods` are this level's own delta -- `convert.rs` folds them into a cumulative active
+/// set while building the timeline, mirroring `apply_corruption_level`'s
+/// `pack.active_moods.update(...).difference_update(...)`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CorruptionLevel {
+    pub added_moods: Vec<String>,
+    pub removed_moods: Vec<String>,
+    pub wallpaper: Option<String>,
+    /// Keys this level's `config` override set, if any -- never converted (a Lewdware timeline
+    /// level's modifier is a single scalar, so per-key rate overrides like Edgeware's
+    /// `{"promptMod": 10}` have no representation), kept only so `convert.rs` can warn about the
+    /// drop instead of silently losing it.
+    pub config_keys: Vec<String>,
+}
+
 /// Structured category for a `Warning`, so a front end can group/count without parsing
 /// `message`. See `behaviour-design/edgeware-compat.md`: "warnings are part of the API".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -84,9 +102,11 @@ pub enum WarningKind {
     ScriptSkipped,
     /// `discord.dat` present -- Discord rich presence isn't supported.
     DiscordSkipped,
-    /// `corruption.json` present -- timeline conversion is M4, not this crate.
+    /// `corruption.json` present but converted to zero usable timeline levels (e.g. empty
+    /// `moods`/`wallpapers`/`config` sections).
     CorruptionNotConverted,
-    /// `config.json` present with keys -- frequency-anchor conversion is M4, not this crate.
+    /// `config.json` present with keys that have no Lewdware equivalent (left over once the
+    /// recognized chance-per-tick pacing keys were mapped to `experience.anchors`).
     ConfigNotConverted,
     /// A file referenced by the pack's JSON (e.g. in `media_moods`) doesn't actually exist in
     /// the source.

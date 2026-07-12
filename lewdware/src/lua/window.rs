@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     lua::{
-        DialogElementUpdate, Media, PopupId, WindowProps, dev_log::log_noop,
+        DialogElementUpdate, Media, PopupId, WindowProps,
         api::{Anchor, Coord},
+        dev_log::log_noop,
         request::WindowRequestSender,
     },
     monitor::Monitor,
@@ -80,13 +81,25 @@ impl UserData for VideoWindow {
         InnerWindow::add_methods(methods);
 
         methods.add_method("pause", |lua, this, _: ()| {
-            let result = this.inner_window.request_sender.pause_video().into_lua_err()?;
-            Ok(this.inner_window.report_noop(lua, "VideoWindow:pause()", result))
+            let result = this
+                .inner_window
+                .request_sender
+                .pause_video()
+                .into_lua_err()?;
+            Ok(this
+                .inner_window
+                .report_noop(lua, "VideoWindow:pause()", result))
         });
 
         methods.add_method("play", |lua, this, _: ()| {
-            let result = this.inner_window.request_sender.play_video().into_lua_err()?;
-            Ok(this.inner_window.report_noop(lua, "VideoWindow:play()", result))
+            let result = this
+                .inner_window
+                .request_sender
+                .play_video()
+                .into_lua_err()?;
+            Ok(this
+                .inner_window
+                .report_noop(lua, "VideoWindow:play()", result))
         });
 
         methods.add_method("set_volume", |lua, this, volume: f32| {
@@ -95,7 +108,9 @@ impl UserData for VideoWindow {
                 .request_sender
                 .set_video_volume(volume)
                 .into_lua_err()?;
-            Ok(this.inner_window.report_noop(lua, "VideoWindow:set_volume()", result))
+            Ok(this
+                .inner_window
+                .report_noop(lua, "VideoWindow:set_volume()", result))
         });
 
         methods.add_method("set_loop", |lua, this, loop_video: bool| {
@@ -104,7 +119,9 @@ impl UserData for VideoWindow {
                 .request_sender
                 .set_video_loop(loop_video)
                 .into_lua_err()?;
-            Ok(this.inner_window.report_noop(lua, "VideoWindow:set_loop()", result))
+            Ok(this
+                .inner_window
+                .report_noop(lua, "VideoWindow:set_loop()", result))
         });
     }
 }
@@ -202,7 +219,9 @@ impl UserData for DialogWindow {
                     .inner_window
                     .request_sender
                     .update_dialog_element(id, props)?;
-                Ok(this.inner_window.report_noop(lua, "DialogWindow:update()", result))
+                Ok(this
+                    .inner_window
+                    .report_noop(lua, "DialogWindow:update()", result))
             },
         );
     }
@@ -216,7 +235,11 @@ impl DialogWindow {
         }
     }
 
-    pub fn on_select(&self, button_id: String, values: HashMap<String, String>) -> anyhow::Result<()> {
+    pub fn on_select(
+        &self,
+        button_id: String,
+        values: HashMap<String, String>,
+    ) -> anyhow::Result<()> {
         let callbacks = {
             let state = self.state.try_borrow()?;
             state.select_callbacks.clone()
@@ -231,7 +254,11 @@ impl DialogWindow {
         Ok(())
     }
 
-    pub fn on_submit(&self, element_id: String, values: HashMap<String, String>) -> anyhow::Result<()> {
+    pub fn on_submit(
+        &self,
+        element_id: String,
+        values: HashMap<String, String>,
+    ) -> anyhow::Result<()> {
         let callbacks = {
             let state = self.state.try_borrow()?;
             state.submit_callbacks.clone()
@@ -271,7 +298,10 @@ impl UserData for TextWindow {
         InnerWindow::add_methods(methods);
 
         methods.add_method("set_text", |lua, this, text: String| {
-            let changed = this.inner_window.request_sender.set_text(Some(text.clone()))?;
+            let changed = this
+                .inner_window
+                .request_sender
+                .set_text(Some(text.clone()))?;
 
             // Only update the local cache if the window was actually open to receive it --
             // otherwise `text` would report a change that never took effect.
@@ -279,7 +309,9 @@ impl UserData for TextWindow {
                 this.state.try_borrow_mut().into_lua_err()?.text = text;
             }
 
-            Ok(this.inner_window.report_noop(lua, "TextWindow:set_text()", changed))
+            Ok(this
+                .inner_window
+                .report_noop(lua, "TextWindow:set_text()", changed))
         });
     }
 }
@@ -429,14 +461,18 @@ impl InnerWindow {
                     .closed = true;
             }
 
-            Ok(this.inner_window().report_noop(lua, "Window:close()", closed_now))
+            Ok(this
+                .inner_window()
+                .report_noop(lua, "Window:close()", closed_now))
         });
 
         methods.add_method("on_close", |lua, this, cb: mlua::Function| {
             let mut state = this.inner_window().state.try_borrow_mut().into_lua_err()?;
 
             if state.closed {
-                return Ok(this.inner_window().report_noop(lua, "Window:on_close()", false));
+                return Ok(this
+                    .inner_window()
+                    .report_noop(lua, "Window:on_close()", false));
             }
 
             state.close_callbacks.push(cb);
@@ -451,7 +487,9 @@ impl InnerWindow {
             let mut state = this.inner_window().state.try_borrow_mut().into_lua_err()?;
 
             if state.closed {
-                return Ok(this.inner_window().report_noop(lua, "Window:on_click()", false));
+                return Ok(this
+                    .inner_window()
+                    .report_noop(lua, "Window:on_click()", false));
             }
 
             state.click_callbacks.push(cb);
@@ -465,7 +503,9 @@ impl InnerWindow {
             };
 
             if closed {
-                return Ok(this.inner_window().report_noop(lua, "Window:on_spawn()", false));
+                return Ok(this
+                    .inner_window()
+                    .report_noop(lua, "Window:on_spawn()", false));
             }
 
             if spawned {
@@ -554,7 +594,9 @@ impl InnerWindow {
                 .request_sender
                 .set_title(title)
                 .into_lua_err()?;
-            Ok(this.inner_window().report_noop(lua, "Window:set_title()", result))
+            Ok(this
+                .inner_window()
+                .report_noop(lua, "Window:set_title()", result))
         });
 
         methods.add_method("set_opacity", |lua, this, opacity: f32| {
@@ -563,7 +605,9 @@ impl InnerWindow {
                 .request_sender
                 .set_opacity(opacity)
                 .into_lua_err()?;
-            Ok(this.inner_window().report_noop(lua, "Window:set_opacity()", result))
+            Ok(this
+                .inner_window()
+                .report_noop(lua, "Window:set_opacity()", result))
         });
     }
 

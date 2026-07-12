@@ -726,9 +726,7 @@ impl InnerWindow {
     pub fn show(&self) {
         if self
             .lua_event_tx
-            .send(lua::Event::WindowSpawned {
-                id: self.popup_id,
-            })
+            .send(lua::Event::WindowSpawned { id: self.popup_id })
             .is_err()
         {
             tracing::debug!("Couldn't send WindowSpawned event: Lua thread has shut down");

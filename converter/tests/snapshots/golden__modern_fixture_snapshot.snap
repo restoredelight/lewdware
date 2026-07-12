@@ -7,6 +7,7 @@ metadata:
   creator: Test Author
   description: A small synthetic pack for converter golden tests (modern index.json layout).
   version: "1.0"
+  recommended_mode: Sandbox
 behaviour:
   version: 1
   content:

@@ -14,7 +14,7 @@ use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, syn
 use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
-    behaviour::{Behaviour, Content, effective_config, effective_options},
+    behaviour::{Behaviour, Content, Experience, effective_config, effective_options},
     mode::{Metadata, OptionValue, VERSION_MAJOR, read_mode_metadata},
     user_config::AppConfig,
 };
@@ -156,25 +156,42 @@ pub struct PackInfo {
     pub metadata: shared::read_pack::Metadata,
 }
 
-/// Resolves the config a mode actually runs with, and — only for the engine's built-in default
-/// mode — the pack's behaviour.json `content` section, handed to the default-modes library code
-/// as `__lewdware_content` (see `create_api`) for its own query-layer filtering (e.g.
-/// `default-modes/src/lib/media.lua` honoring disabled content groups). Standalone from
+/// Resolves the config a mode actually runs with, and — only for the engine's two built-in
+/// default modes (`Sandbox`/`Experience`) — the pack's behaviour.json `content`/`experience`
+/// sections, handed to the default-modes library code as `__lewdware_content`/
+/// `__lewdware_experience` (see `create_api`) for its own query-layer filtering (e.g.
+/// `default-modes/shared/lib/media.lua` honoring disabled content groups). Standalone from
 /// `start_lua_thread` so it's unit-testable without a full thread spawn.
 ///
 /// Custom modes (`Mode::Pack`/`Mode::File`) never see behaviour data or its synthesized
 /// `content_group.*` options — see `behaviour-design/default-mode.md`'s Ownership section ("the
 /// toggle is only shown where it is honored") — so they keep the plain schema-defaulting walk.
+///
+/// `Mode::Experience`'s stored values come from `experience_options[pack_id]` rather than
+/// `mode_options[mode]` — its meta-controls are calibrated per pack (see
+/// `behaviour-design/default-mode.md`, Ownership), unlike every other mode's global storage.
 fn resolve_mode_config(
     metadata: &Metadata,
     mode: &shared::user_config::Mode,
     mode_options: &HashMap<shared::user_config::Mode, HashMap<String, OptionValue>>,
+    experience_options: &HashMap<Uuid, HashMap<String, OptionValue>>,
+    pack_id: Uuid,
     media_manager: &MediaManager,
     dev_mode: bool,
-) -> (HashMap<String, OptionValue>, Content) {
-    let stored = mode_options.get(mode).cloned().unwrap_or_default();
+) -> (HashMap<String, OptionValue>, Content, Experience) {
+    let stored = if matches!(mode, shared::user_config::Mode::Experience) {
+        experience_options
+            .get(&pack_id)
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        mode_options.get(mode).cloned().unwrap_or_default()
+    };
 
-    if !matches!(mode, shared::user_config::Mode::Default) {
+    if !matches!(
+        mode,
+        shared::user_config::Mode::Sandbox | shared::user_config::Mode::Experience
+    ) {
         let mut mode_config = stored;
 
         for (key, option) in metadata.all_options() {
@@ -186,7 +203,7 @@ fn resolve_mode_config(
             }
         }
 
-        return (mode_config, Content::default());
+        return (mode_config, Content::default(), Experience::default());
     }
 
     let behaviour = media_manager
@@ -212,7 +229,11 @@ fn resolve_mode_config(
     let schema = effective_options(metadata, &behaviour);
     let resolved = effective_config(&schema, &stored);
 
-    (resolved, behaviour.content)
+    (
+        resolved,
+        behaviour.content,
+        behaviour.experience.unwrap_or_default(),
+    )
 }
 
 /// Starts the Lua thread using the given `media_manager` — already opened by the caller (see
@@ -241,8 +262,15 @@ pub fn start_lua_thread(
             .expect("Failed to build tokio runtime");
 
         let mut file: Box<dyn ReadSeek> = match config.mode.clone() {
-            shared::user_config::Mode::Default => {
-                let mode_data = include_bytes!("../../../default-modes/build/Default Modes.lwmode");
+            shared::user_config::Mode::Sandbox => {
+                let mode_data =
+                    include_bytes!("../../../default-modes/sandbox/build/Sandbox.lwmode");
+
+                Box::new(Cursor::new(mode_data))
+            }
+            shared::user_config::Mode::Experience => {
+                let mode_data =
+                    include_bytes!("../../../default-modes/experience/build/Experience.lwmode");
 
                 Box::new(Cursor::new(mode_data))
             }
@@ -296,10 +324,12 @@ pub fn start_lua_thread(
 
         let entrypoint = metadata.entrypoint.clone();
 
-        let (mode_config, content) = resolve_mode_config(
+        let (mode_config, content, experience) = resolve_mode_config(
             &metadata,
             &config.mode,
             &config.mode_options,
+            &config.experience_options,
+            pack_info.id,
             &media_manager,
             dev_mode,
         );
@@ -344,6 +374,7 @@ pub fn start_lua_thread(
                 pack_info,
                 config: mode_config,
                 content,
+                experience,
                 gpu_available,
                 dev_mode,
             },
@@ -637,6 +668,7 @@ mod tests {
         time::Duration,
     };
 
+    use shared::behaviour::{DesignValues, FrequencyAnchors, Level, Modifiers, Timeline};
     use shared::user_config::{Capabilities, Volume};
     use tempfile::NamedTempFile;
     use tokio::sync::mpsc::UnboundedSender;
@@ -1072,10 +1104,7 @@ mod tests {
                             let values = dialog_values.get(&id).cloned().unwrap_or_default();
                             let _ = tx.send(values);
                         }
-                        WindowAction::GetDialogValue {
-                            id: element_id,
-                            tx,
-                        } => {
+                        WindowAction::GetDialogValue { id: element_id, tx } => {
                             let value = dialog_values
                                 .get(&id)
                                 .and_then(|values| values.get(&element_id))
@@ -1083,7 +1112,10 @@ mod tests {
                             let _ = tx.send(value);
                         }
                         WindowAction::SetTitle { tx, title } => {
-                            recorded.lock().unwrap().push(Recorded::SetTitle { id, title });
+                            recorded
+                                .lock()
+                                .unwrap()
+                                .push(Recorded::SetTitle { id, title });
                             let _ = tx.send(());
                         }
                         WindowAction::SetOpacity { tx, .. } => {
@@ -1168,13 +1200,38 @@ mod tests {
 
         /// Like `with_config`, but for tests that need a specific pack fixture (e.g. several
         /// distinctly-tagged media rows) and/or behaviour-derived `content`/`mode_config` --
-        /// exactly what `resolve_mode_config` would have produced for `Mode::Default`. The
+        /// exactly what `resolve_mode_config` would have produced for `Mode::Sandbox`. The
         /// content-group query-layer tests use this to exercise `lib/media.lua` against real
         /// media without going through the full pack-behaviour.json resolution path.
         fn with_pack(
             sources: &[(&str, &str)],
             pack_file: NamedTempFile,
             content: Content,
+            mode_config: HashMap<String, OptionValue>,
+            capabilities: Capabilities,
+            volume: Volume,
+        ) -> Self {
+            Self::with_pack_and_experience(
+                sources,
+                pack_file,
+                content,
+                Experience::default(),
+                mode_config,
+                capabilities,
+                volume,
+            )
+        }
+
+        /// Like `with_pack`, but also injects a custom `Experience` section (anchors/design
+        /// values) as `__lewdware_experience` -- for exercising
+        /// `default-modes/experience/src/main.lua` end to end the same way `with_pack` exercises
+        /// Sandbox's.
+        #[allow(clippy::too_many_arguments)]
+        fn with_pack_and_experience(
+            sources: &[(&str, &str)],
+            pack_file: NamedTempFile,
+            content: Content,
+            experience: Experience,
             mode_config: HashMap<String, OptionValue>,
             capabilities: Capabilities,
             volume: Volume,
@@ -1211,6 +1268,7 @@ mod tests {
                         pack_info: None,
                         config: mode_config,
                         content,
+                        experience,
                         gpu_available: false,
                         dev_mode: false,
                     },
@@ -1565,6 +1623,7 @@ mod tests {
                         pack_info: Some(pack_info),
                         config: HashMap::new(),
                         content: Content::default(),
+                        experience: Experience::default(),
                         gpu_available: false,
                         dev_mode: false,
                     },
@@ -1633,6 +1692,7 @@ mod tests {
                         pack_info: None,
                         config: HashMap::new(),
                         content: Content::default(),
+                        experience: Experience::default(),
                         gpu_available: false,
                         dev_mode: true,
                     },
@@ -2282,28 +2342,30 @@ mod tests {
         }
     }
 
-    /// The core invariant `resolve_mode_config` exists for: for the built-in default mode, a
+    /// The core invariant `resolve_mode_config` exists for: for the built-in Sandbox mode, a
     /// content group synthesizes into the resolved config (falling back to its
     /// `enabled_by_default`, or a stored override when present) and its tags are handed back via
-    /// `Content` for the query layer -- see `default-modes/src/lib/media.lua`.
+    /// `Content` for the query layer -- see `default-modes/shared/lib/media.lua`.
     #[test]
-    fn resolve_mode_config_synthesizes_content_group_toggle_for_default_mode() {
+    fn resolve_mode_config_synthesizes_content_group_toggle_for_sandbox_mode() {
         let behaviour = behaviour_with_one_content_group();
         let behaviour_bytes = behaviour.to_json_bytes().unwrap();
         let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
 
         let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
-        let (media_manager, _metadata, _pack_id, _handle) =
+        let (media_manager, _metadata, pack_id, _handle) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
         let metadata = empty_default_mode_metadata();
         let key = format!("{}kinky", shared::behaviour::CONTENT_GROUP_KEY_PREFIX);
 
         // No stored override -> falls back to the group's `enabled_by_default`.
-        let (config, content) = resolve_mode_config(
+        let (config, content, _experience) = resolve_mode_config(
             &metadata,
-            &shared::user_config::Mode::Default,
+            &shared::user_config::Mode::Sandbox,
             &HashMap::new(),
+            &HashMap::new(),
+            pack_id,
             &media_manager,
             false,
         );
@@ -2315,12 +2377,14 @@ mod tests {
         let mut stored = HashMap::new();
         stored.insert(key.clone(), OptionValue::Boolean(false));
         let mut mode_options = HashMap::new();
-        mode_options.insert(shared::user_config::Mode::Default, stored);
+        mode_options.insert(shared::user_config::Mode::Sandbox, stored);
 
-        let (config, _) = resolve_mode_config(
+        let (config, _, _experience) = resolve_mode_config(
             &metadata,
-            &shared::user_config::Mode::Default,
+            &shared::user_config::Mode::Sandbox,
             &mode_options,
+            &HashMap::new(),
+            pack_id,
             &media_manager,
             false,
         );
@@ -2338,7 +2402,7 @@ mod tests {
         let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
 
         let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
-        let (media_manager, _metadata, _pack_id, _handle) =
+        let (media_manager, _metadata, pack_id, _handle) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
         let metadata = empty_default_mode_metadata();
@@ -2350,8 +2414,15 @@ mod tests {
                 path: "some/mode.lwmode".into(),
             },
         ] {
-            let (config, content) =
-                resolve_mode_config(&metadata, &mode, &HashMap::new(), &media_manager, false);
+            let (config, content, _experience) = resolve_mode_config(
+                &metadata,
+                &mode,
+                &HashMap::new(),
+                &HashMap::new(),
+                pack_id,
+                &media_manager,
+                false,
+            );
 
             assert_eq!(config.get(&key), None);
             assert_eq!(content, Content::default());
@@ -2361,19 +2432,21 @@ mod tests {
     /// A pack with no behaviour.json at all (the common case today) shouldn't panic or fail the
     /// mode -- `resolve_mode_config` falls back to an empty `Behaviour`.
     #[test]
-    fn resolve_mode_config_default_mode_with_no_behaviour_data() {
+    fn resolve_mode_config_sandbox_mode_with_no_behaviour_data() {
         let pack_file = pack_fixture_with_data(&[], None);
 
         let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
-        let (media_manager, _metadata, _pack_id, _handle) =
+        let (media_manager, _metadata, pack_id, _handle) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
         let metadata = empty_default_mode_metadata();
 
-        let (config, content) = resolve_mode_config(
+        let (config, content, _experience) = resolve_mode_config(
             &metadata,
-            &shared::user_config::Mode::Default,
+            &shared::user_config::Mode::Sandbox,
             &HashMap::new(),
+            &HashMap::new(),
+            pack_id,
             &media_manager,
             false,
         );
@@ -2429,7 +2502,7 @@ mod tests {
                     ),
                     (
                         "lib/media.lua",
-                        include_str!("../../../default-modes/src/lib/media.lua"),
+                        include_str!("../../../default-modes/shared/lib/media.lua"),
                     ),
                 ];
 
@@ -2472,11 +2545,11 @@ mod tests {
             ("main.lua", main),
             (
                 "lib/content.lua",
-                include_str!("../../../default-modes/src/lib/content.lua"),
+                include_str!("../../../default-modes/shared/lib/content.lua"),
             ),
             (
                 "lib/media.lua",
-                include_str!("../../../default-modes/src/lib/media.lua"),
+                include_str!("../../../default-modes/shared/lib/media.lua"),
             ),
         ]
     }
@@ -2489,35 +2562,39 @@ mod tests {
         vec![
             (
                 "main.lua",
-                include_str!("../../../default-modes/src/main.lua"),
+                include_str!("../../../default-modes/sandbox/src/main.lua"),
             ),
             (
                 "lib/media.lua",
-                include_str!("../../../default-modes/src/lib/media.lua"),
+                include_str!("../../../default-modes/shared/lib/media.lua"),
             ),
             (
                 "lib/content.lua",
-                include_str!("../../../default-modes/src/lib/content.lua"),
+                include_str!("../../../default-modes/shared/lib/content.lua"),
             ),
             (
                 "lib/notifications.lua",
-                include_str!("../../../default-modes/src/lib/notifications.lua"),
+                include_str!("../../../default-modes/shared/lib/notifications.lua"),
             ),
             (
                 "lib/web.lua",
-                include_str!("../../../default-modes/src/lib/web.lua"),
+                include_str!("../../../default-modes/shared/lib/web.lua"),
             ),
             (
                 "lib/subliminals.lua",
-                include_str!("../../../default-modes/src/lib/subliminals.lua"),
+                include_str!("../../../default-modes/shared/lib/subliminals.lua"),
             ),
             (
                 "lib/prompts.lua",
-                include_str!("../../../default-modes/src/lib/prompts.lua"),
+                include_str!("../../../default-modes/shared/lib/prompts.lua"),
             ),
             (
                 "lib/wallpaper.lua",
-                include_str!("../../../default-modes/src/lib/wallpaper.lua"),
+                include_str!("../../../default-modes/shared/lib/wallpaper.lua"),
+            ),
+            (
+                "lib/spawn.lua",
+                include_str!("../../../default-modes/shared/lib/spawn.lua"),
             ),
         ]
     }
@@ -2534,6 +2611,71 @@ mod tests {
             format!("{setup}\nrequire(\"real_main\")\n"),
         )];
         for (path, source) in real_default_mode_sources() {
+            let path = if path == "main.lua" {
+                "real_main.lua"
+            } else {
+                path
+            };
+            sources.push((path.to_string(), source.to_string()));
+        }
+        sources
+    }
+
+    /// Like `real_default_mode_sources`, but the shipped Experience mode
+    /// (`default-modes/experience/src/main.lua`) -- everything except `main.lua` is shared with
+    /// Sandbox (`lib/*.lua`), so both source lists point at the same files.
+    fn real_experience_mode_sources() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (
+                "main.lua",
+                include_str!("../../../default-modes/experience/src/main.lua"),
+            ),
+            (
+                "timeline.lua",
+                include_str!("../../../default-modes/experience/src/timeline.lua"),
+            ),
+            (
+                "lib/media.lua",
+                include_str!("../../../default-modes/shared/lib/media.lua"),
+            ),
+            (
+                "lib/content.lua",
+                include_str!("../../../default-modes/shared/lib/content.lua"),
+            ),
+            (
+                "lib/notifications.lua",
+                include_str!("../../../default-modes/shared/lib/notifications.lua"),
+            ),
+            (
+                "lib/web.lua",
+                include_str!("../../../default-modes/shared/lib/web.lua"),
+            ),
+            (
+                "lib/subliminals.lua",
+                include_str!("../../../default-modes/shared/lib/subliminals.lua"),
+            ),
+            (
+                "lib/prompts.lua",
+                include_str!("../../../default-modes/shared/lib/prompts.lua"),
+            ),
+            (
+                "lib/wallpaper.lua",
+                include_str!("../../../default-modes/shared/lib/wallpaper.lua"),
+            ),
+            (
+                "lib/spawn.lua",
+                include_str!("../../../default-modes/shared/lib/spawn.lua"),
+            ),
+        ]
+    }
+
+    /// Like `wrapped_default_mode_sources`, but for Experience (see `real_experience_mode_sources`).
+    fn wrapped_experience_mode_sources(setup: &str) -> Vec<(String, String)> {
+        let mut sources = vec![(
+            "main.lua".to_string(),
+            format!("{setup}\nrequire(\"real_main\")\n"),
+        )];
+        for (path, source) in real_experience_mode_sources() {
             let path = if path == "main.lua" {
                 "real_main.lua"
             } else {
@@ -2581,8 +2723,55 @@ mod tests {
         config
     }
 
+    /// Like `base_default_mode_config`, but for Experience's meta-controls schema
+    /// (`default-modes/experience/config.jsonc`): `pace = 1.0` (no scaling), image-only spawning,
+    /// every off-switch on (rate/design values themselves come from the test's `Experience`
+    /// fixture, not this config map -- see `behaviour-design/default-mode.md`, Ownership).
+    fn base_experience_mode_config() -> HashMap<String, OptionValue> {
+        let mut config = HashMap::new();
+        config.insert("pace".to_string(), OptionValue::Number(1.0));
+        config.insert("max_popups".to_string(), OptionValue::Integer(5));
+        config.insert("images_enabled".to_string(), OptionValue::Boolean(true));
+        config.insert("videos_enabled".to_string(), OptionValue::Boolean(false));
+        config.insert("audio_enabled".to_string(), OptionValue::Boolean(false));
+        config.insert(
+            "close_trigger_enabled".to_string(),
+            OptionValue::Boolean(false),
+        );
+        config.insert("movement_enabled".to_string(), OptionValue::Boolean(false));
+        config.insert("captions_enabled".to_string(), OptionValue::Boolean(true));
+        config.insert(
+            "notifications_enabled".to_string(),
+            OptionValue::Boolean(true),
+        );
+        config.insert(
+            "web_opening_enabled".to_string(),
+            OptionValue::Boolean(true),
+        );
+        config.insert(
+            "subliminals_enabled".to_string(),
+            OptionValue::Boolean(true),
+        );
+        config.insert("subliminal_opacity".to_string(), OptionValue::Number(0.5));
+        config.insert("prompts_enabled".to_string(), OptionValue::Boolean(true));
+        config.insert("wallpaper_enabled".to_string(), OptionValue::Boolean(true));
+        config.insert("splash_enabled".to_string(), OptionValue::Boolean(true));
+        config
+    }
+
+    /// `base_experience_mode_config()` with popup spawning turned off, mirroring
+    /// `isolated_process_config`'s reasoning.
+    fn isolated_experience_process_config() -> HashMap<String, OptionValue> {
+        let mut config = base_experience_mode_config();
+        config.insert("images_enabled".to_string(), OptionValue::Boolean(false));
+        config
+    }
+
     fn as_str_sources(owned: &[(String, String)]) -> Vec<(&str, &str)> {
-        owned.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect()
+        owned
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect()
     }
 
     const COUNTING_NOTIFICATION_WRAP: &str = r#"
@@ -2775,7 +2964,10 @@ mod tests {
                 };
 
                 let mut config = isolated_process_config();
-                config.insert("web_opening_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert(
+                    "web_opening_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
                 config.insert("web_frequency".to_string(), OptionValue::Number(1.0));
 
                 let mut harness = Harness::with_pack(
@@ -2816,7 +3008,10 @@ mod tests {
                 };
 
                 let mut config = isolated_process_config();
-                config.insert("web_opening_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert(
+                    "web_opening_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
                 config.insert("web_frequency".to_string(), OptionValue::Number(1.0));
 
                 let mut harness = Harness::with_pack(
@@ -2845,7 +3040,10 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let mut config = isolated_process_config();
-                config.insert("web_opening_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert(
+                    "web_opening_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
                 config.insert("web_frequency".to_string(), OptionValue::Number(1.0));
 
                 let mut harness = Harness::with_pack(
@@ -2878,7 +3076,10 @@ mod tests {
                 };
 
                 let mut config = isolated_process_config();
-                config.insert("web_opening_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert(
+                    "web_opening_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
                 // Same timing scheme as `notifications_pause_while_dormant`: ticks at
                 // 300/600/900/1200ms, dormancy triggers at 1000ms and stays dormant for the rest
                 // of the test.
@@ -2931,10 +3132,7 @@ mod tests {
                     "subliminals_enabled".to_string(),
                     OptionValue::Boolean(true),
                 );
-                config.insert(
-                    "subliminal_frequency".to_string(),
-                    OptionValue::Number(1.0),
-                );
+                config.insert("subliminal_frequency".to_string(), OptionValue::Number(1.0));
                 config.insert("subliminal_opacity".to_string(), OptionValue::Number(0.5));
 
                 let mut harness = Harness::with_pack(
@@ -2982,10 +3180,7 @@ mod tests {
                     "subliminals_enabled".to_string(),
                     OptionValue::Boolean(true),
                 );
-                config.insert(
-                    "subliminal_frequency".to_string(),
-                    OptionValue::Number(1.0),
-                );
+                config.insert("subliminal_frequency".to_string(), OptionValue::Number(1.0));
                 config.insert("subliminal_opacity".to_string(), OptionValue::Number(0.3));
 
                 let mut harness = Harness::with_pack(
@@ -3013,10 +3208,7 @@ mod tests {
                     "subliminals_enabled".to_string(),
                     OptionValue::Boolean(true),
                 );
-                config.insert(
-                    "subliminal_frequency".to_string(),
-                    OptionValue::Number(1.0),
-                );
+                config.insert("subliminal_frequency".to_string(), OptionValue::Number(1.0));
                 config.insert("subliminal_opacity".to_string(), OptionValue::Number(0.5));
 
                 let mut harness = Harness::with_pack(
@@ -3057,10 +3249,7 @@ mod tests {
                 // 300/600/900/1200ms, dormancy triggers at 1000ms. Each firing spawns then closes
                 // 200ms later, so 3 firings before dormancy produce 6 recorded events total
                 // (spawn+close for each), and the 1200ms tick is suppressed.
-                config.insert(
-                    "subliminal_frequency".to_string(),
-                    OptionValue::Number(0.3),
-                );
+                config.insert("subliminal_frequency".to_string(), OptionValue::Number(0.3));
                 config.insert("dormancy_enabled".to_string(), OptionValue::Boolean(true));
                 config.insert("active_min".to_string(), OptionValue::Number(1.0));
                 config.insert("active_max".to_string(), OptionValue::Number(1.0));
@@ -3474,7 +3663,11 @@ mod tests {
 
                 harness.advance(Duration::from_millis(1100)).await;
                 assert_eq!(harness.eval_number("RESET_COUNT"), 1.0);
-                assert_eq!(harness.eval_number("SET_COUNT"), 1.0, "shouldn't reapply until wake");
+                assert_eq!(
+                    harness.eval_number("SET_COUNT"),
+                    1.0,
+                    "shouldn't reapply until wake"
+                );
 
                 harness.advance(Duration::from_millis(1100)).await;
                 assert_eq!(harness.eval_number("SET_COUNT"), 2.0);
@@ -3935,7 +4128,7 @@ mod tests {
                     ),
                     (
                         "lib/media.lua",
-                        include_str!("../../../default-modes/src/lib/media.lua"),
+                        include_str!("../../../default-modes/shared/lib/media.lua"),
                     ),
                 ];
 
@@ -3956,5 +4149,735 @@ mod tests {
                 harness.run_entrypoint("main.lua").unwrap();
             })
             .await;
+    }
+
+    // ─── Experience mode ────────────────────────────────────────────────────────
+
+    /// The core Experience arithmetic: `effective_interval = anchor_seconds / pace`, exercised
+    /// against the real `default-modes/experience/src/main.lua`. Anchor 2s x pace 2.0 -> 1s
+    /// popups, so three should have spawned after 3.1s (mirrors the Sandbox constant-rate spawn
+    /// tests' shape).
+    #[tokio::test(start_paused = true)]
+    async fn experience_popup_spawns_at_anchor_over_pace_interval() {
+        LocalSet::new()
+            .run_until(async {
+                let experience = Experience {
+                    anchors: FrequencyAnchors {
+                        popup: Some(2.0),
+                        ..Default::default()
+                    },
+                    design: DesignValues::default(),
+                    timeline: None,
+                };
+
+                let mut config = base_experience_mode_config();
+                config.insert("pace".to_string(), OptionValue::Number(2.0));
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture(true),
+                    Content::default(),
+                    experience,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(3100)).await;
+
+                let spawn_count = harness
+                    .recorded()
+                    .iter()
+                    .filter(|r| matches!(r, Recorded::SpawnImage { .. }))
+                    .count();
+                assert_eq!(spawn_count, 3);
+            })
+            .await;
+    }
+
+    /// An absent `anchors.popup` means the spawn loop never starts at all in Experience -- not
+    /// "spawn at some default rate" -- see `FrequencyAnchors`'s doc comment and interaction rule
+    /// 5's "skip, don't error" spirit generalized to "doesn't exist here".
+    #[tokio::test(start_paused = true)]
+    async fn experience_missing_popup_anchor_never_spawns() {
+        LocalSet::new()
+            .run_until(async {
+                let experience = Experience::default(); // no anchors at all
+
+                let harness_config = base_experience_mode_config();
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture(true),
+                    Content::default(),
+                    experience,
+                    harness_config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_secs(60)).await;
+
+                assert!(harness.recorded().is_empty());
+            })
+            .await;
+    }
+
+    /// Same anchor-over-pace arithmetic, for a standalone-scheduled feature (notifications)
+    /// rather than the spawn loop -- confirms `experience/src/main.lua` threads `anchors.* /
+    /// pace` through to `lib/notifications.lua` correctly.
+    #[tokio::test(start_paused = true)]
+    async fn experience_notification_anchor_scaled_by_pace() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    notifications: vec![shared::behaviour::TextItem {
+                        text: "hi".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+                let experience = Experience {
+                    anchors: FrequencyAnchors {
+                        notification: Some(2.0),
+                        ..Default::default()
+                    },
+                    design: DesignValues::default(),
+                    timeline: None,
+                };
+
+                let mut config = isolated_experience_process_config();
+                config.insert("pace".to_string(), OptionValue::Number(2.0));
+
+                let owned = wrapped_experience_mode_sources(COUNTING_NOTIFICATION_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    experience,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(3100)).await;
+
+                assert_eq!(harness.eval_number("COUNT"), 3.0);
+            })
+            .await;
+    }
+
+    /// The user's off-switch still wins even when the pack's design anchors the feature --
+    /// class-1 ownership applies identically in Experience (`behaviour-design/default-mode.md`,
+    /// Ownership: "Available in *both* modes; the timeline can never touch them").
+    #[tokio::test(start_paused = true)]
+    async fn experience_notifications_off_switch_wins_over_present_anchor() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    notifications: vec![shared::behaviour::TextItem {
+                        text: "hi".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+                let experience = Experience {
+                    anchors: FrequencyAnchors {
+                        notification: Some(1.0),
+                        ..Default::default()
+                    },
+                    design: DesignValues::default(),
+                    timeline: None,
+                };
+
+                let mut config = isolated_experience_process_config();
+                config.insert(
+                    "notifications_enabled".to_string(),
+                    OptionValue::Boolean(false),
+                );
+
+                let owned = wrapped_experience_mode_sources(COUNTING_NOTIFICATION_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    experience,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_secs(10)).await;
+
+                assert_eq!(harness.eval_number("COUNT"), 0.0);
+            })
+            .await;
+    }
+
+    // ─── Transitions (timeline) ─────────────────────────────────────────────────
+
+    /// Minimal sources for exercising `experience/src/timeline.lua` in isolation, uncoupled from
+    /// the spawn loop's own timing -- most of the timeline's own state-machine behaviour (trigger
+    /// evaluation, absolute-snapshot params) doesn't need a real pack or media at all.
+    fn timeline_only_sources() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("main.lua", "require('timeline')"),
+            (
+                "timeline.lua",
+                include_str!("../../../default-modes/experience/src/timeline.lua"),
+            ),
+        ]
+    }
+
+    /// Same as `timeline_only_sources`, but also calls `M.init()` -- needed by any test relying on
+    /// a level's `at_seconds` timer actually firing (as opposed to only `on_popup_spawned()`-driven
+    /// advances).
+    fn timeline_only_sources_initialized() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("main.lua", "require('timeline').init()"),
+            (
+                "timeline.lua",
+                include_str!("../../../default-modes/experience/src/timeline.lua"),
+            ),
+        ]
+    }
+
+    fn timeline_harness(sources: &[(&str, &str)], experience: Experience) -> Harness {
+        Harness::with_pack_and_experience(
+            sources,
+            pack_fixture(false),
+            Content::default(),
+            experience,
+            HashMap::new(),
+            Capabilities::default(),
+            Volume::default(),
+        )
+    }
+
+    /// A no-`timeline` pack (anchors/design only, exactly what M4's earlier "Experience mode"
+    /// bullet already shipped) must leave every getter at the level-0 baseline forever: `nil`
+    /// timeline is not a degraded case, it's the common one (most Experience packs won't design an
+    /// arc) -- see `Timeline`'s doc comment.
+    #[tokio::test(start_paused = true)]
+    async fn experience_timeline_absent_stays_at_baseline_forever() {
+        LocalSet::new()
+            .run_until(async {
+                let experience = Experience {
+                    anchors: FrequencyAnchors::default(),
+                    design: DesignValues::default(),
+                    timeline: None,
+                };
+                let mut harness =
+                    timeline_harness(&timeline_only_sources_initialized(), experience);
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_secs(3600)).await;
+
+                assert_eq!(harness.eval_number("require('timeline').modifier()"), 1.0);
+                assert_eq!(
+                    harness.eval_string("table.concat(require('timeline').tags() or {}, '|')"),
+                    ""
+                );
+                assert_eq!(
+                    harness.eval_string(
+                        "table.concat(require('timeline').wallpaper_tags() or {}, '|')"
+                    ),
+                    ""
+                );
+            })
+            .await;
+    }
+
+    /// The core trigger + snapshot mechanics: before a level's `at_seconds`, every getter stays at
+    /// baseline; once active-time elapses past it, `modifier()`/`tags()` jump to that level's
+    /// absolute values in one step (interaction rules 1-3).
+    #[tokio::test(start_paused = true)]
+    async fn experience_timeline_advances_on_active_time_and_applies_modifier() {
+        LocalSet::new()
+            .run_until(async {
+                let experience = Experience {
+                    anchors: FrequencyAnchors::default(),
+                    design: DesignValues::default(),
+                    timeline: Some(Timeline {
+                        levels: vec![Level {
+                            at_seconds: 5.0,
+                            at_popups: None,
+                            modifiers: Modifiers {
+                                modifier: Some(4.0),
+                                tags: Some(vec!["kinky".to_string()]),
+                                wallpaper_tags: None,
+                            },
+                        }],
+                    }),
+                };
+                let mut harness =
+                    timeline_harness(&timeline_only_sources_initialized(), experience);
+                harness.run_entrypoint("main.lua").unwrap();
+
+                harness.advance(Duration::from_millis(4900)).await;
+                assert_eq!(
+                    harness.eval_number("require('timeline').modifier()"),
+                    1.0,
+                    "still baseline just before at_seconds"
+                );
+
+                harness.advance(Duration::from_millis(300)).await; // crosses t=5.0s
+                assert_eq!(harness.eval_number("require('timeline').modifier()"), 4.0);
+                assert_eq!(
+                    harness.eval_string("table.concat(require('timeline').tags() or {}, '|')"),
+                    "kinky"
+                );
+            })
+            .await;
+    }
+
+    /// A popup-count trigger reached well before its level's `at_seconds` advances immediately --
+    /// no waiting for the time timer, and no stepping through intermediate levels (there are none
+    /// here to step through, but see the order-independence test below for that half).
+    #[tokio::test(start_paused = true)]
+    async fn experience_timeline_popup_count_trigger_advances_before_time_elapses() {
+        LocalSet::new()
+            .run_until(async {
+                let experience = Experience {
+                    anchors: FrequencyAnchors::default(),
+                    design: DesignValues::default(),
+                    timeline: Some(Timeline {
+                        levels: vec![Level {
+                            at_seconds: 1_000.0, // never reached within this test
+                            at_popups: Some(3),
+                            modifiers: Modifiers {
+                                modifier: Some(2.0),
+                                ..Default::default()
+                            },
+                        }],
+                    }),
+                };
+                // No `.init()` -- this test isolates popup-count-driven advancement from any
+                // `at_seconds` timer.
+                let mut harness = timeline_harness(&timeline_only_sources(), experience);
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(
+                    harness.eval_number(
+                        "(function() \
+                            local t = require('timeline') \
+                            t.on_popup_spawned() \
+                            t.on_popup_spawned() \
+                            return t.modifier() \
+                        end)()"
+                    ),
+                    1.0,
+                    "two popups: threshold of three not yet reached"
+                );
+
+                assert_eq!(
+                    harness.eval_number(
+                        "(function() \
+                            local t = require('timeline') \
+                            t.on_popup_spawned() \
+                            return t.modifier() \
+                        end)()"
+                    ),
+                    2.0,
+                    "third popup crosses the threshold"
+                );
+            })
+            .await;
+    }
+
+    /// Rule 6, made structural: a level with an `at_popups` threshold still advances via
+    /// `at_seconds` even when nothing ever calls `on_popup_spawned()` (the real-world case: the
+    /// user disabled every popup-spawning media type). The design can't stall.
+    #[tokio::test(start_paused = true)]
+    async fn experience_timeline_rule6_time_fallback_when_popups_never_spawn() {
+        LocalSet::new()
+            .run_until(async {
+                let experience = Experience {
+                    anchors: FrequencyAnchors::default(),
+                    design: DesignValues::default(),
+                    timeline: Some(Timeline {
+                        levels: vec![Level {
+                            at_seconds: 2.0,
+                            at_popups: Some(1_000_000), // never reached -- popups never spawn
+                            modifiers: Modifiers {
+                                modifier: Some(9.0),
+                                ..Default::default()
+                            },
+                        }],
+                    }),
+                };
+                let mut harness =
+                    timeline_harness(&timeline_only_sources_initialized(), experience);
+                harness.run_entrypoint("main.lua").unwrap();
+
+                harness.advance(Duration::from_millis(2100)).await;
+                assert_eq!(harness.eval_number("require('timeline').modifier()"), 9.0);
+            })
+            .await;
+    }
+
+    /// Levels are absolute snapshots relative to baseline, not deltas relative to the previous
+    /// level: jumping straight from level 0 to level 2 (skipping level 1's own threshold) produces
+    /// identical params to passing through level 1 first -- see `Modifiers`'s doc comment.
+    #[tokio::test(start_paused = true)]
+    async fn experience_timeline_order_independence_jumping_directly_matches_sequential() {
+        LocalSet::new()
+            .run_until(async {
+                fn two_level_experience() -> Experience {
+                    Experience {
+                        anchors: FrequencyAnchors::default(),
+                        design: DesignValues::default(),
+                        timeline: Some(Timeline {
+                            levels: vec![
+                                Level {
+                                    at_seconds: 1_000.0,
+                                    at_popups: Some(2),
+                                    modifiers: Modifiers {
+                                        modifier: Some(2.0),
+                                        tags: Some(vec!["a".to_string()]),
+                                        ..Default::default()
+                                    },
+                                },
+                                Level {
+                                    at_seconds: 1_000.0,
+                                    at_popups: Some(5),
+                                    modifiers: Modifiers {
+                                        modifier: Some(5.0),
+                                        tags: Some(vec!["b".to_string()]),
+                                        ..Default::default()
+                                    },
+                                },
+                            ],
+                        }),
+                    }
+                }
+
+                let probe = "(function() \
+                    local t = require('timeline') \
+                    return t.modifier() * 1000 + #(t.tags() or {}) \
+                end)()";
+
+                // Sequential: reach level 1 (2 popups), observe it, then continue to level 2.
+                let mut sequential = timeline_harness(&timeline_only_sources(), two_level_experience());
+                sequential.run_entrypoint("main.lua").unwrap();
+                sequential.eval_number(
+                    "(function() local t = require('timeline') t.on_popup_spawned() t.on_popup_spawned() return 1 end)()",
+                );
+                assert_eq!(sequential.eval_number(probe), 2000.0 + 1.0, "level 1 reached");
+                sequential.eval_number(
+                    "(function() local t = require('timeline') for i=1,3 do t.on_popup_spawned() end return 1 end)()",
+                );
+                let sequential_final = sequential.eval_number(probe);
+
+                // Direct jump: five popups in one batch, never separately observing level 1.
+                let mut direct = timeline_harness(&timeline_only_sources(), two_level_experience());
+                direct.run_entrypoint("main.lua").unwrap();
+                let direct_final = direct.eval_number(
+                    &format!(
+                        "(function() \
+                            local t = require('timeline') \
+                            for i=1,5 do t.on_popup_spawned() end \
+                            return {probe} \
+                        end)()"
+                    ),
+                );
+
+                assert_eq!(sequential_final, 5000.0 + 1.0, "level 2's own absolute params");
+                assert_eq!(
+                    direct_final, sequential_final,
+                    "jumping straight to level 2 must match passing through level 1 first"
+                );
+            })
+            .await;
+    }
+
+    /// Wallpaper is the one mode parameter that needs *push* semantics (rule 3): it must reapply
+    /// when a level's effective override actually changes, but never redundantly for an unchanged
+    /// value -- otherwise every level transition would re-randomize/flicker the wallpaper even when
+    /// that level doesn't touch it.
+    #[tokio::test(start_paused = true)]
+    async fn experience_timeline_wallpaper_override_reapplies_only_when_changed() {
+        LocalSet::new()
+            .run_until(async {
+                fn level_at(at_seconds: f64, wallpaper_tags: Option<Vec<String>>) -> Level {
+                    Level {
+                        at_seconds,
+                        at_popups: None,
+                        modifiers: Modifiers {
+                            wallpaper_tags,
+                            ..Default::default()
+                        },
+                    }
+                }
+
+                let experience = Experience {
+                    anchors: FrequencyAnchors::default(),
+                    design: DesignValues::default(),
+                    timeline: Some(Timeline {
+                        levels: vec![
+                            level_at(1.0, Some(vec!["special".to_string()])), // baseline -> special: applies
+                            level_at(2.0, None), // special -> baseline (empty): no-ops internally
+                            level_at(3.0, Some(vec!["special".to_string()])), // baseline -> special again: applies
+                            level_at(4.0, Some(vec!["special".to_string()])), // unchanged: must not reapply
+                        ],
+                    }),
+                };
+
+                let owned = wrapped_experience_mode_sources(WALLPAPER_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = base_experience_mode_config();
+                config.insert("images_enabled".to_string(), OptionValue::Boolean(false));
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &sources,
+                    pack_fixture_with_tagged_image(&["special"]),
+                    Content::default(),
+                    experience,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(4100)).await;
+
+                assert_eq!(
+                    harness.eval_number("SET_COUNT"),
+                    2.0,
+                    "two genuine special-tag applications; the no-op-to-empty and repeat-same-value \
+                     transitions must not add to this"
+                );
+            })
+            .await;
+    }
+
+    /// `max_popups` (a class-1 user cap) stays authoritative even when a level's modifier cranks
+    /// the effective spawn rate far above what the pack's anchor alone would produce -- caps are
+    /// "clamps applied after everything else" (`behaviour-design/default-mode.md`, Ownership),
+    /// never something a design can spawn its way past.
+    #[tokio::test(start_paused = true)]
+    async fn experience_timeline_max_popups_still_clamps_when_modifier_raises_rate() {
+        LocalSet::new()
+            .run_until(async {
+                let experience = Experience {
+                    anchors: FrequencyAnchors {
+                        popup: Some(0.1),
+                        ..Default::default()
+                    },
+                    design: DesignValues::default(),
+                    timeline: Some(Timeline {
+                        levels: vec![Level {
+                            at_seconds: 0.05,
+                            at_popups: None,
+                            modifiers: Modifiers {
+                                modifier: Some(100.0),
+                                ..Default::default()
+                            },
+                        }],
+                    }),
+                };
+
+                let mut config = base_experience_mode_config();
+                config.insert("max_popups".to_string(), OptionValue::Integer(2));
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture(true),
+                    Content::default(),
+                    experience,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_secs(2)).await;
+
+                let spawn_count = harness
+                    .recorded()
+                    .iter()
+                    .filter(|r| matches!(r, Recorded::SpawnImage { .. }))
+                    .count();
+                assert_eq!(
+                    spawn_count, 2,
+                    "the cap, not the (much faster) modulated rate, wins"
+                );
+            })
+            .await;
+    }
+
+    /// Records, at the moment each spawn decision is made, whether it violated the timeline's
+    /// *currently active* tag restriction -- rather than comparing spawn counts across a
+    /// before/after time window (which races against exactly which spawn decisions happen to fall
+    /// in the gap around the level's boundary instant, per rule 2). Checking the invariant at each
+    /// decision point directly is deterministic regardless of that timing.
+    const SPAWN_NAME_CAPTURE_WRAP: &str = r#"
+        KINKY_COUNT = 0
+        VANILLA_WHILE_RESTRICTED = 0
+        local real = lewdware.popup.image
+        lewdware.popup.image = function(item, opts)
+            local tags = require("timeline").tags()
+            if item.name == "kinky.avif" then KINKY_COUNT = KINKY_COUNT + 1 end
+            if item.name == "vanilla.avif" and tags and tags[1] == "kinky" then
+                VANILLA_WHILE_RESTRICTED = VANILLA_WHILE_RESTRICTED + 1
+            end
+            return real(item, opts)
+        end
+    "#;
+
+    /// A level's `tags` restricts which media can spawn (the active tag set, an `any`-style
+    /// restriction -- see `Modifiers::tags`'s doc comment): once the timeline's active tag set is
+    /// `{"kinky"}`, `vanilla.avif` (tagged only `"vanilla"`) must never spawn -- checked
+    /// deterministically at every spawn decision (the engine's tag filter is a SQL
+    /// `EXISTS`/`NOT EXISTS` exclusion, not a random sample), not via a racy spawn-count window.
+    #[tokio::test(start_paused = true)]
+    async fn experience_timeline_tags_narrow_which_media_can_spawn() {
+        LocalSet::new()
+            .run_until(async {
+                const MEDIA: &[(&str, &[&str])] =
+                    &[("kinky.avif", &["kinky"]), ("vanilla.avif", &["vanilla"])];
+
+                let experience = Experience {
+                    anchors: FrequencyAnchors {
+                        popup: Some(0.05),
+                        ..Default::default()
+                    },
+                    design: DesignValues::default(),
+                    timeline: Some(Timeline {
+                        levels: vec![Level {
+                            at_seconds: 0.5,
+                            at_popups: None,
+                            modifiers: Modifiers {
+                                tags: Some(vec!["kinky".to_string()]),
+                                ..Default::default()
+                            },
+                        }],
+                    }),
+                };
+
+                let mut config = base_experience_mode_config();
+                config.insert("max_popups".to_string(), OptionValue::Integer(1_000));
+                config.insert("captions_enabled".to_string(), OptionValue::Boolean(false));
+
+                let owned = wrapped_experience_mode_sources(SPAWN_NAME_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &sources,
+                    pack_fixture_with_data(MEDIA, None),
+                    Content::default(),
+                    experience,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2900)).await;
+
+                assert_eq!(
+                    harness.eval_number("VANILLA_WHILE_RESTRICTED"),
+                    0.0,
+                    "vanilla.avif must never spawn while the timeline's active tag set is \
+                     restricted to kinky"
+                );
+                assert!(
+                    harness.eval_number("KINKY_COUNT") > 10.0,
+                    "kinky spawns should still be happening at the full baseline rate"
+                );
+            })
+            .await;
+    }
+
+    /// `Mode::Experience`'s stored options are scoped per pack (`AppConfig::experience_options`),
+    /// unlike every other mode's global `mode_options` -- see `behaviour-design/default-mode.md`,
+    /// Ownership. A stored value under a *different* pack's UUID must never leak into this one's
+    /// resolved config.
+    #[test]
+    fn resolve_mode_config_experience_mode_reads_scoped_experience_options() {
+        let pack_file = pack_fixture_with_data(&[], None);
+
+        let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
+        let (media_manager, _metadata, pack_id, _handle) =
+            MediaManager::open(pack_file.path(), event_poster, None).unwrap();
+
+        let mut entries = indexmap::IndexMap::new();
+        entries.insert(
+            "pace".to_string(),
+            shared::mode::ModeEntry::Option(shared::mode::ModeOption {
+                label: "Pacing".to_string(),
+                description: None,
+                option_type: shared::mode::OptionType::Number {
+                    default: 1.0,
+                    min: None,
+                    max: None,
+                    step: None,
+                    clamp: false,
+                    slider: false,
+                },
+                optional: false,
+                enabled_by_default: false,
+                show_when: None,
+            }),
+        );
+        let metadata = Metadata {
+            name: "Experience".to_string(),
+            version: None,
+            author: None,
+            entrypoint: "main.lua".to_string(),
+            entries,
+            files: HashMap::new(),
+        };
+
+        let mut this_pack_options = HashMap::new();
+        this_pack_options.insert("pace".to_string(), OptionValue::Number(2.0));
+        let mut other_pack_options = HashMap::new();
+        other_pack_options.insert("pace".to_string(), OptionValue::Number(9.0));
+
+        let mut experience_options = HashMap::new();
+        experience_options.insert(pack_id, this_pack_options);
+        experience_options.insert(Uuid::new_v4(), other_pack_options);
+
+        let (config, _content, _experience) = resolve_mode_config(
+            &metadata,
+            &shared::user_config::Mode::Experience,
+            &HashMap::new(),
+            &experience_options,
+            pack_id,
+            &media_manager,
+            false,
+        );
+
+        assert_eq!(config.get("pace"), Some(&OptionValue::Number(2.0)));
+    }
+
+    /// Experience is the pack-behaviour-consuming default mode too -- content-group toggles
+    /// synthesize identically to Sandbox's (mirrors
+    /// `resolve_mode_config_synthesizes_content_group_toggle_for_sandbox_mode`).
+    #[test]
+    fn resolve_mode_config_experience_mode_synthesizes_content_group_toggle() {
+        let behaviour = behaviour_with_one_content_group();
+        let behaviour_bytes = behaviour.to_json_bytes().unwrap();
+        let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
+
+        let event_poster: EventPoster = Arc::new(|_event: UserEvent| true);
+        let (media_manager, _metadata, pack_id, _handle) =
+            MediaManager::open(pack_file.path(), event_poster, None).unwrap();
+
+        let metadata = empty_default_mode_metadata();
+        let key = format!("{}kinky", shared::behaviour::CONTENT_GROUP_KEY_PREFIX);
+
+        let (config, content, _experience) = resolve_mode_config(
+            &metadata,
+            &shared::user_config::Mode::Experience,
+            &HashMap::new(),
+            &HashMap::new(),
+            pack_id,
+            &media_manager,
+            false,
+        );
+        assert_eq!(config.get(&key), Some(&OptionValue::Boolean(true)));
+        assert_eq!(content.content_groups.len(), 1);
     }
 }

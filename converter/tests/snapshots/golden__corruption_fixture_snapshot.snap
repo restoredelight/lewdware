@@ -1,0 +1,117 @@
+---
+source: converter/tests/golden.rs
+expression: output
+---
+metadata:
+  name: Corruption Fixture Pack
+  creator: Test Author
+  description: A small synthetic pack for converter golden tests (corruption.json + config.json -> experience).
+  version: "1.0"
+  recommended_mode: Experience
+behaviour:
+  version: 1
+  content:
+    content_groups:
+      - id: vanilla
+        label: vanilla
+        tags:
+          - vanilla
+        enabled_by_default: true
+      - id: kinky
+        label: kinky
+        tags:
+          - kinky
+        enabled_by_default: true
+      - id: corrupted
+        label: corrupted
+        tags:
+          - corrupted
+        enabled_by_default: true
+    captions:
+      - text: Default caption
+        tags: []
+      - text: Vanilla caption
+        tags:
+          - vanilla
+      - text: Kinky caption
+        tags:
+          - kinky
+      - text: Corrupted caption
+        tags:
+          - corrupted
+    prompts: []
+    prompt_settings:
+      submit_label: ~
+    notifications: []
+    subliminals: []
+    web_links: []
+    wallpaper_tags:
+      - wallpaper
+    splash_tags: []
+  experience:
+    anchors:
+      popup: 2
+      web: ~
+      notification: ~
+      prompt: ~
+      subliminal: ~
+    design:
+      movement_speed_min: ~
+      movement_speed_max: ~
+      mitosis_chance: ~
+      mitosis_count: ~
+    timeline:
+      levels:
+        - at_seconds: 0
+          at_popups: ~
+          modifiers:
+            modifier: ~
+            tags:
+              - vanilla
+            wallpaper_tags:
+              - wallpaper
+        - at_seconds: 120
+          at_popups: 8
+          modifiers:
+            modifier: ~
+            tags:
+              - kinky
+              - vanilla
+            wallpaper_tags: ~
+        - at_seconds: 240
+          at_popups: 16
+          modifiers:
+            modifier: ~
+            tags:
+              - corrupted
+              - kinky
+            wallpaper_tags:
+              - corruption-wallpaper-wallpaper2-png
+media:
+  - source_path: img/kinky_a.png
+    suggested_name: kinky_a.png
+    tags:
+      - kinky
+  - source_path: img/untagged.png
+    suggested_name: untagged.png
+    tags: []
+  - source_path: img/vanilla_a.png
+    suggested_name: vanilla_a.png
+    tags:
+      - vanilla
+  - source_path: wallpaper.png
+    suggested_name: wallpaper.png
+    tags:
+      - wallpaper
+  - source_path: wallpaper2.png
+    suggested_name: wallpaper2.png
+    tags:
+      - corruption-wallpaper-wallpaper2-png
+icon: ~
+warnings:
+  - kind: UnsupportedFeatureDropped
+    message: "corruption.json level 2's config override(s) (promptMod) have no Lewdware equivalent -- a timeline level's modifier is a single scalar, not per-setting, so they were dropped"
+  - kind: UnsupportedFeatureDropped
+    message: "the pack has untagged media alongside a corruption timeline: Edgeware always keeps moodless media in the pool, but Lewdware's timeline tag restriction is an \"any of these tags\" filter, so untagged media will be excluded while a level past the first is active"
+  - kind: ConfigNotConverted
+    message: "config.json's other setting(s) (corruptionMode) have no Lewdware equivalent and were dropped"

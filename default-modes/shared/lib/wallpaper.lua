@@ -30,10 +30,15 @@ local function content()
 	return rawget(_G, "__lewdware_content") or {}
 end
 
-function M.apply_wallpaper()
+--- `tags_override`, if given, replaces `content().wallpaper_tags` for this call -- Experience's
+--- timeline uses this for a level's absolute `wallpaper_tags` write (see
+--- `experience/src/timeline.lua`'s `M.wallpaper_tags()`). Sandbox has no timeline, so its call
+--- site never passes this, unchanged from before.
+---@param tags_override? string[]
+function M.apply_wallpaper(tags_override)
 	if not lewdware.config.wallpaper_enabled then return end
 
-	local tags = content().wallpaper_tags
+	local tags = tags_override or content().wallpaper_tags
 	if not tags or #tags == 0 then return end -- opt-in only: no tags declared, no feature
 
 	local image = media.random({ type = { "image" }, tags = tags })

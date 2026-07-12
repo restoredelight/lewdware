@@ -1,0 +1,21 @@
+{
+  "default": {
+    "captions": ["Default caption"]
+  },
+  "moods": [
+    {
+      "mood": "vanilla",
+      "captions": ["Vanilla caption"],
+      "media": ["vanilla_a.png"]
+    },
+    {
+      "mood": "kinky",
+      "captions": ["Kinky caption"],
+      "media": ["kinky_a.png"]
+    },
+    {
+      "mood": "corrupted",
+      "captions": ["Corrupted caption"]
+    }
+  ]
+}

@@ -23,13 +23,19 @@ end
 
 --- @param is_dormant fun(): boolean See `lib/notifications.lua`'s doc comment on the same
 ---   parameter -- identical reasoning applies here.
-function M.start(is_dormant)
-	if not lewdware.config.web_opening_enabled then return end
+--- @param enabled boolean See `lib/notifications.lua`'s doc comment on the same parameter.
+--- @param frequency_seconds number See `lib/notifications.lua`'s doc comment on the same
+---   parameter.
+--- @param active_tags (fun(): string[]|nil)|nil See `lib/notifications.lua`'s doc comment on the
+---   same parameter.
+--- @return Interval|nil See `lib/notifications.lua`'s doc comment on the same return value.
+function M.start(is_dormant, enabled, frequency_seconds, active_tags)
+	if not enabled then return end
 
-	lewdware.every(secs(lewdware.config.web_frequency), function()
+	return lewdware.every(secs(frequency_seconds), function()
 		if is_dormant() then return end
 
-		local link = content.pick_web_link()
+		local link = content.pick_web_link(active_tags and active_tags())
 		if not link then return end -- rule 5: empty pool, skip this beat
 
 		lewdware.open_link(build_url(link))

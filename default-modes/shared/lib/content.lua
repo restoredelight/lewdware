@@ -33,13 +33,13 @@ local function excluded(tags)
 end
 
 ---@param item_tags string[]
----@param media_tags string[]
+---@param other_tags string[]
 ---@return boolean
-local function matches_media(item_tags, media_tags)
+local function matches(item_tags, other_tags)
 	if #item_tags == 0 then return true end
 	for _, item_tag in ipairs(item_tags) do
-		for _, media_tag in ipairs(media_tags) do
-			if item_tag == media_tag then return true end
+		for _, other_tag in ipairs(other_tags) do
+			if item_tag == other_tag then return true end
 		end
 	end
 	return false
@@ -52,18 +52,24 @@ end
 ---
 --- `media_tags`, if given, is the tags of the media item this pick is for (captions only): an
 --- entry is eligible if its own tags are empty ("applies regardless of media/context") or
---- intersect `media_tags`. Omitted for the standalone pools (prompts/notifications/subliminals/
---- web links) -- they aren't attached to a spawned media item, and Sandbox has no timeline to
---- define an "active tag set" to match them against the way Experience will, so every
---- non-excluded entry is eligible regardless of its own tags; only content-group exclusion
---- narrows these pools.
+--- intersect `media_tags`.
+---
+--- `active_tags`, if given, is the Experience timeline's current active tag set (see
+--- `experience/src/timeline.lua`'s `M.tags()`) -- an *additional* AND'd eligibility condition, same
+--- "empty tags always eligible" rule as `media_tags`. Sandbox has no timeline, so its callers never
+--- pass this (nil, same as an absent/baseline level in Experience) -- every non-excluded,
+--- non-media-filtered entry stays eligible regardless of its own tags, as before.
 ---@param pool table[]
 ---@param media_tags? string[]
+---@param active_tags? string[]
 ---@return table|nil
-function M.pick(pool, media_tags)
+function M.pick(pool, media_tags, active_tags)
 	local eligible = {}
 	for _, item in ipairs(pool) do
-		if not excluded(item.tags) and (media_tags == nil or matches_media(item.tags, media_tags)) then
+		if not excluded(item.tags)
+				and (media_tags == nil or matches(item.tags, media_tags))
+				and (active_tags == nil or matches(item.tags, active_tags))
+		then
 			table.insert(eligible, item)
 		end
 	end
@@ -77,9 +83,10 @@ function M.pick_caption(media_tags)
 	return M.pick(content().captions or {}, media_tags)
 end
 
+---@param active_tags? string[]
 ---@return table|nil
-function M.pick_prompt()
-	return M.pick(content().prompts or {})
+function M.pick_prompt(active_tags)
+	return M.pick(content().prompts or {}, nil, active_tags)
 end
 
 ---@return table
@@ -87,19 +94,22 @@ function M.prompt_settings()
 	return content().prompt_settings or {}
 end
 
+---@param active_tags? string[]
 ---@return table|nil
-function M.pick_notification()
-	return M.pick(content().notifications or {})
+function M.pick_notification(active_tags)
+	return M.pick(content().notifications or {}, nil, active_tags)
 end
 
+---@param active_tags? string[]
 ---@return table|nil
-function M.pick_subliminal()
-	return M.pick(content().subliminals or {})
+function M.pick_subliminal(active_tags)
+	return M.pick(content().subliminals or {}, nil, active_tags)
 end
 
+---@param active_tags? string[]
 ---@return table|nil
-function M.pick_web_link()
-	return M.pick(content().web_links or {})
+function M.pick_web_link(active_tags)
+	return M.pick(content().web_links or {}, nil, active_tags)
 end
 
 return M

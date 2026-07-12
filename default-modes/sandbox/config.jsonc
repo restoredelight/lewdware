@@ -1,9 +1,9 @@
 {
-  "$schema": "../docs/src/data/config.schema.json",
+  "$schema": "../../docs/src/data/config.schema.json",
   // "$schema": "https://lewdware.github.com/mode.schema.json",
-  "include": ["src"],
+  "include": ["../shared", "src"],
   "id": "cd5a36d6-ca1c-4381-97b3-0d2f00d1d401",
-  "name": "Default Modes",
+  "name": "Sandbox",
   "version": "0.1.0",
   "author": "restoredelight",
   "entrypoint": "src/main.lua",

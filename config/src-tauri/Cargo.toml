@@ -32,6 +32,7 @@ r2d2 = "0.8"
 r2d2_sqlite = { version = "0.34.0", features = ["bundled"] }
 rusqlite = { version = "0.39.0", features = ["bundled", "fallible_uint"] }
 tempfile = "3"
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31.3", features = ["signal"] }

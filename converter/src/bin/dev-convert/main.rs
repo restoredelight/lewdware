@@ -8,10 +8,10 @@ mod writer;
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
-use converter::{convert, DirSource, PackSource, ZipSource};
-use shared::encode::{init_binary_paths, HardwareEncoder};
+use converter::{DirSource, PackSource, ZipSource, convert};
+use shared::encode::{HardwareEncoder, init_binary_paths};
 
 #[derive(Parser)]
 struct Args {

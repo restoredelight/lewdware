@@ -47,18 +47,20 @@ use shared::{
     behaviour::{effective_options, Behaviour},
     db::migrate,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, ShowWhen},
-    read_pack::read_pack_metadata,
+    read_pack::{read_pack_metadata, RecommendedMode},
     user_config::{self, AppConfig, Capabilities, Key, Mode, Volume},
 };
 use tauri::{AppHandle, Manager};
 use tempfile::NamedTempFile;
+use uuid::Uuid;
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(tag = "type")]
 pub enum ModeIdDto {
-    Default,
+    Sandbox,
+    Experience,
     Pack { id: u64 },
     File { path: String },
 }
@@ -66,7 +68,8 @@ pub enum ModeIdDto {
 impl From<Mode> for ModeIdDto {
     fn from(m: Mode) -> Self {
         match m {
-            Mode::Default => ModeIdDto::Default,
+            Mode::Sandbox => ModeIdDto::Sandbox,
+            Mode::Experience => ModeIdDto::Experience,
             Mode::Pack { id } => ModeIdDto::Pack { id },
             Mode::File { path } => ModeIdDto::File {
                 path: path.to_string_lossy().into_owned(),
@@ -78,7 +81,8 @@ impl From<Mode> for ModeIdDto {
 impl From<ModeIdDto> for Mode {
     fn from(dto: ModeIdDto) -> Self {
         match dto {
-            ModeIdDto::Default => Mode::Default,
+            ModeIdDto::Sandbox => Mode::Sandbox,
+            ModeIdDto::Experience => Mode::Experience,
             ModeIdDto::Pack { id } => Mode::Pack { id },
             ModeIdDto::File { path } => Mode::File {
                 path: PathBuf::from(path),
@@ -93,11 +97,20 @@ pub struct ModeOptionsEntry {
     pub options: HashMap<String, OptionValue>,
 }
 
+/// A `Mode::Experience` options entry, keyed by pack UUID (string form for JS-friendliness) --
+/// see `AppConfig::experience_options`'s doc comment.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ExperienceOptionsEntry {
+    pub pack_id: String,
+    pub options: HashMap<String, OptionValue>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConfigDto {
     pub pack_path: Option<String>,
     pub mode: ModeIdDto,
     pub mode_options: Vec<ModeOptionsEntry>,
+    pub experience_options: Vec<ExperienceOptionsEntry>,
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,
@@ -115,10 +128,20 @@ impl From<AppConfig> for ConfigDto {
             })
             .collect();
 
+        let experience_options = c
+            .experience_options
+            .into_iter()
+            .map(|(pack_id, options)| ExperienceOptionsEntry {
+                pack_id: pack_id.to_string(),
+                options,
+            })
+            .collect();
+
         ConfigDto {
             pack_path: c.pack_path.and_then(|p| p.to_str().map(str::to_string)),
             mode: c.mode.into(),
             mode_options,
+            experience_options,
             panic_button: c.panic_button,
             disabled_monitors: c.disabled_monitors,
             capabilities: c.capabilities,
@@ -135,11 +158,18 @@ impl From<ConfigDto> for AppConfig {
             .map(|e| (Mode::from(e.mode), e.options))
             .collect();
 
+        let experience_options = dto
+            .experience_options
+            .into_iter()
+            .filter_map(|e| Some((Uuid::parse_str(&e.pack_id).ok()?, e.options)))
+            .collect();
+
         AppConfig {
             pack_path: dto.pack_path.map(PathBuf::from),
             uploaded_modes: Vec::new(),
             mode: dto.mode.into(),
             mode_options,
+            experience_options,
             panic_button: dto.panic_button,
             disabled_monitors: dto.disabled_monitors,
             capabilities: dto.capabilities,
@@ -210,18 +240,23 @@ struct UploadedModeEntry {
 
 struct LoadedPack {
     _db_file: NamedTempFile,
+    id: Uuid,
     modes: Vec<PackModeEntry>,
     /// The pack's behaviour.json, if it has one -- `Behaviour::new()` (empty) otherwise. Used
-    /// only to synthesize the built-in default mode's content-group toggles (see
+    /// only to synthesize the built-in default modes' content-group toggles (see
     /// `effective_entries_for_mode`); custom modes never consult this.
     behaviour: Behaviour,
+    /// Which mode the pack author suggests -- see `pick_pack`'s preselection and
+    /// `build_mode_groups`'s "(recommended)" marker.
+    recommended_mode: Option<RecommendedMode>,
 }
 
 pub struct AppState {
     config: Mutex<AppConfig>,
     pack: Mutex<Option<LoadedPack>>,
     uploaded: Mutex<Vec<UploadedModeEntry>>,
-    default_modes: Metadata,
+    sandbox_mode: Metadata,
+    experience_mode: Metadata,
     lewdware_process: Mutex<Option<Child>>,
 }
 
@@ -231,7 +266,7 @@ pub type State<'a> = tauri::State<'a, AppState>;
 
 fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
     let mut file = std::fs::File::open(&path)?;
-    let (header, _) = read_pack_metadata(&mut file)?;
+    let (header, metadata) = read_pack_metadata(&mut file)?;
 
     let mut db_file = NamedTempFile::new()?;
     file.seek(SeekFrom::Start(header.index_offset))?;
@@ -268,8 +303,10 @@ fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
 
     Ok(LoadedPack {
         _db_file: db_file,
+        id: header.id,
         modes,
         behaviour,
+        recommended_mode: metadata.recommended_mode,
     })
 }
 
@@ -331,23 +368,53 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
         });
     }
 
+    // The pack author's recommendation nudges (not restricts) the choice -- see `pick_pack`'s
+    // preselection and `behaviour-design/default-mode.md`'s "explicit choice, but nudged" UX.
+    // Absent a pack, or an override to a custom mode, neither builtin entry is marked.
+    let recommended = state
+        .pack
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|pack| pack.recommended_mode.clone());
+
     groups.push(ModeGroupDto {
-        label: state.default_modes.name.clone(),
+        label: "Default Modes".into(),
         source: "builtin".into(),
-        entries: vec![ModeEntryDto {
-            id: ModeIdDto::Default,
-            name: state.default_modes.name.clone(),
-        }],
+        entries: vec![
+            ModeEntryDto {
+                id: ModeIdDto::Sandbox,
+                name: builtin_mode_label(
+                    &state.sandbox_mode.name,
+                    matches!(recommended, Some(RecommendedMode::Sandbox)),
+                ),
+            },
+            ModeEntryDto {
+                id: ModeIdDto::Experience,
+                name: builtin_mode_label(
+                    &state.experience_mode.name,
+                    matches!(recommended, Some(RecommendedMode::Experience)),
+                ),
+            },
+        ],
     });
 
     groups
 }
 
-/// Resolves the entries a mode actually presents: for `Mode::Default` (the engine's built-in
-/// default mode) with a pack loaded, the raw schema is passed through
+fn builtin_mode_label(name: &str, recommended: bool) -> String {
+    if recommended {
+        format!("{name} (recommended)")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Resolves the entries a mode actually presents: for `Mode::Sandbox`/`Mode::Experience` (the
+/// engine's two built-in default modes) with a pack loaded, the raw schema is passed through
 /// `shared::behaviour::effective_options` alongside that pack's behaviour.json, synthesizing the
 /// content-group checklist (see `behaviour-design/default-mode.md`, Ownership); every other case
-/// (custom modes, or the default mode with no pack loaded) gets the schema's own entries
+/// (custom modes, or a default mode with no pack loaded) gets the schema's own entries
 /// unchanged -- custom modes never see behaviour-derived toggles. Shared by
 /// `get_mode_options_for` and `get_option_type_for_key` so both agree on what a key resolves to.
 fn effective_entries_for_mode(
@@ -355,7 +422,8 @@ fn effective_entries_for_mode(
     state: &AppState,
 ) -> Option<IndexMap<String, ModeEntry>> {
     let mode_meta = match mode {
-        Mode::Default => Some(state.default_modes.clone()),
+        Mode::Sandbox => Some(state.sandbox_mode.clone()),
+        Mode::Experience => Some(state.experience_mode.clone()),
         Mode::Pack { id } => {
             let pack = state.pack.lock().unwrap();
             pack.as_ref()
@@ -371,7 +439,7 @@ fn effective_entries_for_mode(
         }
     }?;
 
-    if matches!(mode, Mode::Default) {
+    if matches!(mode, Mode::Sandbox | Mode::Experience) {
         let behaviour = state
             .pack
             .lock()
@@ -400,16 +468,32 @@ fn find_option_type(entries: &IndexMap<String, ModeEntry>, key: &str) -> Option<
     None
 }
 
+/// Resolves the values a mode's stored options should read from: `Mode::Experience` is scoped
+/// per pack (`AppConfig::experience_options`), everything else globally
+/// (`AppConfig::mode_options`) -- see `behaviour-design/default-mode.md`, Ownership. No pack
+/// loaded means no scope to read Experience options from, so it falls back to empty (schema
+/// defaults), the same as any other mode with nothing stored yet.
+fn stored_options_for(
+    mode: &Mode,
+    config: &AppConfig,
+    state: &AppState,
+) -> HashMap<String, OptionValue> {
+    if matches!(mode, Mode::Experience) {
+        let pack_id = state.pack.lock().unwrap().as_ref().map(|p| p.id);
+        pack_id
+            .and_then(|id| config.experience_options.get(&id).cloned())
+            .unwrap_or_default()
+    } else {
+        config.mode_options.get(mode).cloned().unwrap_or_default()
+    }
+}
+
 fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<OptionEntryDto> {
     let Some(entries) = effective_entries_for_mode(&config.mode, state) else {
         return Vec::new();
     };
 
-    let stored = config
-        .mode_options
-        .get(&config.mode)
-        .cloned()
-        .unwrap_or_default();
+    let stored = stored_options_for(&config.mode, config, state);
 
     fn build_entries(
         entries: &IndexMap<String, ModeEntry>,
@@ -532,11 +616,26 @@ fn set_mode_option(state: State<'_>, key: String, value: JsonValue) -> Result<()
     let typed_value = coerce_option_value(value, opt_type.as_ref())
         .ok_or_else(|| "invalid option value".to_string())?;
 
-    config
-        .mode_options
-        .entry(mode)
-        .or_default()
-        .insert(key, typed_value);
+    if matches!(mode, Mode::Experience) {
+        let pack_id = state
+            .pack
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|p| p.id)
+            .ok_or_else(|| "no pack loaded".to_string())?;
+        config
+            .experience_options
+            .entry(pack_id)
+            .or_default()
+            .insert(key, typed_value);
+    } else {
+        config
+            .mode_options
+            .entry(mode)
+            .or_default()
+            .insert(key, typed_value);
+    }
     let uploaded = state.uploaded.lock().unwrap();
     save_to_disk(&config, &uploaded).map_err(|e| e.to_string())
 }
@@ -603,10 +702,18 @@ async fn pick_pack(
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
 
+    // Preselect a mode for the newly-picked pack, same "new pack resets mode selection"
+    // precedent for both cases: an embedded pack mode wins if present; otherwise nudge toward
+    // whichever built-in default mode the pack author recommends (falling back to Sandbox --
+    // see `behaviour-design/default-mode.md`: "a plain content pack recommends Sandbox").
     let first_mode = loaded
         .modes
         .first()
-        .map(|m| ModeIdDto::Pack { id: m.id });
+        .map(|m| ModeIdDto::Pack { id: m.id })
+        .or(Some(match loaded.recommended_mode {
+            Some(RecommendedMode::Experience) => ModeIdDto::Experience,
+            _ => ModeIdDto::Sandbox,
+        }));
 
     let pack_path_str = path.to_string_lossy().into_owned();
     *state.pack.lock().unwrap() = Some(loaded);
@@ -943,9 +1050,15 @@ fn open_logs() -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let default_modes_bytes = include_bytes!("../../../default-modes/build/Default Modes.lwmode");
-    let default_modes = mode::read_mode_metadata(&mut Cursor::new(default_modes_bytes))
-        .expect("failed to load embedded default modes")
+    let sandbox_mode_bytes = include_bytes!("../../../default-modes/sandbox/build/Sandbox.lwmode");
+    let sandbox_mode = mode::read_mode_metadata(&mut Cursor::new(sandbox_mode_bytes))
+        .expect("failed to load embedded Sandbox mode")
+        .1;
+
+    let experience_mode_bytes =
+        include_bytes!("../../../default-modes/experience/build/Experience.lwmode");
+    let experience_mode = mode::read_mode_metadata(&mut Cursor::new(experience_mode_bytes))
+        .expect("failed to load embedded Experience mode")
         .1;
 
     let _log_guard = shared::logging::init("config");
@@ -975,7 +1088,8 @@ pub fn run() {
             config: Mutex::new(config),
             pack: Mutex::new(pack),
             uploaded: Mutex::new(uploaded),
-            default_modes,
+            sandbox_mode,
+            experience_mode,
             lewdware_process: Mutex::new(None),
         })
         .setup(|app| {
@@ -1044,8 +1158,10 @@ mod tests {
     fn loaded_pack(behaviour: Behaviour, modes: Vec<PackModeEntry>) -> LoadedPack {
         LoadedPack {
             _db_file: NamedTempFile::new().unwrap(),
+            id: Uuid::new_v4(),
             modes,
             behaviour,
+            recommended_mode: None,
         }
     }
 
@@ -1054,7 +1170,8 @@ mod tests {
             config: Mutex::new(AppConfig::default()),
             pack: Mutex::new(pack),
             uploaded: Mutex::new(Vec::new()),
-            default_modes: empty_metadata("Default Modes"),
+            sandbox_mode: empty_metadata("Sandbox"),
+            experience_mode: empty_metadata("Experience"),
             lewdware_process: Mutex::new(None),
         }
     }
@@ -1083,7 +1200,7 @@ mod tests {
             vec![],
         )));
         let config = AppConfig {
-            mode: Mode::Default,
+            mode: Mode::Sandbox,
             ..Default::default()
         };
 
@@ -1135,7 +1252,7 @@ mod tests {
 
         let opt_type = get_option_type_for_key(
             &AppConfig::default(),
-            &Mode::Default,
+            &Mode::Sandbox,
             "content_group.kinky",
             &state,
         );
@@ -1143,13 +1260,13 @@ mod tests {
         assert_eq!(opt_type, Some(OptionType::Boolean { default: true }));
     }
 
-    /// No pack loaded at all -- `Mode::Default` shouldn't panic, and (with nothing to
+    /// No pack loaded at all -- `Mode::Sandbox` shouldn't panic, and (with nothing to
     /// synthesize) shouldn't render a content checklist.
     #[test]
     fn default_mode_with_no_pack_loaded_has_no_content_checklist() {
         let state = test_state(None);
         let config = AppConfig {
-            mode: Mode::Default,
+            mode: Mode::Sandbox,
             ..Default::default()
         };
 

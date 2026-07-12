@@ -1,0 +1,14 @@
+{
+  "moods": {
+    "1": { "add": ["vanilla"], "remove": [] },
+    "2": { "add": ["kinky"], "remove": [] },
+    "3": { "add": ["corrupted"], "remove": ["vanilla"] }
+  },
+  "wallpapers": {
+    "1": "wallpaper.png",
+    "3": "wallpaper2.png"
+  },
+  "config": {
+    "2": { "promptMod": 10 }
+  }
+}

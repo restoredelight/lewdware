@@ -729,11 +729,14 @@ impl DialogWindow {
         self.inner_window.window().request_redraw();
     }
 
-
     /// Turn a resolved element spec into render-ready state, uploading an `image` element's
     /// pixels as an egui texture (named uniquely per element, since texture names must be
     /// distinct within a `Context`).
-    fn load_element(context: &egui::Context, index: usize, spec: DialogElementSpec) -> DialogElementState {
+    fn load_element(
+        context: &egui::Context,
+        index: usize,
+        spec: DialogElementSpec,
+    ) -> DialogElementState {
         match spec {
             DialogElementSpec::Text { id, text, style } => {
                 DialogElementState::Text { id, text, style }

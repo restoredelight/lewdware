@@ -7,6 +7,7 @@ metadata:
   creator: Test Author
   description: A small synthetic pack for converter golden tests (legacy captions/media/prompt/web.json layout).
   version: "1.0"
+  recommended_mode: Sandbox
 behaviour:
   version: 1
   content:

@@ -10,8 +10,9 @@ use uuid::Uuid;
 
 use super::types::write_type_stubs;
 
-static DEFAULT_SRC: Dir = include_dir!("$CARGO_MANIFEST_DIR/../default-modes/src");
-const DEFAULT_CONFIG_JSONC: &str = include_str!("../../../default-modes/config.jsonc");
+static DEFAULT_SRC: Dir = include_dir!("$CARGO_MANIFEST_DIR/../default-modes/sandbox/src");
+static DEFAULT_LIB: Dir = include_dir!("$CARGO_MANIFEST_DIR/../default-modes/shared/lib");
+const DEFAULT_CONFIG_JSONC: &str = include_str!("../../../default-modes/sandbox/config.jsonc");
 
 fn copy_dir(dir: &Dir, dest: &PathBuf) -> Result<()> {
     for entry in dir.entries() {
@@ -78,16 +79,22 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
 
         let config_content = DEFAULT_CONFIG_JSONC
             .replace(
-                "\"$schema\": \"../docs/src/data/config.schema.json\",\n  // \"$schema\": \"https://lewdware.github.com/config.schema.json\",",
+                "\"$schema\": \"../../docs/src/data/config.schema.json\",\n  // \"$schema\": \"https://lewdware.github.com/config.schema.json\",",
                 "\"$schema\": \"https://lewdware.net/reference/config.schema.json\",",
             )
             .replacen("cd5a36d6-ca1c-4381-97b3-0d2f00d1d401", &id.to_string(), 1)
-            .replace("\"Default Modes\"", &format!("\"{}\"", escaped_name))
+            .replace("\"Sandbox\"", &format!("\"{}\"", escaped_name))
             .replace("\"restoredelight\"", &format!("\"{}\"", escaped_author))
-            .replace("\"0.1.0\"", &format!("\"{}\"", escaped_version));
+            .replace("\"0.1.0\"", &format!("\"{}\"", escaped_version))
+            .replace("[\"../shared\", \"src\"]", "[\"src\"]");
 
         fs::write(base_path.join("config.jsonc"), config_content)?;
+        // The sandbox project's `main.lua` requires its shared `lib/*.lua` modules from a
+        // sibling `../shared` directory (see `default-modes/`'s own layout); a standalone copy
+        // has no sibling project, so both land together under this new mode's own `src/`,
+        // becoming a fully self-contained copy (matching this flag's pre-split behaviour).
         copy_dir(&DEFAULT_SRC, &base_path.join("src"))?;
+        copy_dir(&DEFAULT_LIB, &base_path.join("src/lib"))?;
     } else {
         let escaped_name = json_escape(&name);
         let escaped_author = json_escape(&author);

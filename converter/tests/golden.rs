@@ -33,6 +33,19 @@ fn legacy_fixture_snapshot() {
     insta::assert_yaml_snapshot!(output);
 }
 
+/// A small synthetic pack exercising `corruption.json` + `config.json` -> `experience`: cumulative
+/// mood add/remove across 3 levels, the primary wallpaper reused by level 1 and a second wallpaper
+/// file minted its own tag+media entry for level 3, a dropped per-level `config` override
+/// (level 2's `promptMod`), a `"Popup"` trigger driving `at_popups`, `popupMod`/`delay` mapped to
+/// the `popup` frequency anchor, and one untagged media file to exercise the "any-filter excludes
+/// moodless media" warning.
+#[test]
+fn corruption_fixture_snapshot() {
+    let source = DirSource::new(fixture_path("corruption"));
+    let output = convert(&source);
+    insta::assert_yaml_snapshot!(output);
+}
+
 /// `legacy.zip` is the same fixture as `legacy/`, zipped flat (no wrapping folder). Converting
 /// both must agree exactly -- this is the CI-covered proof that `DirSource` and `ZipSource`
 /// are interchangeable, so `legacy_fixture_snapshot` above is enough golden coverage for both.

@@ -37,8 +37,7 @@ struct Inner {
 }
 
 fn storage_path(scope_key: &str) -> anyhow::Result<PathBuf> {
-    let mut path = dirs::data_local_dir()
-        .context("Could not find a valid data dir for this OS")?;
+    let mut path = dirs::data_local_dir().context("Could not find a valid data dir for this OS")?;
 
     path.push("lewdware");
     path.push("mode-storage");

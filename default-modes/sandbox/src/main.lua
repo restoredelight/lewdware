@@ -1,7 +1,7 @@
 local config = lewdware.config
 local media = require("lib.media")
-local content = require("lib.content")
 local wallpaper = require("lib.wallpaper")
+local spawn = require("lib.spawn")
 
 ---@cast config {
 ---    popup_frequency: number,
@@ -48,11 +48,12 @@ end
 
 -- ── State ──────────────────────────────────────────────────────────────────
 
-local popup_count = 0
 local dormant = false
 local audio_active = false
 ---@type Window[]
 local windows = {}
+
+local function is_dormant() return dormant end
 
 -- Current spawn interval in ms; only meaningful for constant/accelerating modes.
 local current_interval
@@ -73,147 +74,29 @@ local popup_types = {}
 if config.images_enabled then table.insert(popup_types, "image") end
 if config.videos_enabled then table.insert(popup_types, "video") end
 
--- ── Movement ───────────────────────────────────────────────────────────────
-
----@param window Window
----@param speed number
-local function start_movement(window, speed)
-	-- Random angle in [30°, 60°] per quadrant — guarantees both dx and dy are nonzero.
-	local quadrant = math.random(4) - 1
-	local a = math.rad(30 + math.random() * 30) + quadrant * math.pi / 2
-	local dx = math.cos(a)
-	local dy = math.sin(a)
-
-	local function move_to_wall()
-		if window.closed then return end
-
-		local x              = window.x
-		local y              = window.y
-		local width          = window.outer_width
-		local height         = window.outer_height
-		local monitor_width  = window.monitor.width
-		local monitor_height = window.monitor.height
-		local t_min          = math.huge
-		local hit_axis       = nil
-
-		if dx > 0 then
-			local t = (monitor_width - width - x) / (speed * dx)
-			if t >= 0 and t < t_min then
-				t_min = t; hit_axis = "x"
-			end
-		elseif dx < 0 then
-			local t = x / (speed * -dx)
-			if t >= 0 and t < t_min then
-				t_min = t; hit_axis = "x"
-			end
-		end
-
-		if dy > 0 then
-			local t = (monitor_height - height - y) / (speed * dy)
-			if t >= 0 and t < t_min then
-				t_min = t; hit_axis = "y"
-			end
-		elseif dy < 0 then
-			local t = y / (speed * -dy)
-			if t >= 0 and t < t_min then
-				t_min = t; hit_axis = "y"
-			end
-		end
-
-		if t_min == math.huge then return end
-
-		-- Snap the wall axis to the exact edge; float-compute the other axis.
-		local target_x = math.floor(x + dx * speed * t_min + 0.5)
-		local target_y = math.floor(y + dy * speed * t_min + 0.5)
-		if hit_axis == "x" then
-			target_x = dx > 0 and (monitor_width - width) or 0
-		else
-			target_y = dy > 0 and (monitor_height - height) or 0
-		end
-
-		local duration_ms = math.max(1, math.floor(t_min * 1000))
-
-		window:move(
-			{
-				x = target_x,
-				y = target_y,
-				duration = duration_ms,
-				clamp = false,
-			},
-			function()
-				if hit_axis == "x" then dx = -dx else dy = -dy end
-				move_to_wall()
-			end
-		)
-	end
-
-	move_to_wall()
-end
-
 -- ── Spawning ───────────────────────────────────────────────────────────────
+--
+-- The actual spawn/caption/movement/mitosis mechanics are shared with Experience (see
+-- lib/spawn.lua); this mode supplies its own values (user options) plus dormancy's window-list
+-- bookkeeping via `on_spawn`, which the shared module has no opinion on.
 
-local function should_spawn()
-	return not (#popup_types == 0 or dormant or (config.max_popups and popup_count >= config.max_popups))
-end
-
--- spawn_opts: optional table with x, y (center coords), monitor.
--- When provided, spawns near that position; otherwise picks a random spot.
-local function open_popup(spawn_opts, close_trigger)
-	if close_trigger == nil then
-		close_trigger = true
-	end
-
-	if not should_spawn() then return end
-
-	local item = media.random({ type = popup_types })
-	if not item then return end
-
-	local window
-	if item.type == "image" then
-		window = lewdware.popup.image(item, spawn_opts)
-	elseif item.type == "video" then
-		window = lewdware.popup.video(item, spawn_opts)
-	end
-
-	if config.captions_enabled then
-		local caption = content.pick_caption(item.tags)
-		if caption then window:set_title(caption.text) end
-	end
-
-	popup_count = popup_count + 1
-
-	if config.dormancy_enabled then
-		table.insert(windows, window)
-	end
-
-	if config.movement_enabled then
-		local speed = math.random(config.movement_speed_min, config.movement_speed_max)
-		start_movement(window, speed)
-	end
-
-	if close_trigger then
-		window:on_close(function()
-			popup_count = popup_count - 1
-
-			if config.close_trigger_enabled
-					and not dormant
-					and math.random() < config.close_chance
-			then
-				local spread = 200
-				local cx = window.x + math.floor(window.outer_width / 2)
-				local cy = window.y + math.floor(window.outer_height / 2)
-				for i = 1, config.close_count do
-					local nx = math.max(0, cx + math.floor((math.random() * 2 - 1) * spread))
-					local ny = math.max(0, cy + math.floor((math.random() * 2 - 1) * spread))
-					local gap = math.min(500 / config.close_count, 200)
-					lewdware.after(math.floor((i - 1) * gap), function()
-						open_popup({ x = nx, y = ny, anchor = "center", monitor = window.monitor }, false)
-					end)
-				end
-			end
-		end)
-	end
-end
+local open_popup = spawn.make_spawner({
+	popup_types = popup_types,
+	max_popups = config.max_popups,
+	captions_enabled = config.captions_enabled,
+	movement_enabled = config.movement_enabled,
+	movement_speed_min = config.movement_speed_min,
+	movement_speed_max = config.movement_speed_max,
+	close_trigger_enabled = config.close_trigger_enabled,
+	close_chance = config.close_chance,
+	close_count = config.close_count,
+	is_dormant = is_dormant,
+	on_spawn = function(window)
+		if config.dormancy_enabled then
+			table.insert(windows, window)
+		end
+	end,
+})
 
 -- ── Scheduling ─────────────────────────────────────────────────────────────
 
@@ -290,8 +173,6 @@ end
 
 -- ── Start ──────────────────────────────────────────────────────────────────
 
-local function is_dormant() return dormant end
-
 if #popup_types > 0 then
 	schedule_spawning()
 end
@@ -305,10 +186,10 @@ if config.dormancy_enabled then
 	schedule_dormancy()
 end
 
-require("lib.notifications").start(is_dormant)
-require("lib.web").start(is_dormant)
-require("lib.subliminals").start(is_dormant)
-require("lib.prompts").start(is_dormant)
+require("lib.notifications").start(is_dormant, config.notifications_enabled, config.notification_frequency)
+require("lib.web").start(is_dormant, config.web_opening_enabled, config.web_frequency)
+require("lib.subliminals").start(is_dormant, config.subliminals_enabled, config.subliminal_frequency)
+require("lib.prompts").start(is_dormant, config.prompts_enabled, config.prompt_frequency)
 
 wallpaper.apply_wallpaper()
 wallpaper.show_splash()

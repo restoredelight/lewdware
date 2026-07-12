@@ -91,6 +91,10 @@ pub struct ApiOptions {
     /// honor disabled content groups; additive fields (captions, prompts, ...) are for the
     /// "Sandbox mode, full feature set" milestone to consume the same way.
     pub content: shared::behaviour::Content,
+    /// The pack's behaviour.json `experience` section (empty for custom modes, Sandbox, or a
+    /// pack with none) -- handed to Lua as `__lewdware_experience`, mirroring `content`. Only
+    /// `Mode::Experience`'s library code (`default-modes/experience/src/main.lua`) reads this.
+    pub experience: shared::behaviour::Experience,
     pub gpu_available: bool,
     pub dev_mode: bool,
 }
@@ -108,6 +112,7 @@ pub fn create_api(
         pack_info,
         config,
         content,
+        experience,
         gpu_available,
         dev_mode,
     } = options;
@@ -121,7 +126,7 @@ pub fn create_api(
     // `serialize_none_to_null(false)`: mlua's serde bridge defaults to representing `Option::None`
     // as a `Value::NULL` sentinel (a lightuserdata, distinct from Lua `nil`, for JSON-style
     // null-vs-absent round-tripping) -- but that sentinel is truthy in Lua, so the idiomatic
-    // `field or default` fallback (used throughout `default-modes/src/lib/*.lua`, e.g.
+    // `field or default` fallback (used throughout `default-modes/shared/lib/*.lua`, e.g.
     // `PromptSettings.submit_label`) would silently never fall back. This is an internal
     // engine-to-Lua channel, not a JSON API needing that distinction, so plain `nil` is correct.
     let content_value = lua.to_value_with(
@@ -129,6 +134,15 @@ pub fn create_api(
         mlua::SerializeOptions::new().serialize_none_to_null(false),
     )?;
     lua.globals().set("__lewdware_content", content_value)?;
+
+    // Mirrors `__lewdware_content` for the `experience` section -- only
+    // `default-modes/experience/src/main.lua` reads this (empty for Sandbox/custom modes).
+    let experience_value = lua.to_value_with(
+        &experience,
+        mlua::SerializeOptions::new().serialize_none_to_null(false),
+    )?;
+    lua.globals()
+        .set("__lewdware_experience", experience_value)?;
 
     api_table.set("config", config.into_lua(lua)?)?;
 
@@ -1686,19 +1700,11 @@ fn exit(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> {
     request_sender.exit().into_lua_err()
 }
 
-fn after(
-    _: &Lua,
-    (ms, function): (u64, mlua::Function),
-    dev_mode: bool,
-) -> mlua::Result<Timer> {
+fn after(_: &Lua, (ms, function): (u64, mlua::Function), dev_mode: bool) -> mlua::Result<Timer> {
     Ok(Timer::new(Duration::from_millis(ms), function, dev_mode))
 }
 
-fn every(
-    _: &Lua,
-    (ms, function): (u64, mlua::Function),
-    dev_mode: bool,
-) -> mlua::Result<Interval> {
+fn every(_: &Lua, (ms, function): (u64, mlua::Function), dev_mode: bool) -> mlua::Result<Interval> {
     Ok(Interval::new(Duration::from_millis(ms), function, dev_mode))
 }
 
@@ -1744,8 +1750,14 @@ mod tests {
         // "top-center" should behave like TopLeft on y but Center on x -- the actual point of
         // the 9-point grid over the old 3-point diagonal-only version.
         let (coord, size) = (200, 100u32);
-        assert_eq!(Anchor::TopCenter.resolve_x(coord, size), Anchor::Center.resolve_x(coord, size));
-        assert_eq!(Anchor::TopCenter.resolve_y(coord, size), Anchor::TopLeft.resolve_y(coord, size));
+        assert_eq!(
+            Anchor::TopCenter.resolve_x(coord, size),
+            Anchor::Center.resolve_x(coord, size)
+        );
+        assert_eq!(
+            Anchor::TopCenter.resolve_y(coord, size),
+            Anchor::TopLeft.resolve_y(coord, size)
+        );
     }
 
     #[test]

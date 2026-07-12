@@ -1,7 +1,9 @@
+pub mod corruption;
 pub mod legacy;
 pub mod modern;
 
 use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::{Map, Value};
 
 use crate::{
     model::{Warning, WarningKind},
@@ -61,6 +63,15 @@ pub struct InfoJson {
 
 pub fn load_info(source: &dyn PackSource, warnings: &mut Vec<Warning>) -> InfoJson {
     try_load_json5(source, "info.json", warnings).unwrap_or_default()
+}
+
+/// `config.json` -> a raw key/value map, empty if absent or malformed. Kept as `Value` rather
+/// than a typed struct since almost none of Edgeware's ~80 settings have a Lewdware equivalent
+/// (`convert.rs` picks out the handful it maps and warns about the rest by key name).
+pub fn load_config(source: &dyn PackSource, warnings: &mut Vec<Warning>) -> Map<String, Value> {
+    try_load_json5::<Value>(source, "config.json", warnings)
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
 }
 
 /// Picks the modern (`index.json`) or legacy (`captions`/`media`/`prompt`/`web.json`) layout and

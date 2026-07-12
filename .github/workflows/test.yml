@@ -79,8 +79,14 @@ jobs:
           done
 
       - name: Build default modes
-        run: cargo run -p lw -- mode build
-        working-directory: default-modes
+        run: |
+          cargo run -p lw -- mode build
+        working-directory: default-modes/sandbox
+
+      - name: Build Experience mode
+        run: |
+          cargo run -p lw -- mode build
+        working-directory: default-modes/experience
 
       - name: Run tests
         run: cargo test -p lewdware-pack-editor
@@ -136,8 +142,14 @@ jobs:
             xdg-utils
 
       - name: Build default modes
-        run: cargo run -p lw -- mode build
-        working-directory: default-modes
+        run: |
+          cargo run -p lw -- mode build
+        working-directory: default-modes/sandbox
+
+      - name: Build Experience mode
+        run: |
+          cargo run -p lw -- mode build
+        working-directory: default-modes/experience
 
       - name: Run tests
         run: cargo test -p lewdware
@@ -187,4 +199,4 @@ jobs:
         run: sudo apt-get install -y lua5.4
 
       - name: Check syntax
-        run: find default-modes/src -name '*.lua' -exec luac5.4 -p {} +
+        run: find default-modes/sandbox/src default-modes/experience/src default-modes/shared/lib -name '*.lua' -exec luac5.4 -p {} +

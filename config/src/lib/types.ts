@@ -1,5 +1,6 @@
 export type ModeId =
-  | { type: "Default" }
+  | { type: "Sandbox" }
+  | { type: "Experience" }
   | { type: "Pack"; id: number }
   | { type: "File"; path: string };
 
@@ -8,10 +9,17 @@ export interface ModeOptionsEntry {
   options: Record<string, OptionValue>;
 }
 
+/** A `Mode::Experience` options entry, keyed by pack UUID (string). */
+export interface ExperienceOptionsEntry {
+  pack_id: string;
+  options: Record<string, OptionValue>;
+}
+
 export interface ConfigDto {
   pack_path: string | null;
   mode: ModeId;
   mode_options: ModeOptionsEntry[];
+  experience_options: ExperienceOptionsEntry[];
   panic_button: Key;
   disabled_monitors: string[];
   capabilities: Capabilities;

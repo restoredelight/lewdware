@@ -1,8 +1,10 @@
 mod resolver;
 mod schema;
 
-pub use resolver::{effective_config, effective_options, EffectiveSchema, CONTENT_GROUP_KEY_PREFIX};
+pub use resolver::{
+    CONTENT_GROUP_KEY_PREFIX, EffectiveSchema, effective_config, effective_options,
+};
 pub use schema::{
-    Behaviour, Content, ContentGroup, Experience, PromptSettings, TextItem, WebLink,
-    CURRENT_VERSION,
+    Behaviour, CURRENT_VERSION, Content, ContentGroup, DesignValues, Experience, FrequencyAnchors,
+    Level, Modifiers, PromptSettings, TextItem, Timeline, WebLink,
 };

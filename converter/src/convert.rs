@@ -1,12 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::Serialize;
-use serde_json::Value;
-use shared::behaviour::{Behaviour, Content, ContentGroup, PromptSettings, TextItem, WebLink};
-use shared::read_pack::Metadata;
+use serde_json::{Map, Value};
+use shared::behaviour::{
+    Behaviour, Content, ContentGroup, DesignValues, Experience, FrequencyAnchors, Level, Modifiers,
+    PromptSettings, TextItem, Timeline, WebLink,
+};
+use shared::read_pack::{Metadata, RecommendedMode};
 
-use crate::model::{EdgewareIndex, EdgewareMood, Warning, WarningKind};
-use crate::parse::{self, InfoJson, try_load_json5};
+use crate::model::{CorruptionLevel, EdgewareIndex, EdgewareMood, Warning, WarningKind};
+use crate::parse::{self, InfoJson};
 use crate::slug::unique_slug;
 use crate::source::PackSource;
 
@@ -46,8 +49,8 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
 
     let info = parse::load_info(source, &mut warnings);
     let index = parse::load_edgeware_index(source, &mut warnings);
-
-    let metadata = build_metadata(info);
+    let corruption_levels = parse::corruption::load_corruption(source, &mut warnings);
+    let config = parse::load_config(source, &mut warnings);
 
     let mut used_ids = HashSet::new();
     let content_groups = build_content_groups(&index, &mut used_ids);
@@ -64,7 +67,28 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
     let mut media = Vec::new();
     discover_media(source, &index, &mut content, &mut media, &mut warnings);
 
+    let experience = build_experience(
+        &corruption_levels,
+        &config,
+        source,
+        &mut media,
+        &mut warnings,
+    );
+    let has_timeline = experience.as_ref().is_some_and(|e| e.timeline.is_some());
+    if has_timeline && media.iter().any(|m| m.tags.is_empty()) {
+        warnings.push(Warning::new(
+            WarningKind::UnsupportedFeatureDropped,
+            "the pack has untagged media alongside a corruption timeline: Edgeware always keeps \
+             moodless media in the pool, but Lewdware's timeline tag restriction is an \"any of \
+             these tags\" filter, so untagged media will be excluded while a level past the \
+             first is active",
+        ));
+    }
+
     check_unsupported_files(source, &mut warnings);
+    warn_unmapped_config_keys(&config, &mut warnings);
+
+    let metadata = build_metadata(info, has_timeline);
 
     let icon = source
         .file_exists("icon.ico")
@@ -74,6 +98,7 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
         metadata,
         behaviour: Behaviour {
             content,
+            experience,
             ..Behaviour::new()
         },
         media,
@@ -82,14 +107,20 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
     }
 }
 
-fn build_metadata(info: InfoJson) -> Metadata {
+fn build_metadata(info: InfoJson, has_timeline: bool) -> Metadata {
     Metadata {
         name: info.name.unwrap_or_else(|| "Unnamed Pack".to_string()),
         creator: info.creator,
         description: info.description,
         version: info.version,
-        // M4 emits this (corruption.json presence -> Experience); M3 never recommends a mode.
-        recommended_mode: None,
+        // Experience only when the pack actually designs an arc (a corruption timeline);
+        // config.json pacing alone still populates anchors but doesn't flip the recommendation --
+        // see `behaviour-design/edgeware-compat.md`'s Goal section.
+        recommended_mode: Some(if has_timeline {
+            RecommendedMode::Experience
+        } else {
+            RecommendedMode::Sandbox
+        }),
     }
 }
 
@@ -294,21 +325,275 @@ fn check_unsupported_files(source: &dyn PackSource, warnings: &mut Vec<Warning>)
             "discord.dat is present but Discord rich presence isn't supported",
         ));
     }
-    if source.file_exists("corruption.json") {
+}
+
+/// `config.json` keys `build_anchors` reads. Anything else in the pack's `config.json` has no
+/// Lewdware equivalent (theme, hibernate, mitosis, drive, scheduler, ... -- see
+/// `EdgewarePlusPlus/edgeware/src/config/items.py`) and is silently dropped, per
+/// `behaviour-design/edgeware-compat.md`'s "warn + skip the rest".
+const CONFIG_ANCHOR_KEYS: &[&str] = &[
+    "delay",
+    "popupMod",
+    "vidMod",
+    "webMod",
+    "notificationChance",
+    "promptMod",
+    "capPopChance",
+];
+/// Keys `build_timeline` reads to pace `corruption.json` (only meaningful alongside it, but
+/// still a recognized, converted setting rather than a dropped one -- excluded from the
+/// "leftover, unmapped" tally same as `CONFIG_ANCHOR_KEYS`). `corruptionMode` (the on/off switch
+/// itself) is deliberately *not* here: a present `corruption.json` always converts regardless of
+/// whether the pack's `config.json` happened to leave corruption disabled, so the switch itself
+/// has nothing to map to and stays counted as dropped.
+const CONFIG_TIMELINE_KEYS: &[&str] = &["corruptionTime", "corruptionPopups", "corruptionTrigger"];
+/// Keys Edgeware's own `load_config` filters out before anything sees them (`pack/load.py`) --
+/// excluded from the "leftover, unmapped" tally since they were never real settings to begin
+/// with.
+const CONFIG_META_KEYS: &[&str] = &["version", "versionplusplus", "packPath"];
+
+fn warn_unmapped_config_keys(config: &Map<String, Value>, warnings: &mut Vec<Warning>) {
+    let mut leftover: Vec<&str> = config
+        .keys()
+        .map(String::as_str)
+        .filter(|key| {
+            !CONFIG_ANCHOR_KEYS.contains(key)
+                && !CONFIG_TIMELINE_KEYS.contains(key)
+                && !CONFIG_META_KEYS.contains(key)
+        })
+        .collect();
+    if leftover.is_empty() {
+        return;
+    }
+    leftover.sort_unstable();
+    warnings.push(Warning::new(
+        WarningKind::ConfigNotConverted,
+        format!(
+            "config.json's other setting(s) ({}) have no Lewdware equivalent and were dropped",
+            leftover.join(", ")
+        ),
+    ));
+}
+
+/// Edgeware's own hardcoded fallback for a setting the pack's `config.json` doesn't mention --
+/// see `EdgewarePlusPlus/edgeware/assets/default_config.json`. Used (not the schema-wide
+/// "absent means off" convention) because these are genuinely what a user launching this pack in
+/// Edgeware would experience; only mapping keys the pack explicitly set would misrepresent the
+/// pack's actual behaviour, not just decline to state an opinion.
+const DEFAULT_DELAY_MS: f64 = 5000.0;
+const DEFAULT_CORRUPTION_TIME_SECONDS: f64 = 60.0;
+const DEFAULT_CORRUPTION_POPUPS: f64 = 5.0;
+
+fn config_number(config: &Map<String, Value>, key: &str) -> Option<f64> {
+    config.get(key).and_then(Value::as_f64)
+}
+
+/// Edgeware's shared popup-tick model: every `delay` milliseconds, each feature independently
+/// rolls a `chance` percent chance to fire (see `EdgewarePlusPlus/edgeware/src/main_edgeware.py`'s
+/// `main()` and `roll_targets`). Converted to lewdware's "seconds between events" convention:
+/// `events/sec = (chance / 100) * (1000 / delay_ms)`, inverted. `chance <= 0` means the feature
+/// never fires -- absent, not a degenerate huge period, matching `FrequencyAnchors`'
+/// absent-means-off convention.
+fn chance_to_period_seconds(delay_ms: f64, chance_percent: f64) -> Option<f64> {
+    if chance_percent <= 0.0 {
+        return None;
+    }
+    Some(delay_ms / (10.0 * chance_percent))
+}
+
+/// `config.json` -> `experience.anchors`, per `CONFIG_ANCHOR_KEYS`. `image_chance`/`video_chance`
+/// both spawn on the same popup tick and share lewdware's single combined `popup` anchor (Sandbox
+/// has no separate image/video frequency either -- media type is a toggle, not a rate), so their
+/// chances sum before conversion.
+fn build_anchors(config: &Map<String, Value>) -> FrequencyAnchors {
+    let delay_ms = config_number(config, "delay")
+        .unwrap_or(DEFAULT_DELAY_MS)
+        .max(1.0);
+    let popup_chance = config_number(config, "popupMod").unwrap_or(0.0)
+        + config_number(config, "vidMod").unwrap_or(0.0);
+
+    FrequencyAnchors {
+        popup: chance_to_period_seconds(delay_ms, popup_chance),
+        web: chance_to_period_seconds(delay_ms, config_number(config, "webMod").unwrap_or(0.0)),
+        notification: chance_to_period_seconds(
+            delay_ms,
+            config_number(config, "notificationChance").unwrap_or(0.0),
+        ),
+        prompt: chance_to_period_seconds(
+            delay_ms,
+            config_number(config, "promptMod").unwrap_or(0.0),
+        ),
+        subliminal: chance_to_period_seconds(
+            delay_ms,
+            config_number(config, "capPopChance").unwrap_or(0.0),
+        ),
+    }
+}
+
+/// Folds `corruption.json`'s levels (already parsed by `parse::corruption::load_corruption`) into
+/// an absolute-per-level `Timeline`, and resolves each level's wallpaper filename to a tag +
+/// (deduplicated) `ConvertedMedia` entry. `None` if there are no levels to convert.
+fn build_timeline(
+    levels: &[CorruptionLevel],
+    config: &Map<String, Value>,
+    source: &dyn PackSource,
+    media: &mut Vec<ConvertedMedia>,
+    warnings: &mut Vec<Warning>,
+) -> Option<Timeline> {
+    if levels.is_empty() {
+        return None;
+    }
+
+    let corruption_time_seconds =
+        config_number(config, "corruptionTime").unwrap_or(DEFAULT_CORRUPTION_TIME_SECONDS);
+    let corruption_popups =
+        config_number(config, "corruptionPopups").unwrap_or(DEFAULT_CORRUPTION_POPUPS);
+    let trigger = config
+        .get("corruptionTrigger")
+        .and_then(Value::as_str)
+        .unwrap_or("Timed");
+
+    if matches!(trigger, "Launch" | "Script") {
         warnings.push(Warning::new(
-            WarningKind::CorruptionNotConverted,
-            "corruption.json is present but timeline conversion isn't implemented yet (planned for M4)",
+            WarningKind::UnsupportedFeatureDropped,
+            format!(
+                "corruption.json's pack-recommended \"{trigger}\" trigger has no Lewdware \
+                 equivalent -- the timeline advances on elapsed time instead"
+            ),
         ));
     }
-    if let Some(config) = try_load_json5::<Value>(source, "config.json", warnings) {
-        let has_keys = config.as_object().is_some_and(|obj| !obj.is_empty());
-        if has_keys {
-            warnings.push(Warning::new(
-                WarningKind::ConfigNotConverted,
-                "config.json is present but frequency-anchor conversion isn't implemented yet (planned for M4)",
-            ));
-        }
+
+    let mut active: BTreeSet<String> = BTreeSet::new();
+    let mut wallpaper_tag_ids: HashSet<String> = HashSet::new();
+    let mut wallpaper_tags_by_file: HashMap<String, String> = HashMap::new();
+
+    let out_levels = levels
+        .iter()
+        .enumerate()
+        .map(|(i, level)| {
+            for mood in &level.removed_moods {
+                active.remove(mood);
+            }
+            for mood in &level.added_moods {
+                active.insert(mood.clone());
+            }
+
+            if !level.config_keys.is_empty() {
+                warnings.push(Warning::new(
+                    WarningKind::UnsupportedFeatureDropped,
+                    format!(
+                        "corruption.json level {}'s config override(s) ({}) have no Lewdware \
+                         equivalent -- a timeline level's modifier is a single scalar, not \
+                         per-setting, so they were dropped",
+                        i + 1,
+                        level.config_keys.join(", ")
+                    ),
+                ));
+            }
+
+            let wallpaper_tags = level.wallpaper.as_ref().and_then(|file| {
+                resolve_wallpaper_tag(
+                    file,
+                    source,
+                    media,
+                    &mut wallpaper_tag_ids,
+                    &mut wallpaper_tags_by_file,
+                    warnings,
+                )
+            });
+
+            Level {
+                // Level index 0 (Edgeware's level 1) is applied immediately at session start
+                // (`handle_corruption` calls `apply_corruption_level` before ever waiting on
+                // `corruption_time`), not after one interval -- see
+                // `EdgewarePlusPlus/edgeware/src/features/corruption.py`.
+                at_seconds: i as f64 * corruption_time_seconds,
+                // Only meaningful (and only known) for the "Popup" trigger -- `corruption_popups`
+                // isn't consulted at all for the other triggers, so inventing a popup count for
+                // them would be fabricating a fact, not converting one.
+                at_popups: (trigger == "Popup" && i > 0)
+                    .then_some((i as f64 * corruption_popups) as u32),
+                modifiers: Modifiers {
+                    // Per-level config overrides are the only source of a genuine rate change in
+                    // Edgeware's corruption model, and those are dropped (warned above) -- so
+                    // there's no reliable signal left to drive `modifier` from.
+                    modifier: None,
+                    tags: Some(active.iter().cloned().collect()),
+                    wallpaper_tags,
+                },
+            }
+        })
+        .collect();
+
+    Some(Timeline { levels: out_levels })
+}
+
+/// Resolves one corruption level's wallpaper filename to a tag, adding a `ConvertedMedia` entry
+/// the first time a given filename is seen. `"wallpaper.png"` reuses the tag `discover_media`
+/// already assigned the pack's primary wallpaper (no duplicate media entry); any other filename
+/// mints a fresh `corruption-wallpaper-<slug>` tag. Returns `None` (no override -- the previous
+/// level's wallpaper, or `Content::wallpaper_tags`, stays in effect) if the referenced file
+/// doesn't actually exist, after warning.
+fn resolve_wallpaper_tag(
+    file: &str,
+    source: &dyn PackSource,
+    media: &mut Vec<ConvertedMedia>,
+    used_ids: &mut HashSet<String>,
+    known: &mut HashMap<String, String>,
+    warnings: &mut Vec<Warning>,
+) -> Option<Vec<String>> {
+    if let Some(tag) = known.get(file) {
+        return Some(vec![tag.clone()]);
     }
+
+    if file == "wallpaper.png" {
+        known.insert(file.to_string(), "wallpaper".to_string());
+        return Some(vec!["wallpaper".to_string()]);
+    }
+
+    if !source.file_exists(file) {
+        warnings.push(Warning::new(
+            WarningKind::UnreadableMediaFile,
+            format!("corruption.json references wallpaper \"{file}\" which wasn't found"),
+        ));
+        return None;
+    }
+
+    let tag = format!("corruption-wallpaper-{}", unique_slug(file, used_ids));
+    media.push(ConvertedMedia {
+        source_path: file.to_string(),
+        suggested_name: file.to_string(),
+        tags: vec![tag.clone()],
+    });
+    known.insert(file.to_string(), tag.clone());
+    Some(vec![tag])
+}
+
+/// `corruption.json`/`config.json` -> `behaviour.experience`. `None` (not
+/// `Some(Experience::default())`) when neither contributes anything -- presence must stay
+/// structurally meaningful, matching `Behaviour::experience`'s own doc comment and
+/// `pack_has_experience`. `design` is out of this bullet's scope (`DesignValues` isn't a
+/// chance-per-tick concept the way `FrequencyAnchors` is -- see `design/release-plan.md`'s M4
+/// converter bullet).
+fn build_experience(
+    corruption_levels: &[CorruptionLevel],
+    config: &Map<String, Value>,
+    source: &dyn PackSource,
+    media: &mut Vec<ConvertedMedia>,
+    warnings: &mut Vec<Warning>,
+) -> Option<Experience> {
+    let anchors = build_anchors(config);
+    let timeline = build_timeline(corruption_levels, config, source, media, warnings);
+
+    if anchors == FrequencyAnchors::default() && timeline.is_none() {
+        return None;
+    }
+
+    Some(Experience {
+        anchors,
+        design: DesignValues::default(),
+        timeline,
+    })
 }
 
 #[cfg(test)]
@@ -491,5 +776,282 @@ mod tests {
         let (_dir, source) = source_with(&[("icon.ico", "fake ico bytes")]);
         let output = convert(&source);
         assert_eq!(output.icon.as_deref(), Some("icon.ico"));
+    }
+
+    #[test]
+    fn no_config_or_corruption_recommends_sandbox_with_no_experience_section() {
+        let (_dir, source) = source_with(&[]);
+        let output = convert(&source);
+        assert_eq!(
+            output.metadata.recommended_mode,
+            Some(RecommendedMode::Sandbox)
+        );
+        assert_eq!(output.behaviour.experience, None);
+    }
+
+    #[test]
+    fn config_json_pacing_alone_populates_anchors_but_still_recommends_sandbox() {
+        let (_dir, source) = source_with(&[(
+            "config.json",
+            r#"{"delay": 5000, "popupMod": 100, "vidMod": 0, "webMod": 0}"#,
+        )]);
+        let output = convert(&source);
+        // 100% chance every 5000ms tick -> one event every 5 seconds.
+        assert_eq!(
+            output.behaviour.experience.as_ref().unwrap().anchors.popup,
+            Some(5.0)
+        );
+        assert_eq!(
+            output.metadata.recommended_mode,
+            Some(RecommendedMode::Sandbox)
+        );
+        assert_eq!(output.behaviour.experience.as_ref().unwrap().timeline, None);
+    }
+
+    #[test]
+    fn popup_anchor_sums_image_and_video_chance() {
+        let (_dir, source) = source_with(&[(
+            "config.json",
+            r#"{"delay": 1000, "popupMod": 50, "vidMod": 50}"#,
+        )]);
+        let output = convert(&source);
+        // 100% combined chance every 1000ms -> one event/sec.
+        assert_eq!(
+            output.behaviour.experience.as_ref().unwrap().anchors.popup,
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn zero_chance_key_leaves_that_anchor_absent() {
+        let (_dir, source) = source_with(&[("config.json", r#"{"webMod": 0}"#)]);
+        let output = convert(&source);
+        assert!(output.behaviour.experience.is_none());
+    }
+
+    #[test]
+    fn missing_delay_falls_back_to_edgewares_own_default() {
+        let (_dir, source) = source_with(&[("config.json", r#"{"promptMod": 100}"#)]);
+        let output = convert(&source);
+        // 100% chance every (default) 5000ms -> one event every 5 seconds.
+        assert_eq!(
+            output.behaviour.experience.as_ref().unwrap().anchors.prompt,
+            Some(5.0)
+        );
+    }
+
+    #[test]
+    fn corruption_timeline_recommends_experience_with_cumulative_tags() {
+        let (_dir, source) = source_with(&[(
+            "corruption.json",
+            r#"{
+                "moods": {
+                    "1": {"add": ["angel", "apple"], "remove": []},
+                    "2": {"add": ["globe"], "remove": ["apple"]}
+                },
+                "wallpapers": {},
+                "config": {}
+            }"#,
+        )]);
+        let output = convert(&source);
+        assert_eq!(
+            output.metadata.recommended_mode,
+            Some(RecommendedMode::Experience)
+        );
+        let timeline = output
+            .behaviour
+            .experience
+            .as_ref()
+            .unwrap()
+            .timeline
+            .as_ref()
+            .unwrap();
+        assert_eq!(timeline.levels.len(), 2);
+        // Level 1 is applied immediately (Edgeware applies it at session start, not after one
+        // corruption_time interval) -- see `build_timeline`.
+        assert_eq!(timeline.levels[0].at_seconds, 0.0);
+        assert_eq!(
+            timeline.levels[0].modifiers.tags,
+            Some(vec!["angel".to_string(), "apple".to_string()])
+        );
+        // Default corruption_time (config.json absent) is Edgeware's own 60s default.
+        assert_eq!(timeline.levels[1].at_seconds, 60.0);
+        // "apple" removed, "globe" added -- cumulative, not a replacement.
+        assert_eq!(
+            timeline.levels[1].modifiers.tags,
+            Some(vec!["angel".to_string(), "globe".to_string()])
+        );
+    }
+
+    #[test]
+    fn popup_trigger_derives_at_popups_from_corruption_popups() {
+        let (_dir, source) = source_with(&[
+            (
+                "corruption.json",
+                r#"{"moods": {"1": {"add": [], "remove": []}, "2": {"add": [], "remove": []}}, "wallpapers": {}, "config": {}}"#,
+            ),
+            (
+                "config.json",
+                r#"{"corruptionTrigger": "Popup", "corruptionPopups": 10}"#,
+            ),
+        ]);
+        let output = convert(&source);
+        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        assert_eq!(timeline.levels[0].at_popups, None);
+        assert_eq!(timeline.levels[1].at_popups, Some(10));
+    }
+
+    #[test]
+    fn timed_trigger_never_sets_at_popups() {
+        let (_dir, source) = source_with(&[(
+            "corruption.json",
+            r#"{"moods": {"1": {"add": [], "remove": []}, "2": {"add": [], "remove": []}}, "wallpapers": {}, "config": {}}"#,
+        )]);
+        let output = convert(&source);
+        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        assert!(timeline.levels.iter().all(|l| l.at_popups.is_none()));
+    }
+
+    #[test]
+    fn launch_trigger_warns_and_still_produces_a_time_based_timeline() {
+        let (_dir, source) = source_with(&[
+            (
+                "corruption.json",
+                r#"{"moods": {"1": {"add": ["a"], "remove": []}}, "wallpapers": {}, "config": {}}"#,
+            ),
+            ("config.json", r#"{"corruptionTrigger": "Launch"}"#),
+        ]);
+        let output = convert(&source);
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::UnsupportedFeatureDropped)
+        );
+        assert!(output.behaviour.experience.unwrap().timeline.is_some());
+    }
+
+    #[test]
+    fn per_level_config_override_warns_and_is_dropped() {
+        let (_dir, source) = source_with(&[(
+            "corruption.json",
+            r#"{"moods": {}, "wallpapers": {}, "config": {"1": {"promptMod": 0}}}"#,
+        )]);
+        let output = convert(&source);
+        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        assert_eq!(timeline.levels[0].modifiers.modifier, None);
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::UnsupportedFeatureDropped
+                    && w.message.contains("promptMod"))
+        );
+    }
+
+    #[test]
+    fn level_wallpaper_reuses_the_primary_wallpaper_tag_without_duplicate_media() {
+        let (_dir, source) = source_with(&[
+            ("wallpaper.png", "w"),
+            (
+                "corruption.json",
+                r#"{"moods": {}, "wallpapers": {"1": "wallpaper.png"}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        assert_eq!(
+            timeline.levels[0].modifiers.wallpaper_tags,
+            Some(vec!["wallpaper".to_string()])
+        );
+        assert_eq!(
+            output
+                .media
+                .iter()
+                .filter(|m| m.source_path == "wallpaper.png")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn level_wallpaper_other_than_primary_gets_its_own_tag_and_media_entry() {
+        let (_dir, source) = source_with(&[
+            ("wallpaper2.png", "w2"),
+            (
+                "corruption.json",
+                r#"{"moods": {}, "wallpapers": {"1": "wallpaper2.png"}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        let tags = timeline.levels[0].modifiers.wallpaper_tags.clone().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_ne!(tags[0], "wallpaper");
+        let entry = output
+            .media
+            .iter()
+            .find(|m| m.source_path == "wallpaper2.png")
+            .unwrap();
+        assert_eq!(entry.tags, tags);
+    }
+
+    #[test]
+    fn missing_level_wallpaper_file_warns_and_leaves_no_override() {
+        let (_dir, source) = source_with(&[(
+            "corruption.json",
+            r#"{"moods": {}, "wallpapers": {"1": "missing.png"}, "config": {}}"#,
+        )]);
+        let output = convert(&source);
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::UnreadableMediaFile)
+        );
+        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        assert_eq!(timeline.levels[0].modifiers.wallpaper_tags, None);
+    }
+
+    #[test]
+    fn untagged_media_alongside_a_timeline_warns_about_any_filter_exclusion() {
+        let (_dir, source) = source_with(&[
+            ("img/untagged.png", "u"),
+            (
+                "corruption.json",
+                r#"{"moods": {"1": {"add": ["a"], "remove": []}}, "wallpapers": {}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::UnsupportedFeatureDropped
+                    && w.message.contains("untagged media"))
+        );
+    }
+
+    #[test]
+    fn no_untagged_media_alongside_a_timeline_does_not_warn_about_exclusion() {
+        let (_dir, source) = source_with(&[
+            (
+                "index.json",
+                r#"{"moods": [{"mood": "vanilla", "media": ["a.png"]}]}"#,
+            ),
+            ("img/a.png", "a"),
+            (
+                "corruption.json",
+                r#"{"moods": {"1": {"add": ["vanilla"], "remove": []}}, "wallpapers": {}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+        assert!(
+            !output
+                .warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::UnsupportedFeatureDropped
+                    && w.message.contains("untagged media"))
+        );
     }
 }

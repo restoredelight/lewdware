@@ -311,17 +311,17 @@ pub fn get_ffmpeg_path() -> PathBuf {
     }
 
     let name = ffmpeg_filename();
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let path = exe_dir.join(name);
-            if path.exists() {
-                return path;
-            }
-            // macOS .app bundle
-            let resources = exe_dir.join("../Resources").join(name);
-            if resources.exists() {
-                return resources;
-            }
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        let path = exe_dir.join(name);
+        if path.exists() {
+            return path;
+        }
+        // macOS .app bundle
+        let resources = exe_dir.join("../Resources").join(name);
+        if resources.exists() {
+            return resources;
         }
     }
 
@@ -334,17 +334,17 @@ pub fn get_ffprobe_path() -> PathBuf {
     }
 
     let name = ffprobe_filename();
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let path = exe_dir.join(name);
-            if path.exists() {
-                return path;
-            }
-            // macOS .app bundle
-            let resources = exe_dir.join("../Resources").join(name);
-            if resources.exists() {
-                return resources;
-            }
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        let path = exe_dir.join(name);
+        if path.exists() {
+            return path;
+        }
+        // macOS .app bundle
+        let resources = exe_dir.join("../Resources").join(name);
+        if resources.exists() {
+            return resources;
         }
     }
 
@@ -491,14 +491,12 @@ fn encode_image(
         stderr_buf.push_str(&line);
         stderr_buf.push('\n');
 
-        if line.contains("lavfi.signalstats.YMIN=") {
-            if let Some(val_str) = line.split('=').next_back() {
-                if let Ok(y_min) = val_str.trim().parse::<f64>() {
-                    if y_min < 255.0 {
-                        transparent = true;
-                    }
-                }
-            }
+        if line.contains("lavfi.signalstats.YMIN=")
+            && let Some(val_str) = line.split('=').next_back()
+            && let Ok(y_min) = val_str.trim().parse::<f64>()
+            && y_min < 255.0
+        {
+            transparent = true;
         }
     }
 
@@ -571,19 +569,15 @@ fn encode_video(
         stderr_buf.push_str(&line);
         stderr_buf.push('\n');
 
-        if line.contains("lavfi.signalstats.YMIN=") {
-            if let Some(val_str) = line.split('=').next_back() {
-                if let Ok(y_min) = val_str.trim().parse::<f64>() {
-                    if y_min < 255.0 {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        let _ = std::fs::remove_file(output);
-                        return encode_video_with_transparency(
-                            input, output, width, height, audio, false,
-                        );
-                    }
-                }
-            }
+        if line.contains("lavfi.signalstats.YMIN=")
+            && let Some(val_str) = line.split('=').next_back()
+            && let Ok(y_min) = val_str.trim().parse::<f64>()
+            && y_min < 255.0
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(output);
+            return encode_video_with_transparency(input, output, width, height, audio, false);
         }
     }
 
