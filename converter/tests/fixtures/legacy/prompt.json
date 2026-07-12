@@ -1,0 +1,10 @@
+{
+  "moods": ["default", "high"],
+  "minLen": 1,
+  "maxLen": 1,
+  "freqList": [100, 50],
+  "subtext": "I Submit <3",
+  "commandtext": "Type for me~",
+  "default": ["A default prompt"],
+  "high": ["A high-intensity prompt"]
+}

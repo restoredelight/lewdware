@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "converter",
     "lewdware",
     "lw",
     "pack-editor/src-tauri",

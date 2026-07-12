@@ -1,0 +1,127 @@
+---
+source: converter/tests/golden.rs
+expression: output
+---
+metadata:
+  name: Modern Fixture Pack
+  creator: Test Author
+  description: A small synthetic pack for converter golden tests (modern index.json layout).
+  version: "1.0"
+behaviour:
+  version: 1
+  content:
+    content_groups:
+      - id: vanilla
+        label: vanilla
+        tags:
+          - vanilla
+        enabled_by_default: true
+      - id: kinky
+        label: kinky
+        tags:
+          - kinky
+        enabled_by_default: true
+      - id: moody
+        label: moody
+        tags:
+          - moody
+        enabled_by_default: true
+    captions:
+      - text: Caption 1
+        tags: []
+      - text: Caption 2
+        tags: []
+      - text: Vanilla caption
+        tags:
+          - vanilla
+      - text: Kinky caption
+        tags:
+          - kinky
+      - text: Close
+        tags: []
+    prompts:
+      - text: Prompt 1
+        tags: []
+      - text: Prompt 2
+        tags: []
+      - text: Vanilla prompt 1
+        tags:
+          - vanilla
+      - text: Vanilla prompt 2
+        tags:
+          - vanilla
+    prompt_settings:
+      submit_label: Submit
+    notifications:
+      - text: Notification
+        tags: []
+    subliminals:
+      - text: Subliminal message
+        tags: []
+    web_links:
+      - url: "https://duckduckgo.com/?q="
+        args:
+          - edgeware packs
+          - rule 34
+        tags: []
+      - url: "https://github.com/"
+        args: []
+        tags: []
+      - url: "https://bsky.app/"
+        args: []
+        tags:
+          - vanilla
+    wallpaper_tags:
+      - wallpaper
+    splash_tags:
+      - splash
+media:
+  - source_path: img/kinky_a.jpg
+    suggested_name: kinky_a.jpg
+    tags:
+      - kinky
+  - source_path: img/kinky_b.png
+    suggested_name: kinky_b.png
+    tags:
+      - kinky
+  - source_path: img/kinky_c.jpg
+    suggested_name: kinky_c.jpg
+    tags:
+      - kinky
+  - source_path: img/moody_a.jpg
+    suggested_name: moody_a.jpg
+    tags:
+      - moody
+  - source_path: img/moody_b.png
+    suggested_name: moody_b.png
+    tags:
+      - moody
+  - source_path: img/untagged.png
+    suggested_name: untagged.png
+    tags: []
+  - source_path: vid/moody_c.mp4
+    suggested_name: moody_c.mp4
+    tags:
+      - moody
+  - source_path: aud/moody_d.mp3
+    suggested_name: moody_d.mp3
+    tags:
+      - moody
+  - source_path: hypno/glimmer.gif
+    suggested_name: glimmer.gif
+    tags:
+      - hypno
+  - source_path: wallpaper.png
+    suggested_name: wallpaper.png
+    tags:
+      - wallpaper
+  - source_path: loading_splash.png
+    suggested_name: loading_splash.png
+    tags:
+      - splash
+icon: ~
+warnings:
+  - kind: UnsupportedFeatureDropped
+    message: "1 denial caption(s) for \"default\" were dropped (denial/blur isn't supported yet)"
+  - kind: UnsupportedFeatureDropped
+    message: "\"kinky\"'s multi-click dismissal (maxClicks: 2) isn't supported and was dropped"

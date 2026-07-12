@@ -48,7 +48,7 @@ use shared::read_pack::{Metadata, RecommendedMode};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::encode::HardwareEncoder;
+use shared::encode::HardwareEncoder;
 
 pub type PackState = Arc<Mutex<Option<MediaPack>>>;
 
@@ -605,7 +605,7 @@ pub fn run() {
                 let ffmpeg = resource_dir.join("binaries").join(ffmpeg_name);
                 let ffprobe = resource_dir.join("binaries").join(ffprobe_name);
                 if ffmpeg.exists() && ffprobe.exists() {
-                    encode::init_binary_paths(ffmpeg, ffprobe);
+                    shared::encode::init_binary_paths(ffmpeg, ffprobe);
                 }
             }
             let _ = state

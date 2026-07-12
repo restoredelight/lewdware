@@ -1,0 +1,5 @@
+{
+  "urls": ["https://duckduckgo.com/?q=", "https://example.com/", "https://github.com/"],
+  "args": ["edgeware,packs", "", ""],
+  "moods": ["low", "default", "vanilla"]
+}

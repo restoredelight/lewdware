@@ -1,0 +1,11 @@
+{
+  "prefix": ["low", "high"],
+  "prefix_settings": { "high": { "max": 3, "chance": 50 } },
+  "default": ["A default caption"],
+  "subtext": "Click to close!",
+  "denial": ["Not for you"],
+  "subliminals": ["Obey"],
+  "notifications": ["New notification"],
+  "low": ["A low caption"],
+  "high": ["A high caption"]
+}

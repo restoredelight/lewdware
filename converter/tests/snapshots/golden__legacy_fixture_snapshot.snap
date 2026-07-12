@@ -1,0 +1,114 @@
+---
+source: converter/tests/golden.rs
+expression: output
+---
+metadata:
+  name: Legacy Fixture Pack
+  creator: Test Author
+  description: A small synthetic pack for converter golden tests (legacy captions/media/prompt/web.json layout).
+  version: "1.0"
+behaviour:
+  version: 1
+  content:
+    content_groups:
+      - id: vanilla
+        label: vanilla
+        tags:
+          - vanilla
+        enabled_by_default: true
+      - id: spicy
+        label: spicy
+        tags:
+          - spicy
+        enabled_by_default: true
+      - id: low
+        label: low
+        tags:
+          - low
+        enabled_by_default: true
+      - id: high
+        label: high
+        tags:
+          - high
+        enabled_by_default: true
+    captions:
+      - text: A default caption
+        tags: []
+      - text: A low caption
+        tags:
+          - low
+      - text: A high caption
+        tags:
+          - high
+      - text: Click to close!
+        tags: []
+    prompts:
+      - text: A default prompt
+        tags: []
+      - text: A high-intensity prompt
+        tags:
+          - high
+    prompt_settings:
+      submit_label: I Submit <3
+    notifications:
+      - text: New notification
+        tags: []
+    subliminals:
+      - text: Obey
+        tags: []
+    web_links:
+      - url: "https://example.com/"
+        args: []
+        tags: []
+      - url: "https://github.com/"
+        args: []
+        tags:
+          - vanilla
+      - url: "https://duckduckgo.com/?q="
+        args:
+          - edgeware
+          - packs
+        tags:
+          - low
+    wallpaper_tags:
+      - wallpaper
+    splash_tags:
+      - splash
+media:
+  - source_path: img/untagged.png
+    suggested_name: untagged.png
+    tags: []
+  - source_path: img/vanilla_a.png
+    suggested_name: vanilla_a.png
+    tags:
+      - vanilla
+  - source_path: img/vanilla_b.jpg
+    suggested_name: vanilla_b.jpg
+    tags:
+      - vanilla
+  - source_path: vid/spicy_a.mp4
+    suggested_name: spicy_a.mp4
+    tags:
+      - spicy
+  - source_path: aud/spicy_b.mp3
+    suggested_name: spicy_b.mp3
+    tags:
+      - spicy
+  - source_path: subliminals/glimmer.gif
+    suggested_name: glimmer.gif
+    tags:
+      - hypno
+  - source_path: wallpaper.png
+    suggested_name: wallpaper.png
+    tags:
+      - wallpaper
+  - source_path: loading_splash.gif
+    suggested_name: loading_splash.gif
+    tags:
+      - splash
+icon: ~
+warnings:
+  - kind: UnsupportedFeatureDropped
+    message: "1 denial caption(s) for \"default\" were dropped (denial/blur isn't supported yet)"
+  - kind: UnsupportedFeatureDropped
+    message: "\"high\"'s multi-click dismissal (max: 3) isn't supported and was dropped"

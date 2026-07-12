@@ -1,0 +1,7 @@
+{
+  "name": "Legacy Fixture Pack",
+  "id": "legacyFixture",
+  "creator": "Test Author",
+  "version": "1.0",
+  "description": "A small synthetic pack for converter golden tests (legacy captions/media/prompt/web.json layout)."
+}

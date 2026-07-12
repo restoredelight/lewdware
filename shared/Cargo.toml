@@ -8,6 +8,7 @@ mlua = ["dep:mlua"]
 
 [dependencies]
 anyhow = "1.0.100"
+blake3 = "1.8"
 ciborium = "0.2.2"
 dirs = "6.0.0"
 glob = "0.3.3"

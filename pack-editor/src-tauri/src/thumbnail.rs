@@ -21,7 +21,7 @@ pub async fn generate_display_image(file_data: FileData) -> Result<Vec<u8>> {
     };
 
     #[allow(unused_mut)]
-    let mut std_cmd = std::process::Command::new(crate::encode::get_ffmpeg_path());
+    let mut std_cmd = std::process::Command::new(shared::encode::get_ffmpeg_path());
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -70,7 +70,7 @@ pub async fn generate_preview(
     };
 
     #[allow(unused_mut)]
-    let mut std_cmd = std::process::Command::new(crate::encode::get_ffmpeg_path());
+    let mut std_cmd = std::process::Command::new(shared::encode::get_ffmpeg_path());
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;

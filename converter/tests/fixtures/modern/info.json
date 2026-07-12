@@ -1,0 +1,7 @@
+{
+  "name": "Modern Fixture Pack",
+  "id": "modernFixture",
+  "creator": "Test Author",
+  "version": "1.0",
+  "description": "A small synthetic pack for converter golden tests (modern index.json layout)."
+}

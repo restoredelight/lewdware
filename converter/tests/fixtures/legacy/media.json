@@ -1,0 +1,5 @@
+{
+  "default": ["untagged.png"],
+  "vanilla": ["vanilla_a.png", "vanilla_b.jpg"],
+  "spicy": ["spicy_a.mp4", "spicy_b.mp3"]
+}

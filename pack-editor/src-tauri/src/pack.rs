@@ -27,7 +27,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::encode::EncodedFile;
+use shared::encode::EncodedFile;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MediaFile {

@@ -1,0 +1,36 @@
+{
+  "default": {
+    "popupClose": "Close",
+    "maxClicks": 1,
+    "captions": ["Caption 1", "Caption 2"],
+    "denial": ["Denied"],
+    "subliminals": ["Subliminal message"],
+    "notifications": ["Notification"],
+    "promptCommand": "Type below",
+    "promptSubmit": "Submit",
+    "promptMinLength": 1,
+    "promptMaxLength": 1,
+    "prompts": ["Prompt 1", "Prompt 2"],
+    "web": ["https://duckduckgo.com/?q=", "https://github.com/"],
+    "webArgs": [["edgeware packs", "rule 34"], []]
+  },
+  "moods": [
+    {
+      "mood": "vanilla",
+      "captions": ["Vanilla caption"],
+      "prompts": ["Vanilla prompt 1", "Vanilla prompt 2"],
+      "web": ["https://bsky.app/"],
+      "webArgs": [[]]
+    },
+    {
+      "mood": "kinky",
+      "maxClicks": 2,
+      "captions": ["Kinky caption"],
+      "media": ["kinky_a.jpg", "kinky_b.png", "kinky_c.jpg"]
+    },
+    {
+      "mood": "moody",
+      "media": ["moody_a.jpg", "moody_b.png", "moody_c.mp4", "moody_d.mp3"]
+    }
+  ]
+}
