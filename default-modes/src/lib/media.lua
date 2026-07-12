@@ -11,6 +11,8 @@
 
 local M = {}
 
+-- Exported (not just used internally) so `lib/content.lua` can subtract the same disabled-group
+-- tags from its own pools without re-deriving them from `__lewdware_content` a second time.
 ---@return string[]
 local function disabled_tags()
 	local content = rawget(_G, "__lewdware_content")
@@ -25,6 +27,21 @@ local function disabled_tags()
 	end
 	return excluded
 end
+M.disabled_tags = disabled_tags
+
+-- Normalizes the shorthand array form (`tags = { "a", "b" }`, meaning "any of these" -- see
+-- `lewdware.media.*`'s documented shorthand) to the object form, so `merge_tags` always has
+-- `.any`/`.all`/`.none` to read regardless of which form the caller used. Without this, a
+-- shorthand-tags call silently lost its filter entirely once any content group was disabled: the
+-- old code read `tags.any` off a plain array (always nil) and reassembled `tags = { any = nil,
+-- ... }`, matching all media instead of the intended tag.
+local function normalize_tags(tags)
+	if tags == nil then return {} end
+	if tags.any == nil and tags.all == nil and tags.none == nil then
+		return { any = tags }
+	end
+	return tags
+end
 
 -- Unions the disabled-group tags into opts.tags.none, on top of whatever the caller already
 -- asked to exclude. A pure union composes correctly regardless of what else populates `none`
@@ -35,7 +52,7 @@ local function merge_tags(opts)
 	local excluded = disabled_tags()
 	if #excluded == 0 then return opts end
 
-	local tags = opts.tags or {}
+	local tags = normalize_tags(opts.tags)
 	local none = {}
 	for _, t in ipairs(tags.none or {}) do table.insert(none, t) end
 	for _, t in ipairs(excluded) do table.insert(none, t) end

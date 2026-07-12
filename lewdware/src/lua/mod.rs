@@ -711,6 +711,64 @@ mod tests {
         file
     }
 
+    /// Like `pack_fixture(true)`, but the single real image is tagged with the given tags instead
+    /// of the hardcoded "red"/"blue" -- for tests needing a real-bytes image tagged e.g.
+    /// "wallpaper" or "splash" (`get_image_file`/`wallpaper.set` need real offset/length data,
+    /// which `pack_fixture_with_data` below deliberately doesn't attach).
+    fn pack_fixture_with_tagged_image(tags: &[&str]) -> NamedTempFile {
+        const IMAGE_BYTES: &[u8] = b"not a real avif, just needs to be some bytes";
+
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        shared::db::migrate(&db).unwrap();
+
+        db.execute(
+            "INSERT INTO media (file_name, file_type, width, height, transparent, hash) \
+             VALUES ('pic.avif', 'image', 64, 64, 0, x'00')",
+            [],
+        )
+        .unwrap();
+        for tag in tags {
+            db.execute("INSERT INTO tags (name) VALUES (?)", [*tag])
+                .unwrap();
+            let tag_id = db.last_insert_rowid();
+            db.execute(
+                "INSERT INTO media_tags (media_id, tag_id) VALUES (1, ?)",
+                [tag_id],
+            )
+            .unwrap();
+        }
+
+        let metadata = shared::read_pack::Metadata {
+            name: "test-pack".to_string(),
+            ..Default::default()
+        };
+        let metadata_bytes = metadata.to_buf().unwrap();
+
+        let mut header = shared::read_pack::Header::new();
+        header.metadata_offset = shared::read_pack::HEADER_SIZE as u64;
+        header.metadata_length = metadata_bytes.len() as u64;
+        header.index_offset = header.metadata_offset + header.metadata_length;
+
+        let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
+        header.index_length = db_bytes.len() as u64;
+        let image_offset = header.index_offset + header.index_length;
+
+        db.execute(
+            "UPDATE media SET offset = ?, length = ? WHERE file_name = 'pic.avif'",
+            rusqlite::params![image_offset, IMAGE_BYTES.len() as u64],
+        )
+        .unwrap();
+        let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&header.to_buf().unwrap()).unwrap();
+        file.write_all(&metadata_bytes).unwrap();
+        file.write_all(&db_bytes).unwrap();
+        file.write_all(IMAGE_BYTES).unwrap();
+        file.flush().unwrap();
+        file
+    }
+
     /// Build a `.lwpack` fixture with the given tagged image rows (name, tags) and, if `Some`, a
     /// `pack_data` row named `"behaviour"` holding the given bytes. Media rows get no real file
     /// bytes/offsets -- fine for `list`/`random` queries, which never read `offset`/`length` (see
@@ -813,6 +871,7 @@ mod tests {
         SpawnText,
         CloseWindow { id: PopupId },
         OpenLink { url: String },
+        SetTitle { id: PopupId, title: Option<String> },
         Exit,
     }
 
@@ -1023,7 +1082,8 @@ mod tests {
                                 .cloned();
                             let _ = tx.send(value);
                         }
-                        WindowAction::SetTitle { tx, .. } => {
+                        WindowAction::SetTitle { tx, title } => {
+                            recorded.lock().unwrap().push(Recorded::SetTitle { id, title });
                             let _ = tx.send(());
                         }
                         WindowAction::SetOpacity { tx, .. } => {
@@ -1211,6 +1271,20 @@ mod tests {
 
         fn recorded(&self) -> Vec<Recorded> {
             self.recorded.lock().unwrap().clone()
+        }
+
+        /// Evaluates a Lua expression against the running mode's global state and returns it as
+        /// a number -- e.g. a counter a test's own wrapped API function incremented (see
+        /// `wrapped_default_mode_sources`). Not needed for anything the fake handler already
+        /// tracks via `Recorded`; only for effects it doesn't (e.g. `show_notification`, which
+        /// carries no `Recorded` variant since nothing else needs to assert on it).
+        fn eval_number(&self, expr: &str) -> f64 {
+            self.runtime.lua.load(expr).eval().unwrap()
+        }
+
+        /// Like `eval_number`, but for a string-valued global.
+        fn eval_string(&self, expr: &str) -> String {
+            self.runtime.lua.load(expr).eval().unwrap()
         }
     }
 
@@ -2382,6 +2456,1500 @@ mod tests {
                     pack_fixture_with_data(MEDIA, None),
                     content,
                     disabled_config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    /// Builds the `(sources, Content)` pair shared by `lib/content.lua`'s own tests: no media
+    /// pack fixture needed beyond the media-less-by-default default (the picker never touches
+    /// `lewdware.media.*`), so every test below runs `main.lua` against `pack_fixture(false)`.
+    fn content_lib_sources(main: &str) -> Vec<(&str, &str)> {
+        vec![
+            ("main.lua", main),
+            (
+                "lib/content.lua",
+                include_str!("../../../default-modes/src/lib/content.lua"),
+            ),
+            (
+                "lib/media.lua",
+                include_str!("../../../default-modes/src/lib/media.lua"),
+            ),
+        ]
+    }
+
+    /// The real `default-modes` mode's own source files (not test-only stand-ins) -- for tests
+    /// that exercise `main.lua`'s actual process wiring end-to-end rather than a re-implementation
+    /// of its logic. Extended with additional `lib/*.lua` entries as later milestone phases add
+    /// new process modules.
+    fn real_default_mode_sources() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (
+                "main.lua",
+                include_str!("../../../default-modes/src/main.lua"),
+            ),
+            (
+                "lib/media.lua",
+                include_str!("../../../default-modes/src/lib/media.lua"),
+            ),
+            (
+                "lib/content.lua",
+                include_str!("../../../default-modes/src/lib/content.lua"),
+            ),
+            (
+                "lib/notifications.lua",
+                include_str!("../../../default-modes/src/lib/notifications.lua"),
+            ),
+            (
+                "lib/web.lua",
+                include_str!("../../../default-modes/src/lib/web.lua"),
+            ),
+            (
+                "lib/subliminals.lua",
+                include_str!("../../../default-modes/src/lib/subliminals.lua"),
+            ),
+            (
+                "lib/prompts.lua",
+                include_str!("../../../default-modes/src/lib/prompts.lua"),
+            ),
+            (
+                "lib/wallpaper.lua",
+                include_str!("../../../default-modes/src/lib/wallpaper.lua"),
+            ),
+        ]
+    }
+
+    /// Like `real_default_mode_sources`, but the real `main.lua` is aliased to `real_main.lua` and
+    /// `setup` runs first as `main.lua` -- lets a test wrap an API function (e.g.
+    /// `lewdware.show_notification`, `lewdware.popup.dialog`) before the real mode's processes
+    /// start. This works because the library modules look up `lewdware.*` fields fresh each time
+    /// their scheduled callback fires, not once at `require()`/`start()` time, so the override
+    /// only needs to land before the first `advance()`, not before `require("real_main")` itself.
+    fn wrapped_default_mode_sources(setup: &str) -> Vec<(String, String)> {
+        let mut sources = vec![(
+            "main.lua".to_string(),
+            format!("{setup}\nrequire(\"real_main\")\n"),
+        )];
+        for (path, source) in real_default_mode_sources() {
+            let path = if path == "main.lua" {
+                "real_main.lua"
+            } else {
+                path
+            };
+            sources.push((path.to_string(), source.to_string()));
+        }
+        sources
+    }
+
+    /// Baseline `mode_config` covering every key `default-modes/src/main.lua` reads unconditionally
+    /// at startup -- image-only, constant-interval spawning at 1 popup/second, every optional
+    /// feature off. The harness hands Lua `lewdware.config` exactly as given (unlike the real app,
+    /// which resolves defaults first via `resolve_mode_config`), so a test running the real
+    /// `main.lua` must supply every key it reads; tests extend/override individual keys via
+    /// `.insert(...)` on the returned map.
+    fn base_default_mode_config() -> HashMap<String, OptionValue> {
+        let mut config = HashMap::new();
+        config.insert(
+            "spawn_mode".to_string(),
+            OptionValue::Enum("constant".to_string()),
+        );
+        config.insert("popup_frequency".to_string(), OptionValue::Number(1.0));
+        config.insert("max_popups".to_string(), OptionValue::Integer(5));
+        config.insert("images_enabled".to_string(), OptionValue::Boolean(true));
+        config.insert("videos_enabled".to_string(), OptionValue::Boolean(false));
+        config.insert("audio_enabled".to_string(), OptionValue::Boolean(false));
+        config.insert("dormancy_enabled".to_string(), OptionValue::Boolean(false));
+        config.insert(
+            "close_trigger_enabled".to_string(),
+            OptionValue::Boolean(false),
+        );
+        config.insert("movement_enabled".to_string(), OptionValue::Boolean(false));
+        config.insert("captions_enabled".to_string(), OptionValue::Boolean(true));
+        config
+    }
+
+    /// `base_default_mode_config()` with popup spawning turned off (`images_enabled = false`),
+    /// for tests exercising one of the frequency-scheduled processes (notifications/web/
+    /// subliminals/prompts) in isolation, unpolluted by the ordinary spawn loop's own
+    /// `SpawnImage`/`SetTitle` traffic.
+    fn isolated_process_config() -> HashMap<String, OptionValue> {
+        let mut config = base_default_mode_config();
+        config.insert("images_enabled".to_string(), OptionValue::Boolean(false));
+        config
+    }
+
+    fn as_str_sources(owned: &[(String, String)]) -> Vec<(&str, &str)> {
+        owned.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect()
+    }
+
+    const COUNTING_NOTIFICATION_WRAP: &str = r#"
+        COUNT = 0
+        local real = lewdware.show_notification
+        lewdware.show_notification = function(n)
+            COUNT = COUNT + 1
+            return real(n)
+        end
+    "#;
+
+    #[tokio::test(start_paused = true)]
+    async fn notifications_fire_at_configured_frequency() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    notifications: vec![shared::behaviour::TextItem {
+                        text: "hi".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(COUNTING_NOTIFICATION_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert(
+                    "notifications_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert(
+                    "notification_frequency".to_string(),
+                    OptionValue::Number(1.0),
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(3100)).await;
+
+                assert_eq!(harness.eval_number("COUNT"), 3.0);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn notifications_skip_when_pool_empty_but_enabled() {
+        LocalSet::new()
+            .run_until(async {
+                let owned = wrapped_default_mode_sources(COUNTING_NOTIFICATION_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert(
+                    "notifications_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert(
+                    "notification_frequency".to_string(),
+                    OptionValue::Number(1.0),
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    Content::default(),
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2100)).await;
+
+                assert_eq!(harness.eval_number("COUNT"), 0.0);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn notifications_disabled_never_fires() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    notifications: vec![shared::behaviour::TextItem {
+                        text: "hi".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(COUNTING_NOTIFICATION_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert(
+                    "notifications_enabled".to_string(),
+                    OptionValue::Boolean(false),
+                );
+                config.insert(
+                    "notification_frequency".to_string(),
+                    OptionValue::Number(1.0),
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2100)).await;
+
+                assert_eq!(harness.eval_number("COUNT"), 0.0);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn notifications_pause_while_dormant() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    notifications: vec![shared::behaviour::TextItem {
+                        text: "hi".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(COUNTING_NOTIFICATION_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert(
+                    "notifications_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                // Ticks at 300ms/600ms/900ms/1200ms...; `active_min`/`active_max` (and
+                // `dormant_min`/`dormant_max`) are whole seconds -- `schedule_dormancy` passes
+                // them straight to `math.random(m, n)`, which requires integer-valued arguments.
+                // Dormancy triggers at 1000ms and stays dormant for the rest of the test
+                // (dormant_min/max = 10s): the 300/600/900ms ticks should fire, the 1200ms+ ticks
+                // should all be suppressed.
+                config.insert(
+                    "notification_frequency".to_string(),
+                    OptionValue::Number(0.3),
+                );
+                config.insert("dormancy_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("active_min".to_string(), OptionValue::Number(1.0));
+                config.insert("active_max".to_string(), OptionValue::Number(1.0));
+                config.insert("dormant_min".to_string(), OptionValue::Number(10.0));
+                config.insert("dormant_max".to_string(), OptionValue::Number(10.0));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1300)).await;
+
+                assert_eq!(harness.eval_number("COUNT"), 3.0);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn web_link_opens_with_random_arg_appended() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    web_links: vec![shared::behaviour::WebLink {
+                        url: "https://example.com/?q=".to_string(),
+                        args: vec!["a".to_string(), "b".to_string()],
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let mut config = isolated_process_config();
+                config.insert("web_opening_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("web_frequency".to_string(), OptionValue::Number(1.0));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                let recorded = harness.recorded();
+                assert_eq!(recorded.len(), 1);
+                match &recorded[0] {
+                    Recorded::OpenLink { url } => assert!(
+                        url == "https://example.com/?q=a" || url == "https://example.com/?q=b",
+                        "unexpected url: {url}"
+                    ),
+                    other => panic!("expected OpenLink, got {other:?}"),
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn web_link_opens_url_unmodified_when_no_args() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    web_links: vec![shared::behaviour::WebLink {
+                        url: "https://example.com/".to_string(),
+                        args: vec![],
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let mut config = isolated_process_config();
+                config.insert("web_opening_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("web_frequency".to_string(), OptionValue::Number(1.0));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![Recorded::OpenLink {
+                        url: "https://example.com/".to_string()
+                    }]
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn web_opening_skips_when_pool_empty() {
+        LocalSet::new()
+            .run_until(async {
+                let mut config = isolated_process_config();
+                config.insert("web_opening_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("web_frequency".to_string(), OptionValue::Number(1.0));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    Content::default(),
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2100)).await;
+
+                assert_eq!(harness.recorded(), vec![]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn web_opening_pauses_while_dormant() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    web_links: vec![shared::behaviour::WebLink {
+                        url: "https://example.com/".to_string(),
+                        args: vec![],
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let mut config = isolated_process_config();
+                config.insert("web_opening_enabled".to_string(), OptionValue::Boolean(true));
+                // Same timing scheme as `notifications_pause_while_dormant`: ticks at
+                // 300/600/900/1200ms, dormancy triggers at 1000ms and stays dormant for the rest
+                // of the test.
+                config.insert("web_frequency".to_string(), OptionValue::Number(0.3));
+                config.insert("dormancy_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("active_min".to_string(), OptionValue::Number(1.0));
+                config.insert("active_max".to_string(), OptionValue::Number(1.0));
+                config.insert("dormant_min".to_string(), OptionValue::Number(10.0));
+                config.insert("dormant_max".to_string(), OptionValue::Number(10.0));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1300)).await;
+
+                assert_eq!(harness.recorded().len(), 3);
+            })
+            .await;
+    }
+
+    const OPACITY_CAPTURE_WRAP: &str = r#"
+        OPACITY = -1
+        local real = lewdware.popup.text
+        lewdware.popup.text = function(text, opts)
+            OPACITY = opts.opacity
+            return real(text, opts)
+        end
+    "#;
+
+    #[tokio::test(start_paused = true)]
+    async fn subliminal_flashes_then_closes_after_flash_duration() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    subliminals: vec![shared::behaviour::TextItem {
+                        text: "Obey".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let mut config = isolated_process_config();
+                config.insert(
+                    "subliminals_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert(
+                    "subliminal_frequency".to_string(),
+                    OptionValue::Number(1.0),
+                );
+                config.insert("subliminal_opacity".to_string(), OptionValue::Number(0.5));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+                assert_eq!(harness.recorded(), vec![Recorded::SpawnText]);
+
+                // FLASH_DURATION_MS = 200 -- the window should self-close shortly after spawning.
+                harness.advance(Duration::from_millis(300)).await;
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnText,
+                        Recorded::CloseWindow { id: PopupId(0) },
+                    ]
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn subliminal_opacity_passed_through() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    subliminals: vec![shared::behaviour::TextItem {
+                        text: "Obey".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(OPACITY_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert(
+                    "subliminals_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert(
+                    "subliminal_frequency".to_string(),
+                    OptionValue::Number(1.0),
+                );
+                config.insert("subliminal_opacity".to_string(), OptionValue::Number(0.3));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(harness.eval_number("OPACITY"), 0.3);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn subliminal_skips_when_pool_empty() {
+        LocalSet::new()
+            .run_until(async {
+                let mut config = isolated_process_config();
+                config.insert(
+                    "subliminals_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert(
+                    "subliminal_frequency".to_string(),
+                    OptionValue::Number(1.0),
+                );
+                config.insert("subliminal_opacity".to_string(), OptionValue::Number(0.5));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    Content::default(),
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2100)).await;
+
+                assert_eq!(harness.recorded(), vec![]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn subliminals_pause_while_dormant() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    subliminals: vec![shared::behaviour::TextItem {
+                        text: "Obey".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let mut config = isolated_process_config();
+                config.insert(
+                    "subliminals_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert("subliminal_opacity".to_string(), OptionValue::Number(0.5));
+                // Same timing scheme as `notifications_pause_while_dormant`: ticks at
+                // 300/600/900/1200ms, dormancy triggers at 1000ms. Each firing spawns then closes
+                // 200ms later, so 3 firings before dormancy produce 6 recorded events total
+                // (spawn+close for each), and the 1200ms tick is suppressed.
+                config.insert(
+                    "subliminal_frequency".to_string(),
+                    OptionValue::Number(0.3),
+                );
+                config.insert("dormancy_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("active_min".to_string(), OptionValue::Number(1.0));
+                config.insert("active_max".to_string(), OptionValue::Number(1.0));
+                config.insert("dormant_min".to_string(), OptionValue::Number(10.0));
+                config.insert("dormant_max".to_string(), OptionValue::Number(10.0));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1300)).await;
+
+                assert_eq!(harness.recorded().len(), 6);
+            })
+            .await;
+    }
+
+    const DIALOG_ELEMENT_CAPTURE_WRAP: &str = r#"
+        DIALOG_TEXT = nil
+        DIALOG_LABEL = nil
+        local real = lewdware.popup.dialog
+        lewdware.popup.dialog = function(opts)
+            for _, el in ipairs(opts.elements) do
+                if el.type == "text" then DIALOG_TEXT = el.text end
+                if el.type == "buttons" then DIALOG_LABEL = el.options[1].label end
+            end
+            return real(opts)
+        end
+    "#;
+
+    #[tokio::test(start_paused = true)]
+    async fn prompt_dialog_spawns_with_pool_text_and_configured_submit_label() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    prompts: vec![shared::behaviour::TextItem {
+                        text: "Well?".to_string(),
+                        tags: vec![],
+                    }],
+                    prompt_settings: shared::behaviour::PromptSettings {
+                        submit_label: Some("Confirm".to_string()),
+                    },
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(DIALOG_ELEMENT_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert("prompts_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("prompt_frequency".to_string(), OptionValue::Number(1.0));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(harness.recorded(), vec![Recorded::SpawnDialog]);
+                assert_eq!(harness.eval_string("DIALOG_TEXT"), "Well?");
+                assert_eq!(harness.eval_string("DIALOG_LABEL"), "Confirm");
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn prompt_dialog_falls_back_to_default_submit_label_when_unset() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    prompts: vec![shared::behaviour::TextItem {
+                        text: "Well?".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(DIALOG_ELEMENT_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert("prompts_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("prompt_frequency".to_string(), OptionValue::Number(1.0));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(harness.eval_string("DIALOG_LABEL"), "Submit");
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn prompt_submit_and_select_both_close_the_dialog() {
+        async fn spawn_one_prompt_dialog() -> Harness {
+            let content = Content {
+                prompts: vec![shared::behaviour::TextItem {
+                    text: "Well?".to_string(),
+                    tags: vec![],
+                }],
+                ..Default::default()
+            };
+
+            let mut config = isolated_process_config();
+            config.insert("prompts_enabled".to_string(), OptionValue::Boolean(true));
+            config.insert("prompt_frequency".to_string(), OptionValue::Number(1.0));
+
+            let mut harness = Harness::with_pack(
+                &real_default_mode_sources(),
+                pack_fixture(false),
+                content,
+                config,
+                Capabilities::default(),
+                Volume::default(),
+            );
+            harness.run_entrypoint("main.lua").unwrap();
+            harness.advance(Duration::from_millis(1100)).await;
+            assert_eq!(harness.recorded(), vec![Recorded::SpawnDialog]);
+            harness
+        }
+
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = spawn_one_prompt_dialog().await;
+                harness.send_event(Event::DialogSelect {
+                    id: PopupId(0),
+                    button_id: "submit".to_string(),
+                    values: HashMap::new(),
+                });
+                harness.pump_events();
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnDialog,
+                        Recorded::CloseWindow { id: PopupId(0) },
+                    ]
+                );
+
+                let mut harness = spawn_one_prompt_dialog().await;
+                harness.send_event(Event::DialogSubmit {
+                    id: PopupId(0),
+                    element_id: "response".to_string(),
+                    values: HashMap::new(),
+                });
+                harness.pump_events();
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnDialog,
+                        Recorded::CloseWindow { id: PopupId(0) },
+                    ]
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn prompts_skip_when_pool_empty() {
+        LocalSet::new()
+            .run_until(async {
+                let mut config = isolated_process_config();
+                config.insert("prompts_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("prompt_frequency".to_string(), OptionValue::Number(1.0));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    Content::default(),
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2100)).await;
+
+                assert_eq!(harness.recorded(), vec![]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn prompts_pause_while_dormant() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    prompts: vec![shared::behaviour::TextItem {
+                        text: "Well?".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let mut config = isolated_process_config();
+                config.insert("prompts_enabled".to_string(), OptionValue::Boolean(true));
+                // Same timing scheme as `notifications_pause_while_dormant`: ticks at
+                // 300/600/900/1200ms, dormancy triggers at 1000ms and stays dormant for the rest
+                // of the test -- the 300/600/900ms ticks should spawn a dialog, the 1200ms tick
+                // should be suppressed.
+                config.insert("prompt_frequency".to_string(), OptionValue::Number(0.3));
+                config.insert("dormancy_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("active_min".to_string(), OptionValue::Number(1.0));
+                config.insert("active_max".to_string(), OptionValue::Number(1.0));
+                config.insert("dormant_min".to_string(), OptionValue::Number(10.0));
+                config.insert("dormant_max".to_string(), OptionValue::Number(10.0));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1300)).await;
+
+                assert_eq!(harness.recorded().len(), 3);
+            })
+            .await;
+    }
+
+    const WALLPAPER_CAPTURE_WRAP: &str = r#"
+        SET_COUNT = 0
+        RESET_COUNT = 0
+        SET_IMAGE_NAME = nil
+        local real_set = lewdware.wallpaper.set
+        lewdware.wallpaper.set = function(image, opts)
+            SET_COUNT = SET_COUNT + 1
+            SET_IMAGE_NAME = image.name
+            return real_set(image, opts)
+        end
+        local real_reset = lewdware.wallpaper.reset
+        lewdware.wallpaper.reset = function()
+            RESET_COUNT = RESET_COUNT + 1
+            return real_reset()
+        end
+    "#;
+
+    #[tokio::test(start_paused = true)]
+    async fn wallpaper_applied_once_at_mode_start() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    wallpaper_tags: vec!["wallpaper".to_string()],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(WALLPAPER_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert("wallpaper_enabled".to_string(), OptionValue::Boolean(true));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture_with_tagged_image(&["wallpaper"]),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(harness.eval_number("SET_COUNT"), 1.0);
+                assert_eq!(harness.eval_string("SET_IMAGE_NAME"), "pic.avif");
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wallpaper_skips_silently_with_no_wallpaper_tagged_media() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    wallpaper_tags: vec!["wallpaper".to_string()],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(WALLPAPER_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert("wallpaper_enabled".to_string(), OptionValue::Boolean(true));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(harness.eval_number("SET_COUNT"), 0.0);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wallpaper_not_applied_when_no_tags_declared() {
+        // Opt-in only: `wallpaper_tags` empty (the pack never declared any) means no wallpaper
+        // feature at all, even if `wallpaper_enabled` is somehow true (defensive against a custom
+        // mode reusing this library, or a stale stored option) and the fixture has real media.
+        LocalSet::new()
+            .run_until(async {
+                let owned = wrapped_default_mode_sources(WALLPAPER_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert("wallpaper_enabled".to_string(), OptionValue::Boolean(true));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(true),
+                    Content::default(),
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(harness.eval_number("SET_COUNT"), 0.0);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wallpaper_honors_a_custom_configured_tag() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    wallpaper_tags: vec!["bg".to_string()],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(WALLPAPER_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert("wallpaper_enabled".to_string(), OptionValue::Boolean(true));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture_with_tagged_image(&["bg"]),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(harness.eval_number("SET_COUNT"), 1.0);
+                assert_eq!(harness.eval_string("SET_IMAGE_NAME"), "pic.avif");
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wallpaper_resets_on_dormancy_sleep_and_reapplies_on_wake() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    wallpaper_tags: vec!["wallpaper".to_string()],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(WALLPAPER_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert("wallpaper_enabled".to_string(), OptionValue::Boolean(true));
+                // Whole-second bounds: schedule_dormancy passes these straight to
+                // math.random(m, n), which requires integer-valued arguments (see
+                // notifications_pause_while_dormant). 1s active, 1s dormant: reset should happen
+                // ~1000ms in, reapply ~2000ms in.
+                config.insert("dormancy_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("active_min".to_string(), OptionValue::Number(1.0));
+                config.insert("active_max".to_string(), OptionValue::Number(1.0));
+                config.insert("dormant_min".to_string(), OptionValue::Number(1.0));
+                config.insert("dormant_max".to_string(), OptionValue::Number(1.0));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture_with_tagged_image(&["wallpaper"]),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                assert_eq!(harness.eval_number("SET_COUNT"), 1.0);
+
+                harness.advance(Duration::from_millis(1100)).await;
+                assert_eq!(harness.eval_number("RESET_COUNT"), 1.0);
+                assert_eq!(harness.eval_number("SET_COUNT"), 1.0, "shouldn't reapply until wake");
+
+                harness.advance(Duration::from_millis(1100)).await;
+                assert_eq!(harness.eval_number("SET_COUNT"), 2.0);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn splash_shown_once_and_fades_out() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    splash_tags: vec!["splash".to_string()],
+                    ..Default::default()
+                };
+
+                let mut config = isolated_process_config();
+                config.insert("splash_enabled".to_string(), OptionValue::Boolean(true));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture_with_tagged_image(&["splash"]),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                assert_eq!(
+                    harness.recorded(),
+                    vec![Recorded::SpawnImage { media_id: 1 }]
+                );
+
+                // Drive the fade-in -> hold -> fade-out -> close chain: the fake handler doesn't
+                // simulate FadeFinish itself (a real animation-completion event in the real app),
+                // so the test supplies it directly, same as DialogSelect/DialogSubmit elsewhere.
+                harness.send_event(Event::FadeFinish {
+                    id: PopupId(0),
+                    fade_id: 0,
+                });
+                harness.pump_events();
+                harness.advance(Duration::from_millis(1600)).await; // SPLASH_HOLD_MS = 1500
+                harness.send_event(Event::FadeFinish {
+                    id: PopupId(0),
+                    fade_id: 1,
+                });
+                harness.pump_events();
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnImage { media_id: 1 },
+                        Recorded::CloseWindow { id: PopupId(0) },
+                    ]
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn splash_disabled_never_spawns() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    splash_tags: vec!["splash".to_string()],
+                    ..Default::default()
+                };
+
+                let mut config = isolated_process_config();
+                config.insert("splash_enabled".to_string(), OptionValue::Boolean(false));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture_with_tagged_image(&["splash"]),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(harness.recorded(), vec![]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn splash_skips_silently_with_no_splash_tagged_media() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    splash_tags: vec!["splash".to_string()],
+                    ..Default::default()
+                };
+
+                let mut config = isolated_process_config();
+                config.insert("splash_enabled".to_string(), OptionValue::Boolean(true));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(harness.recorded(), vec![]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn open_popup_sets_title_from_matching_caption() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    captions: vec![shared::behaviour::TextItem {
+                        text: "Obey.".to_string(),
+                        tags: vec!["red".to_string()],
+                    }],
+                    ..Default::default()
+                };
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(true),
+                    content,
+                    base_default_mode_config(),
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                // Slack beyond the nominal 1000ms popup_frequency: the fake handler's reply is a
+                // real OS-thread round trip, which eats into the paused clock's margin (see
+                // `interval_keeps_firing_after_a_callback_errors`'s comment for the same reasoning).
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnImage { media_id: 1 },
+                        Recorded::SetTitle {
+                            id: PopupId(0),
+                            title: Some("Obey.".to_string()),
+                        },
+                    ]
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn open_popup_skips_caption_silently_when_pool_empty_or_unmatched() {
+        LocalSet::new()
+            .run_until(async {
+                for content in [
+                    Content::default(),
+                    Content {
+                        captions: vec![shared::behaviour::TextItem {
+                            text: "Obey.".to_string(),
+                            tags: vec!["nonexistent".to_string()],
+                        }],
+                        ..Default::default()
+                    },
+                ] {
+                    let mut harness = Harness::with_pack(
+                        &real_default_mode_sources(),
+                        pack_fixture(true),
+                        content,
+                        base_default_mode_config(),
+                        Capabilities::default(),
+                        Volume::default(),
+                    );
+                    harness.run_entrypoint("main.lua").unwrap();
+                    harness.advance(Duration::from_millis(1100)).await;
+
+                    assert_eq!(
+                        harness.recorded(),
+                        vec![Recorded::SpawnImage { media_id: 1 }],
+                        "expected no SetTitle when the caption pool is empty or unmatched"
+                    );
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn captions_disabled_via_config_leaves_title_unset() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    captions: vec![shared::behaviour::TextItem {
+                        text: "Obey.".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let mut config = base_default_mode_config();
+                config.insert("captions_enabled".to_string(), OptionValue::Boolean(false));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(true),
+                    content,
+                    config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![Recorded::SpawnImage { media_id: 1 }],
+                    "expected no SetTitle when captions are disabled via config"
+                );
+            })
+            .await;
+    }
+
+    /// A tagged-only item (no empty-tag fallback in the pool) is eligible exactly when the
+    /// spawned media's tags intersect its own -- proving tag-matching actually gates eligibility,
+    /// independent of the empty-tag-always-applies case covered by the next test.
+    #[tokio::test(start_paused = true)]
+    async fn content_picker_matches_media_tags_over_empty_bucket() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    captions: vec![shared::behaviour::TextItem {
+                        text: "kinky".to_string(),
+                        tags: vec!["kinky".to_string()],
+                    }],
+                    ..Default::default()
+                };
+
+                let sources = content_lib_sources(
+                    r#"
+                        local content = require("lib.content")
+                        for _ = 1, 20 do
+                            local caption = content.pick_caption({ "kinky" })
+                            assert(caption ~= nil and caption.text == "kinky",
+                                "expected the tagged caption to be eligible on a matching tag")
+                        end
+                        assert(content.pick_caption({ "other" }) == nil,
+                            "a non-matching tag should exclude the only pool entry")
+                    "#,
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    HashMap::new(),
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn content_picker_falls_back_to_empty_tag_item_when_no_match() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    captions: vec![
+                        shared::behaviour::TextItem {
+                            text: "untagged".to_string(),
+                            tags: vec![],
+                        },
+                        shared::behaviour::TextItem {
+                            text: "kinky".to_string(),
+                            tags: vec!["kinky".to_string()],
+                        },
+                    ],
+                    ..Default::default()
+                };
+
+                let sources = content_lib_sources(
+                    r#"
+                        local content = require("lib.content")
+                        for _ = 1, 20 do
+                            local caption = content.pick_caption({ "other" })
+                            assert(caption.text == "untagged", "expected the empty-tag caption to win")
+                        end
+                    "#,
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    HashMap::new(),
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn content_picker_returns_nil_for_empty_pool() {
+        LocalSet::new()
+            .run_until(async {
+                let sources = content_lib_sources(
+                    r#"
+                        local content = require("lib.content")
+                        assert(content.pick_caption({ "anything" }) == nil)
+                        assert(content.pick_prompt() == nil)
+                        assert(content.pick_notification() == nil)
+                        assert(content.pick_subliminal() == nil)
+                        assert(content.pick_web_link() == nil)
+                    "#,
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    Content::default(),
+                    HashMap::new(),
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn content_picker_excludes_disabled_content_group_tags() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    content_groups: vec![shared::behaviour::ContentGroup {
+                        id: "kinky".to_string(),
+                        label: "Kinky".to_string(),
+                        description: None,
+                        tags: vec!["kinky".to_string()],
+                        enabled_by_default: true,
+                    }],
+                    notifications: vec![
+                        shared::behaviour::TextItem {
+                            text: "vanilla".to_string(),
+                            tags: vec![],
+                        },
+                        shared::behaviour::TextItem {
+                            text: "kinky".to_string(),
+                            tags: vec!["kinky".to_string()],
+                        },
+                    ],
+                    ..Default::default()
+                };
+
+                let sources = content_lib_sources(
+                    r#"
+                        local content = require("lib.content")
+                        for _ = 1, 20 do
+                            local notification = content.pick_notification()
+                            assert(notification.text == "vanilla",
+                                "expected the kinky-tagged notification to be excluded")
+                        end
+                    "#,
+                );
+
+                let mut mode_config = HashMap::new();
+                mode_config.insert(
+                    format!("{}kinky", shared::behaviour::CONTENT_GROUP_KEY_PREFIX),
+                    OptionValue::Boolean(false),
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    mode_config,
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn content_picker_standalone_mode_ignores_own_tags() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    subliminals: vec![shared::behaviour::TextItem {
+                        text: "obey".to_string(),
+                        tags: vec!["hypno".to_string()],
+                    }],
+                    ..Default::default()
+                };
+
+                let sources = content_lib_sources(
+                    r#"
+                        local content = require("lib.content")
+                        for _ = 1, 20 do
+                            local item = content.pick_subliminal()
+                            assert(item ~= nil and item.text == "obey",
+                                "a standalone pool's own tags shouldn't gate eligibility")
+                        end
+                    "#,
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    HashMap::new(),
+                    Capabilities::default(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    /// Regression test for the `merge_tags` shorthand-array bug: querying with the shorthand
+    /// `tags = { "wallpaper" }` form must still narrow the results even once some *other* content
+    /// group is disabled -- before the fix, `merge_tags` silently dropped the shorthand filter in
+    /// that case (`tags.any` read off a plain array is always nil), matching all media instead.
+    #[tokio::test(start_paused = true)]
+    async fn media_query_layer_honors_shorthand_tags_when_a_group_is_disabled() {
+        LocalSet::new()
+            .run_until(async {
+                const MEDIA: &[(&str, &[&str])] = &[
+                    ("wallpaper1.avif", &["wallpaper"]),
+                    ("kinky1.avif", &["kinky"]),
+                ];
+
+                let content = Content {
+                    content_groups: vec![shared::behaviour::ContentGroup {
+                        id: "kinky".to_string(),
+                        label: "Kinky".to_string(),
+                        description: None,
+                        tags: vec!["kinky".to_string()],
+                        enabled_by_default: true,
+                    }],
+                    ..Default::default()
+                };
+
+                let sources: &[(&str, &str)] = &[
+                    (
+                        "main.lua",
+                        r#"
+                            local media = require("lib.media")
+                            local items = media.list({ type = { "image" }, tags = { "wallpaper" } })
+                            assert(#items == 1, "shorthand tag filter should still narrow the results")
+                            assert(items[1].name == "wallpaper1.avif")
+                        "#,
+                    ),
+                    (
+                        "lib/media.lua",
+                        include_str!("../../../default-modes/src/lib/media.lua"),
+                    ),
+                ];
+
+                let mut mode_config = HashMap::new();
+                mode_config.insert(
+                    format!("{}kinky", shared::behaviour::CONTENT_GROUP_KEY_PREFIX),
+                    OptionValue::Boolean(false),
+                );
+
+                let mut harness = Harness::with_pack(
+                    sources,
+                    pack_fixture_with_data(MEDIA, None),
+                    content,
+                    mode_config,
                     Capabilities::default(),
                     Volume::default(),
                 );

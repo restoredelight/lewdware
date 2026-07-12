@@ -96,6 +96,14 @@ fn pack_has_constants(content: &Content, has_experience: bool) -> IndexMap<Strin
         "pack_has_experience".to_string(),
         OptionValue::Boolean(has_experience),
     );
+    map.insert(
+        "pack_has_wallpaper".to_string(),
+        OptionValue::Boolean(!content.wallpaper_tags.is_empty()),
+    );
+    map.insert(
+        "pack_has_splash".to_string(),
+        OptionValue::Boolean(!content.splash_tags.is_empty()),
+    );
     map
 }
 
@@ -225,6 +233,8 @@ mod tests {
             "pack_has_web_links",
             "pack_has_content_groups",
             "pack_has_experience",
+            "pack_has_wallpaper",
+            "pack_has_splash",
         ] {
             assert_eq!(
                 schema.pack_has.get(key),
@@ -281,6 +291,40 @@ mod tests {
         assert_eq!(
             schema.pack_has.get("pack_has_web_links"),
             Some(&OptionValue::Boolean(false))
+        );
+    }
+
+    #[test]
+    fn pack_has_wallpaper_false_when_not_declared() {
+        // No mechanical fallback: a pack that never sets wallpaper_tags/splash_tags in
+        // behaviour.json gets `pack_has_wallpaper`/`pack_has_splash` = false, even if it happens
+        // to tag some media "wallpaper"/"splash" -- see `Content`'s doc comment on why there's no
+        // guessing here (opt-in only).
+        let schema = effective_options(&empty_mode_schema(), &Behaviour::new());
+        assert_eq!(
+            schema.pack_has.get("pack_has_wallpaper"),
+            Some(&OptionValue::Boolean(false))
+        );
+        assert_eq!(
+            schema.pack_has.get("pack_has_splash"),
+            Some(&OptionValue::Boolean(false))
+        );
+    }
+
+    #[test]
+    fn pack_has_wallpaper_true_once_author_declares_tags() {
+        let mut behaviour = Behaviour::new();
+        behaviour.content.wallpaper_tags = vec!["bg".to_string()];
+        behaviour.content.splash_tags = vec!["intro".to_string()];
+
+        let schema = effective_options(&empty_mode_schema(), &behaviour);
+        assert_eq!(
+            schema.pack_has.get("pack_has_wallpaper"),
+            Some(&OptionValue::Boolean(true))
+        );
+        assert_eq!(
+            schema.pack_has.get("pack_has_splash"),
+            Some(&OptionValue::Boolean(true))
         );
     }
 

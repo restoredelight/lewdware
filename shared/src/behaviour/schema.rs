@@ -53,12 +53,15 @@ impl Default for Behaviour {
 }
 
 /// Data read by both default modes: captions, prompts, notifications, subliminals, web links,
-/// and the content groups a user can toggle. See `behaviour-design/behaviour-tab.md` and
-/// `behaviour-design/default-mode.md` (Ownership).
+/// wallpaper/splash tags, and the content groups a user can toggle. See
+/// `behaviour-design/behaviour-tab.md` and `behaviour-design/default-mode.md` (Ownership).
 ///
-/// No wallpaper/splash fields: those are pure tagged media (`wallpaper`/`splash` are already
-/// reserved, "mechanical" tags per `default-mode.md`'s Ownership section), so the default modes
-/// query them directly via `Media.tags` — there's nothing for this document to carry.
+/// Wallpaper/splash are pure tagged media -- `wallpaper_tags`/`splash_tags` name which tags
+/// identify that media, rather than carrying the media itself. Both are opt-in like every other
+/// field here: empty means the pack doesn't use engine-managed wallpaper/splash at all, full
+/// stop -- there is deliberately no mechanical fallback tag (e.g. assuming anything tagged
+/// `"wallpaper"` is wallpaper media), since a pack author using that word for an unrelated
+/// organizational tag would otherwise get surprise behaviour they never asked for.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Content {
     #[serde(default)]
@@ -75,6 +78,13 @@ pub struct Content {
     pub subliminals: Vec<TextItem>,
     #[serde(default)]
     pub web_links: Vec<WebLink>,
+    /// Tags identifying wallpaper media. Empty means the pack has no wallpaper feature at all --
+    /// see this struct's doc comment.
+    #[serde(default)]
+    pub wallpaper_tags: Vec<String>,
+    /// Tags identifying splash media. See `wallpaper_tags`'s doc comment -- same reasoning.
+    #[serde(default)]
+    pub splash_tags: Vec<String>,
 }
 
 /// A single content-pool entry, taggable independently of any other entry in the same pool
@@ -181,6 +191,8 @@ mod tests {
                     args: vec!["edgeware packs".to_string(), "rule 34".to_string()],
                     tags: vec![],
                 }],
+                wallpaper_tags: vec!["bg".to_string()],
+                splash_tags: vec![],
             },
             experience: Some(Experience::default()),
         }
@@ -192,6 +204,15 @@ mod tests {
         let bytes = original.to_json_bytes().unwrap();
         let decoded = Behaviour::from_json_bytes(&bytes).unwrap();
         assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn wallpaper_and_splash_tags_are_opt_in_with_no_mechanical_default() {
+        // No mechanical fallback: an author who never declares wallpaper_tags/splash_tags gets an
+        // empty list, not an assumed "wallpaper"/"splash" tag -- see `Content`'s doc comment.
+        let content = Content::default();
+        assert_eq!(content.wallpaper_tags, Vec::<String>::new());
+        assert_eq!(content.splash_tags, Vec::<String>::new());
     }
 
     #[test]

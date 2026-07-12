@@ -1,5 +1,7 @@
 local config = lewdware.config
 local media = require("lib.media")
+local content = require("lib.content")
+local wallpaper = require("lib.wallpaper")
 
 ---@cast config {
 ---    popup_frequency: number,
@@ -24,6 +26,18 @@ local media = require("lib.media")
 ---    movement_enabled: boolean,
 ---    movement_speed_min: number,
 ---    movement_speed_max: number,
+---    captions_enabled: boolean,
+---    notifications_enabled: boolean,
+---    notification_frequency: number,
+---    web_opening_enabled: boolean,
+---    web_frequency: number,
+---    subliminals_enabled: boolean,
+---    subliminal_frequency: number,
+---    subliminal_opacity: number,
+---    prompts_enabled: boolean,
+---    prompt_frequency: number,
+---    wallpaper_enabled: boolean,
+---    splash_enabled: boolean,
 ---}
 
 -- ── Helpers ────────────────────────────────────────────────────────────────
@@ -161,6 +175,11 @@ local function open_popup(spawn_opts, close_trigger)
 		window = lewdware.popup.video(item, spawn_opts)
 	end
 
+	if config.captions_enabled then
+		local caption = content.pick_caption(item.tags)
+		if caption then window:set_title(caption.text) end
+	end
+
 	popup_count = popup_count + 1
 
 	if config.dormancy_enabled then
@@ -251,6 +270,7 @@ local function schedule_dormancy()
 			window:close()
 		end
 		windows = {}
+		wallpaper.reset_wallpaper()
 
 		local dormant_ms = secs(math.random(config.dormant_min, config.dormant_max))
 		lewdware.after(dormant_ms, function()
@@ -262,12 +282,15 @@ local function schedule_dormancy()
 				audio_active = true
 				spawn_audio()
 			end
+			wallpaper.apply_wallpaper()
 			schedule_dormancy()
 		end)
 	end)
 end
 
 -- ── Start ──────────────────────────────────────────────────────────────────
+
+local function is_dormant() return dormant end
 
 if #popup_types > 0 then
 	schedule_spawning()
@@ -281,3 +304,11 @@ end
 if config.dormancy_enabled then
 	schedule_dormancy()
 end
+
+require("lib.notifications").start(is_dormant)
+require("lib.web").start(is_dormant)
+require("lib.subliminals").start(is_dormant)
+require("lib.prompts").start(is_dormant)
+
+wallpaper.apply_wallpaper()
+wallpaper.show_splash()

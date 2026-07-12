@@ -117,8 +117,18 @@ pub fn create_api(
     // Private channel to the default-modes library code (never under the public `lewdware`
     // table, so it stays out of api.lua/the docs site): the whole behaviour.json `content`
     // section, empty for custom modes. See `ApiOptions::content`'s doc comment.
-    lua.globals()
-        .set("__lewdware_content", lua.to_value(&content)?)?;
+    //
+    // `serialize_none_to_null(false)`: mlua's serde bridge defaults to representing `Option::None`
+    // as a `Value::NULL` sentinel (a lightuserdata, distinct from Lua `nil`, for JSON-style
+    // null-vs-absent round-tripping) -- but that sentinel is truthy in Lua, so the idiomatic
+    // `field or default` fallback (used throughout `default-modes/src/lib/*.lua`, e.g.
+    // `PromptSettings.submit_label`) would silently never fall back. This is an internal
+    // engine-to-Lua channel, not a JSON API needing that distinction, so plain `nil` is correct.
+    let content_value = lua.to_value_with(
+        &content,
+        mlua::SerializeOptions::new().serialize_none_to_null(false),
+    )?;
+    lua.globals().set("__lewdware_content", content_value)?;
 
     api_table.set("config", config.into_lua(lua)?)?;
 
