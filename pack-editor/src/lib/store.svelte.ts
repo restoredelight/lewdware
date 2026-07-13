@@ -1,4 +1,4 @@
-import type { MediaFile, MetadataDto, UploadError } from "./types.js";
+import type { ConversionWarning, MediaFile, MetadataDto, UploadError } from "./types.js";
 
 // Reused across sorts: constructing a Collator per comparison (e.g. via
 // a.localeCompare(b, undefined, opts)) is drastically slower at scale.
@@ -47,6 +47,9 @@ class AppStore {
   uploadErrors = $state<UploadError[]>([]);
   _showDoneBriefly = $state(false);
   _doneTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Edgeware import (the converter's warnings for the currently-open pack, if it was imported)
+  importWarnings = $state<ConversionWarning[]>([]);
 
   uploading = $derived(this.uploadBatches > 0);
   showUploadProgress = $derived(
@@ -113,6 +116,7 @@ class AppStore {
     this.mediaTypeFilter = "all";
     this.tagFilter = new Set();
     this.metadata = null;
+    this.importWarnings = [];
   }
 
   closePack() {
@@ -127,10 +131,15 @@ class AppStore {
     this.searchQuery = "";
     this.mediaTypeFilter = "all";
     this.tagFilter = new Set();
+    this.importWarnings = [];
   }
 
   addFile(file: MediaFile) {
     this.files.push(file);
+    if (file.tags.length > 0) {
+      const newTags = file.tags.filter((t) => !this.allTags.includes(t));
+      if (newTags.length > 0) this.allTags = [...this.allTags, ...newTags];
+    }
     this.packSaved = false;
   }
 

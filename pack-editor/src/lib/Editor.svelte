@@ -8,6 +8,7 @@
   import Options from "./Options.svelte";
   import UploadProgress from "./UploadProgress.svelte";
   import MediaViewer from "./MediaViewer.svelte";
+  import ImportWarnings from "./ImportWarnings.svelte";
 
   let showAddMenu = $state(false);
   let showTagFilter = $state(false);
@@ -368,6 +369,11 @@
 <!-- Media viewer overlay -->
 {#if store.openedId !== null}
   <MediaViewer />
+{/if}
+
+<!-- Edgeware import warnings -->
+{#if store.importWarnings.length > 0}
+  <ImportWarnings />
 {/if}
 
 <!-- Drag and drop overlay -->

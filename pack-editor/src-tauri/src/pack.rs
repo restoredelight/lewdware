@@ -1058,6 +1058,51 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
+    /// Bulk get-or-create + associate, for a caller (the Edgeware importer) that already knows a
+    /// media file's full tag set up front rather than adding tags one at a time via the UI --
+    /// unlike `add_tag`, a tag here doesn't need to already exist.
+    pub async fn add_tags(&self, id: u64, tags: Vec<String>) -> Result<()> {
+        if tags.is_empty() {
+            return Ok(());
+        }
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            for tag in &tags {
+                tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
+                let tag_id: u64 =
+                    tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
+                        row.get("id")
+                    })?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+                    params![id, tag_id],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    /// Writes a named blob into the pack's generic `pack_data` table (e.g. `"behaviour"` for the
+    /// Edgeware importer's converted behaviour.json) -- `name` is the table's primary key, so a
+    /// repeat write for the same name replaces it.
+    pub async fn set_pack_data(&self, name: &str, blob: Vec<u8>) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let name = name.to_string();
+        self.db_execute(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO pack_data (name, blob) VALUES (?, ?)",
+                params![name, blob],
+            )?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
     pub async fn remove_tag(&self, id: u64, tag: String) -> Result<()> {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| {
@@ -1529,6 +1574,67 @@ mod tests {
         let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
         assert_eq!(pack2.name(), "Modified Name");
         assert!(!pack2.is_saved().await);
+    }
+
+    #[tokio::test]
+    async fn add_tags_creates_new_tags_and_associates_them() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
+        let file_id = insert_staged_audio(&pack, b"audio").await;
+
+        pack.add_tags(file_id, vec!["kinky".to_string(), "hypno".to_string()])
+            .await
+            .unwrap();
+
+        let mut tags = pack.get_tags(file_id).await.unwrap();
+        tags.sort();
+        assert_eq!(tags, vec!["hypno".to_string(), "kinky".to_string()]);
+
+        let mut all_tags = pack.get_all_tags().await.unwrap();
+        all_tags.sort();
+        assert_eq!(all_tags, vec!["hypno".to_string(), "kinky".to_string()]);
+
+        // Re-adding an already-associated tag (e.g. a second imported file sharing a mood) is a
+        // no-op, not a constraint-violation error.
+        pack.add_tags(file_id, vec!["kinky".to_string()])
+            .await
+            .unwrap();
+        let mut tags = pack.get_tags(file_id).await.unwrap();
+        tags.sort();
+        assert_eq!(tags, vec!["hypno".to_string(), "kinky".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn set_pack_data_round_trips_a_named_blob() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
+        pack.set_pack_data("behaviour", b"first".to_vec())
+            .await
+            .unwrap();
+        // A repeat write for the same name replaces it, rather than erroring or duplicating.
+        pack.set_pack_data("behaviour", b"second".to_vec())
+            .await
+            .unwrap();
+
+        let blob: Vec<u8> = pack
+            .db_execute(|conn| {
+                conn.query_row(
+                    "SELECT blob FROM pack_data WHERE name = 'behaviour'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(blob, b"second");
+        assert!(!pack.is_saved().await);
     }
 
     #[tokio::test]

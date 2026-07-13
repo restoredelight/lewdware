@@ -49,6 +49,17 @@
     pendingInfo = null;
     await api.closePack();
   }
+
+  async function importEdgeware() {
+    try {
+      const result = await api.importEdgewarePackDialog();
+      if (!result) return;
+      store.openPack(result.info.name, [], []);
+      store.importWarnings = result.warnings;
+    } catch (err) {
+      alert(`Import failed: ${err}`);
+    }
+  }
 </script>
 
 <div class="flex h-screen items-center justify-center bg-bg">
@@ -67,6 +78,15 @@
         class="px-5 py-2 rounded bg-surface border border-border text-text font-medium hover:bg-bg transition-colors text-sm"
       >
         Open Pack
+      </button>
+    </div>
+
+    <div class="mt-2">
+      <button
+        onclick={importEdgeware}
+        class="px-3 py-1.5 rounded bg-surface border border-border text-text text-xs hover:bg-bg transition-colors"
+      >
+        Import Edgeware Pack…
       </button>
     </div>
   </div>

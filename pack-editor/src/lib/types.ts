@@ -29,6 +29,16 @@ export interface PackInfo {
   has_unsaved_changes: boolean;
 }
 
+export interface ConversionWarning {
+  kind: string;
+  message: string;
+}
+
+export interface ImportResult {
+  info: PackInfo;
+  warnings: ConversionWarning[];
+}
+
 export interface UploadError {
   path: string;
   error: string;

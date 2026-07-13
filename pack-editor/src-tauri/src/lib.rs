@@ -1,4 +1,5 @@
 mod encode;
+mod import;
 mod media_server;
 mod pack;
 mod thumbnail;
@@ -189,6 +190,134 @@ async fn open_pack_dialog(
     };
     *state.pack.lock().await = Some(pack);
     Ok(Some(info))
+}
+
+/// A picked-path-plus-converted-output result the frontend needs to both open the (still
+/// filling-in) pack and surface what the converter couldn't carry over.
+#[derive(Serialize)]
+struct ImportResult {
+    info: PackInfo,
+    warnings: Vec<converter::Warning>,
+}
+
+/// Replaces any filesystem-hostile character (Windows' reserved set is the strictest, so it's
+/// used uniformly) with `_`, for turning a converted pack's freeform `name` into a suggested
+/// `.lwpack` file name.
+fn sanitize_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if r#"<>:"/\|?*"#.contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "Imported Pack".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[tauri::command]
+async fn import_edgeware_pack_dialog(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Option<ImportResult>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let app_c = app.clone();
+    let picked = tokio::task::spawn_blocking(move || {
+        app_c
+            .dialog()
+            .file()
+            .set_title("Select an Edgeware pack (.zip)")
+            .add_filter("Zip Archive", &["zip"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let source_path: PathBuf = picked.into_path().map_err(|e| e.to_string())?;
+
+    // Converting is I/O-only (JSON + directory listings, never media bytes) and runs
+    // synchronously here -- before any pack is created or a destination is even picked -- so an
+    // unreadable source (e.g. a corrupt zip) fails the command immediately instead of leaving a
+    // half-created empty pack behind.
+    let (source, output) = tokio::task::spawn_blocking(move || import::load(&source_path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+
+    let app_c = app.clone();
+    let suggested_name = sanitize_file_name(&output.metadata.name);
+    let dest = tokio::task::spawn_blocking(move || {
+        app_c
+            .dialog()
+            .file()
+            .set_title("Import as")
+            .add_filter("Lewdware Pack", &["lwpack"])
+            .set_file_name(format!("{suggested_name}.lwpack"))
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let Some(dest) = dest else {
+        return Ok(None);
+    };
+    let dest_path: PathBuf = dest.into_path().map_err(|e| e.to_string())?;
+
+    let shared::read_pack::Metadata { name, .. } = &output.metadata;
+    let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
+    let pack = MediaPack::new(dest_path, &data_dir, name)
+        .await
+        .map_err(|e| e.to_string())?;
+    let info = PackInfo {
+        name: pack.name(),
+        has_unsaved_changes: false,
+    };
+    *state.pack.lock().await = Some(pack);
+
+    let pack_state = state.pack.clone();
+    let encoder = state
+        .hardware_encoder
+        .get()
+        .cloned()
+        .unwrap_or(HardwareEncoder::SoftwareFallback);
+    let upload_lock = state.upload_lock.clone();
+    let cancel = state.cancel_flag.clone();
+    cancel.store(false, Ordering::SeqCst);
+
+    let converter::ConversionOutput {
+        metadata,
+        behaviour,
+        media,
+        icon: _,
+        warnings,
+    } = output;
+
+    tauri::async_runtime::spawn(import::run_import(
+        pack_state,
+        Arc::from(source),
+        import::ImportedContent {
+            media,
+            behaviour,
+            metadata,
+        },
+        app,
+        encoder,
+        upload_lock,
+        cancel,
+    ));
+
+    Ok(Some(ImportResult { info, warnings }))
 }
 
 #[tauri::command]
@@ -639,6 +768,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             new_pack_dialog,
             open_pack_dialog,
+            import_edgeware_pack_dialog,
             save_pack,
             save_pack_as_dialog,
             discard_changes,

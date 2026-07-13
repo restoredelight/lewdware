@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { MediaFile, MetadataDto, PackInfo } from "./types.js";
+import type { ImportResult, MediaFile, MetadataDto, PackInfo } from "./types.js";
 
 export const api = {
   newPackDialog: () => invoke<PackInfo | null>("new_pack_dialog"),
   openPackDialog: () => invoke<PackInfo | null>("open_pack_dialog"),
+  importEdgewarePackDialog: () => invoke<ImportResult | null>("import_edgeware_pack_dialog"),
   savePack: () => invoke<void>("save_pack"),
   savePackAsDialog: () => invoke<PackInfo | null>("save_pack_as_dialog"),
   discardChanges: () => invoke<MetadataDto>("discard_changes"),
