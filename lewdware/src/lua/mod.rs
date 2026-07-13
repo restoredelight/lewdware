@@ -317,9 +317,9 @@ pub fn start_lua_thread(
                 header.version_major, VERSION_MAJOR
             );
             tracing::warn!("{warning}");
-            if let Err(err) = shared::status::set_warning(warning) {
-                tracing::warn!("Failed to write engine status: {err}");
-            }
+            crate::supervisor_link::report(shared::ipc::EngineToSupervisor::Warning {
+                message: warning,
+            });
         }
 
         let entrypoint = metadata.entrypoint.clone();
@@ -389,18 +389,16 @@ pub fn start_lua_thread(
 
         // Everything needed to run the mode is in place; from here on a failure is a runtime
         // error rather than a reason the engine never started.
-        if let Err(err) = shared::status::set_state(shared::status::EngineState::Running) {
-            tracing::warn!("Failed to write engine status: {err}");
-        }
+        crate::supervisor_link::report(shared::ipc::EngineToSupervisor::Started);
 
         let runtime_clone = runtime.clone();
 
         local.spawn_local(async move {
             if let Err(err) = runtime_clone.run_entrypoint(entrypoint) {
                 tracing::error!("{err}");
-                if let Err(err) = shared::status::set_last_runtime_error(err.to_string()) {
-                    tracing::warn!("Failed to write engine status: {err}");
-                }
+                crate::supervisor_link::report(shared::ipc::EngineToSupervisor::RuntimeError {
+                    message: err.to_string(),
+                });
             }
 
             tracing::info!("Code finished");
@@ -414,9 +412,9 @@ pub fn start_lua_thread(
             while let Some(event) = event_rx.recv().await {
                 if let Err(err) = runtime.handle_event(event) {
                     tracing::error!("{err}");
-                    if let Err(err) = shared::status::set_last_runtime_error(err.to_string()) {
-                        tracing::warn!("Failed to write engine status: {err}");
-                    }
+                    crate::supervisor_link::report(shared::ipc::EngineToSupervisor::RuntimeError {
+                        message: err.to_string(),
+                    });
                 }
             }
         });
@@ -445,10 +443,6 @@ pub fn start_lua_thread(
         // channel — and hence its thread's shutdown/temp-file cleanup — is the main thread's
         // responsibility to wait on, not ours.
         drop(local);
-
-        if let Err(err) = shared::status::set_state(shared::status::EngineState::Exited) {
-            tracing::warn!("Failed to write engine status: {err}");
-        }
 
         tracing::info!("Thread killed");
     });

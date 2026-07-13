@@ -5,7 +5,8 @@ members = [
     "lw",
     "pack-editor/src-tauri",
     "shared",
-    "config/src-tauri"
+    "config/src-tauri",
+    "supervisor"
 ]
 resolver = "3"
 

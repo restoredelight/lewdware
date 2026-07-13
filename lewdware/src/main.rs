@@ -7,11 +7,7 @@ use pollster::block_on;
 use shared::user_config::{Mode, load_config};
 use winit::event_loop::EventLoop;
 
-use crate::{
-    app::LewdwareApp,
-    utils::{create_tray_icon, handle_sigterm, report_fatal_startup_error, spawn_panic_thread},
-    wgpu::WgpuState,
-};
+use crate::{app::LewdwareApp, utils::report_fatal_startup_error, wgpu::WgpuState};
 
 mod app;
 mod audio;
@@ -21,6 +17,7 @@ mod inner_window;
 mod lua;
 mod media;
 mod monitor;
+mod supervisor_link;
 mod text_font;
 mod utils;
 mod video;
@@ -40,12 +37,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Reset status.json for this run so a previous session's warning/error can't leak into this
-    // one; anything polling it (e.g. the config app) should only ever see this run's state.
-    if let Err(err) = shared::status::write_status(&shared::status::EngineStatus::starting()) {
-        tracing::warn!("Failed to write engine status: {err}");
-    }
-
     // Now that we know we're the only instance running, it's safe to clear out any temp files
     // left behind by a previous session (see `utils::prepare_temp_dir`).
     if let Err(err) = utils::prepare_temp_dir() {
@@ -57,6 +48,7 @@ fn main() -> Result<()> {
 
     let mut mode_path = None;
     let mut dev_mode = false;
+    let mut control_token = None;
     while let Some(arg) = args.next() {
         if &arg == "--mode-path" {
             mode_path = Some(PathBuf::from(args.next().context("No mode path provided")?));
@@ -65,7 +57,21 @@ fn main() -> Result<()> {
         if &arg == "--dev" {
             dev_mode = true;
         }
+
+        if &arg == "--control-token" {
+            control_token = Some(
+                args.next()
+                    .context("No control token provided")?
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
     }
+
+    // Spawned before `load_config()` so even a config-load failure can be reported to the
+    // supervisor; `stop_rx` fires once the supervisor asks this session to gracefully stop
+    // (wired to the winit event loop once it exists, below).
+    let stop_rx = supervisor_link::connect(control_token);
 
     let mut config = load_config().inspect_err(|err| report_fatal_startup_error(err))?;
 
@@ -103,10 +109,17 @@ fn main() -> Result<()> {
         }
     };
 
-    handle_sigterm(proxy.clone());
-
-    spawn_panic_thread(proxy.clone(), config.panic_button.clone());
-    create_tray_icon(proxy.clone()).inspect_err(|err| report_fatal_startup_error(err))?;
+    // Forwards a graceful-stop request from the supervisor (see `supervisor_link::connect`
+    // above) into the same `UserEvent::Exit` path a panic-key press or tray click used to feed
+    // directly -- both now live in the supervisor, which is the sole owner of session lifecycle.
+    {
+        let proxy = proxy.clone();
+        std::thread::spawn(move || {
+            if stop_rx.recv().is_ok() {
+                let _ = proxy.send_event(app::UserEvent::Exit);
+            }
+        });
+    }
 
     let mut app = LewdwareApp::new(wgpu_state, proxy, config, dev_mode)
         .inspect_err(|err| report_fatal_startup_error(err))?;

@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     io::{Cursor, Read, Seek, SeekFrom},
     path::PathBuf,
-    process::{Child, Command},
     sync::Mutex,
 };
 
@@ -257,7 +256,6 @@ pub struct AppState {
     uploaded: Mutex<Vec<UploadedModeEntry>>,
     sandbox_mode: Metadata,
     experience_mode: Metadata,
-    lewdware_process: Mutex<Option<Child>>,
 }
 
 pub type State<'a> = tauri::State<'a, AppState>;
@@ -819,83 +817,36 @@ fn remove_uploaded_mode(state: State<'_>, path: String) -> Result<Vec<ModeGroupD
 }
 
 // ─── Process management ───────────────────────────────────────────────────────
+//
+// The config app no longer owns the engine `Child` directly -- it talks to the resident
+// supervisor over IPC (starting it on demand), which is now the sole owner of session
+// lifecycle, wallpaper safety, and the panic key. See `design/scheduling.md`.
 
-fn find_lewdware() -> Option<Command> {
-    let bin_name = if cfg!(windows) {
-        "lewdware-engine.exe"
-    } else {
-        "lewdware-engine"
-    };
+#[tauri::command]
+async fn launch_lewdware() -> Result<(), String> {
+    shared::ipc::ensure_supervisor_running()
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe
-            .canonicalize()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.to_owned()))
-        {
-            // Windows / macOS: engine sits next to the config binary.
-            candidates.push(dir.join(bin_name));
-            // Portable tar.gz on Linux: bin/lewdware → lib/lewdware/lewdware-engine.
-            if let Some(root) = dir.parent() {
-                candidates.push(root.join("lib").join("lewdware").join(bin_name));
-            }
-        }
+    match shared::ipc::request(&shared::ipc::Request::StartSession {
+        mode_path: None,
+        dev: false,
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    {
+        shared::ipc::Response::Error { message } => Err(message),
+        // `Busy` means a session is already running -- matches the old no-op-if-already-running
+        // idempotency.
+        shared::ipc::Response::Ok | shared::ipc::Response::Busy { .. } | shared::ipc::Response::Status(_) => Ok(()),
     }
-
-    // Linux package installs (deb/rpm): engine lives in /usr/lib/lewdware/.
-    #[cfg(target_os = "linux")]
-    candidates.push(PathBuf::from("/usr/lib/lewdware").join(bin_name));
-
-    for path in candidates {
-        if path.exists() {
-            let mut cmd = Command::new(path);
-            shared::utils::sanitize_child_env(&mut cmd);
-            return Some(cmd);
-        }
-    }
-
-    None
 }
 
 #[tauri::command]
-fn launch_lewdware(state: State<'_>) -> Result<(), String> {
-    let mut guard = state.lewdware_process.lock().unwrap();
-
-    // No-op if already running.
-    if let Some(child) = guard.as_mut() {
-        if matches!(child.try_wait(), Ok(None)) {
-            return Ok(());
-        }
-    }
-
-    let mut cmd = find_lewdware().ok_or("Could not find lewdware binary")?;
-    let child = cmd.spawn().map_err(|e| e.to_string())?;
-    *guard = Some(child);
-    Ok(())
-}
-
-#[tauri::command]
-fn stop_lewdware(state: State<'_>) -> Result<(), String> {
-    let child = state.lewdware_process.lock().unwrap().take();
-
-    if let Some(mut child) = child {
-        #[cfg(unix)]
-        {
-            use nix::sys::signal::{self, Signal};
-            use nix::unistd::Pid;
-            let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
-        }
-        #[cfg(not(unix))]
-        let _ = child.kill();
-
-        // Reap without blocking the command thread.
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-    }
-
+async fn stop_lewdware() -> Result<(), String> {
+    // Best-effort: if no supervisor is reachable, there's nothing running to stop either --
+    // matches the old code's no-op-safe handling of a possibly-`None` tracked `Child`.
+    let _ = shared::ipc::request(&shared::ipc::Request::StopSession).await;
     Ok(())
 }
 
@@ -903,7 +854,8 @@ fn stop_lewdware(state: State<'_>) -> Result<(), String> {
 pub struct EngineStatusDto {
     running: bool,
     /// Why the engine failed to start, if the last launch we made died before reaching a
-    /// running state (e.g. a bad pack, a stale mode reference, a mode-script error).
+    /// running state (e.g. a bad pack, a stale mode reference, a mode-script error), or why it
+    /// stopped restarting after repeated crashes.
     error: Option<String>,
     /// A non-fatal issue noticed at startup (e.g. a mode built for an older API version). Only
     /// set while `running` is true.
@@ -911,10 +863,10 @@ pub struct EngineStatusDto {
 }
 
 #[tauri::command]
-fn lewdware_running(state: State<'_>) -> EngineStatusDto {
-    let mut guard = state.lewdware_process.lock().unwrap();
-
-    let Some(child) = guard.as_mut() else {
+async fn lewdware_running() -> EngineStatusDto {
+    let Ok(shared::ipc::Response::Status(info)) =
+        shared::ipc::request(&shared::ipc::Request::Status).await
+    else {
         return EngineStatusDto {
             running: false,
             error: None,
@@ -922,34 +874,25 @@ fn lewdware_running(state: State<'_>) -> EngineStatusDto {
         };
     };
 
-    // Only trust status.json if it's actually this child's — otherwise it could be a stale
-    // leftover from an earlier run that happens to still be sitting on disk.
-    let pid = child.id();
-    let still_running = matches!(child.try_wait(), Ok(None));
-    let status = shared::status::read_status()
-        .ok()
-        .filter(|status| status.pid == pid);
+    let error = match &info.session {
+        shared::ipc::SessionState::GaveUp { last_error, .. } => last_error
+            .clone()
+            .or_else(|| Some("Crashed repeatedly and was not restarted".to_string())),
+        _ => info
+            .last_exit
+            .as_ref()
+            .and_then(|exit| exit.error.clone()),
+    };
 
-    if still_running {
-        EngineStatusDto {
-            running: true,
-            error: None,
-            warning: status.and_then(|status| status.warning),
-        }
-    } else {
-        // The process is gone; drop it so a future fatal error isn't reported over and over.
-        *guard = None;
-
-        let error = status.and_then(|status| match status.state {
-            shared::status::EngineState::FailedToStart(err) => Some(err),
-            _ => None,
-        });
-
-        EngineStatusDto {
-            running: false,
-            error,
-            warning: None,
-        }
+    EngineStatusDto {
+        running: matches!(
+            info.session,
+            shared::ipc::SessionState::Starting
+                | shared::ipc::SessionState::Running { .. }
+                | shared::ipc::SessionState::RestartPending { .. }
+        ),
+        error,
+        warning: info.warning,
     }
 }
 
@@ -1090,7 +1033,6 @@ pub fn run() {
             uploaded: Mutex::new(uploaded),
             sandbox_mode,
             experience_mode,
-            lewdware_process: Mutex::new(None),
         })
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -1172,7 +1114,6 @@ mod tests {
             uploaded: Mutex::new(Vec::new()),
             sandbox_mode: empty_metadata("Sandbox"),
             experience_mode: empty_metadata("Experience"),
-            lewdware_process: Mutex::new(None),
         }
     }
 

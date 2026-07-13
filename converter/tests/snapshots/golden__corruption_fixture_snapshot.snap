@@ -67,6 +67,7 @@ behaviour:
           modifiers:
             modifier: ~
             tags:
+              - corruption-moodless
               - vanilla
             wallpaper_tags:
               - wallpaper
@@ -75,6 +76,7 @@ behaviour:
           modifiers:
             modifier: ~
             tags:
+              - corruption-moodless
               - kinky
               - vanilla
             wallpaper_tags: ~
@@ -84,6 +86,7 @@ behaviour:
             modifier: ~
             tags:
               - corrupted
+              - corruption-moodless
               - kinky
             wallpaper_tags:
               - corruption-wallpaper-wallpaper2-png
@@ -94,7 +97,8 @@ media:
       - kinky
   - source_path: img/untagged.png
     suggested_name: untagged.png
-    tags: []
+    tags:
+      - corruption-moodless
   - source_path: img/vanilla_a.png
     suggested_name: vanilla_a.png
     tags:
@@ -111,7 +115,5 @@ icon: ~
 warnings:
   - kind: UnsupportedFeatureDropped
     message: "corruption.json level 2's config override(s) (promptMod) have no Lewdware equivalent -- a timeline level's modifier is a single scalar, not per-setting, so they were dropped"
-  - kind: UnsupportedFeatureDropped
-    message: "the pack has untagged media alongside a corruption timeline: Edgeware always keeps moodless media in the pool, but Lewdware's timeline tag restriction is an \"any of these tags\" filter, so untagged media will be excluded while a level past the first is active"
   - kind: ConfigNotConverted
     message: "config.json's other setting(s) (corruptionMode) have no Lewdware equivalent and were dropped"

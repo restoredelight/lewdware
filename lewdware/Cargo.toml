@@ -8,7 +8,7 @@ version.workspace = true
 edition = "2024"
 
 [dependencies]
-shared = { path = "../shared/", features = ["mlua"] }
+shared = { path = "../shared/", features = ["mlua", "ipc"] }
 anyhow = "1.0.99"
 egui = { version = "0.34.2", features = ["serde"] }
 egui-wgpu = "0.34.2"
@@ -19,7 +19,6 @@ fast_image_resize = { version = "4", features = ["image"] }
 wgpu = { version = "29.0.3", features = ["static-dxc"] }
 notify-rust = "4.11.7"
 rand = "0.10.0"
-rdev = { git = "https://github.com/fufesou/rdev" }
 rodio = "0.22.2"
 rusqlite = { version = "0.39.0", features = ["bundled", "fallible_uint", "serialize"] }
 serde = { version = "1.0.219", features = ["derive"] }
@@ -54,17 +53,10 @@ objc2-io-surface = { version = "0.3.2", features = ["IOSurfaceRef", "objc2"], de
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash = "0.38"
-ksni = "0.2"
 x11-dl = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi_Common", "Win32_System_Threading"] }
-
-[target.'cfg(not(target_os = "linux"))'.dependencies]
-tray-icon = "0.24.0"
-
-[target.'cfg(unix)'.dependencies]
-signal-hook = "0.4.4"
+windows = { version = "0.62", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi_Common"] }
 
 [features]
 static-ffmpeg = ["ffmpeg-next/static"]

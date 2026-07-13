@@ -23,7 +23,7 @@ tauri-plugin-dialog = { version = "2", default-features = false, features = ["xd
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-shared = { path = "../../shared" }
+shared = { path = "../../shared", features = ["ipc"] }
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -33,6 +33,3 @@ r2d2_sqlite = { version = "0.34.0", features = ["bundled"] }
 rusqlite = { version = "0.39.0", features = ["bundled", "fallible_uint"] }
 tempfile = "3"
 uuid = { version = "1.18.1", features = ["serde", "v4"] }
-
-[target.'cfg(unix)'.dependencies]
-nix = { version = "0.31.3", features = ["signal"] }

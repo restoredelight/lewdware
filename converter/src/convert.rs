@@ -35,9 +35,8 @@ pub struct ConversionOutput {
 }
 
 /// Converts an Edgeware/Edgeware++ pack into the pieces a `.lwpack` needs: media (with tags),
-/// pack metadata, and a behaviour.json `Content` section. Scoped to content only --
-/// `corruption.json` -> timeline and `config.json` -> frequency anchors are M4 work (see
-/// `design/release-plan.md`); their presence is only *noted* here via a warning.
+/// pack metadata, and a behaviour.json `Content` + `Experience` section (`corruption.json` ->
+/// transition timeline, `config.json` -> frequency anchors).
 ///
 /// Infallible: every pack-content problem degrades to a `Warning` rather than failing the
 /// conversion (an unreadable/nonexistent source just reads as an empty pack, since every
@@ -75,15 +74,6 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
         &mut warnings,
     );
     let has_timeline = experience.as_ref().is_some_and(|e| e.timeline.is_some());
-    if has_timeline && media.iter().any(|m| m.tags.is_empty()) {
-        warnings.push(Warning::new(
-            WarningKind::UnsupportedFeatureDropped,
-            "the pack has untagged media alongside a corruption timeline: Edgeware always keeps \
-             moodless media in the pool, but Lewdware's timeline tag restriction is an \"any of \
-             these tags\" filter, so untagged media will be excluded while a level past the \
-             first is active",
-        ));
-    }
 
     check_unsupported_files(source, &mut warnings);
     warn_unmapped_config_keys(&config, &mut warnings);
@@ -384,6 +374,11 @@ const DEFAULT_DELAY_MS: f64 = 5000.0;
 const DEFAULT_CORRUPTION_TIME_SECONDS: f64 = 60.0;
 const DEFAULT_CORRUPTION_POPUPS: f64 = 5.0;
 
+/// Synthetic tag `build_timeline` assigns to every previously-untagged media file, so a
+/// timeline level's `any`-of-tags restriction still includes mood-less media -- see its use site
+/// for the full reasoning.
+const MOODLESS_TAG: &str = "corruption-moodless";
+
 fn config_number(config: &Map<String, Value>, key: &str) -> Option<f64> {
     config.get(key).and_then(Value::as_f64)
 }
@@ -464,6 +459,27 @@ fn build_timeline(
     }
 
     let mut active: BTreeSet<String> = BTreeSet::new();
+
+    // Edgeware's corruption model is exclusion-based: mood-less media always stays in the pool,
+    // only mood-tagged media becomes conditionally available (`pack.active_moods` only ever gates
+    // media that actually has a mood). `Modifiers.tags` is structurally an *inclusion* (`any`-of)
+    // filter, so without this a level's tag restriction would wrongly drop every untagged file.
+    // Tagging previously-untagged media with one synthetic tag and folding that tag into every
+    // level's active set (never removed) reconciles the two models exactly: mood-less media now
+    // matches every level's `any` filter, same as it always matched Edgeware's absence of
+    // exclusion. Only seeded when needed, and only into levels (baseline -- `tags: None` -- is
+    // already unrestricted and needs no help). Collision with a real mood of this exact name is
+    // the same accepted, vanishingly small risk as `resolve_wallpaper_tag`'s `corruption-wallpaper-*`
+    // tags.
+    if media.iter().any(|m| m.tags.is_empty()) {
+        for item in media.iter_mut() {
+            if item.tags.is_empty() {
+                item.tags.push(MOODLESS_TAG.to_string());
+            }
+        }
+        active.insert(MOODLESS_TAG.to_string());
+    }
+
     let mut wallpaper_tag_ids: HashSet<String> = HashSet::new();
     let mut wallpaper_tags_by_file: HashMap<String, String> = HashMap::new();
 
@@ -1014,26 +1030,48 @@ mod tests {
     }
 
     #[test]
-    fn untagged_media_alongside_a_timeline_warns_about_any_filter_exclusion() {
+    fn moodless_media_alongside_a_timeline_gets_tagged_into_every_level() {
         let (_dir, source) = source_with(&[
             ("img/untagged.png", "u"),
             (
                 "corruption.json",
-                r#"{"moods": {"1": {"add": ["a"], "remove": []}}, "wallpapers": {}, "config": {}}"#,
+                r#"{"moods": {"1": {"add": ["a"], "remove": []}, "2": {"add": ["b"], "remove": ["a"]}}, "wallpapers": {}, "config": {}}"#,
             ),
         ]);
         let output = convert(&source);
+
+        let untagged = output
+            .media
+            .iter()
+            .find(|m| m.suggested_name == "untagged.png")
+            .unwrap();
+        assert_eq!(untagged.tags, vec![MOODLESS_TAG.to_string()]);
+
+        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        for level in &timeline.levels {
+            assert!(
+                level
+                    .modifiers
+                    .tags
+                    .as_ref()
+                    .unwrap()
+                    .contains(&MOODLESS_TAG.to_string()),
+                "expected every level to keep mood-less media eligible: {level:?}"
+            );
+        }
+        // Never removed by an unrelated mood change.
         assert!(
-            output
-                .warnings
-                .iter()
-                .any(|w| w.kind == WarningKind::UnsupportedFeatureDropped
-                    && w.message.contains("untagged media"))
+            timeline.levels[1]
+                .modifiers
+                .tags
+                .as_ref()
+                .unwrap()
+                .contains(&MOODLESS_TAG.to_string())
         );
     }
 
     #[test]
-    fn no_untagged_media_alongside_a_timeline_does_not_warn_about_exclusion() {
+    fn no_moodless_media_means_no_synthetic_tag_anywhere() {
         let (_dir, source) = source_with(&[
             (
                 "index.json",
@@ -1046,12 +1084,21 @@ mod tests {
             ),
         ]);
         let output = convert(&source);
+
         assert!(
             !output
-                .warnings
+                .media
                 .iter()
-                .any(|w| w.kind == WarningKind::UnsupportedFeatureDropped
-                    && w.message.contains("untagged media"))
+                .any(|m| m.tags.contains(&MOODLESS_TAG.to_string()))
+        );
+        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        assert!(
+            !timeline.levels[0]
+                .modifiers
+                .tags
+                .as_ref()
+                .unwrap()
+                .contains(&MOODLESS_TAG.to_string())
         );
     }
 }

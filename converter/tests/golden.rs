@@ -37,8 +37,8 @@ fn legacy_fixture_snapshot() {
 /// mood add/remove across 3 levels, the primary wallpaper reused by level 1 and a second wallpaper
 /// file minted its own tag+media entry for level 3, a dropped per-level `config` override
 /// (level 2's `promptMod`), a `"Popup"` trigger driving `at_popups`, `popupMod`/`delay` mapped to
-/// the `popup` frequency anchor, and one untagged media file to exercise the "any-filter excludes
-/// moodless media" warning.
+/// the `popup` frequency anchor, and one untagged media file to exercise the moodless-media
+/// tagging that keeps it eligible in every level (see `build_timeline`'s `MOODLESS_TAG`).
 #[test]
 fn corruption_fixture_snapshot() {
     let source = DirSource::new(fixture_path("corruption"));

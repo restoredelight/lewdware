@@ -1855,6 +1855,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "doctest-file"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2db04e74f0a9a93103b50e90b96024c9b2bdca8bce6a632ec71b88736d3d359"
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3485,6 +3491,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "interprocess"
+version = "2.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "069323743400cb7ab06a8fe5c1ed911d36b6919ec531661d034c89083629595b"
+dependencies = [
+ "doctest-file",
+ "futures-core",
+ "libc",
+ "recvmsg",
+ "tokio",
+ "widestring",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3784,7 +3805,6 @@ dependencies = [
  "ffmpeg-next",
  "image",
  "indexmap 2.14.0",
- "ksni",
  "libc",
  "mlua",
  "notify-rust",
@@ -3796,19 +3816,16 @@ dependencies = [
  "r2d2_sqlite",
  "rand 0.10.2",
  "rayon",
- "rdev",
  "rodio",
  "rusqlite",
  "serde",
  "serde_json",
  "shared",
- "signal-hook",
  "softbuffer",
  "tempfile",
  "tiny-skia 0.12.0",
  "tokio",
  "tracing",
- "tray-icon",
  "url",
  "uuid",
  "walkdir",
@@ -3827,7 +3844,6 @@ version = "0.0.2"
 dependencies = [
  "anyhow",
  "indexmap 2.14.0",
- "nix",
  "r2d2",
  "r2d2_sqlite",
  "reqwest 0.13.4",
@@ -3874,6 +3890,29 @@ dependencies = [
  "tracing",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "lewdware-supervisor"
+version = "0.0.2"
+dependencies = [
+ "anyhow",
+ "clap 4.6.1",
+ "dirs 6.0.0",
+ "image",
+ "ksni",
+ "nix",
+ "notify-rust",
+ "rdev",
+ "serde",
+ "serde_json",
+ "shared",
+ "tao",
+ "tokio",
+ "tracing",
+ "tray-icon",
+ "wallpaper",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -4074,12 +4113,12 @@ dependencies = [
  "include_dir",
  "indexmap 2.14.0",
  "json5",
- "nix",
  "notify",
  "serde",
  "serde_json",
  "shared",
  "tempfile",
+ "tokio",
  "ureq",
  "uuid",
  "walkdir",
@@ -5829,6 +5868,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "recvmsg"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3edd4d5d42c92f0a659926464d4cce56b562761267ecf0f469d85b7de384175"
+
+[[package]]
 name = "redox_syscall"
 version = "0.1.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6672,6 +6717,7 @@ dependencies = [
  "dirs 6.0.0",
  "glob",
  "indexmap 2.14.0",
+ "interprocess",
  "itertools 0.14.0",
  "json5",
  "merge",
@@ -6687,6 +6733,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "walkdir",
+ "which",
  "zstd",
 ]
 
@@ -6701,16 +6748,6 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
-
-[[package]]
-name = "signal-hook"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a0c28ca5908dbdbcd52e6fdaa00358ab88637f8ab33e1f188dd510eb44b53d"
-dependencies = [
- "libc",
- "signal-hook-registry",
-]
 
 [[package]]
 name = "signal-hook-registry"

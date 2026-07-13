@@ -1,0 +1,35 @@
+[package]
+name = "lewdware-supervisor"
+version.workspace = true
+edition = "2024"
+
+[[bin]]
+name = "lewdware-supervisor"
+path = "src/main.rs"
+
+[dependencies]
+shared = { path = "../shared", features = ["ipc"] }
+anyhow = "1.0.100"
+clap = { version = "4.6.1", features = ["derive"] }
+dirs = "6.0.0"
+notify-rust = "4.11.7"
+rdev = { git = "https://github.com/fufesou/rdev" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "process", "time", "net", "sync", "io-util"] }
+tracing = "0.1"
+wallpaper = "3.2.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = "0.2"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+image = { version = "0.25.6", default-features = false, features = ["png", "ico"] }
+tao = "0.35"
+tray-icon = "0.24.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.3", features = ["signal"] }

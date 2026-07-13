@@ -1,14 +1,13 @@
 use std::fs::File;
-use std::io::{Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
 use std::sync::mpsc::channel;
 use std::time::Duration;
-use std::{env, fs, io, thread};
+use std::{fs, io, thread};
 
-use anyhow::Context;
 use clap::Args;
 use notify::{Event, EventKind, RecommendedWatcher, Watcher};
+use shared::ipc::{Request, Response};
 
 use crate::mode::build::build_to;
 use crate::mode::config::Config;
@@ -59,21 +58,23 @@ pub fn dev(_args: DevArgs) -> anyhow::Result<()> {
 
     println!("Built");
 
-    let mut process = spawn_lewdware(&file.path)?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    spawn_log_tail();
+
+    rt.block_on(restart_session(&file.path))?;
 
     println!("Spawned");
 
     while let Ok(()) = rx.recv() {
-        println!("Oh?");
         while let Ok(()) = rx.try_recv() {}
         thread::sleep(Duration::from_millis(200));
         while let Ok(()) = rx.try_recv() {
             thread::sleep(Duration::from_millis(200));
             while let Ok(()) = rx.try_recv() {}
         }
-
-        terminate(&mut process);
-        process.wait().ok();
 
         let config = read_config(&root)?;
 
@@ -84,10 +85,98 @@ pub fn dev(_args: DevArgs) -> anyhow::Result<()> {
         file.file.seek(SeekFrom::Start(0))?;
         build_to(&mut file.file, &root, config)?;
 
-        process = spawn_lewdware(&file.path)?;
+        rt.block_on(restart_session(&file.path))?;
     }
 
     Ok(())
+}
+
+/// Asks the supervisor (starting it on demand if it isn't already running) to run this build,
+/// replacing whatever session it's currently supervising -- both the very first spawn and every
+/// rebuild go through this same call, since `RestartSession` is unconditional.
+async fn restart_session(mode_path: &Path) -> anyhow::Result<()> {
+    shared::ipc::ensure_supervisor_running().await?;
+
+    match shared::ipc::request(&Request::RestartSession {
+        mode_path: mode_path.to_path_buf(),
+        dev: true,
+    })
+    .await?
+    {
+        Response::Error { message } => anyhow::bail!(message),
+        _ => Ok(()),
+    }
+}
+
+/// Reprints new lines appended to the engine's own rolling log file into this terminal. Now that
+/// the supervisor -- not `lw dev` -- spawns the engine, `lw dev` no longer inherits its stdio for
+/// free, so this reads the same file `shared::logging::init` already writes to instead (`tracing`'s
+/// daily rotation names it `lewdware.log.<date>`, so the newest `lewdware.log*` file in the log
+/// dir is tailed rather than a fixed name -- this also means a day rollover mid-session is
+/// handled automatically, by switching to the fresh file). Starts from the current end of
+/// whichever file is newest, not its history. Known limitation: this log file is shared per-day
+/// across every engine session, not just this one -- lines from a concurrently-running
+/// Sandbox/Experience session would interleave, an acceptable trade-off for a single-developer
+/// workflow.
+fn spawn_log_tail() {
+    let Some(dir) = shared::logging::log_dir() else {
+        return;
+    };
+
+    thread::spawn(move || {
+        let mut current: Option<PathBuf> = None;
+        let mut offset = 0u64;
+
+        loop {
+            thread::sleep(Duration::from_millis(150));
+
+            let Some(latest) = latest_log_file(&dir) else {
+                continue;
+            };
+
+            if current.as_ref() != Some(&latest) {
+                // First time, or a day rollover produced a fresh file -- start from its current
+                // end (0 if it was just created), not its whole history.
+                offset = fs::metadata(&latest).map(|m| m.len()).unwrap_or(0);
+                current = Some(latest);
+            }
+            let path = current.as_ref().expect("just set above");
+
+            let Ok(metadata) = fs::metadata(path) else {
+                continue;
+            };
+            let len = metadata.len();
+            if len <= offset {
+                continue;
+            }
+
+            let Ok(mut log_file) = File::open(path) else {
+                continue;
+            };
+            if log_file.seek(SeekFrom::Start(offset)).is_err() {
+                continue;
+            }
+
+            let mut buf = String::new();
+            if log_file.read_to_string(&mut buf).is_ok() {
+                print!("{buf}");
+                offset = len;
+            }
+        }
+    });
+}
+
+fn latest_log_file(dir: &Path) -> Option<PathBuf> {
+    fs::read_dir(dir)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("lewdware.log"))
+        })
+        .max_by_key(|path| fs::metadata(path).and_then(|m| m.modified()).ok())
 }
 
 // Resolves config.include entries (paths relative to root) to canonical,
@@ -127,12 +216,6 @@ fn update_watches(watcher: &mut RecommendedWatcher, current: &[PathBuf], desired
     }
 }
 
-fn spawn_lewdware(path: &Path) -> anyhow::Result<Child> {
-    let mut command = find_lewdware_binary().context("Couldn't find lewdware binary")?;
-
-    Ok(command.arg("--mode-path").arg(path).arg("--dev").spawn()?)
-}
-
 struct BuildFile {
     path: PathBuf,
     file: File,
@@ -152,54 +235,4 @@ impl Drop for BuildFile {
             eprintln!("{err}");
         }
     }
-}
-
-fn terminate(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        use nix::sys::signal::{self, Signal};
-        use nix::unistd::Pid;
-        let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
-    }
-    #[cfg(not(unix))]
-    let _ = child.kill();
-}
-
-fn find_lewdware_binary() -> Option<Command> {
-    let bin_name = if cfg!(target_os = "windows") {
-        "lewdware-engine.exe"
-    } else {
-        "lewdware-engine"
-    };
-
-    if let Ok(current_exe) = env::current_exe()
-        && let Ok(real_lw_path) = fs::canonicalize(current_exe)
-        && let Some(bin_dir) = real_lw_path.parent()
-    {
-        let neighbor = bin_dir.join(bin_name);
-        if neighbor.exists() {
-            println!("Found executable: {}", neighbor.display());
-            return Some(Command::new(neighbor));
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    {
-        let mut current_dir = env::current_dir().ok();
-        while let Some(dir) = current_dir {
-            println!("Running cargo command");
-            if dir.join("Cargo.toml").exists() {
-                let mut cmd = std::process::Command::new("cargo");
-                cmd.args(["run", "-p", "lewdware", "--"]);
-                return Some(cmd);
-            }
-            current_dir = dir.parent().map(|p| p.to_path_buf());
-        }
-    }
-
-    if let Ok(path) = which::which(bin_name) {
-        return Some(Command::new(path));
-    }
-
-    None
 }

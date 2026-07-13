@@ -41,7 +41,10 @@ use crate::window::{
 ///   a winit window closes it, we can close ready windows by removing them from this map.
 /// * `window_ids`: Reverse lookup from winit's `WindowId` to `PopupId`, needed to route winit's
 ///   `window_event` callback (which only knows the real `WindowId`) back to a `PopupSlot`.
-/// * `default_wallpaper`: Stores the user's default wallpaper, so we can restore it on panic.
+/// * `default_wallpaper`: The wallpaper in effect when this session started, so
+///   `lewdware.wallpaper.reset()` has something to restore to. (Crash/panic-time restoration is
+///   the supervisor's job now, done externally from its own snapshot -- this field is unrelated
+///   to that, purely backing the Lua-facing reset API.)
 pub struct LewdwareApp {
     running: bool,
     config: Arc<AppConfig>,
@@ -1657,14 +1660,6 @@ impl Drop for LewdwareApp {
             && handle.join().is_err()
         {
             tracing::error!("Media manager thread panicked");
-        }
-
-        if let Some(wallpaper) = &self.default_wallpaper {
-            if let Err(err) = wallpaper::set_from_path(wallpaper) {
-                tracing::error!("Error setting wallpaper back to default: {}", err);
-            }
-        } else {
-            tracing::warn!("No default wallpaper found; leaving wallpaper as is");
         }
     }
 }
