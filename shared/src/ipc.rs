@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // ─── CLI / config-app protocol (one-shot request/response) ────────────────────
@@ -18,6 +19,10 @@ pub enum Request {
     },
     StopSession,
     Panic,
+    /// Re-reads `config.json` from disk and feeds the new `schedule` section to the schedule
+    /// engine -- how a config-app edit reaches an already-resident supervisor (`design/
+    /// scheduling.md`'s schedule vocabulary).
+    ReloadConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,12 +42,28 @@ pub struct StatusInfo {
     pub warning: Option<String>,
     pub last_runtime_error: Option<String>,
     pub last_exit: Option<ExitInfo>,
+    pub schedule: ScheduleStatus,
+}
+
+/// Schedule-engine status for display -- not itself the source of truth (that's
+/// `AppConfig::schedule` on disk), just a snapshot for the config app's Scheduling tab.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleStatus {
+    pub enabled: bool,
+    /// UTC on the wire, not local -- the supervisor and config-app are separate OS processes that
+    /// shouldn't need to agree on what "local" means (e.g. under different `TZ` environments); the
+    /// frontend renders it timezone-aware for free via `Date`.
+    pub next_session: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionKind {
     Manual,
     Dev,
+    /// Opened unattended by the schedule engine -- see `design/scheduling.md`: "a closing window
+    /// ends only schedule-owned sessions." A manual session overlapping a window's boundary is
+    /// never touched by the schedule engine, which is what this variant makes checkable.
+    Scheduled,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -94,13 +115,21 @@ pub enum EngineToSupervisor {
     /// Always the first message on a fresh connection. `token` is the spawning episode's
     /// sequence number, as a string -- lets the supervisor match this connection to the session
     /// it belongs to without a separate lookup table.
-    Hello { token: String },
+    Hello {
+        token: String,
+    },
     /// The Lua runtime finished initialising and the mode has started running (distinct from
     /// the OS process merely being alive).
     Started,
-    Warning { message: String },
-    RuntimeError { message: String },
-    FailedToStart { message: String },
+    Warning {
+        message: String,
+    },
+    RuntimeError {
+        message: String,
+    },
+    FailedToStart {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -275,19 +304,25 @@ mod tests {
             mode_path: Some(PathBuf::from("/tmp/mode.lwmode")),
             dev: true,
         });
-        roundtrip(Request::StartSession { mode_path: None, dev: false });
+        roundtrip(Request::StartSession {
+            mode_path: None,
+            dev: false,
+        });
         roundtrip(Request::RestartSession {
             mode_path: PathBuf::from("/tmp/mode.lwmode"),
             dev: true,
         });
         roundtrip(Request::StopSession);
         roundtrip(Request::Panic);
+        roundtrip(Request::ReloadConfig);
     }
 
     #[test]
     fn response_variants_roundtrip() {
         roundtrip(Response::Ok);
-        roundtrip(Response::Error { message: "boom".to_string() });
+        roundtrip(Response::Error {
+            message: "boom".to_string(),
+        });
         roundtrip(Response::Busy {
             current: SessionSummary {
                 kind: SessionKind::Dev,
@@ -302,7 +337,7 @@ mod tests {
                 retry_in_secs: 2,
                 last_error: Some("crashed".to_string()),
             },
-            session_kind: Some(SessionKind::Manual),
+            session_kind: Some(SessionKind::Scheduled),
             mode_path: None,
             warning: Some("stale mode version".to_string()),
             last_runtime_error: Some("nil index".to_string()),
@@ -311,7 +346,28 @@ mod tests {
                 classification: ExitClassification::Crashed,
                 error: Some("crashed".to_string()),
             }),
+            schedule: ScheduleStatus {
+                enabled: true,
+                next_session: Some(Utc::now()),
+            },
         }));
+    }
+
+    #[test]
+    fn schedule_status_variants_roundtrip() {
+        roundtrip(ScheduleStatus {
+            enabled: false,
+            next_session: None,
+        });
+        roundtrip(ScheduleStatus {
+            enabled: true,
+            next_session: Some(Utc::now()),
+        });
+    }
+
+    #[test]
+    fn session_kind_scheduled_roundtrips() {
+        roundtrip(SessionKind::Scheduled);
     }
 
     #[test]
@@ -327,7 +383,9 @@ mod tests {
 
     #[test]
     fn engine_to_supervisor_variants_roundtrip() {
-        roundtrip(EngineToSupervisor::Hello { token: "7".to_string() });
+        roundtrip(EngineToSupervisor::Hello {
+            token: "7".to_string(),
+        });
         roundtrip(EngineToSupervisor::Started);
         roundtrip(EngineToSupervisor::Warning {
             message: "stale mode version".to_string(),

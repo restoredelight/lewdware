@@ -7,7 +7,11 @@ use anyhow::{Result, anyhow};
 /// engine knows which `engine_link` connection to open and identify itself with; `--mode-path`/
 /// `--dev` are only added when the episode carries them (letting the engine load `AppConfig`
 /// itself exactly as it does for an ordinary session otherwise).
-pub fn build_command(seq: u64, mode_path: Option<&Path>, dev: bool) -> Result<tokio::process::Command> {
+pub fn build_command(
+    seq: u64,
+    mode_path: Option<&Path>,
+    dev: bool,
+) -> Result<tokio::process::Command> {
     let cmd = shared::child::find_engine_binary()
         .ok_or_else(|| anyhow!("could not find the lewdware-engine binary"))?;
     let mut cmd = tokio::process::Command::from(cmd);
@@ -20,7 +24,9 @@ pub fn build_command(seq: u64, mode_path: Option<&Path>, dev: bool) -> Result<to
         cmd.arg("--dev");
     }
 
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
     Ok(cmd)
 }

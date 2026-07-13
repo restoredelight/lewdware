@@ -6,6 +6,7 @@ use serde_with::serde_as;
 use uuid::Uuid;
 
 use crate::mode::OptionValue;
+use crate::schedule::ScheduleConfig;
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -27,6 +28,12 @@ pub struct AppConfig {
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,
     pub volume: Volume,
+    /// `design/scheduling.md`'s schedule vocabulary (windows/jitter/quiet hours) plus the
+    /// grace-notification toggle. `enabled` also drives OS autostart-at-login registration
+    /// one-to-one (see `config/src-tauri/src/lib.rs`'s `set_schedule_enabled`). `#[serde(default)]`
+    /// is required, not polish -- every pre-existing `config.json` has no `"schedule"` key at all.
+    #[serde(default)]
+    pub schedule: ScheduleConfig,
 }
 
 /// Consent-critical, user-owned off-switches for actions a mode can take that reach outside its
@@ -153,6 +160,7 @@ impl Default for AppConfig {
             disabled_monitors: Vec::new(),
             capabilities: Capabilities::default(),
             volume: Volume::default(),
+            schedule: ScheduleConfig::default(),
         }
     }
 }
@@ -276,5 +284,39 @@ mod tests {
         assert_eq!(config.panic_button.code, "Escape");
         assert!(config.panic_button.modifiers.shift);
         assert!(!config.panic_button.modifiers.ctrl);
+    }
+
+    #[test]
+    fn default_schedule_is_disabled_and_empty() {
+        let config = AppConfig::default();
+        assert!(!config.schedule.enabled);
+        assert!(config.schedule.windows.is_empty());
+        assert!(config.schedule.quiet_hours.is_empty());
+        assert!(config.schedule.grace_notification);
+    }
+
+    /// The actual risk with adding a field to `AppConfig`: every pre-existing user's
+    /// `config.json` has no `"schedule"` key at all. `#[serde(default)]` must keep it loading.
+    #[test]
+    fn config_json_without_a_schedule_key_still_loads() {
+        let json = serde_json::json!({
+            "pack_path": null,
+            "uploaded_modes": [],
+            "mode": "Sandbox",
+            "mode_options": [],
+            "experience_options": [],
+            "panic_button": {
+                "name": "Escape",
+                "code": "Escape",
+                "modifiers": { "alt": false, "ctrl": false, "shift": true, "meta": false }
+            },
+            "disabled_monitors": [],
+            "capabilities": { "wallpaper": true, "open_link": true, "notify": true },
+            "volume": { "video": 1.0, "audio": 1.0 }
+        });
+
+        let config: AppConfig =
+            serde_json::from_value(json).expect("should decode without a schedule key");
+        assert_eq!(config.schedule, ScheduleConfig::default());
     }
 }

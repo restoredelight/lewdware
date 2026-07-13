@@ -1,3 +1,5 @@
+#[cfg(feature = "autostart")]
+pub mod autostart;
 pub mod behaviour;
 pub mod child;
 pub mod db;
@@ -7,6 +9,7 @@ pub mod logging;
 pub mod mode;
 mod once;
 pub mod read_pack;
+pub mod schedule;
 pub mod user_config;
 pub mod utils;
 

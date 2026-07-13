@@ -24,6 +24,41 @@ export interface ConfigDto {
   disabled_monitors: string[];
   capabilities: Capabilities;
   volume: Volume;
+  schedule: ScheduleDto;
+}
+
+/** `days[0]` = Monday .. `days[6]` = Sunday. */
+export interface WindowDto {
+  days: boolean[];
+  start_hour: number;
+  start_minute: number;
+  duration_minutes: number;
+  jitter_minutes: number;
+}
+
+/** `end_hour`/`end_minute` before `start_hour`/`start_minute` means an overnight wrap; equal
+ * start/end is a no-op (never quiet), not a 24h block -- disallow saving that in the UI. */
+export interface QuietHoursDto {
+  days: boolean[];
+  start_hour: number;
+  start_minute: number;
+  end_hour: number;
+  end_minute: number;
+}
+
+/** `enabled` also drives OS autostart-at-login registration one-to-one -- see
+ * `store.setScheduleEnabled`, the only place that ever changes it. */
+export interface ScheduleDto {
+  enabled: boolean;
+  windows: WindowDto[];
+  quiet_hours: QuietHoursDto[];
+  grace_notification: boolean;
+}
+
+export interface ScheduleStatusDto {
+  enabled: boolean;
+  /** RFC3339, or null if nothing's scheduled. */
+  next_session: string | null;
 }
 
 export interface Capabilities {

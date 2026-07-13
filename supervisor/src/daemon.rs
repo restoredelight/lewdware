@@ -1,6 +1,7 @@
 use std::fs::File;
 
 use anyhow::{Context, Result};
+use shared::user_config::AppConfig;
 use tokio::sync::mpsc;
 
 use crate::control::{Control, ControlMessage};
@@ -17,19 +18,27 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
+    // Loaded once, synchronously, before the tokio runtime exists -- both the panic key
+    // (unchanged) and the schedule engine (new) need their initial values before anything else
+    // spins up.
+    let config = shared::user_config::load_config().unwrap_or_else(|err| {
+        tracing::warn!("failed to load user config, falling back to defaults: {err}");
+        AppConfig::default()
+    });
+
     #[cfg(target_os = "linux")]
-    return run_linux();
+    return run_linux(config);
     #[cfg(not(target_os = "linux"))]
-    return run_non_linux();
+    return run_non_linux(config);
 }
 
 #[cfg(target_os = "linux")]
-fn run_linux() -> Result<()> {
+fn run_linux(config: AppConfig) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let (control_tx, control_rx) = mpsc::channel::<ControlMessage>(64);
         crate::tray::create_tray_icon(control_tx.clone())?;
-        run_services(control_tx, control_rx).await;
+        run_services(control_tx, control_rx, config).await;
         Ok(())
     })
 }
@@ -40,13 +49,13 @@ fn run_linux() -> Result<()> {
 /// thread is dedicated to pumping it, and everything else (IPC servers, session supervision, the
 /// panic-key thread) runs on a tokio runtime hosted on a background thread.
 #[cfg(not(target_os = "linux"))]
-fn run_non_linux() -> Result<()> {
+fn run_non_linux(config: AppConfig) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let (control_tx, control_rx) = mpsc::channel::<ControlMessage>(64);
 
     let tray_tx = control_tx.clone();
     std::thread::spawn(move || {
-        rt.block_on(run_services(control_tx, control_rx));
+        rt.block_on(run_services(control_tx, control_rx, config));
     });
 
     crate::tray::create_tray_icon(tray_tx)?;
@@ -57,14 +66,12 @@ fn run_non_linux() -> Result<()> {
     });
 }
 
-async fn run_services(control_tx: mpsc::Sender<ControlMessage>, control_rx: mpsc::Receiver<ControlMessage>) {
-    let panic_button = shared::user_config::load_config()
-        .map(|config| config.panic_button)
-        .unwrap_or_else(|err| {
-            tracing::warn!("failed to load user config, falling back to the default panic button: {err}");
-            shared::user_config::AppConfig::default().panic_button
-        });
-    crate::panic_key::spawn_panic_thread(control_tx.clone(), panic_button);
+async fn run_services(
+    control_tx: mpsc::Sender<ControlMessage>,
+    control_rx: mpsc::Receiver<ControlMessage>,
+    config: AppConfig,
+) {
+    crate::panic_key::spawn_panic_thread(control_tx.clone(), config.panic_button);
 
     {
         let control_tx = control_tx.clone();
@@ -83,5 +90,7 @@ async fn run_services(control_tx: mpsc::Sender<ControlMessage>, control_rx: mpsc
         });
     }
 
-    Control::new(control_tx).run(control_rx).await;
+    Control::new(control_tx, config.schedule)
+        .run(control_rx)
+        .await;
 }

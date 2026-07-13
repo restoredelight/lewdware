@@ -8,8 +8,18 @@ import type {
   OptionEntryDto,
   OptionValue,
   MonitorDto,
+  QuietHoursDto,
   Volume,
+  WindowDto,
 } from "./types";
+
+function defaultWindow(): WindowDto {
+  return { days: [false, false, false, false, false, false, false], start_hour: 9, start_minute: 0, duration_minutes: 60, jitter_minutes: 0 };
+}
+
+function defaultQuietHours(): QuietHoursDto {
+  return { days: [true, true, true, true, true, true, true], start_hour: 22, start_minute: 0, end_hour: 7, end_minute: 0 };
+}
 
 function updateOptionValue(
   entries: OptionEntryDto[],
@@ -39,7 +49,7 @@ class AppStore {
   monitors = $state<MonitorDto[]>([]);
   modeGroups = $state<ModeGroupDto[]>([]);
   modeOptions = $state<OptionEntryDto[]>([]);
-  activeTab = $state<"general" | "pack_mode" | "permissions">("general");
+  activeTab = $state<"general" | "pack_mode" | "permissions" | "scheduling">("general");
 
   get ready() {
     return this.config !== null;
@@ -99,6 +109,95 @@ class AppStore {
   previewVolume(key: keyof Volume, value: number) {
     if (!this.config) return;
     this.config = { ...this.config, volume: { ...this.config.volume, [key]: value } };
+  }
+
+  // `saveConfig()` (schedule content is a normal ConfigDto field, so this alone persists it) plus
+  // a best-effort ping to a resident supervisor so an already-running one picks up the change
+  // without waiting for its next boundary wake. Every schedule *content* editing method below ends
+  // by calling this -- except `setScheduleEnabled`, which is the one field that also drives OS
+  // autostart registration and needs its own error handling, so it's never routed through here.
+  async saveSchedule() {
+    await this.saveConfig();
+    await api.reloadSupervisorSchedule().catch(() => {});
+  }
+
+  // Deliberately not routed through `saveSchedule()`: enabling/disabling also registers/
+  // deregisters OS autostart, which can fail (e.g. no installed binary found) -- a failure must
+  // not silently flip the toggle. Throws on failure so the caller (`Scheduling.svelte`) can show
+  // an error and leave the toggle in its previous state.
+  async setScheduleEnabled(enabled: boolean) {
+    await api.setScheduleEnabled(enabled);
+    if (!this.config) return;
+    this.config = { ...this.config, schedule: { ...this.config.schedule, enabled } };
+  }
+
+  setGraceNotification(enabled: boolean) {
+    if (!this.config) return;
+    this.config = { ...this.config, schedule: { ...this.config.schedule, grace_notification: enabled } };
+    this.saveSchedule();
+  }
+
+  addWindow() {
+    if (!this.config) return;
+    this.config = {
+      ...this.config,
+      schedule: { ...this.config.schedule, windows: [...this.config.schedule.windows, defaultWindow()] },
+    };
+    this.saveSchedule();
+  }
+
+  removeWindow(index: number) {
+    if (!this.config) return;
+    this.config = {
+      ...this.config,
+      schedule: { ...this.config.schedule, windows: this.config.schedule.windows.filter((_, i) => i !== index) },
+    };
+    this.saveSchedule();
+  }
+
+  updateWindow(index: number, patch: Partial<WindowDto>) {
+    if (!this.config) return;
+    this.config = {
+      ...this.config,
+      schedule: {
+        ...this.config.schedule,
+        windows: this.config.schedule.windows.map((w, i) => (i === index ? { ...w, ...patch } : w)),
+      },
+    };
+    this.saveSchedule();
+  }
+
+  addQuietHours() {
+    if (!this.config) return;
+    this.config = {
+      ...this.config,
+      schedule: { ...this.config.schedule, quiet_hours: [...this.config.schedule.quiet_hours, defaultQuietHours()] },
+    };
+    this.saveSchedule();
+  }
+
+  removeQuietHours(index: number) {
+    if (!this.config) return;
+    this.config = {
+      ...this.config,
+      schedule: {
+        ...this.config.schedule,
+        quiet_hours: this.config.schedule.quiet_hours.filter((_, i) => i !== index),
+      },
+    };
+    this.saveSchedule();
+  }
+
+  updateQuietHours(index: number, patch: Partial<QuietHoursDto>) {
+    if (!this.config) return;
+    this.config = {
+      ...this.config,
+      schedule: {
+        ...this.config.schedule,
+        quiet_hours: this.config.schedule.quiet_hours.map((q, i) => (i === index ? { ...q, ...patch } : q)),
+      },
+    };
+    this.saveSchedule();
   }
 
   async pickPack() {

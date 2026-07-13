@@ -27,13 +27,21 @@ fn candidates_for(bin_name: &str) -> Vec<PathBuf> {
     candidates
 }
 
+/// Binary-adjacent install locations only (no `PATH` lookup, no dev `cargo run` fallback) -- the
+/// first half of `find_binary`'s original search order, factored out so
+/// `find_supervisor_binary_path` can reuse it without also picking up the `cargo run` fallback
+/// (not a real path) or reordering `find_binary`'s existing candidates-then-cargo-then-PATH priority.
+fn find_installed_path(bin_name: &str) -> Option<PathBuf> {
+    candidates_for(bin_name)
+        .into_iter()
+        .find(|path| path.exists())
+}
+
 fn find_binary(bin_name: &str, cargo_package: &str) -> Option<Command> {
-    for path in candidates_for(bin_name) {
-        if path.exists() {
-            let mut cmd = Command::new(path);
-            sanitize_child_env(&mut cmd);
-            return Some(cmd);
-        }
+    if let Some(path) = find_installed_path(bin_name) {
+        let mut cmd = Command::new(path);
+        sanitize_child_env(&mut cmd);
+        return Some(cmd);
     }
 
     // Dev-workflow fallback: run straight out of the workspace via cargo. Not a real install, so
@@ -60,6 +68,14 @@ fn find_binary(bin_name: &str, cargo_package: &str) -> Option<Command> {
     None
 }
 
+fn supervisor_bin_name() -> &'static str {
+    if cfg!(windows) {
+        "lewdware-supervisor.exe"
+    } else {
+        "lewdware-supervisor"
+    }
+}
+
 pub fn find_engine_binary() -> Option<Command> {
     let bin_name = if cfg!(windows) {
         "lewdware-engine.exe"
@@ -70,10 +86,13 @@ pub fn find_engine_binary() -> Option<Command> {
 }
 
 pub fn find_supervisor_binary() -> Option<Command> {
-    let bin_name = if cfg!(windows) {
-        "lewdware-supervisor.exe"
-    } else {
-        "lewdware-supervisor"
-    };
-    find_binary(bin_name, "supervisor")
+    find_binary(supervisor_bin_name(), "supervisor")
+}
+
+/// The only sane input for an OS autostart-at-login registration (`shared::autostart`) -- a real
+/// path to hand the OS, never the dev-workflow `cargo run` fallback `find_supervisor_binary`
+/// falls back to. Checks install locations, then `PATH` (skipping the `cargo run` step in between,
+/// unlike `find_binary` -- there's no path to extract from a `cargo run` invocation).
+pub fn find_supervisor_binary_path() -> Option<PathBuf> {
+    find_installed_path(supervisor_bin_name()).or_else(|| which::which(supervisor_bin_name()).ok())
 }

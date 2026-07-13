@@ -9,6 +9,7 @@ import type {
   OptionEntryDto,
   OptionValue,
   PickPackResult,
+  ScheduleStatusDto,
   UploadModeResult,
 } from "./types";
 
@@ -40,6 +41,12 @@ export const api = {
   stopLewdware: () => invoke<void>("stop_lewdware"),
 
   lewdwareRunning: () => invoke<EngineStatusDto>("lewdware_running"),
+
+  getScheduleStatus: () => invoke<ScheduleStatusDto>("get_schedule_status"),
+
+  setScheduleEnabled: (enabled: boolean) => invoke<void>("set_schedule_enabled", { enabled }),
+
+  reloadSupervisorSchedule: () => invoke<void>("reload_supervisor_schedule"),
 
   openLogs: () => invoke<void>("open_logs"),
 

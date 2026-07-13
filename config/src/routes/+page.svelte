@@ -4,6 +4,7 @@
   import General from "$lib/General.svelte";
   import PackMode from "$lib/PackMode.svelte";
   import Permissions from "$lib/Permissions.svelte";
+  import Scheduling from "$lib/Scheduling.svelte";
 
   onMount(() => {
     store.load();
@@ -13,6 +14,7 @@
     { id: "general" as const, label: "General" },
     { id: "pack_mode" as const, label: "Pack & Mode" },
     { id: "permissions" as const, label: "Permissions & Volume" },
+    { id: "scheduling" as const, label: "Scheduling" },
   ];
 </script>
 
@@ -51,6 +53,8 @@
       <PackMode />
     {:else if store.activeTab === "permissions"}
       <Permissions />
+    {:else if store.activeTab === "scheduling"}
+      <Scheduling />
     {/if}
   </main>
 </div>

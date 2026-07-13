@@ -64,7 +64,9 @@ pub fn create_tray_icon(control_tx: mpsc::Sender<ControlMessage>) -> Result<()> 
                 StandardItem {
                     label: "Panic".into(),
                     activate: Box::new(|this: &mut Self| {
-                        let _ = this.control_tx.blocking_send(ControlMessage::TrayPanicClicked);
+                        let _ = this
+                            .control_tx
+                            .blocking_send(ControlMessage::TrayPanicClicked);
                     }),
                     ..Default::default()
                 }

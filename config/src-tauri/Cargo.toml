@@ -23,7 +23,7 @@ tauri-plugin-dialog = { version = "2", default-features = false, features = ["xd
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-shared = { path = "../../shared", features = ["ipc"] }
+shared = { path = "../../shared", features = ["ipc", "autostart"] }
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"

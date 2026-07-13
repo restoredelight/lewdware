@@ -10,6 +10,7 @@ mod engine;
 mod engine_link;
 mod ipc_server;
 mod panic_key;
+mod schedule;
 mod session;
 mod tray;
 mod wallpaper;
