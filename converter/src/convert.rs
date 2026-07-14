@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use shared::behaviour::{
-    Behaviour, Content, ContentGroup, DesignValues, Experience, FrequencyAnchors, Level, Modifiers,
+    Behaviour, Content, ContentGroup, DesignValues, Experience, FrequencyAnchors, Level,
     PromptSettings, TextItem, Timeline, WebLink,
 };
 use shared::read_pack::{Metadata, RecommendedMode};
@@ -68,12 +68,17 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
 
     let experience = build_experience(
         &corruption_levels,
+        &content,
         &config,
         source,
         &mut media,
         &mut warnings,
     );
-    let has_timeline = experience.as_ref().is_some_and(|e| e.timeline.is_some());
+    // More than just the baseline level means the pack actually designs an escalating arc, not
+    // just a static config.json-derived pace -- see `build_experience`.
+    let has_timeline = experience
+        .as_ref()
+        .is_some_and(|e| e.timeline.levels.len() > 1);
 
     check_unsupported_files(source, &mut warnings);
     warn_unmapped_config_keys(&config, &mut warnings);
@@ -317,9 +322,9 @@ fn check_unsupported_files(source: &dyn PackSource, warnings: &mut Vec<Warning>)
     }
 }
 
-/// `config.json` keys `build_anchors` reads. Anything else in the pack's `config.json` has no
-/// Lewdware equivalent (theme, hibernate, mitosis, drive, scheduler, ... -- see
-/// `EdgewarePlusPlus/edgeware/src/config/items.py`) and is silently dropped, per
+/// `config.json` keys `resolve_anchor_series`/`resolve_popup_anchor_series` read. Anything else
+/// in the pack's `config.json` has no Lewdware equivalent (theme, hibernate, mitosis, drive,
+/// scheduler, ... -- see `EdgewarePlusPlus/edgeware/src/config/items.py`) and is silently dropped, per
 /// `behaviour-design/edgeware-compat.md`'s "warn + skip the rest".
 const CONFIG_ANCHOR_KEYS: &[&str] = &[
     "delay",
@@ -373,6 +378,12 @@ fn warn_unmapped_config_keys(config: &Map<String, Value>, warnings: &mut Vec<War
 const DEFAULT_DELAY_MS: f64 = 5000.0;
 const DEFAULT_CORRUPTION_TIME_SECONDS: f64 = 60.0;
 const DEFAULT_CORRUPTION_POPUPS: f64 = 5.0;
+// Edgeware's own `assets/default_config.json`: a pack shipping no config.json at all still runs
+// with these chances in real Edgeware, so falling back to 0 here (like every other -- genuinely
+// opt-in -- anchor key) would misrepresent the pack, the same reasoning that already justifies
+// the three fallback constants above.
+const DEFAULT_POPUP_MOD: f64 = 100.0;
+const DEFAULT_VID_MOD: f64 = 10.0;
 
 /// Synthetic tag `build_timeline` assigns to every previously-untagged media file, so a
 /// timeline level's `any`-of-tags restriction still includes mood-less media -- see its use site
@@ -396,47 +407,161 @@ fn chance_to_period_seconds(delay_ms: f64, chance_percent: f64) -> Option<f64> {
     Some(delay_ms / (10.0 * chance_percent))
 }
 
-/// `config.json` -> `experience.anchors`, per `CONFIG_ANCHOR_KEYS`. `image_chance`/`video_chance`
-/// both spawn on the same popup tick and share lewdware's single combined `popup` anchor (Sandbox
-/// has no separate image/video frequency either -- media type is a toggle, not a rate), so their
-/// chances sum before conversion.
-fn build_anchors(config: &Map<String, Value>) -> FrequencyAnchors {
-    let delay_ms = config_number(config, "delay")
-        .unwrap_or(DEFAULT_DELAY_MS)
-        .max(1.0);
-    let popup_chance = config_number(config, "popupMod").unwrap_or(0.0)
-        + config_number(config, "vidMod").unwrap_or(0.0);
+/// Edgeware `config.json`/per-level `config` override keys that map onto a `FrequencyAnchors`
+/// field -- recognized and converted (see `resolve_anchor_series`/`resolve_popup_anchor_series`),
+/// unlike any other per-level `config` key (e.g. `promptMistakes`), which still just warns and
+/// drops (see `build_timeline`).
+const LEVEL_ANCHOR_CONFIG_KEYS: &[&str] = &[
+    "popupMod",
+    "vidMod",
+    "webMod",
+    "notificationChance",
+    "promptMod",
+    "capPopChance",
+];
 
-    FrequencyAnchors {
-        popup: chance_to_period_seconds(delay_ms, popup_chance),
-        web: chance_to_period_seconds(delay_ms, config_number(config, "webMod").unwrap_or(0.0)),
-        notification: chance_to_period_seconds(
-            delay_ms,
-            config_number(config, "notificationChance").unwrap_or(0.0),
-        ),
-        prompt: chance_to_period_seconds(
-            delay_ms,
-            config_number(config, "promptMod").unwrap_or(0.0),
-        ),
-        subliminal: chance_to_period_seconds(
-            delay_ms,
-            config_number(config, "capPopChance").unwrap_or(0.0),
-        ),
+// Sensible default pacing assumed for a feature the pack clearly has content for, but that no
+// config.json/corruption.json data anywhere gives an actual chance/rate for -- see
+// `resolve_anchor_series`. Matches the same defaults already used as starting points in the pack
+// editor's Experience tab (`OptionalNumberField`'s `default` prop), for consistency between "what
+// a fresh toggle-on shows in the editor" and "what the converter assumes".
+const DEFAULT_WEB_PERIOD_SECONDS: f64 = 300.0;
+const DEFAULT_NOTIFICATION_PERIOD_SECONDS: f64 = 300.0;
+const DEFAULT_PROMPT_PERIOD_SECONDS: f64 = 90.0;
+const DEFAULT_SUBLIMINAL_PERIOD_SECONDS: f64 = 60.0;
+
+/// One `FrequencyAnchors` field's value at every point in the timeline (one entry per generated
+/// level, or a single entry when there's no corruption.json at all) -- reconciles `config.json`'s
+/// global setting with `corruption.json`'s own per-level `config` overrides for the same key.
+/// Edgeware allows both, which is genuinely ambiguous to convert if either is trusted alone (see
+/// `behaviour-design/edgeware-compat.md`'s Goal section): a pack can leave `config.json` silent on
+/// a feature entirely and still turn it on and off across the corruption arc via per-level
+/// overrides (e.g. `corruption.json`'s `{"config": {"1": {"promptMod": 0}, "4": {"promptMod":
+/// 10}}}` -- prompts off at the baseline, on from level 4 onward).
+///
+/// Two cases:
+/// - **The key appears somewhere** (`config.json`, or any corruption level's own override): fold
+///   it cumulatively across levels, exactly like Edgeware's own runtime model (a corruption
+///   level's config override is a persistent app-config mutation, not a one-shot pulse) -- seeded
+///   from `config.json`'s value if set, else Edgeware's own real default for this key (`0`, i.e.
+///   off, for every key this function handles -- popup's own real default is handled separately
+///   by `resolve_popup_anchor_series`, since Edgeware's default for it is genuinely on).
+/// - **The key never appears anywhere**: there's no numeric signal to convert at all. Defaulting
+///   to Edgeware's literal "off" here would silently disable a feature the pack clearly has
+///   content for -- so instead, assume the feature runs at a sensible default pace
+///   (`default_period_if_content`) whenever the pack has usable content for it (`has_content`),
+///   and stays genuinely absent otherwise.
+fn resolve_anchor_series(
+    key: &str,
+    delay_ms: f64,
+    has_content: bool,
+    default_period_if_content: f64,
+    global_config: &Map<String, Value>,
+    corruption_levels: &[CorruptionLevel],
+) -> Vec<Option<f64>> {
+    let explicit_anywhere = config_number(global_config, key).is_some()
+        || corruption_levels
+            .iter()
+            .any(|level| level.config.contains_key(key));
+
+    if !explicit_anywhere {
+        let value = has_content.then_some(default_period_if_content);
+        return vec![value; corruption_levels.len().max(1)];
     }
+
+    let mut current_chance = config_number(global_config, key).unwrap_or(0.0);
+    if corruption_levels.is_empty() {
+        return vec![chance_to_period_seconds(delay_ms, current_chance)];
+    }
+    corruption_levels
+        .iter()
+        .map(|level| {
+            if let Some(v) = level.config.get(key).and_then(Value::as_f64) {
+                current_chance = v;
+            }
+            chance_to_period_seconds(delay_ms, current_chance)
+        })
+        .collect()
+}
+
+/// Like `resolve_anchor_series`, but for `popup` specifically: two Edgeware keys (`popupMod`/
+/// `vidMod`) sum into lewdware's single combined anchor (Sandbox has no separate image/video
+/// frequency either -- media type is a toggle, not a rate), and Edgeware's own real default for
+/// this pair is genuinely *on* (`assets/default_config.json`: `popupMod: 100, vidMod: 10`), unlike
+/// every other anchor key -- so when neither key appears anywhere, the "no signal -> fall back to
+/// content presence" branch checks `has_media` (any media at all) rather than a specific content
+/// pool, and assumes Edgeware's own real default pace rather than a made-up one.
+fn resolve_popup_anchor_series(
+    delay_ms: f64,
+    has_media: bool,
+    global_config: &Map<String, Value>,
+    corruption_levels: &[CorruptionLevel],
+) -> Vec<Option<f64>> {
+    let explicit_anywhere = config_number(global_config, "popupMod").is_some()
+        || config_number(global_config, "vidMod").is_some()
+        || corruption_levels.iter().any(|level| {
+            level.config.contains_key("popupMod") || level.config.contains_key("vidMod")
+        });
+
+    if !explicit_anywhere {
+        let default_period =
+            chance_to_period_seconds(delay_ms, DEFAULT_POPUP_MOD + DEFAULT_VID_MOD);
+        let value = has_media.then_some(default_period).flatten();
+        return vec![value; corruption_levels.len().max(1)];
+    }
+
+    let mut current_popup_mod =
+        config_number(global_config, "popupMod").unwrap_or(DEFAULT_POPUP_MOD);
+    let mut current_vid_mod = config_number(global_config, "vidMod").unwrap_or(DEFAULT_VID_MOD);
+    if corruption_levels.is_empty() {
+        return vec![chance_to_period_seconds(
+            delay_ms,
+            current_popup_mod + current_vid_mod,
+        )];
+    }
+    corruption_levels
+        .iter()
+        .map(|level| {
+            if let Some(v) = level.config.get("popupMod").and_then(Value::as_f64) {
+                current_popup_mod = v;
+            }
+            if let Some(v) = level.config.get("vidMod").and_then(Value::as_f64) {
+                current_vid_mod = v;
+            }
+            chance_to_period_seconds(delay_ms, current_popup_mod + current_vid_mod)
+        })
+        .collect()
+}
+
+/// One resolved anchor value per generated level, for each of the 5 `FrequencyAnchors` fields --
+/// bundled purely to keep `build_timeline`'s argument count reasonable.
+struct AnchorSeries {
+    popup: Vec<Option<f64>>,
+    web: Vec<Option<f64>>,
+    notification: Vec<Option<f64>>,
+    prompt: Vec<Option<f64>>,
+    subliminal: Vec<Option<f64>>,
 }
 
 /// Folds `corruption.json`'s levels (already parsed by `parse::corruption::load_corruption`) into
-/// an absolute-per-level `Timeline`, and resolves each level's wallpaper filename to a tag +
-/// (deduplicated) `ConvertedMedia` entry. `None` if there are no levels to convert.
+/// a `Vec<Level>` (never empty -- see `build_experience`), resolving each level's wallpaper
+/// filename to a tag + (deduplicated) `ConvertedMedia` entry and pulling that level's own anchor
+/// values from the already-resolved `anchors` series (see `resolve_anchor_series`). `design` stays
+/// `DesignValues::default()` on every level: it isn't a pacing concept, and per-level design-value
+/// overrides are out of scope here (see `design/release-plan.md`'s M4 converter bullet). Level 0
+/// (Edgeware's own level 1, applied immediately at session start -- see the `at_seconds` comment
+/// below) doubles as the new schema's baseline: it already has `at_seconds: 0.0`/`at_popups: None`,
+/// exactly what a trigger-less baseline level needs, so no separate synthetic entry is required.
 fn build_timeline(
     levels: &[CorruptionLevel],
+    anchors: &AnchorSeries,
     config: &Map<String, Value>,
     source: &dyn PackSource,
     media: &mut Vec<ConvertedMedia>,
     warnings: &mut Vec<Warning>,
-) -> Option<Timeline> {
+) -> Vec<Level> {
     if levels.is_empty() {
-        return None;
+        return Vec::new();
     }
 
     let corruption_time_seconds =
@@ -483,7 +608,7 @@ fn build_timeline(
     let mut wallpaper_tag_ids: HashSet<String> = HashSet::new();
     let mut wallpaper_tags_by_file: HashMap<String, String> = HashMap::new();
 
-    let out_levels = levels
+    levels
         .iter()
         .enumerate()
         .map(|(i, level)| {
@@ -494,15 +619,21 @@ fn build_timeline(
                 active.insert(mood.clone());
             }
 
-            if !level.config_keys.is_empty() {
+            let mut leftover: Vec<&str> = level
+                .config
+                .keys()
+                .map(String::as_str)
+                .filter(|key| !LEVEL_ANCHOR_CONFIG_KEYS.contains(key))
+                .collect();
+            if !leftover.is_empty() {
+                leftover.sort_unstable();
                 warnings.push(Warning::new(
                     WarningKind::UnsupportedFeatureDropped,
                     format!(
                         "corruption.json level {}'s config override(s) ({}) have no Lewdware \
-                         equivalent -- a timeline level's modifier is a single scalar, not \
-                         per-setting, so they were dropped",
+                         equivalent and were dropped",
                         i + 1,
-                        level.config_keys.join(", ")
+                        leftover.join(", ")
                     ),
                 ));
             }
@@ -522,26 +653,28 @@ fn build_timeline(
                 // Level index 0 (Edgeware's level 1) is applied immediately at session start
                 // (`handle_corruption` calls `apply_corruption_level` before ever waiting on
                 // `corruption_time`), not after one interval -- see
-                // `EdgewarePlusPlus/edgeware/src/features/corruption.py`.
+                // `EdgewarePlusPlus/edgeware/src/features/corruption.py`. This also makes it
+                // exactly the new schema's baseline level: `at_seconds: 0.0`/`at_popups: None`,
+                // never read as a trigger.
                 at_seconds: i as f64 * corruption_time_seconds,
                 // Only meaningful (and only known) for the "Popup" trigger -- `corruption_popups`
                 // isn't consulted at all for the other triggers, so inventing a popup count for
                 // them would be fabricating a fact, not converting one.
                 at_popups: (trigger == "Popup" && i > 0)
                     .then_some((i as f64 * corruption_popups) as u32),
-                modifiers: Modifiers {
-                    // Per-level config overrides are the only source of a genuine rate change in
-                    // Edgeware's corruption model, and those are dropped (warned above) -- so
-                    // there's no reliable signal left to drive `modifier` from.
-                    modifier: None,
-                    tags: Some(active.iter().cloned().collect()),
-                    wallpaper_tags,
+                anchors: FrequencyAnchors {
+                    popup: anchors.popup[i],
+                    web: anchors.web[i],
+                    notification: anchors.notification[i],
+                    prompt: anchors.prompt[i],
+                    subliminal: anchors.subliminal[i],
                 },
+                design: DesignValues::default(),
+                tags: Some(active.iter().cloned().collect()),
+                wallpaper_tags,
             }
         })
-        .collect();
-
-    Some(Timeline { levels: out_levels })
+        .collect()
 }
 
 /// Resolves one corruption level's wallpaper filename to a tag, adding a `ConvertedMedia` entry
@@ -588,27 +721,88 @@ fn resolve_wallpaper_tag(
 /// `corruption.json`/`config.json` -> `behaviour.experience`. `None` (not
 /// `Some(Experience::default())`) when neither contributes anything -- presence must stay
 /// structurally meaningful, matching `Behaviour::experience`'s own doc comment and
-/// `pack_has_experience`. `design` is out of this bullet's scope (`DesignValues` isn't a
-/// chance-per-tick concept the way `FrequencyAnchors` is -- see `design/release-plan.md`'s M4
-/// converter bullet).
+/// `pack_has_experience`. With no `corruption.json` at all, `config.json`'s anchors alone still
+/// produce a valid one-level (baseline-only) `Timeline` -- exactly what "a purely
+/// statically-designed pack" is under the new per-level schema.
 fn build_experience(
     corruption_levels: &[CorruptionLevel],
+    content: &Content,
     config: &Map<String, Value>,
     source: &dyn PackSource,
     media: &mut Vec<ConvertedMedia>,
     warnings: &mut Vec<Warning>,
 ) -> Option<Experience> {
-    let anchors = build_anchors(config);
-    let timeline = build_timeline(corruption_levels, config, source, media, warnings);
+    let delay_ms = config_number(config, "delay")
+        .unwrap_or(DEFAULT_DELAY_MS)
+        .max(1.0);
 
-    if anchors == FrequencyAnchors::default() && timeline.is_none() {
+    let anchors = AnchorSeries {
+        popup: resolve_popup_anchor_series(delay_ms, !media.is_empty(), config, corruption_levels),
+        web: resolve_anchor_series(
+            "webMod",
+            delay_ms,
+            !content.web_links.is_empty(),
+            DEFAULT_WEB_PERIOD_SECONDS,
+            config,
+            corruption_levels,
+        ),
+        notification: resolve_anchor_series(
+            "notificationChance",
+            delay_ms,
+            !content.notifications.is_empty(),
+            DEFAULT_NOTIFICATION_PERIOD_SECONDS,
+            config,
+            corruption_levels,
+        ),
+        prompt: resolve_anchor_series(
+            "promptMod",
+            delay_ms,
+            !content.prompts.is_empty(),
+            DEFAULT_PROMPT_PERIOD_SECONDS,
+            config,
+            corruption_levels,
+        ),
+        subliminal: resolve_anchor_series(
+            "capPopChance",
+            delay_ms,
+            !content.subliminals.is_empty(),
+            DEFAULT_SUBLIMINAL_PERIOD_SECONDS,
+            config,
+            corruption_levels,
+        ),
+    };
+
+    let all_absent = corruption_levels.is_empty()
+        && anchors.popup[0].is_none()
+        && anchors.web[0].is_none()
+        && anchors.notification[0].is_none()
+        && anchors.prompt[0].is_none()
+        && anchors.subliminal[0].is_none();
+    if all_absent {
         return None;
     }
 
+    let levels = if corruption_levels.is_empty() {
+        vec![Level {
+            at_seconds: 0.0,
+            at_popups: None,
+            anchors: FrequencyAnchors {
+                popup: anchors.popup[0],
+                web: anchors.web[0],
+                notification: anchors.notification[0],
+                prompt: anchors.prompt[0],
+                subliminal: anchors.subliminal[0],
+            },
+            design: DesignValues::default(),
+            tags: None,
+            wallpaper_tags: None,
+        }]
+    } else {
+        build_timeline(corruption_levels, &anchors, config, source, media, warnings)
+    };
+
     Some(Experience {
-        anchors,
-        design: DesignValues::default(),
-        timeline,
+        timeline: Timeline { levels },
     })
 }
 
@@ -812,16 +1006,15 @@ mod tests {
             r#"{"delay": 5000, "popupMod": 100, "vidMod": 0, "webMod": 0}"#,
         )]);
         let output = convert(&source);
+        let experience = output.behaviour.experience.as_ref().unwrap();
         // 100% chance every 5000ms tick -> one event every 5 seconds.
-        assert_eq!(
-            output.behaviour.experience.as_ref().unwrap().anchors.popup,
-            Some(5.0)
-        );
+        assert_eq!(experience.timeline.levels[0].anchors.popup, Some(5.0));
         assert_eq!(
             output.metadata.recommended_mode,
             Some(RecommendedMode::Sandbox)
         );
-        assert_eq!(output.behaviour.experience.as_ref().unwrap().timeline, None);
+        // No corruption.json -> just the one baseline level, no escalation.
+        assert_eq!(experience.timeline.levels.len(), 1);
     }
 
     #[test]
@@ -833,7 +1026,15 @@ mod tests {
         let output = convert(&source);
         // 100% combined chance every 1000ms -> one event/sec.
         assert_eq!(
-            output.behaviour.experience.as_ref().unwrap().anchors.popup,
+            output
+                .behaviour
+                .experience
+                .as_ref()
+                .unwrap()
+                .timeline
+                .levels[0]
+                .anchors
+                .popup,
             Some(1.0)
         );
     }
@@ -846,12 +1047,50 @@ mod tests {
     }
 
     #[test]
+    fn content_presence_defaults_an_anchor_on_when_no_config_signal_exists_anywhere() {
+        // No config.json, no corruption.json -- webMod is never mentioned anywhere. A pack with
+        // real web-link content should still convert with the web anchor assumed on at a sensible
+        // default pace, rather than silently defaulting to Edgeware's literal (but here clearly
+        // unintended) "off".
+        let (_dir, source) = source_with(&[(
+            "index.json",
+            r#"{"default": {"web": ["https://example.com"], "webArgs": [[]]}}"#,
+        )]);
+        let output = convert(&source);
+        assert!(!output.behaviour.content.web_links.is_empty());
+        assert_eq!(
+            output.behaviour.experience.unwrap().timeline.levels[0]
+                .anchors
+                .web,
+            Some(DEFAULT_WEB_PERIOD_SECONDS)
+        );
+    }
+
+    #[test]
+    fn no_content_and_no_config_signal_leaves_the_anchor_absent() {
+        // Same as above but with no web-link content at all -- nothing implies the feature should
+        // be on, so it correctly stays absent.
+        let (_dir, source) = source_with(&[("index.json", r#"{"default": {"captions": ["hi"]}}"#)]);
+        let output = convert(&source);
+        assert!(output.behaviour.content.web_links.is_empty());
+        assert!(output.behaviour.experience.is_none());
+    }
+
+    #[test]
     fn missing_delay_falls_back_to_edgewares_own_default() {
         let (_dir, source) = source_with(&[("config.json", r#"{"promptMod": 100}"#)]);
         let output = convert(&source);
         // 100% chance every (default) 5000ms -> one event every 5 seconds.
         assert_eq!(
-            output.behaviour.experience.as_ref().unwrap().anchors.prompt,
+            output
+                .behaviour
+                .experience
+                .as_ref()
+                .unwrap()
+                .timeline
+                .levels[0]
+                .anchors
+                .prompt,
             Some(5.0)
         );
     }
@@ -874,27 +1113,21 @@ mod tests {
             output.metadata.recommended_mode,
             Some(RecommendedMode::Experience)
         );
-        let timeline = output
-            .behaviour
-            .experience
-            .as_ref()
-            .unwrap()
-            .timeline
-            .as_ref()
-            .unwrap();
+        let timeline = &output.behaviour.experience.as_ref().unwrap().timeline;
         assert_eq!(timeline.levels.len(), 2);
         // Level 1 is applied immediately (Edgeware applies it at session start, not after one
-        // corruption_time interval) -- see `build_timeline`.
+        // corruption_time interval) -- see `build_timeline`. It also doubles as the new schema's
+        // baseline level.
         assert_eq!(timeline.levels[0].at_seconds, 0.0);
         assert_eq!(
-            timeline.levels[0].modifiers.tags,
+            timeline.levels[0].tags,
             Some(vec!["angel".to_string(), "apple".to_string()])
         );
         // Default corruption_time (config.json absent) is Edgeware's own 60s default.
         assert_eq!(timeline.levels[1].at_seconds, 60.0);
         // "apple" removed, "globe" added -- cumulative, not a replacement.
         assert_eq!(
-            timeline.levels[1].modifiers.tags,
+            timeline.levels[1].tags,
             Some(vec!["angel".to_string(), "globe".to_string()])
         );
     }
@@ -912,7 +1145,7 @@ mod tests {
             ),
         ]);
         let output = convert(&source);
-        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        let timeline = output.behaviour.experience.unwrap().timeline;
         assert_eq!(timeline.levels[0].at_popups, None);
         assert_eq!(timeline.levels[1].at_popups, Some(10));
     }
@@ -924,7 +1157,7 @@ mod tests {
             r#"{"moods": {"1": {"add": [], "remove": []}, "2": {"add": [], "remove": []}}, "wallpapers": {}, "config": {}}"#,
         )]);
         let output = convert(&source);
-        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        let timeline = output.behaviour.experience.unwrap().timeline;
         assert!(timeline.levels.iter().all(|l| l.at_popups.is_none()));
     }
 
@@ -944,24 +1177,86 @@ mod tests {
                 .iter()
                 .any(|w| w.kind == WarningKind::UnsupportedFeatureDropped)
         );
-        assert!(output.behaviour.experience.unwrap().timeline.is_some());
+        assert!(
+            !output
+                .behaviour
+                .experience
+                .unwrap()
+                .timeline
+                .levels
+                .is_empty()
+        );
     }
 
     #[test]
-    fn per_level_config_override_warns_and_is_dropped() {
+    fn per_level_config_override_of_a_recognized_anchor_key_converts_not_warns() {
+        // promptMod is now a recognized anchor-affecting key (see LEVEL_ANCHOR_CONFIG_KEYS) --
+        // it should be converted into a real per-level anchor change, not warned about and
+        // dropped the way an unrecognized per-level key still is.
         let (_dir, source) = source_with(&[(
             "corruption.json",
             r#"{"moods": {}, "wallpapers": {}, "config": {"1": {"promptMod": 0}}}"#,
         )]);
         let output = convert(&source);
-        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
-        assert_eq!(timeline.levels[0].modifiers.modifier, None);
+        assert!(
+            !output
+                .warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::UnsupportedFeatureDropped
+                    && w.message.contains("promptMod"))
+        );
+    }
+
+    #[test]
+    fn per_level_config_override_of_an_unrecognized_key_still_warns_and_is_dropped() {
+        let (_dir, source) = source_with(&[(
+            "corruption.json",
+            r#"{"moods": {}, "wallpapers": {}, "config": {"1": {"promptMistakes": 10}}}"#,
+        )]);
+        let output = convert(&source);
         assert!(
             output
                 .warnings
                 .iter()
                 .any(|w| w.kind == WarningKind::UnsupportedFeatureDropped
-                    && w.message.contains("promptMod"))
+                    && w.message.contains("promptMistakes"))
+        );
+    }
+
+    #[test]
+    fn per_level_promptmod_overrides_convert_into_real_per_level_prompt_anchors() {
+        // Mirrors the real Edgeware++ Test Pack V2's own corruption.json: prompts explicitly off
+        // at the baseline, explicitly on from level 4 onward -- a level's own promptMod override
+        // must be reflected in that level's (and every subsequent level's, until changed again)
+        // `anchors.prompt`, not silently dropped the way the old single-scalar-modifier schema
+        // had to.
+        let (_dir, source) = source_with(&[(
+            "corruption.json",
+            r#"{
+                "moods": {"1": {"add": [], "remove": []}, "2": {"add": [], "remove": []},
+                          "3": {"add": [], "remove": []}, "4": {"add": [], "remove": []}},
+                "wallpapers": {},
+                "config": {"1": {"promptMod": 0}, "4": {"promptMod": 10}}
+            }"#,
+        )]);
+        let output = convert(&source);
+        let timeline = &output.behaviour.experience.unwrap().timeline;
+        assert_eq!(timeline.levels.len(), 4);
+        assert_eq!(
+            timeline.levels[0].anchors.prompt, None,
+            "off at the baseline"
+        );
+        assert_eq!(
+            timeline.levels[1].anchors.prompt, None,
+            "still off (carried forward)"
+        );
+        assert_eq!(
+            timeline.levels[2].anchors.prompt, None,
+            "still off (carried forward)"
+        );
+        assert!(
+            timeline.levels[3].anchors.prompt.is_some(),
+            "on from level 4 (index 3) onward"
         );
     }
 
@@ -975,9 +1270,9 @@ mod tests {
             ),
         ]);
         let output = convert(&source);
-        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        let timeline = output.behaviour.experience.unwrap().timeline;
         assert_eq!(
-            timeline.levels[0].modifiers.wallpaper_tags,
+            timeline.levels[0].wallpaper_tags,
             Some(vec!["wallpaper".to_string()])
         );
         assert_eq!(
@@ -1000,8 +1295,8 @@ mod tests {
             ),
         ]);
         let output = convert(&source);
-        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
-        let tags = timeline.levels[0].modifiers.wallpaper_tags.clone().unwrap();
+        let timeline = output.behaviour.experience.unwrap().timeline;
+        let tags = timeline.levels[0].wallpaper_tags.clone().unwrap();
         assert_eq!(tags.len(), 1);
         assert_ne!(tags[0], "wallpaper");
         let entry = output
@@ -1025,8 +1320,8 @@ mod tests {
                 .iter()
                 .any(|w| w.kind == WarningKind::UnreadableMediaFile)
         );
-        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
-        assert_eq!(timeline.levels[0].modifiers.wallpaper_tags, None);
+        let timeline = output.behaviour.experience.unwrap().timeline;
+        assert_eq!(timeline.levels[0].wallpaper_tags, None);
     }
 
     #[test]
@@ -1047,11 +1342,10 @@ mod tests {
             .unwrap();
         assert_eq!(untagged.tags, vec![MOODLESS_TAG.to_string()]);
 
-        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        let timeline = output.behaviour.experience.unwrap().timeline;
         for level in &timeline.levels {
             assert!(
                 level
-                    .modifiers
                     .tags
                     .as_ref()
                     .unwrap()
@@ -1062,7 +1356,6 @@ mod tests {
         // Never removed by an unrelated mood change.
         assert!(
             timeline.levels[1]
-                .modifiers
                 .tags
                 .as_ref()
                 .unwrap()
@@ -1091,10 +1384,9 @@ mod tests {
                 .iter()
                 .any(|m| m.tags.contains(&MOODLESS_TAG.to_string()))
         );
-        let timeline = output.behaviour.experience.unwrap().timeline.unwrap();
+        let timeline = output.behaviour.experience.unwrap().timeline;
         assert!(
             !timeline.levels[0]
-                .modifiers
                 .tags
                 .as_ref()
                 .unwrap()

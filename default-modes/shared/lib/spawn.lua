@@ -11,6 +11,17 @@ local content = require("lib.content")
 
 local M = {}
 
+--- Accepts either a plain value (Sandbox's call site: a fixed user option) or a getter function
+--- (Experience's call site: re-read the current timeline level fresh at each spawn/close
+--- decision, mirroring `active_tags`) -- lets both modes share this module's option shape without
+--- Sandbox needing any changes.
+---@param v any
+---@return any
+local function resolve(v)
+	if type(v) == "function" then return v() end
+	return v
+end
+
 ---@param window Window
 ---@param speed number
 local function start_movement(window, speed)
@@ -92,25 +103,25 @@ end
 --- @field max_popups integer|nil Hard cap (both modes' own option); nil/false means unlimited.
 --- @field captions_enabled boolean
 --- @field movement_enabled boolean
---- @field movement_speed_min number
---- @field movement_speed_max number
+--- @field movement_speed_min number|(fun(): number|nil) Sandbox: a fixed user option. Experience:
+---   a getter re-reading the current timeline level's design value fresh at each spawn (see
+---   `resolve`) -- absent/nil degrades this sub-behaviour to inert rather than erroring.
+--- @field movement_speed_max number|(fun(): number|nil) Same shape as movement_speed_min.
 --- @field close_trigger_enabled boolean Mitosis off-switch -- user-owned in both modes.
---- @field close_chance number Mitosis probability -- Sandbox: user option. Experience: author
----   design value (not pace-scaled -- it's a probability, not a rate).
---- @field close_count integer Mitosis spawn count -- same ownership as close_chance.
+--- @field close_chance number|(fun(): number|nil) Mitosis probability -- Sandbox: a fixed user
+---   option. Experience: a getter re-reading the current level's design value fresh at each close
+---   decision (not pace-scaled -- it's a probability, not a rate).
+--- @field close_count integer|(fun(): integer|nil) Mitosis spawn count -- same ownership as
+---   close_chance.
 --- @field is_dormant fun(): boolean Sandbox: the dormancy cycle. Experience (no dormancy in this
 ---   milestone): a function that always returns false.
 --- @field on_spawn fun(window: Window)|nil Called right after a popup is opened and captioned,
 ---   before movement/mitosis wiring -- lets the caller do its own bookkeeping (e.g. Sandbox's
 ---   dormancy window list, Experience's timeline popup-count trigger). Optional.
 --- @field active_tags (fun(): string[]|nil)|nil Called at each spawn decision -- Experience's
----   timeline active tag set (nil at baseline: unrestricted). Sandbox has no timeline, so this is
----   nil there. Composes with disabled content groups exactly like any other caller-supplied tag
----   filter (see lib/media.lua's `merge_tags`) -- no changes needed there.
---- @field modifier (fun(): number)|nil Called at each spawn decision -- Experience's timeline
----   modifier, scaling movement speed and mitosis chance/count (non-rate design-value baselines).
----   nil (or a function returning 1.0) leaves them at the caller's own values, unmodified --
----   Sandbox has no timeline, so this is nil there.
+---   timeline active tag set (nil for a level that doesn't restrict tags: unrestricted). Sandbox
+---   has no timeline, so this is nil there. Composes with disabled content groups exactly like any
+---   other caller-supplied tag filter (see lib/media.lua's `merge_tags`) -- no changes needed there.
 
 --- Builds an `open_popup(spawn_opts?, close_trigger?)` closure bound to one set of options.
 --- `spawn_opts`/`close_trigger` mirror the original inline function's parameters: an optional
@@ -157,13 +168,14 @@ function M.make_spawner(opts)
 
 		if opts.on_spawn then opts.on_spawn(window) end
 
-		-- `movement_speed_min/max` absent (Experience with no design value for this pack) is
-		-- treated the same as `movement_enabled` being off, not an error -- see
-		-- `shared/src/behaviour/schema.rs`'s `DesignValues` doc comment. The timeline modifier (if
-		-- any) scales these non-rate baselines directly -- see `SpawnOpts.modifier`'s doc comment.
-		local m = opts.modifier and opts.modifier() or 1.0
-		if opts.movement_enabled and opts.movement_speed_min and opts.movement_speed_max then
-			local speed = math.random(opts.movement_speed_min * m, opts.movement_speed_max * m)
+		-- `movement_speed_min/max` absent (Experience: no design value at the current level for
+		-- this pack) is treated the same as `movement_enabled` being off, not an error -- see
+		-- `shared/src/behaviour/schema.rs`'s `DesignValues` doc comment. `resolve` re-reads a
+		-- getter fresh (Experience) or passes a fixed value through unchanged (Sandbox).
+		local speed_min = resolve(opts.movement_speed_min)
+		local speed_max = resolve(opts.movement_speed_max)
+		if opts.movement_enabled and speed_min and speed_max then
+			local speed = math.random(speed_min, speed_max)
 			start_movement(window, speed)
 		end
 
@@ -173,16 +185,14 @@ function M.make_spawner(opts)
 
 				-- `close_chance` absent means mitosis is inert for this pack (same convention as
 				-- movement above); when present but `close_count` isn't, one spawn is the sane
-				-- minimum rather than erroring on a nil loop bound. `close_chance` is a probability,
-				-- so it's clamped to [0, 1] after the timeline modifier scales it (unlike a rate, a
-				-- probability can't just grow unbounded).
-				local close_chance = opts.close_chance and math.min(1, opts.close_chance * m)
+				-- minimum rather than erroring on a nil loop bound.
+				local close_chance = resolve(opts.close_chance)
 				if opts.close_trigger_enabled
 						and not opts.is_dormant()
 						and close_chance
 						and math.random() < close_chance
 				then
-					local close_count = opts.close_count and math.max(1, math.floor(opts.close_count * m + 0.5)) or 1
+					local close_count = resolve(opts.close_count) or 1
 					local spread = 200
 					local cx = window.x + math.floor(window.outer_width / 2)
 					local cy = window.y + math.floor(window.outer_height / 2)

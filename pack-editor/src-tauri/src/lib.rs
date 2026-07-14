@@ -14,6 +14,7 @@ use std::{
 
 use pack::{MediaFile, MediaPack};
 use serde::{Deserialize, Serialize};
+use shared::behaviour::Behaviour;
 
 // ─── Update check ─────────────────────────────────────────────────────────────
 
@@ -279,9 +280,33 @@ async fn import_edgeware_pack_dialog(
     let pack = MediaPack::new(dest_path, &data_dir, name)
         .await
         .map_err(|e| e.to_string())?;
+
+    let converter::ConversionOutput {
+        metadata,
+        behaviour,
+        media,
+        icon: _,
+        warnings,
+    } = output;
+
+    // Written synchronously, before the pack is even stored in app state or the media pipeline
+    // spawned -- behaviour.json/metadata are keyed by tag, not by any specific media file's id, so
+    // they have no dependency on encoding having finished. This is what lets the pack editor's
+    // Content/Experience tabs show real converted data immediately, rather than only once a
+    // (potentially large) media pipeline finishes streaming in.
+    pack.set_pack_data(
+        "behaviour",
+        behaviour.to_json_bytes().map_err(|e| e.to_string())?,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    pack.set_metadata(&metadata)
+        .await
+        .map_err(|e| e.to_string())?;
+
     let info = PackInfo {
         name: pack.name(),
-        has_unsaved_changes: false,
+        has_unsaved_changes: !pack.is_saved().await,
     };
     *state.pack.lock().await = Some(pack);
 
@@ -295,22 +320,10 @@ async fn import_edgeware_pack_dialog(
     let cancel = state.cancel_flag.clone();
     cancel.store(false, Ordering::SeqCst);
 
-    let converter::ConversionOutput {
-        metadata,
-        behaviour,
-        media,
-        icon: _,
-        warnings,
-    } = output;
-
     tauri::async_runtime::spawn(import::run_import(
         pack_state,
         Arc::from(source),
-        import::ImportedContent {
-            media,
-            behaviour,
-            metadata,
-        },
+        media,
         app,
         encoder,
         upload_lock,
@@ -546,6 +559,38 @@ async fn mark_pack_unsaved(state: State<'_, AppState>) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         pack.mark_unsaved().await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// ── Behaviour (Content/Experience tabs) ──────────────────────────────────────
+
+#[tauri::command]
+async fn get_behaviour(state: State<'_, AppState>) -> Result<Behaviour, String> {
+    let lock = state.pack.lock().await;
+    match lock.as_ref() {
+        Some(pack) => {
+            let blob = pack
+                .get_pack_data("behaviour")
+                .await
+                .map_err(|e| e.to_string())?;
+            match blob {
+                Some(bytes) => Behaviour::from_json_bytes(&bytes).map_err(|e| e.to_string()),
+                None => Ok(Behaviour::new()),
+            }
+        }
+        None => Err("No pack open".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn set_behaviour(state: State<'_, AppState>, behaviour: Behaviour) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        let bytes = behaviour.to_json_bytes().map_err(|e| e.to_string())?;
+        pack.set_pack_data("behaviour", bytes)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -787,6 +832,8 @@ pub fn run() {
             set_pack_metadata,
             save_pack_metadata,
             mark_pack_unsaved,
+            get_behaviour,
+            set_behaviour,
             add_files_dialog,
             add_folder_dialog,
             add_paths,

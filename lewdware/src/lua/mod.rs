@@ -662,7 +662,7 @@ mod tests {
         time::Duration,
     };
 
-    use shared::behaviour::{DesignValues, FrequencyAnchors, Level, Modifiers, Timeline};
+    use shared::behaviour::{DesignValues, FrequencyAnchors, Level, Timeline};
     use shared::user_config::{Capabilities, Volume};
     use tempfile::NamedTempFile;
     use tokio::sync::mpsc::UnboundedSender;
@@ -2761,6 +2761,24 @@ mod tests {
         config
     }
 
+    /// Builds a single-level `Experience` (just the baseline, no escalation at all) from a
+    /// baseline `FrequencyAnchors`/`DesignValues` pair -- the common case for tests exercising
+    /// anchor/design arithmetic in isolation from the timeline's own trigger mechanics.
+    fn experience_with_baseline(anchors: FrequencyAnchors, design: DesignValues) -> Experience {
+        Experience {
+            timeline: Timeline {
+                levels: vec![Level {
+                    at_seconds: 0.0,
+                    at_popups: None,
+                    anchors,
+                    design,
+                    tags: None,
+                    wallpaper_tags: None,
+                }],
+            },
+        }
+    }
+
     fn as_str_sources(owned: &[(String, String)]) -> Vec<(&str, &str)> {
         owned
             .iter()
@@ -4155,14 +4173,13 @@ mod tests {
     async fn experience_popup_spawns_at_anchor_over_pace_interval() {
         LocalSet::new()
             .run_until(async {
-                let experience = Experience {
-                    anchors: FrequencyAnchors {
+                let experience = experience_with_baseline(
+                    FrequencyAnchors {
                         popup: Some(2.0),
                         ..Default::default()
                     },
-                    design: DesignValues::default(),
-                    timeline: None,
-                };
+                    DesignValues::default(),
+                );
 
                 let mut config = base_experience_mode_config();
                 config.insert("pace".to_string(), OptionValue::Number(2.0));
@@ -4231,14 +4248,13 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                let experience = Experience {
-                    anchors: FrequencyAnchors {
+                let experience = experience_with_baseline(
+                    FrequencyAnchors {
                         notification: Some(2.0),
                         ..Default::default()
                     },
-                    design: DesignValues::default(),
-                    timeline: None,
-                };
+                    DesignValues::default(),
+                );
 
                 let mut config = isolated_experience_process_config();
                 config.insert("pace".to_string(), OptionValue::Number(2.0));
@@ -4277,14 +4293,13 @@ mod tests {
                     }],
                     ..Default::default()
                 };
-                let experience = Experience {
-                    anchors: FrequencyAnchors {
+                let experience = experience_with_baseline(
+                    FrequencyAnchors {
                         notification: Some(1.0),
                         ..Default::default()
                     },
-                    design: DesignValues::default(),
-                    timeline: None,
-                };
+                    DesignValues::default(),
+                );
 
                 let mut config = isolated_experience_process_config();
                 config.insert(
@@ -4352,25 +4367,24 @@ mod tests {
         )
     }
 
-    /// A no-`timeline` pack (anchors/design only, exactly what M4's earlier "Experience mode"
-    /// bullet already shipped) must leave every getter at the level-0 baseline forever: `nil`
-    /// timeline is not a degraded case, it's the common one (most Experience packs won't design an
-    /// arc) -- see `Timeline`'s doc comment.
+    /// A pack with no levels at all (the common case: most Experience packs won't design an arc,
+    /// and a purely static design is just a single baseline level with no timeline levels beyond
+    /// it) must leave every getter inert forever -- an empty `levels` is not a degraded case, it's
+    /// the common one -- see `Timeline`'s doc comment.
     #[tokio::test(start_paused = true)]
-    async fn experience_timeline_absent_stays_at_baseline_forever() {
+    async fn experience_timeline_with_no_levels_stays_inert_forever() {
         LocalSet::new()
             .run_until(async {
-                let experience = Experience {
-                    anchors: FrequencyAnchors::default(),
-                    design: DesignValues::default(),
-                    timeline: None,
-                };
+                let experience = Experience::default(); // no levels at all
                 let mut harness =
                     timeline_harness(&timeline_only_sources_initialized(), experience);
                 harness.run_entrypoint("main.lua").unwrap();
                 harness.advance(Duration::from_secs(3600)).await;
 
-                assert_eq!(harness.eval_number("require('timeline').modifier()"), 1.0);
+                assert_eq!(
+                    harness.eval_string("tostring(require('timeline').anchors().popup)"),
+                    "nil"
+                );
                 assert_eq!(
                     harness.eval_string("table.concat(require('timeline').tags() or {}, '|')"),
                     ""
@@ -4386,26 +4400,33 @@ mod tests {
     }
 
     /// The core trigger + snapshot mechanics: before a level's `at_seconds`, every getter stays at
-    /// baseline; once active-time elapses past it, `modifier()`/`tags()` jump to that level's
-    /// absolute values in one step (interaction rules 1-3).
+    /// the baseline (level 0); once active-time elapses past it, `anchors()`/`tags()` jump to that
+    /// level's own absolute values in one step (interaction rules 1-3).
     #[tokio::test(start_paused = true)]
-    async fn experience_timeline_advances_on_active_time_and_applies_modifier() {
+    async fn experience_timeline_advances_on_active_time_and_applies_level_values() {
         LocalSet::new()
             .run_until(async {
                 let experience = Experience {
-                    anchors: FrequencyAnchors::default(),
-                    design: DesignValues::default(),
-                    timeline: Some(Timeline {
-                        levels: vec![Level {
-                            at_seconds: 5.0,
-                            at_popups: None,
-                            modifiers: Modifiers {
-                                modifier: Some(4.0),
-                                tags: Some(vec!["kinky".to_string()]),
-                                wallpaper_tags: None,
+                    timeline: Timeline {
+                        levels: vec![
+                            Level {
+                                anchors: FrequencyAnchors {
+                                    popup: Some(1.0),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
                             },
-                        }],
-                    }),
+                            Level {
+                                at_seconds: 5.0,
+                                anchors: FrequencyAnchors {
+                                    popup: Some(4.0),
+                                    ..Default::default()
+                                },
+                                tags: Some(vec!["kinky".to_string()]),
+                                ..Default::default()
+                            },
+                        ],
+                    },
                 };
                 let mut harness =
                     timeline_harness(&timeline_only_sources_initialized(), experience);
@@ -4413,13 +4434,16 @@ mod tests {
 
                 harness.advance(Duration::from_millis(4900)).await;
                 assert_eq!(
-                    harness.eval_number("require('timeline').modifier()"),
+                    harness.eval_number("require('timeline').anchors().popup"),
                     1.0,
                     "still baseline just before at_seconds"
                 );
 
                 harness.advance(Duration::from_millis(300)).await; // crosses t=5.0s
-                assert_eq!(harness.eval_number("require('timeline').modifier()"), 4.0);
+                assert_eq!(
+                    harness.eval_number("require('timeline').anchors().popup"),
+                    4.0
+                );
                 assert_eq!(
                     harness.eval_string("table.concat(require('timeline').tags() or {}, '|')"),
                     "kinky"
@@ -4436,18 +4460,26 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let experience = Experience {
-                    anchors: FrequencyAnchors::default(),
-                    design: DesignValues::default(),
-                    timeline: Some(Timeline {
-                        levels: vec![Level {
-                            at_seconds: 1_000.0, // never reached within this test
-                            at_popups: Some(3),
-                            modifiers: Modifiers {
-                                modifier: Some(2.0),
+                    timeline: Timeline {
+                        levels: vec![
+                            Level {
+                                anchors: FrequencyAnchors {
+                                    popup: Some(1.0),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
-                        }],
-                    }),
+                            Level {
+                                at_seconds: 1_000.0, // never reached within this test
+                                at_popups: Some(3),
+                                anchors: FrequencyAnchors {
+                                    popup: Some(2.0),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                        ],
+                    },
                 };
                 // No `.init()` -- this test isolates popup-count-driven advancement from any
                 // `at_seconds` timer.
@@ -4460,7 +4492,7 @@ mod tests {
                             local t = require('timeline') \
                             t.on_popup_spawned() \
                             t.on_popup_spawned() \
-                            return t.modifier() \
+                            return t.anchors().popup \
                         end)()"
                     ),
                     1.0,
@@ -4472,7 +4504,7 @@ mod tests {
                         "(function() \
                             local t = require('timeline') \
                             t.on_popup_spawned() \
-                            return t.modifier() \
+                            return t.anchors().popup \
                         end)()"
                     ),
                     2.0,
@@ -4490,68 +4522,74 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let experience = Experience {
-                    anchors: FrequencyAnchors::default(),
-                    design: DesignValues::default(),
-                    timeline: Some(Timeline {
-                        levels: vec![Level {
-                            at_seconds: 2.0,
-                            at_popups: Some(1_000_000), // never reached -- popups never spawn
-                            modifiers: Modifiers {
-                                modifier: Some(9.0),
+                    timeline: Timeline {
+                        levels: vec![
+                            Level::default(),
+                            Level {
+                                at_seconds: 2.0,
+                                at_popups: Some(1_000_000), // never reached -- popups never spawn
+                                anchors: FrequencyAnchors {
+                                    popup: Some(9.0),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
-                        }],
-                    }),
+                        ],
+                    },
                 };
                 let mut harness =
                     timeline_harness(&timeline_only_sources_initialized(), experience);
                 harness.run_entrypoint("main.lua").unwrap();
 
                 harness.advance(Duration::from_millis(2100)).await;
-                assert_eq!(harness.eval_number("require('timeline').modifier()"), 9.0);
+                assert_eq!(
+                    harness.eval_number("require('timeline').anchors().popup"),
+                    9.0
+                );
             })
             .await;
     }
 
-    /// Levels are absolute snapshots relative to baseline, not deltas relative to the previous
-    /// level: jumping straight from level 0 to level 2 (skipping level 1's own threshold) produces
-    /// identical params to passing through level 1 first -- see `Modifiers`'s doc comment.
+    /// Levels are fully independent snapshots, not deltas relative to the previous level: jumping
+    /// straight from the baseline to level 3 (skipping level 2's own threshold) produces identical
+    /// params to passing through level 2 first -- see `Level`'s doc comment.
     #[tokio::test(start_paused = true)]
     async fn experience_timeline_order_independence_jumping_directly_matches_sequential() {
         LocalSet::new()
             .run_until(async {
                 fn two_level_experience() -> Experience {
                     Experience {
-                        anchors: FrequencyAnchors::default(),
-                        design: DesignValues::default(),
-                        timeline: Some(Timeline {
+                        timeline: Timeline {
                             levels: vec![
+                                Level::default(), // baseline
                                 Level {
                                     at_seconds: 1_000.0,
                                     at_popups: Some(2),
-                                    modifiers: Modifiers {
-                                        modifier: Some(2.0),
-                                        tags: Some(vec!["a".to_string()]),
+                                    anchors: FrequencyAnchors {
+                                        popup: Some(2.0),
                                         ..Default::default()
                                     },
+                                    tags: Some(vec!["a".to_string()]),
+                                    ..Default::default()
                                 },
                                 Level {
                                     at_seconds: 1_000.0,
                                     at_popups: Some(5),
-                                    modifiers: Modifiers {
-                                        modifier: Some(5.0),
-                                        tags: Some(vec!["b".to_string()]),
+                                    anchors: FrequencyAnchors {
+                                        popup: Some(5.0),
                                         ..Default::default()
                                     },
+                                    tags: Some(vec!["b".to_string()]),
+                                    ..Default::default()
                                 },
                             ],
-                        }),
+                        },
                     }
                 }
 
                 let probe = "(function() \
                     local t = require('timeline') \
-                    return t.modifier() * 1000 + #(t.tags() or {}) \
+                    return t.anchors().popup * 1000 + #(t.tags() or {}) \
                 end)()";
 
                 // Sequential: reach level 1 (2 popups), observe it, then continue to level 2.
@@ -4599,25 +4637,21 @@ mod tests {
                 fn level_at(at_seconds: f64, wallpaper_tags: Option<Vec<String>>) -> Level {
                     Level {
                         at_seconds,
-                        at_popups: None,
-                        modifiers: Modifiers {
-                            wallpaper_tags,
-                            ..Default::default()
-                        },
+                        wallpaper_tags,
+                        ..Default::default()
                     }
                 }
 
                 let experience = Experience {
-                    anchors: FrequencyAnchors::default(),
-                    design: DesignValues::default(),
-                    timeline: Some(Timeline {
+                    timeline: Timeline {
                         levels: vec![
+                            Level::default(), // baseline: no wallpaper override
                             level_at(1.0, Some(vec!["special".to_string()])), // baseline -> special: applies
                             level_at(2.0, None), // special -> baseline (empty): no-ops internally
                             level_at(3.0, Some(vec!["special".to_string()])), // baseline -> special again: applies
                             level_at(4.0, Some(vec!["special".to_string()])), // unchanged: must not reapply
                         ],
-                    }),
+                    },
                 };
 
                 let owned = wrapped_experience_mode_sources(WALLPAPER_CAPTURE_WRAP);
@@ -4648,30 +4682,34 @@ mod tests {
             .await;
     }
 
-    /// `max_popups` (a class-1 user cap) stays authoritative even when a level's modifier cranks
-    /// the effective spawn rate far above what the pack's anchor alone would produce -- caps are
-    /// "clamps applied after everything else" (`behaviour-design/default-mode.md`, Ownership),
-    /// never something a design can spawn its way past.
+    /// `max_popups` (a class-1 user cap) stays authoritative even when a later level's own anchor
+    /// is far faster than the baseline's -- caps are "clamps applied after everything else"
+    /// (`behaviour-design/default-mode.md`, Ownership), never something a design can spawn its way
+    /// past.
     #[tokio::test(start_paused = true)]
-    async fn experience_timeline_max_popups_still_clamps_when_modifier_raises_rate() {
+    async fn experience_timeline_max_popups_still_clamps_when_level_raises_rate() {
         LocalSet::new()
             .run_until(async {
                 let experience = Experience {
-                    anchors: FrequencyAnchors {
-                        popup: Some(0.1),
-                        ..Default::default()
-                    },
-                    design: DesignValues::default(),
-                    timeline: Some(Timeline {
-                        levels: vec![Level {
-                            at_seconds: 0.05,
-                            at_popups: None,
-                            modifiers: Modifiers {
-                                modifier: Some(100.0),
+                    timeline: Timeline {
+                        levels: vec![
+                            Level {
+                                anchors: FrequencyAnchors {
+                                    popup: Some(0.1),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
-                        }],
-                    }),
+                            Level {
+                                at_seconds: 0.05,
+                                anchors: FrequencyAnchors {
+                                    popup: Some(0.001),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                        ],
+                    },
                 };
 
                 let mut config = base_experience_mode_config();
@@ -4734,21 +4772,26 @@ mod tests {
                     &[("kinky.avif", &["kinky"]), ("vanilla.avif", &["vanilla"])];
 
                 let experience = Experience {
-                    anchors: FrequencyAnchors {
-                        popup: Some(0.05),
-                        ..Default::default()
-                    },
-                    design: DesignValues::default(),
-                    timeline: Some(Timeline {
-                        levels: vec![Level {
-                            at_seconds: 0.5,
-                            at_popups: None,
-                            modifiers: Modifiers {
+                    timeline: Timeline {
+                        levels: vec![
+                            Level {
+                                anchors: FrequencyAnchors {
+                                    popup: Some(0.05),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                            Level {
+                                at_seconds: 0.5,
+                                anchors: FrequencyAnchors {
+                                    popup: Some(0.05),
+                                    ..Default::default()
+                                },
                                 tags: Some(vec!["kinky".to_string()]),
                                 ..Default::default()
                             },
-                        }],
-                    }),
+                        ],
+                    },
                 };
 
                 let mut config = base_experience_mode_config();

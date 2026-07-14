@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ImportResult, MediaFile, MetadataDto, PackInfo } from "./types.js";
+import type { Behaviour, ImportResult, MediaFile, MetadataDto, PackInfo } from "./types.js";
 
 export const api = {
   newPackDialog: () => invoke<PackInfo | null>("new_pack_dialog"),
@@ -28,6 +28,9 @@ export const api = {
   setPackMetadata: (dto: MetadataDto) => invoke<void>("set_pack_metadata", { dto }),
   savePackMetadata: () => invoke<void>("save_pack_metadata"),
   markPackUnsaved: () => invoke<void>("mark_pack_unsaved"),
+
+  getBehaviour: () => invoke<Behaviour>("get_behaviour"),
+  setBehaviour: (behaviour: Behaviour) => invoke<void>("set_behaviour", { behaviour }),
 
   addFilesDialog: () => invoke<void>("add_files_dialog"),
   addFolderDialog: (recursive: boolean) => invoke<void>("add_folder_dialog", { recursive }),

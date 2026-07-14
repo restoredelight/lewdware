@@ -3,6 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { store } from "$lib/store.svelte.js";
   import { api } from "$lib/api.js";
+  import { flushBehaviourSave } from "$lib/behaviourSave.js";
   import type { MediaFile, UploadError, SaveProgress } from "$lib/types.js";
   import Start from "$lib/Start.svelte";
   import Editor from "$lib/Editor.svelte";
@@ -48,6 +49,7 @@
   });
 
   async function onCloseSave() {
+    await flushBehaviourSave();
     showCloseDialog = false;
     pendingClose = true;
     try {

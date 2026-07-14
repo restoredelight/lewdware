@@ -6,8 +6,12 @@
 //!
 //! Mirrors `encode.rs`'s `process_files`/`process_one_file` shape closely -- same
 //! extract-encode-hash-insert pipeline, just pulling input bytes from a `PackSource` instead of
-//! an already-local path, and additionally writing the converted tags and behaviour.json/metadata
-//! once every media file has landed.
+//! an already-local path. behaviour.json/metadata are written synchronously in the
+//! `import_edgeware_pack_dialog` command itself (`lib.rs`), before this module's media pipeline
+//! ever starts: they're keyed by tag, not by any specific media file's id, so they have no actual
+//! dependency on encoding having finished -- waiting for the whole (potentially large) media
+//! pipeline before the Content/Experience tabs had anything to show was an artificial delay, not a
+//! real one.
 
 use std::{
     io,
@@ -22,11 +26,7 @@ use std::{
 use anyhow::{anyhow, Context};
 use converter::{convert, ConversionOutput, ConvertedMedia, DirSource, PackSource, ZipSource};
 use futures::{stream, StreamExt};
-use shared::{
-    behaviour::Behaviour,
-    encode::{encode_file, hash_file, HardwareEncoder},
-    read_pack::Metadata,
-};
+use shared::encode::{encode_file, hash_file, HardwareEncoder};
 use tauri::Emitter;
 use tokio::sync::{oneshot, RwLock};
 use uuid::Uuid;
@@ -78,36 +78,21 @@ pub fn load(
     Ok((source, output))
 }
 
-/// The pieces of a `ConversionOutput` `run_import` needs, minus `metadata`/`icon`/`warnings`
-/// already consumed by the Tauri command before this task was spawned -- bundled into one struct
-/// purely to keep `run_import`'s argument count under clippy's threshold.
-pub struct ImportedContent {
-    pub media: Vec<ConvertedMedia>,
-    pub behaviour: Behaviour,
-    pub metadata: Metadata,
-}
-
-/// Streams `content.media` into the pack open in `pack_state`, then writes
-/// `content.behaviour`/`content.metadata`. Reuses the `upload:*` event names normal uploads emit
-/// (`start`/`added`/`error`/`file-done`/`done`) -- from the frontend's perspective, importing an
-/// Edgeware pack's media *is* a bulk upload; the only Edgeware-specific artifact (the converter's
-/// warnings) is returned directly from the Tauri command instead, since conversion itself already
-/// finished by the time this task starts.
+/// Streams `media` into the pack open in `pack_state`. Reuses the `upload:*` event names normal
+/// uploads emit (`start`/`added`/`error`/`file-done`/`done`) -- from the frontend's perspective,
+/// importing an Edgeware pack's media *is* a bulk upload; the only Edgeware-specific artifact (the
+/// converter's warnings) is returned directly from the Tauri command instead, since conversion
+/// itself already finished by the time this task starts (as did the behaviour.json/metadata write
+/// -- see this module's own doc comment).
 pub async fn run_import(
     pack_state: crate::PackState,
     source: Arc<dyn PackSource + Send + Sync>,
-    content: ImportedContent,
+    media: Vec<ConvertedMedia>,
     app: tauri::AppHandle,
     encoder: HardwareEncoder,
     upload_lock: Arc<RwLock<()>>,
     cancel: Arc<AtomicBool>,
 ) {
-    let ImportedContent {
-        media,
-        behaviour,
-        metadata,
-    } = content;
-
     let dir = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {
@@ -158,21 +143,6 @@ pub async fn run_import(
             }
         })
         .await;
-
-    let lock = pack_state.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        let result: anyhow::Result<()> = async {
-            pack.set_pack_data("behaviour", behaviour.to_json_bytes()?)
-                .await?;
-            pack.set_metadata(&metadata).await?;
-            Ok(())
-        }
-        .await;
-        if let Err(err) = result {
-            tracing::error!("failed to finalize imported pack: {err}");
-        }
-    }
-    drop(lock);
 
     let _ = app.emit("upload:done", ());
 }

@@ -48,3 +48,82 @@ export interface SaveProgress {
   saved: number;
   total: number;
 }
+
+// behaviour.json (shared/src/behaviour/schema.rs) -- field names are the exact JSON keys.
+
+export interface TextItem {
+  text: string;
+  tags: string[];
+}
+
+export interface WebLink {
+  url: string;
+  args: string[];
+  tags: string[];
+}
+
+export interface PromptSettings {
+  submit_label: string | null;
+}
+
+export interface ContentGroup {
+  id: string;
+  label: string;
+  description: string | null;
+  tags: string[];
+  enabled_by_default: boolean;
+}
+
+export interface Content {
+  content_groups: ContentGroup[];
+  captions: TextItem[];
+  prompts: TextItem[];
+  prompt_settings: PromptSettings;
+  notifications: TextItem[];
+  subliminals: TextItem[];
+  web_links: WebLink[];
+  wallpaper_tags: string[];
+  splash_tags: string[];
+}
+
+export interface FrequencyAnchors {
+  popup: number | null;
+  web: number | null;
+  notification: number | null;
+  prompt: number | null;
+  subliminal: number | null;
+}
+
+export interface DesignValues {
+  movement_speed_min: number | null;
+  movement_speed_max: number | null;
+  mitosis_chance: number | null;
+  mitosis_count: number | null;
+}
+
+// Every level is fully independent (no inheritance between levels, not even from levels[0]) --
+// a field left unset means that feature/restriction simply doesn't apply while this level is
+// active. levels[0] is the baseline: always active from session start, at_seconds/at_popups are
+// ignored for it and the editor never renders trigger fields for that level.
+export interface Level {
+  at_seconds: number;
+  at_popups: number | null;
+  anchors: FrequencyAnchors;
+  design: DesignValues;
+  tags: string[] | null;
+  wallpaper_tags: string[] | null;
+}
+
+export interface Timeline {
+  levels: Level[];
+}
+
+export interface Experience {
+  timeline: Timeline;
+}
+
+export interface Behaviour {
+  version: number;
+  content: Content;
+  experience: Experience | null;
+}

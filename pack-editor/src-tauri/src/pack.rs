@@ -1103,6 +1103,25 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
+    /// Reads a named blob from the pack's `pack_data` table (e.g. `"behaviour"`). `None` if the
+    /// pack doesn't carry an entry with this name -- a pack predating this key, or never written
+    /// by a tool that populates it, is expected, not an error. Mirrors the engine's own
+    /// `lewdware::media::pack::MediaPack::get_pack_data`.
+    pub async fn get_pack_data(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        let _handle = self.saving.read().await;
+        let name = name.to_string();
+        self.db_execute(move |conn| {
+            conn.query_row(
+                "SELECT blob FROM pack_data WHERE name = ?",
+                params![name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+        })
+        .await
+    }
+
     pub async fn remove_tag(&self, id: u64, tag: String) -> Result<()> {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| {
@@ -1484,7 +1503,13 @@ mod tests {
 
     use proptest::prelude::*;
     use rusqlite::params;
-    use shared::read_pack::Metadata;
+    use shared::{
+        behaviour::{
+            Behaviour, ContentGroup, DesignValues, Experience, FrequencyAnchors, Level, TextItem,
+            Timeline, WebLink,
+        },
+        read_pack::Metadata,
+    };
     use tempfile::tempdir;
 
     use super::*;
@@ -1635,6 +1660,104 @@ mod tests {
             .unwrap();
         assert_eq!(blob, b"second");
         assert!(!pack.is_saved().await);
+    }
+
+    /// Exercises the exact path the pack editor's `get_behaviour`/`set_behaviour` Tauri commands
+    /// use (`Behaviour::to_json_bytes`/`from_json_bytes` over `set_pack_data`/`get_pack_data`),
+    /// with a document touching every new Content/Experience tab section -- content groups,
+    /// captions, web links, and an Experience section with a timeline level -- through a real
+    /// save + reopen, not just an in-memory round-trip.
+    #[tokio::test]
+    async fn content_and_experience_behaviour_survives_save_and_reopen() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let mut behaviour = Behaviour::new();
+        behaviour.content.content_groups.push(ContentGroup {
+            id: "kinky".to_string(),
+            label: "Kinky".to_string(),
+            description: Some("Kinky-tagged content".to_string()),
+            tags: vec!["kinky".to_string()],
+            enabled_by_default: true,
+        });
+        behaviour.content.captions.push(TextItem {
+            text: "Obey.".to_string(),
+            tags: vec!["kinky".to_string()],
+        });
+        behaviour.content.web_links.push(WebLink {
+            url: "https://duckduckgo.com/?q=".to_string(),
+            args: vec!["edgeware packs".to_string()],
+            tags: vec![],
+        });
+        behaviour.content.wallpaper_tags = vec!["bg".to_string()];
+        behaviour.experience = Some(Experience {
+            timeline: Timeline {
+                levels: vec![
+                    Level {
+                        at_seconds: 0.0,
+                        at_popups: None,
+                        anchors: FrequencyAnchors {
+                            popup: Some(30.0),
+                            web: None,
+                            notification: None,
+                            prompt: None,
+                            subliminal: None,
+                        },
+                        design: DesignValues::default(),
+                        tags: None,
+                        wallpaper_tags: None,
+                    },
+                    Level {
+                        at_seconds: 300.0,
+                        at_popups: None,
+                        anchors: FrequencyAnchors {
+                            popup: Some(45.0),
+                            web: None,
+                            notification: None,
+                            prompt: None,
+                            subliminal: None,
+                        },
+                        design: DesignValues::default(),
+                        tags: Some(vec!["kinky".to_string()]),
+                        wallpaper_tags: None,
+                    },
+                ],
+            },
+        });
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
+        assert_eq!(pack.get_pack_data("behaviour").await.unwrap(), None);
+
+        pack.set_pack_data("behaviour", behaviour.to_json_bytes().unwrap())
+            .await
+            .unwrap();
+        assert!(!pack.is_saved().await);
+        pack.save(|_, _| {}).await.unwrap();
+        drop(pack);
+
+        let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        let blob = pack2.get_pack_data("behaviour").await.unwrap().unwrap();
+        let decoded = Behaviour::from_json_bytes(&blob).unwrap();
+        assert_eq!(decoded, behaviour);
+    }
+
+    #[tokio::test]
+    async fn get_pack_data_returns_none_when_absent_and_the_written_blob_otherwise() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
+        assert_eq!(pack.get_pack_data("behaviour").await.unwrap(), None);
+
+        pack.set_pack_data("behaviour", b"the-blob".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            pack.get_pack_data("behaviour").await.unwrap(),
+            Some(b"the-blob".to_vec())
+        );
     }
 
     #[tokio::test]

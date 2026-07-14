@@ -1,4 +1,4 @@
-import type { ConversionWarning, MediaFile, MetadataDto, UploadError } from "./types.js";
+import type { Behaviour, ConversionWarning, MediaFile, MetadataDto, UploadError } from "./types.js";
 
 // Reused across sorts: constructing a Collator per comparison (e.g. via
 // a.localeCompare(b, undefined, opts)) is drastically slower at scale.
@@ -26,7 +26,7 @@ class AppStore {
   openedId = $state<number | null>(null);
 
   // View routing
-  activeView = $state<"media" | "options">("media");
+  activeView = $state<"media" | "content" | "experience" | "options">("media");
 
   // Filtering
   searchQuery = $state("");
@@ -48,8 +48,16 @@ class AppStore {
   _showDoneBriefly = $state(false);
   _doneTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Edgeware import (the converter's warnings for the currently-open pack, if it was imported)
+  // Edgeware import (the converter's warnings for the currently-open pack, if it was imported).
+  // behaviour.json/metadata are written synchronously by the import command itself, before it
+  // even returns -- so there's no window where an imported pack's `behaviour` is stale/empty,
+  // unlike media (which streams in afterwards via the same `upload:*` events a normal add-files
+  // uses).
   importWarnings = $state<ConversionWarning[]>([]);
+
+  // Content/Experience tab state: the pack's behaviour.json document, shared by both tabs (see
+  // behaviourSave.ts) -- null until lazily fetched by whichever tab mounts first.
+  behaviour = $state<Behaviour | null>(null);
 
   uploading = $derived(this.uploadBatches > 0);
   showUploadProgress = $derived(
@@ -117,6 +125,7 @@ class AppStore {
     this.tagFilter = new Set();
     this.metadata = null;
     this.importWarnings = [];
+    this.behaviour = null;
   }
 
   closePack() {
@@ -132,6 +141,7 @@ class AppStore {
     this.mediaTypeFilter = "all";
     this.tagFilter = new Set();
     this.importWarnings = [];
+    this.behaviour = null;
   }
 
   addFile(file: MediaFile) {

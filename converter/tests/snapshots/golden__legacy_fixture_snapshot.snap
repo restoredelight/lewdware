@@ -9,7 +9,7 @@ metadata:
   version: "1.0"
   recommended_mode: Sandbox
 behaviour:
-  version: 1
+  version: 2
   content:
     content_groups:
       - id: vanilla
@@ -75,6 +75,24 @@ behaviour:
       - wallpaper
     splash_tags:
       - splash
+  experience:
+    timeline:
+      levels:
+        - at_seconds: 0
+          at_popups: ~
+          anchors:
+            popup: 4.545454545454546
+            web: 300
+            notification: 300
+            prompt: 90
+            subliminal: 60
+          design:
+            movement_speed_min: ~
+            movement_speed_max: ~
+            mitosis_chance: ~
+            mitosis_count: ~
+          tags: ~
+          wallpaper_tags: ~
 media:
   - source_path: img/untagged.png
     suggested_name: untagged.png

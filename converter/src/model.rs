@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
+use serde_json::{Map, Value};
 
 /// One Edgeware mood's (or the pack's un-moodded "default" bucket's) content pools -- mirrors
 /// `EdgewarePlusPlus/edgeware/src/pack/data.py`'s `MoodBase` dataclass, since that's the real,
@@ -82,11 +83,13 @@ pub struct CorruptionLevel {
     pub added_moods: Vec<String>,
     pub removed_moods: Vec<String>,
     pub wallpaper: Option<String>,
-    /// Keys this level's `config` override set, if any -- never converted (a Lewdware timeline
-    /// level's modifier is a single scalar, so per-key rate overrides like Edgeware's
-    /// `{"promptMod": 10}` have no representation), kept only so `convert.rs` can warn about the
-    /// drop instead of silently losing it.
-    pub config_keys: Vec<String>,
+    /// This level's raw `config` override, if any (e.g. Edgeware's `{"promptMod": 10}`). Unlike
+    /// the old per-level scalar-modifier schema, a `Level` now carries full `FrequencyAnchors`
+    /// directly, so `convert.rs` can actually apply the keys it recognizes (see
+    /// `LEVEL_ANCHOR_CONFIG_KEYS`) as real per-level anchor changes, folded cumulatively across
+    /// levels the same way `added_moods`/`removed_moods` are -- rather than only ever warning
+    /// about the drop. Any key it doesn't recognize (e.g. `promptMistakes`) still warns and drops.
+    pub config: Map<String, Value>,
 }
 
 /// Structured category for a `Warning`, so a front end can group/count without parsing

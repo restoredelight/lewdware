@@ -56,6 +56,10 @@
       if (!result) return;
       store.openPack(result.info.name, [], []);
       store.importWarnings = result.warnings;
+      // behaviour.json/metadata are already written by the time this command returns (see
+      // import_edgeware_pack_dialog/run_import) -- fetch it right away, no waiting on media.
+      store.behaviour = await api.getBehaviour();
+      store.packSaved = !result.info.has_unsaved_changes;
     } catch (err) {
       alert(`Import failed: ${err}`);
     }

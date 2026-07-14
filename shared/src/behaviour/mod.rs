@@ -6,5 +6,5 @@ pub use resolver::{
 };
 pub use schema::{
     Behaviour, CURRENT_VERSION, Content, ContentGroup, DesignValues, Experience, FrequencyAnchors,
-    Level, Modifiers, PromptSettings, TextItem, Timeline, WebLink,
+    Level, PromptSettings, TextItem, Timeline, WebLink,
 };

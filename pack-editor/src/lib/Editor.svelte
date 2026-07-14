@@ -6,9 +6,12 @@
   import MediaGrid from "./MediaGrid.svelte";
   import Sidebar from "./Sidebar.svelte";
   import Options from "./Options.svelte";
+  import Content from "./Content.svelte";
+  import Experience from "./Experience.svelte";
   import UploadProgress from "./UploadProgress.svelte";
   import MediaViewer from "./MediaViewer.svelte";
   import ImportWarnings from "./ImportWarnings.svelte";
+  import { cancelBehaviourSave, flushBehaviourSave } from "./behaviourSave.js";
 
   let showAddMenu = $state(false);
   let showTagFilter = $state(false);
@@ -33,6 +36,7 @@
   });
 
   async function save() {
+    await flushBehaviourSave();
     saving = true;
     saveError = null;
     try {
@@ -48,6 +52,7 @@
   }
 
   async function saveAs() {
+    await flushBehaviourSave();
     saveError = null;
     try {
       const info = await api.savePackAsDialog();
@@ -58,12 +63,18 @@
   }
 
   async function discard() {
+    cancelBehaviourSave();
     const meta = await api.discardChanges();
     store.metadata = meta;
     store.packSaved = true;
-    const [files, tags] = await Promise.all([api.getFiles(), api.getAllTags()]);
+    const [files, tags, behaviour] = await Promise.all([
+      api.getFiles(),
+      api.getAllTags(),
+      api.getBehaviour(),
+    ]);
     store.files = files;
     store.allTags = tags;
+    store.behaviour = behaviour;
   }
 
   async function closePack() {
@@ -71,6 +82,7 @@
       const ok = confirm("You have unsaved changes. Close anyway?");
       if (!ok) return;
     }
+    cancelBehaviourSave();
     await api.closePack();
     store.closePack();
   }
@@ -302,6 +314,32 @@
       </button>
 
       <button
+        onclick={() => (store.activeView = "content")}
+        title="Content"
+        class="w-8 h-8 flex items-center justify-center rounded mb-1 transition-colors
+          {store.activeView === 'content' ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-bg'}"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M4 4h16v16H4z"/>
+          <line x1="7" y1="8" x2="17" y2="8"/>
+          <line x1="7" y1="12" x2="17" y2="12"/>
+          <line x1="7" y1="16" x2="13" y2="16"/>
+        </svg>
+      </button>
+
+      <button
+        onclick={() => (store.activeView = "experience")}
+        title="Experience"
+        class="w-8 h-8 flex items-center justify-center rounded mb-1 transition-colors
+          {store.activeView === 'experience' ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-bg'}"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+      </button>
+
+      <button
         onclick={() => (store.activeView = "options")}
         title="Options"
         class="w-8 h-8 flex items-center justify-center rounded transition-colors
@@ -332,6 +370,14 @@
             {/if}
           </div>
           <Sidebar />
+        </div>
+      {:else if store.activeView === "content"}
+        <div class="flex-1 min-h-0 flex flex-col">
+          <Content />
+        </div>
+      {:else if store.activeView === "experience"}
+        <div class="flex-1 min-h-0 flex flex-col">
+          <Experience />
         </div>
       {:else}
         <div class="flex-1 overflow-y-auto">

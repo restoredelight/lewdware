@@ -9,7 +9,7 @@ metadata:
   version: "1.0"
   recommended_mode: Experience
 behaviour:
-  version: 1
+  version: 2
   content:
     content_groups:
       - id: vanilla
@@ -49,47 +49,63 @@ behaviour:
       - wallpaper
     splash_tags: []
   experience:
-    anchors:
-      popup: 2
-      web: ~
-      notification: ~
-      prompt: ~
-      subliminal: ~
-    design:
-      movement_speed_min: ~
-      movement_speed_max: ~
-      mitosis_chance: ~
-      mitosis_count: ~
     timeline:
       levels:
         - at_seconds: 0
           at_popups: ~
-          modifiers:
-            modifier: ~
-            tags:
-              - corruption-moodless
-              - vanilla
-            wallpaper_tags:
-              - wallpaper
+          anchors:
+            popup: 2
+            web: ~
+            notification: ~
+            prompt: ~
+            subliminal: ~
+          design:
+            movement_speed_min: ~
+            movement_speed_max: ~
+            mitosis_chance: ~
+            mitosis_count: ~
+          tags:
+            - corruption-moodless
+            - vanilla
+          wallpaper_tags:
+            - wallpaper
         - at_seconds: 120
           at_popups: 8
-          modifiers:
-            modifier: ~
-            tags:
-              - corruption-moodless
-              - kinky
-              - vanilla
-            wallpaper_tags: ~
+          anchors:
+            popup: 2
+            web: ~
+            notification: ~
+            prompt: 20
+            subliminal: ~
+          design:
+            movement_speed_min: ~
+            movement_speed_max: ~
+            mitosis_chance: ~
+            mitosis_count: ~
+          tags:
+            - corruption-moodless
+            - kinky
+            - vanilla
+          wallpaper_tags: ~
         - at_seconds: 240
           at_popups: 16
-          modifiers:
-            modifier: ~
-            tags:
-              - corrupted
-              - corruption-moodless
-              - kinky
-            wallpaper_tags:
-              - corruption-wallpaper-wallpaper2-png
+          anchors:
+            popup: 2
+            web: ~
+            notification: ~
+            prompt: 20
+            subliminal: ~
+          design:
+            movement_speed_min: ~
+            movement_speed_max: ~
+            mitosis_chance: ~
+            mitosis_count: ~
+          tags:
+            - corrupted
+            - corruption-moodless
+            - kinky
+          wallpaper_tags:
+            - corruption-wallpaper-wallpaper2-png
 media:
   - source_path: img/kinky_a.png
     suggested_name: kinky_a.png
@@ -113,7 +129,5 @@ media:
       - corruption-wallpaper-wallpaper2-png
 icon: ~
 warnings:
-  - kind: UnsupportedFeatureDropped
-    message: "corruption.json level 2's config override(s) (promptMod) have no Lewdware equivalent -- a timeline level's modifier is a single scalar, not per-setting, so they were dropped"
   - kind: ConfigNotConverted
     message: "config.json's other setting(s) (corruptionMode) have no Lewdware equivalent and were dropped"

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
+use serde_json::Map;
 
 use crate::model::{CorruptionLevel, Warning, WarningKind};
 use crate::parse::try_load_json5;
@@ -16,7 +17,7 @@ struct RawCorruption {
     #[serde(default)]
     wallpapers: HashMap<String, String>,
     #[serde(default)]
-    config: HashMap<String, HashMap<String, serde_json::Value>>,
+    config: HashMap<String, Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -67,18 +68,13 @@ pub fn load_corruption(
                     .then(|| raw.wallpapers.get("default").cloned())
                     .flatten()
             });
-            let mut config_keys: Vec<String> = raw
-                .config
-                .get(&key)
-                .map(|c| c.keys().cloned().collect())
-                .unwrap_or_default();
-            config_keys.sort();
+            let config = raw.config.get(&key).cloned().unwrap_or_default();
 
             CorruptionLevel {
                 added_moods: mood_change.map(|m| m.add.clone()).unwrap_or_default(),
                 removed_moods: mood_change.map(|m| m.remove.clone()).unwrap_or_default(),
                 wallpaper,
-                config_keys,
+                config,
             }
         })
         .collect()
@@ -205,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn config_keys_are_captured_sorted_for_the_dropped_warning() {
+    fn config_values_are_captured_not_just_key_names() {
         let (_dir, source) = source_with(&[(
             "corruption.json",
             r#"{
@@ -217,6 +213,13 @@ mod tests {
         let mut warnings = Vec::new();
         let levels = load_corruption(&source, &mut warnings);
         assert_eq!(levels.len(), 1);
-        assert_eq!(levels[0].config_keys, vec!["promptMistakes", "promptMod"]);
+        assert_eq!(
+            levels[0].config.get("promptMod"),
+            Some(&serde_json::json!(10))
+        );
+        assert_eq!(
+            levels[0].config.get("promptMistakes"),
+            Some(&serde_json::json!(10))
+        );
     }
 }
