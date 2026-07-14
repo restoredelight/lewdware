@@ -4,7 +4,7 @@
   import Tabs from "$ui/Tabs.svelte";
   import Checkbox from "$ui/Checkbox.svelte";
   import OptionalNumberField from "./OptionalNumberField.svelte";
-  import { scheduleBehaviourSave } from "./behaviourSave.js";
+  import { scheduleBehaviourSave } from "./behaviourSave.svelte.js";
   import type { Level } from "./types.js";
   import Button from "$ui/Button.svelte";
   import { Icon, Plus } from "svelte-hero-icons";
@@ -89,7 +89,7 @@
     <div class="flex-1 w-full max-w-3xl min-w-0 min-h-0 overflow-y-auto flex flex-col gap-4 p-6">
       <div>
         <h2 class="text-lg font-semibold text-text">{activeIndex === 0 ? "Starting Stage" : `Stage ${activeIndex + 1}`}</h2>
-        <p class="text-sm text-muted mt-1">{activeIndex === 0 ? "Behavior used when the session begins." : "Behavior used after this stage’s trigger is reached."}</p>
+        <p class="text-sm text-muted mt-1">{activeIndex === 0 ? "This baseline is active from the beginning. Set only the behaviour this pack needs; unset controls leave the player’s defaults unchanged." : "Behavior used after this stage’s trigger is reached."}</p>
       </div>
       {#if activeIndex !== 0}
         <section class="flex flex-col gap-3 p-4 rounded-md border border-border bg-surface">

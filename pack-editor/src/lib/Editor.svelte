@@ -4,7 +4,7 @@
   import IconButton from "$ui/IconButton.svelte";
   import Popover from "$ui/Popover.svelte";
   import Dialog from "$ui/Dialog.svelte";
-  import { ChevronLeft, ChevronRight, Cog6Tooth, DocumentText, EllipsisVertical, Icon, Sparkles, Squares2x2, Tag } from "svelte-hero-icons";
+  import { ArrowUturnLeft, ArrowUturnRight, ChevronLeft, ChevronRight, Cog6Tooth, DocumentText, EllipsisVertical, Icon, Sparkles, Squares2x2, Tag } from "svelte-hero-icons";
   import { onMount } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { api } from "./api.js";
@@ -19,8 +19,12 @@
   import ImportWarnings from "./ImportWarnings.svelte";
   import MediaToolbar from "./MediaToolbar.svelte";
   import Tags from "./Tags.svelte";
-  import { cancelBehaviourSave, flushBehaviourSave } from "./behaviourSave.js";
-  import { cancelMetadataSave, flushMetadataSave } from "./metadataSave.js";
+  import { cancelBehaviourSave, flushBehaviourSave, initializeBehaviourHistory } from "./behaviourSave.svelte.js";
+  import { cancelMetadataSave, flushMetadataSave, initializeMetadataHistory } from "./metadataSave.svelte.js";
+  import { history } from "./history.svelte.js";
+  import TaskStatus from "./TaskStatus.svelte";
+  import { taskFeedback } from "./taskFeedback.svelte.js";
+  import EmptyState from "$ui/EmptyState.svelte";
 
   let saving = $state(false);
   let saveError = $state<string | null>(null);
@@ -42,10 +46,17 @@
     const handleShortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey) return;
       if (showClosePackDialog || store.pendingMediaRemoval.length > 0 || store.openedId !== null) return;
-      if (event.key.toLowerCase() === "s") {
+      const key = event.key.toLowerCase();
+      if (key === "s") {
         event.preventDefault();
         if (event.shiftKey) void saveAs();
         else if (!store.packSaved) void save();
+      } else if (key === "z") {
+        event.preventDefault();
+        void (event.shiftKey ? redo() : undo());
+      } else if (key === "y" && !event.shiftKey) {
+        event.preventDefault();
+        void redo();
       }
     };
     window.addEventListener("keydown", handleShortcut);
@@ -71,9 +82,39 @@
     localStorage.setItem("pack-editor:navigation-collapsed", String(navCollapsed));
   }
 
+  async function undo() {
+    saveError = null;
+    try {
+      taskFeedback.progress(history.undoLabel ? `Undoing ${history.undoLabel}…` : "Undoing change…");
+      await flushMetadataSave();
+      await flushBehaviourSave();
+      await history.undo();
+      taskFeedback.success("Change undone");
+    } catch (err) {
+      saveError = `Undo failed: ${String(err)}`;
+      taskFeedback.error(saveError);
+    }
+  }
+
+  async function redo() {
+    saveError = null;
+    try {
+      taskFeedback.progress(history.redoLabel ? `Redoing ${history.redoLabel}…` : "Redoing change…");
+      await flushMetadataSave();
+      await flushBehaviourSave();
+      await history.redo();
+      taskFeedback.success("Change redone");
+    } catch (err) {
+      saveError = `Redo failed: ${String(err)}`;
+      taskFeedback.error(saveError);
+    }
+  }
+
   async function save() {
     saving = true;
     saveError = null;
+    if (store.uploading) taskFeedback.warning("Saving while upload continues — pending files may not be included");
+    else taskFeedback.progress("Saving pack…");
     try {
       await flushMetadataSave();
       await flushBehaviourSave();
@@ -87,6 +128,7 @@
       // otherwise leave the "Saving… X/Y" progress bar stuck on screen forever.
       store.saveActive = false;
       saveError = String(err);
+      taskFeedback.error(`Save failed: ${saveError}`);
     } finally {
       saving = false;
     }
@@ -94,6 +136,8 @@
 
   async function saveAs() {
     saveError = null;
+    if (store.uploading) taskFeedback.warning("Saving while upload continues — pending files may not be included");
+    else taskFeedback.progress("Choosing save location…");
     try {
       await flushMetadataSave();
       await flushBehaviourSave();
@@ -101,9 +145,10 @@
       if (info) {
         store.packName = info.name;
         store.packHasDestination = true;
-      }
+      } else taskFeedback.dismiss();
     } catch (err) {
       saveError = String(err);
+      taskFeedback.error(`Save failed: ${saveError}`);
     }
   }
 
@@ -121,6 +166,9 @@
     store.files = files;
     store.allTags = tags;
     store.behaviour = behaviour;
+    initializeMetadataHistory(meta);
+    initializeBehaviourHistory(behaviour);
+    history.reset(true);
   }
 
   async function finishClosePack() {
@@ -147,6 +195,7 @@
     } catch (err) {
       store.saveActive = false;
       saveError = String(err);
+      taskFeedback.error(`Save failed: ${saveError}`);
     }
   }
 
@@ -161,16 +210,23 @@
       await finishClosePack();
     } catch (err) {
       saveError = `Could not discard changes: ${String(err)}`;
+      taskFeedback.error(saveError);
     }
   }
 
   async function confirmMediaRemoval() {
     const ids = store.pendingMediaRemoval;
     if (!ids.length) return;
+    const removed = store.files.filter((file) => ids.includes(file.id)).map((file) => structuredClone($state.snapshot(file)));
     const activeIndex = store.gridActiveId == null ? -1 : store.filteredFiles.findIndex((file) => file.id === store.gridActiveId);
     await api.removeFiles(ids);
     store.cancelMediaRemoval();
-    store.removeFilesById(ids);
+    store.removeFilesById(ids, true);
+    history.record({
+      label: removed.length === 1 ? `Remove “${removed[0].file_name}”` : `Remove ${removed.length} media items`,
+      undo: async () => { await api.restoreFiles(ids); store.restoreFiles(removed); },
+      redo: async () => { await api.removeFiles(ids); store.removeFilesById(ids, true); },
+    });
     const remaining = store.filteredFiles;
     if (remaining.length > 0) {
       const next = remaining[Math.min(Math.max(activeIndex, 0), remaining.length - 1)];
@@ -203,6 +259,15 @@
       {/if}
     </span>
     <div class="flex-1"></div>
+    <TaskStatus />
+    <div class="flex items-center">
+      <IconButton label={history.undoLabel ? `Undo ${history.undoLabel}` : "Undo"} disabled={!history.canUndo} onclick={undo} title={`Undo (${modifierLabel}+Z)`}>
+        <span class="w-4 h-4"><Icon src={ArrowUturnLeft} mini /></span>
+      </IconButton>
+      <IconButton label={history.redoLabel ? `Redo ${history.redoLabel}` : "Redo"} disabled={!history.canRedo} onclick={redo} title={`Redo (${modifierLabel}+Shift+Z)`}>
+        <span class="w-4 h-4"><Icon src={ArrowUturnRight} mini /></span>
+      </IconButton>
+    </div>
     <Button size="compact" variant="primary" onclick={save} disabled={store.packSaved} loading={saving} title={`Save (${modifierLabel}+S)`}>{saving ? "Saving…" : "Save"}</Button>
     <Popover align="end" label="Pack actions">
       {#snippet trigger(toggle, open)}
@@ -239,12 +304,12 @@
         <div class="flex-1 min-h-0 flex">
           <div class="flex-1 min-w-0">
             {#if store.filteredFiles.length === 0 && store.files.length === 0}
-              <div class="flex items-center justify-center h-full text-sm text-muted">
-                Import files to get started
+              <div class="flex items-center justify-center h-full p-8">
+                <div class="w-full max-w-lg"><EmptyState title="Add media to this pack" description="Import images, videos, or audio files. You can also drag files or folders anywhere onto this window." actionLabel="Import files…" onclick={() => api.addFilesDialog()} secondaryActionLabel="Import folder…" onsecondary={() => api.addFolderDialog(false)} /></div>
               </div>
             {:else if store.filteredFiles.length === 0}
-              <div class="flex items-center justify-center h-full text-sm text-muted">
-                No files match the filter
+              <div class="flex items-center justify-center h-full p-8">
+                <div class="w-full max-w-lg"><EmptyState title="No matching media" description="No media matches the current search, type, or tag filters." actionLabel="Clear filters" onclick={() => { store.searchQuery = ""; store.mediaTypeFilter = "all"; store.tagFilter = new Set(); }} /></div>
               </div>
             {:else}
               <MediaGrid />
@@ -275,24 +340,6 @@
     <UploadProgress />
   {/if}
 
-  <!-- Save progress bar -->
-  {#if store.saveActive}
-    <div class="flex items-center gap-2 px-3 h-8 bg-surface border-t border-border text-xs text-muted shrink-0">
-      <span class="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin"></span>
-      Saving… {store.saveDone} / {store.saveTotal}
-    </div>
-  {/if}
-
-  <!-- Save error -->
-  {#if saveError}
-    <div class="flex items-center gap-2 px-3 h-8 bg-red-50 border-t border-red-200 text-xs text-red-700 shrink-0">
-      <span class="flex-1 truncate">Save failed: {saveError}</span>
-      <button
-        onclick={() => (saveError = null)}
-        class="text-red-700 hover:text-red-900 transition-colors"
-      >Dismiss</button>
-    </div>
-  {/if}
 </div>
 
 {#if showClosePackDialog}

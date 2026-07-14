@@ -1,13 +1,29 @@
 import { api } from "./api.js";
 import { store } from "./store.svelte.js";
+import { history } from "./history.svelte.js";
 import type { MetadataDto } from "./types.js";
+import { taskFeedback } from "./taskFeedback.svelte.js";
 
 let pending: MetadataDto | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight: Promise<void> | null = null;
+let baseline: MetadataDto | null = null;
 
 function copy(metadata: MetadataDto): MetadataDto {
-  return { ...metadata };
+  return structuredClone($state.snapshot(metadata));
+}
+
+export function initializeMetadataHistory(metadata: MetadataDto): void {
+  baseline = copy(metadata);
+}
+
+async function applyHistorySnapshot(metadata: MetadataDto): Promise<void> {
+  const snapshot = copy(metadata);
+  await api.setPackMetadata(snapshot);
+  await api.savePackMetadata();
+  store.metadata = copy(snapshot);
+  baseline = copy(snapshot);
+  store.markBackupComplete("metadata");
 }
 
 async function writePending(): Promise<void> {
@@ -21,10 +37,21 @@ async function writePending(): Promise<void> {
   })();
   try {
     await inFlight;
+    const before = baseline ? copy(baseline) : copy(metadata);
+    if (JSON.stringify(before) !== JSON.stringify(metadata)) {
+      const after = copy(metadata);
+      history.record({
+        label: "Edit pack metadata",
+        undo: () => applyHistorySnapshot(before),
+        redo: () => applyHistorySnapshot(after),
+      });
+    }
+    baseline = copy(metadata);
     store.markBackupComplete("metadata");
   } catch (error) {
     pending ??= metadata;
     store.markBackupFailed("metadata", error);
+    taskFeedback.error(`Could not back up pack metadata: ${String(error)}`);
     throw error;
   } finally {
     inFlight = null;

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { TextItem } from "./types.js";
   import TagPicker from "./TagPicker.svelte";
-  import { scheduleBehaviourSave } from "./behaviourSave.js";
+  import { scheduleBehaviourSave } from "./behaviourSave.svelte.js";
   import Button from "$ui/Button.svelte";
   import Card from "$ui/Card.svelte";
   import EmptyState from "$ui/EmptyState.svelte";

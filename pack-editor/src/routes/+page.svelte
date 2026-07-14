@@ -3,12 +3,14 @@
   import { listen } from "@tauri-apps/api/event";
   import { store } from "$lib/store.svelte.js";
   import { api } from "$lib/api.js";
-  import { cancelBehaviourSave, flushBehaviourSave } from "$lib/behaviourSave.js";
-  import { cancelMetadataSave, flushMetadataSave } from "$lib/metadataSave.js";
+  import { cancelBehaviourSave, flushBehaviourSave } from "$lib/behaviourSave.svelte.js";
+  import { cancelMetadataSave, flushMetadataSave } from "$lib/metadataSave.svelte.js";
   import type { MediaFile, UploadError, SaveProgress } from "$lib/types.js";
   import Start from "$lib/Start.svelte";
   import Editor from "$lib/Editor.svelte";
   import Dialog from "$ui/Dialog.svelte";
+  import { history } from "$lib/history.svelte.js";
+  import { taskFeedback } from "$lib/taskFeedback.svelte.js";
 
   let showCloseDialog = $state(false);
   let pendingClose = $state(false);
@@ -17,19 +19,22 @@
     api.getMediaPort().then((port) => (store.mediaPort = port));
 
     const unsubs = [
-      listen<{ total: number }>("upload:start", (e) => store.onUploadStart(e.payload.total)),
+      listen<{ total: number }>("upload:start", (e) => { store.onUploadStart(e.payload.total); taskFeedback.progress("Importing files…", store.uploadDone, store.uploadTotal); }),
       listen<MediaFile>("upload:added", (e) => store.addFile(e.payload)),
-      listen<UploadError>("upload:error", (e) => store.addUploadError(e.payload)),
-      listen("upload:file-done", () => store.onUploadFileDone()),
-      listen("upload:done", () => store.onUploadDone()),
+      listen<UploadError>("upload:error", (e) => { store.addUploadError(e.payload); taskFeedback.error(`Could not import ${e.payload.path}`); }),
+      listen("upload:file-done", () => { store.onUploadFileDone(); taskFeedback.progress("Importing files…", store.uploadDone, store.uploadTotal); }),
+      listen("upload:done", () => { store.onUploadDone(); if (store.uploadErrors.length) taskFeedback.error(`Import finished with ${store.uploadErrors.length} error${store.uploadErrors.length === 1 ? "" : "s"}`); else taskFeedback.success("Import complete"); }),
       listen<SaveProgress>("save:progress", (e) => {
         store.saveActive = true;
         store.saveDone = e.payload.saved;
         store.saveTotal = e.payload.total;
+        if (store.uploading) taskFeedback.warning(`Saving during upload — ${e.payload.saved}/${e.payload.total} saved; pending files may not be included`);
+        else taskFeedback.progress("Saving pack…", e.payload.saved, e.payload.total);
       }),
       listen("save:done", () => {
         store.saveActive = false;
-        store.markPackSaved();
+        history.markSaved();
+        taskFeedback.success("Pack saved");
         if (pendingClose) {
           pendingClose = false;
           api.confirmClose();
@@ -52,6 +57,8 @@
   async function onCloseSave() {
     showCloseDialog = false;
     pendingClose = true;
+    if (store.uploading) taskFeedback.warning("Saving while upload continues — pending files may not be included");
+    else taskFeedback.progress("Saving pack…");
     try {
       await flushMetadataSave();
       await flushBehaviourSave();
@@ -65,6 +72,7 @@
       pendingClose = false;
       store.saveActive = false;
       alert(`Save failed: ${err}\n\nThe pack was not closed.`);
+      taskFeedback.error(`Save failed: ${String(err)}`);
     }
   }
 

@@ -1,5 +1,8 @@
 import { api } from "./api.js";
 import { store } from "./store.svelte.js";
+import { history } from "./history.svelte.js";
+import type { Behaviour } from "./types.js";
+import { taskFeedback } from "./taskFeedback.svelte.js";
 
 // Shared across the Content and Experience tabs, which both edit different sections of the same
 // `store.behaviour` document: one debounce timer and one write-order-preserving promise chain, so
@@ -9,16 +12,43 @@ const DEBOUNCE_MS = 500;
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let saveChain: Promise<void> = Promise.resolve();
+let baseline: Behaviour | null = null;
+
+const clone = (value: Behaviour): Behaviour => structuredClone($state.snapshot(value));
+
+export function initializeBehaviourHistory(value: Behaviour) {
+  baseline = clone(value);
+}
+
+async function applyHistorySnapshot(value: Behaviour) {
+  const snapshot = clone(value);
+  await api.setBehaviour(snapshot);
+  store.behaviour = clone(snapshot);
+  baseline = clone(snapshot);
+  store.markBackupComplete("behaviour");
+}
 
 function persist() {
   // Chained rather than fired standalone: if `flushBehaviourSave` forces an early write while an
   // earlier debounced write is still in flight, this guarantees they apply in the order they were
   // issued, so the last edit made is always the last one that lands.
   saveChain = saveChain.catch(() => {}).then(async () => {
-    if (store.behaviour) await api.setBehaviour($state.snapshot(store.behaviour));
+    if (!store.behaviour) return;
+    const after = clone(store.behaviour);
+    const before = baseline ? clone(baseline) : clone(after);
+    await api.setBehaviour(after);
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      history.record({
+        label: "Edit pack behaviour",
+        undo: () => applyHistorySnapshot(before),
+        redo: () => applyHistorySnapshot(after),
+      });
+    }
+    baseline = clone(after);
     store.markBackupComplete("behaviour");
   }).catch((error) => {
     store.markBackupFailed("behaviour", error);
+    taskFeedback.error(`Could not back up pack behaviour: ${String(error)}`);
     throw error;
   });
 }

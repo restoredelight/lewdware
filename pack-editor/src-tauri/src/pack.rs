@@ -952,8 +952,18 @@ impl MediaPack {
     }
 
     fn clean_media(&self) -> Result<()> {
+        // Rows staged for undo still point at their encoded working files. A save must not remove
+        // those files: history deliberately survives saves and may move the rows back afterwards.
+        let conn = self.db_pool.get()?;
+        let mut stmt = conn.prepare("SELECT path FROM history_media WHERE path IS NOT NULL")?;
+        let retained = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
         for entry in fs::read_dir(self.dir.join("media"))? {
-            if let Err(err) = entry.and_then(|e| fs::remove_file(e.path())) {
+            if let Err(err) = entry.and_then(|e| {
+                if retained.contains(&e.file_name().to_string_lossy().to_string()) { Ok(()) }
+                else { fs::remove_file(e.path()) }
+            }) {
                 tracing::error!("{err}");
             }
         }
@@ -1049,15 +1059,34 @@ impl MediaPack {
     }
 
     pub async fn remove_files(&self, ids: Vec<u64>) -> Result<()> {
+        if ids.is_empty() { return Ok(()); }
         let _handle = self.saving.read().await;
-        self.db_execute(move |conn| {
-            conn.execute(
-                &format!("DELETE FROM media WHERE id IN ({})", repeat_vars(ids.len())),
-                params_from_iter(&ids),
-            )?;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            let vars = repeat_vars(ids.len());
+            tx.execute(&format!("INSERT OR REPLACE INTO history_media SELECT * FROM media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+            tx.execute(&format!("INSERT OR IGNORE INTO history_media_tags SELECT mt.media_id, t.name FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE mt.media_id IN ({vars})"), params_from_iter(&ids))?;
+            tx.execute(&format!("DELETE FROM media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+            tx.commit()?;
             Ok(())
         })
         .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn restore_files(&self, ids: Vec<u64>) -> Result<()> {
+        if ids.is_empty() { return Ok(()); }
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            let vars = repeat_vars(ids.len());
+            tx.execute(&format!("INSERT OR REPLACE INTO media SELECT * FROM history_media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+            tx.execute(&format!("INSERT OR IGNORE INTO tags (name) SELECT DISTINCT tag FROM history_media_tags WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
+            tx.execute(&format!("INSERT OR IGNORE INTO media_tags SELECT h.media_id, t.id FROM history_media_tags h JOIN tags t ON t.name = h.tag WHERE h.media_id IN ({vars})"), params_from_iter(&ids))?;
+            tx.execute(&format!("DELETE FROM history_media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+            tx.commit()?;
+            Ok(())
+        }).await?;
         self.mark_unsaved().await
     }
 
@@ -1191,6 +1220,38 @@ impl MediaPack {
             Ok(())
         })
         .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn restore_merged_tag(&self, from: String, to: String, source_ids: Vec<u64>, target_ids: Vec<u64>, behaviour: &Behaviour) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let blob = behaviour.to_json_bytes()?;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![from])?;
+            let source_id: u64 = tx.query_row("SELECT id FROM tags WHERE name = ?", params![from], |r| r.get(0))?;
+            let target_id: u64 = tx.query_row("SELECT id FROM tags WHERE name = ?", params![to], |r| r.get(0))?;
+            for id in &source_ids { tx.execute("INSERT OR IGNORE INTO media_tags VALUES (?, ?)", params![id, source_id])?; }
+            for id in source_ids.iter().filter(|id| !target_ids.contains(id)) { tx.execute("DELETE FROM media_tags WHERE media_id = ? AND tag_id = ?", params![id, target_id])?; }
+            tx.execute("INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)", params![blob])?;
+            tx.commit()?;
+            Ok(())
+        }).await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn restore_deleted_tag(&self, tag: String, ids: Vec<u64>, behaviour: &Behaviour) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let blob = behaviour.to_json_bytes()?;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
+            let tag_id: u64 = tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |r| r.get(0))?;
+            for id in &ids { tx.execute("INSERT OR IGNORE INTO media_tags VALUES (?, ?)", params![id, tag_id])?; }
+            tx.execute("INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)", params![blob])?;
+            tx.commit()?;
+            Ok(())
+        }).await?;
         self.mark_unsaved().await
     }
 
@@ -1971,6 +2032,108 @@ mod tests {
             .unwrap();
         assert!(pack.get_tags(media).await.unwrap().is_empty());
         assert!(pack.get_tag_summaries().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn removed_media_can_be_restored_with_its_row_tags_and_bytes_after_save() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("history.lwpack");
+        let bytes = b"undoable media bytes";
+        let pack = new_test_pack(&pack_path, data_dir.path(), "History").await;
+        let id = insert_staged_audio(&pack, bytes).await;
+        pack.add_tags(id, vec!["one".into(), "two".into()]).await.unwrap();
+        let original = pack.get_files().await.unwrap().remove(0);
+
+        pack.remove_files(vec![id]).await.unwrap();
+        assert!(pack.get_files().await.unwrap().is_empty());
+        pack.save(|_, _| {}).await.unwrap();
+
+        pack.restore_files(vec![id]).await.unwrap();
+        let restored = pack.get_files().await.unwrap().remove(0);
+        assert_eq!(restored.id, original.id);
+        assert_eq!(restored.file_name, original.file_name);
+        assert_eq!(restored.hash, original.hash);
+        let mut tags = pack.get_tags(id).await.unwrap();
+        tags.sort();
+        assert_eq!(tags, vec!["one", "two"]);
+        let (restored_bytes, _) = pack.get_view().unwrap().get_file_data(id).await.unwrap();
+        assert_eq!(restored_bytes, bytes);
+
+        pack.remove_files(vec![id]).await.unwrap();
+        assert!(pack.get_files().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn restoring_a_merge_recovers_source_target_and_dual_associations_atomically() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("tags.lwpack"), data_dir.path(), "Tags").await;
+        let source_only = insert_staged_audio(&pack, b"source").await;
+        let target_only = insert_staged_audio(&pack, b"target").await;
+        let both = insert_staged_audio(&pack, b"both").await;
+        pack.add_tags(source_only, vec!["source".into()]).await.unwrap();
+        pack.add_tags(target_only, vec!["target".into()]).await.unwrap();
+        pack.add_tags(both, vec!["source".into(), "target".into()]).await.unwrap();
+        let mut before = Behaviour::default();
+        before.content.wallpaper_tags = vec!["source".into()];
+        let mut after = before.clone();
+        after.content.wallpaper_tags = vec!["target".into()];
+
+        pack.merge_tag("source".into(), "target".into(), &after).await.unwrap();
+        pack.restore_merged_tag("source".into(), "target".into(), vec![source_only, both], vec![target_only, both], &before).await.unwrap();
+
+        assert_eq!(pack.get_tags(source_only).await.unwrap(), vec!["source"]);
+        assert_eq!(pack.get_tags(target_only).await.unwrap(), vec!["target"]);
+        let mut both_tags = pack.get_tags(both).await.unwrap();
+        both_tags.sort();
+        assert_eq!(both_tags, vec!["source", "target"]);
+        let stored = Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap()).unwrap();
+        assert_eq!(stored.content.wallpaper_tags, vec!["source"]);
+    }
+
+    #[tokio::test]
+    async fn failed_merge_restoration_rolls_back_every_change() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("rollback.lwpack"), data_dir.path(), "Tags").await;
+        let media = insert_staged_audio(&pack, b"media").await;
+        let result = pack.restore_merged_tag("source".into(), "missing-target".into(), vec![media], vec![], &Behaviour::default()).await;
+        assert!(result.is_err());
+        assert!(!pack.get_all_tags().await.unwrap().contains(&"source".to_string()));
+        assert!(pack.get_tags(media).await.unwrap().is_empty());
+        assert!(pack.get_pack_data("behaviour").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn restoring_a_deleted_tag_recovers_associations_and_behaviour() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("delete-tag.lwpack"), data_dir.path(), "Tags").await;
+        let media = insert_staged_audio(&pack, b"tagged").await;
+        pack.add_tags(media, vec!["restore-me".into()]).await.unwrap();
+        let mut before = Behaviour::default();
+        before.content.splash_tags = vec!["restore-me".into()];
+        let after = Behaviour::default();
+        pack.delete_tag("restore-me".into(), &after).await.unwrap();
+        pack.restore_deleted_tag("restore-me".into(), vec![media], &before).await.unwrap();
+        assert_eq!(pack.get_tags(media).await.unwrap(), vec!["restore-me"]);
+        let stored = Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap()).unwrap();
+        assert_eq!(stored.content.splash_tags, vec!["restore-me"]);
+    }
+
+    #[tokio::test]
+    async fn closing_a_saved_pack_removes_staged_history_files() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("cleanup.lwpack"), data_dir.path(), "Cleanup").await;
+        let id = insert_staged_audio(&pack, b"temporary").await;
+        pack.remove_files(vec![id]).await.unwrap();
+        pack.save(|_, _| {}).await.unwrap();
+        let working_dir = pack.dir().to_path_buf();
+        assert!(working_dir.exists());
+        drop(pack);
+        assert!(!working_dir.exists());
     }
 
     #[tokio::test]

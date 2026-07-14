@@ -14,6 +14,7 @@ class AppStore {
   packName = $state("");
   packSaved = $state(true);
   packHasDestination = $state(false);
+  untrackedDirty = $state(false);
   metadataBackupPending = $state(false);
   behaviourBackupPending = $state(false);
   recoveryError = $state<string | null>(null);
@@ -31,7 +32,7 @@ class AppStore {
   );
 
   markBackupPending(kind: "metadata" | "behaviour") {
-    this.markLocallyBackedUp();
+    this.packSaved = false;
     if (this.recoveryErrorKind === kind) {
       this.recoveryError = null;
       this.recoveryErrorKind = null;
@@ -47,6 +48,11 @@ class AppStore {
 
   markLocallyBackedUp() {
     this.packSaved = false;
+    this.untrackedDirty = true;
+  }
+
+  markHistoryChanged(atSavedPosition: boolean) {
+    this.packSaved = atSavedPosition && !this.untrackedDirty;
   }
 
   markBackupFailed(kind: "metadata" | "behaviour", error: unknown) {
@@ -59,6 +65,7 @@ class AppStore {
 
   markPackSaved() {
     this.packSaved = true;
+    this.untrackedDirty = false;
     this.metadataBackupPending = false;
     this.behaviourBackupPending = false;
     this.recoveryError = null;
@@ -158,17 +165,17 @@ class AppStore {
 
   selectedFiles = $derived(this.files.filter((file) => this.selectedIds.has(file.id)));
 
-  addTagToFiles(ids: number[], tag: string) {
+  addTagToFiles(ids: number[], tag: string, tracked = false) {
     const idSet = new Set(ids);
     this.files = this.files.map((file) => idSet.has(file.id) && !file.tags.includes(tag) ? { ...file, tags: [...file.tags, tag] } : file);
     if (!this.allTags.includes(tag)) this.allTags = [...this.allTags, tag];
-    this.markLocallyBackedUp();
+    if (!tracked) this.markLocallyBackedUp();
   }
 
-  removeTagFromFiles(ids: number[], tag: string) {
+  removeTagFromFiles(ids: number[], tag: string, tracked = false) {
     const idSet = new Set(ids);
     this.files = this.files.map((file) => idSet.has(file.id) ? { ...file, tags: file.tags.filter((item) => item !== tag) } : file);
-    this.markLocallyBackedUp();
+    if (!tracked) this.markLocallyBackedUp();
   }
 
   requestMediaRemoval(ids = [...this.selectedIds]) {
@@ -187,6 +194,7 @@ class AppStore {
     this.packOpen = true;
     this.packName = name;
     this.packSaved = saved;
+    this.untrackedDirty = !saved;
     this.packHasDestination = hasDestination;
     this.metadataBackupPending = false;
     this.behaviourBackupPending = false;
@@ -235,7 +243,7 @@ class AppStore {
     this.markLocallyBackedUp();
   }
 
-  removeFilesById(ids: number[]) {
+  removeFilesById(ids: number[], tracked = false) {
     const idSet = new Set(ids);
     this.files = this.files.filter((f) => !idSet.has(f.id));
     const next = new Set(this.selectedIds);
@@ -243,14 +251,19 @@ class AppStore {
     this.selectedIds = next;
     if (this.primaryId != null && idSet.has(this.primaryId)) this.primaryId = null;
     if (this.gridActiveId != null && idSet.has(this.gridActiveId)) this.gridActiveId = null;
-    this.markLocallyBackedUp();
+    if (!tracked) this.markLocallyBackedUp();
   }
 
-  updateFileName(id: number, name: string) {
+  restoreFiles(files: MediaFile[]) {
+    const restored = new Set(files.map((file) => file.id));
+    this.files = [...this.files.filter((file) => !restored.has(file.id)), ...files];
+  }
+
+  updateFileName(id: number, name: string, tracked = false) {
     const idx = this.files.findIndex((f) => f.id === id);
     if (idx >= 0) {
       this.files[idx] = { ...this.files[idx], file_name: name };
-      this.markLocallyBackedUp();
+      if (!tracked) this.markLocallyBackedUp();
     }
   }
 

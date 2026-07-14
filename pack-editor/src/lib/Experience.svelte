@@ -3,12 +3,13 @@
   import { api } from "./api.js";
   import { store } from "./store.svelte.js";
   import TimelineEditor from "./TimelineEditor.svelte";
-  import { flushBehaviourSave, scheduleBehaviourSave } from "./behaviourSave.js";
+  import { flushBehaviourSave, initializeBehaviourHistory, scheduleBehaviourSave } from "./behaviourSave.svelte.js";
   import type { Level } from "./types.js";
   import Button from "$ui/Button.svelte";
 
   onMount(async () => {
     if (store.behaviour === null) store.behaviour = await api.getBehaviour();
+    initializeBehaviourHistory(store.behaviour);
   });
 
   onDestroy(() => {

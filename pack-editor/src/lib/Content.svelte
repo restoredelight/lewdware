@@ -7,7 +7,7 @@
   import ContentGroupsEditor from "./ContentGroupsEditor.svelte";
   import WebLinksEditor from "./WebLinksEditor.svelte";
   import Tabs from "$ui/Tabs.svelte";
-  import { flushBehaviourSave, scheduleBehaviourSave } from "./behaviourSave.js";
+  import { flushBehaviourSave, initializeBehaviourHistory, scheduleBehaviourSave } from "./behaviourSave.svelte.js";
 
   type Tab =
     | "groups"
@@ -42,6 +42,7 @@
 
   onMount(async () => {
     if (store.behaviour === null) store.behaviour = await api.getBehaviour();
+    initializeBehaviourHistory(store.behaviour);
   });
 
   onDestroy(() => {

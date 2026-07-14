@@ -17,6 +17,7 @@ export const api = {
 
   getFiles: () => invoke<MediaFile[]>("get_files"),
   removeFiles: (ids: number[]) => invoke<void>("remove_files", { ids }),
+  restoreFiles: (ids: number[]) => invoke<void>("restore_files", { ids }),
   setFileTitle: (id: number, name: string) => invoke<void>("set_file_title", { id, name }),
 
   getAllTags: () => invoke<string[]>("get_all_tags"),
@@ -32,6 +33,8 @@ export const api = {
   renameTag: (from: string, to: string, behaviour: Behaviour) => invoke<void>("rename_tag", { from, to, behaviour }),
   mergeTag: (from: string, to: string, behaviour: Behaviour) => invoke<void>("merge_tag", { from, to, behaviour }),
   deleteTag: (tag: string, behaviour: Behaviour) => invoke<void>("delete_tag", { tag, behaviour }),
+  restoreMergedTag: (from: string, to: string, sourceIds: number[], targetIds: number[], behaviour: Behaviour) => invoke<void>("restore_merged_tag", { from, to, sourceIds, targetIds, behaviour }),
+  restoreDeletedTag: (tag: string, ids: number[], behaviour: Behaviour) => invoke<void>("restore_deleted_tag", { tag, ids, behaviour }),
 
   getPackMetadata: () => invoke<MetadataDto>("get_pack_metadata"),
   setPackMetadata: (dto: MetadataDto) => invoke<void>("set_pack_metadata", { dto }),

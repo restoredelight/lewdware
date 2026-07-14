@@ -1,6 +1,6 @@
 <script lang="ts">
   import { store } from "./store.svelte.js";
-  import { scheduleBehaviourSave } from "./behaviourSave.js";
+  import { scheduleBehaviourSave } from "./behaviourSave.svelte.js";
   import TagInput from "$ui/TagInput.svelte";
 
   type Props = {

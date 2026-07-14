@@ -6,6 +6,8 @@
   import Button from "$ui/Button.svelte";
   import { api } from "./api.js";
   import { onMount } from "svelte";
+  import { history } from "./history.svelte.js";
+  import EmptyState from "$ui/EmptyState.svelte";
 
   function formatDuration(s: number): string {
     const h = Math.floor(s / 3600);
@@ -114,18 +116,43 @@
 
   async function addTag(tag: string) {
     const ids = selected.map((file) => file.id);
+    const affected = selected.filter((file) => !file.tags.includes(tag)).map((file) => file.id);
+    if (!affected.length) return;
     await api.addTagToFiles(ids, tag);
-    store.addTagToFiles(ids, tag);
+    store.addTagToFiles(ids, tag, true);
+    history.record({
+      label: affected.length === 1 ? `Add tag “${tag}”` : `Add tag “${tag}” to ${affected.length} items`,
+      undo: async () => { await api.removeTagFromFiles(affected, tag); store.removeTagFromFiles(affected, tag, true); },
+      redo: async () => { await api.addTagToFiles(affected, tag); store.addTagToFiles(affected, tag, true); },
+    });
   }
   async function removeTag(tag: string) {
     const ids = selected.map((file) => file.id);
+    const affected = selected.filter((file) => file.tags.includes(tag)).map((file) => file.id);
+    if (!affected.length) return;
     await api.removeTagFromFiles(ids, tag);
-    store.removeTagFromFiles(ids, tag);
+    store.removeTagFromFiles(ids, tag, true);
+    history.record({
+      label: affected.length === 1 ? `Remove tag “${tag}”` : `Remove tag “${tag}” from ${affected.length} items`,
+      undo: async () => { await api.addTagToFiles(affected, tag); store.addTagToFiles(affected, tag, true); },
+      redo: async () => { await api.removeTagFromFiles(affected, tag); store.removeTagFromFiles(affected, tag, true); },
+    });
   }
   async function rename() {
     if (!primary || selCount !== 1 || !titleValue.trim() || titleValue === primary.file_name) return;
     titleError = null;
-    try { await api.setFileTitle(primary.id, titleValue.trim()); store.updateFileName(primary.id, titleValue.trim()); }
+    const id = primary.id;
+    const before = primary.file_name;
+    const after = titleValue.trim();
+    try {
+      await api.setFileTitle(id, after);
+      store.updateFileName(id, after, true);
+      history.record({
+        label: `Rename “${before}”`,
+        undo: async () => { await api.setFileTitle(id, before); store.updateFileName(id, before, true); },
+        redo: async () => { await api.setFileTitle(id, after); store.updateFileName(id, after, true); },
+      });
+    }
     catch (error) { titleError = String(error); titleValue = primary.file_name; }
   }
   function removeSelected() {
@@ -210,8 +237,8 @@
       <span class="text-xs">items selected</span>
     </div>
   {:else}
-    <div class="flex items-center justify-center h-full text-xs text-muted">
-      No selection
+    <div class="flex items-center justify-center h-full p-3">
+      <EmptyState title="Nothing selected" description="Select an item to inspect it. Use Shift-click for a range or Ctrl/⌘-click to select several items and edit their tags together." />
     </div>
   {/if}
 </aside>

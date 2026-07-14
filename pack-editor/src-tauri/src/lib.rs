@@ -661,6 +661,13 @@ async fn remove_files(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), S
 }
 
 #[tauri::command]
+async fn restore_files(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() { pack.restore_files(ids).await.map_err(|e| e.to_string())?; }
+    Ok(())
+}
+
+#[tauri::command]
 async fn set_file_title(state: State<'_, AppState>, id: u64, name: String) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
@@ -779,6 +786,20 @@ async fn delete_tag(
             .await
             .map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+#[tauri::command]
+async fn restore_merged_tag(state: State<'_, AppState>, from: String, to: String, source_ids: Vec<u64>, target_ids: Vec<u64>, behaviour: Behaviour) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() { pack.restore_merged_tag(from, to, source_ids, target_ids, &behaviour).await.map_err(|e| e.to_string())?; }
+    Ok(())
+}
+
+#[tauri::command]
+async fn restore_deleted_tag(state: State<'_, AppState>, tag: String, ids: Vec<u64>, behaviour: Behaviour) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() { pack.restore_deleted_tag(tag, ids, &behaviour).await.map_err(|e| e.to_string())?; }
     Ok(())
 }
 
@@ -1114,6 +1135,7 @@ pub fn run() {
             is_pack_saved,
             get_files,
             remove_files,
+            restore_files,
             set_file_title,
             get_all_tags,
             get_file_tags,
@@ -1124,6 +1146,8 @@ pub fn run() {
             rename_tag,
             merge_tag,
             delete_tag,
+            restore_merged_tag,
+            restore_deleted_tag,
             add_tag_to_files,
             remove_tag_from_files,
             get_pack_metadata,

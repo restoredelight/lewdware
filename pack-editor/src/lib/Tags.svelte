@@ -6,10 +6,13 @@
   import Field from "$ui/Field.svelte";
   import Select from "$ui/Select.svelte";
   import { api } from "./api.js";
-  import { flushBehaviourSave } from "./behaviourSave.js";
+  import { flushBehaviourSave, initializeBehaviourHistory } from "./behaviourSave.svelte.js";
   import { store } from "./store.svelte.js";
   import { behaviourTags, rewriteTag, tagUsage } from "./tagReferences.js";
   import type { TagSummary } from "./types.js";
+  import type { Behaviour } from "./types.js";
+  import { history } from "./history.svelte.js";
+  import EmptyState from "$ui/EmptyState.svelte";
 
   let summaries = $state<TagSummary[]>([]);
   let query = $state("");
@@ -38,10 +41,26 @@
     editing = tag; mode = nextMode; value = nextMode === "rename" ? tag : ""; error = null;
   }
 
-  function updateLocal(from: string, to: string | null) {
+  const cloneBehaviour = (behaviour: Behaviour) => structuredClone($state.snapshot(behaviour));
+
+  function updateLocal(from: string, to: string | null, tracked = false) {
     store.files = store.files.map((file) => ({ ...file, tags: [...new Set(file.tags.flatMap((tag) => tag === from ? (to ? [to] : []) : [tag]))] }));
     store.allTags = [...new Set([...store.files.flatMap((file) => file.tags), ...(store.behaviour ? behaviourTags(store.behaviour) : [])])];
-    store.markLocallyBackedUp();
+    if (!tracked) store.markLocallyBackedUp();
+  }
+
+  function restoreLocalTag(tag: string, ids: number[], target: string | null, targetIds: number[], behaviour: Behaviour) {
+    const sourceSet = new Set(ids);
+    const targetSet = new Set(targetIds);
+    store.files = store.files.map((file) => {
+      let tags = file.tags.filter((item) => item !== tag && item !== target);
+      if (sourceSet.has(file.id)) tags.push(tag);
+      if (target && targetSet.has(file.id)) tags.push(target);
+      return { ...file, tags: [...new Set(tags)] };
+    });
+    store.behaviour = cloneBehaviour(behaviour);
+    initializeBehaviourHistory(store.behaviour);
+    store.allTags = [...new Set([...store.files.flatMap((file) => file.tags), ...behaviourTags(store.behaviour)])];
   }
 
   async function apply() {
@@ -52,11 +71,38 @@
     busy = true; error = null;
     try {
       await flushBehaviourSave();
-      const behaviour = rewriteTag($state.snapshot(store.behaviour), editing, target);
-      if (mode === "rename") await api.renameTag(editing, target, behaviour);
-      else await api.mergeTag(editing, target, behaviour);
-      store.behaviour = behaviour;
-      updateLocal(editing, target);
+      const source = editing;
+      const editMode = mode;
+      const before = cloneBehaviour(store.behaviour);
+      const after = rewriteTag(before, source, target);
+      const sourceIds = store.files.filter((file) => file.tags.includes(source)).map((file) => file.id);
+      const targetIds = store.files.filter((file) => file.tags.includes(target)).map((file) => file.id);
+      if (editMode === "rename") await api.renameTag(source, target, after);
+      else await api.mergeTag(source, target, after);
+      store.behaviour = after;
+      initializeBehaviourHistory(after);
+      updateLocal(source, target, true);
+      const operation = editMode === "rename" ? "Rename" : "Merge";
+      history.record({
+        label: `${operation} tag “${source}”`,
+        undo: async () => {
+          if (editMode === "rename") {
+            await api.renameTag(target, source, before);
+          } else {
+            await api.restoreMergedTag(source, target, sourceIds, targetIds, before);
+          }
+          restoreLocalTag(source, sourceIds, target, targetIds, before);
+          summaries = await api.getTagSummaries();
+        },
+        redo: async () => {
+          if (editMode === "rename") await api.renameTag(source, target, after);
+          else await api.mergeTag(source, target, after);
+          store.behaviour = cloneBehaviour(after);
+          initializeBehaviourHistory(store.behaviour);
+          updateLocal(source, target, true);
+          summaries = await api.getTagSummaries();
+        },
+      });
       summaries = await api.getTagSummaries();
       editing = null;
     } catch (err) { error = String(err); }
@@ -68,10 +114,28 @@
     const tag = deleting; deleting = null; busy = true; error = null;
     try {
       await flushBehaviourSave();
-      const behaviour = rewriteTag($state.snapshot(store.behaviour), tag, null);
-      await api.deleteTag(tag, behaviour);
-      store.behaviour = behaviour;
-      updateLocal(tag, null);
+      const before = cloneBehaviour(store.behaviour);
+      const after = rewriteTag(before, tag, null);
+      const sourceIds = store.files.filter((file) => file.tags.includes(tag)).map((file) => file.id);
+      await api.deleteTag(tag, after);
+      store.behaviour = after;
+      initializeBehaviourHistory(after);
+      updateLocal(tag, null, true);
+      history.record({
+        label: `Delete tag “${tag}”`,
+        undo: async () => {
+          await api.restoreDeletedTag(tag, sourceIds, before);
+          restoreLocalTag(tag, sourceIds, null, [], before);
+          summaries = await api.getTagSummaries();
+        },
+        redo: async () => {
+          await api.deleteTag(tag, after);
+          store.behaviour = cloneBehaviour(after);
+          initializeBehaviourHistory(store.behaviour);
+          updateLocal(tag, null, true);
+          summaries = await api.getTagSummaries();
+        },
+      });
       summaries = await api.getTagSummaries();
     } catch (err) { error = String(err); }
     finally { busy = false; }
@@ -87,7 +151,13 @@
   <header><div><h2>Tags</h2><p>Manage the vocabulary used across media, Content, and Experience.</p></div><Field label="Search tags" hideLabel value={query} placeholder="Search tags…" oninput={(next) => (query = next)} /></header>
   {#if error}<div class="error" role="alert">{error}<button onclick={() => (error = null)}>Dismiss</button></div>{/if}
   {#if !store.behaviour}<p class="loading">Loading…</p>
-  {:else if rows.length === 0}<p class="empty">{query ? "No tags match your search." : "This pack does not contain any tags yet."}</p>
+  {:else if rows.length === 0}
+    <EmptyState
+      title={query ? "No matching tags" : "No tags yet"}
+      description={query ? "No tags match this search. Clear it to see every tag in the pack." : "Tags are created when you tag media or use them in Content and Experience settings."}
+      actionLabel={query ? "Clear search" : "Go to Media"}
+      onclick={() => query ? (query = "") : (store.activeView = "media")}
+    />
   {:else}
     <div class="table" aria-label="Pack tags">
       <div class="table-head"><span>Tag</span><span>Media</span><span>Content</span><span>Experience</span><span></span></div>
@@ -134,6 +204,6 @@
   .edit-actions { display: flex; gap: 6px; }
   .error { display: flex; margin-bottom: 12px; padding: 9px 11px; justify-content: space-between; border: 1px solid var(--ui-danger-border); border-radius: var(--ui-radius-sm); background: var(--ui-danger-bg); color: var(--ui-danger); font-size: 12px; }
   .error button { border: 0; background: transparent; color: inherit; cursor: pointer; }
-  .loading, .empty { padding: 36px; border: 1px dashed var(--ui-border); border-radius: var(--ui-radius-md); color: var(--ui-muted); text-align: center; font-size: 13px; }
+  .loading { padding: 36px; border: 1px dashed var(--ui-border); border-radius: var(--ui-radius-md); color: var(--ui-muted); text-align: center; font-size: 13px; }
   @media (max-width: 950px) { .table-head, .tag-row { grid-template-columns: minmax(100px, 1fr) 48px 58px 68px; } .table-head span:last-child { display: none; } .row-actions { grid-column: 1 / -1; padding-bottom: 8px; justify-content: flex-start; } .edit-row { grid-template-columns: 1fr; } }
 </style>

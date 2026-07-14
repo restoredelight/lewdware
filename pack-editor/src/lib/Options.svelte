@@ -4,7 +4,7 @@
   import { store } from "./store.svelte.js";
   import type { MetadataDto } from "./types.js";
   import Field from "$ui/Field.svelte";
-  import { flushMetadataSave, scheduleMetadataSave } from "./metadataSave.js";
+  import { flushMetadataSave, initializeMetadataHistory, scheduleMetadataSave } from "./metadataSave.svelte.js";
 
   let form = $state<MetadataDto>({
     name: "",
@@ -14,9 +14,16 @@
     recommended_mode: null,
   });
 
+  $effect(() => {
+    if (store.metadata && JSON.stringify(store.metadata) !== JSON.stringify(form)) {
+      form = structuredClone($state.snapshot(store.metadata));
+    }
+  });
+
   onMount(async () => {
     form = await api.getPackMetadata();
     store.metadata = form;
+    initializeMetadataHistory(form);
   });
 
   onDestroy(() => {

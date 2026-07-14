@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from "./api.js";
   import { store } from "./store.svelte.js";
+  import { history } from "./history.svelte.js";
   import Dialog from "$ui/Dialog.svelte";
   import type { PackInfo, RecentPack } from "./types.js";
   import Button from "$ui/Button.svelte";
@@ -31,6 +32,7 @@
   async function finishOpen(info: PackInfo) {
     const [files, tags] = await Promise.all([api.getFiles(), api.getAllTags()]);
     store.openPack(info.name, files, tags, !info.has_unsaved_changes, info.has_destination);
+    history.reset(!info.has_unsaved_changes);
   }
 
   async function newPack() {
@@ -113,6 +115,7 @@
       const result = await api.importEdgewarePackDialog();
       if (!result) return;
       store.openPack(result.info.name, [], [], false, false);
+      history.reset(false);
       store.importWarnings = result.warnings;
       // behaviour.json/metadata are already written by the time this command returns (see
       // import_edgeware_pack_dialog/run_import) -- fetch it right away, no waiting on media.
@@ -167,7 +170,7 @@
                 <span class="recent-icon" aria-hidden="true"><Icon src={FolderOpen} mini /></span>
                 <span class="recent-copy">
                   <strong>{recent.name}{#if !recent.path}<span class="draft-badge">Recoverable draft</span>{/if}</strong>
-                  <small title={recent.path ?? "Stored in local recovery data"}>{recent.path ?? "Not saved to a pack file yet · backed up locally"}</small>
+                  <small title={recent.path ?? "Stored in local recovery data"}>{recent.path ?? "Backed up locally · choose a destination on first save"}</small>
                 </span>
               </button>
               <button class="recent-remove" type="button" aria-label={`Remove ${recent.name} from recent packs`} title="Remove from recent packs" onclick={() => removeRecent(recent)}><Icon src={XMark} mini size="14px" /></button>
