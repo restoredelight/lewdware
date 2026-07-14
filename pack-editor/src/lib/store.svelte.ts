@@ -13,6 +13,57 @@ class AppStore {
   packOpen = $state(false);
   packName = $state("");
   packSaved = $state(true);
+  packHasDestination = $state(false);
+  metadataBackupPending = $state(false);
+  behaviourBackupPending = $state(false);
+  recoveryError = $state<string | null>(null);
+  recoveryErrorKind = $state<"metadata" | "behaviour" | null>(null);
+  pendingMediaRemoval = $state<number[]>([]);
+
+  recoveryStatus = $derived<"saved" | "pending" | "backed-up" | "error">(
+    this.packSaved
+      ? "saved"
+      : this.recoveryError
+        ? "error"
+        : this.metadataBackupPending || this.behaviourBackupPending
+          ? "pending"
+          : "backed-up",
+  );
+
+  markBackupPending(kind: "metadata" | "behaviour") {
+    this.markLocallyBackedUp();
+    if (this.recoveryErrorKind === kind) {
+      this.recoveryError = null;
+      this.recoveryErrorKind = null;
+    }
+    if (kind === "metadata") this.metadataBackupPending = true;
+    else this.behaviourBackupPending = true;
+  }
+
+  markBackupComplete(kind?: "metadata" | "behaviour") {
+    if (kind === "metadata") this.metadataBackupPending = false;
+    else if (kind === "behaviour") this.behaviourBackupPending = false;
+  }
+
+  markLocallyBackedUp() {
+    this.packSaved = false;
+  }
+
+  markBackupFailed(kind: "metadata" | "behaviour", error: unknown) {
+    if (kind === "metadata") this.metadataBackupPending = false;
+    else this.behaviourBackupPending = false;
+    this.markLocallyBackedUp();
+    this.recoveryError = error instanceof Error ? error.message : String(error);
+    this.recoveryErrorKind = kind;
+  }
+
+  markPackSaved() {
+    this.packSaved = true;
+    this.metadataBackupPending = false;
+    this.behaviourBackupPending = false;
+    this.recoveryError = null;
+    this.recoveryErrorKind = null;
+  }
 
   // Files and tags
   files = $state<MediaFile[]>([]);
@@ -21,12 +72,13 @@ class AppStore {
   // Selection
   selectedIds = $state(new Set<number>());
   primaryId = $state<number | null>(null);
+  gridActiveId = $state<number | null>(null);
 
   // Viewer
   openedId = $state<number | null>(null);
 
   // View routing
-  activeView = $state<"media" | "content" | "experience" | "options">("media");
+  activeView = $state<"media" | "tags" | "content" | "experience" | "options">("media");
 
   // Filtering
   searchQuery = $state("");
@@ -104,20 +156,47 @@ class AppStore {
     return this.files.find((f) => f.id === id) ?? null;
   });
 
+  selectedFiles = $derived(this.files.filter((file) => this.selectedIds.has(file.id)));
+
+  addTagToFiles(ids: number[], tag: string) {
+    const idSet = new Set(ids);
+    this.files = this.files.map((file) => idSet.has(file.id) && !file.tags.includes(tag) ? { ...file, tags: [...file.tags, tag] } : file);
+    if (!this.allTags.includes(tag)) this.allTags = [...this.allTags, tag];
+    this.markLocallyBackedUp();
+  }
+
+  removeTagFromFiles(ids: number[], tag: string) {
+    const idSet = new Set(ids);
+    this.files = this.files.map((file) => idSet.has(file.id) ? { ...file, tags: file.tags.filter((item) => item !== tag) } : file);
+    this.markLocallyBackedUp();
+  }
+
+  requestMediaRemoval(ids = [...this.selectedIds]) {
+    this.pendingMediaRemoval = ids.filter((id) => this.files.some((file) => file.id === id));
+  }
+
+  cancelMediaRemoval() { this.pendingMediaRemoval = []; }
+
   openedFile = $derived.by(() => {
     const id = this.openedId;
     if (id == null) return null;
     return this.files.find((f) => f.id === id) ?? null;
   });
 
-  openPack(name: string, files: MediaFile[], tags: string[]) {
+  openPack(name: string, files: MediaFile[], tags: string[], saved = true, hasDestination = true) {
     this.packOpen = true;
     this.packName = name;
-    this.packSaved = true;
+    this.packSaved = saved;
+    this.packHasDestination = hasDestination;
+    this.metadataBackupPending = false;
+    this.behaviourBackupPending = false;
+    this.recoveryError = null;
+    this.recoveryErrorKind = null;
     this.files = files;
     this.allTags = tags;
     this.selectedIds = new Set();
     this.primaryId = null;
+    this.gridActiveId = null;
     this.openedId = null;
     this.activeView = "media";
     this.searchQuery = "";
@@ -131,11 +210,14 @@ class AppStore {
   closePack() {
     this.packOpen = false;
     this.packName = "";
-    this.packSaved = true;
+    this.markPackSaved();
+    this.packHasDestination = false;
+    this.pendingMediaRemoval = [];
     this.files = [];
     this.allTags = [];
     this.selectedIds = new Set();
     this.primaryId = null;
+    this.gridActiveId = null;
     this.openedId = null;
     this.searchQuery = "";
     this.mediaTypeFilter = "all";
@@ -150,7 +232,7 @@ class AppStore {
       const newTags = file.tags.filter((t) => !this.allTags.includes(t));
       if (newTags.length > 0) this.allTags = [...this.allTags, ...newTags];
     }
-    this.packSaved = false;
+    this.markLocallyBackedUp();
   }
 
   removeFilesById(ids: number[]) {
@@ -160,12 +242,16 @@ class AppStore {
     for (const id of ids) next.delete(id);
     this.selectedIds = next;
     if (this.primaryId != null && idSet.has(this.primaryId)) this.primaryId = null;
-    this.packSaved = false;
+    if (this.gridActiveId != null && idSet.has(this.gridActiveId)) this.gridActiveId = null;
+    this.markLocallyBackedUp();
   }
 
   updateFileName(id: number, name: string) {
     const idx = this.files.findIndex((f) => f.id === id);
-    if (idx >= 0) this.files[idx] = { ...this.files[idx], file_name: name };
+    if (idx >= 0) {
+      this.files[idx] = { ...this.files[idx], file_name: name };
+      this.markLocallyBackedUp();
+    }
   }
 
   addTagToFile(id: number, tag: string) {
@@ -187,6 +273,7 @@ class AppStore {
   selectSingle(id: number) {
     this.selectedIds = new Set([id]);
     this.primaryId = id;
+    this.gridActiveId = id;
   }
 
   selectRange(anchorId: number, targetId: number) {
@@ -195,15 +282,25 @@ class AppStore {
     const ti = list.findIndex((f) => f.id === targetId);
     if (ai === -1 || ti === -1) return;
     const [lo, hi] = ai < ti ? [ai, ti] : [ti, ai];
-    const next = new Set(this.selectedIds);
+    const next = new Set<number>();
     for (const f of list.slice(lo, hi + 1)) next.add(f.id);
     this.selectedIds = next;
     this.primaryId = targetId;
+    this.gridActiveId = targetId;
   }
 
   addToSelection(id: number) {
     this.selectedIds = new Set([...this.selectedIds, id]);
     this.primaryId = id;
+    this.gridActiveId = id;
+  }
+
+  toggleSelection(id: number) {
+    const next = new Set(this.selectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    this.selectedIds = next;
+    this.gridActiveId = id;
+    this.primaryId = next.has(id) ? id : ([...next].at(-1) ?? null);
   }
 
   clearSelection() {
@@ -215,6 +312,7 @@ class AppStore {
     const list = this.filteredFiles;
     this.selectedIds = new Set(list.map((f) => f.id));
     this.primaryId = list.length > 0 ? list[list.length - 1].id : null;
+    this.gridActiveId = this.primaryId;
   }
 
   onUploadStart(total: number) {

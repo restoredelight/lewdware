@@ -1,0 +1,32 @@
+:root {
+  --ui-bg: #030712;
+  --ui-surface: #0f1117;
+  --ui-surface-raised: #1a1d26;
+  --ui-border: #252836;
+  --ui-border-strong: #3a3d50;
+  --ui-accent: #c70036;
+  --ui-accent-hover: #e8003f;
+  --ui-accent-foreground: #ff668f;
+  --ui-text: #e8e8e8;
+  --ui-muted: #8b8fa8;
+  --ui-focus: #ff4d7d;
+
+  --ui-success: #3ecf8e;
+  --ui-success-bg: #0c2a20;
+  --ui-success-border: #185b42;
+  --ui-warning: #f6c453;
+  --ui-warning-bg: #2d2108;
+  --ui-warning-border: #6b4e12;
+  --ui-danger: #ff6b6b;
+  --ui-danger-bg: #321313;
+  --ui-danger-border: #7a2929;
+  --ui-info: #78a9ff;
+  --ui-info-bg: #10213d;
+  --ui-info-border: #284f89;
+
+  --ui-control-compact: 32px;
+  --ui-control-normal: 36px;
+  --ui-radius-sm: 5px;
+  --ui-radius-md: 7px;
+  --ui-radius-lg: 10px;
+}

@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-use pack::{MediaFile, MediaPack};
+use pack::{MediaFile, MediaPack, TagSummary};
 use serde::{Deserialize, Serialize};
 use shared::behaviour::Behaviour;
 
@@ -78,6 +78,138 @@ impl AppState {
 pub struct PackInfo {
     pub name: String,
     pub has_unsaved_changes: bool,
+    pub has_destination: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RecentPack {
+    pub name: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub draft_id: Option<String>,
+    pub last_opened: u64,
+}
+
+fn editor_data_dir() -> Result<PathBuf, String> {
+    dirs::data_dir()
+        .map(|p| p.join("Lewdware Pack Editor"))
+        .ok_or_else(|| "Couldn't find data dir".to_string())
+}
+
+fn recent_file() -> Result<PathBuf, String> {
+    Ok(editor_data_dir()?.join("recent-packs.json"))
+}
+
+fn load_recents() -> Vec<RecentPack> {
+    recent_file()
+        .ok()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn write_recents(recents: &[RecentPack]) -> Result<(), String> {
+    let path = recent_file()?;
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(
+        &temp,
+        serde_json::to_vec_pretty(recents).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    std::fs::rename(temp, path).map_err(|e| e.to_string())
+}
+
+fn remember_pack(path: &std::path::Path, name: String) -> Result<(), String> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let value = canonical.to_string_lossy().to_string();
+    let mut recents = load_recents();
+    recents.retain(|r| r.path.as_deref() != Some(&value));
+    recents.insert(
+        0,
+        RecentPack {
+            name,
+            path: Some(value),
+            draft_id: None,
+            last_opened: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        },
+    );
+    recents.truncate(10);
+    write_recents(&recents)
+}
+
+fn remember_draft(id: uuid::Uuid, name: String) -> Result<(), String> {
+    let id = id.to_string();
+    let mut recents = load_recents();
+    recents.retain(|r| r.draft_id.as_deref() != Some(&id));
+    recents.insert(
+        0,
+        RecentPack {
+            name,
+            path: None,
+            draft_id: Some(id),
+            last_opened: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        },
+    );
+    recents.truncate(10);
+    write_recents(&recents)
+}
+
+fn forget_draft(id: uuid::Uuid) -> Result<(), String> {
+    let id = id.to_string();
+    let mut recents = load_recents();
+    recents.retain(|r| r.draft_id.as_deref() != Some(&id));
+    write_recents(&recents)
+}
+
+#[tauri::command]
+fn get_recent_packs() -> Vec<RecentPack> {
+    let base = editor_data_dir().ok();
+    let recents: Vec<_> = load_recents()
+        .into_iter()
+        .filter_map(|mut r| {
+            let saved_exists = r
+                .path
+                .as_deref()
+                .is_some_and(|p| std::path::Path::new(p).is_file());
+            let draft_dir = r
+                .draft_id
+                .as_deref()
+                .and_then(|id| base.as_ref().map(|b| b.join(id)));
+            let draft_exists = draft_dir
+                .as_ref()
+                .is_some_and(|d| d.join("UNSAVED").is_file());
+            if draft_exists {
+                if let Some(name) = draft_dir
+                    .and_then(|d| std::fs::read(d.join("Metadata")).ok())
+                    .and_then(|b| Metadata::from_buf(&b).ok())
+                    .map(|m| m.name)
+                {
+                    r.name = name;
+                }
+            }
+            (saved_exists || draft_exists).then_some(r)
+        })
+        .collect();
+    let _ = write_recents(&recents);
+    recents
+}
+
+#[tauri::command]
+fn remove_recent_pack(path: Option<String>, draft_id: Option<String>) -> Result<(), String> {
+    let mut recents = load_recents();
+    recents.retain(|r| r.path != path || r.draft_id != draft_id);
+    if let Some(id) = draft_id {
+        let _ = std::fs::remove_dir_all(editor_data_dir()?.join(id));
+    }
+    write_recents(&recents)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -121,42 +253,20 @@ impl From<MetadataDto> for Metadata {
 // ── Pack lifecycle ───────────────────────────────────────────────────────────
 
 #[tauri::command]
-async fn new_pack_dialog(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<Option<PackInfo>, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let app_c = app.clone();
-    let file = tokio::task::spawn_blocking(move || {
-        app_c
-            .dialog()
-            .file()
-            .set_title("Create new pack")
-            .add_filter("Lewdware Pack", &["lwpack"])
-            .blocking_save_file()
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let Some(path) = file else { return Ok(None) };
-    let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
-
-    // Prompt for a name based on the file stem
-    let name = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "New Pack".to_string());
-
+async fn new_pack(state: State<'_, AppState>) -> Result<PackInfo, String> {
+    let name = "Untitled Pack";
     let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
-    let pack = MediaPack::new(path, &data_dir, &name)
+    let pack = MediaPack::new_unsaved(&data_dir, name)
         .await
         .map_err(|e| e.to_string())?;
     let info = PackInfo {
         name: pack.name(),
-        has_unsaved_changes: false,
+        has_unsaved_changes: true,
+        has_destination: false,
     };
+    remember_draft(pack.id(), info.name.clone())?;
     *state.pack.lock().await = Some(pack);
-    Ok(Some(info))
+    Ok(info)
 }
 
 #[tauri::command]
@@ -181,16 +291,50 @@ async fn open_pack_dialog(
     let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
 
     let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
-    let pack = MediaPack::open(path, &data_dir)
+    let pack = MediaPack::open(path.clone(), &data_dir)
         .await
         .map_err(|e| e.to_string())?;
     let has_unsaved_changes = !pack.is_saved().await;
     let info = PackInfo {
         name: pack.name(),
         has_unsaved_changes,
+        has_destination: true,
     };
+    remember_pack(&path, info.name.clone())?;
     *state.pack.lock().await = Some(pack);
     Ok(Some(info))
+}
+
+#[tauri::command]
+async fn open_recent_pack(
+    state: State<'_, AppState>,
+    path: Option<String>,
+    draft_id: Option<String>,
+) -> Result<PackInfo, String> {
+    let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
+    let pack = if let Some(path) = path.as_deref() {
+        MediaPack::open(PathBuf::from(path), &data_dir)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        let id = uuid::Uuid::parse_str(draft_id.as_deref().ok_or("Missing draft id")?)
+            .map_err(|e| e.to_string())?;
+        MediaPack::recover_unsaved(&data_dir, id)
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    let info = PackInfo {
+        name: pack.name(),
+        has_unsaved_changes: !pack.is_saved().await,
+        has_destination: pack.path().is_some(),
+    };
+    if let Some(path) = path {
+        remember_pack(std::path::Path::new(&path), info.name.clone())?;
+    } else {
+        remember_draft(pack.id(), info.name.clone())?;
+    }
+    *state.pack.lock().await = Some(pack);
+    Ok(info)
 }
 
 /// A picked-path-plus-converted-output result the frontend needs to both open the (still
@@ -256,28 +400,9 @@ async fn import_edgeware_pack_dialog(
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
 
-    let app_c = app.clone();
-    let suggested_name = sanitize_file_name(&output.metadata.name);
-    let dest = tokio::task::spawn_blocking(move || {
-        app_c
-            .dialog()
-            .file()
-            .set_title("Import as")
-            .add_filter("Lewdware Pack", &["lwpack"])
-            .set_file_name(format!("{suggested_name}.lwpack"))
-            .blocking_save_file()
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let Some(dest) = dest else {
-        return Ok(None);
-    };
-    let dest_path: PathBuf = dest.into_path().map_err(|e| e.to_string())?;
-
     let shared::read_pack::Metadata { name, .. } = &output.metadata;
     let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
-    let pack = MediaPack::new(dest_path, &data_dir, name)
+    let pack = MediaPack::new_unsaved(&data_dir, name)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -303,11 +428,14 @@ async fn import_edgeware_pack_dialog(
     pack.set_metadata(&metadata)
         .await
         .map_err(|e| e.to_string())?;
+    pack.save_metadata().await.map_err(|e| e.to_string())?;
 
     let info = PackInfo {
         name: pack.name(),
         has_unsaved_changes: !pack.is_saved().await,
+        has_destination: false,
     };
+    remember_draft(pack.id(), info.name.clone())?;
     *state.pack.lock().await = Some(pack);
 
     let pack_state = state.pack.clone();
@@ -334,15 +462,64 @@ async fn import_edgeware_pack_dialog(
 }
 
 #[tauri::command]
-async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
-    tracing::warn!("Here!");
+async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<PackInfo>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (needs_destination, suggested_name) = {
+        let lock = state.pack.lock().await;
+        let pack = lock.as_ref().ok_or("No pack open")?;
+        (pack.path().is_none(), sanitize_file_name(&pack.name()))
+    };
+
+    if needs_destination {
+        let app_c = app.clone();
+        let file = tokio::task::spawn_blocking(move || {
+            app_c
+                .dialog()
+                .file()
+                .set_title("Save pack")
+                .add_filter("Lewdware Pack", &["lwpack"])
+                .set_file_name(format!("{suggested_name}.lwpack"))
+                .blocking_save_file()
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        let Some(file) = file else { return Ok(None) };
+        let path: PathBuf = file.into_path().map_err(|e| e.to_string())?;
+        let _write_guard = state.upload_lock.write().await;
+        let mut lock = state.pack.lock().await;
+        let pack = lock.as_ref().ok_or("No pack open")?;
+        let draft_id = pack.id();
+        let app_cb = app.clone();
+        if let Some(new_pack) = pack
+            .save_as(&path, move |saved, total| {
+                let _ = app_cb.emit(
+                    "save:progress",
+                    serde_json::json!({ "saved": saved, "total": total }),
+                );
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            let info = PackInfo {
+                name: new_pack.name(),
+                has_unsaved_changes: false,
+                has_destination: true,
+            };
+            forget_draft(draft_id)?;
+            remember_pack(&path, info.name.clone())?;
+            *lock = Some(new_pack);
+            let _ = app.emit("save:done", ());
+            return Ok(Some(info));
+        }
+        return Ok(None);
+    }
+
     // Write lock pauses any in-flight uploads until they finish their current file,
     // then holds exclusive access for the duration of the save.
     let _write_guard = state.upload_lock.write().await;
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         let app_cb = app.clone();
-        tracing::warn!("Here!");
         pack.save(move |saved, t| {
             let _ = app_cb.emit(
                 "save:progress",
@@ -351,9 +528,17 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<(), Str
         })
         .await
         .map_err(|e| e.to_string())?;
+        if let Some(path) = pack.path() {
+            remember_pack(path, pack.name())?;
+        }
         let _ = app.emit("save:done", ());
+        return Ok(Some(PackInfo {
+            name: pack.name(),
+            has_unsaved_changes: false,
+            has_destination: true,
+        }));
     }
-    Ok(())
+    Ok(None)
 }
 
 #[tauri::command]
@@ -380,6 +565,7 @@ async fn save_pack_as_dialog(
     let _write_guard = state.upload_lock.write().await;
     let mut lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
+        let draft_id = pack.path().is_none().then(|| pack.id());
         let app_cb = app.clone();
         let new_pack = pack
             .save_as(&path, move |saved, t| {
@@ -395,7 +581,12 @@ async fn save_pack_as_dialog(
             let info = PackInfo {
                 name: new_pack.name(),
                 has_unsaved_changes: false,
+                has_destination: true,
             };
+            if let Some(id) = draft_id {
+                forget_draft(id)?;
+            }
+            remember_pack(&path, info.name.clone())?;
             *lock = Some(new_pack);
             let _ = app.emit("save:done", ());
             return Ok(Some(info));
@@ -417,13 +608,25 @@ async fn discard_changes(state: State<'_, AppState>) -> Result<MetadataDto, Stri
 
 #[tauri::command]
 async fn close_pack(state: State<'_, AppState>) -> Result<(), String> {
-    *state.pack.lock().await = None;
+    let pack = state.pack.lock().await.take();
+    let draft_id = pack.as_ref().filter(|p| p.is_untitled()).map(|p| p.id());
+    let cleanup = pack
+        .as_ref()
+        .filter(|p| p.is_untitled())
+        .map(|p| p.dir().to_path_buf());
+    drop(pack);
+    if let Some(id) = draft_id {
+        let _ = forget_draft(id);
+    }
+    if let Some(dir) = cleanup {
+        let _ = std::fs::remove_dir_all(dir);
+    }
     Ok(())
 }
 
 #[tauri::command]
 async fn confirm_close(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
-    *state.pack.lock().await = None;
+    close_pack(state).await?;
     app.exit(0);
     Ok(())
 }
@@ -517,6 +720,92 @@ async fn create_and_add_tag(
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         pack.create_and_add_tag(id, tag)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_tag_summaries(state: State<'_, AppState>) -> Result<Vec<TagSummary>, String> {
+    let lock = state.pack.lock().await;
+    match lock.as_ref() {
+        Some(pack) => pack.get_tag_summaries().await.map_err(|e| e.to_string()),
+        None => Ok(vec![]),
+    }
+}
+
+#[tauri::command]
+async fn rename_tag(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    behaviour: Behaviour,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.rename_tag(from, to, &behaviour)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn merge_tag(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    behaviour: Behaviour,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.merge_tag(from, to, &behaviour)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_tag(
+    state: State<'_, AppState>,
+    tag: String,
+    behaviour: Behaviour,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.delete_tag(tag, &behaviour)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn add_tag_to_files(
+    state: State<'_, AppState>,
+    ids: Vec<u64>,
+    tag: String,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.add_tag_to_files(ids, tag)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn remove_tag_from_files(
+    state: State<'_, AppState>,
+    ids: Vec<u64>,
+    tag: String,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.remove_tag_from_files(ids, tag)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -811,8 +1100,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            new_pack_dialog,
+            new_pack,
             open_pack_dialog,
+            open_recent_pack,
+            get_recent_packs,
+            remove_recent_pack,
             import_edgeware_pack_dialog,
             save_pack,
             save_pack_as_dialog,
@@ -828,6 +1120,12 @@ pub fn run() {
             add_tag_to_file,
             remove_tag_from_file,
             create_and_add_tag,
+            get_tag_summaries,
+            rename_tag,
+            merge_tag,
+            delete_tag,
+            add_tag_to_files,
+            remove_tag_from_files,
             get_pack_metadata,
             set_pack_metadata,
             save_pack_metadata,

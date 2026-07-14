@@ -5,6 +5,7 @@
   import TimelineEditor from "./TimelineEditor.svelte";
   import { flushBehaviourSave, scheduleBehaviourSave } from "./behaviourSave.js";
   import type { Level } from "./types.js";
+  import Button from "$ui/Button.svelte";
 
   onMount(async () => {
     if (store.behaviour === null) store.behaviour = await api.getBehaviour();
@@ -44,28 +45,33 @@
   }
 </script>
 
-<div class="p-6 flex flex-col gap-4 w-full max-w-4xl mx-auto h-full min-h-0">
-  <h2 class="text-base font-semibold text-text shrink-0">Experience</h2>
+<div class="flex flex-col w-full h-full min-h-0">
+  <div class="p-6 pb-4 flex flex-col gap-4 shrink-0">
+    <h2 class="text-lg font-semibold text-text">Experience Timeline</h2>
 
-  {#if store.behaviour === null}
-    <p class="text-sm text-muted">Loading…</p>
-  {:else}
-    <label class="flex items-center gap-2 shrink-0">
-      <input
-        type="checkbox"
-        checked={store.behaviour.experience !== null}
-        onchange={(e) => enableExperience(e.currentTarget.checked)}
-        class="accent-accent"
-      />
-      <span class="text-sm font-medium text-text">This pack designs an Experience</span>
-    </label>
-    <p class="text-xs text-muted shrink-0">
-      Recommends the Experience mode, whose spawn shape and pacing follow what you design below
-      instead of the player's own Sandbox controls. Leave off for a plain content pack (Sandbox).
-    </p>
-
-    {#if store.behaviour.experience}
-      <TimelineEditor />
+    {#if store.behaviour === null}
+      <p class="text-sm text-muted">Loading…</p>
+    {:else}
+      <p class="text-sm text-muted max-w-2xl">
+        Change the pack’s behavior as a session progresses. Each stage can adjust event frequency,
+        movement, active content, and wallpaper.
+      </p>
+      {#if store.behaviour.experience}
+        <div class="flex items-center gap-3 p-3 rounded-md border border-border bg-surface max-w-2xl">
+          <span class="px-2 py-1 rounded-full bg-[var(--ui-success-bg)] border border-[var(--ui-success-border)] text-[var(--ui-success)] text-xs font-semibold">Enabled</span>
+          <div class="flex flex-1 flex-col"><span class="text-sm font-medium text-text">Experience timeline</span><span class="text-xs text-muted">Lewdware will recommend Experience mode for this pack.</span></div>
+          <Button size="compact" variant="destructive" onclick={() => enableExperience(false)}>Disable timeline</Button>
+        </div>
+      {:else}
+        <div class="flex items-center justify-between gap-6 p-4 rounded-md border border-border bg-surface max-w-2xl">
+          <div><h3 class="text-sm font-semibold text-text">No timeline yet</h3><p class="text-xs text-muted mt-1">Without a timeline, the pack uses the player’s own Sandbox controls.</p></div>
+          <Button variant="primary" onclick={() => enableExperience(true)}>Enable timeline</Button>
+        </div>
+      {/if}
     {/if}
+  </div>
+
+  {#if store.behaviour?.experience}
+    <TimelineEditor />
   {/if}
 </div>

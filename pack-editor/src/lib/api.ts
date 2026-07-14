@@ -1,11 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Behaviour, ImportResult, MediaFile, MetadataDto, PackInfo } from "./types.js";
+import type { Behaviour, ImportResult, MediaFile, MetadataDto, PackInfo, RecentPack, TagSummary } from "./types.js";
 
 export const api = {
-  newPackDialog: () => invoke<PackInfo | null>("new_pack_dialog"),
+  newPack: () => invoke<PackInfo>("new_pack"),
   openPackDialog: () => invoke<PackInfo | null>("open_pack_dialog"),
+  openRecentPack: (recent: RecentPack) => invoke<PackInfo>("open_recent_pack", { path: recent.path, draftId: recent.draft_id }),
+  getRecentPacks: () => invoke<RecentPack[]>("get_recent_packs"),
+  removeRecentPack: (recent: RecentPack) => invoke<void>("remove_recent_pack", { path: recent.path, draftId: recent.draft_id }),
   importEdgewarePackDialog: () => invoke<ImportResult | null>("import_edgeware_pack_dialog"),
-  savePack: () => invoke<void>("save_pack"),
+  savePack: () => invoke<PackInfo | null>("save_pack"),
   savePackAsDialog: () => invoke<PackInfo | null>("save_pack_as_dialog"),
   discardChanges: () => invoke<MetadataDto>("discard_changes"),
   closePack: () => invoke<void>("close_pack"),
@@ -23,6 +26,12 @@ export const api = {
     invoke<void>("remove_tag_from_file", { id, tag }),
   createAndAddTag: (id: number, tag: string) =>
     invoke<void>("create_and_add_tag", { id, tag }),
+  addTagToFiles: (ids: number[], tag: string) => invoke<void>("add_tag_to_files", { ids, tag }),
+  removeTagFromFiles: (ids: number[], tag: string) => invoke<void>("remove_tag_from_files", { ids, tag }),
+  getTagSummaries: () => invoke<TagSummary[]>("get_tag_summaries"),
+  renameTag: (from: string, to: string, behaviour: Behaviour) => invoke<void>("rename_tag", { from, to, behaviour }),
+  mergeTag: (from: string, to: string, behaviour: Behaviour) => invoke<void>("merge_tag", { from, to, behaviour }),
+  deleteTag: (tag: string, behaviour: Behaviour) => invoke<void>("delete_tag", { tag, behaviour }),
 
   getPackMetadata: () => invoke<MetadataDto>("get_pack_metadata"),
   setPackMetadata: (dto: MetadataDto) => invoke<void>("set_pack_metadata", { dto }),

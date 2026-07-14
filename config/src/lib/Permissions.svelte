@@ -1,5 +1,7 @@
 <script lang="ts">
   import { store } from "./store.svelte";
+  import Checkbox from "$ui/Checkbox.svelte";
+  import Slider from "$ui/Slider.svelte";
   import type { Capabilities, Volume } from "./types";
 
   const toggles: { key: keyof Capabilities; label: string; description: string }[] = [
@@ -33,12 +35,6 @@
     },
   ];
 
-  // Matches PackMode.svelte's slider fill: the track's filled portion is driven by a `--fill`
-  // CSS custom property (see app.css's `input[type="range"]` rules), not the native thumb-only
-  // styling, so it needs recomputing by hand on every input.
-  function fillPercent(value: number): string {
-    return `${Math.max(0, Math.min(100, value * 100))}%`;
-  }
 </script>
 
 <div class="flex flex-col gap-8 p-8 overflow-y-auto flex-1">
@@ -54,23 +50,7 @@
           class="flex items-start gap-3 px-3 py-2 rounded-md cursor-pointer
                  hover:bg-surface-2 transition-colors"
         >
-          <input
-            type="checkbox"
-            checked={store.config?.capabilities[toggle.key] ?? false}
-            onchange={(e) => store.setCapability(toggle.key, e.currentTarget.checked)}
-            class="sr-only"
-          />
-          <span
-            class="shrink-0 mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition-colors
-                   {store.config?.capabilities[toggle.key] ? 'bg-accent border-accent' : 'bg-bg border-border'}"
-          >
-            {#if store.config?.capabilities[toggle.key]}
-              <svg class="w-2.5 h-2.5 text-white" viewBox="0 0 10 10" fill="none">
-                <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="currentColor" stroke-width="2"
-                  stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            {/if}
-          </span>
+          <span class="mt-0.5"><Checkbox checked={store.config?.capabilities[toggle.key] ?? false} ariaLabel={toggle.label} onchange={(checked) => store.setCapability(toggle.key, checked)} /></span>
           <span class="flex flex-col">
             <span class="text-sm text-text">{toggle.label}</span>
             <span class="text-xs text-muted">{toggle.description}</span>
@@ -95,19 +75,14 @@
             </span>
           </div>
           <p class="text-xs text-muted">{slider.description}</p>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
+          <Slider
+            ariaLabel={`${slider.label} volume`}
+            min={0}
+            max={1}
+            step={0.01}
             value={store.config?.volume[slider.key] ?? 0}
-            oninput={(e) => {
-              e.currentTarget.style.setProperty('--fill', fillPercent(e.currentTarget.valueAsNumber));
-              store.previewVolume(slider.key, e.currentTarget.valueAsNumber);
-            }}
+            oninput={(value) => store.previewVolume(slider.key, value)}
             onchange={() => store.saveConfig()}
-            style="--fill: {fillPercent(store.config?.volume[slider.key] ?? 0)}"
-            class="w-full"
           />
         </div>
       {/each}

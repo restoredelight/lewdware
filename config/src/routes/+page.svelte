@@ -5,6 +5,7 @@
   import PackMode from "$lib/PackMode.svelte";
   import Permissions from "$lib/Permissions.svelte";
   import Scheduling from "$lib/Scheduling.svelte";
+  import Tabs from "$ui/Tabs.svelte";
 
   onMount(() => {
     store.load();
@@ -24,20 +25,8 @@
     <div class="p-4 border-b border-border">
       <span class="text-sm font-semibold text-text">Settings</span>
     </div>
-    <nav class="flex flex-col gap-0.5 p-2">
-      {#each tabs as tab}
-        <button
-          onclick={() => (store.activeTab = tab.id)}
-          class="px-3 py-2 rounded text-sm text-left transition-colors"
-          class:bg-accent={store.activeTab === tab.id}
-          class:text-white={store.activeTab === tab.id}
-          class:font-medium={store.activeTab === tab.id}
-          class:text-text={store.activeTab !== tab.id}
-          class:hover:bg-surface-2={store.activeTab !== tab.id}
-        >
-          {tab.label}
-        </button>
-      {/each}
+    <nav class="p-2">
+      <Tabs {tabs} active={store.activeTab} orientation="vertical" onselect={(id) => (store.activeTab = id as typeof store.activeTab)} />
     </nav>
   </aside>
 

@@ -1,19 +1,28 @@
 <script lang="ts">
   import { store } from "./store.svelte.js";
   import TagPicker from "./TagPicker.svelte";
-  import TabStrip from "./TabStrip.svelte";
+  import Tabs from "$ui/Tabs.svelte";
+  import Checkbox from "$ui/Checkbox.svelte";
   import OptionalNumberField from "./OptionalNumberField.svelte";
   import { scheduleBehaviourSave } from "./behaviourSave.js";
   import type { Level } from "./types.js";
+  import Button from "$ui/Button.svelte";
+  import { Icon, Plus } from "svelte-hero-icons";
 
   const levels = $derived(store.behaviour!.experience!.timeline.levels);
 
   let activeIndex = $state(0);
   let scaleFactor = $state("2");
 
-  const tabs = $derived(
-    levels.map((_, i) => ({ id: String(i), label: i === 0 ? "Baseline" : `Level ${i + 1}` })),
-  );
+  function levelLabel(level: Level, index: number): string {
+    if (index === 0) return "Starting stage";
+    const minutes = level.at_seconds / 60;
+    const time = Number.isInteger(minutes) ? `${minutes} min` : `${level.at_seconds} sec`;
+    return level.at_popups === null ? `After ${time}` : `${time} or ${level.at_popups} popups`;
+  }
+
+  const tabs = $derived(levels.map((level, i) => ({ id: String(i), label: levelLabel(level, i) })));
+  const duplicateTrigger = $derived(activeIndex > 0 && levels.some((level, index) => index !== activeIndex && level.at_seconds === levels[activeIndex]?.at_seconds && level.at_popups === levels[activeIndex]?.at_popups));
 
   function cloneLevel(level: Level): Level {
     return {
@@ -50,6 +59,7 @@
 
   function removeLevel(index: number) {
     if (index === 0) return; // the baseline can't be removed
+    if (!confirm(`Remove Stage ${index + 1}?`)) return;
     levels.splice(index, 1);
     if (activeIndex >= levels.length) activeIndex = levels.length - 1;
     scheduleBehaviourSave();
@@ -66,54 +76,61 @@
   }
 </script>
 
-<section class="flex-1 min-h-0 flex flex-col gap-3">
-  <TabStrip {tabs} active={String(activeIndex)} onselect={(id) => (activeIndex = Number(id))} />
+<section class="flex-1 min-h-0 flex gap-6">
+  <aside class="w-48 max-[900px]:w-40 shrink-0 border-r border-border bg-surface p-3 flex flex-col gap-3">
+    <div class="flex-1 min-h-0 overflow-y-auto">
+      <Tabs {tabs} active={String(activeIndex)} orientation="vertical" onselect={(id) => (activeIndex = Number(id))} />
+    </div>
+    <Button size="compact" class="w-full" onclick={addLevel}><span class="w-4 h-4"><Icon src={Plus} mini /></span> Add stage</Button>
+  </aside>
 
   {#if levels[activeIndex]}
     {@const level = levels[activeIndex]}
-    <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 pr-1">
+    <div class="flex-1 w-full max-w-3xl min-w-0 min-h-0 overflow-y-auto flex flex-col gap-4 p-6">
+      <div>
+        <h2 class="text-lg font-semibold text-text">{activeIndex === 0 ? "Starting Stage" : `Stage ${activeIndex + 1}`}</h2>
+        <p class="text-sm text-muted mt-1">{activeIndex === 0 ? "Behavior used when the session begins." : "Behavior used after this stage’s trigger is reached."}</p>
+      </div>
       {#if activeIndex !== 0}
-        <section class="flex flex-col gap-2">
+        <section class="flex flex-col gap-3 p-4 rounded-md border border-border bg-surface">
           <div class="flex items-center justify-between">
-            <h3 class="text-sm font-semibold text-text">Reached at</h3>
-            <button
-              onclick={() => removeLevel(activeIndex)}
-              class="text-xs text-muted hover:text-text transition-colors"
-            >Remove level</button>
+            <h3 class="text-base font-semibold text-text">Start this stage</h3>
+            <Button size="compact" variant="destructive" class="!h-7" onclick={() => removeLevel(activeIndex)}>Remove stage</Button>
           </div>
           <label class="flex items-center gap-2">
-            <span class="text-xs text-text w-40 shrink-0">Active-time seconds</span>
+            <span class="text-xs text-text w-40 shrink-0">Time elapsed (minutes)</span>
             <input
               type="number"
               min={0}
-              bind:value={level.at_seconds}
-              onchange={onTriggerEdited}
+              value={level.at_seconds / 60}
+              onchange={(event) => { level.at_seconds = Math.max(0, event.currentTarget.valueAsNumber || 0) * 60; onTriggerEdited(); }}
               class="w-24 px-2 py-1 rounded border border-border bg-surface text-text text-xs
-                focus:outline-none focus:border-accent"
+                focus:border-accent"
             />
           </label>
           <OptionalNumberField
-            label="Or after this many popups"
+            label="Or after popup count"
             value={level.at_popups}
             min={0}
             step={1}
             default={10}
             onchange={(v) => { level.at_popups = v === null ? null : Math.round(v); scheduleBehaviourSave(); }}
           />
+          {#if duplicateTrigger}<p class="text-xs text-[var(--ui-danger)]">Another stage uses the same trigger. Change the elapsed time or popup count so each stage starts at a distinct point.</p>{/if}
         </section>
       {/if}
 
-      <section class="flex flex-col gap-2">
+      <section class="flex flex-col gap-3 p-4 rounded-md border border-border bg-surface">
         <div class="flex items-center justify-between">
-          <h3 class="text-sm font-semibold text-text">Frequency anchors</h3>
+            <h3 class="text-base font-semibold text-text">Event frequency</h3>
           <div class="flex items-center gap-1.5">
-            <span class="text-xs text-muted">Scale by</span>
+            <span class="text-xs text-muted">Multiply intervals by</span>
             <input
               type="number"
               step={0.1}
               bind:value={scaleFactor}
               class="w-14 px-1.5 py-0.5 rounded border border-border bg-surface text-text text-xs
-                focus:outline-none focus:border-accent"
+                focus:border-accent"
             />
             <button
               onclick={applyScaleFactor}
@@ -122,8 +139,8 @@
           </div>
         </div>
         <p class="text-xs text-muted -mt-1">
-          Seconds between events for this level only. A feature left off simply doesn't run while
-          this level is active.
+          Approximate seconds between events during this stage. Turn an event off to disable it
+          for this part of the session.
         </p>
         <OptionalNumberField
           label="Popups"
@@ -172,10 +189,10 @@
         />
       </section>
 
-      <section class="flex flex-col gap-2">
-        <h3 class="text-sm font-semibold text-text">Design values</h3>
+      <section class="flex flex-col gap-3 p-4 rounded-md border border-border bg-surface">
+        <h3 class="text-base font-semibold text-text">Movement and duplication</h3>
         <p class="text-xs text-muted -mt-1">
-          Non-rate baselines for this level — unaffected by the player's pacing setting.
+          Visual behavior for this stage, independent of the player’s pacing setting.
         </p>
         <OptionalNumberField
           label="Movement speed (min)"
@@ -194,8 +211,9 @@
           onchange={(v) => { level.design.movement_speed_max = v; scheduleBehaviourSave(); }}
         />
         <OptionalNumberField
-          label="Mitosis chance"
+          label="Mitosis chance (0–1)"
           min={0}
+          max={1}
           step={0.05}
           default={0.5}
           value={level.design.mitosis_chance}
@@ -211,34 +229,33 @@
         />
       </section>
 
-      <section class="flex flex-col gap-2">
+      <section class="flex flex-col gap-3 p-4 rounded-md border border-border bg-surface">
+        <div><h3 class="text-base font-semibold text-text">Content and wallpaper</h3><p class="text-xs text-muted mt-1">Optionally narrow the content or wallpaper used during this stage.</p></div>
         <label class="flex items-center gap-2">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={level.tags !== null}
-            onchange={(e) => {
-              level.tags = e.currentTarget.checked ? [] : null;
+            ariaLabel="Limit content to these tags"
+            onchange={(checked) => {
+              level.tags = checked ? [] : null;
               scheduleBehaviourSave();
             }}
-            class="accent-accent"
           />
-          <span class="text-xs text-text w-40 shrink-0">Restrict active tags</span>
+          <span class="text-xs text-text w-40 shrink-0">Limit content to these tags</span>
         </label>
         {#if level.tags !== null}
           <TagPicker tags={level.tags} id={`level-tags-${activeIndex}`} />
         {/if}
 
         <label class="flex items-center gap-2">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={level.wallpaper_tags !== null}
-            onchange={(e) => {
-              level.wallpaper_tags = e.currentTarget.checked ? [] : null;
+            ariaLabel="Use different wallpaper tags"
+            onchange={(checked) => {
+              level.wallpaper_tags = checked ? [] : null;
               scheduleBehaviourSave();
             }}
-            class="accent-accent"
           />
-          <span class="text-xs text-text w-40 shrink-0">Override wallpaper</span>
+          <span class="text-xs text-text w-40 shrink-0">Use different wallpaper tags</span>
         </label>
         {#if level.wallpaper_tags !== null}
           <TagPicker tags={level.wallpaper_tags} id={`level-wallpaper-${activeIndex}`} />
@@ -247,10 +264,4 @@
     </div>
   {/if}
 
-  <button
-    onclick={addLevel}
-    class="self-start px-2 py-1 rounded text-xs font-medium bg-surface border border-border text-text hover:bg-bg transition-colors shrink-0"
-  >
-    + Add level
-  </button>
 </section>

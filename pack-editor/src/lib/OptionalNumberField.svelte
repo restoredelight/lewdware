@@ -1,15 +1,17 @@
 <script lang="ts">
+  import Checkbox from "$ui/Checkbox.svelte";
   type Props = {
     label: string;
     value: number | null;
     onchange: (v: number | null) => void;
     unit?: string;
     min?: number;
+    max?: number;
     step?: number;
     default?: number;
   };
 
-  let { label, value, onchange, unit, min, step, default: defaultValue = 1 }: Props = $props();
+  let { label, value, onchange, unit, min, max, step, default: defaultValue = 1 }: Props = $props();
 
   const enabled = $derived(value !== null);
 
@@ -23,13 +25,8 @@
   }
 </script>
 
-<label class="flex items-center gap-2">
-  <input
-    type="checkbox"
-    checked={enabled}
-    onchange={(e) => toggle(e.currentTarget.checked)}
-    class="accent-accent"
-  />
+<label class="flex min-h-8 items-center gap-2">
+  <Checkbox checked={enabled} ariaLabel={label} onchange={toggle} />
   <span class="text-xs text-text w-40 shrink-0">{label}</span>
   {#if enabled}
     <input
@@ -37,9 +34,10 @@
       value={value}
       oninput={(e) => setValue(e.currentTarget.value)}
       {min}
+      {max}
       {step}
-      class="w-24 px-2 py-1 rounded border border-border bg-surface text-text text-xs
-        focus:outline-none focus:border-accent"
+      class="w-24 h-8 px-2 py-0 rounded border border-border bg-surface text-text text-xs
+        focus:border-accent"
     />
     {#if unit}
       <span class="text-xs text-muted">{unit}</span>

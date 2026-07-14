@@ -1,25 +1,22 @@
 <script lang="ts">
-  import { api } from "./api.js";
+  import { onMount } from "svelte";
   import { store } from "./store.svelte.js";
+  import { ChevronLeft, ChevronRight, Icon, XMark } from "svelte-hero-icons";
 
   const file = $derived(store.openedFile);
   const files = $derived(store.filteredFiles);
 
-  let newTag = $state("");
-  let editingName = $state(false);
-  let nameValue = $state("");
-  let nameError = $state<string | null>(null);
+  let dialog: HTMLDivElement;
+  let previouslyFocused: HTMLElement | null = null;
 
-  $effect(() => {
-    if (file) nameValue = file.file_name;
+  onMount(() => {
+    previouslyFocused = document.activeElement as HTMLElement | null;
+    dialog.focus();
+    return () => previouslyFocused?.focus();
   });
-
-  const tags = $derived(file?.tags ?? []);
 
   function close() {
     store.openedId = null;
-    editingName = false;
-    nameError = null;
   }
 
   function navigate(dir: -1 | 1) {
@@ -29,42 +26,18 @@
     if (next >= 0 && next < files.length) store.openedId = files[next].id;
   }
 
-  async function saveName() {
-    if (!file || !nameValue.trim()) return;
-    try {
-      await api.setFileTitle(file.id, nameValue.trim());
-      store.updateFileName(file.id, nameValue.trim());
-      editingName = false;
-      nameError = null;
-    } catch (err) {
-      // Stay in edit mode so the user can pick a different name -- reverting to the old
-      // name here would silently discard what they just typed.
-      nameError = String(err);
-    }
-  }
-
-  async function addTag() {
-    const t = newTag.trim();
-    if (!t || !file) return;
-    if (store.allTags.includes(t)) {
-      await api.addTagToFile(file.id, t);
-    } else {
-      await api.createAndAddTag(file.id, t);
-      store.allTags.push(t);
-    }
-    store.addTagToFile(file.id, t);
-    newTag = "";
-  }
-
-  async function removeTag(tag: string) {
-    if (!file) return;
-    await api.removeTagFromFile(file.id, tag);
-    store.removeTagFromFile(file.id, tag);
-  }
-
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") close();
-    else if (e.key === "ArrowRight") navigate(1);
+    if (e.key === "Escape") { close(); return; }
+    if (e.key === "Tab") {
+      const items = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), audio[controls], video[controls], [tabindex]:not([tabindex="-1"])')];
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      return;
+    }
+    if ((e.target as HTMLElement).matches("input, textarea, select")) return;
+    if (e.key === "ArrowRight") navigate(1);
     else if (e.key === "ArrowLeft") navigate(-1);
   }
 
@@ -75,6 +48,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
+  bind:this={dialog}
   role="dialog"
   aria-modal="true"
   class="fixed inset-0 z-50 flex bg-black/80"
@@ -88,33 +62,43 @@
     aria-label="Close"
   ></button>
 
+  {#if file}
+    <div class="absolute z-10 top-0 inset-x-0 flex items-start justify-between gap-4 p-3 pointer-events-none">
+      <div class="min-w-0 max-w-[min(70vw,44rem)] rounded-md bg-black/65 px-3 py-2 text-white shadow-lg backdrop-blur-sm">
+        <p class="truncate text-sm font-medium" title={file.file_name}>{file.file_name}</p>
+        <p class="mt-0.5 text-[11px] text-white/65">{idx + 1} of {files.length}</p>
+      </div>
+      <button onclick={close} class="pointer-events-auto w-9 h-9 shrink-0 grid place-items-center rounded-full bg-black/60 text-white/80 hover:bg-black/80 hover:text-white transition-colors" aria-label="Close preview"><span class="block w-5 h-5"><Icon src={XMark} /></span></button>
+    </div>
+  {/if}
+
   <!-- Nav prev -->
   {#if hasPrev}
     <button
       onclick={(e) => { e.stopPropagation(); navigate(-1); }}
       class="absolute left-2 top-1/2 -translate-y-1/2 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors text-xl"
       aria-label="Previous"
-    >‹</button>
+    ><span class="w-5 h-5"><Icon src={ChevronLeft} /></span></button>
   {/if}
 
   <!-- Nav next -->
   {#if hasNext}
     <button
       onclick={(e) => { e.stopPropagation(); navigate(1); }}
-      class="absolute right-64 top-1/2 -translate-y-1/2 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors text-xl"
+      class="absolute right-2 top-1/2 -translate-y-1/2 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors text-xl"
       aria-label="Next"
-    >›</button>
+    ><span class="w-5 h-5"><Icon src={ChevronRight} /></span></button>
   {/if}
 
   <!-- Media area -->
-  <div class="flex-1 flex items-center justify-center p-4 relative z-[1] pointer-events-none">
+  <div class="flex-1 flex items-center justify-center px-14 py-16 relative z-[1] pointer-events-none">
     {#if file}
       {#if file.file_info.type === "image"}
         <img
           src="{store.mediaBase}/display/{file.id}"
           alt={file.file_name}
           class="max-w-full max-h-full object-contain pointer-events-auto"
-          style="max-height: calc(100vh - 32px)"
+          style="max-height: calc(100vh - 128px)"
         />
       {:else if file.file_info.type === "video" && file.file_info.transparent}
         <!-- Transparent videos are encoded as a packed frame (color on top, alpha-as-luma on
@@ -132,7 +116,7 @@
           muted
           playsinline
           class="max-w-full max-h-full object-cover object-top pointer-events-auto"
-          style="aspect-ratio: {file.file_info.width} / {file.file_info.height}; max-height: calc(100vh - 32px)"
+          style="aspect-ratio: {file.file_info.width} / {file.file_info.height}; max-height: calc(100vh - 128px)"
         ></video>
       {:else if file.file_info.type === "video"}
         <!-- svelte-ignore a11y_media_has_caption -->
@@ -140,7 +124,7 @@
           src="{store.mediaBase}/file/{file.id}"
           controls
           class="max-w-full max-h-full pointer-events-auto"
-          style="max-height: calc(100vh - 32px)"
+          style="max-height: calc(100vh - 128px)"
         ></video>
       {:else if file.file_info.type === "audio"}
         <audio
@@ -152,78 +136,4 @@
     {/if}
   </div>
 
-  <!-- Right panel -->
-  {#if file}
-    <aside
-      class="w-60 shrink-0 flex flex-col bg-surface border-l border-border z-[2] overflow-y-auto"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <!-- Close button -->
-      <div class="flex items-center justify-between px-3 py-2 border-b border-border">
-        <span class="text-xs text-muted">{idx + 1} / {files.length}</span>
-        <button
-          onclick={close}
-          class="text-muted hover:text-text text-lg leading-none"
-          aria-label="Close"
-        >×</button>
-      </div>
-
-      <div class="p-3 flex flex-col gap-3">
-        <!-- Filename -->
-        {#if editingName}
-          <input
-            bind:value={nameValue}
-            class="text-sm font-medium border border-accent rounded px-1.5 py-0.5 w-full focus:outline-none"
-            onblur={saveName}
-            onkeydown={(e) => { if (e.key === "Enter") saveName(); if (e.key === "Escape") { editingName = false; nameError = null; nameValue = file!.file_name; } }}
-          />
-          {#if nameError}
-            <p class="text-xs text-red-600">{nameError}</p>
-          {/if}
-        {:else}
-          <button
-            class="text-sm font-medium text-text text-left hover:text-accent break-all leading-snug"
-            onclick={() => (editingName = true)}
-            title="Click to edit"
-          >{file.file_name}</button>
-        {/if}
-
-        <!-- Tags -->
-        <div>
-          <p class="text-xs text-muted mb-1.5">Tags</p>
-          <div class="flex flex-wrap gap-1 mb-2">
-            {#each tags as tag}
-              <span class="inline-flex items-center gap-0.5 bg-accent/15 text-accent rounded-full px-2 py-0.5 text-xs">
-                {tag}
-                <button
-                  onclick={() => removeTag(tag)}
-                  class="text-accent/70 hover:text-accent leading-none"
-                  aria-label="Remove tag"
-                >×</button>
-              </span>
-            {/each}
-          </div>
-          <div class="flex gap-1">
-            <input
-              bind:value={newTag}
-              placeholder="Add tag…"
-              list="all-tags"
-              class="flex-1 text-xs px-2 py-1 rounded border border-border bg-surface focus:outline-none focus:border-accent"
-              onkeydown={(e) => { if (e.key === "Enter") addTag(); }}
-            />
-            <datalist id="all-tags">
-              {#each store.allTags as t}
-                <option value={t}></option>
-              {/each}
-            </datalist>
-            <button
-              onclick={addTag}
-              class="text-xs px-2 py-1 rounded bg-accent text-white hover:bg-accent-hover"
-            >Add</button>
-          </div>
-        </div>
-      </div>
-    </aside>
-  {/if}
 </div>

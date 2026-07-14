@@ -11,6 +11,7 @@ export interface MediaFile {
   tags: string[];
   size: number;
 }
+export interface TagSummary { name: string; media_count: number; }
 
 // Not yet editable from the pack editor UI (no Modes tab) -- see MetadataDto.recommended_mode
 // on the Rust side. Kept here only so the DTO round-trips without dropping the field.
@@ -27,7 +28,10 @@ export interface MetadataDto {
 export interface PackInfo {
   name: string;
   has_unsaved_changes: boolean;
+  has_destination: boolean;
 }
+
+export interface RecentPack { name: string; path: string | null; draft_id: string | null; last_opened: number; }
 
 export interface ConversionWarning {
   kind: string;

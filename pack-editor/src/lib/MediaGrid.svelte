@@ -1,7 +1,7 @@
 <script lang="ts">
+  import { Icon, MusicalNote, Play } from "svelte-hero-icons";
   import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
   import { LogicalPosition } from "@tauri-apps/api/dpi";
-  import { api } from "./api.js";
   import { store } from "./store.svelte.js";
   import type { MediaFile } from "./types.js";
 
@@ -16,11 +16,18 @@
   let scrollTop = $state(0);
   let viewH = $state(0);
   let viewW = $state(0);
+  let gridFocused = $state(false);
+  let announcement = $state("");
 
   // Track last non-shift-click for range anchor
   let anchorId = $state<number | null>(null);
 
   const files = $derived(store.filteredFiles);
+  $effect(() => {
+    if (store.gridActiveId !== null && !files.some((file) => file.id === store.gridActiveId)) {
+      store.gridActiveId = files[0]?.id ?? null;
+    }
+  });
   const cols = $derived(Math.max(1, Math.floor((viewW + GAP) / (ITEM_W + GAP))));
   const rows = $derived(Math.ceil(files.length / cols));
   const totalH = $derived(rows * ROW_H);
@@ -49,11 +56,12 @@
     if (e.shiftKey && anchorId != null) {
       store.selectRange(anchorId, file.id);
     } else if (e.ctrlKey || e.metaKey) {
-      store.addToSelection(file.id);
+      store.toggleSelection(file.id);
     } else {
       store.selectSingle(file.id);
     }
-    anchorId = file.id;
+    if (!e.shiftKey) anchorId = file.id;
+    announceSelection();
     container?.focus();
   }
 
@@ -65,31 +73,56 @@
     if (e.key === "Escape") {
       store.clearSelection();
       anchorId = null;
+      announcement = "Selection cleared";
       return;
     }
-    if (e.key === "Enter" && store.primaryId != null) {
-      store.openedId = store.primaryId;
+    if (e.key === "Enter" && store.gridActiveId != null) {
+      store.openedId = store.gridActiveId;
+      return;
+    }
+    if (e.key === " " && store.gridActiveId != null) {
+      e.preventDefault();
+      store.toggleSelection(store.gridActiveId);
+      anchorId ??= store.gridActiveId;
+      announceSelection();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key === "a") {
       e.preventDefault();
       store.selectAll();
+      announceSelection();
       return;
     }
     if (e.key === "Delete" && store.selectedIds.size > 0) {
+      e.preventDefault();
       deleteSelected();
+      return;
+    }
+    if (e.key === "Escape" && store.selectedIds.size > 0) {
+      e.preventDefault();
+      store.clearSelection();
+      announceSelection();
+      return;
+    }
+    if ((e.key === "Home" || e.key === "End") && files.length > 0) {
+      e.preventDefault();
+      const next = e.key === "Home" ? 0 : files.length - 1;
+      store.selectSingle(files[next].id);
+      anchorId = files[next].id;
+      announceSelection();
+      scrollToIndex(next);
       return;
     }
     if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
       e.preventDefault();
-      navigateGrid(e.key);
+      navigateGrid(e.key, e.shiftKey, e.ctrlKey || e.metaKey);
     }
   }
 
-  function navigateGrid(key: string) {
+  function navigateGrid(key: string, extend: boolean, preserveSelection: boolean) {
     const list = files;
     if (list.length === 0) return;
-    const cur = store.primaryId;
+    const cur = store.gridActiveId;
     let idx = cur != null ? list.findIndex((f) => f.id === cur) : -1;
     if (idx === -1) idx = 0;
 
@@ -99,11 +132,24 @@
     else if (key === "ArrowDown") next = Math.min(list.length - 1, idx + cols);
     else if (key === "ArrowUp") next = Math.max(0, idx - cols);
 
-    if (next !== idx) {
-      store.selectSingle(list[next].id);
-      anchorId = list[next].id;
+    if (cur == null || next !== idx) {
+      const nextId = list[next].id;
+      store.gridActiveId = nextId;
+      if (extend) {
+        anchorId ??= cur ?? nextId;
+        store.selectRange(anchorId, nextId);
+      } else if (!preserveSelection) {
+        store.selectSingle(nextId);
+        anchorId = nextId;
+      }
+      announceSelection();
       scrollToIndex(next);
     }
+  }
+
+  function announceSelection() {
+    const count = store.selectedIds.size;
+    announcement = count === 0 ? "No media selected" : `${count} media item${count === 1 ? "" : "s"} selected`;
   }
 
   function scrollToIndex(idx: number) {
@@ -115,10 +161,8 @@
     else if (itemBot > scrollTop + viewH) container.scrollTop = itemBot - viewH;
   }
 
-  async function deleteSelected() {
-    const ids = [...store.selectedIds];
-    store.removeFilesById(ids);
-    await api.removeFiles(ids);
+  function deleteSelected() {
+    store.requestMediaRemoval();
   }
 
   async function showContextMenu(e: MouseEvent, clickedFile?: MediaFile) {
@@ -165,32 +209,42 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
-  role="list"
+  role="grid"
+  aria-label="Media files"
+  aria-multiselectable="true"
+  aria-activedescendant={store.gridActiveId === null ? undefined : `media-${store.gridActiveId}`}
+  aria-rowcount={rows}
+  aria-colcount={cols}
   tabindex="0"
   bind:this={container}
   bind:clientHeight={viewH}
   bind:clientWidth={viewW}
   onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}
   onkeydown={handleKeydown}
+  onfocus={() => (gridFocused = true)}
+  onblur={() => (gridFocused = false)}
   oncontextmenu={(e) => showContextMenu(e)}
-  class="relative overflow-auto outline-none h-full w-full bg-bg p-2"
-  onclick={() => store.clearSelection()}
+  class="media-grid relative overflow-auto h-full w-full bg-bg p-2 rounded-sm"
+  onclick={() => { store.clearSelection(); store.gridActiveId = null; anchorId = null; announcement = "Selection cleared"; }}
 >
+  <span class="sr-only" aria-live="polite">{announcement}</span>
   <div style="height: {totalH}px; position: relative;">
     {#each visibleRows as { row, items } (row)}
       <div
+        role="row"
+        aria-rowindex={row + 1}
         style="position: absolute; top: {row * ROW_H}px; left: 0; right: 0; height: {ITEM_H}px; display: flex; justify-content: space-between;"
       >
-        {#each items as file}
+        {#each items as file, column}
           {#if file != null}
             {@const selected = store.selectedIds.has(file.id)}
-            {@const primary = store.primaryId === file.id}
             <div
-              role="listitem"
+              id={`media-${file.id}`}
+              role="gridcell"
               tabindex="-1"
+              aria-selected={selected}
+              aria-colindex={column + 1}
               style="width: {ITEM_W}px;"
               onclick={(e) => handleClick(file, e)}
               ondblclick={() => handleDblClick(file)}
@@ -198,7 +252,7 @@
               onkeydown={() => {}}
               class="relative flex flex-col rounded cursor-pointer select-none shrink-0 group
                 {selected ? 'bg-accent/15 ring-1 ring-accent' : 'hover:bg-accent/8'}
-                {primary ? 'ring-2 ring-accent' : ''}"
+                {store.gridActiveId === file.id ? (gridFocused ? 'ring-2 ring-[#ff4d7d]' : 'ring-2 ring-accent') : ''}"
             >
               <!-- Thumbnail -->
               <div
@@ -206,9 +260,7 @@
                 style="height: {ITEM_W}px"
               >
                 {#if file.file_info.type === "audio"}
-                  <svg class="text-muted" width="40" height="40" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6zm-2 16a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" />
-                  </svg>
+                  <span class="w-10 h-10 text-muted"><Icon src={MusicalNote} /></span>
                 {:else}
                   <img
                     src="{store.mediaBase}/thumbnail/{file.id}"
@@ -219,7 +271,7 @@
                 {/if}
                 {#if file.file_info.type === "video"}
                   <div class="absolute bottom-6 left-1 bg-black/60 rounded px-1 py-px text-white text-[10px] leading-none">
-                    ▶
+                    <span class="block w-2.5 h-2.5"><Icon src={Play} solid /></span>
                   </div>
                 {/if}
               </div>
@@ -238,3 +290,8 @@
     {/each}
   </div>
 </div>
+
+<style>
+  .media-grid:focus-visible { outline: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+</style>

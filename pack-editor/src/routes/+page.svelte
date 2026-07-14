@@ -3,11 +3,12 @@
   import { listen } from "@tauri-apps/api/event";
   import { store } from "$lib/store.svelte.js";
   import { api } from "$lib/api.js";
-  import { flushBehaviourSave } from "$lib/behaviourSave.js";
+  import { cancelBehaviourSave, flushBehaviourSave } from "$lib/behaviourSave.js";
+  import { cancelMetadataSave, flushMetadataSave } from "$lib/metadataSave.js";
   import type { MediaFile, UploadError, SaveProgress } from "$lib/types.js";
   import Start from "$lib/Start.svelte";
   import Editor from "$lib/Editor.svelte";
-  import Dialog from "$lib/Dialog.svelte";
+  import Dialog from "$ui/Dialog.svelte";
 
   let showCloseDialog = $state(false);
   let pendingClose = $state(false);
@@ -28,7 +29,7 @@
       }),
       listen("save:done", () => {
         store.saveActive = false;
-        store.packSaved = true;
+        store.markPackSaved();
         if (pendingClose) {
           pendingClose = false;
           api.confirmClose();
@@ -49,11 +50,17 @@
   });
 
   async function onCloseSave() {
-    await flushBehaviourSave();
     showCloseDialog = false;
     pendingClose = true;
     try {
-      await api.savePack();
+      await flushMetadataSave();
+      await flushBehaviourSave();
+      const info = await api.savePack();
+      if (!info) {
+        pendingClose = false;
+        return;
+      }
+      store.packHasDestination = info.has_destination;
     } catch (err) {
       pendingClose = false;
       store.saveActive = false;
@@ -63,7 +70,15 @@
 
   async function onCloseDiscard() {
     showCloseDialog = false;
-    await api.confirmClose();
+    cancelBehaviourSave();
+    cancelMetadataSave();
+    try {
+      await api.discardChanges();
+      store.markPackSaved();
+      await api.confirmClose();
+    } catch (err) {
+      alert(`Could not discard changes: ${err}\n\nThe pack was not closed.`);
+    }
   }
 
   function onCloseCancel() {
@@ -83,8 +98,9 @@
     description="You have unsaved changes. What would you like to do?"
     buttons={[
       { label: "Cancel", onclick: onCloseCancel },
-      { label: "Discard", onclick: onCloseDiscard },
+      { label: "Discard", destructive: true, onclick: onCloseDiscard },
       { label: "Save", primary: true, onclick: onCloseSave },
     ]}
+    onclose={onCloseCancel}
   />
 {/if}

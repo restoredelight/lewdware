@@ -15,6 +15,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{named_params, params, params_from_iter, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use shared::{
+    behaviour::Behaviour,
     db::migrate,
     encode::{FileInfo, FileInfoParts, FileType},
     read_pack::{Header, Metadata, HEADER_SIZE},
@@ -37,6 +38,12 @@ pub struct MediaFile {
     pub hash: String,
     pub tags: Vec<String>,
     pub size: u64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct TagSummary {
+    pub name: String,
+    pub media_count: u64,
 }
 
 struct Lock {
@@ -64,10 +71,10 @@ impl Drop for Lock {
 }
 
 pub struct MediaPack {
-    path: PathBuf,
+    path: Option<PathBuf>,
     data_dir: PathBuf,
     saving: Arc<RwLock<()>>,
-    _lock: Lock,
+    _lock: Option<Lock>,
     header: StdRwLock<Header>,
     dir: PathBuf,
     metadata: StdRwLock<Metadata>,
@@ -77,7 +84,7 @@ pub struct MediaPack {
 }
 
 pub struct MediaPackView {
-    path: PathBuf,
+    path: Option<PathBuf>,
     saving: Arc<RwLock<()>>,
     dir: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
@@ -200,6 +207,49 @@ pub struct Range {
 }
 
 impl MediaPack {
+    pub async fn new_unsaved(data_dir: &Path, name: &str) -> Result<Self> {
+        let header = Header::new();
+        let metadata = Metadata {
+            name: name.to_string(),
+            ..Metadata::default()
+        };
+        Self::initialize(None, data_dir, header, metadata, None).await
+    }
+
+    pub async fn recover_unsaved(data_dir: &Path, id: Uuid) -> Result<Self> {
+        let dir = data_dir.join("Lewdware Pack Editor").join(id.to_string());
+        if !dir.join("UNSAVED").is_file() {
+            bail!("draft no longer exists");
+        }
+        let metadata = Metadata::from_buf(&fs::read(dir.join("Metadata"))?)?;
+        let db_path = dir.join("index.db");
+        if !db_path.is_file() {
+            bail!("draft database is missing");
+        }
+        let manager = SqliteConnectionManager::file(&db_path);
+        let db_pool = Pool::builder().build(manager)?;
+        let pool = db_pool.clone();
+        spawn_blocking(move || -> Result<_> {
+            let conn = pool.get()?;
+            migrate(&conn)
+        })
+        .await??;
+        let mut header = Header::new();
+        header.id = id;
+        Ok(Self {
+            path: None,
+            data_dir: data_dir.to_path_buf(),
+            saving: Arc::new(RwLock::new(())),
+            _lock: None,
+            header: StdRwLock::new(header),
+            dir,
+            metadata: StdRwLock::new(metadata),
+            db_pool,
+            db_path,
+            saved: AtomicBool::new(false),
+        })
+    }
+
     pub async fn new(path: PathBuf, data_dir: &Path, name: &str) -> Result<Self> {
         let mut file = OpenOptions::new()
             .read(true)
@@ -220,6 +270,16 @@ impl MediaPack {
             ..Metadata::default()
         };
 
+        Self::initialize(Some(path), data_dir, header, metadata, Some(lock)).await
+    }
+
+    async fn initialize(
+        path: Option<PathBuf>,
+        data_dir: &Path,
+        header: Header,
+        metadata: Metadata,
+        lock: Option<Lock>,
+    ) -> Result<Self> {
         let dir = data_dir
             .join("Lewdware Pack Editor")
             .join(header.id.to_string());
@@ -286,10 +346,23 @@ impl MediaPack {
 
         let metadata = if has_unsaved {
             let metadata_path = dir.join("Metadata");
-            fs::read(metadata_path)
+            match fs::read(&metadata_path)
                 .map_err(|err| anyhow!(err))
                 .and_then(|buf| Metadata::from_buf(&buf).map_err(|err| err.into()))
-                .unwrap_or_default()
+            {
+                Ok(metadata) => metadata,
+                Err(err) => {
+                    // Never replace damaged recovery metadata with an all-default value. The
+                    // last saved metadata embedded in the pack is a safer recovery baseline.
+                    tracing::error!("could not read working metadata, using saved metadata: {err}");
+                    file.seek(SeekFrom::Start(header.metadata_offset)).await?;
+                    let mut buf = vec![0u8; header.metadata_length as usize];
+                    file.read_exact(&mut buf).await?;
+                    let metadata = Metadata::from_buf(&buf)?;
+                    fs::write(&metadata_path, metadata.to_buf()?)?;
+                    metadata
+                }
+            }
         } else {
             file.seek(SeekFrom::Start(header.metadata_offset)).await?;
             let mut buf = vec![0u8; header.metadata_length as usize];
@@ -323,10 +396,10 @@ impl MediaPack {
         .await??;
 
         Ok(Self {
-            path,
+            path: Some(path),
             data_dir: data_dir.to_path_buf(),
             saving: Arc::new(RwLock::new(())),
-            _lock: lock,
+            _lock: Some(lock),
             header: StdRwLock::new(header),
             dir,
             metadata: StdRwLock::new(metadata),
@@ -355,8 +428,20 @@ impl MediaPack {
         self.metadata.read().unwrap().name.clone()
     }
 
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    pub fn id(&self) -> Uuid {
+        self.header.read().unwrap().id
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    pub fn is_untitled(&self) -> bool {
+        self.path.is_none()
     }
 
     pub async fn is_saved(&self) -> bool {
@@ -398,17 +483,26 @@ impl MediaPack {
     }
 
     async fn open_read(&self) -> io::Result<File> {
-        OpenOptions::new().read(true).open(&self.path).await
+        let path = self.path.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "pack has not been saved yet")
+        })?;
+        OpenOptions::new().read(true).open(path).await
     }
 
     async fn open_write(&self) -> io::Result<File> {
-        OpenOptions::new().write(true).open(&self.path).await
+        let path = self.path.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "pack has not been saved yet")
+        })?;
+        OpenOptions::new().write(true).open(path).await
     }
 
     pub async fn save(
         &self,
         on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
     ) -> Result<()> {
+        if self.path.is_none() {
+            bail!("pack has not been assigned a save location");
+        }
         if self.saved.load(Ordering::Relaxed) {
             return Ok(());
         }
@@ -466,7 +560,10 @@ impl MediaPack {
         let db_pool = self.db_pool.clone();
 
         self.db_execute(move |conn| {
-            let out_path = to_path.clone().unwrap_or_else(|| path.clone());
+            let out_path = to_path
+                .clone()
+                .or_else(|| path.clone())
+                .ok_or_else(|| anyhow!("pack has not been assigned a save location"))?;
 
             let mut num_files: usize =
                 conn.query_row_and_then("SELECT COUNT(*) as files FROM media", params![], |row| {
@@ -587,7 +684,9 @@ impl MediaPack {
                             }
                         }
 
-                        let path = &path;
+                        let path = path
+                            .as_ref()
+                            .expect("embedded media requires a source pack");
                         let out_path = &out_path;
                         let in_flight = &in_flight;
                         let cvar = &cvar;
@@ -711,7 +810,7 @@ impl MediaPack {
         path: &Path,
         on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
     ) -> Result<Option<Self>> {
-        if path == self.path {
+        if self.path.as_deref() == Some(path) {
             self.save(on_progress).await?;
             return Ok(None);
         }
@@ -725,8 +824,9 @@ impl MediaPack {
             .open(path)
             .await?;
 
-        if self.saved.load(Ordering::Relaxed) {
-            tokio::fs::copy(&self.path, path).await?;
+        let first_save = self.path.is_none();
+        if self.saved.load(Ordering::Relaxed) && !first_save {
+            tokio::fs::copy(self.path.as_ref().unwrap(), path).await?;
             let header = self.header.read().unwrap().make_clone();
             file.write_all(&header.to_buf()?).await?;
             file.sync_data().await?;
@@ -752,7 +852,11 @@ impl MediaPack {
                 .await?;
 
             let header = Header {
-                id: Uuid::new_v4(),
+                id: if first_save {
+                    self.header.read().unwrap().id
+                } else {
+                    Uuid::new_v4()
+                },
                 index_offset: offset,
                 index_length,
                 metadata_offset: offset + index_length,
@@ -765,7 +869,11 @@ impl MediaPack {
             self.mark_saved().await?;
         }
 
-        Ok(Some(Self::open(path.to_path_buf(), &self.data_dir).await?))
+        let opened = Self::open(path.to_path_buf(), &self.data_dir).await?;
+        if first_save {
+            self.saved.store(false, Ordering::Relaxed);
+        }
+        Ok(Some(opened))
     }
 
     pub async fn discard_changes(&self) -> Result<Metadata> {
@@ -829,14 +937,17 @@ impl MediaPack {
     }
 
     pub async fn save_metadata(&self) -> Result<()> {
-        let temp_path = self.dir.join("Metadata.copy");
         let final_path = self.dir.join("Metadata");
         let data = self.metadata.read().unwrap().to_buf()?;
-        tokio::fs::File::create(&temp_path)
-            .await?
-            .write_all(&data)
-            .await?;
-        fs::rename(temp_path, final_path)?;
+        let dir = self.dir.clone();
+        spawn_blocking(move || -> Result<()> {
+            let mut temp = tempfile::NamedTempFile::new_in(dir)?;
+            std::io::Write::write_all(&mut temp, &data)?;
+            temp.as_file().sync_all()?;
+            temp.persist(final_path).map_err(|e| e.error)?;
+            Ok(())
+        })
+        .await??;
         Ok(())
     }
 
@@ -1009,6 +1120,80 @@ impl MediaPack {
         .await
     }
 
+    pub async fn get_tag_summaries(&self) -> Result<Vec<TagSummary>> {
+        self.db_execute(move |conn| {
+            let mut stmt = conn.prepare("SELECT tags.name, COUNT(media_tags.media_id) FROM tags LEFT JOIN media_tags ON media_tags.tag_id = tags.id GROUP BY tags.id ORDER BY tags.name COLLATE NOCASE")?;
+            let rows = stmt.query_map([], |row| Ok(TagSummary { name: row.get(0)?, media_count: row.get(1)? }))?;
+            rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+        }).await
+    }
+
+    pub async fn rename_tag(&self, from: String, to: String, behaviour: &Behaviour) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let blob = behaviour.to_json_bytes()?;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            let target_exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM tags WHERE name = ?)",
+                params![to],
+                |row| row.get(0),
+            )?;
+            if target_exists {
+                bail!("A tag named \"{to}\" already exists. Merge the tags instead.");
+            }
+            let changed =
+                tx.execute("UPDATE tags SET name = ? WHERE name = ?", params![to, from])?;
+            if changed == 0 {
+                tx.execute("INSERT INTO tags (name) VALUES (?)", params![to])?;
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
+                params![blob],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn merge_tag(&self, from: String, to: String, behaviour: &Behaviour) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let blob = behaviour.to_json_bytes()?;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![to])?;
+            tx.execute("INSERT OR IGNORE INTO media_tags (media_id, tag_id) SELECT media_tags.media_id, target.id FROM media_tags JOIN tags source ON source.id = media_tags.tag_id JOIN tags target ON target.name = ? WHERE source.name = ?", params![to, from])?;
+            tx.execute("DELETE FROM media_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ?)", params![from])?;
+            tx.execute("DELETE FROM tags WHERE name = ?", params![from])?;
+            tx.execute("INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)", params![blob])?;
+            tx.commit()?;
+            Ok(())
+        }).await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn delete_tag(&self, tag: String, behaviour: &Behaviour) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let blob = behaviour.to_json_bytes()?;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "DELETE FROM media_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ?)",
+                params![tag],
+            )?;
+            tx.execute("DELETE FROM tags WHERE name = ?", params![tag])?;
+            tx.execute(
+                "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
+                params![blob],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
     pub async fn get_tags(&self, id: u64) -> Result<Vec<String>> {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| {
@@ -1135,6 +1320,47 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
+    pub async fn add_tag_to_files(&self, ids: Vec<u64>, tag: String) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
+            let tag_id: u64 =
+                tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
+                    row.get("id")
+                })?;
+            for id in &ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+                    params![id, tag_id],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn remove_tag_from_files(&self, ids: Vec<u64>, tag: String) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            for id in &ids {
+                tx.execute("DELETE FROM media_tags WHERE media_id = ? AND tag_id IN (SELECT id FROM tags WHERE name = ?)", params![id, tag])?;
+            }
+            tx.commit()?;
+            Ok(())
+        }).await?;
+        self.mark_unsaved().await
+    }
+
     pub async fn check_hash(&self, hash: &blake3::Hash) -> Result<bool> {
         let hash_bytes = *hash.as_bytes();
         self.db_execute(move |conn| {
@@ -1204,7 +1430,10 @@ impl MediaPackView {
     }
 
     async fn open_read(&self) -> io::Result<File> {
-        OpenOptions::new().read(true).open(&self.path).await
+        let path = self.path.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "pack has not been saved yet")
+        })?;
+        OpenOptions::new().read(true).open(path).await
     }
 
     async fn get_raw_file(&self, id: u64) -> Result<(FileData, FileType, bool)> {
@@ -1226,10 +1455,9 @@ impl MediaPackView {
             })
             .await?;
 
-        let mut file = self.open_read().await?;
-
         let file_data = match (offset, length, path) {
             (Some(offset), Some(length), _) => {
+                let mut file = self.open_read().await?;
                 file.seek(SeekFrom::Start(offset)).await?;
                 let mut buf = vec![0u8; length];
                 file.read_exact(&mut buf).await?;
@@ -1520,6 +1748,44 @@ mod tests {
             .unwrap()
     }
 
+    #[tokio::test]
+    async fn destinationless_pack_uses_its_generated_id_on_first_save() {
+        let output = tempdir().unwrap();
+        let data = tempdir().unwrap();
+        let pack = MediaPack::new_unsaved(data.path(), "Untitled Pack")
+            .await
+            .unwrap();
+        let id = pack.header.read().unwrap().id;
+        assert!(pack.path().is_none());
+        assert!(pack.dir().ends_with(id.to_string()));
+
+        let destination = output.path().join("first-save.lwpack");
+        let opened = pack
+            .save_as(&destination, |_, _| {})
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(opened.header.read().unwrap().id, id);
+        assert_eq!(opened.path(), Some(destination.as_path()));
+        assert!(destination.is_file());
+    }
+
+    #[tokio::test]
+    async fn destinationless_pack_can_be_recovered_from_its_working_directory() {
+        let data = tempdir().unwrap();
+        let pack = MediaPack::new_unsaved(data.path(), "Crash draft")
+            .await
+            .unwrap();
+        let id = pack.id();
+        drop(pack);
+
+        let recovered = MediaPack::recover_unsaved(data.path(), id).await.unwrap();
+        assert_eq!(recovered.name(), "Crash draft");
+        assert_eq!(recovered.id(), id);
+        assert!(recovered.path().is_none());
+        assert!(!recovered.is_saved().await);
+    }
+
     // Insert a minimal audio row backed by a staging file in dir/media/. Reuses the (already
     // unique, UUID-based) staged file name as the DB file_name too, since callers routinely
     // insert several of these against the same pack and `media.file_name` is UNIQUE.
@@ -1602,6 +1868,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn damaged_working_metadata_falls_back_to_saved_metadata_not_defaults() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Original Name").await;
+        pack.save(|_, _| {}).await.unwrap();
+        pack.set_metadata(&Metadata {
+            name: "Modified Name".to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        tokio::fs::write(pack.dir().join("Metadata"), b"damaged")
+            .await
+            .unwrap();
+        drop(pack);
+
+        let recovered = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        assert_eq!(recovered.name(), "Original Name");
+        assert!(!recovered.is_saved().await);
+    }
+
+    #[tokio::test]
     async fn add_tags_creates_new_tags_and_associates_them() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
@@ -1630,6 +1920,57 @@ mod tests {
         let mut tags = pack.get_tags(file_id).await.unwrap();
         tags.sort();
         assert_eq!(tags, vec!["hypno".to_string(), "kinky".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn bulk_tag_edit_updates_every_selected_file() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
+        let first = insert_staged_audio(&pack, b"first").await;
+        let second = insert_staged_audio(&pack, b"second").await;
+
+        pack.add_tag_to_files(vec![first, second], "shared".to_string())
+            .await
+            .unwrap();
+        assert_eq!(pack.get_tags(first).await.unwrap(), vec!["shared"]);
+        assert_eq!(pack.get_tags(second).await.unwrap(), vec!["shared"]);
+
+        pack.remove_tag_from_files(vec![first, second], "shared".to_string())
+            .await
+            .unwrap();
+        assert!(pack.get_tags(first).await.unwrap().is_empty());
+        assert!(pack.get_tags(second).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn tag_management_updates_associations_and_behaviour_together() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("test.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
+        let media = insert_staged_audio(&pack, b"tagged").await;
+        pack.add_tags(media, vec!["old".to_string()]).await.unwrap();
+
+        let mut behaviour = Behaviour::default();
+        behaviour.content.wallpaper_tags = vec!["new".to_string()];
+        pack.rename_tag("old".to_string(), "new".to_string(), &behaviour)
+            .await
+            .unwrap();
+
+        assert_eq!(pack.get_tags(media).await.unwrap(), vec!["new"]);
+        let stored =
+            Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
+                .unwrap();
+        assert_eq!(stored.content.wallpaper_tags, vec!["new"]);
+
+        behaviour.content.wallpaper_tags.clear();
+        pack.delete_tag("new".to_string(), &behaviour)
+            .await
+            .unwrap();
+        assert!(pack.get_tags(media).await.unwrap().is_empty());
+        assert!(pack.get_tag_summaries().await.unwrap().is_empty());
     }
 
     #[tokio::test]

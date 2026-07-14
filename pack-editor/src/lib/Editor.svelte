@@ -1,4 +1,10 @@
 <script lang="ts">
+  import Button from "$ui/Button.svelte";
+  import Tabs from "$ui/Tabs.svelte";
+  import IconButton from "$ui/IconButton.svelte";
+  import Popover from "$ui/Popover.svelte";
+  import Dialog from "$ui/Dialog.svelte";
+  import { ChevronLeft, ChevronRight, Cog6Tooth, DocumentText, EllipsisVertical, Icon, Sparkles, Squares2x2, Tag } from "svelte-hero-icons";
   import { onMount } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { api } from "./api.js";
@@ -11,14 +17,38 @@
   import UploadProgress from "./UploadProgress.svelte";
   import MediaViewer from "./MediaViewer.svelte";
   import ImportWarnings from "./ImportWarnings.svelte";
+  import MediaToolbar from "./MediaToolbar.svelte";
+  import Tags from "./Tags.svelte";
   import { cancelBehaviourSave, flushBehaviourSave } from "./behaviourSave.js";
+  import { cancelMetadataSave, flushMetadataSave } from "./metadataSave.js";
 
-  let showAddMenu = $state(false);
-  let showTagFilter = $state(false);
   let saving = $state(false);
   let saveError = $state<string | null>(null);
+  let navCollapsed = $state(false);
+  let showClosePackDialog = $state(false);
+  let modifierLabel = $state("Ctrl");
+
+  const navigationTabs = [
+    { id: "media", label: "Media", icon: Squares2x2 },
+    { id: "tags", label: "Tags", icon: Tag },
+    { id: "content", label: "Content", icon: DocumentText },
+    { id: "experience", label: "Experience", icon: Sparkles },
+    { id: "options", label: "Pack Metadata", icon: Cog6Tooth },
+  ];
 
   onMount(() => {
+    modifierLabel = navigator.platform.includes("Mac") ? "⌘" : "Ctrl";
+    navCollapsed = localStorage.getItem("pack-editor:navigation-collapsed") === "true";
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+      if (showClosePackDialog || store.pendingMediaRemoval.length > 0 || store.openedId !== null) return;
+      if (event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (event.shiftKey) void saveAs();
+        else if (!store.packSaved) void save();
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
     const unlisten = getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "enter" || e.payload.type === "over") {
         store.dragActive = true;
@@ -31,16 +61,27 @@
     });
     return () => {
       unlisten.then((fn) => fn());
+      window.removeEventListener("keydown", handleShortcut);
       store.dragActive = false;
     };
   });
 
+  function toggleNavigation() {
+    navCollapsed = !navCollapsed;
+    localStorage.setItem("pack-editor:navigation-collapsed", String(navCollapsed));
+  }
+
   async function save() {
-    await flushBehaviourSave();
     saving = true;
     saveError = null;
     try {
-      await api.savePack();
+      await flushMetadataSave();
+      await flushBehaviourSave();
+      const info = await api.savePack();
+      if (info) {
+        store.packName = info.name;
+        store.packHasDestination = info.has_destination;
+      }
     } catch (err) {
       // The backend only emits save:done on success, so a failed save would
       // otherwise leave the "Saving… X/Y" progress bar stuck on screen forever.
@@ -52,21 +93,26 @@
   }
 
   async function saveAs() {
-    await flushBehaviourSave();
     saveError = null;
     try {
+      await flushMetadataSave();
+      await flushBehaviourSave();
       const info = await api.savePackAsDialog();
-      if (info) store.packName = info.name;
+      if (info) {
+        store.packName = info.name;
+        store.packHasDestination = true;
+      }
     } catch (err) {
       saveError = String(err);
     }
   }
 
   async function discard() {
+    cancelMetadataSave();
     cancelBehaviourSave();
     const meta = await api.discardChanges();
     store.metadata = meta;
-    store.packSaved = true;
+    store.markPackSaved();
     const [files, tags, behaviour] = await Promise.all([
       api.getFiles(),
       api.getAllTags(),
@@ -77,284 +123,119 @@
     store.behaviour = behaviour;
   }
 
-  async function closePack() {
-    if (!store.packSaved) {
-      const ok = confirm("You have unsaved changes. Close anyway?");
-      if (!ok) return;
-    }
+  async function finishClosePack() {
     cancelBehaviourSave();
+    cancelMetadataSave();
     await api.closePack();
     store.closePack();
   }
 
-  function addFiles() {
-    showAddMenu = false;
-    api.addFilesDialog();
+  async function requestClosePack() {
+    if (store.packSaved) await finishClosePack();
+    else showClosePackDialog = true;
   }
 
-  function addFolder(recursive: boolean) {
-    showAddMenu = false;
-    api.addFolderDialog(recursive);
+  async function saveAndClosePack() {
+    showClosePackDialog = false;
+    saveError = null;
+    try {
+      await flushMetadataSave();
+      await flushBehaviourSave();
+      const info = await api.savePack();
+      if (!info) return;
+      await finishClosePack();
+    } catch (err) {
+      store.saveActive = false;
+      saveError = String(err);
+    }
   }
+
+  async function discardAndClosePack() {
+    showClosePackDialog = false;
+    cancelBehaviourSave();
+    cancelMetadataSave();
+    saveError = null;
+    try {
+      await api.discardChanges();
+      store.markPackSaved();
+      await finishClosePack();
+    } catch (err) {
+      saveError = `Could not discard changes: ${String(err)}`;
+    }
+  }
+
+  async function confirmMediaRemoval() {
+    const ids = store.pendingMediaRemoval;
+    if (!ids.length) return;
+    const activeIndex = store.gridActiveId == null ? -1 : store.filteredFiles.findIndex((file) => file.id === store.gridActiveId);
+    await api.removeFiles(ids);
+    store.cancelMediaRemoval();
+    store.removeFilesById(ids);
+    const remaining = store.filteredFiles;
+    if (remaining.length > 0) {
+      const next = remaining[Math.min(Math.max(activeIndex, 0), remaining.length - 1)];
+      store.selectSingle(next.id);
+    }
+  }
+
 </script>
 
 <div class="flex flex-col h-screen bg-bg text-text select-none">
   <!-- Toolbar -->
-  <header
-    class="flex items-center gap-1 px-2 h-9 bg-surface border-b border-border shrink-0"
-  >
-    <span class="text-sm font-medium text-text px-1">
-      {store.packName}{#if !store.packSaved}*{/if}
-    </span>
-    <span class="text-xs text-muted px-1">
-      {store.files.length} file{store.files.length === 1 ? "" : "s"}
-    </span>
-
-    <div class="w-px h-5 bg-border mx-1"></div>
-
-    <button
-      onclick={save}
-      disabled={saving || store.packSaved}
-      class="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
-        bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors"
+  <header class="flex items-center gap-2 px-3 h-11 bg-surface border-b border-border shrink-0">
+    <span class="text-sm font-semibold text-text truncate">{store.packName}</span>
+    <span
+      class="flex items-center gap-1.5 text-xs {store.recoveryStatus === 'error' ? 'text-[var(--ui-danger)]' : store.recoveryStatus === 'saved' ? 'text-muted' : 'text-[var(--ui-warning)]'}"
+      role={store.recoveryStatus === "error" ? "alert" : undefined}
+      title={store.recoveryError ?? (store.recoveryStatus === "backed-up" ? "Changes are stored in the application data directory and can be recovered after a crash." : undefined)}
     >
-      {#if saving}Saving…{:else}Save{/if}
-    </button>
-
-    <button
-      onclick={saveAs}
-      class="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
-        bg-surface border border-border text-text hover:bg-bg transition-colors"
-    >
-      Save As…
-    </button>
-
-    {#if !store.packSaved}
-      <button
-        onclick={discard}
-        class="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
-          text-muted hover:text-text hover:bg-bg transition-colors"
-      >
-        Discard
-      </button>
-    {/if}
-
+      <span class="w-1.5 h-1.5 rounded-full {store.recoveryStatus === 'error' ? 'bg-[var(--ui-danger)]' : store.recoveryStatus === 'saved' ? 'bg-muted' : 'bg-[var(--ui-warning)]'} {store.recoveryStatus === 'pending' ? 'animate-pulse' : ''}"></span>
+      {#if store.recoveryStatus === "saved"}
+        Saved
+      {:else if store.recoveryStatus === "pending"}
+        Backing up changes…
+      {:else if store.recoveryStatus === "error"}
+        Local backup failed
+      {:else if store.packHasDestination}
+        Unsaved · backed up locally
+      {:else}
+        Draft backed up locally
+      {/if}
+    </span>
     <div class="flex-1"></div>
-
-    <!-- Filters -->
-    <input
-      bind:value={store.searchQuery}
-      placeholder="Search…"
-      type="search"
-      class="text-xs px-2 py-1 rounded border border-border bg-surface w-36
-        focus:outline-none focus:border-accent"
-    />
-
-    <select
-      bind:value={store.mediaTypeFilter}
-      class="text-xs px-1.5 py-1 rounded border border-border bg-surface text-text
-        focus:outline-none focus:border-accent"
-    >
-      <option value="all">All types</option>
-      <option value="image">Images</option>
-      <option value="video">Videos</option>
-      <option value="audio">Audio</option>
-    </select>
-
-    <!-- Sort -->
-    <select
-      bind:value={store.sortBy}
-      class="text-xs px-1.5 py-1 rounded border border-border bg-surface text-text
-        focus:outline-none focus:border-accent"
-    >
-      <option value="created">Date added</option>
-      <option value="name">Name</option>
-      <option value="size">File size</option>
-    </select>
-    <button
-      onclick={() => (store.sortDir = store.sortDir === "asc" ? "desc" : "asc")}
-      title={store.sortDir === "asc" ? "Ascending" : "Descending"}
-      class="flex items-center justify-center w-6 h-6 rounded border border-border bg-surface
-        text-text hover:bg-bg transition-colors text-xs"
-    >
-      {store.sortDir === "asc" ? "↑" : "↓"}
-    </button>
-
-    <!-- Tag filter -->
-    <div class="relative">
-      <button
-        onclick={() => (showTagFilter = !showTagFilter)}
-        class="flex items-center gap-1.5 text-xs px-2 py-1 rounded border bg-surface transition-colors
-          {store.tagFilter.size > 0
-            ? 'border-accent text-accent'
-            : 'border-border text-text hover:bg-bg'}"
-      >
-        Tags
-        {#if store.tagFilter.size > 0}
-          <span class="bg-accent text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] leading-none">
-            {store.tagFilter.size}
-          </span>
-        {/if}
-      </button>
-
-      {#if showTagFilter}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="fixed inset-0 z-10" onclick={() => (showTagFilter = false)}></div>
-
-        <div class="absolute right-0 top-full mt-1 w-48 bg-surface border border-border rounded shadow-lg z-20 overflow-hidden">
-          {#if store.allTags.length === 0}
-            <p class="text-xs text-muted px-3 py-2">No tags defined</p>
-          {:else}
-            <div class="max-h-52 overflow-y-auto">
-              {#each store.allTags as tag}
-                <label class="flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-bg">
-                  <input
-                    type="checkbox"
-                    checked={store.tagFilter.has(tag)}
-                    onchange={(e) => {
-                      if (e.currentTarget.checked) {
-                        store.tagFilter = new Set([...store.tagFilter, tag]);
-                      } else {
-                        const next = new Set(store.tagFilter);
-                        next.delete(tag);
-                        store.tagFilter = next;
-                      }
-                    }}
-                    class="accent-accent"
-                  />
-                  {tag}
-                </label>
-              {/each}
-            </div>
-          {/if}
-          {#if store.tagFilter.size > 0}
-            <div class="border-t border-border px-3 py-1.5">
-              <button
-                onclick={() => (store.tagFilter = new Set())}
-                class="text-xs text-muted hover:text-text transition-colors"
-              >Clear filter</button>
-            </div>
-          {/if}
+    <Button size="compact" variant="primary" onclick={save} disabled={store.packSaved} loading={saving} title={`Save (${modifierLabel}+S)`}>{saving ? "Saving…" : "Save"}</Button>
+    <Popover align="end" label="Pack actions">
+      {#snippet trigger(toggle, open)}
+        <button onclick={toggle} aria-label="More pack actions" aria-haspopup="menu" aria-expanded={open} class="w-8 h-8 grid place-items-center rounded text-muted hover:text-text hover:bg-surface-2"><Icon src={EllipsisVertical} mini size="16px" /></button>
+      {/snippet}
+      {#snippet children(close)}
+        <div class="w-48 py-1">
+          <button role="menuitem" onclick={() => { close(); saveAs(); }} class="w-full flex items-center justify-between gap-3 text-left text-xs px-3 py-2 hover:bg-bg"><span>Save As…</span><kbd class="text-[10px] text-muted font-sans">{modifierLabel}+Shift+S</kbd></button>
+          {#if !store.packSaved && store.packHasDestination}<button role="menuitem" onclick={() => { close(); discard(); }} class="w-full text-left text-xs px-3 py-2 text-[var(--ui-warning)] hover:bg-bg">Discard changes</button>{/if}
+          <div class="border-t border-border my-1"></div>
+          <button role="menuitem" onclick={() => { close(); requestClosePack(); }} class="w-full text-left text-xs px-3 py-2 text-[var(--ui-danger)] hover:bg-[var(--ui-danger-bg)]">Close pack</button>
         </div>
-      {/if}
-    </div>
-
-    <div class="w-px h-5 bg-border mx-1"></div>
-
-    <!-- Add files dropdown -->
-    <div class="relative">
-      <button
-        onclick={() => (showAddMenu = !showAddMenu)}
-        class="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
-          bg-surface border border-border text-text hover:bg-bg transition-colors"
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <line x1="12" y1="5" x2="12" y2="19"></line>
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-        </svg>
-        Import
-      </button>
-
-      {#if showAddMenu}
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div
-          role="menu"
-          tabindex="-1"
-          class="absolute right-0 top-full mt-1 w-52 bg-surface border border-border rounded shadow-lg z-20 overflow-hidden"
-          onmouseleave={() => (showAddMenu = false)}
-        >
-          <button
-            role="menuitem"
-            onclick={addFiles}
-            class="w-full text-left text-xs px-3 py-2 hover:bg-bg transition-colors"
-          >
-            Add files…
-          </button>
-          <button
-            role="menuitem"
-            onclick={() => addFolder(false)}
-            class="w-full text-left text-xs px-3 py-2 hover:bg-bg transition-colors"
-          >
-            Add folder…
-          </button>
-          <button
-            role="menuitem"
-            onclick={() => addFolder(true)}
-            class="w-full text-left text-xs px-3 py-2 hover:bg-bg transition-colors"
-          >
-            Add folder (recursive)…
-          </button>
-        </div>
-      {/if}
-    </div>
-
-    <button
-      onclick={closePack}
-      class="ml-1 text-muted hover:text-text text-lg leading-none px-1"
-      title="Close pack"
-    >×</button>
+      {/snippet}
+    </Popover>
   </header>
 
   <div class="flex flex-1 min-h-0">
-    <!-- Nav rail -->
-    <nav class="flex flex-col items-center w-10 bg-surface border-r border-border pt-1 shrink-0">
-      <button
-        onclick={() => (store.activeView = "media")}
-        title="Media"
-        class="w-8 h-8 flex items-center justify-center rounded mb-1 transition-colors
-          {store.activeView === 'media' ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-bg'}"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-          <rect x="3" y="3" width="7" height="7" rx="1"/>
-          <rect x="14" y="3" width="7" height="7" rx="1"/>
-          <rect x="3" y="14" width="7" height="7" rx="1"/>
-          <rect x="14" y="14" width="7" height="7" rx="1"/>
-        </svg>
-      </button>
-
-      <button
-        onclick={() => (store.activeView = "content")}
-        title="Content"
-        class="w-8 h-8 flex items-center justify-center rounded mb-1 transition-colors
-          {store.activeView === 'content' ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-bg'}"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M4 4h16v16H4z"/>
-          <line x1="7" y1="8" x2="17" y2="8"/>
-          <line x1="7" y1="12" x2="17" y2="12"/>
-          <line x1="7" y1="16" x2="13" y2="16"/>
-        </svg>
-      </button>
-
-      <button
-        onclick={() => (store.activeView = "experience")}
-        title="Experience"
-        class="w-8 h-8 flex items-center justify-center rounded mb-1 transition-colors
-          {store.activeView === 'experience' ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-bg'}"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>
-          <circle cx="12" cy="12" r="3"/>
-        </svg>
-      </button>
-
-      <button
-        onclick={() => (store.activeView = "options")}
-        title="Options"
-        class="w-8 h-8 flex items-center justify-center rounded transition-colors
-          {store.activeView === 'options' ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-bg'}"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-      </button>
-    </nav>
+    <aside class="flex flex-col bg-surface border-r border-border shrink-0 transition-[width] duration-150 {navCollapsed ? 'w-12' : 'w-44'}">
+      <div class="flex items-center h-11 px-2 border-b border-border {navCollapsed ? 'justify-center' : 'justify-between'}">
+        {#if !navCollapsed}<span class="text-sm font-semibold text-text px-1">Sections</span>{/if}
+        <IconButton label={navCollapsed ? "Expand navigation" : "Collapse navigation"} onclick={toggleNavigation}>
+          <span class="w-4 h-4"><Icon src={navCollapsed ? ChevronRight : ChevronLeft} mini /></span>
+        </IconButton>
+      </div>
+      <nav class="p-2">
+        <Tabs tabs={navigationTabs} active={store.activeView} orientation="vertical" collapsed={navCollapsed} onselect={(id) => (store.activeView = id as typeof store.activeView)} />
+      </nav>
+    </aside>
 
     <!-- Main content -->
     <div class="flex-1 min-w-0 flex flex-col">
       {#if store.activeView === "media"}
+        <MediaToolbar />
         <div class="flex-1 min-h-0 flex">
           <div class="flex-1 min-w-0">
             {#if store.filteredFiles.length === 0 && store.files.length === 0}
@@ -375,6 +256,8 @@
         <div class="flex-1 min-h-0 flex flex-col">
           <Content />
         </div>
+      {:else if store.activeView === "tags"}
+        <Tags />
       {:else if store.activeView === "experience"}
         <div class="flex-1 min-h-0 flex flex-col">
           <Experience />
@@ -412,6 +295,35 @@
   {/if}
 </div>
 
+{#if showClosePackDialog}
+  <Dialog
+    title="Unsaved Changes"
+    description="You have unsaved changes. What would you like to do?"
+    buttons={[
+      { label: "Cancel", onclick: () => (showClosePackDialog = false) },
+      { label: "Discard", destructive: true, onclick: discardAndClosePack },
+      { label: "Save", primary: true, onclick: saveAndClosePack },
+    ]}
+    onclose={() => (showClosePackDialog = false)}
+  />
+{/if}
+
+{#if store.pendingMediaRemoval.length > 0}
+  {@const removalCount = store.pendingMediaRemoval.length}
+  {@const removalFile = removalCount === 1 ? store.files.find((file) => file.id === store.pendingMediaRemoval[0]) : null}
+  <Dialog
+    title={removalCount === 1 ? "Remove media from pack?" : `Remove ${removalCount} items from pack?`}
+    description={removalCount === 1
+      ? `“${removalFile?.file_name ?? "This item"}” will be removed from this pack. The original file on your computer will not be deleted.`
+      : `These ${removalCount} media items will be removed from this pack. The original files on your computer will not be deleted.`}
+    buttons={[
+      { label: "Cancel", onclick: () => store.cancelMediaRemoval() },
+      { label: removalCount === 1 ? "Remove item" : `Remove ${removalCount} items`, destructive: true, onclick: confirmMediaRemoval },
+    ]}
+    onclose={() => store.cancelMediaRemoval()}
+  />
+{/if}
+
 <!-- Media viewer overlay -->
 {#if store.openedId !== null}
   <MediaViewer />
@@ -427,7 +339,7 @@
   <div
     class="fixed inset-0 z-[60] flex items-center justify-center bg-accent/10 border-4 border-dashed border-accent pointer-events-none"
   >
-    <span class="text-lg font-medium text-accent bg-surface/90 rounded px-4 py-2 shadow-lg">
+    <span class="text-lg font-medium text-accent-foreground bg-surface/90 rounded px-4 py-2 shadow-lg">
       Drop to import
     </span>
   </div>

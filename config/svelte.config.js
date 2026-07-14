@@ -9,6 +9,7 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 const config = {
   preprocess: vitePreprocess(),
   kit: {
+    alias: { $ui: "../shared-ui", $icons: "./node_modules/svelte-hero-icons" },
     adapter: adapter({
       fallback: "index.html",
     }),

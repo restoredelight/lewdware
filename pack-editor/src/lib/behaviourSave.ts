@@ -14,10 +14,13 @@ function persist() {
   // Chained rather than fired standalone: if `flushBehaviourSave` forces an early write while an
   // earlier debounced write is still in flight, this guarantees they apply in the order they were
   // issued, so the last edit made is always the last one that lands.
-  saveChain = saveChain.then(() => {
-    if (store.behaviour) return api.setBehaviour(store.behaviour);
+  saveChain = saveChain.catch(() => {}).then(async () => {
+    if (store.behaviour) await api.setBehaviour($state.snapshot(store.behaviour));
+    store.markBackupComplete("behaviour");
+  }).catch((error) => {
+    store.markBackupFailed("behaviour", error);
+    throw error;
   });
-  store.packSaved = false;
 }
 
 /**
@@ -34,10 +37,12 @@ export function cancelBehaviourSave() {
 }
 
 export function scheduleBehaviourSave() {
+  store.markBackupPending("behaviour");
   if (saveTimer !== null) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
     persist();
+    void saveChain.catch((error) => console.error("Could not back up pack behaviour", error));
   }, DEBOUNCE_MS);
 }
 

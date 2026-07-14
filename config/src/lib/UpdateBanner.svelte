@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
+  import { Icon, XMark } from 'svelte-hero-icons';
 
   let downloadUrl = $state<string | null>(null);
   let dismissed = $state(false);
@@ -19,7 +20,7 @@
   <div class="flex items-center gap-3 border-b border-accent/30 bg-accent/10 px-4 py-2 text-sm text-text">
     <span class="flex-1">A new version of Lewdware is available.</span>
     <button
-      class="font-medium underline hover:text-accent"
+      class="font-medium underline hover:text-accent-foreground"
       onclick={() => openUrl(downloadUrl!)}
     >
       Download update
@@ -29,7 +30,7 @@
       aria-label="Dismiss"
       onclick={() => { dismissed = true; }}
     >
-      ✕
+      <span class="block w-4 h-4"><Icon src={XMark} mini /></span>
     </button>
   </div>
 {/if}

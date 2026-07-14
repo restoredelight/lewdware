@@ -9,7 +9,11 @@
     OptionType,
     ShowWhen,
   } from "./types";
-  import { Icon, ChevronRight } from "svelte-hero-icons";
+  import { ArrowUpTray, Check, ChevronRight, Icon, XMark } from "svelte-hero-icons";
+  import Slider from "$ui/Slider.svelte";
+  import Toggle from "$ui/Toggle.svelte";
+  import Tooltip from "$ui/Tooltip.svelte";
+  import Select from "$ui/Select.svelte";
 
   function optionTypeKey(opt: ModeOptionDto): string {
     return Object.keys(opt.option_type)[0];
@@ -62,29 +66,12 @@
     return value;
   }
 
-  // Sets range value after mount so min/max/step are already applied, preventing
-  // the browser from snapping float values against the default step=1.
-  function rangeValue(el: HTMLInputElement, value: number) {
-    el.value = String(value);
-    return {
-      update(v: number) { el.value = String(v); },
-    };
-  }
-
   // When an optional slider is disabled (value=null), fall back to the last known
   // value so thumb and track stay in sync rather than both snapping to 0/midpoint.
   function sliderDisplayValue(opt: ModeOptionDto): number {
     if (opt.value !== null && typeof opt.value === 'number') return opt.value;
     const fallback = lastValues.get(opt.key) ?? getInitialValue(opt);
     return typeof fallback === 'number' ? fallback : 0;
-  }
-
-  function computeFill(value: number, opt: ModeOptionDto): string {
-    const min = getMin(opt) ?? 0;
-    const max = getMax(opt) ?? 100;
-    if (max <= min) return '0%';
-    const pct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
-    return `${pct}%`;
   }
 
   function handleNumberInput(opt: ModeOptionDto, raw: string) {
@@ -171,28 +158,12 @@
   {@const typeKey = optionTypeKey(opt)}
 
   {#if typeKey === "Boolean"}
-    <label class="flex items-center gap-2 cursor-pointer w-fit">
-      <div
-        class="relative w-10 h-5 rounded-full transition-colors duration-200"
-        class:bg-accent={opt.value === true}
-        class:bg-border={opt.value !== true}
-      >
-        <input
-          type="checkbox"
-          checked={opt.value === true}
-          onchange={(e) => store.setModeOption(opt.key, e.currentTarget.checked)}
-          class="sr-only"
-        />
-        <span
-          class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full
-                 shadow transition-transform duration-200"
-          class:translate-x-5={opt.value === true}
-        ></span>
-      </div>
+    <div class="flex items-center gap-2 w-fit">
+      <Toggle ariaLabel={opt.label} checked={opt.value === true} onchange={(checked) => store.setModeOption(opt.key, checked)} />
       <span class="text-sm text-muted">
         {opt.value === true ? "On" : "Off"}
       </span>
-    </label>
+    </div>
 
   {:else if typeKey === "String"}
     <input
@@ -200,37 +171,31 @@
       value={opt.value as string}
       oninput={(e) => store.setModeOption(opt.key, e.currentTarget.value)}
       class="px-3 py-1.5 border border-border rounded text-sm bg-surface
-             text-text focus:outline-none focus:border-accent w-64"
+             text-text focus:border-accent w-64"
     />
 
   {:else if typeKey === "Enum"}
-    <select
+    <Select
+      class="w-64"
+      hideLabel
+      label={opt.label}
       value={opt.value as string}
-      onchange={(e) => store.setModeOption(opt.key, e.currentTarget.value)}
-      class="px-3 py-1.5 border border-border rounded text-sm bg-surface
-             text-text focus:outline-none focus:border-accent w-64"
-    >
-      {#each Object.entries(enumValues(opt)) as [k, label]}
-        <option value={k}>{label}</option>
-      {/each}
-    </select>
+      options={Object.entries(enumValues(opt)).map(([value, label]) => ({ value, label }))}
+      onchange={(value) => store.setModeOption(opt.key, value)}
+    />
 
   {:else if typeKey === "Integer" || typeKey === "Number"}
     {#if isSlider(opt)}
       {@const displayVal = sliderDisplayValue(opt)}
       <div class="flex items-center gap-4">
-        <input
-          type="range"
-          min={getMin(opt)}
-          max={getMax(opt)}
+        <Slider
+          ariaLabel={opt.label}
+          min={getMin(opt) ?? 0}
+          max={getMax(opt) ?? 100}
           step={getStep(opt) ?? 1}
-          use:rangeValue={displayVal}
-          oninput={(e) => {
-            e.currentTarget.style.setProperty('--fill', computeFill(parseFloat(e.currentTarget.value), opt));
-            handleNumberInput(opt, e.currentTarget.value);
-          }}
+          value={displayVal}
+          oninput={(value) => handleNumberInput(opt, String(value))}
           class="flex-1 max-w-xs"
-          style="--fill: {computeFill(displayVal, opt)}"
         />
         <input
           type="number"
@@ -240,7 +205,7 @@
           step={getStep(opt)}
           oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
           class="px-3 py-1.5 border border-border rounded text-sm bg-surface
-                 text-text focus:outline-none focus:border-accent w-24"
+                 text-text focus:border-accent w-24"
         />
       </div>
     {:else}
@@ -252,7 +217,7 @@
         step={getStep(opt)}
         oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
         class="px-3 py-1.5 border border-border rounded text-sm bg-surface
-               text-text focus:outline-none focus:border-accent w-32"
+               text-text focus:border-accent w-32"
       />
     {/if}
   {/if}
@@ -310,10 +275,10 @@
             {#if group.source === "uploaded"}
               <button
                 onclick={() => store.uploadMode()}
-                class="text-xs text-accent hover:text-accent-hover px-2 py-0.5
+                class="text-xs text-accent-foreground hover:text-white px-2 py-0.5
                        hover:bg-accent/10 rounded transition-colors"
               >
-                + Upload
+                <span class="w-4 h-4"><Icon src={ArrowUpTray} mini /></span> Upload
               </button>
             {/if}
           </div>
@@ -326,10 +291,10 @@
                   onclick={() => store.setMode(entry.id)}
                   class="flex-1 flex items-center gap-2 px-2 py-1.5 rounded text-sm
                          text-left transition-colors
-                         {selected ? 'bg-accent/10 text-accent font-medium' : 'text-text hover:bg-surface-2'}"
+                         {selected ? 'bg-accent/10 text-accent-foreground font-medium' : 'text-text hover:bg-surface-2'}"
                 >
-                  <span class="w-4 text-accent shrink-0">
-                    {#if selected}✓{/if}
+                  <span class="w-4 text-accent-foreground shrink-0">
+                    {#if selected}<Icon src={Check} mini />{/if}
                   </span>
                   {entry.name}
                 </button>
@@ -340,7 +305,7 @@
                            hover:bg-red-950 rounded transition-colors"
                     title="Remove this mode"
                   >
-                    ✕
+                    <span class="block w-4 h-4"><Icon src={XMark} mini /></span>
                   </button>
                 {/if}
               </div>
@@ -364,10 +329,10 @@
             </p>
             <button
               onclick={() => store.uploadMode()}
-              class="text-xs text-accent hover:text-accent-hover px-2 py-0.5
+              class="text-xs text-accent-foreground hover:text-white px-2 py-0.5
                      hover:bg-accent/10 rounded transition-colors"
             >
-              + Upload
+              <span class="inline-block w-4 h-4 align-text-bottom"><Icon src={ArrowUpTray} mini /></span> Upload
             </button>
           </div>
           <p class="text-xs text-muted italic px-2 py-1">No uploaded modes.</p>
@@ -396,37 +361,13 @@
     <div class="flex items-center gap-2">
       <span class="text-sm font-medium text-text">{opt.label}</span>
       {#if opt.description}
-        <span
-          class="text-xs text-muted border border-border rounded-full
-                 w-4 h-4 inline-flex items-center justify-center cursor-help"
-          title={opt.description}
-        >
-          ?
-        </span>
+        <Tooltip text={opt.description} label={`About ${opt.label}`} />
       {/if}
     </div>
 
     {#if opt.optional}
       <div class="flex items-center gap-3">
-        <label class="flex items-center cursor-pointer shrink-0">
-          <div
-            class="relative w-10 h-5 rounded-full transition-colors duration-200"
-            class:bg-accent={!isDisabled}
-            class:bg-border={isDisabled}
-          >
-            <input
-              type="checkbox"
-              checked={!isDisabled}
-              onchange={(e) => handleOptionalToggle(opt, e.currentTarget.checked)}
-              class="sr-only"
-            />
-            <span
-              class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full
-                     shadow transition-transform duration-200"
-              class:translate-x-5={!isDisabled}
-            ></span>
-          </div>
-        </label>
+        <Toggle ariaLabel={`Enable ${opt.label}`} checked={!isDisabled} onchange={(checked) => handleOptionalToggle(opt, checked)} />
         <div class="transition-opacity" class:opacity-40={isDisabled}>
           <fieldset disabled={isDisabled} class="contents">
             {@render optionInput(opt)}
@@ -452,13 +393,7 @@
       </span>
       {group.label}
       {#if group.description}
-        <span
-          class="text-xs text-muted border border-border rounded-full normal-case
-                 w-4 h-4 inline-flex items-center justify-center cursor-help ml-1"
-          title={group.description}
-        >
-          ?
-        </span>
+        <Tooltip text={group.description} label={`About ${group.label}`} />
       {/if}
     </button>
 

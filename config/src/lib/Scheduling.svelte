@@ -2,6 +2,8 @@
   import { onMount, onDestroy } from "svelte";
   import { api } from "./api";
   import { store } from "./store.svelte";
+  import Checkbox from "$ui/Checkbox.svelte";
+  import Toggle from "$ui/Toggle.svelte";
   import type { QuietHoursDto, WindowDto } from "./types";
 
   const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -85,26 +87,16 @@
           haven't started it yourself.
         </p>
       </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={store.config?.schedule.enabled ?? false}
-        aria-label="Enable scheduling"
+      <Toggle
+        ariaLabel="Enable scheduling"
+        checked={store.config?.schedule.enabled ?? false}
         disabled={enablePending}
-        onclick={toggleEnabled}
-        class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors
-               disabled:opacity-50
-               {store.config?.schedule.enabled ? 'bg-accent' : 'bg-border'}"
-      >
-        <span
-          class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform
-                 {store.config?.schedule.enabled ? 'translate-x-6' : 'translate-x-1'}"
-        ></span>
-      </button>
+        onchange={() => toggleEnabled()}
+      />
     </div>
 
     {#if enableError}
-      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[#fdecea] border border-[#e74c3c] text-sm text-[#a02c22]">
+      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[var(--ui-danger-bg)] border border-[var(--ui-danger-border)] text-sm text-[var(--ui-danger)]">
         <span>Couldn't update scheduling: {enableError}</span>
       </div>
     {/if}
@@ -259,7 +251,7 @@
               />
             </label>
             {#if quiet.start_hour === quiet.end_hour && quiet.start_minute === quiet.end_minute}
-              <span class="text-xs text-[#8a6d3b]">Same start/end has no effect -- pick different times.</span>
+              <span class="text-xs text-[var(--ui-warning)]">Same start/end has no effect -- pick different times.</span>
             {/if}
           </div>
         </div>
@@ -285,22 +277,7 @@
       skips just that one occurrence.
     </p>
     <label class="flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer hover:bg-surface-2 transition-colors">
-      <input
-        type="checkbox"
-        checked={store.config?.schedule.grace_notification ?? false}
-        onchange={(e) => store.setGraceNotification(e.currentTarget.checked)}
-        class="sr-only"
-      />
-      <span
-        class="shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors
-               {store.config?.schedule.grace_notification ? 'bg-accent border-accent' : 'bg-bg border-border'}"
-      >
-        {#if store.config?.schedule.grace_notification}
-          <svg class="w-2.5 h-2.5 text-white" viewBox="0 0 10 10" fill="none">
-            <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        {/if}
-      </span>
+      <Checkbox checked={store.config?.schedule.grace_notification ?? false} ariaLabel="Show a warning before a scheduled session starts" onchange={(checked) => store.setGraceNotification(checked)} />
       <span class="text-sm text-text">Show a warning before a scheduled session starts</span>
     </label>
   </div>

@@ -3,6 +3,8 @@
   import { api } from "./api";
   import { store } from "./store.svelte";
   import type { Key } from "./types";
+  import Checkbox from "$ui/Checkbox.svelte";
+  import Button from "$ui/Button.svelte";
 
   let running = $state(false);
   let launchError = $state<string | null>(null);
@@ -67,7 +69,7 @@
 
   const captureClass = $derived(
     recording
-      ? "bg-accent/10 border-accent text-accent italic"
+      ? "bg-accent/10 border-accent text-accent-foreground italic"
       : "bg-bg border-border text-text hover:border-muted"
   );
 
@@ -110,45 +112,31 @@
     <span class="text-sm font-semibold text-text">Lewdware</span>
     <div class="flex items-center gap-3">
       {#if running}
-        <button
-          onclick={stop}
-          class="px-4 py-2 rounded-md text-sm font-medium text-white
-                 bg-[#e74c3c] hover:bg-[#c0392b] transition-colors"
-        >
-          Stop
-        </button>
-        <span class="text-xs text-[#27ae60] font-medium">Running</span>
+        <Button variant="destructive" onclick={stop}>Stop</Button>
+        <span class="text-xs text-[var(--ui-success)] font-medium">Running</span>
       {:else}
-        <button
-          onclick={launch}
-          disabled={!hasPack}
-          class="px-4 py-2 rounded-md text-sm font-medium text-white
-                 bg-[#27ae60] hover:bg-[#219a52] transition-colors
-                 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#27ae60]"
-        >
-          Launch
-        </button>
+        <Button variant="primary" onclick={launch} disabled={!hasPack}>Launch</Button>
       {/if}
     </div>
     {#if !hasPack && !running}
-      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[#fef3cd] border border-[#f0ad4e] text-sm text-[#8a6d3b]">
+      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[var(--ui-warning-bg)] border border-[var(--ui-warning-border)] text-sm text-[var(--ui-warning)]">
         <span>No pack selected. Upload a pack to launch Lewdware.</span>
         <button
           onclick={() => (store.activeTab = "pack_mode")}
           class="ml-auto shrink-0 px-3 py-1 rounded text-xs font-medium
-                 bg-[#f0ad4e] hover:bg-[#ec971f] text-white transition-colors"
+                 bg-[var(--ui-warning)] hover:brightness-110 text-bg transition-colors"
         >
           Pack &amp; Mode settings
         </button>
       </div>
     {/if}
     {#if !running && launchError}
-      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[#fdecea] border border-[#e74c3c] text-sm text-[#a02c22]">
+      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[var(--ui-danger-bg)] border border-[var(--ui-danger-border)] text-sm text-[var(--ui-danger)]">
         <span>Lewdware failed to start: {launchError}</span>
       </div>
     {/if}
     {#if running && launchWarning}
-      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[#fef3cd] border border-[#f0ad4e] text-sm text-[#8a6d3b]">
+      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[var(--ui-warning-bg)] border border-[var(--ui-warning-border)] text-sm text-[var(--ui-warning)]">
         <span>{launchWarning}</span>
       </div>
     {/if}
@@ -161,13 +149,13 @@
       Pressing this key combination closes the app immediately.
     </p>
     {#if !inputMonitoringGranted}
-      <div class="flex flex-col gap-2 px-3 py-2 rounded-md bg-[#fef3cd] border border-[#f0ad4e] text-sm text-[#8a6d3b]">
+      <div class="flex flex-col gap-2 px-3 py-2 rounded-md bg-[var(--ui-warning-bg)] border border-[var(--ui-warning-border)] text-sm text-[var(--ui-warning)]">
         <div class="flex items-center gap-3">
           <span>The panic key requires Input Monitoring permission.</span>
           <button
             onclick={openInputMonitoringSettings}
             class="ml-auto shrink-0 px-3 py-1 rounded text-xs font-medium
-                   bg-[#f0ad4e] hover:bg-[#ec971f] text-white transition-colors"
+                   bg-[var(--ui-warning)] hover:brightness-110 text-bg transition-colors"
           >
             Open Settings
           </button>
@@ -177,7 +165,7 @@
             The permission prompt could not be shown (the app may need to be signed).
             To enable manually: open <button
               onclick={() => api.openInputMonitoringSettings()}
-              class="underline hover:text-[#6d5618] transition-colors"
+              class="underline hover:text-white transition-colors"
             >System Settings → Privacy &amp; Security → Input Monitoring</button>
             and add Lewdware, then restart the app.
           </p>
@@ -189,7 +177,7 @@
       tabindex="0"
       role="button"
       class="px-4 py-2 rounded-md cursor-pointer min-w-40 inline-flex items-center
-             justify-center text-sm outline-none select-none transition-all duration-150
+             justify-center text-sm select-none transition-all duration-150
              border-2 {captureClass}"
       onclick={() => (recording = true)}
       onkeydown={handleKeyDown}
@@ -205,13 +193,7 @@
     <p class="text-xs text-muted">
       Open the folder containing log files for all Lewdware apps.
     </p>
-    <button
-      onclick={() => api.openLogs()}
-      class="self-start px-4 py-2 rounded-md text-sm font-medium
-             bg-surface hover:bg-surface-2 text-text transition-colors"
-    >
-      Open logs folder
-    </button>
+    <Button class="self-start" onclick={() => api.openLogs()}>Open logs folder</Button>
   </div>
 
   <!-- Monitors -->
@@ -226,24 +208,7 @@
           class="flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer
                  hover:bg-surface-2 transition-colors"
         >
-          <input
-            type="checkbox"
-            checked={!monitor.disabled}
-            onchange={(e) =>
-              store.setMonitorEnabled(monitor.id, e.currentTarget.checked)}
-            class="sr-only"
-          />
-          <span
-            class="shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors
-                   {!monitor.disabled ? 'bg-accent border-accent' : 'bg-bg border-border'}"
-          >
-            {#if !monitor.disabled}
-              <svg class="w-2.5 h-2.5 text-white" viewBox="0 0 10 10" fill="none">
-                <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="currentColor" stroke-width="2"
-                  stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            {/if}
-          </span>
+          <Checkbox checked={!monitor.disabled} ariaLabel={monitor.name} onchange={(checked) => store.setMonitorEnabled(monitor.id, checked)} />
           <span class="text-sm text-text">
             {monitor.name}
             {#if monitor.primary}
