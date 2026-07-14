@@ -258,5 +258,6 @@
     .action-copy { margin-bottom: 4px; }
     .migration { grid-template-columns: 22px 1fr; }
     .migration :global(button) { grid-column: 2; justify-self: start; }
+    .draft-badge { display: table; margin: 3px 0 0; }
   }
 </style>

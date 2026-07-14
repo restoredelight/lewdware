@@ -55,5 +55,10 @@
   .panel:focus { outline: none; }
   h2 { margin: 0 0 6px; color: var(--ui-text); font-size: 16px; line-height: 1.3; }
   p { margin: 0 0 20px; color: var(--ui-muted); font-size: 13px; line-height: 1.45; }
-  .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  @media (max-width: 420px) {
+    .panel { padding: 16px; }
+    .actions { align-items: stretch; flex-direction: column-reverse; }
+    .actions span, .actions :global(button) { width: 100%; }
+  }
 </style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { store } from "./store.svelte.js";
   import TagPicker from "./TagPicker.svelte";
   import Tabs from "$ui/Tabs.svelte";
@@ -7,12 +8,23 @@
   import { scheduleBehaviourSave } from "./behaviourSave.svelte.js";
   import type { Level } from "./types.js";
   import Button from "$ui/Button.svelte";
+  import Dialog from "$ui/Dialog.svelte";
   import { Icon, Plus } from "svelte-hero-icons";
 
   const levels = $derived(store.behaviour!.experience!.timeline.levels);
 
   let activeIndex = $state(0);
   let scaleFactor = $state("2");
+  let removing = $state<Level | null>(null);
+  let narrowWindow = $state(false);
+
+  onMount(() => {
+    const query = window.matchMedia("(max-width: 700px)");
+    const update = () => (narrowWindow = query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  });
 
   function levelLabel(level: Level, index: number): string {
     if (index === 0) return "Starting stage";
@@ -59,9 +71,16 @@
 
   function removeLevel(index: number) {
     if (index === 0) return; // the baseline can't be removed
-    if (!confirm(`Remove Stage ${index + 1}?`)) return;
+    removing = levels[index];
+  }
+
+  function confirmRemove() {
+    if (!removing) return;
+    const index = levels.indexOf(removing);
+    if (index <= 0) { removing = null; return; }
     levels.splice(index, 1);
     if (activeIndex >= levels.length) activeIndex = levels.length - 1;
+    removing = null;
     scheduleBehaviourSave();
   }
 
@@ -76,24 +95,24 @@
   }
 </script>
 
-<section class="flex-1 min-h-0 flex gap-6">
-  <aside class="w-48 max-[900px]:w-40 shrink-0 border-r border-border bg-surface p-3 flex flex-col gap-3">
+<section class="flex-1 min-h-0 flex gap-6 max-[700px]:flex-col max-[700px]:gap-0">
+  <aside class="w-48 max-[900px]:w-40 max-[700px]:w-full shrink-0 border-r max-[700px]:border-r-0 max-[700px]:border-b border-border bg-surface p-3 max-[700px]:py-0 flex max-[700px]:items-center flex-col max-[700px]:flex-row gap-3">
     <div class="flex-1 min-h-0 overflow-y-auto">
-      <Tabs {tabs} active={String(activeIndex)} orientation="vertical" onselect={(id) => (activeIndex = Number(id))} />
+      <Tabs {tabs} active={String(activeIndex)} orientation={narrowWindow ? "horizontal" : "vertical"} onselect={(id) => (activeIndex = Number(id))} />
     </div>
-    <Button size="compact" class="w-full" onclick={addLevel}><span class="w-4 h-4"><Icon src={Plus} mini /></span> Add stage</Button>
+    <Button size="compact" class="w-full max-[700px]:w-auto max-[700px]:shrink-0" onclick={addLevel}><span class="w-4 h-4"><Icon src={Plus} mini /></span> Add stage</Button>
   </aside>
 
   {#if levels[activeIndex]}
     {@const level = levels[activeIndex]}
-    <div class="flex-1 w-full max-w-3xl min-w-0 min-h-0 overflow-y-auto flex flex-col gap-4 p-6">
+    <div class="flex-1 w-full max-w-3xl min-w-0 min-h-0 overflow-y-auto flex flex-col gap-4 p-6 max-[700px]:p-4">
       <div>
         <h2 class="text-lg font-semibold text-text">{activeIndex === 0 ? "Starting Stage" : `Stage ${activeIndex + 1}`}</h2>
         <p class="text-sm text-muted mt-1">{activeIndex === 0 ? "This baseline is active from the beginning. Set only the behaviour this pack needs; unset controls leave the player’s defaults unchanged." : "Behavior used after this stage’s trigger is reached."}</p>
       </div>
       {#if activeIndex !== 0}
         <section class="flex flex-col gap-3 p-4 rounded-md border border-border bg-surface">
-          <div class="flex items-center justify-between">
+          <div class="flex items-center justify-between gap-2 max-[520px]:items-start max-[520px]:flex-col">
             <h3 class="text-base font-semibold text-text">Start this stage</h3>
             <Button size="compact" variant="destructive" class="!h-7" onclick={() => removeLevel(activeIndex)}>Remove stage</Button>
           </div>
@@ -121,9 +140,9 @@
       {/if}
 
       <section class="flex flex-col gap-3 p-4 rounded-md border border-border bg-surface">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-2 max-[560px]:items-start max-[560px]:flex-col">
             <h3 class="text-base font-semibold text-text">Event frequency</h3>
-          <div class="flex items-center gap-1.5">
+          <div class="flex items-center gap-1.5 max-[420px]:flex-wrap">
             <span class="text-xs text-muted">Multiply intervals by</span>
             <input
               type="number"
@@ -265,3 +284,13 @@
   {/if}
 
 </section>
+
+{#if removing}
+  {@const stageNumber = levels.indexOf(removing) + 1}
+  <Dialog
+    title={`Remove Stage ${stageNumber}?`}
+    description="This stage and all of its behaviour settings will be removed. You can undo this change from the editor history."
+    buttons={[{ label: "Cancel", onclick: () => (removing = null) }, { label: "Remove stage", destructive: true, onclick: confirmRemove }]}
+    onclose={() => (removing = null)}
+  />
+{/if}

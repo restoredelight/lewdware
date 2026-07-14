@@ -4,6 +4,7 @@
   import { LogicalPosition } from "@tauri-apps/api/dpi";
   import { store } from "./store.svelte.js";
   import type { MediaFile } from "./types.js";
+  import { copyFileName } from "./clipboard.js";
 
   // Item geometry (px)
   const ITEM_W = 150;
@@ -176,6 +177,16 @@
 
     const selCount = store.selectedIds.size;
     const items: (MenuItem | PredefinedMenuItem)[] = [];
+
+    if (clickedFile) {
+      items.push(
+        await MenuItem.new({
+          text: "Copy file name",
+          action: () => void copyFileName(clickedFile.file_name),
+        }),
+        await PredefinedMenuItem.new({ item: "Separator" }),
+      );
+    }
 
     if (selCount > 0) {
       items.push(

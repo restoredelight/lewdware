@@ -46,9 +46,10 @@ function persist() {
     }
     baseline = clone(after);
     store.markBackupComplete("behaviour");
+    taskFeedback.dismiss("behaviour-backup");
   }).catch((error) => {
     store.markBackupFailed("behaviour", error);
-    taskFeedback.error(`Could not back up pack behaviour: ${String(error)}`);
+    taskFeedback.error("behaviour-backup", `Could not back up pack behaviour: ${String(error)}`);
     throw error;
   });
 }

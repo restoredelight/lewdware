@@ -39,6 +39,15 @@
   };
 
   let activeTab = $state<Tab>("groups");
+  let narrowWindow = $state(false);
+
+  onMount(() => {
+    const query = window.matchMedia("(max-width: 700px)");
+    const update = () => (narrowWindow = query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  });
 
   onMount(async () => {
     if (store.behaviour === null) store.behaviour = await api.getBehaviour();
@@ -54,12 +63,12 @@
   {#if store.behaviour === null}
     <p class="text-sm text-muted p-6">Loading…</p>
   {:else}
-    <div class="flex-1 min-h-0 flex">
-      <aside class="w-48 max-[900px]:w-40 shrink-0 border-r border-border bg-surface p-3">
-        <Tabs {tabs} active={activeTab} orientation="vertical" onselect={(id) => (activeTab = id as Tab)} />
+    <div class="flex-1 min-h-0 flex max-[700px]:flex-col">
+      <aside class="w-48 max-[900px]:w-40 max-[700px]:w-full shrink-0 border-r max-[700px]:border-r-0 max-[700px]:border-b border-border bg-surface p-3 max-[700px]:py-0">
+        <Tabs {tabs} active={activeTab} orientation={narrowWindow ? "horizontal" : "vertical"} onselect={(id) => (activeTab = id as Tab)} />
       </aside>
 
-      <div class="flex-1 min-w-0 overflow-y-auto p-6">
+      <div class="flex-1 min-w-0 overflow-y-auto p-6 max-[700px]:p-4">
         <div class="mb-5 max-w-2xl">
           <h2 class="text-lg font-semibold text-text">{sectionInfo[activeTab].title}</h2>
           <p class="text-sm text-muted mt-1">{sectionInfo[activeTab].description}</p>

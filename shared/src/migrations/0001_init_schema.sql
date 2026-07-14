@@ -16,18 +16,6 @@ CREATE TABLE IF NOT EXISTS media (
 
 CREATE INDEX media_hash_index ON media (hash);
 
-CREATE TABLE IF NOT EXISTS history_media (
-    id INTEGER PRIMARY KEY, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
-    "offset" INTEGER, length INTEGER, path TEXT, width INTEGER, height INTEGER,
-    transparent INTEGER, duration REAL, audio INTEGER, hash BLOB NOT NULL, thumbnail BLOB
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS history_media_tags (
-    media_id INTEGER NOT NULL, tag TEXT NOT NULL,
-    PRIMARY KEY (media_id, tag),
-    FOREIGN KEY (media_id) REFERENCES history_media (id) ON DELETE CASCADE
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY,
     name TEXT UNIQUE NOT NULL

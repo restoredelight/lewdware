@@ -3,7 +3,7 @@
 </script>
 
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-  <div class="bg-surface border border-border rounded-lg shadow-xl w-96 max-h-[70vh] flex flex-col p-5">
+  <div class="bg-surface border border-border rounded-lg shadow-xl w-96 max-w-[calc(100vw-2rem)] max-h-[70vh] flex flex-col p-5">
     <h2 class="text-sm font-semibold text-text mb-1">Import warnings</h2>
     <p class="text-xs text-muted mb-3">
       {store.importWarnings.length} part{store.importWarnings.length === 1 ? "" : "s"} of the

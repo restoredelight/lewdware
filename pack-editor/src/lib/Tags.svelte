@@ -206,4 +206,11 @@
   .error button { border: 0; background: transparent; color: inherit; cursor: pointer; }
   .loading { padding: 36px; border: 1px dashed var(--ui-border); border-radius: var(--ui-radius-md); color: var(--ui-muted); text-align: center; font-size: 13px; }
   @media (max-width: 950px) { .table-head, .tag-row { grid-template-columns: minmax(100px, 1fr) 48px 58px 68px; } .table-head span:last-child { display: none; } .row-actions { grid-column: 1 / -1; padding-bottom: 8px; justify-content: flex-start; } .edit-row { grid-template-columns: 1fr; } }
+  @media (max-width: 620px) {
+    .page { padding: 16px; }
+    header { align-items: stretch; flex-direction: column; gap: 10px; }
+    header :global(.root) { width: 100%; }
+    .table-head, .tag-row { grid-template-columns: minmax(90px, 1fr) repeat(3, 44px); padding-inline: 8px; gap: 4px; }
+    .row-actions { flex-wrap: wrap; }
+  }
 </style>

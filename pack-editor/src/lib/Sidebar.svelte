@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Eye, Icon, MusicalNote, Plus, Trash, XMark } from "svelte-hero-icons";
+  import { ClipboardDocument, Eye, Icon, MusicalNote, Plus, Trash, XMark } from "svelte-hero-icons";
   import { store } from "./store.svelte.js";
   import type { FileInfo } from "./types.js";
   import TagInput from "$ui/TagInput.svelte";
@@ -8,6 +8,8 @@
   import { onMount } from "svelte";
   import { history } from "./history.svelte.js";
   import EmptyState from "$ui/EmptyState.svelte";
+  import IconButton from "$ui/IconButton.svelte";
+  import { copyFileName } from "./clipboard.js";
 
   function formatDuration(s: number): string {
     const h = Math.floor(s / 3600);
@@ -202,7 +204,13 @@
       <section>
         <div class="section-heading"><h2>{selCount === 1 ? "Media" : `${selCount} items selected`}</h2></div>
         {#if selCount === 1}
-          <label class="title-field"><span>File name</span><input bind:value={titleValue} onblur={rename} onkeydown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { titleValue = primary.file_name; event.currentTarget.blur(); } }} /></label>
+          <div class="title-field">
+            <label for={`media-title-${primary.id}`}>File name</label>
+            <div class="title-control">
+              <input id={`media-title-${primary.id}`} bind:value={titleValue} onblur={rename} onkeydown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { titleValue = primary.file_name; event.currentTarget.blur(); } }} />
+              <IconButton label={`Copy file name “${primary.file_name}”`} onclick={() => copyFileName(primary.file_name)}><Icon src={ClipboardDocument} mini size="15px" /></IconButton>
+            </div>
+          </div>
           {#if titleError}<p class="field-error" role="alert">{titleError}</p>{/if}
         {/if}
       </section>
@@ -261,7 +269,8 @@
   h2 { margin: 0; color: var(--ui-text); font-size: 12px; font-weight: 700; }
   .section-heading > span, .mixed-label { color: var(--ui-muted); font-size: 10px; }
   .title-field { display: flex; flex-direction: column; gap: 5px; color: var(--ui-muted); font-size: 11px; }
-  .title-field input { width: 100%; height: 32px; padding: 0 8px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); background: var(--ui-bg); color: var(--ui-text); font: inherit; font-size: 12px; }
+  .title-control { display: flex; min-width: 0; align-items: center; gap: 4px; }
+  .title-field input { width: 100%; min-width: 0; height: 32px; padding: 0 8px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); background: var(--ui-bg); color: var(--ui-text); font: inherit; font-size: 12px; }
   .title-field input:focus-visible { border-color: var(--ui-focus); outline: 2px solid var(--ui-focus); outline-offset: 1px; }
   .field-error { margin: 5px 0 0; color: var(--ui-danger); font-size: 10px; line-height: 1.35; }
   .mixed-label { margin: 10px 0 5px; }
@@ -278,4 +287,12 @@
   td { color: var(--ui-text); text-align: right; }
   .selection-summary { display: flex; padding-top: 10px; justify-content: space-between; border-top: 1px solid var(--ui-border); color: var(--ui-muted); font-size: 11px; }
   .actions { padding-top: 12px; border-top: 1px solid var(--ui-border); }
+  @media (max-width: 760px) and (min-width: 521px) {
+    .inspector { width: 220px !important; }
+  }
+  @media (max-width: 520px) {
+    .inspector { width: 100% !important; height: min(42%, 300px); border-top: 1px solid var(--ui-border); border-left: 0; }
+    .resize-handle { display: none; }
+    .preview { display: none; }
+  }
 </style>

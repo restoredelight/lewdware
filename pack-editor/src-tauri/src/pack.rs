@@ -913,6 +913,7 @@ impl MediaPack {
         db_file.write_all(&db_data).await?;
         db_file.flush().await?;
 
+        let _ = fs::remove_file(self.dir.join("history.db"));
         self.clean_media()?;
 
         let final_meta = if let Some(m) = metadata {
@@ -954,11 +955,17 @@ impl MediaPack {
     fn clean_media(&self) -> Result<()> {
         // Rows staged for undo still point at their encoded working files. A save must not remove
         // those files: history deliberately survives saves and may move the rows back afterwards.
-        let conn = self.db_pool.get()?;
-        let mut stmt = conn.prepare("SELECT path FROM history_media WHERE path IS NOT NULL")?;
-        let retained = stmt
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
+        let history_path = self.dir.join("history.db");
+        let retained = if history_path.exists() {
+            let conn = rusqlite::Connection::open(history_path)?;
+            conn.execute_batch(HISTORY_SCHEMA)?;
+            let mut stmt = conn.prepare("SELECT path FROM media WHERE path IS NOT NULL")?;
+            let paths = stmt.query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
+            paths
+        } else {
+            std::collections::HashSet::new()
+        };
         for entry in fs::read_dir(self.dir.join("media"))? {
             if let Err(err) = entry.and_then(|e| {
                 if retained.contains(&e.file_name().to_string_lossy().to_string()) { Ok(()) }
@@ -1061,14 +1068,22 @@ impl MediaPack {
     pub async fn remove_files(&self, ids: Vec<u64>) -> Result<()> {
         if ids.is_empty() { return Ok(()); }
         let _handle = self.saving.read().await;
+        let history_path = self.dir.join("history.db").to_string_lossy().to_string();
         self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            let vars = repeat_vars(ids.len());
-            tx.execute(&format!("INSERT OR REPLACE INTO history_media SELECT * FROM media WHERE id IN ({vars})"), params_from_iter(&ids))?;
-            tx.execute(&format!("INSERT OR IGNORE INTO history_media_tags SELECT mt.media_id, t.name FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE mt.media_id IN ({vars})"), params_from_iter(&ids))?;
-            tx.execute(&format!("DELETE FROM media WHERE id IN ({vars})"), params_from_iter(&ids))?;
-            tx.commit()?;
-            Ok(())
+            let _ = conn.execute("DETACH DATABASE undo_history", []);
+            conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
+            conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
+            let result = (|| -> Result<()> {
+                let tx = conn.transaction()?;
+                let vars = repeat_vars(ids.len());
+                tx.execute(&format!("INSERT OR REPLACE INTO undo_history.media SELECT * FROM main.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_tags SELECT mt.media_id, t.name FROM main.media_tags mt JOIN main.tags t ON t.id = mt.tag_id WHERE mt.media_id IN ({vars})"), params_from_iter(&ids))?;
+                tx.execute(&format!("DELETE FROM main.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+                tx.commit()?;
+                Ok(())
+            })();
+            let _ = conn.execute("DETACH DATABASE undo_history", []);
+            result
         })
         .await?;
         self.mark_unsaved().await
@@ -1077,17 +1092,55 @@ impl MediaPack {
     pub async fn restore_files(&self, ids: Vec<u64>) -> Result<()> {
         if ids.is_empty() { return Ok(()); }
         let _handle = self.saving.read().await;
+        let history_path = self.dir.join("history.db").to_string_lossy().to_string();
         self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            let vars = repeat_vars(ids.len());
-            tx.execute(&format!("INSERT OR REPLACE INTO media SELECT * FROM history_media WHERE id IN ({vars})"), params_from_iter(&ids))?;
-            tx.execute(&format!("INSERT OR IGNORE INTO tags (name) SELECT DISTINCT tag FROM history_media_tags WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
-            tx.execute(&format!("INSERT OR IGNORE INTO media_tags SELECT h.media_id, t.id FROM history_media_tags h JOIN tags t ON t.name = h.tag WHERE h.media_id IN ({vars})"), params_from_iter(&ids))?;
-            tx.execute(&format!("DELETE FROM history_media WHERE id IN ({vars})"), params_from_iter(&ids))?;
-            tx.commit()?;
-            Ok(())
+            let _ = conn.execute("DETACH DATABASE undo_history", []);
+            conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
+            conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
+            let result = (|| -> Result<()> {
+                let tx = conn.transaction()?;
+                let vars = repeat_vars(ids.len());
+                tx.execute(&format!("INSERT OR REPLACE INTO main.media SELECT * FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO main.tags (name) SELECT DISTINCT tag FROM undo_history.media_tags WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO main.media_tags SELECT h.media_id, t.id FROM undo_history.media_tags h JOIN main.tags t ON t.name = h.tag WHERE h.media_id IN ({vars})"), params_from_iter(&ids))?;
+                tx.execute(&format!("DELETE FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+                tx.commit()?;
+                Ok(())
+            })();
+            let _ = conn.execute("DETACH DATABASE undo_history", []);
+            result
         }).await?;
         self.mark_unsaved().await
+    }
+
+    pub async fn purge_history_files(&self, ids: Vec<u64>) -> Result<()> {
+        if ids.is_empty() { return Ok(()); }
+        let _handle = self.saving.read().await;
+        let history_path = self.dir.join("history.db");
+        if !history_path.exists() { return Ok(()); }
+        let media_dir = self.dir.join("media");
+        spawn_blocking(move || -> Result<()> {
+            let mut conn = rusqlite::Connection::open(history_path)?;
+            conn.execute_batch(HISTORY_SCHEMA)?;
+            let vars = repeat_vars(ids.len());
+            let paths = {
+                let mut stmt = conn.prepare(&format!("SELECT path FROM media WHERE path IS NOT NULL AND id IN ({vars})"))?;
+                let paths = stmt.query_map(params_from_iter(&ids), |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                paths
+            };
+            let tx = conn.transaction()?;
+            tx.execute(&format!("DELETE FROM media_tags WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
+            tx.execute(&format!("DELETE FROM media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+            tx.commit()?;
+            for path in paths {
+                if let Err(error) = fs::remove_file(media_dir.join(path)) {
+                    if error.kind() != io::ErrorKind::NotFound { return Err(error.into()); }
+                }
+            }
+            Ok(())
+        }).await??;
+        Ok(())
     }
 
     pub async fn get_files(&self) -> Result<Vec<MediaFile>> {
@@ -1147,6 +1200,77 @@ impl MediaPack {
             rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
         })
         .await
+    }
+
+    pub async fn get_modes(&self) -> Result<Vec<(u64, Vec<u8>)>> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |conn| {
+            let mut stmt = conn.prepare("SELECT id, file FROM modes ORDER BY id")?;
+            let rows = stmt.query_map([], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+        }).await
+    }
+
+    pub async fn add_mode(&self, file: Vec<u8>) -> Result<u64> {
+        let _handle = self.saving.read().await;
+        let id = self.db_execute(move |conn| {
+            conn.query_row("INSERT INTO modes (file) VALUES (?) RETURNING id", params![file], |row| row.get(0)).map_err(Into::into)
+        }).await?;
+        self.mark_unsaved().await?;
+        Ok(id)
+    }
+
+    pub async fn remove_mode(&self, id: u64) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let history_path = self.dir.join("history.db").to_string_lossy().to_string();
+        self.db_execute(move |mut conn| {
+            let _ = conn.execute("DETACH DATABASE undo_history", []);
+            conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
+            conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
+            let result = (|| -> Result<()> {
+                let tx = conn.transaction()?;
+                tx.execute("INSERT OR REPLACE INTO undo_history.modes SELECT * FROM main.modes WHERE id = ?", params![id])?;
+                tx.execute("DELETE FROM main.modes WHERE id = ?", params![id])?;
+                tx.commit()?;
+                Ok(())
+            })();
+            let _ = conn.execute("DETACH DATABASE undo_history", []);
+            result
+        }).await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn restore_mode(&self, id: u64) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let history_path = self.dir.join("history.db").to_string_lossy().to_string();
+        self.db_execute(move |mut conn| {
+            let _ = conn.execute("DETACH DATABASE undo_history", []);
+            conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
+            conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
+            let result = (|| -> Result<()> {
+                let tx = conn.transaction()?;
+                tx.execute("INSERT OR REPLACE INTO main.modes SELECT * FROM undo_history.modes WHERE id = ?", params![id])?;
+                tx.execute("DELETE FROM undo_history.modes WHERE id = ?", params![id])?;
+                tx.commit()?;
+                Ok(())
+            })();
+            let _ = conn.execute("DETACH DATABASE undo_history", []);
+            result
+        }).await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn purge_history_mode(&self, id: u64) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let history_path = self.dir.join("history.db");
+        if !history_path.exists() { return Ok(()); }
+        spawn_blocking(move || -> Result<()> {
+            let conn = rusqlite::Connection::open(history_path)?;
+            conn.execute_batch(HISTORY_SCHEMA)?;
+            conn.execute("DELETE FROM modes WHERE id = ?", params![id])?;
+            Ok(())
+        }).await??;
+        Ok(())
     }
 
     pub async fn get_tag_summaries(&self) -> Result<Vec<TagSummary>> {
@@ -1778,6 +1902,32 @@ fn repeat_vars(count: usize) -> String {
     s
 }
 
+const HISTORY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS media (
+    id INTEGER PRIMARY KEY, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
+    "offset" INTEGER, length INTEGER, path TEXT, width INTEGER, height INTEGER,
+    transparent INTEGER, duration REAL, audio INTEGER, hash BLOB NOT NULL, thumbnail BLOB
+) STRICT;
+CREATE TABLE IF NOT EXISTS media_tags (
+    media_id INTEGER NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (media_id, tag),
+    FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE IF NOT EXISTS modes (id INTEGER PRIMARY KEY, file BLOB NOT NULL) STRICT;
+"#;
+
+const HISTORY_SCHEMA_ATTACHED: &str = r#"
+CREATE TABLE IF NOT EXISTS undo_history.media (
+    id INTEGER PRIMARY KEY, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
+    "offset" INTEGER, length INTEGER, path TEXT, width INTEGER, height INTEGER,
+    transparent INTEGER, duration REAL, audio INTEGER, hash BLOB NOT NULL, thumbnail BLOB
+) STRICT;
+CREATE TABLE IF NOT EXISTS undo_history.media_tags (
+    media_id INTEGER NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (media_id, tag),
+    FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE IF NOT EXISTS undo_history.modes (id INTEGER PRIMARY KEY, file BLOB NOT NULL) STRICT;
+"#;
+
 fn resolve_range(range: Range, size: u64) -> Result<(u64, u64)> {
     match (range.start, range.end) {
         (Some(start), Some(end)) => Ok((start, (end + 1).min(size))),
@@ -1829,6 +1979,32 @@ mod tests {
         assert_eq!(opened.header.read().unwrap().id, id);
         assert_eq!(opened.path(), Some(destination.as_path()));
         assert!(destination.is_file());
+    }
+
+    #[tokio::test]
+    async fn embedded_modes_roundtrip_through_undo_history() {
+        let output = tempdir().unwrap();
+        let data = tempdir().unwrap();
+        let pack = new_test_pack(&output.path().join("modes.lwpack"), data.path(), "Modes").await;
+        let bytes = include_bytes!("../../../default-modes/sandbox/build/Sandbox.lwmode").to_vec();
+
+        let id = pack.add_mode(bytes.clone()).await.unwrap();
+        assert_eq!(pack.get_modes().await.unwrap(), vec![(id, bytes.clone())]);
+
+        pack.remove_mode(id).await.unwrap();
+        assert!(pack.get_modes().await.unwrap().is_empty());
+        let history = rusqlite::Connection::open(pack.dir().join("history.db")).unwrap();
+        let staged: Vec<u8> = history.query_row("SELECT file FROM modes WHERE id = ?", params![id], |row| row.get(0)).unwrap();
+        assert_eq!(staged, bytes);
+        drop(history);
+
+        pack.restore_mode(id).await.unwrap();
+        assert_eq!(pack.get_modes().await.unwrap().len(), 1);
+        pack.remove_mode(id).await.unwrap();
+        pack.purge_history_mode(id).await.unwrap();
+        let history = rusqlite::Connection::open(pack.dir().join("history.db")).unwrap();
+        let retained: u64 = history.query_row("SELECT COUNT(*) FROM modes WHERE id = ?", params![id], |row| row.get(0)).unwrap();
+        assert_eq!(retained, 0);
     }
 
     #[tokio::test]
@@ -2047,7 +2223,13 @@ mod tests {
 
         pack.remove_files(vec![id]).await.unwrap();
         assert!(pack.get_files().await.unwrap().is_empty());
+        assert!(pack.dir().join("history.db").is_file());
         pack.save(|_, _| {}).await.unwrap();
+
+        let history_tables_in_pack_index: u64 = pack.db_execute(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('history_media', 'history_media_tags')", [], |row| row.get(0)).map_err(Into::into)
+        }).await.unwrap();
+        assert_eq!(history_tables_in_pack_index, 0);
 
         pack.restore_files(vec![id]).await.unwrap();
         let restored = pack.get_files().await.unwrap().remove(0);
@@ -2062,6 +2244,26 @@ mod tests {
 
         pack.remove_files(vec![id]).await.unwrap();
         assert!(pack.get_files().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn purging_evicted_media_history_removes_only_staged_rows_and_bytes() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("purge.lwpack"), data_dir.path(), "Purge").await;
+        let staged = insert_staged_audio(&pack, b"staged").await;
+        let active = insert_staged_audio(&pack, b"active").await;
+        let staged_path: String = pack.db_execute(move |conn| conn.query_row("SELECT path FROM media WHERE id = ?", params![staged], |row| row.get(0)).map_err(Into::into)).await.unwrap();
+        pack.remove_files(vec![staged]).await.unwrap();
+        pack.purge_history_files(vec![staged]).await.unwrap();
+
+        assert!(!pack.dir().join("media").join(staged_path).exists());
+        assert_eq!(pack.get_files().await.unwrap().iter().map(|file| file.id).collect::<Vec<_>>(), vec![active]);
+        let history = rusqlite::Connection::open(pack.dir().join("history.db")).unwrap();
+        let remaining: u64 = history.query_row("SELECT COUNT(*) FROM media", [], |row| row.get(0)).unwrap();
+        assert_eq!(remaining, 0);
+        pack.restore_files(vec![staged]).await.unwrap();
+        assert_eq!(pack.get_files().await.unwrap().iter().map(|file| file.id).collect::<Vec<_>>(), vec![active]);
     }
 
     #[tokio::test]

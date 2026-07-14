@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from "./api.js";
   import { store } from "./store.svelte.js";
+  import { taskFeedback } from "./taskFeedback.svelte.js";
 
   let showErrors = $state(false);
 </script>
@@ -15,8 +16,9 @@
       <button
         onclick={() => api.cancelUpload()}
         class="text-muted hover:text-text transition-colors"
+        title="Stop processing remaining files; completed imports will stay in the pack"
       >
-        Cancel
+        Stop importing
       </button>
     {:else}
       <span class="text-muted">
@@ -45,7 +47,7 @@
             </div>
           {/each}
           <button
-            onclick={() => store.clearUploadErrors()}
+            onclick={() => { store.clearUploadErrors(); taskFeedback.dismiss("upload-error"); }}
             class="mt-1 text-xs text-muted hover:text-text self-end"
           >
             Clear

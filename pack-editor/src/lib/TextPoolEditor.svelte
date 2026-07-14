@@ -5,6 +5,7 @@
   import Button from "$ui/Button.svelte";
   import Card from "$ui/Card.svelte";
   import EmptyState from "$ui/EmptyState.svelte";
+  import Dialog from "$ui/Dialog.svelte";
   import { Icon, Plus } from "svelte-hero-icons";
 
   type Props = {
@@ -15,6 +16,7 @@
   };
 
   let { title, description, pool, idPrefix }: Props = $props();
+  let removing = $state<TextItem | null>(null);
 
   function addItem() {
     pool.push({ text: "", tags: [] });
@@ -22,8 +24,19 @@
   }
 
   function removeItem(index: number) {
-    if ((pool[index].text.trim() || pool[index].tags.length > 0) && !confirm(`Remove this ${title.toLowerCase().replace(/s$/, '')}?`)) return;
+    if (pool[index].text.trim() || pool[index].tags.length > 0) {
+      removing = pool[index];
+      return;
+    }
     pool.splice(index, 1);
+    scheduleBehaviourSave();
+  }
+
+  function confirmRemove() {
+    if (!removing) return;
+    const index = pool.indexOf(removing);
+    if (index >= 0) pool.splice(index, 1);
+    removing = null;
     scheduleBehaviourSave();
   }
 </script>
@@ -59,3 +72,12 @@
 
   {#if pool.length > 0}<Button size="compact" class="self-start" onclick={addItem}><span class="w-4 h-4"><Icon src={Plus} mini /></span> Add {title.toLowerCase().replace(/s$/, '')}</Button>{/if}
 </section>
+
+{#if removing}
+  <Dialog
+    title={`Remove ${title.toLowerCase().replace(/s$/, '')}?`}
+    description="This entry and its tag assignments will be removed. You can undo this change from the editor history."
+    buttons={[{ label: "Cancel", onclick: () => (removing = null) }, { label: "Remove", destructive: true, onclick: confirmRemove }]}
+    onclose={() => (removing = null)}
+  />
+{/if}

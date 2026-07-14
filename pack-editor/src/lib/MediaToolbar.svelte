@@ -29,11 +29,11 @@
   function clearFilters() { store.searchQuery = ""; store.mediaTypeFilter = "all"; store.tagFilter = new Set(); }
 </script>
 
-<div class="flex items-center gap-2 h-12 px-3 bg-bg border-b border-border shrink-0">
-  <span class="text-xs text-muted whitespace-nowrap">{store.files.length} file{store.files.length === 1 ? "" : "s"}</span>
-  <div class="w-px h-5 bg-border"></div>
+<div class="media-toolbar flex items-center gap-2 min-h-11 px-3 bg-bg border-b border-border shrink-0">
+  <span class="file-count text-xs text-muted whitespace-nowrap">{store.files.length} file{store.files.length === 1 ? "" : "s"}</span>
+  <div class="divider w-px h-5 bg-border"></div>
 
-  <Field class="w-56" size="compact" hideLabel label="Search media" type="search" value={store.searchQuery} placeholder="Search media…" oninput={(value) => (store.searchQuery = value)} />
+  <Field class="search w-56" size="compact" hideLabel label="Search media" type="search" value={store.searchQuery} placeholder="Search media…" oninput={(value) => (store.searchQuery = value)} />
   <Select class="w-28" size="compact" hideLabel label="Media type" value={store.mediaTypeFilter} options={typeOptions} onchange={(value) => (store.mediaTypeFilter = value as typeof store.mediaTypeFilter)} />
 
   <Popover label="Filter by tags">
@@ -83,3 +83,14 @@
     {/snippet}
   </Popover>
 </div>
+
+<style>
+  @media (max-width: 940px) {
+    .media-toolbar { height: auto; padding-block: 6px; flex-wrap: wrap; }
+    .media-toolbar :global(.search) { width: min(224px, 35vw); flex: 1 1 150px; }
+  }
+  @media (max-width: 620px) {
+    .file-count, .divider { display: none; }
+    .media-toolbar :global(.search) { min-width: 120px; }
+  }
+</style>

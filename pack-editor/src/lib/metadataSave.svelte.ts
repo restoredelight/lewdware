@@ -48,10 +48,11 @@ async function writePending(): Promise<void> {
     }
     baseline = copy(metadata);
     store.markBackupComplete("metadata");
+    taskFeedback.dismiss("metadata-backup");
   } catch (error) {
     pending ??= metadata;
     store.markBackupFailed("metadata", error);
-    taskFeedback.error(`Could not back up pack metadata: ${String(error)}`);
+    taskFeedback.error("metadata-backup", `Could not back up pack metadata: ${String(error)}`);
     throw error;
   } finally {
     inFlight = null;

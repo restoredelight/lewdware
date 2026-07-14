@@ -5,6 +5,7 @@ mod pack;
 mod thumbnail;
 
 use std::{
+    io::Cursor,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -15,6 +16,7 @@ use std::{
 use pack::{MediaFile, MediaPack, TagSummary};
 use serde::{Deserialize, Serialize};
 use shared::behaviour::Behaviour;
+use shared::mode;
 
 // ─── Update check ─────────────────────────────────────────────────────────────
 
@@ -89,6 +91,31 @@ pub struct RecentPack {
     #[serde(default)]
     pub draft_id: Option<String>,
     pub last_opened: u64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct EmbeddedMode {
+    pub id: u64,
+    pub stable_id: String,
+    pub name: String,
+    pub author: Option<String>,
+    pub version: Option<String>,
+    pub option_count: usize,
+    pub size: u64,
+}
+
+fn embedded_mode(id: u64, bytes: &[u8]) -> Result<EmbeddedMode, String> {
+    let (header, metadata) = mode::read_mode_metadata(Cursor::new(bytes)).map_err(|error| error.to_string())?;
+    let option_count = metadata.all_options().len();
+    Ok(EmbeddedMode {
+        id,
+        stable_id: header.id.to_string(),
+        name: metadata.name,
+        author: metadata.author,
+        version: metadata.version,
+        option_count,
+        size: bytes.len() as u64,
+    })
 }
 
 fn editor_data_dir() -> Result<PathBuf, String> {
@@ -668,6 +695,69 @@ async fn restore_files(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), 
 }
 
 #[tauri::command]
+async fn purge_history_files(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() { pack.purge_history_files(ids).await.map_err(|e| e.to_string())?; }
+    Ok(())
+}
+
+// ── Embedded modes ──────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_modes(state: State<'_, AppState>) -> Result<Vec<EmbeddedMode>, String> {
+    let lock = state.pack.lock().await;
+    let Some(pack) = lock.as_ref() else { return Ok(vec![]) };
+    pack.get_modes().await.map_err(|error| error.to_string())?
+        .into_iter().map(|(id, bytes)| embedded_mode(id, &bytes)).collect()
+}
+
+#[tauri::command]
+async fn add_mode_dialog(state: State<'_, AppState>, app: AppHandle) -> Result<Option<EmbeddedMode>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tokio::task::spawn_blocking(move || app.dialog().file()
+        .set_title("Add custom mode")
+        .add_filter("Lewdware Mode", &["lwmode"])
+        .blocking_pick_file())
+        .await.map_err(|error| error.to_string())?;
+    let Some(picked) = picked else { return Ok(None) };
+    let path: PathBuf = picked.into_path().map_err(|error| error.to_string())?;
+    let bytes = tokio::fs::read(path).await.map_err(|error| error.to_string())?;
+    let candidate = embedded_mode(0, &bytes)?;
+
+    let lock = state.pack.lock().await;
+    let Some(pack) = lock.as_ref() else { return Err("No pack is open".into()) };
+    for (id, existing) in pack.get_modes().await.map_err(|error| error.to_string())? {
+        let current = embedded_mode(id, &existing)?;
+        if current.stable_id == candidate.stable_id {
+            return Err(format!("“{}” is already included in this pack", current.name));
+        }
+    }
+    let id = pack.add_mode(bytes).await.map_err(|error| error.to_string())?;
+    Ok(Some(EmbeddedMode { id, ..candidate }))
+}
+
+#[tauri::command]
+async fn remove_mode(state: State<'_, AppState>, id: u64) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() { pack.remove_mode(id).await.map_err(|error| error.to_string())?; }
+    Ok(())
+}
+
+#[tauri::command]
+async fn restore_mode(state: State<'_, AppState>, id: u64) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() { pack.restore_mode(id).await.map_err(|error| error.to_string())?; }
+    Ok(())
+}
+
+#[tauri::command]
+async fn purge_history_mode(state: State<'_, AppState>, id: u64) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() { pack.purge_history_mode(id).await.map_err(|error| error.to_string())?; }
+    Ok(())
+}
+
+#[tauri::command]
 async fn set_file_title(state: State<'_, AppState>, id: u64, name: String) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
@@ -1136,6 +1226,12 @@ pub fn run() {
             get_files,
             remove_files,
             restore_files,
+            purge_history_files,
+            get_modes,
+            add_mode_dialog,
+            remove_mode,
+            restore_mode,
+            purge_history_mode,
             set_file_title,
             get_all_tags,
             get_file_tags,

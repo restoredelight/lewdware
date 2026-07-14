@@ -25,9 +25,9 @@
   }
 </script>
 
-<label class="flex min-h-8 items-center gap-2">
+<label class="optional-number flex min-h-8 items-center gap-2">
   <Checkbox checked={enabled} ariaLabel={label} onchange={toggle} />
-  <span class="text-xs text-text w-40 shrink-0">{label}</span>
+  <span class="field-label text-xs text-text w-40 shrink-0">{label}</span>
   {#if enabled}
     <input
       type="number"
@@ -44,3 +44,11 @@
     {/if}
   {/if}
 </label>
+
+<style>
+  @media (max-width: 560px) {
+    .optional-number { flex-wrap: wrap; }
+    .field-label { width: calc(100% - 32px); }
+    .optional-number :global(input) { margin-left: 32px; }
+  }
+</style>

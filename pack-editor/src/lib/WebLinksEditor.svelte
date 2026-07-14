@@ -5,11 +5,13 @@
   import Button from "$ui/Button.svelte";
   import Card from "$ui/Card.svelte";
   import EmptyState from "$ui/EmptyState.svelte";
+  import Dialog from "$ui/Dialog.svelte";
   import { Icon, Plus, XMark } from "svelte-hero-icons";
 
   const links = $derived(store.behaviour!.content.web_links);
 
   let newArgByLink = $state<Record<number, string>>({});
+  let removing = $state<(typeof links)[number] | null>(null);
 
   function addLink() {
     links.push({ url: "", args: [], tags: [] });
@@ -18,8 +20,19 @@
 
   function removeLink(index: number) {
     const link = links[index];
-    if ((link.url || link.args.length > 0 || link.tags.length > 0) && !confirm("Remove this web link?")) return;
+    if (link.url || link.args.length > 0 || link.tags.length > 0) {
+      removing = link;
+      return;
+    }
     links.splice(index, 1);
+    scheduleBehaviourSave();
+  }
+
+  function confirmRemove() {
+    if (!removing) return;
+    const index = links.indexOf(removing);
+    if (index >= 0) links.splice(index, 1);
+    removing = null;
     scheduleBehaviourSave();
   }
 
@@ -90,3 +103,12 @@
 
   {#if links.length > 0}<Button size="compact" class="self-start" onclick={addLink}><span class="w-4 h-4"><Icon src={Plus} mini /></span> Add web link</Button>{/if}
 </section>
+
+{#if removing}
+  <Dialog
+    title="Remove web link?"
+    description="This link, its URL suffixes, and its tag assignments will be removed. You can undo this change from the editor history."
+    buttons={[{ label: "Cancel", onclick: () => (removing = null) }, { label: "Remove link", destructive: true, onclick: confirmRemove }]}
+    onclose={() => (removing = null)}
+  />
+{/if}

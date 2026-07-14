@@ -13,8 +13,16 @@ export interface MediaFile {
 }
 export interface TagSummary { name: string; media_count: number; }
 
-// Not yet editable from the pack editor UI (no Modes tab) -- see MetadataDto.recommended_mode
-// on the Rust side. Kept here only so the DTO round-trips without dropping the field.
+export interface EmbeddedMode {
+  id: number;
+  stable_id: string;
+  name: string;
+  author: string | null;
+  version: string | null;
+  option_count: number;
+  size: number;
+}
+
 export type RecommendedMode = "Sandbox" | "Experience" | { Pack: { id: number } };
 
 export interface MetadataDto {

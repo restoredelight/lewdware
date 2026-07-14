@@ -37,7 +37,7 @@
   }
 </script>
 
-<div class="p-6 max-w-lg">
+<div class="p-6 max-[600px]:p-4 max-w-lg">
   <div class="flex items-center gap-3 mb-4">
     <h2 class="text-base font-semibold text-text">Pack Metadata</h2>
   </div>

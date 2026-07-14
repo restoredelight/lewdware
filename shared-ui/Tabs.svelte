@@ -49,7 +49,7 @@
   .vertical button { display: flex; width: 100%; min-width: 0; margin: 0; padding: 8px 12px; align-items: center; gap: 10px; border: 0; border-radius: 5px; text-align: left; font-size: 14px; font-weight: 400; line-height: 1.25; white-space: normal; overflow-wrap: anywhere; color: var(--color-text); }
   .tab-icon { display: inline-flex; width: 18px; height: 18px; flex: none; }
   .vertical.collapsed button { justify-content: center; padding-inline: 0; }
-  .vertical.collapsed button span { display: none; }
+  .vertical.collapsed button > span:not(.tab-icon) { display: none; }
   .vertical button.active { background: var(--color-accent); color: white; font-weight: 600; }
   .vertical button:not(.active):hover { background: var(--color-surface-2, #1a1d26); }
   .group-label { padding: 12px 12px 4px; color: var(--color-muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }

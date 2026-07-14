@@ -14,27 +14,67 @@
 
   let showCloseDialog = $state(false);
   let pendingClose = $state(false);
+  let pendingImportToken: number | null = null;
+  let pendingImportFiles: MediaFile[] = [];
+
+  function finalizeImportHistory() {
+    if (pendingImportToken === null) return;
+    const token = pendingImportToken;
+    const files = pendingImportFiles.map((file) => structuredClone(file));
+    pendingImportToken = null;
+    pendingImportFiles = [];
+    if (!files.length) {
+      history.finalize(token, null);
+      return;
+    }
+    const ids = files.map((file) => file.id);
+    history.finalize(token, {
+      label: files.length === 1 ? `Import “${files[0].file_name}”` : `Import ${files.length} media items`,
+      storageBytes: files.reduce((total, file) => total + file.size, 0),
+      undo: async () => { await api.removeFiles(ids); store.removeFilesById(ids, true); },
+      redo: async () => { await api.restoreFiles(ids); store.restoreFiles(files); },
+      dispose: () => api.purgeHistoryFiles(ids),
+    });
+  }
 
   onMount(() => {
     api.getMediaPort().then((port) => (store.mediaPort = port));
 
     const unsubs = [
-      listen<{ total: number }>("upload:start", (e) => { store.onUploadStart(e.payload.total); taskFeedback.progress("Importing files…", store.uploadDone, store.uploadTotal); }),
-      listen<MediaFile>("upload:added", (e) => store.addFile(e.payload)),
-      listen<UploadError>("upload:error", (e) => { store.addUploadError(e.payload); taskFeedback.error(`Could not import ${e.payload.path}`); }),
-      listen("upload:file-done", () => { store.onUploadFileDone(); taskFeedback.progress("Importing files…", store.uploadDone, store.uploadTotal); }),
-      listen("upload:done", () => { store.onUploadDone(); if (store.uploadErrors.length) taskFeedback.error(`Import finished with ${store.uploadErrors.length} error${store.uploadErrors.length === 1 ? "" : "s"}`); else taskFeedback.success("Import complete"); }),
+      listen<{ total: number }>("upload:start", (e) => {
+        if (store.uploadBatches === 0) {
+          pendingImportToken = history.reserve("Import still in progress");
+          pendingImportFiles = [];
+        }
+        store.onUploadStart(e.payload.total);
+        taskFeedback.progress("upload", "Importing files…", store.uploadDone, store.uploadTotal);
+      }),
+      listen<MediaFile>("upload:added", (e) => {
+        store.addFile(e.payload, true);
+        pendingImportFiles.push(structuredClone(e.payload));
+        if (pendingImportToken !== null) history.touchPending(pendingImportToken);
+      }),
+      listen<UploadError>("upload:error", (e) => { store.addUploadError(e.payload); taskFeedback.error("upload-error", `Could not import ${e.payload.path}`); }),
+      listen("upload:file-done", () => { store.onUploadFileDone(); taskFeedback.progress("upload", "Importing files…", store.uploadDone, store.uploadTotal); }),
+      listen("upload:done", () => {
+        store.onUploadDone();
+        if (store.uploadBatches === 0) {
+          finalizeImportHistory();
+          if (store.uploadErrors.length) taskFeedback.error("upload-error", `Import finished with ${store.uploadErrors.length} error${store.uploadErrors.length === 1 ? "" : "s"}`);
+          else taskFeedback.success("upload", "Import complete");
+        }
+      }),
       listen<SaveProgress>("save:progress", (e) => {
         store.saveActive = true;
         store.saveDone = e.payload.saved;
         store.saveTotal = e.payload.total;
-        if (store.uploading) taskFeedback.warning(`Saving during upload — ${e.payload.saved}/${e.payload.total} saved; pending files may not be included`);
-        else taskFeedback.progress("Saving pack…", e.payload.saved, e.payload.total);
+        if (store.uploading) taskFeedback.warning("save", `Saving during upload (${e.payload.saved}/${e.payload.total}) — unfinished files excluded`);
+        else taskFeedback.progress("save", "Saving pack…", e.payload.saved, e.payload.total);
       }),
       listen("save:done", () => {
         store.saveActive = false;
         history.markSaved();
-        taskFeedback.success("Pack saved");
+        taskFeedback.success("save", "Pack saved");
         if (pendingClose) {
           pendingClose = false;
           api.confirmClose();
@@ -57,14 +97,15 @@
   async function onCloseSave() {
     showCloseDialog = false;
     pendingClose = true;
-    if (store.uploading) taskFeedback.warning("Saving while upload continues — pending files may not be included");
-    else taskFeedback.progress("Saving pack…");
+    if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
+    else taskFeedback.progress("save", "Saving pack…");
     try {
       await flushMetadataSave();
       await flushBehaviourSave();
       const info = await api.savePack();
       if (!info) {
         pendingClose = false;
+        taskFeedback.dismiss("save");
         return;
       }
       store.packHasDestination = info.has_destination;
@@ -72,7 +113,7 @@
       pendingClose = false;
       store.saveActive = false;
       alert(`Save failed: ${err}\n\nThe pack was not closed.`);
-      taskFeedback.error(`Save failed: ${String(err)}`);
+      taskFeedback.error("save", `Save failed: ${String(err)}`);
     }
   }
 

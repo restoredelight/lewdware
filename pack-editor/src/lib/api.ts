@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Behaviour, ImportResult, MediaFile, MetadataDto, PackInfo, RecentPack, TagSummary } from "./types.js";
+import type { Behaviour, EmbeddedMode, ImportResult, MediaFile, MetadataDto, PackInfo, RecentPack, TagSummary } from "./types.js";
 
 export const api = {
   newPack: () => invoke<PackInfo>("new_pack"),
@@ -18,7 +18,13 @@ export const api = {
   getFiles: () => invoke<MediaFile[]>("get_files"),
   removeFiles: (ids: number[]) => invoke<void>("remove_files", { ids }),
   restoreFiles: (ids: number[]) => invoke<void>("restore_files", { ids }),
+  purgeHistoryFiles: (ids: number[]) => invoke<void>("purge_history_files", { ids }),
   setFileTitle: (id: number, name: string) => invoke<void>("set_file_title", { id, name }),
+  getModes: () => invoke<EmbeddedMode[]>("get_modes"),
+  addModeDialog: () => invoke<EmbeddedMode | null>("add_mode_dialog"),
+  removeMode: (id: number) => invoke<void>("remove_mode", { id }),
+  restoreMode: (id: number) => invoke<void>("restore_mode", { id }),
+  purgeHistoryMode: (id: number) => invoke<void>("purge_history_mode", { id }),
 
   getAllTags: () => invoke<string[]>("get_all_tags"),
   getFileTags: (id: number) => invoke<string[]>("get_file_tags", { id }),

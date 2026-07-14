@@ -7,11 +7,13 @@
   import Button from "$ui/Button.svelte";
   import Card from "$ui/Card.svelte";
   import EmptyState from "$ui/EmptyState.svelte";
+  import Dialog from "$ui/Dialog.svelte";
   import { Icon, Plus } from "svelte-hero-icons";
 
   const groups = $derived(store.behaviour!.content.content_groups);
 
   let quickCreateTag = $state("");
+  let removing = $state<(typeof groups)[number] | null>(null);
 
   function capitalize(s: string): string {
     return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
@@ -44,8 +46,19 @@
 
   function removeGroup(index: number) {
     const group = groups[index];
-    if ((group.tags.length > 0 || group.description || group.label !== "New group") && !confirm(`Remove the content group “${group.label}”?`)) return;
+    if (group.tags.length > 0 || group.description || group.label !== "New group") {
+      removing = group;
+      return;
+    }
     groups.splice(index, 1);
+    scheduleBehaviourSave();
+  }
+
+  function confirmRemove() {
+    if (!removing) return;
+    const index = groups.indexOf(removing);
+    if (index >= 0) groups.splice(index, 1);
+    removing = null;
     scheduleBehaviourSave();
   }
 </script>
@@ -114,3 +127,12 @@
     {/if}
   </div>
 </section>
+
+{#if removing}
+  <Dialog
+    title={`Remove “${removing.label}”?`}
+    description="This content group will be removed. Its tags and matching media will remain available, and you can undo this change from the editor history."
+    buttons={[{ label: "Cancel", onclick: () => (removing = null) }, { label: "Remove group", destructive: true, onclick: confirmRemove }]}
+    onclose={() => (removing = null)}
+  />
+{/if}

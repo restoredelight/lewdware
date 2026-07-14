@@ -4,7 +4,7 @@
   import IconButton from "$ui/IconButton.svelte";
   import Popover from "$ui/Popover.svelte";
   import Dialog from "$ui/Dialog.svelte";
-  import { ArrowUturnLeft, ArrowUturnRight, ChevronLeft, ChevronRight, Cog6Tooth, DocumentText, EllipsisVertical, Icon, Sparkles, Squares2x2, Tag } from "svelte-hero-icons";
+  import { ArrowUturnLeft, ArrowUturnRight, ChevronLeft, ChevronRight, CodeBracketSquare, Cog6Tooth, DocumentText, EllipsisVertical, Icon, Sparkles, Squares2x2, Tag } from "svelte-hero-icons";
   import { onMount } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { api } from "./api.js";
@@ -14,6 +14,7 @@
   import Options from "./Options.svelte";
   import Content from "./Content.svelte";
   import Experience from "./Experience.svelte";
+  import Modes from "./Modes.svelte";
   import UploadProgress from "./UploadProgress.svelte";
   import MediaViewer from "./MediaViewer.svelte";
   import ImportWarnings from "./ImportWarnings.svelte";
@@ -29,6 +30,7 @@
   let saving = $state(false);
   let saveError = $state<string | null>(null);
   let navCollapsed = $state(false);
+  let narrowWindow = $state(false);
   let showClosePackDialog = $state(false);
   let modifierLabel = $state("Ctrl");
 
@@ -37,12 +39,18 @@
     { id: "tags", label: "Tags", icon: Tag },
     { id: "content", label: "Content", icon: DocumentText },
     { id: "experience", label: "Experience", icon: Sparkles },
+    { id: "modes", label: "Modes", icon: CodeBracketSquare },
     { id: "options", label: "Pack Metadata", icon: Cog6Tooth },
   ];
+  const navigationCollapsed = $derived(navCollapsed || narrowWindow);
 
   onMount(() => {
     modifierLabel = navigator.platform.includes("Mac") ? "⌘" : "Ctrl";
     navCollapsed = localStorage.getItem("pack-editor:navigation-collapsed") === "true";
+    const narrowQuery = window.matchMedia("(max-width: 760px)");
+    const updateNarrowWindow = () => (narrowWindow = narrowQuery.matches);
+    updateNarrowWindow();
+    narrowQuery.addEventListener("change", updateNarrowWindow);
     const handleShortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey) return;
       if (showClosePackDialog || store.pendingMediaRemoval.length > 0 || store.openedId !== null) return;
@@ -73,6 +81,7 @@
     return () => {
       unlisten.then((fn) => fn());
       window.removeEventListener("keydown", handleShortcut);
+      narrowQuery.removeEventListener("change", updateNarrowWindow);
       store.dragActive = false;
     };
   });
@@ -85,36 +94,36 @@
   async function undo() {
     saveError = null;
     try {
-      taskFeedback.progress(history.undoLabel ? `Undoing ${history.undoLabel}…` : "Undoing change…");
+      taskFeedback.progress("history", history.undoLabel ? `Undoing ${history.undoLabel}…` : "Undoing change…");
       await flushMetadataSave();
       await flushBehaviourSave();
       await history.undo();
-      taskFeedback.success("Change undone");
+      taskFeedback.success("history", "Change undone");
     } catch (err) {
       saveError = `Undo failed: ${String(err)}`;
-      taskFeedback.error(saveError);
+      taskFeedback.error("history", saveError);
     }
   }
 
   async function redo() {
     saveError = null;
     try {
-      taskFeedback.progress(history.redoLabel ? `Redoing ${history.redoLabel}…` : "Redoing change…");
+      taskFeedback.progress("history", history.redoLabel ? `Redoing ${history.redoLabel}…` : "Redoing change…");
       await flushMetadataSave();
       await flushBehaviourSave();
       await history.redo();
-      taskFeedback.success("Change redone");
+      taskFeedback.success("history", "Change redone");
     } catch (err) {
       saveError = `Redo failed: ${String(err)}`;
-      taskFeedback.error(saveError);
+      taskFeedback.error("history", saveError);
     }
   }
 
   async function save() {
     saving = true;
     saveError = null;
-    if (store.uploading) taskFeedback.warning("Saving while upload continues — pending files may not be included");
-    else taskFeedback.progress("Saving pack…");
+    if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
+    else taskFeedback.progress("save", "Saving pack…");
     try {
       await flushMetadataSave();
       await flushBehaviourSave();
@@ -122,13 +131,13 @@
       if (info) {
         store.packName = info.name;
         store.packHasDestination = info.has_destination;
-      }
+      } else taskFeedback.dismiss("save");
     } catch (err) {
       // The backend only emits save:done on success, so a failed save would
       // otherwise leave the "Saving… X/Y" progress bar stuck on screen forever.
       store.saveActive = false;
       saveError = String(err);
-      taskFeedback.error(`Save failed: ${saveError}`);
+      taskFeedback.error("save", `Save failed: ${saveError}`);
     } finally {
       saving = false;
     }
@@ -136,8 +145,8 @@
 
   async function saveAs() {
     saveError = null;
-    if (store.uploading) taskFeedback.warning("Saving while upload continues — pending files may not be included");
-    else taskFeedback.progress("Choosing save location…");
+    if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
+    else taskFeedback.progress("save", "Choosing save location…");
     try {
       await flushMetadataSave();
       await flushBehaviourSave();
@@ -145,10 +154,10 @@
       if (info) {
         store.packName = info.name;
         store.packHasDestination = true;
-      } else taskFeedback.dismiss();
+      } else taskFeedback.dismiss("save");
     } catch (err) {
       saveError = String(err);
-      taskFeedback.error(`Save failed: ${saveError}`);
+      taskFeedback.error("save", `Save failed: ${saveError}`);
     }
   }
 
@@ -166,6 +175,7 @@
     store.files = files;
     store.allTags = tags;
     store.behaviour = behaviour;
+    store.suspendedExperience = null;
     initializeMetadataHistory(meta);
     initializeBehaviourHistory(behaviour);
     history.reset(true);
@@ -190,12 +200,12 @@
       await flushMetadataSave();
       await flushBehaviourSave();
       const info = await api.savePack();
-      if (!info) return;
+      if (!info) { taskFeedback.dismiss("save"); return; }
       await finishClosePack();
     } catch (err) {
       store.saveActive = false;
       saveError = String(err);
-      taskFeedback.error(`Save failed: ${saveError}`);
+      taskFeedback.error("save", `Save failed: ${saveError}`);
     }
   }
 
@@ -210,7 +220,7 @@
       await finishClosePack();
     } catch (err) {
       saveError = `Could not discard changes: ${String(err)}`;
-      taskFeedback.error(saveError);
+      taskFeedback.error("pack-action", saveError);
     }
   }
 
@@ -224,8 +234,10 @@
     store.removeFilesById(ids, true);
     history.record({
       label: removed.length === 1 ? `Remove “${removed[0].file_name}”` : `Remove ${removed.length} media items`,
+      storageBytes: removed.reduce((total, file) => total + file.size, 0),
       undo: async () => { await api.restoreFiles(ids); store.restoreFiles(removed); },
       redo: async () => { await api.removeFiles(ids); store.removeFilesById(ids, true); },
+      dispose: () => api.purgeHistoryFiles(ids),
     });
     const remaining = store.filteredFiles;
     if (remaining.length > 0) {
@@ -239,14 +251,14 @@
 <div class="flex flex-col h-screen bg-bg text-text select-none">
   <!-- Toolbar -->
   <header class="flex items-center gap-2 px-3 h-11 bg-surface border-b border-border shrink-0">
-    <span class="text-sm font-semibold text-text truncate">{store.packName}</span>
+    <span class="pack-title text-sm font-semibold text-text truncate">{store.packName}</span>
     <span
-      class="flex items-center gap-1.5 text-xs {store.recoveryStatus === 'error' ? 'text-[var(--ui-danger)]' : store.recoveryStatus === 'saved' ? 'text-muted' : 'text-[var(--ui-warning)]'}"
+      class="recovery-status flex items-center gap-1.5 text-xs {store.recoveryStatus === 'error' ? 'text-[var(--ui-danger)]' : store.recoveryStatus === 'saved' ? 'text-muted' : 'text-[var(--ui-warning)]'}"
       role={store.recoveryStatus === "error" ? "alert" : undefined}
       title={store.recoveryError ?? (store.recoveryStatus === "backed-up" ? "Changes are stored in the application data directory and can be recovered after a crash." : undefined)}
     >
       <span class="w-1.5 h-1.5 rounded-full {store.recoveryStatus === 'error' ? 'bg-[var(--ui-danger)]' : store.recoveryStatus === 'saved' ? 'bg-muted' : 'bg-[var(--ui-warning)]'} {store.recoveryStatus === 'pending' ? 'animate-pulse' : ''}"></span>
-      {#if store.recoveryStatus === "saved"}
+      <span class="recovery-label">{#if store.recoveryStatus === "saved"}
         Saved
       {:else if store.recoveryStatus === "pending"}
         Backing up changes…
@@ -256,7 +268,7 @@
         Unsaved · backed up locally
       {:else}
         Draft backed up locally
-      {/if}
+      {/if}</span>
     </span>
     <div class="flex-1"></div>
     <TaskStatus />
@@ -285,15 +297,15 @@
   </header>
 
   <div class="flex flex-1 min-h-0">
-    <aside class="flex flex-col bg-surface border-r border-border shrink-0 transition-[width] duration-150 {navCollapsed ? 'w-12' : 'w-44'}">
-      <div class="flex items-center h-11 px-2 border-b border-border {navCollapsed ? 'justify-center' : 'justify-between'}">
-        {#if !navCollapsed}<span class="text-sm font-semibold text-text px-1">Sections</span>{/if}
-        <IconButton label={navCollapsed ? "Expand navigation" : "Collapse navigation"} onclick={toggleNavigation}>
+    <aside class="flex flex-col bg-surface border-r border-border shrink-0 transition-[width] duration-150 {navigationCollapsed ? 'w-12' : 'w-44'}">
+      <div class="flex items-center h-11 px-2 border-b border-border {navigationCollapsed ? 'justify-center' : 'justify-between'}">
+        {#if !navigationCollapsed}<span class="text-sm font-semibold text-text px-1">Sections</span>{/if}
+        {#if !narrowWindow}<IconButton label={navCollapsed ? "Expand navigation" : "Collapse navigation"} onclick={toggleNavigation}>
           <span class="w-4 h-4"><Icon src={navCollapsed ? ChevronRight : ChevronLeft} mini /></span>
-        </IconButton>
+        </IconButton>{/if}
       </div>
       <nav class="p-2">
-        <Tabs tabs={navigationTabs} active={store.activeView} orientation="vertical" collapsed={navCollapsed} onselect={(id) => (store.activeView = id as typeof store.activeView)} />
+        <Tabs tabs={navigationTabs} active={store.activeView} orientation="vertical" collapsed={navigationCollapsed} onselect={(id) => (store.activeView = id as typeof store.activeView)} />
       </nav>
     </aside>
 
@@ -301,8 +313,8 @@
     <div class="flex-1 min-w-0 flex flex-col">
       {#if store.activeView === "media"}
         <MediaToolbar />
-        <div class="flex-1 min-h-0 flex">
-          <div class="flex-1 min-w-0">
+        <div class="flex-1 min-h-0 flex max-[520px]:flex-col">
+          <div class="flex-1 min-w-0 min-h-0">
             {#if store.filteredFiles.length === 0 && store.files.length === 0}
               <div class="flex items-center justify-center h-full p-8">
                 <div class="w-full max-w-lg"><EmptyState title="Add media to this pack" description="Import images, videos, or audio files. You can also drag files or folders anywhere onto this window." actionLabel="Import files…" onclick={() => api.addFilesDialog()} secondaryActionLabel="Import folder…" onsecondary={() => api.addFolderDialog(false)} /></div>
@@ -327,6 +339,8 @@
         <div class="flex-1 min-h-0 flex flex-col">
           <Experience />
         </div>
+      {:else if store.activeView === "modes"}
+        <Modes />
       {:else}
         <div class="flex-1 overflow-y-auto">
           <Options />
@@ -341,6 +355,16 @@
   {/if}
 
 </div>
+
+<style>
+  .pack-title { min-width: 48px; }
+  @media (max-width: 760px) {
+    .pack-title { max-width: 28vw; }
+    .recovery-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .recovery-status { flex: none; }
+  }
+  @media (max-width: 520px) { .pack-title { max-width: 20vw; } }
+</style>
 
 {#if showClosePackDialog}
   <Dialog

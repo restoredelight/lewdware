@@ -1,4 +1,4 @@
-import type { Behaviour, ConversionWarning, MediaFile, MetadataDto, UploadError } from "./types.js";
+import type { Behaviour, ConversionWarning, Experience, MediaFile, MetadataDto, UploadError } from "./types.js";
 
 // Reused across sorts: constructing a Collator per comparison (e.g. via
 // a.localeCompare(b, undefined, opts)) is drastically slower at scale.
@@ -85,7 +85,7 @@ class AppStore {
   openedId = $state<number | null>(null);
 
   // View routing
-  activeView = $state<"media" | "tags" | "content" | "experience" | "options">("media");
+  activeView = $state<"media" | "tags" | "content" | "experience" | "modes" | "options">("media");
 
   // Filtering
   searchQuery = $state("");
@@ -117,6 +117,9 @@ class AppStore {
   // Content/Experience tab state: the pack's behaviour.json document, shared by both tabs (see
   // behaviourSave.ts) -- null until lazily fetched by whichever tab mounts first.
   behaviour = $state<Behaviour | null>(null);
+  // Retained only for the lifetime of the open pack, so disabling Experience can persist `null`
+  // without making a quick disable/re-enable cycle destroy the timeline the user was editing.
+  suspendedExperience = $state<Experience | null>(null);
 
   uploading = $derived(this.uploadBatches > 0);
   showUploadProgress = $derived(
@@ -213,6 +216,7 @@ class AppStore {
     this.metadata = null;
     this.importWarnings = [];
     this.behaviour = null;
+    this.suspendedExperience = null;
   }
 
   closePack() {
@@ -232,15 +236,16 @@ class AppStore {
     this.tagFilter = new Set();
     this.importWarnings = [];
     this.behaviour = null;
+    this.suspendedExperience = null;
   }
 
-  addFile(file: MediaFile) {
+  addFile(file: MediaFile, tracked = false) {
     this.files.push(file);
     if (file.tags.length > 0) {
       const newTags = file.tags.filter((t) => !this.allTags.includes(t));
       if (newTags.length > 0) this.allTags = [...this.allTags, ...newTags];
     }
-    this.markLocallyBackedUp();
+    if (!tracked) this.markLocallyBackedUp();
   }
 
   removeFilesById(ids: number[], tracked = false) {
