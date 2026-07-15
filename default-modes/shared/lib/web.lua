@@ -21,6 +21,13 @@ local function build_url(link)
 	return url
 end
 
+function M.fire(active_tags)
+	local link = content.pick_web_link(active_tags and active_tags())
+	if not link then return false end
+	lewdware.open_link(build_url(link))
+	return true
+end
+
 --- @param is_dormant fun(): boolean See `lib/notifications.lua`'s doc comment on the same
 ---   parameter -- identical reasoning applies here.
 --- @param enabled boolean See `lib/notifications.lua`'s doc comment on the same parameter.
@@ -29,16 +36,13 @@ end
 --- @param active_tags (fun(): string[]|nil)|nil See `lib/notifications.lua`'s doc comment on the
 ---   same parameter.
 --- @return Interval|nil See `lib/notifications.lua`'s doc comment on the same return value.
-function M.start(is_dormant, enabled, frequency_seconds, active_tags)
+function M.start(is_dormant, enabled, frequency_seconds, active_tags, on_spawn)
 	if not enabled then return end
 
 	return lewdware.every(secs(frequency_seconds), function()
 		if is_dormant() then return end
 
-		local link = content.pick_web_link(active_tags and active_tags())
-		if not link then return end -- rule 5: empty pool, skip this beat
-
-		lewdware.open_link(build_url(link))
+		if M.fire(active_tags) and on_spawn then on_spawn() end
 	end)
 end
 

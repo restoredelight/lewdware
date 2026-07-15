@@ -1,137 +1,222 @@
--- The Experience transition timeline: session-scoped level state machine. Experience-only (not
--- `shared/lib` -- see behaviour-design/default-mode.md's feature table, "Transitions | Experience
--- | Timeline"), same reasoning as dormancy bookkeeping staying Sandbox-only via `spawn.lua`'s
--- `on_spawn` hook: a mode-specific concept shouldn't leak into the shared library.
---
--- This module only knows "what level are we at, and what does that level say" -- it has no
--- opinion on which features consume that (main.lua wires each one). See
--- behaviour-design/default-mode.md, "Transitions v1" and the Ownership section's per-level
--- definition.
---
--- Levels are fully independent snapshots -- no inheritance between them, not even from
--- `levels[1]` (see `Level`'s doc comment in shared/src/behaviour/schema.rs): computing the
--- current effective params is a pure function of `levels[level_index]` alone, so jumping straight
--- to a later level (via a popup-count trigger) produces identical params to passing through every
--- level in between. That's also what makes trigger checking simple: "jump to the highest
--- not-yet-reached level whose trigger is satisfied", never step-by-step.
---
--- `levels[1]` is the baseline: always active from session start, with no trigger of its own --
--- its `at_seconds`/`at_popups` are never read here.
+-- Experience's ordered stage/transition state machine. A stage first remains fully active until
+-- its ending condition is met. Its outgoing transition then interpolates selected numeric values;
+-- discrete values switch when that transition ends. Only after that does the next stage's own
+-- duration begin.
 
 local M = {}
 
-local function experience()
-	return rawget(_G, "__lewdware_experience") or {}
+local experience = rawget(_G, "__lewdware_experience") or {}
+local timeline = experience.timeline or {}
+local stages = timeline.stages or {}
+local transitions = timeline.transitions or {}
+
+local stage_index = 1
+local phase = "stage"
+local generation = 0 -- invalidates timers left behind by an event-count advance
+local session_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0 }
+local stage_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0 }
+local listeners = {}
+local current = stages[1] or { content={}, events={} }
+local duration_reached = false
+
+local function milliseconds(seconds)
+	return math.max(0, math.floor((seconds or 0) * 1000))
 end
 
----@type table[]
-local levels = ((experience().timeline or {}).levels) or {}
-
-local level_index = 1 -- 1 = the baseline (levels[1]); never 0, there's no virtual level anymore
-local popup_count = 0
-
----@type fun()[]
-local change_listeners = {}
-
-local function secs(s)
-	return math.floor(s * 1000)
+local function copy(value)
+	if type(value) ~= "table" then return value end
+	local result = {}
+	for key, child in pairs(value) do result[key] = copy(child) end
+	return result
 end
 
----@param i integer
-local function level_at(i)
-	return levels[i] or {}
+local function notify()
+	for _, listener in ipairs(listeners) do listener() end
 end
 
---- The current level's frequency anchors (empty table if `levels` is empty or the level sets
---- none) -- each field absent means that feature doesn't run while this level is active.
----@return table
-function M.anchors()
-	return level_at(level_index).anchors or {}
+local function outgoing(index)
+	local from = stages[index]
+	local to = stages[index + 1]
+	if not from or not to then return nil end
+	for _, transition in ipairs(transitions) do
+		if transition.from_stage == from.id and transition.to_stage == to.id then return transition end
+	end
+	return nil
 end
 
---- The current level's non-rate design values -- same absent-means-inert convention as anchors.
----@return table
-function M.design()
-	return level_at(level_index).design or {}
-end
-
---- The current level's active tag set (mode parameter) -- nil means unrestricted (the pack's full
---- tag vocabulary), same as an absent `tags` filter anywhere else in the default-modes library.
----@return string[]|nil
-function M.tags()
-	return level_at(level_index).tags
-end
-
---- The current level's wallpaper-tag override -- nil means no override (`content.wallpaper_tags`
---- stays in effect, applied by `lib.wallpaper` as usual).
----@return string[]|nil
-function M.wallpaper_tags()
-	return level_at(level_index).wallpaper_tags
-end
-
---- True if any level in the whole design sets a value at `path` (e.g. a rate feature this design
---- ever uses, even if not at the baseline) -- used to decide whether a feature's process should
---- ever start at all, since a later level can turn on a feature the baseline never used.
----@param predicate fun(level: table): boolean
----@return boolean
-function M.any_level(predicate)
-	for _, level in ipairs(levels) do
-		if predicate(level) then return true end
+local function selected(transition, granular, broad)
+	for _, value in ipairs(transition.affected or {}) do
+		if value == granular or value == broad then return true end
 	end
 	return false
 end
 
---- Registers a listener invoked (with no arguments) whenever `level_index` actually changes.
---- Consumers re-read `M.anchors()`/`M.design()`/`M.tags()`/`M.wallpaper_tags()` themselves rather
---- than being handed values -- keeps this module ignorant of which features exist (interaction
---- rule 3: "every process declares which parameters it derives state from").
----@param fn fun()
-function M.on_level_change(fn)
-	table.insert(change_listeners, fn)
-end
-
---- Jumps directly to `i` if it's further than the current level -- never steps through
---- intermediates (levels are independent snapshots, so there's nothing to accumulate). A stale
---- timer firing for a level already passed (because a popup-count trigger got there first) is a
---- safe no-op: rule 2, no timer ever needs cancelling.
----@param i integer
-local function try_advance_to(i)
-	if i <= level_index then return end
-	level_index = i
-	for _, fn in ipairs(change_listeners) do
-		fn()
+local function ease(kind, t)
+	if kind == "ease_in" then return t * t end
+	if kind == "ease_out" then return 1 - (1 - t) * (1 - t) end
+	if kind == "ease_in_out" then
+		if t < 0.5 then return 2 * t * t end
+		return 1 - ((-2 * t + 2) ^ 2) / 2
 	end
+	return t
 end
 
---- Cumulative popups spawned since session start. Increments the counter, then jumps to the
---- highest not-yet-reached level whose `at_popups` threshold is now satisfied, if any -- an
---- *early* advance ahead of that level's `at_seconds` timer (which stays scheduled regardless,
---- and becomes a no-op once it fires: see `try_advance_to`).
-function M.on_popup_spawned()
-	popup_count = popup_count + 1
+local function lerp(a, b, t, round)
+	if type(a) ~= "number" or type(b) ~= "number" then return a end
+	local value = a + (b - a) * t
+	return round and math.floor(value + 0.5) or value
+end
 
-	local target = level_index
-	for i = 2, #levels do
-		local level = levels[i]
-		if i > target and level.at_popups and popup_count >= level.at_popups then
-			target = i
+local function interval_bounds(interval)
+	if not interval then return nil, nil end
+	if interval.kind == "random" then return interval.minimum_seconds, interval.maximum_seconds end
+	return interval.seconds, interval.seconds
+end
+
+local event_values = {
+	popup="popup_interval", web="web_interval", notification="notification_interval",
+	prompt="prompt_interval", subliminal="subliminal_interval",
+}
+
+local function interpolate(from, to, transition, progress)
+	local value = copy(from)
+	value.content = copy(from.content or {})
+	value.events = copy(from.events or {})
+
+	for event, affected in pairs(event_values) do
+		local source = (from.events or {})[event]
+		local target = (to.events or {})[event]
+		if source and target and selected(transition, affected, "events") then
+			local source_min, source_max = interval_bounds(source.interval)
+			local target_min, target_max = interval_bounds(target.interval)
+			local minimum = lerp(source_min, target_min, progress)
+			local maximum = lerp(source_max, target_max, progress)
+			value.events[event].interval = minimum == maximum
+				and { kind="fixed", seconds=minimum }
+				or { kind="random", minimum_seconds=minimum, maximum_seconds=maximum }
 		end
 	end
-	if target > level_index then try_advance_to(target) end
+
+	if from.movement then
+		value.movement = copy(from.movement)
+		if to.movement then
+			if selected(transition, "movement_minimum_speed", "movement") then value.movement.minimum_speed = lerp(from.movement.minimum_speed, to.movement.minimum_speed, progress) end
+			if selected(transition, "movement_maximum_speed", "movement") then value.movement.maximum_speed = lerp(from.movement.maximum_speed, to.movement.maximum_speed, progress) end
+		end
+	end
+	if from.mitosis then
+		value.mitosis = copy(from.mitosis)
+		if to.mitosis then
+			if selected(transition, "mitosis_chance", "mitosis") then value.mitosis.chance = lerp(from.mitosis.chance, to.mitosis.chance, progress) end
+			if selected(transition, "mitosis_count", "mitosis") then value.mitosis.count = lerp(from.mitosis.count, to.mitosis.count, progress, true) end
+		end
+	end
+	return value
 end
 
---- Schedules one timer per non-baseline level at its `at_seconds` offset from session start (call
---- once, at startup). `levels[1]` (the baseline) has no trigger and needs no timer. Every other
---- level gets a timer regardless of order or of an intervening popup-count advance --
---- `try_advance_to`'s "only advance forward" guard makes a stale fire harmless, so nothing needs
---- to be cancelled or rescheduled when popups jump ahead (rule 2).
-function M.init()
-	for i = 2, #levels do
-		local level = levels[i]
-		lewdware.after(secs(level.at_seconds), function()
-			try_advance_to(i)
+local enter_stage
+
+local function run_transition()
+	local next_stage = stages[stage_index + 1]
+	if not next_stage then return end
+	local transition = outgoing(stage_index) or { duration_seconds=0, easing="linear", affected={} }
+	local duration_ms = milliseconds(transition.duration_seconds)
+	generation = generation + 1
+	local token = generation
+	phase = "transition"
+	if duration_ms == 0 then enter_stage(stage_index + 1); return end
+
+	local source = stages[stage_index]
+	local elapsed = 0
+	local tick_ms = math.min(50, duration_ms)
+	local function tick()
+		if token ~= generation then return end
+		elapsed = math.min(duration_ms, elapsed + tick_ms)
+		current = interpolate(source, next_stage, transition, ease(transition.easing, elapsed / duration_ms))
+		notify()
+		if elapsed >= duration_ms then enter_stage(stage_index + 1)
+		else lewdware.after(math.min(tick_ms, duration_ms - elapsed), tick) end
+	end
+	lewdware.after(tick_ms, tick)
+end
+
+local function condition_reached(condition)
+	if not condition then return false end
+	local counts = condition.scope == "session" and session_counts or stage_counts
+	return (counts[condition.event] or 0) >= condition.count
+end
+
+local function check_event_end()
+	local ending = (stages[stage_index] or {})["end"]
+	if phase ~= "stage" or not ending or not ending.event_count then return end
+	local event_done = condition_reached(ending.event_count)
+	local has_duration = ending.duration_seconds ~= nil
+	if event_done and (ending.strategy ~= "all" or not has_duration or duration_reached) then run_transition() end
+end
+
+enter_stage = function(index)
+	generation = generation + 1
+	local token = generation
+	stage_index = index
+	phase = "stage"
+	duration_reached = false
+	stage_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0 }
+	current = stages[index] or { content={}, events={} }
+	notify()
+	local ending = current["end"]
+	if not ending then return end
+	if ending.duration_seconds ~= nil then
+		lewdware.after(milliseconds(ending.duration_seconds), function()
+			if token ~= generation or phase ~= "stage" then return end
+			duration_reached = true
+			if ending.strategy ~= "all" or not ending.event_count or condition_reached(ending.event_count) then run_transition() end
 		end)
 	end
+end
+
+function M.events() return current.events or {} end
+function M.movement() return current.movement end
+function M.mitosis() return current.mitosis end
+function M.tags() return (current.content or {}).tags end
+function M.wallpaper_tags() return (current.content or {}).wallpaper_tags end
+function M.phase() return phase end
+function M.stage_index() return stage_index end
+
+function M.any_stage(predicate)
+	for _, stage in ipairs(stages) do if predicate(stage) then return true end end
+	return false
+end
+
+function M.on_change(listener) table.insert(listeners, listener) end
+
+function M.on_event(kind)
+	if session_counts[kind] == nil then return end
+	session_counts[kind] = session_counts[kind] + 1
+	stage_counts[kind] = stage_counts[kind] + 1
+	check_event_end()
+end
+
+-- Compatibility aliases for embedded/default-mode tests and third-party wrappers written while
+-- the v2 level runtime was under development. The built-in mode itself uses the v3 getters above.
+function M.anchors()
+	local result = {}
+	for kind, schedule in pairs(M.events()) do
+		if schedule.interval.kind == "fixed" then result[kind] = schedule.interval.seconds end
+	end
+	return result
+end
+function M.design()
+	local movement = M.movement() or {}
+	local mitosis = M.mitosis() or {}
+	return {
+		movement_speed_min=movement.minimum_speed, movement_speed_max=movement.maximum_speed,
+		mitosis_chance=mitosis.chance, mitosis_count=mitosis.count,
+	}
+end
+function M.on_popup_spawned() M.on_event("popup") end
+
+function M.init()
+	if stages[1] then enter_stage(1) end
 end
 
 return M

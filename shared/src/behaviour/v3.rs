@@ -42,6 +42,10 @@ impl Behaviour {
         serde_json::to_vec_pretty(self)
     }
 
+    pub fn is_from_newer_engine(&self) -> bool {
+        self.version > VERSION
+    }
+
     pub fn validate(&self) -> Vec<ValidationIssue> {
         let Some(experience) = &self.experience else {
             return vec![];

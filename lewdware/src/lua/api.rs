@@ -94,7 +94,7 @@ pub struct ApiOptions {
     /// The pack's behaviour.json `experience` section (empty for custom modes, Sandbox, or a
     /// pack with none) -- handed to Lua as `__lewdware_experience`, mirroring `content`. Only
     /// `Mode::Experience`'s library code (`default-modes/experience/src/main.lua`) reads this.
-    pub experience: shared::behaviour::Experience,
+    pub experience: shared::behaviour::v3::Experience,
     pub gpu_available: bool,
     pub dev_mode: bool,
 }

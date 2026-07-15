@@ -19,6 +19,17 @@ local function secs(s)
 	return math.floor(s * 1000)
 end
 
+function M.fire(active_tags)
+	local item = content.pick_subliminal(active_tags and active_tags())
+	if not item then return false end
+	local window = lewdware.popup.text(item.text, {
+		opacity = lewdware.config.subliminal_opacity, decorations = false, click_through = true,
+		width = { percent = 100 }, height = { percent = 100 }, font_size = { percent = 6 },
+	})
+	lewdware.after(FLASH_DURATION_MS, function() window:close() end)
+	return true
+end
+
 --- @param is_dormant fun(): boolean See `lib/notifications.lua`'s doc comment on the same
 ---   parameter -- identical reasoning applies here.
 --- @param enabled boolean See `lib/notifications.lua`'s doc comment on the same parameter.
@@ -29,27 +40,13 @@ end
 --- @param active_tags (fun(): string[]|nil)|nil See `lib/notifications.lua`'s doc comment on the
 ---   same parameter.
 --- @return Interval|nil See `lib/notifications.lua`'s doc comment on the same return value.
-function M.start(is_dormant, enabled, frequency_seconds, active_tags)
+function M.start(is_dormant, enabled, frequency_seconds, active_tags, on_spawn)
 	if not enabled then return end
 
 	return lewdware.every(secs(frequency_seconds), function()
 		if is_dormant() then return end
 
-		local item = content.pick_subliminal(active_tags and active_tags())
-		if not item then return end -- rule 5: empty pool, skip this beat
-
-		local window = lewdware.popup.text(item.text, {
-			opacity = lewdware.config.subliminal_opacity,
-			decorations = false,
-			click_through = true,
-			width = { percent = 100 },
-			height = { percent = 100 },
-			font_size = { percent = 6 },
-		})
-
-		lewdware.after(FLASH_DURATION_MS, function()
-			window:close()
-		end)
+		if M.fire(active_tags) and on_spawn then on_spawn() end
 	end)
 end
 

@@ -134,9 +134,10 @@ function M.make_spawner(opts)
 	local popup_count = 0
 
 	local function should_spawn()
+		local max_popups = resolve(opts.max_popups)
 		return not (#opts.popup_types == 0
 			or opts.is_dormant()
-			or (opts.max_popups and popup_count >= opts.max_popups))
+			or (max_popups and popup_count >= max_popups))
 	end
 
 	local open_popup
@@ -146,11 +147,11 @@ function M.make_spawner(opts)
 			close_trigger = true
 		end
 
-		if not should_spawn() then return end
+		if not should_spawn() then return false end
 
 		local tags = opts.active_tags and opts.active_tags()
 		local item = media.random({ type = opts.popup_types, tags = tags })
-		if not item then return end
+		if not item then return false end
 
 		local window
 		if item.type == "image" then
@@ -175,7 +176,7 @@ function M.make_spawner(opts)
 		local speed_min = resolve(opts.movement_speed_min)
 		local speed_max = resolve(opts.movement_speed_max)
 		if opts.movement_enabled and speed_min and speed_max then
-			local speed = math.random(speed_min, speed_max)
+			local speed = math.floor(speed_min + math.random() * (speed_max - speed_min) + 0.5)
 			start_movement(window, speed)
 		end
 
@@ -207,6 +208,7 @@ function M.make_spawner(opts)
 				end
 			end)
 		end
+		return true
 	end
 
 	return open_popup

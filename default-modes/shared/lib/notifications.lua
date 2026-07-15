@@ -11,6 +11,13 @@ local function secs(s)
 	return math.floor(s * 1000)
 end
 
+function M.fire(active_tags)
+	local notification = content.pick_notification(active_tags and active_tags())
+	if not notification then return false end
+	lewdware.show_notification({ body = notification.text })
+	return true
+end
+
 --- @param is_dormant fun(): boolean Checked on every tick -- Sandbox's dormancy cycle pauses this
 ---   process the same way it pauses popups (see main.lua's `schedule_dormancy`), rather than
 ---   stopping/restarting the underlying interval: there's no accelerating-style state here to
@@ -27,16 +34,13 @@ end
 --- @return Interval|nil The interval driving this process (nil if `enabled` was false) -- so a
 ---   timeline (Experience only) can retune it via `Interval:set_duration()` on a level change,
 ---   rather than this module needing any timeline awareness of its own.
-function M.start(is_dormant, enabled, frequency_seconds, active_tags)
+function M.start(is_dormant, enabled, frequency_seconds, active_tags, on_spawn)
 	if not enabled then return end
 
 	return lewdware.every(secs(frequency_seconds), function()
 		if is_dormant() then return end
 
-		local notification = content.pick_notification(active_tags and active_tags())
-		if not notification then return end -- rule 5: empty pool, skip this beat
-
-		lewdware.show_notification({ body = notification.text })
+		if M.fire(active_tags) and on_spawn then on_spawn() end
 	end)
 end
 
