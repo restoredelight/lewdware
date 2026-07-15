@@ -1,7 +1,8 @@
 <script lang="ts">
   import { store } from "./store.svelte";
-  import Checkbox from "$ui/Checkbox.svelte";
   import Slider from "$ui/Slider.svelte";
+  import Toggle from "$ui/Toggle.svelte";
+  import Card from "$ui/Card.svelte";
   import type { Capabilities, Volume } from "./types";
 
   const toggles: { key: keyof Capabilities; label: string; description: string }[] = [
@@ -37,44 +38,47 @@
 
 </script>
 
-<div class="flex flex-col gap-8 p-8 overflow-y-auto flex-1">
-  <div class="flex flex-col gap-2">
-    <span class="text-sm font-semibold text-text">Permissions</span>
+<div class="flex-1 overflow-y-auto">
+<div class="w-full max-w-4xl mx-auto flex flex-col gap-8 p-8">
+  <header class="max-w-2xl">
+    <h1 class="ui-page-title">Permissions &amp; Volume</h1>
+    <p class="mt-1.5 mb-0 text-sm text-muted">
+      Control what packs may do outside their windows and how loudly they can play media.
+    </p>
+  </header>
+
+  <section class="flex flex-col gap-2">
+    <h2 class="ui-section-title">Permissions</h2>
     <p class="text-xs text-muted">
       Control what the running pack or mode is allowed to do outside its own windows. A denied
       action is silently skipped rather than shown as an error.
     </p>
-    <div class="flex flex-col gap-1">
+    <Card class="divide-y divide-border">
       {#each toggles as toggle (toggle.key)}
-        <label
-          class="flex items-start gap-3 px-3 py-2 rounded-md cursor-pointer
-                 hover:bg-surface-2 transition-colors"
-        >
-          <span class="mt-0.5"><Checkbox checked={store.config?.capabilities[toggle.key] ?? false} ariaLabel={toggle.label} onchange={(checked) => store.setCapability(toggle.key, checked)} /></span>
-          <span class="flex flex-col">
-            <span class="text-sm text-text">{toggle.label}</span>
-            <span class="text-xs text-muted">{toggle.description}</span>
-          </span>
-        </label>
+        <div class="flex items-center gap-4 px-4 py-3">
+          <div class="min-w-0 flex-1"><h3 class="m-0 text-sm font-medium text-text">{toggle.label}</h3><p class="m-0 mt-1 text-xs text-muted">{toggle.description}</p></div>
+          <span class="text-xs font-medium {store.config?.capabilities[toggle.key] ? 'text-[var(--ui-success)]' : 'text-muted'}">{store.config?.capabilities[toggle.key] ? "Allowed" : "Denied"}</span>
+          <Toggle checked={store.config?.capabilities[toggle.key] ?? false} ariaLabel={`Allow ${toggle.label.toLowerCase()}`} onchange={(checked) => store.setCapability(toggle.key, checked)} />
+        </div>
       {/each}
-    </div>
-  </div>
+    </Card>
+  </section>
 
-  <div class="flex flex-col gap-2">
-    <span class="text-sm font-semibold text-text">Volume</span>
+  <section class="flex flex-col gap-2 border-t border-border pt-6">
+    <h2 class="ui-section-title">Volume</h2>
     <p class="text-xs text-muted">
       Master volume, applied on top of whatever volume the pack/mode requests for a track.
     </p>
-    <div class="flex flex-col gap-4">
+    <div class="grid grid-cols-2 gap-3">
       {#each volumeSliders as slider (slider.key)}
-        <div class="flex flex-col gap-1 px-3 py-2">
+        <Card class="flex flex-col gap-3 p-4">
           <div class="flex items-center justify-between">
-            <span class="text-sm text-text">{slider.label}</span>
-            <span class="text-xs text-muted tabular-nums">
+            <span class="text-sm font-medium text-text">{slider.label}</span>
+            <span class="rounded bg-bg px-2 py-1 text-xs font-semibold text-text tabular-nums">
               {Math.round((store.config?.volume[slider.key] ?? 0) * 100)}%
             </span>
           </div>
-          <p class="text-xs text-muted">{slider.description}</p>
+          <p class="m-0 text-xs text-muted">{slider.description}</p>
           <Slider
             ariaLabel={`${slider.label} volume`}
             min={0}
@@ -84,8 +88,9 @@
             oninput={(value) => store.previewVolume(slider.key, value)}
             onchange={() => store.saveConfig()}
           />
-        </div>
+        </Card>
       {/each}
     </div>
-  </div>
+  </section>
+</div>
 </div>

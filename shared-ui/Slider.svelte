@@ -12,10 +12,22 @@
   };
 
   let { value, min = 0, max = 100, step = 1, disabled = false, ariaLabel, class: className = "", oninput = () => {}, onchange = () => {} }: Props = $props();
+  let input: HTMLInputElement;
   const fill = $derived(max <= min ? 0 : Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100)));
+
+  // Some webviews initialize a newly revealed range input's native value before applying its
+  // fractional min/max attributes. The CSS fill (calculated above) is then correct while the
+  // browser thumb remains at its default position. Synchronize the property after all range
+  // constraints have been applied.
+  $effect(() => {
+    if (!input) return;
+    min; max; step;
+    if (Number.isFinite(value) && input.valueAsNumber !== value) input.valueAsNumber = value;
+  });
 </script>
 
 <input
+  bind:this={input}
   type="range"
   {value}
   {min}
