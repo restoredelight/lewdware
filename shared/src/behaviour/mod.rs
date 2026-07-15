@@ -1,5 +1,6 @@
 mod resolver;
 mod schema;
+pub mod v3;
 
 pub use resolver::{
     CONTENT_GROUP_KEY_PREFIX, EffectiveSchema, effective_config, effective_options,

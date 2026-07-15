@@ -4,7 +4,7 @@
   import { store } from "./store.svelte.js";
   import TimelineEditor from "./TimelineEditor.svelte";
   import { flushBehaviourSave, initializeBehaviourHistory, scheduleBehaviourSave } from "./behaviourSave.svelte.js";
-  import type { Experience, Level } from "./types.js";
+  import type { Experience, Stage } from "./types.js";
   import Toggle from "$ui/Toggle.svelte";
 
   onMount(async () => {
@@ -16,25 +16,9 @@
     flushBehaviourSave();
   });
 
-  function emptyBaselineLevel(): Level {
+  function emptyBaselineLevel(): Stage {
     return {
-      at_seconds: 0,
-      at_popups: null,
-      anchors: {
-        popup: null,
-        web: null,
-        notification: null,
-        prompt: null,
-        subliminal: null,
-      },
-      design: {
-        movement_speed_min: null,
-        movement_speed_max: null,
-        mitosis_chance: null,
-        mitosis_count: null,
-      },
-      tags: null,
-      wallpaper_tags: null,
+      id: crypto.randomUUID(), label: "Stage 1", content: {}, events: {},
     };
   }
 
@@ -43,7 +27,7 @@
     if (checked) {
       store.behaviour.experience = store.suspendedExperience
         ? structuredClone($state.snapshot(store.suspendedExperience))
-        : { timeline: { levels: [emptyBaselineLevel()] } };
+        : { timeline: { stages: [emptyBaselineLevel()], transitions: [] } };
       store.suspendedExperience = null;
     } else {
       store.suspendedExperience = store.behaviour.experience

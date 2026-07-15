@@ -98,37 +98,22 @@ export interface Content {
   splash_tags: string[];
 }
 
-export interface FrequencyAnchors {
-  popup: number | null;
-  web: number | null;
-  notification: number | null;
-  prompt: number | null;
-  subliminal: number | null;
-}
-
-export interface DesignValues {
-  movement_speed_min: number | null;
-  movement_speed_max: number | null;
-  mitosis_chance: number | null;
-  mitosis_count: number | null;
-}
-
-// Every level is fully independent (no inheritance between levels, not even from levels[0]) --
-// a field left unset means that feature/restriction simply doesn't apply while this level is
-// active. levels[0] is the baseline: always active from session start, at_seconds/at_popups are
-// ignored for it and the editor never renders trigger fields for that level.
-export interface Level {
-  at_seconds: number;
-  at_popups: number | null;
-  anchors: FrequencyAnchors;
-  design: DesignValues;
-  tags: string[] | null;
-  wallpaper_tags: string[] | null;
-}
-
-export interface Timeline {
-  levels: Level[];
-}
+export type Interval = { kind: "fixed"; seconds: number } | { kind: "random"; minimum_seconds: number; maximum_seconds: number };
+export interface EventSchedule { interval: Interval; initial_delay_seconds?: number; max_concurrent?: number; }
+export interface Events { popup?: EventSchedule; web?: EventSchedule; notification?: EventSchedule; prompt?: EventSchedule; subliminal?: EventSchedule; }
+export interface Movement { minimum_speed?: number; maximum_speed?: number; }
+export interface Mitosis { chance?: number; count?: number; }
+export interface ContentSelection { tags?: string[]; wallpaper_tags?: string[]; }
+export interface EventCountCondition { event: "popup" | "web" | "notification" | "prompt" | "subliminal"; count: number; scope: "stage" | "session"; }
+export interface StageEnd { duration_seconds?: number; event_count?: EventCountCondition; strategy: "any" | "all"; }
+export interface Stage { id: string; label: string; end?: StageEnd; content: ContentSelection; events: Events; movement?: Movement; mitosis?: Mitosis; }
+export type TransitionValue =
+  // Broad values remain readable for behaviour documents created by early v3 editor builds.
+  | "events" | "movement" | "mitosis"
+  | "popup_interval" | "web_interval" | "notification_interval" | "prompt_interval" | "subliminal_interval"
+  | "movement_minimum_speed" | "movement_maximum_speed" | "mitosis_chance" | "mitosis_count";
+export interface Transition { id: string; from_stage: string; to_stage: string; duration_seconds: number; easing: "linear" | "ease_in" | "ease_out" | "ease_in_out"; affected: TransitionValue[]; }
+export interface Timeline { stages: Stage[]; transitions: Transition[]; }
 
 export interface Experience {
   timeline: Timeline;

@@ -12,9 +12,9 @@ function lists(behaviour: Behaviour): { tags: string[]; area: "content" | "exper
     { tags: content.wallpaper_tags, area: "content" },
     { tags: content.splash_tags, area: "content" },
   ];
-  for (const level of behaviour.experience?.timeline.levels ?? []) {
-    if (level.tags) result.push({ tags: level.tags, area: "experience" });
-    if (level.wallpaper_tags) result.push({ tags: level.wallpaper_tags, area: "experience" });
+  for (const stage of behaviour.experience?.timeline.stages ?? []) {
+    if (stage.content.tags) result.push({ tags: stage.content.tags, area: "experience" });
+    if (stage.content.wallpaper_tags) result.push({ tags: stage.content.wallpaper_tags, area: "experience" });
   }
   return result;
 }

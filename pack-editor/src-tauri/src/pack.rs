@@ -15,7 +15,6 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{named_params, params, params_from_iter, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use shared::{
-    behaviour::Behaviour,
     db::migrate,
     encode::{FileInfo, FileInfoParts, FileType},
     read_pack::{Header, Metadata, HEADER_SIZE},
@@ -960,7 +959,8 @@ impl MediaPack {
             let conn = rusqlite::Connection::open(history_path)?;
             conn.execute_batch(HISTORY_SCHEMA)?;
             let mut stmt = conn.prepare("SELECT path FROM media WHERE path IS NOT NULL")?;
-            let paths = stmt.query_map([], |row| row.get::<_, String>(0))?
+            let paths = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
             paths
         } else {
@@ -968,8 +968,11 @@ impl MediaPack {
         };
         for entry in fs::read_dir(self.dir.join("media"))? {
             if let Err(err) = entry.and_then(|e| {
-                if retained.contains(&e.file_name().to_string_lossy().to_string()) { Ok(()) }
-                else { fs::remove_file(e.path()) }
+                if retained.contains(&e.file_name().to_string_lossy().to_string()) {
+                    Ok(())
+                } else {
+                    fs::remove_file(e.path())
+                }
             }) {
                 tracing::error!("{err}");
             }
@@ -1066,7 +1069,9 @@ impl MediaPack {
     }
 
     pub async fn remove_files(&self, ids: Vec<u64>) -> Result<()> {
-        if ids.is_empty() { return Ok(()); }
+        if ids.is_empty() {
+            return Ok(());
+        }
         let _handle = self.saving.read().await;
         let history_path = self.dir.join("history.db").to_string_lossy().to_string();
         self.db_execute(move |mut conn| {
@@ -1090,7 +1095,9 @@ impl MediaPack {
     }
 
     pub async fn restore_files(&self, ids: Vec<u64>) -> Result<()> {
-        if ids.is_empty() { return Ok(()); }
+        if ids.is_empty() {
+            return Ok(());
+        }
         let _handle = self.saving.read().await;
         let history_path = self.dir.join("history.db").to_string_lossy().to_string();
         self.db_execute(move |mut conn| {
@@ -1114,32 +1121,48 @@ impl MediaPack {
     }
 
     pub async fn purge_history_files(&self, ids: Vec<u64>) -> Result<()> {
-        if ids.is_empty() { return Ok(()); }
+        if ids.is_empty() {
+            return Ok(());
+        }
         let _handle = self.saving.read().await;
         let history_path = self.dir.join("history.db");
-        if !history_path.exists() { return Ok(()); }
+        if !history_path.exists() {
+            return Ok(());
+        }
         let media_dir = self.dir.join("media");
         spawn_blocking(move || -> Result<()> {
             let mut conn = rusqlite::Connection::open(history_path)?;
             conn.execute_batch(HISTORY_SCHEMA)?;
             let vars = repeat_vars(ids.len());
             let paths = {
-                let mut stmt = conn.prepare(&format!("SELECT path FROM media WHERE path IS NOT NULL AND id IN ({vars})"))?;
-                let paths = stmt.query_map(params_from_iter(&ids), |row| row.get::<_, String>(0))?
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT path FROM media WHERE path IS NOT NULL AND id IN ({vars})"
+                ))?;
+                let paths = stmt
+                    .query_map(params_from_iter(&ids), |row| row.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 paths
             };
             let tx = conn.transaction()?;
-            tx.execute(&format!("DELETE FROM media_tags WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
-            tx.execute(&format!("DELETE FROM media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+            tx.execute(
+                &format!("DELETE FROM media_tags WHERE media_id IN ({vars})"),
+                params_from_iter(&ids),
+            )?;
+            tx.execute(
+                &format!("DELETE FROM media WHERE id IN ({vars})"),
+                params_from_iter(&ids),
+            )?;
             tx.commit()?;
             for path in paths {
                 if let Err(error) = fs::remove_file(media_dir.join(path)) {
-                    if error.kind() != io::ErrorKind::NotFound { return Err(error.into()); }
+                    if error.kind() != io::ErrorKind::NotFound {
+                        return Err(error.into());
+                    }
                 }
             }
             Ok(())
-        }).await??;
+        })
+        .await??;
         Ok(())
     }
 
@@ -1206,16 +1229,26 @@ impl MediaPack {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| {
             let mut stmt = conn.prepare("SELECT id, file FROM modes ORDER BY id")?;
-            let rows = stmt.query_map([], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?)))?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
             rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
-        }).await
+        })
+        .await
     }
 
     pub async fn add_mode(&self, file: Vec<u8>) -> Result<u64> {
         let _handle = self.saving.read().await;
-        let id = self.db_execute(move |conn| {
-            conn.query_row("INSERT INTO modes (file) VALUES (?) RETURNING id", params![file], |row| row.get(0)).map_err(Into::into)
-        }).await?;
+        let id = self
+            .db_execute(move |conn| {
+                conn.query_row(
+                    "INSERT INTO modes (file) VALUES (?) RETURNING id",
+                    params![file],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await?;
         self.mark_unsaved().await?;
         Ok(id)
     }
@@ -1263,13 +1296,16 @@ impl MediaPack {
     pub async fn purge_history_mode(&self, id: u64) -> Result<()> {
         let _handle = self.saving.read().await;
         let history_path = self.dir.join("history.db");
-        if !history_path.exists() { return Ok(()); }
+        if !history_path.exists() {
+            return Ok(());
+        }
         spawn_blocking(move || -> Result<()> {
             let conn = rusqlite::Connection::open(history_path)?;
             conn.execute_batch(HISTORY_SCHEMA)?;
             conn.execute("DELETE FROM modes WHERE id = ?", params![id])?;
             Ok(())
-        }).await??;
+        })
+        .await??;
         Ok(())
     }
 
@@ -1281,9 +1317,14 @@ impl MediaPack {
         }).await
     }
 
-    pub async fn rename_tag(&self, from: String, to: String, behaviour: &Behaviour) -> Result<()> {
+    pub async fn rename_tag<B: Serialize + Sync>(
+        &self,
+        from: String,
+        to: String,
+        behaviour: &B,
+    ) -> Result<()> {
         let _handle = self.saving.read().await;
-        let blob = behaviour.to_json_bytes()?;
+        let blob = serde_json::to_vec_pretty(behaviour)?;
         self.db_execute(move |mut conn| {
             let tx = conn.transaction()?;
             let target_exists: bool = tx.query_row(
@@ -1310,9 +1351,14 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
-    pub async fn merge_tag(&self, from: String, to: String, behaviour: &Behaviour) -> Result<()> {
+    pub async fn merge_tag<B: Serialize + Sync>(
+        &self,
+        from: String,
+        to: String,
+        behaviour: &B,
+    ) -> Result<()> {
         let _handle = self.saving.read().await;
-        let blob = behaviour.to_json_bytes()?;
+        let blob = serde_json::to_vec_pretty(behaviour)?;
         self.db_execute(move |mut conn| {
             let tx = conn.transaction()?;
             tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![to])?;
@@ -1326,9 +1372,9 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
-    pub async fn delete_tag(&self, tag: String, behaviour: &Behaviour) -> Result<()> {
+    pub async fn delete_tag<B: Serialize + Sync>(&self, tag: String, behaviour: &B) -> Result<()> {
         let _handle = self.saving.read().await;
-        let blob = behaviour.to_json_bytes()?;
+        let blob = serde_json::to_vec_pretty(behaviour)?;
         self.db_execute(move |mut conn| {
             let tx = conn.transaction()?;
             tx.execute(
@@ -1347,35 +1393,82 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
-    pub async fn restore_merged_tag(&self, from: String, to: String, source_ids: Vec<u64>, target_ids: Vec<u64>, behaviour: &Behaviour) -> Result<()> {
+    pub async fn restore_merged_tag<B: Serialize + Sync>(
+        &self,
+        from: String,
+        to: String,
+        source_ids: Vec<u64>,
+        target_ids: Vec<u64>,
+        behaviour: &B,
+    ) -> Result<()> {
         let _handle = self.saving.read().await;
-        let blob = behaviour.to_json_bytes()?;
+        let blob = serde_json::to_vec_pretty(behaviour)?;
         self.db_execute(move |mut conn| {
             let tx = conn.transaction()?;
-            tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![from])?;
-            let source_id: u64 = tx.query_row("SELECT id FROM tags WHERE name = ?", params![from], |r| r.get(0))?;
-            let target_id: u64 = tx.query_row("SELECT id FROM tags WHERE name = ?", params![to], |r| r.get(0))?;
-            for id in &source_ids { tx.execute("INSERT OR IGNORE INTO media_tags VALUES (?, ?)", params![id, source_id])?; }
-            for id in source_ids.iter().filter(|id| !target_ids.contains(id)) { tx.execute("DELETE FROM media_tags WHERE media_id = ? AND tag_id = ?", params![id, target_id])?; }
-            tx.execute("INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)", params![blob])?;
+            tx.execute(
+                "INSERT OR IGNORE INTO tags (name) VALUES (?)",
+                params![from],
+            )?;
+            let source_id: u64 =
+                tx.query_row("SELECT id FROM tags WHERE name = ?", params![from], |r| {
+                    r.get(0)
+                })?;
+            let target_id: u64 =
+                tx.query_row("SELECT id FROM tags WHERE name = ?", params![to], |r| {
+                    r.get(0)
+                })?;
+            for id in &source_ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO media_tags VALUES (?, ?)",
+                    params![id, source_id],
+                )?;
+            }
+            for id in source_ids.iter().filter(|id| !target_ids.contains(id)) {
+                tx.execute(
+                    "DELETE FROM media_tags WHERE media_id = ? AND tag_id = ?",
+                    params![id, target_id],
+                )?;
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
+                params![blob],
+            )?;
             tx.commit()?;
             Ok(())
-        }).await?;
+        })
+        .await?;
         self.mark_unsaved().await
     }
 
-    pub async fn restore_deleted_tag(&self, tag: String, ids: Vec<u64>, behaviour: &Behaviour) -> Result<()> {
+    pub async fn restore_deleted_tag<B: Serialize + Sync>(
+        &self,
+        tag: String,
+        ids: Vec<u64>,
+        behaviour: &B,
+    ) -> Result<()> {
         let _handle = self.saving.read().await;
-        let blob = behaviour.to_json_bytes()?;
+        let blob = serde_json::to_vec_pretty(behaviour)?;
         self.db_execute(move |mut conn| {
             let tx = conn.transaction()?;
             tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
-            let tag_id: u64 = tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |r| r.get(0))?;
-            for id in &ids { tx.execute("INSERT OR IGNORE INTO media_tags VALUES (?, ?)", params![id, tag_id])?; }
-            tx.execute("INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)", params![blob])?;
+            let tag_id: u64 =
+                tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |r| {
+                    r.get(0)
+                })?;
+            for id in &ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO media_tags VALUES (?, ?)",
+                    params![id, tag_id],
+                )?;
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
+                params![blob],
+            )?;
             tx.commit()?;
             Ok(())
-        }).await?;
+        })
+        .await?;
         self.mark_unsaved().await
     }
 
@@ -1994,7 +2087,11 @@ mod tests {
         pack.remove_mode(id).await.unwrap();
         assert!(pack.get_modes().await.unwrap().is_empty());
         let history = rusqlite::Connection::open(pack.dir().join("history.db")).unwrap();
-        let staged: Vec<u8> = history.query_row("SELECT file FROM modes WHERE id = ?", params![id], |row| row.get(0)).unwrap();
+        let staged: Vec<u8> = history
+            .query_row("SELECT file FROM modes WHERE id = ?", params![id], |row| {
+                row.get(0)
+            })
+            .unwrap();
         assert_eq!(staged, bytes);
         drop(history);
 
@@ -2003,7 +2100,13 @@ mod tests {
         pack.remove_mode(id).await.unwrap();
         pack.purge_history_mode(id).await.unwrap();
         let history = rusqlite::Connection::open(pack.dir().join("history.db")).unwrap();
-        let retained: u64 = history.query_row("SELECT COUNT(*) FROM modes WHERE id = ?", params![id], |row| row.get(0)).unwrap();
+        let retained: u64 = history
+            .query_row(
+                "SELECT COUNT(*) FROM modes WHERE id = ?",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(retained, 0);
     }
 
@@ -2218,7 +2321,9 @@ mod tests {
         let bytes = b"undoable media bytes";
         let pack = new_test_pack(&pack_path, data_dir.path(), "History").await;
         let id = insert_staged_audio(&pack, bytes).await;
-        pack.add_tags(id, vec!["one".into(), "two".into()]).await.unwrap();
+        pack.add_tags(id, vec!["one".into(), "two".into()])
+            .await
+            .unwrap();
         let original = pack.get_files().await.unwrap().remove(0);
 
         pack.remove_files(vec![id]).await.unwrap();
@@ -2253,17 +2358,45 @@ mod tests {
         let pack = new_test_pack(&tmp.path().join("purge.lwpack"), data_dir.path(), "Purge").await;
         let staged = insert_staged_audio(&pack, b"staged").await;
         let active = insert_staged_audio(&pack, b"active").await;
-        let staged_path: String = pack.db_execute(move |conn| conn.query_row("SELECT path FROM media WHERE id = ?", params![staged], |row| row.get(0)).map_err(Into::into)).await.unwrap();
+        let staged_path: String = pack
+            .db_execute(move |conn| {
+                conn.query_row(
+                    "SELECT path FROM media WHERE id = ?",
+                    params![staged],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .unwrap();
         pack.remove_files(vec![staged]).await.unwrap();
         pack.purge_history_files(vec![staged]).await.unwrap();
 
         assert!(!pack.dir().join("media").join(staged_path).exists());
-        assert_eq!(pack.get_files().await.unwrap().iter().map(|file| file.id).collect::<Vec<_>>(), vec![active]);
+        assert_eq!(
+            pack.get_files()
+                .await
+                .unwrap()
+                .iter()
+                .map(|file| file.id)
+                .collect::<Vec<_>>(),
+            vec![active]
+        );
         let history = rusqlite::Connection::open(pack.dir().join("history.db")).unwrap();
-        let remaining: u64 = history.query_row("SELECT COUNT(*) FROM media", [], |row| row.get(0)).unwrap();
+        let remaining: u64 = history
+            .query_row("SELECT COUNT(*) FROM media", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(remaining, 0);
         pack.restore_files(vec![staged]).await.unwrap();
-        assert_eq!(pack.get_files().await.unwrap().iter().map(|file| file.id).collect::<Vec<_>>(), vec![active]);
+        assert_eq!(
+            pack.get_files()
+                .await
+                .unwrap()
+                .iter()
+                .map(|file| file.id)
+                .collect::<Vec<_>>(),
+            vec![active]
+        );
     }
 
     #[tokio::test]
@@ -2274,23 +2407,41 @@ mod tests {
         let source_only = insert_staged_audio(&pack, b"source").await;
         let target_only = insert_staged_audio(&pack, b"target").await;
         let both = insert_staged_audio(&pack, b"both").await;
-        pack.add_tags(source_only, vec!["source".into()]).await.unwrap();
-        pack.add_tags(target_only, vec!["target".into()]).await.unwrap();
-        pack.add_tags(both, vec!["source".into(), "target".into()]).await.unwrap();
+        pack.add_tags(source_only, vec!["source".into()])
+            .await
+            .unwrap();
+        pack.add_tags(target_only, vec!["target".into()])
+            .await
+            .unwrap();
+        pack.add_tags(both, vec!["source".into(), "target".into()])
+            .await
+            .unwrap();
         let mut before = Behaviour::default();
         before.content.wallpaper_tags = vec!["source".into()];
         let mut after = before.clone();
         after.content.wallpaper_tags = vec!["target".into()];
 
-        pack.merge_tag("source".into(), "target".into(), &after).await.unwrap();
-        pack.restore_merged_tag("source".into(), "target".into(), vec![source_only, both], vec![target_only, both], &before).await.unwrap();
+        pack.merge_tag("source".into(), "target".into(), &after)
+            .await
+            .unwrap();
+        pack.restore_merged_tag(
+            "source".into(),
+            "target".into(),
+            vec![source_only, both],
+            vec![target_only, both],
+            &before,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(pack.get_tags(source_only).await.unwrap(), vec!["source"]);
         assert_eq!(pack.get_tags(target_only).await.unwrap(), vec!["target"]);
         let mut both_tags = pack.get_tags(both).await.unwrap();
         both_tags.sort();
         assert_eq!(both_tags, vec!["source", "target"]);
-        let stored = Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap()).unwrap();
+        let stored =
+            Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
+                .unwrap();
         assert_eq!(stored.content.wallpaper_tags, vec!["source"]);
     }
 
@@ -2298,11 +2449,24 @@ mod tests {
     async fn failed_merge_restoration_rolls_back_every_change() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
-        let pack = new_test_pack(&tmp.path().join("rollback.lwpack"), data_dir.path(), "Tags").await;
+        let pack =
+            new_test_pack(&tmp.path().join("rollback.lwpack"), data_dir.path(), "Tags").await;
         let media = insert_staged_audio(&pack, b"media").await;
-        let result = pack.restore_merged_tag("source".into(), "missing-target".into(), vec![media], vec![], &Behaviour::default()).await;
+        let result = pack
+            .restore_merged_tag(
+                "source".into(),
+                "missing-target".into(),
+                vec![media],
+                vec![],
+                &Behaviour::default(),
+            )
+            .await;
         assert!(result.is_err());
-        assert!(!pack.get_all_tags().await.unwrap().contains(&"source".to_string()));
+        assert!(!pack
+            .get_all_tags()
+            .await
+            .unwrap()
+            .contains(&"source".to_string()));
         assert!(pack.get_tags(media).await.unwrap().is_empty());
         assert!(pack.get_pack_data("behaviour").await.unwrap().is_none());
     }
@@ -2311,16 +2475,27 @@ mod tests {
     async fn restoring_a_deleted_tag_recovers_associations_and_behaviour() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
-        let pack = new_test_pack(&tmp.path().join("delete-tag.lwpack"), data_dir.path(), "Tags").await;
+        let pack = new_test_pack(
+            &tmp.path().join("delete-tag.lwpack"),
+            data_dir.path(),
+            "Tags",
+        )
+        .await;
         let media = insert_staged_audio(&pack, b"tagged").await;
-        pack.add_tags(media, vec!["restore-me".into()]).await.unwrap();
+        pack.add_tags(media, vec!["restore-me".into()])
+            .await
+            .unwrap();
         let mut before = Behaviour::default();
         before.content.splash_tags = vec!["restore-me".into()];
         let after = Behaviour::default();
         pack.delete_tag("restore-me".into(), &after).await.unwrap();
-        pack.restore_deleted_tag("restore-me".into(), vec![media], &before).await.unwrap();
+        pack.restore_deleted_tag("restore-me".into(), vec![media], &before)
+            .await
+            .unwrap();
         assert_eq!(pack.get_tags(media).await.unwrap(), vec!["restore-me"]);
-        let stored = Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap()).unwrap();
+        let stored =
+            Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
+                .unwrap();
         assert_eq!(stored.content.splash_tags, vec!["restore-me"]);
     }
 
@@ -2328,7 +2503,12 @@ mod tests {
     async fn closing_a_saved_pack_removes_staged_history_files() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
-        let pack = new_test_pack(&tmp.path().join("cleanup.lwpack"), data_dir.path(), "Cleanup").await;
+        let pack = new_test_pack(
+            &tmp.path().join("cleanup.lwpack"),
+            data_dir.path(),
+            "Cleanup",
+        )
+        .await;
         let id = insert_staged_audio(&pack, b"temporary").await;
         pack.remove_files(vec![id]).await.unwrap();
         pack.save(|_, _| {}).await.unwrap();
