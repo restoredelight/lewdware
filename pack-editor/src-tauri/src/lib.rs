@@ -817,7 +817,9 @@ async fn set_file_source_url(
 ) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
-        pack.set_source_url(id, url).await.map_err(|e| e.to_string())?;
+        pack.set_source_url(id, url)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1027,7 +1029,9 @@ async fn add_artist_to_file(
 ) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
-        pack.add_artist(id, artist).await.map_err(|e| e.to_string())?;
+        pack.add_artist(id, artist)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1072,14 +1076,12 @@ async fn get_artist_summaries(state: State<'_, AppState>) -> Result<Vec<ArtistSu
 }
 
 #[tauri::command]
-async fn rename_artist(
-    state: State<'_, AppState>,
-    from: String,
-    to: String,
-) -> Result<(), String> {
+async fn rename_artist(state: State<'_, AppState>, from: String, to: String) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
-        pack.rename_artist(from, to).await.map_err(|e| e.to_string())?;
+        pack.rename_artist(from, to)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1088,7 +1090,9 @@ async fn rename_artist(
 async fn merge_artist(state: State<'_, AppState>, from: String, to: String) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
-        pack.merge_artist(from, to).await.map_err(|e| e.to_string())?;
+        pack.merge_artist(from, to)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1097,7 +1101,9 @@ async fn merge_artist(state: State<'_, AppState>, from: String, to: String) -> R
 async fn delete_artist(state: State<'_, AppState>, artist: String) -> Result<(), String> {
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
-        pack.delete_artist(artist).await.map_err(|e| e.to_string())?;
+        pack.delete_artist(artist)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }

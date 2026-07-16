@@ -1,3 +1,4 @@
+pub mod attribution;
 #[cfg(feature = "autostart")]
 pub mod autostart;
 pub mod behaviour;

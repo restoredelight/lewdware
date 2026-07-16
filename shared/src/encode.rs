@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
+use crate::attribution::ExtractedAttribution;
 use crate::utils::sanitize_child_env;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -175,6 +176,8 @@ pub struct EncodedFile {
     pub info: FileInfo,
     pub thumbnail: Option<Vec<u8>>,
     pub path: PathBuf,
+    pub artists: Vec<String>,
+    pub source_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -375,6 +378,44 @@ fn file_info(path: &Path) -> Result<Option<FileInfo>> {
     Ok(parse_media_info(json))
 }
 
+/// Best-effort artist/source-url extraction from a video/audio container's own metadata tags
+/// (`artist`/`album_artist`/`composer`, `comment`) -- a separate, lightweight ffprobe call (just
+/// `format_tags`, no stream/packet counting) rather than folding into `file_info`'s probe, so a
+/// failure here can never affect the required width/height/duration detection. Never fails --
+/// any error (missing ffprobe, unreadable file, no tags) just yields an empty result.
+fn extract_container_attribution(path: &Path) -> ExtractedAttribution {
+    let mut out = ExtractedAttribution::default();
+    let Ok(output) = new_command(get_ffprobe_path())
+        .args(["-v", "error", "-show_entries", "format_tags", "-output_format", "json"])
+        .arg(path)
+        .output()
+    else {
+        return out;
+    };
+    if !output.status.success() {
+        return out;
+    }
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return out;
+    };
+    let Some(tags) = json
+        .get("format")
+        .and_then(|f| f.get("tags"))
+        .and_then(|t| t.as_object())
+    else {
+        return out;
+    };
+    for key in ["artist", "album_artist", "composer", "performer"] {
+        if let Some(v) = tags.get(key).and_then(|v| v.as_str()) {
+            out.add_artist(v);
+        }
+    }
+    if let Some(v) = tags.get("comment").and_then(|v| v.as_str()) {
+        out.set_source_url(v);
+    }
+    out
+}
+
 pub fn encode_file(
     input: &Path,
     output: &Path,
@@ -383,6 +424,11 @@ pub fn encode_file(
     let info = match file_info(input)? {
         Some(x) => x,
         None => return Ok(None),
+    };
+
+    let attribution = match info {
+        FileInfo::Image { .. } => crate::attribution::extract_image_attribution(input),
+        FileInfo::Video { .. } | FileInfo::Audio { .. } => extract_container_attribution(input),
     };
 
     let output = match info {
@@ -430,6 +476,8 @@ pub fn encode_file(
         info,
         thumbnail,
         path: output,
+        artists: attribution.artists,
+        source_url: attribution.source_url,
     }))
 }
 

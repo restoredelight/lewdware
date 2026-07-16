@@ -1024,17 +1024,19 @@ impl MediaPack {
         let thumbnail = encoded_file.thumbnail.clone();
         let hash_bytes = *hash.as_bytes();
         let size = tokio::fs::metadata(&encoded_file.path).await?.len();
+        let source_url = encoded_file.source_url.clone();
 
         let id = loop {
             let file_name_clone = file_name.clone();
             let file_path = file_path.clone();
             let thumbnail = thumbnail.clone();
+            let source_url = source_url.clone();
 
             let insert_result = self
                 .db_execute(move |conn| {
                     conn.query_row(
-                        "INSERT INTO media (file_name, file_type, path, length, width, height, transparent, duration, audio, hash, thumbnail)
-                        VALUES (:file_name, :file_type, :path, :length, :width, :height, :transparent, :duration, :audio, :hash, :thumbnail) RETURNING id",
+                        "INSERT INTO media (file_name, file_type, path, length, width, height, transparent, duration, audio, hash, thumbnail, source_url)
+                        VALUES (:file_name, :file_type, :path, :length, :width, :height, :transparent, :duration, :audio, :hash, :thumbnail, :source_url) RETURNING id",
                         named_params! {
                             ":file_name": file_name_clone,
                             ":file_type": file_type_str,
@@ -1047,6 +1049,7 @@ impl MediaPack {
                             ":audio": audio,
                             ":hash": hash_bytes,
                             ":thumbnail": thumbnail,
+                            ":source_url": source_url,
                         },
                         |row| row.get::<_, u64>("id"),
                     )
@@ -1064,6 +1067,10 @@ impl MediaPack {
             }
         };
 
+        if !encoded_file.artists.is_empty() {
+            self.add_artists(id, encoded_file.artists.clone()).await?;
+        }
+
         self.mark_unsaved().await?;
 
         Ok(Some(MediaFile {
@@ -1072,8 +1079,8 @@ impl MediaPack {
             file_info,
             hash: hash.to_string(),
             tags: vec![],
-            artists: vec![],
-            source_url: None,
+            artists: encoded_file.artists,
+            source_url: encoded_file.source_url,
             size,
         }))
     }
@@ -1581,6 +1588,39 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
+    /// Bulk get-or-create + associate, for a caller (media import, and the Edgeware importer's
+    /// converted attribution) that already knows a media file's full artist set up front rather
+    /// than adding artists one at a time via the UI -- unlike `add_artist`, an artist here
+    /// doesn't need to already exist.
+    pub async fn add_artists(&self, id: u64, artists: Vec<String>) -> Result<()> {
+        if artists.is_empty() {
+            return Ok(());
+        }
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            for artist in &artists {
+                tx.execute(
+                    "INSERT OR IGNORE INTO artists (name) VALUES (?)",
+                    params![artist],
+                )?;
+                let artist_id: u64 = tx.query_row(
+                    "SELECT id FROM artists WHERE name = ?",
+                    params![artist],
+                    |row| row.get("id"),
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO media_artists (media_id, artist_id) VALUES (?, ?)",
+                    params![id, artist_id],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
     /// Writes a named blob into the pack's generic `pack_data` table (e.g. `"behaviour"` for the
     /// Edgeware importer's converted behaviour.json) -- `name` is the table's primary key, so a
     /// repeat write for the same name replaces it.
@@ -1764,8 +1804,10 @@ impl MediaPack {
             if target_exists {
                 bail!("An artist named \"{to}\" already exists. Merge the artists instead.");
             }
-            let changed =
-                tx.execute("UPDATE artists SET name = ? WHERE name = ?", params![to, from])?;
+            let changed = tx.execute(
+                "UPDATE artists SET name = ? WHERE name = ?",
+                params![to, from],
+            )?;
             if changed == 0 {
                 tx.execute("INSERT INTO artists (name) VALUES (?)", params![to])?;
             }
@@ -1825,11 +1867,10 @@ impl MediaPack {
                 params![from],
                 |r| r.get(0),
             )?;
-            let target_id: u64 = tx.query_row(
-                "SELECT id FROM artists WHERE name = ?",
-                params![to],
-                |r| r.get(0),
-            )?;
+            let target_id: u64 =
+                tx.query_row("SELECT id FROM artists WHERE name = ?", params![to], |r| {
+                    r.get(0)
+                })?;
             for id in &source_ids {
                 tx.execute(
                     "INSERT OR IGNORE INTO media_artists VALUES (?, ?)",
@@ -1882,7 +1923,10 @@ impl MediaPack {
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
             let tx = conn.transaction()?;
-            tx.execute("INSERT OR IGNORE INTO artists (name) VALUES (?)", params![artist])?;
+            tx.execute(
+                "INSERT OR IGNORE INTO artists (name) VALUES (?)",
+                params![artist],
+            )?;
             let artist_id: u64 = tx.query_row(
                 "SELECT id FROM artists WHERE name = ?",
                 params![artist],
@@ -3180,6 +3224,8 @@ mod tests {
         let encoded_1 = EncodedFile {
             info: FileInfo::Audio { duration: 1.0 },
             thumbnail: None,
+            artists: vec![],
+            source_url: None,
             path: encoded_path_1,
         };
 
@@ -3188,6 +3234,8 @@ mod tests {
         let encoded_2 = EncodedFile {
             info: FileInfo::Audio { duration: 1.0 },
             thumbnail: None,
+            artists: vec![],
+            source_url: None,
             path: encoded_path_2,
         };
 
@@ -3232,6 +3280,8 @@ mod tests {
         let encoded_1 = EncodedFile {
             info: FileInfo::Audio { duration: 1.0 },
             thumbnail: None,
+            artists: vec![],
+            source_url: None,
             path: encoded_path_1,
         };
 
@@ -3240,6 +3290,8 @@ mod tests {
         let encoded_2 = EncodedFile {
             info: FileInfo::Audio { duration: 1.0 },
             thumbnail: None,
+            artists: vec![],
+            source_url: None,
             path: encoded_path_2,
         };
 
@@ -3248,6 +3300,8 @@ mod tests {
         let encoded_3 = EncodedFile {
             info: FileInfo::Audio { duration: 1.0 },
             thumbnail: None,
+            artists: vec![],
+            source_url: None,
             path: encoded_path_3,
         };
 
@@ -3290,6 +3344,8 @@ mod tests {
         let encoded_1 = EncodedFile {
             info: FileInfo::Audio { duration: 1.0 },
             thumbnail: None,
+            artists: vec![],
+            source_url: None,
             path: encoded_path_1,
         };
         let first = pack
@@ -3303,6 +3359,8 @@ mod tests {
         let encoded_2 = EncodedFile {
             info: FileInfo::Audio { duration: 1.0 },
             thumbnail: None,
+            artists: vec![],
+            source_url: None,
             path: encoded_path_2,
         };
         let second = pack
