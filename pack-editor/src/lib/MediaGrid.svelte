@@ -6,10 +6,11 @@
   import type { MediaFile } from "./types.js";
   import { copyFileName } from "./clipboard.js";
 
-  // Item geometry (px)
+  // Item geometry (px). ITEM_H is the fixed virtualization slot; the visible tile inside
+  // it hugs its content (thumbnail + up to two caption lines) and may be shorter.
   const ITEM_W = 150;
-  const ITEM_H = 180; // 150 thumb + 30 label
-  const GAP = 8;
+  const ITEM_H = 190; // 4 + 142 thumb + caption (up to 2 lines) + 4, with slack
+  const GAP = 16;
   const ROW_H = ITEM_H + GAP;
   const BUFFER = 2; // extra rows to render outside viewport
 
@@ -250,46 +251,49 @@
         {#each items as file, column}
           {#if file != null}
             {@const selected = store.selectedIds.has(file.id)}
-            <div
-              id={`media-${file.id}`}
-              role="gridcell"
-              tabindex="-1"
-              aria-selected={selected}
-              aria-colindex={column + 1}
-              style="width: {ITEM_W}px;"
-              onclick={(e) => handleClick(file, e)}
-              ondblclick={() => handleDblClick(file)}
-              oncontextmenu={(e) => showContextMenu(e, file)}
-              onkeydown={() => {}}
-              class="relative flex flex-col rounded cursor-pointer select-none shrink-0 group
-                {selected ? 'bg-accent/15 ring-1 ring-accent' : 'hover:bg-accent/8'}
-                {store.gridActiveId === file.id ? (gridFocused ? 'ring-2 ring-[#ff4d7d]' : 'ring-2 ring-accent') : ''}"
-            >
-              <!-- Thumbnail -->
+            <!-- Fixed virtualization slot; clicks beside/below the tile fall through to "clear selection". -->
+            <div style="width: {ITEM_W}px;" class="shrink-0" role="presentation">
               <div
-                class="flex items-center justify-center bg-bg rounded-t overflow-hidden shrink-0"
-                style="height: {ITEM_W}px"
+                id={`media-${file.id}`}
+                role="gridcell"
+                tabindex="-1"
+                aria-selected={selected}
+                aria-colindex={column + 1}
+                onclick={(e) => handleClick(file, e)}
+                ondblclick={() => handleDblClick(file)}
+                oncontextmenu={(e) => showContextMenu(e, file)}
+                onkeydown={() => {}}
+                class="flex flex-col rounded p-1 cursor-pointer select-none group transition-colors duration-75
+                  {selected ? 'bg-accent/15 hover:bg-accent/25' : 'hover:bg-surface-2'}
+                  {store.gridActiveId === file.id && gridFocused ? 'ring-2 ring-[var(--ui-focus)]' : selected ? 'ring-1 ring-accent' : ''}"
               >
-                {#if file.file_info.type === "audio"}
-                  <span class="w-10 h-10 text-muted"><Icon src={MusicalNote} /></span>
-                {:else}
-                  <img
-                    src="{store.mediaBase}/thumbnail/{file.id}"
-                    alt={file.file_name}
-                    loading="lazy"
-                    class="max-w-full max-h-full object-contain"
-                  />
-                {/if}
-                {#if file.file_info.type === "video"}
-                  <div class="absolute bottom-6 left-1 bg-black/60 rounded px-1 py-px text-white text-[10px] leading-none">
-                    <span class="block w-2.5 h-2.5"><Icon src={Play} solid /></span>
-                  </div>
-                {/if}
-              </div>
+                <!-- Thumbnail -->
+                <div
+                  class="relative flex items-center justify-center overflow-hidden shrink-0"
+                  style="height: {ITEM_W - 8}px"
+                >
+                  {#if file.file_info.type === "audio"}
+                    <span class="w-10 h-10 text-muted"><Icon src={MusicalNote} /></span>
+                  {:else}
+                    <img
+                      src="{store.mediaBase}/thumbnail/{file.id}"
+                      alt={file.file_name}
+                      loading="lazy"
+                      draggable="false"
+                      class="media-thumb max-w-full max-h-full object-contain"
+                    />
+                  {/if}
+                  {#if file.file_info.type === "video"}
+                    <div class="absolute bottom-1 left-1 bg-black/60 rounded px-1 py-px text-white text-[10px] leading-none">
+                      <span class="block w-2.5 h-2.5"><Icon src={Play} solid /></span>
+                    </div>
+                  {/if}
+                </div>
 
-              <!-- Label -->
-              <div class="px-1 py-1 text-center" style="height: 30px">
-                <span class="text-[11px] text-text leading-tight line-clamp-2 break-all">{file.file_name}</span>
+                <!-- Label: auto height, so the tile hugs short names -->
+                <div class="px-1 pt-1 text-center">
+                  <span class="text-[11px] text-text leading-tight line-clamp-2 break-all">{file.file_name}</span>
+                </div>
               </div>
             </div>
           {:else}
@@ -304,5 +308,7 @@
 
 <style>
   .media-grid:focus-visible { outline: none; }
+  /* Lift dark-on-dark images off the canvas: soft shadow plus a hairline edge. */
+  .media-thumb { box-shadow: 0 2px 6px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(255 255 255 / 0.07); }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 </style>

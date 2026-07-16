@@ -99,8 +99,10 @@
 
 <div class="page">
   <header>
-    <div><h2>Custom Modes</h2><p>Bundle a Lua mode with this pack and define the options people can configure before it runs.</p></div>
-    <Button variant="primary" onclick={addMode} loading={adding}><span class="w-4 h-4"><Icon src={Plus} mini /></span> Add mode…</Button>
+    <div><h2 class="ui-page-title">Modes</h2><p>Bundle a Lua mode with this pack and define the options people can configure before it runs.</p></div>
+    {#if loaded && modes.length > 0}
+      <Button variant="primary" onclick={addMode} loading={adding}><span class="w-4 h-4"><Icon src={Plus} mini /></span> Add mode…</Button>
+    {/if}
   </header>
 
   {#if error}<div class="error" role="alert"><span>{error}</span><button onclick={() => (error = null)}>Dismiss</button></div>{/if}
@@ -132,9 +134,10 @@
 {/if}
 
 <style>
-  .page { height: 100%; padding: 24px; overflow-y: auto; }
+  .page { display: flex; height: 100%; padding: 24px; overflow-y: auto; flex-direction: column; align-items: center; }
+  .page > :global(*) { width: 100%; max-width: 800px; }
   header { display: flex; margin-bottom: 18px; align-items: start; justify-content: space-between; gap: 24px; }
-  h2 { margin: 0; font-size: 20px; } header p, .recommendation p { margin: 4px 0 0; max-width: 620px; color: var(--ui-muted); font-size: 13px; line-height: 1.45; }
+  header p, .recommendation p { margin: 4px 0 0; max-width: 620px; color: var(--ui-muted); font-size: 13px; line-height: 1.45; }
   .error { display: flex; margin-bottom: 12px; padding: 9px 11px; justify-content: space-between; gap: 12px; border: 1px solid var(--ui-danger-border); border-radius: var(--ui-radius-sm); background: var(--ui-danger-bg); color: var(--ui-danger); font-size: 12px; }
   .error button { border: 0; background: transparent; color: inherit; cursor: pointer; }
   .loading { padding: 36px; border: 1px dashed var(--ui-border); border-radius: var(--ui-radius-md); color: var(--ui-muted); text-align: center; font-size: 13px; }

@@ -41,14 +41,14 @@
 <style>
   label { display: flex; min-width: 0; flex-direction: column; gap: 5px; color: var(--ui-text); }
   .label { font-size: 12px; font-weight: 600; line-height: 1.3; }
-  .required, .error { color: var(--ui-danger); }
+  .required { color: var(--ui-muted); }
+  .error { color: var(--ui-danger); }
   .description, .error { font-size: 12px; line-height: 1.35; }
   .description { color: var(--ui-muted); }
   input { width: 100%; min-width: 0; height: var(--ui-control-normal); padding: 0 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); background: var(--ui-surface); color: var(--ui-text); font: inherit; font-size: 14px; transition: border-color 120ms, box-shadow 120ms; }
   input.size-compact { height: var(--ui-control-compact); font-size: 12px; }
   input::placeholder { color: var(--ui-muted); opacity: .8; }
   input:hover:not(:disabled) { border-color: var(--ui-border-strong); }
-  input:focus-visible { border-color: var(--ui-focus); outline: 2px solid var(--ui-focus); outline-offset: 1px; }
   input[aria-invalid="true"] { border-color: var(--ui-danger); }
   input:disabled { cursor: not-allowed; opacity: .5; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

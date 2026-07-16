@@ -239,6 +239,7 @@
         <img
           src="{store.mediaBase}/preview/{primary.id}"
           alt={primary.file_name}
+          draggable="false"
           class="max-w-full max-h-full object-contain"
           style="max-height: 160px"
         />
@@ -340,7 +341,6 @@
   .title-field { display: flex; flex-direction: column; gap: 5px; color: var(--ui-muted); font-size: 11px; }
   .title-control { display: flex; min-width: 0; align-items: center; gap: 4px; }
   .title-field input { width: 100%; min-width: 0; height: 32px; padding: 0 8px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); background: var(--ui-bg); color: var(--ui-text); font: inherit; font-size: 12px; }
-  .title-field input:focus-visible { border-color: var(--ui-focus); outline: 2px solid var(--ui-focus); outline-offset: 1px; }
   .field-error { margin: 5px 0 0; color: var(--ui-danger); font-size: 10px; line-height: 1.35; }
   .mixed-label { margin: 10px 0 5px; }
   .mixed-tags { display: flex; flex-wrap: wrap; gap: 5px; }

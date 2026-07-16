@@ -80,7 +80,7 @@
               oninput={scheduleBehaviourSave}
               placeholder="Label"
               class="px-2 py-1 rounded border border-border bg-bg text-text text-xs
-                focus:border-accent"
+"
             />
             <label class="text-xs font-medium text-muted mt-1" for={`group-description-${index}`}>Description <span class="font-normal">(optional)</span></label>
             <input
@@ -89,11 +89,11 @@
               oninput={scheduleBehaviourSave}
               placeholder="Explain what this group contains"
               class="px-2 py-1 rounded border border-border bg-bg text-text text-xs
-                focus:border-accent"
+"
             />
           </div>
         </div>
-        <TagPicker tags={group.tags} id={`content-group-${index}`} />
+        <TagPicker tags={group.tags} id={`content-group-${index}`} onchange={(tags) => (group.tags = tags)} />
         <label class="flex items-center gap-2">
           <Checkbox
             checked={group.enabled_by_default}

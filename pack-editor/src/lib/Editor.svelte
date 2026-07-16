@@ -22,7 +22,7 @@
   import Tags from "./Tags.svelte";
   import Artists from "./Artists.svelte";
   import { cancelBehaviourSave, flushBehaviourSave, initializeBehaviourHistory } from "./behaviourSave.svelte.js";
-  import { cancelMetadataSave, flushMetadataSave, initializeMetadataHistory } from "./metadataSave.svelte.js";
+  import { cancelMetadataSave, flushMetadataSave, initializeMetadataHistory, scheduleMetadataSave } from "./metadataSave.svelte.js";
   import { history } from "./history.svelte.js";
   import TaskStatus from "./TaskStatus.svelte";
   import { taskFeedback } from "./taskFeedback.svelte.js";
@@ -34,6 +34,8 @@
   let narrowWindow = $state(false);
   let showClosePackDialog = $state(false);
   let modifierLabel = $state("Ctrl");
+  let packTitle = $state(store.packName);
+  let packTitleInput = $state<HTMLInputElement>();
 
   const navigationTabs = [
     { id: "media", label: "Media", icon: Squares2x2 },
@@ -45,6 +47,11 @@
     { id: "options", label: "Pack Metadata", icon: Cog6Tooth },
   ];
   const navigationCollapsed = $derived(navCollapsed || narrowWindow);
+
+  $effect(() => {
+    const name = store.packName;
+    if (packTitleInput !== document.activeElement) packTitle = name;
+  });
 
   onMount(() => {
     modifierLabel = navigator.platform.includes("Mac") ? "⌘" : "Ctrl";
@@ -87,6 +94,41 @@
       store.dragActive = false;
     };
   });
+
+  onMount(async () => {
+    const metadata = await api.getPackMetadata();
+    store.metadata = metadata;
+    store.packName = metadata.name;
+    packTitle = metadata.name;
+    initializeMetadataHistory(metadata);
+  });
+
+  function editPackTitle(value: string) {
+    packTitle = value;
+    const name = value.trim();
+    if (!name || !store.metadata) return;
+    store.packName = name;
+    store.metadata = { ...store.metadata, name };
+    scheduleMetadataSave(store.metadata);
+  }
+
+  function finishPackTitleEdit() {
+    const name = packTitle.trim();
+    if (!name) {
+      packTitle = store.packName;
+      return;
+    }
+    packTitle = name;
+    if (name !== store.packName) editPackTitle(name);
+  }
+
+  function handlePackTitleKeydown(event: KeyboardEvent) {
+    if (event.key === "Enter") packTitleInput?.blur();
+    else if (event.key === "Escape") {
+      packTitle = store.packName;
+      packTitleInput?.blur();
+    }
+  }
 
   function toggleNavigation() {
     navCollapsed = !navCollapsed;
@@ -255,7 +297,17 @@
 <div class="flex flex-col h-screen bg-bg text-text select-none">
   <!-- Toolbar -->
   <header class="flex items-center gap-2 px-3 h-11 bg-surface border-b border-border shrink-0">
-    <span class="pack-title text-sm font-semibold text-text truncate">{store.packName}</span>
+    <input
+      bind:this={packTitleInput}
+      class="pack-title text-sm font-semibold text-text truncate"
+      aria-label="Pack title"
+      title="Edit pack title"
+      value={packTitle}
+      disabled={!store.metadata}
+      oninput={(event) => editPackTitle(event.currentTarget.value)}
+      onblur={finishPackTitleEdit}
+      onkeydown={handlePackTitleKeydown}
+    />
     {#if store.recoveryStatus === "error"}
       <span class="recovery-status flex items-center gap-1.5 font-mono text-[11px] text-[var(--ui-danger)]" role="alert" title={store.recoveryError ?? "Changes could not be backed up locally."}>
         <span class="w-1.5 h-1.5 shrink-0 rounded-full bg-[var(--ui-danger)]"></span>
@@ -300,14 +352,14 @@
   </header>
 
   <div class="flex flex-1 min-h-0">
-    <aside class="flex flex-col bg-surface border-r border-border shrink-0 transition-[width] duration-150 {navigationCollapsed ? 'w-12' : 'w-44'}">
+    <aside class="flex flex-col overflow-hidden bg-surface border-r border-border shrink-0 transition-[width] duration-150 {navigationCollapsed ? 'w-12' : 'w-44'}">
       <div class="flex items-center h-11 px-2 border-b border-border {navigationCollapsed ? 'justify-center' : 'justify-between'}">
         {#if !navigationCollapsed}<span class="text-sm font-semibold text-text px-1">Sections</span>{/if}
         {#if !narrowWindow}<IconButton label={navCollapsed ? "Expand navigation" : "Collapse navigation"} onclick={toggleNavigation}>
           <span class="w-4 h-4"><Icon src={navCollapsed ? ChevronRight : ChevronLeft} mini /></span>
         </IconButton>{/if}
       </div>
-      <nav class="p-2">
+      <nav class="p-2 {navigationCollapsed ? '' : 'w-44'}">
         <Tabs tabs={navigationTabs} active={store.activeView} orientation="vertical" collapsed={navigationCollapsed} onselect={(id) => (store.activeView = id as typeof store.activeView)} />
       </nav>
     </aside>
@@ -362,7 +414,10 @@
 </div>
 
 <style>
-  .pack-title { min-width: 48px; }
+  .pack-title { min-width: 48px; max-width: min(36vw, 360px); padding: 2px 4px; border: 1px solid transparent; border-radius: var(--ui-radius-sm); background: transparent; outline: none; }
+  .pack-title:hover:not(:disabled) { border-color: var(--ui-border); background: var(--ui-bg); }
+  .pack-title:focus { border-color: var(--ui-focus); background: var(--ui-bg); }
+  .pack-title:disabled { opacity: 1; }
   .drop-overlay { background: rgb(0 0 0 / .62); }
   .drop-window { position: relative; width: min(380px, calc(100vw - 64px)); border: 1px solid var(--ui-accent); border-radius: var(--ui-radius-md); background: var(--ui-surface); box-shadow: var(--ui-shadow-pop); }
   .drop-window::before, .drop-window::after { content: ""; position: absolute; inset: 0; z-index: -1; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: rgb(10 8 9 / .4); }

@@ -97,6 +97,7 @@
         <img
           src="{store.mediaBase}/display/{file.id}"
           alt={file.file_name}
+          draggable="false"
           class="max-w-full max-h-full object-contain pointer-events-auto"
           style="max-height: calc(100vh - 128px)"
         />
@@ -111,6 +112,7 @@
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
           src="{store.mediaBase}/file/{file.id}"
+          draggable="false"
           autoplay
           loop
           muted
@@ -122,6 +124,7 @@
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
           src="{store.mediaBase}/file/{file.id}"
+          draggable="false"
           controls
           class="max-w-full max-h-full pointer-events-auto"
           style="max-height: calc(100vh - 128px)"

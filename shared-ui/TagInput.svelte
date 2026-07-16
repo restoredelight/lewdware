@@ -65,7 +65,6 @@
   .entry { position: relative; min-width: 128px; flex: 1; }
   input { width: 100%; height: 32px; padding: 0 9px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); background: var(--ui-surface); color: var(--ui-text); font: inherit; font-size: 12px; }
   input::placeholder { color: var(--ui-muted); }
-  input:focus-visible { border-color: var(--ui-focus); outline: 2px solid var(--ui-focus); outline-offset: 1px; }
   .suggestions { position: absolute; z-index: 50; top: calc(100% + 4px); left: 0; width: max-content; min-width: 100%; max-width: min(320px, calc(100vw - 24px)); max-height: 224px; overflow-y: auto; padding: 4px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: var(--ui-surface); box-shadow: 0 12px 32px rgb(0 0 0 / .4); }
   .suggestions button { display: block; width: 100%; min-height: 32px; padding: 6px 9px; border: 0; border-radius: var(--ui-radius-sm); background: transparent; color: var(--ui-text); font: inherit; font-size: 12px; text-align: left; white-space: nowrap; cursor: pointer; }
   .suggestions button:hover, .suggestions button[aria-selected="true"] { background: var(--ui-surface-raised); }

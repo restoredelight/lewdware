@@ -37,7 +37,7 @@
       {max}
       {step}
       class="w-24 h-8 px-2 py-0 rounded border border-border bg-surface text-text text-xs
-        focus:border-accent"
+"
     />
     {#if unit}
       <span class="text-xs text-muted">{unit}</span>

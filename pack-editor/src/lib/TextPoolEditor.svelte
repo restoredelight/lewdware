@@ -2,6 +2,7 @@
   import type { TextItem } from "./types.js";
   import TagPicker from "./TagPicker.svelte";
   import { scheduleBehaviourSave } from "./behaviourSave.svelte.js";
+  import { store } from "./store.svelte.js";
   import Button from "$ui/Button.svelte";
   import Card from "$ui/Card.svelte";
   import EmptyState from "$ui/EmptyState.svelte";
@@ -11,11 +12,14 @@
   type Props = {
     title: string;
     description?: string;
-    pool: TextItem[];
+    // A key into behaviour content rather than the array itself: this editor mutates the
+    // pool, and mutating an unbound prop trips Svelte's ownership warning.
+    poolKey: "captions" | "prompts" | "notifications" | "subliminals";
     idPrefix: string;
   };
 
-  let { title, description, pool, idPrefix }: Props = $props();
+  let { title, description, poolKey, idPrefix }: Props = $props();
+  const pool = $derived(store.behaviour!.content[poolKey]);
   let removing = $state<TextItem | null>(null);
 
   function addItem() {
@@ -62,10 +66,10 @@
             rows={2}
             placeholder="Text"
             class="flex-1 px-2 py-1 rounded border border-border bg-bg text-text text-xs resize-none
-              focus:border-accent"
+"
           ></textarea>
         </div>
-        <TagPicker tags={item.tags} id={`${idPrefix}-${index}`} />
+        <TagPicker tags={item.tags} id={`${idPrefix}-${index}`} onchange={(tags) => (item.tags = tags)} />
       </Card>
     {/each}
   </div>

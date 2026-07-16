@@ -37,6 +37,11 @@ body {
   overflow: hidden;
 }
 
+img,
+video {
+  -webkit-user-drag: none;
+}
+
 
 ::-webkit-scrollbar {
   width: 8px;

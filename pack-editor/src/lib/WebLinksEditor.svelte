@@ -71,7 +71,7 @@
             oninput={scheduleBehaviourSave}
             placeholder="https://…"
             class="flex-1 px-2 py-1 rounded border border-border bg-bg text-text text-xs
-              focus:border-accent"
+"
           />
         </div>
 
@@ -92,11 +92,11 @@
             onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); addArg(index); } }}
             placeholder="Add arg…"
             class="text-xs px-2 py-0.5 rounded border border-border bg-surface text-text w-24
-              focus:border-accent"
+"
           />
         </div></div>
 
-        <TagPicker tags={link.tags} id={`web-link-${index}`} />
+        <TagPicker tags={link.tags} id={`web-link-${index}`} onchange={(tags) => (link.tags = tags)} />
       </Card>
     {/each}
   </div>

@@ -21,9 +21,13 @@
   });
 
   onMount(async () => {
-    form = await api.getPackMetadata();
-    store.metadata = form;
-    initializeMetadataHistory(form);
+    if (store.metadata) {
+      form = structuredClone($state.snapshot(store.metadata));
+    } else {
+      form = await api.getPackMetadata();
+      store.metadata = form;
+      initializeMetadataHistory(form);
+    }
   });
 
   onDestroy(() => {
@@ -32,28 +36,30 @@
 
   function scheduleSave() {
     if (!form.name.trim()) return;
+    store.packName = form.name.trim();
     store.metadata = { ...form };
     scheduleMetadataSave(form);
   }
 </script>
 
-<div class="p-6 max-[600px]:p-4 max-w-lg">
-  <div class="flex items-center gap-3 mb-4">
-    <h2 class="text-base font-semibold text-text">Pack Metadata</h2>
-  </div>
+<div class="w-full max-w-[800px] mx-auto p-6 max-[600px]:p-4">
+  <header class="mb-5">
+    <h2 class="ui-page-title">Pack Metadata</h2>
+    <p class="mt-1 mb-0 text-[13px] text-muted">The name, attribution, and version shipped with this pack.</p>
+  </header>
 
-  <div class="flex flex-col gap-3">
+  <div class="flex flex-col gap-3 max-w-lg">
     <Field label="Name" value={form.name} required placeholder="Pack name" oninput={(value) => { form.name = value; scheduleSave(); }} />
 
     <Field label="Creator" value={form.creator} placeholder="Creator name" oninput={(value) => { form.creator = value; scheduleSave(); }} />
 
-    <label class="flex flex-col gap-1">
-      <span class="text-xs text-muted font-medium">Description</span>
+    <label class="flex flex-col gap-[5px]">
+      <span class="text-xs font-semibold text-text">Description</span>
       <textarea
         bind:value={form.description}
         oninput={scheduleSave}
         rows={4}
-        class="px-2 py-1.5 rounded border border-border bg-surface text-text text-sm focus:border-accent resize-none"
+        class="px-2.5 py-2 rounded-sm border border-border bg-surface text-text text-sm resize-none transition-colors hover:border-[var(--ui-border-strong)]"
         placeholder="Optional description"
       ></textarea>
     </label>

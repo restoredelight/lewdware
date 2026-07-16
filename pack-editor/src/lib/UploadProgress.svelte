@@ -80,7 +80,7 @@
 </div>
 
 <style>
-  .import-window { position: fixed; right: 16px; bottom: 16px; z-index: 40; width: min(320px, calc(100vw - 32px)); border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-md); background: var(--ui-surface); box-shadow: var(--ui-shadow-pop); }
+  .import-window { position: fixed; right: 16px; bottom: 16px; z-index: 40; isolation: isolate; width: min(320px, calc(100vw - 32px)); border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-md); background: #141113; box-shadow: var(--ui-shadow-pop); }
   .import-window::before { content: ""; position: absolute; inset: 0; z-index: -1; transform: translate(-10px, -10px); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: rgb(10 8 9 / .4); backdrop-filter: blur(10px); }
   .import-window.minimized { width: max-content; border-radius: var(--ui-radius-md); }
   .titlebar { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface-raised); border-radius: var(--ui-radius-md) var(--ui-radius-md) 0 0; }
@@ -95,10 +95,10 @@
   .icon-btn:focus-visible, .close:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -1px; }
   .icon-btn svg, .close svg { width: 11px; height: 11px; }
   .mini-bar { height: 3px; overflow: hidden; background: var(--ui-border); border-radius: 0 0 var(--ui-radius-md) var(--ui-radius-md); }
-  .mini-bar i { display: block; height: 100%; border-radius: 999px; background: var(--ui-accent); transition: width 200ms; }
-  .body { display: flex; padding: 10px 12px 11px; flex-direction: column; gap: 8px; }
+  .mini-bar i { display: block; height: 100%; border-radius: 999px; background: var(--ui-accent); }
+  .body { display: flex; padding: 10px 12px 11px; flex-direction: column; gap: 8px; border-radius: 0 0 var(--ui-radius-md) var(--ui-radius-md); background: #141113; }
   .bar { height: 3px; overflow: hidden; border-radius: 999px; background: var(--ui-border); }
-  .bar i { display: block; height: 100%; border-radius: 999px; background: var(--ui-accent); transition: width 200ms; }
+  .bar i { display: block; height: 100%; border-radius: 999px; background: var(--ui-accent); }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .readout { color: var(--ui-muted); font-family: var(--ui-font-mono); font-size: 11px; }
   .stop { flex: none; padding: 2px 7px; border: 0; border-radius: var(--ui-radius-sm); background: transparent; color: var(--ui-danger); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }

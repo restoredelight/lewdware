@@ -205,7 +205,7 @@
       value={opt.value as string}
       oninput={(e) => store.setModeOption(opt.key, e.currentTarget.value)}
       class="px-3 py-1.5 border border-border rounded text-sm bg-surface
-             text-text focus:border-accent w-64"
+             text-text w-64"
     />
 
   {:else if typeKey === "Enum"}
@@ -239,7 +239,7 @@
           step={getStep(opt)}
           oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
           class="px-3 py-1.5 border border-border rounded text-sm bg-surface
-                 text-text focus:border-accent w-24"
+                 text-text w-24"
         />
       </div>
     {:else}
@@ -251,7 +251,7 @@
         step={getStep(opt)}
         oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
         class="px-3 py-1.5 border border-border rounded text-sm bg-surface
-               text-text focus:border-accent w-32"
+               text-text w-32"
       />
     {/if}
   {/if}

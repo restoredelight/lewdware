@@ -125,7 +125,7 @@
 </script>
 
 <div class="page">
-  <header><div><h2>Artists</h2><p>Manage attribution recorded across media.</p></div><Field label="Search artists" hideLabel value={query} placeholder="Search artists…" oninput={(next) => (query = next)} /></header>
+  <header><div><h2 class="ui-page-title">Artists</h2><p>Manage attribution recorded across media.</p></div><Field label="Search artists" hideLabel value={query} placeholder="Search artists…" oninput={(next) => (query = next)} /></header>
   {#if error}<div class="error" role="alert">{error}<button onclick={() => (error = null)}>Dismiss</button></div>{/if}
   {#if !loaded}<p class="loading">Loading…</p>
   {:else if rows.length === 0}
@@ -167,9 +167,10 @@
 {/if}
 
 <style>
-  .page { height: 100%; padding: 24px; overflow-y: auto; }
+  .page { display: flex; height: 100%; padding: 24px; overflow-y: auto; flex-direction: column; align-items: center; }
+  .page > :global(*) { width: 100%; max-width: 800px; }
   header { display: flex; margin-bottom: 18px; align-items: end; justify-content: space-between; gap: 24px; }
-  header h2 { margin: 0; font-size: 20px; } header p { margin: 4px 0 0; color: var(--ui-muted); font-size: 13px; }
+  header p { margin: 4px 0 0; color: var(--ui-muted); font-size: 13px; }
   header :global(.root) { width: 220px; }
   .table { overflow: hidden; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: var(--ui-surface); }
   .table-head, .artist-row { display: grid; grid-template-columns: minmax(120px, 1fr) 70px minmax(310px, auto); min-height: 45px; padding: 0 12px; align-items: center; gap: 8px; border-bottom: 1px solid var(--ui-border); }

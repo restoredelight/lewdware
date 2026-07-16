@@ -6,19 +6,21 @@
   type Props = {
     tags: string[];
     id: string;
+    // The parent owns the array: mutating a plain prop trips Svelte's ownership warning.
+    onchange: (tags: string[]) => void;
   };
 
-  let { tags, id }: Props = $props();
+  let { tags, id, onchange }: Props = $props();
 
   function addTag(t: string) {
     if (!t || tags.includes(t)) return;
-    tags.push(t);
+    onchange([...tags, t]);
     scheduleBehaviourSave();
   }
 
   function removeTag(tag: string) {
-    const idx = tags.indexOf(tag);
-    if (idx >= 0) tags.splice(idx, 1);
+    if (!tags.includes(tag)) return;
+    onchange(tags.filter((item) => item !== tag));
     scheduleBehaviourSave();
   }
 </script>

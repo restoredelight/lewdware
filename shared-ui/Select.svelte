@@ -69,7 +69,6 @@
   .root > button { display: grid; width: 100%; min-width: 0; height: var(--ui-control-normal); padding: 0 8px 0 10px; grid-template-columns: minmax(0, 1fr) 18px; align-items: center; gap: 4px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); background: var(--ui-surface); color: var(--ui-text); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
   .root > button.compact { height: var(--ui-control-compact); font-size: 12px; }
   .root > button:hover:not(:disabled) { border-color: var(--ui-border-strong); background: var(--ui-surface-raised); }
-  .root > button:focus-visible { border-color: var(--ui-focus); outline: 2px solid var(--ui-focus); outline-offset: 1px; }
   .root > button:disabled { cursor: not-allowed; opacity: .5; }
   .value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chevron, .selected-icon { display: inline-flex; width: 16px; height: 16px; color: var(--ui-muted); }

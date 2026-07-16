@@ -79,28 +79,28 @@
       <div class="flex-1 min-w-0 overflow-y-auto p-6 max-[700px]:p-4" bind:this={panel}>
         <div class="w-full max-w-[800px] mx-auto">
         <div class="mb-5 max-w-2xl">
-          <h2 class="text-lg font-semibold text-text">{sectionInfo[activeTab].title}</h2>
+          <h2 class="ui-page-title">{sectionInfo[activeTab].title}</h2>
           <p class="text-sm text-muted mt-1">{sectionInfo[activeTab].description}</p>
         </div>
         {#if activeTab === "groups"}
           <ContentGroupsEditor />
         {:else if activeTab === "captions"}
-          <TextPoolEditor title="Captions" pool={store.behaviour!.content.captions} idPrefix="caption" />
+          <TextPoolEditor title="Captions" poolKey="captions" idPrefix="caption" />
         {:else if activeTab === "prompts"}
           <div class="flex flex-col gap-3">
-            <TextPoolEditor title="Prompts" pool={store.behaviour!.content.prompts} idPrefix="prompt" />
-            <label class="flex flex-col gap-1"><span class="text-xs text-muted font-medium">Submit button label</span><input bind:value={store.behaviour!.content.prompt_settings.submit_label} oninput={scheduleBehaviourSave} placeholder="Submit" class="px-2 py-1.5 rounded border border-border bg-surface text-text text-sm w-48 focus:border-accent" /></label>
+            <TextPoolEditor title="Prompts" poolKey="prompts" idPrefix="prompt" />
+            <label class="flex flex-col gap-[5px]"><span class="text-xs font-semibold text-text">Submit button label</span><input bind:value={store.behaviour!.content.prompt_settings.submit_label} oninput={scheduleBehaviourSave} placeholder="Submit" class="px-2.5 py-2 rounded-sm border border-border bg-surface text-text text-sm w-48 transition-colors hover:border-[var(--ui-border-strong)]" /></label>
           </div>
         {:else if activeTab === "notifications"}
-          <TextPoolEditor title="Notifications" pool={store.behaviour!.content.notifications} idPrefix="notification" />
+          <TextPoolEditor title="Notifications" poolKey="notifications" idPrefix="notification" />
         {:else if activeTab === "subliminals"}
-          <TextPoolEditor title="Subliminals" pool={store.behaviour!.content.subliminals} idPrefix="subliminal" />
+          <TextPoolEditor title="Subliminals" poolKey="subliminals" idPrefix="subliminal" />
         {:else if activeTab === "web_links"}
           <WebLinksEditor />
         {:else if activeTab === "wallpaper"}
           <div class="flex flex-col gap-6">
-            <section class="flex flex-col gap-2"><div><h3 class="text-sm font-semibold text-text">Wallpaper</h3><p class="text-xs text-muted">Tags identifying wallpaper media. Leave empty to disable engine-managed wallpaper.</p></div><TagPicker tags={store.behaviour!.content.wallpaper_tags} id="wallpaper-tags" />{#if store.behaviour!.content.wallpaper_tags.length === 0}<p class="text-xs text-muted italic">No wallpaper tags selected. Lewdware will not change the wallpaper.</p>{/if}</section>
-            <section class="flex flex-col gap-2"><div><h3 class="text-sm font-semibold text-text">Splash</h3><p class="text-xs text-muted">Tags identifying a startup splash image. Leave empty to disable it.</p></div><TagPicker tags={store.behaviour!.content.splash_tags} id="splash-tags" />{#if store.behaviour!.content.splash_tags.length === 0}<p class="text-xs text-muted italic">No splash tags selected. No startup image will be shown.</p>{/if}</section>
+            <section class="flex flex-col gap-2"><div><h3 class="text-sm font-semibold text-text">Wallpaper</h3><p class="text-xs text-muted">Tags identifying wallpaper media. Leave empty to disable engine-managed wallpaper.</p></div><TagPicker tags={store.behaviour!.content.wallpaper_tags} id="wallpaper-tags" onchange={(tags) => (store.behaviour!.content.wallpaper_tags = tags)} />{#if store.behaviour!.content.wallpaper_tags.length === 0}<p class="text-xs text-muted italic">No wallpaper tags selected. Lewdware will not change the wallpaper.</p>{/if}</section>
+            <section class="flex flex-col gap-2"><div><h3 class="text-sm font-semibold text-text">Splash</h3><p class="text-xs text-muted">Tags identifying a startup splash image. Leave empty to disable it.</p></div><TagPicker tags={store.behaviour!.content.splash_tags} id="splash-tags" onchange={(tags) => (store.behaviour!.content.splash_tags = tags)} />{#if store.behaviour!.content.splash_tags.length === 0}<p class="text-xs text-muted italic">No splash tags selected. No startup image will be shown.</p>{/if}</section>
           </div>
         {/if}
         </div>
