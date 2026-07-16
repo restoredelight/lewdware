@@ -5,7 +5,7 @@
   import { api } from "$lib/api.js";
   import { cancelBehaviourSave, flushBehaviourSave } from "$lib/behaviourSave.svelte.js";
   import { cancelMetadataSave, flushMetadataSave } from "$lib/metadataSave.svelte.js";
-  import type { MediaFile, UploadError, SaveProgress } from "$lib/types.js";
+  import type { MediaFile, UploadError, SaveDone, SaveProgress } from "$lib/types.js";
   import Start from "$lib/Start.svelte";
   import Editor from "$lib/Editor.svelte";
   import Dialog from "$ui/Dialog.svelte";
@@ -67,13 +67,17 @@
         if (store.uploading) taskFeedback.warning("save", `Saving during upload (${e.payload.saved}/${e.payload.total}) — unfinished files excluded`);
         else taskFeedback.progress("save", "Saving pack…", e.payload.saved, e.payload.total);
       }),
-      listen("save:done", () => {
+      listen<SaveDone>("save:done", (event) => {
         store.saveActive = false;
-        history.markSaved();
-        taskFeedback.success("save", "Pack saved");
+        if (event.payload.has_unsaved_changes) {
+          taskFeedback.warning("save", "Pack saved — newer changes remain unsaved");
+        } else {
+          history.markSaved();
+          taskFeedback.success("save", "Pack saved");
+        }
         if (pendingClose) {
           pendingClose = false;
-          api.confirmClose();
+          if (!event.payload.has_unsaved_changes) api.confirmClose();
         }
       }),
       listen("close-requested", () => {

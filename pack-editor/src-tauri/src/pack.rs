@@ -3,16 +3,20 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Condvar, Mutex, RwLock as StdRwLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, Condvar, Mutex, OnceLock, RwLock as StdRwLock, Weak,
     },
-    thread::available_parallelism,
+    thread::{available_parallelism, sleep},
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Result};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{named_params, params, params_from_iter, OptionalExtension};
+use rusqlite::{
+    backup::{Backup, StepResult},
+    named_params, params, params_from_iter, OpenFlags, OptionalExtension,
+};
 use serde::{Deserialize, Serialize};
 use shared::{
     db::migrate,
@@ -22,7 +26,7 @@ use shared::{
 use tokio::{
     fs::{remove_file, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    sync::RwLock,
+    sync::{Mutex as AsyncMutex, RwLock},
     task::spawn_blocking,
 };
 use uuid::Uuid;
@@ -81,6 +85,8 @@ pub struct MediaPack {
     path: Option<PathBuf>,
     data_dir: PathBuf,
     saving: Arc<RwLock<()>>,
+    archive_io: Arc<RwLock<()>>,
+    save_serial: Arc<AsyncMutex<()>>,
     _lock: Option<Lock>,
     header: StdRwLock<Header>,
     dir: PathBuf,
@@ -88,14 +94,153 @@ pub struct MediaPack {
     db_pool: Pool<SqliteConnectionManager>,
     db_path: PathBuf,
     saved: AtomicBool,
+    revision: AtomicU64,
+    loose_files: LooseFileRegistry,
+}
+
+/// Runtime ownership for an encoded file that has not yet been embedded in the pack archive.
+/// Database rows remain the durable source of truth; this object makes successful runtime
+/// ownership transitions delete-on-last-release without racing undo history or an active save.
+struct LooseFile {
+    path: PathBuf,
+    stored_path: PathBuf,
+    db_path: PathBuf,
+    history_path: PathBuf,
+}
+
+impl LooseFile {
+    fn new(path: PathBuf, stored_path: PathBuf, db_path: PathBuf, history_path: PathBuf) -> Self {
+        Self {
+            path,
+            stored_path,
+            db_path,
+            history_path,
+        }
+    }
+
+    fn database_references(path: &Path, stored_path: &Path) -> Result<bool> {
+        if !path.exists() {
+            return Ok(false);
+        }
+        let conn = rusqlite::Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM media WHERE path = ?)",
+            params![stored_path.to_string_lossy().as_ref()],
+            |row| row.get(0),
+        )?)
+    }
+
+    fn is_durably_referenced(&self) -> Result<bool> {
+        Ok(Self::database_references(&self.db_path, &self.stored_path)?
+            || Self::database_references(&self.history_path, &self.stored_path)?)
+    }
+}
+
+impl Drop for LooseFile {
+    fn drop(&mut self) {
+        match self.is_durably_referenced() {
+            Ok(true) => return,
+            // A query failure is ambiguous (including a database busy during unwinding). Keep
+            // the bytes; the next open-time sweep can make the decision safely.
+            Err(error) => {
+                tracing::error!(
+                    "preserving {} because its references could not be checked: {error}",
+                    self.path.display()
+                );
+                return;
+            }
+            Ok(false) => {}
+        }
+        if let Err(error) = fs::remove_file(&self.path) {
+            if error.kind() != io::ErrorKind::NotFound {
+                tracing::error!("{error}");
+            }
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct LooseFileRegistry(Arc<Mutex<LooseFileRegistryInner>>);
+
+#[derive(Default)]
+struct LooseFileRegistryInner {
+    live: std::collections::HashMap<u64, Arc<LooseFile>>,
+    history: std::collections::HashMap<u64, Arc<LooseFile>>,
+}
+
+fn loose_file_cache(
+) -> &'static Mutex<std::collections::HashMap<(PathBuf, PathBuf), Weak<LooseFile>>> {
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<(PathBuf, PathBuf), Weak<LooseFile>>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+impl LooseFileRegistry {
+    fn acquire(
+        path: PathBuf,
+        stored_path: PathBuf,
+        db_path: PathBuf,
+        history_path: PathBuf,
+    ) -> Arc<LooseFile> {
+        let mut cache = loose_file_cache().lock().unwrap();
+        let key = (db_path.clone(), path.clone());
+        if let Some(file) = cache.get(&key).and_then(Weak::upgrade) {
+            return file;
+        }
+        let file = Arc::new(LooseFile::new(path, stored_path, db_path, history_path));
+        cache.insert(key, Arc::downgrade(&file));
+        file
+    }
+
+    fn insert_live(&self, id: u64, file: Arc<LooseFile>) {
+        self.0.lock().unwrap().live.insert(id, file);
+    }
+
+    fn move_to_history(&self, ids: &[u64]) {
+        let mut inner = self.0.lock().unwrap();
+        for id in ids {
+            if let Some(file) = inner.live.remove(id) {
+                inner.history.insert(*id, file);
+            }
+        }
+    }
+
+    fn move_to_live(&self, ids: &[u64]) {
+        let mut inner = self.0.lock().unwrap();
+        for id in ids {
+            if let Some(file) = inner.history.remove(id) {
+                inner.live.insert(*id, file);
+            }
+        }
+    }
+
+    fn release_live(&self, id: u64) {
+        self.0.lock().unwrap().live.remove(&id);
+    }
+
+    fn release_history(&self, ids: &[u64]) -> std::collections::HashSet<u64> {
+        let mut inner = self.0.lock().unwrap();
+        ids.iter()
+            .filter_map(|id| inner.history.remove(id).map(|_| *id))
+            .collect()
+    }
 }
 
 pub struct MediaPackView {
     path: Option<PathBuf>,
-    saving: Arc<RwLock<()>>,
+    archive_io: Arc<RwLock<()>>,
     dir: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
     _thread_pool: Arc<rayon::ThreadPool>,
+}
+
+struct SaveSnapshot {
+    revision: u64,
+    metadata: Metadata,
+    db_path: PathBuf,
+    db_pool: Pool<SqliteConnectionManager>,
+    _loose_files: Vec<Arc<LooseFile>>,
+    _staging: tempfile::TempDir,
 }
 
 #[derive(Debug)]
@@ -151,6 +296,7 @@ struct DbUpdateRequest {
 fn run_db_writer(
     conn: PooledConnection<SqliteConnectionManager>,
     rx: std::sync::mpsc::Receiver<DbUpdateRequest>,
+    loose_files: Option<LooseFileRegistry>,
 ) {
     while let Ok(req) = rx.recv() {
         let result = (|| -> Result<()> {
@@ -166,6 +312,9 @@ fn run_db_writer(
                         "UPDATE media SET offset = ?, length = ?, path = NULL WHERE id = ?",
                         params![offset, length, id],
                     )?;
+                    if let Some(loose_files) = &loose_files {
+                        loose_files.release_live(id as u64);
+                    }
                 }
                 DbUpdateKind::DropMissing { id } => {
                     conn.execute("DELETE FROM media WHERE id = ?", params![id])?;
@@ -238,15 +387,18 @@ impl MediaPack {
         let pool = db_pool.clone();
         spawn_blocking(move || -> Result<_> {
             let conn = pool.get()?;
+            conn.pragma_update(None, "journal_mode", "WAL")?;
             migrate(&conn)
         })
         .await??;
         let mut header = Header::new();
         header.id = id;
-        Ok(Self {
+        let pack = Self {
             path: None,
             data_dir: data_dir.to_path_buf(),
             saving: Arc::new(RwLock::new(())),
+            archive_io: Arc::new(RwLock::new(())),
+            save_serial: Arc::new(AsyncMutex::new(())),
             _lock: None,
             header: StdRwLock::new(header),
             dir,
@@ -254,7 +406,11 @@ impl MediaPack {
             db_pool,
             db_path,
             saved: AtomicBool::new(false),
-        })
+            revision: AtomicU64::new(0),
+            loose_files: LooseFileRegistry::default(),
+        };
+        pack.rebuild_loose_files_and_sweep().await?;
+        Ok(pack)
     }
 
     pub async fn new(path: PathBuf, data_dir: &Path, name: &str) -> Result<Self> {
@@ -307,27 +463,43 @@ impl MediaPack {
         let pool = db_pool.clone();
         spawn_blocking(move || -> Result<_> {
             let conn = pool.get()?;
+            conn.pragma_update(None, "journal_mode", "WAL")?;
             migrate(&conn)
         })
         .await??;
 
         File::create(dir.join("UNSAVED")).await?;
 
-        Ok(Self {
+        let pack = Self {
             path,
             data_dir: data_dir.to_path_buf(),
             saving: Arc::new(RwLock::new(())),
+            archive_io: Arc::new(RwLock::new(())),
+            save_serial: Arc::new(AsyncMutex::new(())),
             _lock: lock,
             header: StdRwLock::new(header),
             dir,
             metadata: StdRwLock::new(metadata),
             db_pool,
             saved: AtomicBool::new(false),
+            revision: AtomicU64::new(0),
             db_path,
-        })
+            loose_files: LooseFileRegistry::default(),
+        };
+        pack.rebuild_loose_files_and_sweep().await?;
+        Ok(pack)
     }
 
     pub async fn open(path: PathBuf, data_dir: &Path) -> Result<Self> {
+        Self::open_internal(path, data_dir, true, false).await
+    }
+
+    async fn open_internal(
+        path: PathBuf,
+        data_dir: &Path,
+        sweep_orphans: bool,
+        reuse_working_db: bool,
+    ) -> Result<Self> {
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -350,8 +522,9 @@ impl MediaPack {
 
         let db_path = dir.join("index.db");
         let has_unsaved = fs::exists(dir.join("UNSAVED"))? && fs::exists(&db_path)?;
+        let has_working_db = has_unsaved || (reuse_working_db && fs::exists(&db_path)?);
 
-        let metadata = if has_unsaved {
+        let metadata = if has_working_db {
             let metadata_path = dir.join("Metadata");
             match fs::read(&metadata_path)
                 .map_err(|err| anyhow!(err))
@@ -377,11 +550,15 @@ impl MediaPack {
             Metadata::from_buf(&buf)?
         };
 
-        if !has_unsaved {
+        if !has_working_db {
             file.seek(SeekFrom::Start(header.index_offset)).await?;
             let mut db_data = vec![0u8; header.index_length as usize];
             file.read_exact(&mut db_data).await?;
 
+            // The working database uses WAL. Never place a freshly extracted main
+            // database beside sidecars belonging to the previous working copy:
+            // SQLite could otherwise replay stale pages into the extracted index.
+            remove_sqlite_sidecars(&db_path)?;
             let mut db_file = File::create(&db_path).await?;
             db_file.write_all(&db_data).await?;
             db_file.flush().await?;
@@ -398,29 +575,40 @@ impl MediaPack {
         let pool = db_pool.clone();
         spawn_blocking(move || -> Result<_> {
             let conn = pool.get()?;
+            conn.pragma_update(None, "journal_mode", "WAL")?;
             migrate(&conn)
         })
         .await??;
 
-        Ok(Self {
+        let pack = Self {
             path: Some(path),
             data_dir: data_dir.to_path_buf(),
             saving: Arc::new(RwLock::new(())),
+            archive_io: Arc::new(RwLock::new(())),
+            save_serial: Arc::new(AsyncMutex::new(())),
             _lock: Some(lock),
             header: StdRwLock::new(header),
             dir,
             metadata: StdRwLock::new(metadata),
             db_pool,
             saved: AtomicBool::new(!has_unsaved),
+            revision: AtomicU64::new(0),
             db_path,
-        })
+            loose_files: LooseFileRegistry::default(),
+        };
+        if sweep_orphans {
+            pack.rebuild_loose_files_and_sweep().await?;
+        } else {
+            pack.rebuild_loose_files().await?;
+        }
+        Ok(pack)
     }
 
     pub fn get_view(&self) -> Result<MediaPackView> {
         let threads = (available_parallelism()?.get() / 2).max(1);
         Ok(MediaPackView {
             path: self.path.clone(),
-            saving: self.saving.clone(),
+            archive_io: self.archive_io.clone(),
             dir: self.dir.clone(),
             db_pool: self.db_pool.clone(),
             _thread_pool: Arc::new(
@@ -447,6 +635,113 @@ impl MediaPack {
         &self.dir
     }
 
+    /// Rebuild runtime leases from durable rows. History rows count as references just like live
+    /// rows. Returns the physical paths retained by those leases for orphan sweeping.
+    async fn rebuild_loose_files(&self) -> Result<std::collections::HashSet<PathBuf>> {
+        let pool = self.db_pool.clone();
+        let history_path = self.dir.join("history.db");
+        let (live, history) = spawn_blocking(move || -> Result<_> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare("SELECT id, path FROM media WHERE path IS NOT NULL")?;
+            let live = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, u64>(0)?,
+                        PathBuf::from(row.get::<_, String>(1)?),
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let history = if history_path.exists() {
+                let conn = rusqlite::Connection::open(history_path)?;
+                conn.execute_batch(HISTORY_SCHEMA)?;
+                let mut stmt = conn.prepare("SELECT id, path FROM media WHERE path IS NOT NULL")?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, u64>(0)?,
+                            PathBuf::from(row.get::<_, String>(1)?),
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            } else {
+                Vec::new()
+            };
+            Ok((live, history))
+        })
+        .await??;
+
+        let media_dir = self.dir.join("media");
+        let db_path = self.db_path.clone();
+        let history_path = self.dir.join("history.db");
+        let resolve = |path: PathBuf| {
+            if path.is_absolute() {
+                path
+            } else {
+                media_dir.join(path)
+            }
+        };
+        Ok({
+            let mut inner = self.loose_files.0.lock().unwrap();
+            inner.live.clear();
+            inner.history.clear();
+            for (id, stored_path) in live {
+                let file = LooseFileRegistry::acquire(
+                    resolve(stored_path.clone()),
+                    stored_path,
+                    db_path.clone(),
+                    history_path.clone(),
+                );
+                inner.live.insert(id, file);
+            }
+            for (id, stored_path) in history {
+                let file = LooseFileRegistry::acquire(
+                    resolve(stored_path.clone()),
+                    stored_path,
+                    db_path.clone(),
+                    history_path.clone(),
+                );
+                inner.history.insert(id, file);
+            }
+            inner
+                .live
+                .values()
+                .chain(inner.history.values())
+                .map(|file| file.path.clone())
+                .collect::<std::collections::HashSet<_>>()
+        })
+    }
+
+    /// Remove files left behind by a crash before its database transaction completed.
+    async fn rebuild_loose_files_and_sweep(&self) -> Result<()> {
+        let referenced = self.rebuild_loose_files().await?;
+        let media_dir = self.dir.join("media");
+        spawn_blocking(move || -> Result<()> {
+            for entry in fs::read_dir(&media_dir)? {
+                let entry = entry?;
+                if entry.file_type()?.is_file() && !referenced.contains(&entry.path()) {
+                    fs::remove_file(entry.path())?;
+                }
+            }
+            if let Some(pack_dir) = media_dir.parent() {
+                for entry in fs::read_dir(pack_dir)? {
+                    let entry = entry?;
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if entry.file_type()?.is_dir()
+                        && (name.starts_with("pack-editor-upload-")
+                            || name.starts_with("pack-editor-import-"))
+                    {
+                        fs::remove_dir_all(entry.path())?;
+                    }
+                }
+            }
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
     pub fn is_untitled(&self) -> bool {
         self.path.is_none()
     }
@@ -457,6 +752,7 @@ impl MediaPack {
     }
 
     pub async fn mark_unsaved(&self) -> Result<()> {
+        self.revision.fetch_add(1, Ordering::SeqCst);
         if self.saved.load(Ordering::Relaxed) {
             File::create(self.dir.join("UNSAVED")).await?;
             self.saved.store(false, Ordering::Relaxed);
@@ -503,6 +799,120 @@ impl MediaPack {
         OpenOptions::new().write(true).open(path).await
     }
 
+    async fn create_save_snapshot(&self) -> Result<SaveSnapshot> {
+        let staging = tempfile::Builder::new()
+            .prefix("pack-editor-save-")
+            .tempdir_in(&self.dir)?;
+        let db_path = staging.path().join("index.db");
+
+        // Establish the SQLite and in-memory parts of the snapshot at one precise
+        // mutation boundary. The open read transaction pins the current WAL view,
+        // so the expensive backup can continue after this application lock is
+        // released without preventing other pooled connections from writing.
+        let _mutation_guard = self.saving.write().await;
+        let live_db_path = self.db_path.clone();
+        let source = spawn_blocking(move || -> Result<_> {
+            // This must not come from r2d2: if establishing or copying the
+            // snapshot fails, closing this dedicated connection reliably rolls
+            // back its transaction instead of returning transaction state to the
+            // live pool.
+            let conn = rusqlite::Connection::open_with_flags(
+                live_db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )?;
+            conn.execute_batch("BEGIN DEFERRED; SELECT 1;")?;
+            Ok(conn)
+        })
+        .await??;
+        let revision = self.revision.load(Ordering::SeqCst);
+        let metadata = self.metadata.read().unwrap().clone();
+        let loose_files = self
+            .loose_files
+            .0
+            .lock()
+            .unwrap()
+            .live
+            .values()
+            .cloned()
+            .collect();
+        drop(_mutation_guard);
+
+        let destination = db_path.clone();
+        spawn_blocking(move || -> Result<()> {
+            let mut destination = rusqlite::Connection::open(destination)?;
+            let backup = Backup::new(&source, &mut destination)?;
+            loop {
+                match backup.step(256)? {
+                    StepResult::Done => break,
+                    StepResult::More => std::thread::yield_now(),
+                    StepResult::Busy | StepResult::Locked => sleep(Duration::from_millis(1)),
+                    _ => sleep(Duration::from_millis(1)),
+                }
+            }
+            // Release the pinned WAL snapshot before vacuuming the private copy.
+            // On any earlier error or panic, normal RAII cleanup does the same.
+            drop(backup);
+            drop(source);
+            // Journal mode is stored in the database and is copied by the backup.
+            // Keep WAL on the live working DB, but make this self-contained snapshot
+            // use a rollback journal: later offset updates must land in index.db
+            // itself because that single file is what gets embedded in the pack.
+            destination.pragma_update(None, "journal_mode", "DELETE")?;
+            destination.execute_batch("VACUUM")?;
+            Ok(())
+        })
+        .await??;
+
+        let db_pool = Pool::builder().build(SqliteConnectionManager::file(&db_path))?;
+        Ok(SaveSnapshot {
+            revision,
+            metadata,
+            db_path,
+            db_pool,
+            _loose_files: loose_files,
+            _staging: staging,
+        })
+    }
+
+    async fn reconcile_save_snapshot(&self, snapshot: &SaveSnapshot) -> Result<bool> {
+        let pool = snapshot.db_pool.clone();
+        let rows = spawn_blocking(move || -> Result<Vec<(u64, Vec<u8>, u64, u64)>> {
+            let conn = pool.get()?;
+            let mut stmt = conn
+                .prepare("SELECT id, hash, offset, length FROM media WHERE offset IS NOT NULL")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await??;
+
+        let live_pool = self.db_pool.clone();
+        let embedded = spawn_blocking(move || -> Result<Vec<u64>> {
+            let mut conn = live_pool.get()?;
+            let tx = conn.transaction()?;
+            let mut embedded = Vec::new();
+            for (id, hash, offset, length) in rows {
+                if tx.execute(
+                    "UPDATE media SET offset = ?, length = ?, path = NULL WHERE id = ? AND hash = ?",
+                    params![offset, length, id, hash],
+                )? > 0
+                {
+                    embedded.push(id);
+                }
+            }
+            tx.commit()?;
+            Ok(embedded)
+        })
+        .await??;
+        for id in embedded {
+            self.loose_files.release_live(id);
+        }
+        Ok(self.revision.load(Ordering::SeqCst) == snapshot.revision)
+    }
+
     pub async fn save(
         &self,
         on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
@@ -513,27 +923,39 @@ impl MediaPack {
         if self.saved.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let _handle = self.saving.write().await;
+        let _save_guard = self.save_serial.lock().await;
+        // Another queued save may already have persisted the current revision.
+        if self.saved.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let snapshot = self.create_save_snapshot().await?;
+        let _archive_guard = self.archive_io.write().await;
         let on_progress = Arc::new(on_progress);
 
         tracing::warn!("Writing files");
 
-        let offset = self.write_files(None, on_progress).await?;
+        let offset = self
+            .write_files_from(snapshot.db_pool.clone(), None, None, on_progress)
+            .await?;
 
         tracing::warn!("Finished writing files");
 
-        self.db_execute(|conn| conn.execute("VACUUM", []).map_err(|err| err.into()))
-            .await?;
+        let snapshot_pool = snapshot.db_pool.clone();
+        spawn_blocking(move || -> Result<()> {
+            snapshot_pool.get()?.execute("VACUUM", [])?;
+            Ok(())
+        })
+        .await??;
 
         let mut file = self.open_write().await?;
         file.seek(SeekFrom::Start(offset)).await?;
 
         let index_length = {
-            let mut dbf = File::open(&self.db_path).await?;
+            let mut dbf = File::open(&snapshot.db_path).await?;
             tokio::io::copy(&mut dbf, &mut file).await?
         };
 
-        let buf = self.metadata.read().unwrap().to_buf()?;
+        let buf = snapshot.metadata.to_buf()?;
         let metadata_length = buf.len() as u64;
         file.write_all(&buf).await?;
         file.set_len(offset + metadata_length + index_length)
@@ -552,8 +974,10 @@ impl MediaPack {
         *self.header.write().unwrap() = header;
         file.sync_data().await?;
 
-        self.clean_media()?;
-        self.mark_saved().await?;
+        let _mutation_guard = self.saving.write().await;
+        if self.reconcile_save_snapshot(&snapshot).await? {
+            self.mark_saved().await?;
+        }
         Ok(())
     }
 
@@ -562,11 +986,28 @@ impl MediaPack {
         to_path: Option<PathBuf>,
         on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
     ) -> Result<u64> {
+        self.write_files_from(
+            self.db_pool.clone(),
+            Some(self.loose_files.clone()),
+            to_path,
+            on_progress,
+        )
+        .await
+    }
+
+    async fn write_files_from(
+        &self,
+        db_pool: Pool<SqliteConnectionManager>,
+        loose_files: Option<LooseFileRegistry>,
+        to_path: Option<PathBuf>,
+        on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
+    ) -> Result<u64> {
         let dir = self.dir.clone();
         let path = self.path.clone();
-        let db_pool = self.db_pool.clone();
+        let worker_pool = db_pool.clone();
 
-        self.db_execute(move |conn| {
+        spawn_blocking(move || {
+            let conn = db_pool.get()?;
             let out_path = to_path
                 .clone()
                 .or_else(|| path.clone())
@@ -644,8 +1085,10 @@ impl MediaPack {
             // same per-file crash-safety guarantee as before, just funneled through
             // one thread instead of one connection per worker.
             let (db_tx, db_rx) = std::sync::mpsc::channel::<DbUpdateRequest>();
-            let writer_conn = db_pool.get()?;
-            let writer_handle = std::thread::spawn(move || run_db_writer(writer_conn, db_rx));
+            let writer_conn = worker_pool.get()?;
+            let writer_loose_files = loose_files.clone();
+            let writer_handle =
+                std::thread::spawn(move || run_db_writer(writer_conn, db_rx, writer_loose_files));
 
             let result: Result<()> = (|| {
                 // Run the shifts in parallel. For an in-place save, `path` and
@@ -809,7 +1252,7 @@ impl MediaPack {
             result?;
             Ok(offset)
         })
-        .await
+        .await?
     }
 
     pub async fn save_as(
@@ -843,8 +1286,11 @@ impl MediaPack {
                 .write_files(Some(path.to_path_buf()), on_progress)
                 .await?;
 
-            self.db_execute(|conn| conn.execute("VACUUM", []).map_err(|err| err.into()))
-                .await?;
+            self.db_execute(|conn| {
+                conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE)")?;
+                Ok(())
+            })
+            .await?;
 
             file.seek(SeekFrom::Start(offset)).await?;
             let index_length = {
@@ -876,7 +1322,7 @@ impl MediaPack {
             self.mark_saved().await?;
         }
 
-        let opened = Self::open(path.to_path_buf(), &self.data_dir).await?;
+        let opened = Self::open_internal(path.to_path_buf(), &self.data_dir, false, true).await?;
         if first_save {
             self.saved.store(false, Ordering::Relaxed);
         }
@@ -916,12 +1362,29 @@ impl MediaPack {
         let mut db_data = vec![0u8; index_length as usize];
         file.read_exact(&mut db_data).await?;
 
-        let mut db_file = File::create(&self.db_path).await?;
-        db_file.write_all(&db_data).await?;
-        db_file.flush().await?;
+        // Restore through SQLite rather than overwriting index.db underneath the
+        // live pool. In WAL mode the latter can leave existing connections tied to
+        // stale pages or replay an old sidecar over the restored database.
+        let staging = tempfile::Builder::new()
+            .prefix("pack-editor-restore-")
+            .tempdir_in(&self.dir)?;
+        let restore_path = staging.path().join("index.db");
+        tokio::fs::write(&restore_path, db_data).await?;
+        let pool = self.db_pool.clone();
+        spawn_blocking(move || -> Result<()> {
+            let source = rusqlite::Connection::open_with_flags(
+                restore_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )?;
+            let mut destination = pool.get()?;
+            let backup = Backup::new(&source, &mut destination)?;
+            backup.run_to_completion(256, Duration::from_millis(1), None)?;
+            Ok(())
+        })
+        .await??;
 
         let _ = fs::remove_file(self.dir.join("history.db"));
-        self.clean_media()?;
+        self.rebuild_loose_files_and_sweep().await?;
 
         let final_meta = if let Some(m) = metadata {
             *self.metadata.write().unwrap() = m.clone();
@@ -959,35 +1422,6 @@ impl MediaPack {
         Ok(())
     }
 
-    fn clean_media(&self) -> Result<()> {
-        // Rows staged for undo still point at their encoded working files. A save must not remove
-        // those files: history deliberately survives saves and may move the rows back afterwards.
-        let history_path = self.dir.join("history.db");
-        let retained = if history_path.exists() {
-            let conn = rusqlite::Connection::open(history_path)?;
-            conn.execute_batch(HISTORY_SCHEMA)?;
-            let mut stmt = conn.prepare("SELECT path FROM media WHERE path IS NOT NULL")?;
-            let paths = stmt
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
-            paths
-        } else {
-            std::collections::HashSet::new()
-        };
-        for entry in fs::read_dir(self.dir.join("media"))? {
-            if let Err(err) = entry.and_then(|e| {
-                if retained.contains(&e.file_name().to_string_lossy().to_string()) {
-                    Ok(())
-                } else {
-                    fs::remove_file(e.path())
-                }
-            }) {
-                tracing::error!("{err}");
-            }
-        }
-        Ok(())
-    }
-
     /// Returns `Ok(None)` if `hash` is already present - a DB-level `UNIQUE`
     /// constraint on `media.hash`, not just the caller's own pre-check, so this
     /// is safe even when two uploads with identical content race each other (the
@@ -1007,6 +1441,15 @@ impl MediaPack {
         hash: blake3::Hash,
     ) -> Result<Option<MediaFile>> {
         let _handle = self.saving.read().await;
+        let stored_path = encoded_file.path.clone();
+        let loose_file = {
+            LooseFileRegistry::acquire(
+                encoded_file.path.clone(),
+                stored_path,
+                self.db_path.clone(),
+                self.dir.join("history.db"),
+            )
+        };
 
         let FileInfoParts {
             file_type,
@@ -1066,6 +1509,7 @@ impl MediaPack {
                 Err(err) => return Err(err),
             }
         };
+        self.loose_files.insert_live(id, loose_file);
 
         if !encoded_file.artists.is_empty() {
             self.add_artists(id, encoded_file.artists.clone()).await?;
@@ -1091,17 +1535,18 @@ impl MediaPack {
         }
         let _handle = self.saving.read().await;
         let history_path = self.dir.join("history.db").to_string_lossy().to_string();
+        let db_ids = ids.clone();
         self.db_execute(move |mut conn| {
             let _ = conn.execute("DETACH DATABASE undo_history", []);
             conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
             conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
             let result = (|| -> Result<()> {
                 let tx = conn.transaction()?;
-                let vars = repeat_vars(ids.len());
-                tx.execute(&format!("INSERT OR REPLACE INTO undo_history.media SELECT * FROM main.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_tags SELECT mt.media_id, t.name FROM main.media_tags mt JOIN main.tags t ON t.id = mt.tag_id WHERE mt.media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_artists SELECT ma.media_id, a.name FROM main.media_artists ma JOIN main.artists a ON a.id = ma.artist_id WHERE ma.media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("DELETE FROM main.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+                let vars = repeat_vars(db_ids.len());
+                tx.execute(&format!("INSERT OR REPLACE INTO undo_history.media SELECT * FROM main.media WHERE id IN ({vars})"), params_from_iter(&db_ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_tags SELECT mt.media_id, t.name FROM main.media_tags mt JOIN main.tags t ON t.id = mt.tag_id WHERE mt.media_id IN ({vars})"), params_from_iter(&db_ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_artists SELECT ma.media_id, a.name FROM main.media_artists ma JOIN main.artists a ON a.id = ma.artist_id WHERE ma.media_id IN ({vars})"), params_from_iter(&db_ids))?;
+                tx.execute(&format!("DELETE FROM main.media WHERE id IN ({vars})"), params_from_iter(&db_ids))?;
                 tx.commit()?;
                 Ok(())
             })();
@@ -1109,6 +1554,7 @@ impl MediaPack {
             result
         })
         .await?;
+        self.loose_files.move_to_history(&ids);
         self.mark_unsaved().await
     }
 
@@ -1118,25 +1564,27 @@ impl MediaPack {
         }
         let _handle = self.saving.read().await;
         let history_path = self.dir.join("history.db").to_string_lossy().to_string();
+        let db_ids = ids.clone();
         self.db_execute(move |mut conn| {
             let _ = conn.execute("DETACH DATABASE undo_history", []);
             conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
             conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
             let result = (|| -> Result<()> {
                 let tx = conn.transaction()?;
-                let vars = repeat_vars(ids.len());
-                tx.execute(&format!("INSERT OR REPLACE INTO main.media SELECT * FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.tags (name) SELECT DISTINCT tag FROM undo_history.media_tags WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.media_tags SELECT h.media_id, t.id FROM undo_history.media_tags h JOIN main.tags t ON t.name = h.tag WHERE h.media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.artists (name) SELECT DISTINCT artist FROM undo_history.media_artists WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.media_artists SELECT h.media_id, a.id FROM undo_history.media_artists h JOIN main.artists a ON a.name = h.artist WHERE h.media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("DELETE FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
+                let vars = repeat_vars(db_ids.len());
+                tx.execute(&format!("INSERT OR REPLACE INTO main.media SELECT * FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&db_ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO main.tags (name) SELECT DISTINCT tag FROM undo_history.media_tags WHERE media_id IN ({vars})"), params_from_iter(&db_ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO main.media_tags SELECT h.media_id, t.id FROM undo_history.media_tags h JOIN main.tags t ON t.name = h.tag WHERE h.media_id IN ({vars})"), params_from_iter(&db_ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO main.artists (name) SELECT DISTINCT artist FROM undo_history.media_artists WHERE media_id IN ({vars})"), params_from_iter(&db_ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO main.media_artists SELECT h.media_id, a.id FROM undo_history.media_artists h JOIN main.artists a ON a.name = h.artist WHERE h.media_id IN ({vars})"), params_from_iter(&db_ids))?;
+                tx.execute(&format!("DELETE FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&db_ids))?;
                 tx.commit()?;
                 Ok(())
             })();
             let _ = conn.execute("DETACH DATABASE undo_history", []);
             result
         }).await?;
+        self.loose_files.move_to_live(&ids);
         self.mark_unsaved().await
     }
 
@@ -1149,44 +1597,55 @@ impl MediaPack {
         if !history_path.exists() {
             return Ok(());
         }
-        let media_dir = self.dir.join("media");
-        spawn_blocking(move || -> Result<()> {
+        let db_ids = ids.clone();
+        let purged_paths = spawn_blocking(move || -> Result<Vec<(u64, PathBuf)>> {
             let mut conn = rusqlite::Connection::open(history_path)?;
             conn.execute_batch(HISTORY_SCHEMA)?;
-            let vars = repeat_vars(ids.len());
+            let vars = repeat_vars(db_ids.len());
             let paths = {
                 let mut stmt = conn.prepare(&format!(
-                    "SELECT path FROM media WHERE path IS NOT NULL AND id IN ({vars})"
+                    "SELECT id, path FROM media WHERE path IS NOT NULL AND id IN ({vars})"
                 ))?;
-                let paths = stmt
-                    .query_map(params_from_iter(&ids), |row| row.get::<_, String>(0))?
+                let rows = stmt
+                    .query_map(params_from_iter(&db_ids), |row| {
+                        Ok((row.get(0)?, PathBuf::from(row.get::<_, String>(1)?)))
+                    })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                paths
+                rows
             };
             let tx = conn.transaction()?;
             tx.execute(
                 &format!("DELETE FROM media_tags WHERE media_id IN ({vars})"),
-                params_from_iter(&ids),
+                params_from_iter(&db_ids),
             )?;
             tx.execute(
                 &format!("DELETE FROM media_artists WHERE media_id IN ({vars})"),
-                params_from_iter(&ids),
+                params_from_iter(&db_ids),
             )?;
             tx.execute(
                 &format!("DELETE FROM media WHERE id IN ({vars})"),
-                params_from_iter(&ids),
+                params_from_iter(&db_ids),
             )?;
             tx.commit()?;
-            for path in paths {
-                if let Err(error) = fs::remove_file(media_dir.join(path)) {
+            Ok(paths)
+        })
+        .await??;
+        let released = self.loose_files.release_history(&ids);
+        // Rows created before registry ownership was established have no Arc to perform cleanup.
+        for (id, path) in purged_paths {
+            if !released.contains(&id) {
+                let path = if path.is_absolute() {
+                    path
+                } else {
+                    self.dir.join("media").join(path)
+                };
+                if let Err(error) = fs::remove_file(path) {
                     if error.kind() != io::ErrorKind::NotFound {
                         return Err(error.into());
                     }
                 }
             }
-            Ok(())
-        })
-        .await??;
+        }
         Ok(())
     }
 
@@ -2094,20 +2553,20 @@ impl MediaPackView {
     }
 
     pub async fn get_preview(&self, id: u64) -> Result<Vec<u8>> {
-        let _handle = self.saving.read().await;
+        let _handle = self.archive_io.read().await;
         let (file_data, file_type, transparent) = self.get_raw_file(id).await?;
         crate::thumbnail::generate_preview(file_data, file_type == FileType::Image, transparent)
             .await
     }
 
     pub async fn get_display(&self, id: u64) -> Result<Vec<u8>> {
-        let _handle = self.saving.read().await;
+        let _handle = self.archive_io.read().await;
         let (file_data, _, _) = self.get_raw_file(id).await?;
         crate::thumbnail::generate_display_image(file_data).await
     }
 
     pub async fn get_file_data(&self, id: u64) -> Result<(Vec<u8>, FileType)> {
-        let _handle = self.saving.read().await;
+        let _handle = self.archive_io.read().await;
         let (file_data, file_type, _) = self.get_raw_file(id).await?;
         let data = match file_data {
             FileData::Path(path) => tokio::fs::read(path).await?,
@@ -2117,7 +2576,7 @@ impl MediaPackView {
     }
 
     pub async fn get_file_range(&self, id: u64, range: Range) -> Result<(DataRange, FileType)> {
-        let _handle = self.saving.read().await;
+        let _handle = self.archive_io.read().await;
 
         let (offset, length, path, file_type) = self
             .db_execute(move |conn| {
@@ -2265,10 +2724,6 @@ fn copy_new_file_job(
         },
     )?;
 
-    if let Err(err) = fs::remove_file(&job.full_path) {
-        tracing::error!("{err}");
-    }
-
     Ok(true)
 }
 
@@ -2296,6 +2751,19 @@ fn file_name(path: &Path) -> String {
         .unwrap_or(path.as_os_str())
         .to_string_lossy()
         .to_string()
+}
+
+fn remove_sqlite_sidecars(path: &Path) -> io::Result<()> {
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        match fs::remove_file(PathBuf::from(sidecar)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
 }
 
 /// Produces the next name to try after `name` collided with an existing file: appends
@@ -2509,6 +2977,114 @@ mod tests {
         let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
         assert_eq!(pack2.name(), "My Pack");
         assert!(pack2.is_saved().await);
+    }
+
+    #[tokio::test]
+    async fn edits_during_snapshot_save_remain_dirty_and_are_not_written_into_that_snapshot() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("snapshot.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Before snapshot").await;
+        insert_staged_audio(&pack, &vec![7; 2 * 1024 * 1024]).await;
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let save = pack.save({
+            let started_tx = started_tx.clone();
+            move |_, _| {
+                if let Some(tx) = started_tx.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+            }
+        });
+        let edit = async {
+            started_rx.await.unwrap();
+            pack.set_metadata(&Metadata {
+                name: "Edited while saving".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        };
+        let (save_result, ()) = tokio::join!(save, edit);
+        save_result.unwrap();
+
+        assert!(
+            !pack.is_saved().await,
+            "a post-snapshot edit must remain dirty"
+        );
+        assert_eq!(pack.name(), "Edited while saving");
+
+        let mut file = File::open(&pack_path).await.unwrap();
+        let mut header_buf = [0; HEADER_SIZE];
+        file.read_exact(&mut header_buf).await.unwrap();
+        let header = Header::from_buf(header_buf).unwrap();
+        file.seek(SeekFrom::Start(header.metadata_offset))
+            .await
+            .unwrap();
+        let mut metadata_buf = vec![0; header.metadata_length as usize];
+        file.read_exact(&mut metadata_buf).await.unwrap();
+        assert_eq!(
+            Metadata::from_buf(&metadata_buf).unwrap().name,
+            "Before snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_loose_media_during_save_keeps_undo_bytes_alive() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("snapshot-remove.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Snapshot remove").await;
+        let bytes = vec![9; 2 * 1024 * 1024];
+        let path = pack.dir.join("media").join("snapshot-remove.opus");
+        tokio::fs::write(&path, &bytes).await.unwrap();
+        let media = pack
+            .add_file(
+                EncodedFile {
+                    info: FileInfo::Audio { duration: 1.0 },
+                    thumbnail: None,
+                    path: path.clone(),
+                    artists: vec![],
+                    source_url: None,
+                },
+                Path::new("snapshot-remove.wav"),
+                blake3::hash(&bytes),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let save = pack.save({
+            let started_tx = started_tx.clone();
+            move |_, _| {
+                if let Some(tx) = started_tx.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+            }
+        });
+        let remove = async {
+            started_rx.await.unwrap();
+            pack.remove_files(vec![media.id]).await.unwrap();
+        };
+        let (save_result, ()) = tokio::join!(save, remove);
+        save_result.unwrap();
+
+        assert!(!pack.is_saved().await);
+        assert!(
+            path.exists(),
+            "undo history must retain bytes leased by the snapshot"
+        );
+        pack.restore_files(vec![media.id]).await.unwrap();
+        let (restored, _) = pack
+            .get_view()
+            .unwrap()
+            .get_file_data(media.id)
+            .await
+            .unwrap();
+        assert_eq!(restored, bytes);
     }
 
     #[tokio::test]
@@ -3256,12 +3832,119 @@ mod tests {
             second.is_none(),
             "duplicate hash should be rejected, not inserted"
         );
+        assert!(
+            !pack.dir.join("media").join("upload-2").exists(),
+            "an unreferenced encoded file should be deleted on final drop"
+        );
 
         let files = pack.get_files().await.unwrap();
         assert_eq!(
             files.len(),
             1,
             "only one row should exist for the duplicate hash"
+        );
+    }
+
+    #[tokio::test]
+    async fn referenced_loose_file_survives_pack_drop_and_orphans_are_swept_on_reopen() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("leases.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Leases").await;
+
+        let encoded_path = pack.dir.join("media").join("referenced.opus");
+        tokio::fs::write(&encoded_path, b"referenced")
+            .await
+            .unwrap();
+        let media = pack
+            .add_file(
+                EncodedFile {
+                    info: FileInfo::Audio { duration: 1.0 },
+                    thumbnail: None,
+                    path: encoded_path.clone(),
+                    artists: vec![],
+                    source_url: None,
+                },
+                Path::new("referenced.wav"),
+                blake3::hash(b"referenced"),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        let orphan_path = pack.dir.join("media").join("orphan.opus");
+        tokio::fs::write(&orphan_path, b"orphan").await.unwrap();
+        let abandoned_staging = pack.dir.join("pack-editor-upload-abandoned");
+        tokio::fs::create_dir(&abandoned_staging).await.unwrap();
+        tokio::fs::write(abandoned_staging.join("partial.opus"), b"partial")
+            .await
+            .unwrap();
+
+        drop(pack);
+        assert!(
+            encoded_path.exists(),
+            "a durable live row must survive application teardown"
+        );
+
+        let reopened = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        assert!(encoded_path.exists());
+        assert!(!orphan_path.exists());
+        assert!(!abandoned_staging.exists());
+        assert_eq!(reopened.get_files().await.unwrap()[0].id, media.id);
+        reopened.remove_files(vec![media.id]).await.unwrap();
+        assert!(
+            encoded_path.exists(),
+            "undo history must retain the loose file"
+        );
+        reopened.purge_history_files(vec![media.id]).await.unwrap();
+        assert!(
+            !encoded_path.exists(),
+            "history eviction must release the final durable owner"
+        );
+    }
+
+    #[tokio::test]
+    async fn cloned_loose_file_lease_survives_history_eviction_until_final_drop() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("lease.lwpack"), data_dir.path(), "Lease").await;
+        let path = pack.dir.join("media").join("leased.opus");
+        tokio::fs::write(&path, b"leased").await.unwrap();
+        let media = pack
+            .add_file(
+                EncodedFile {
+                    info: FileInfo::Audio { duration: 1.0 },
+                    thumbnail: None,
+                    path: path.clone(),
+                    artists: vec![],
+                    source_url: None,
+                },
+                Path::new("leased.wav"),
+                blake3::hash(b"leased"),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let snapshot_lease = pack
+            .loose_files
+            .0
+            .lock()
+            .unwrap()
+            .live
+            .get(&media.id)
+            .unwrap()
+            .clone();
+
+        pack.remove_files(vec![media.id]).await.unwrap();
+        pack.purge_history_files(vec![media.id]).await.unwrap();
+        assert!(
+            path.exists(),
+            "the cloned snapshot lease must retain the bytes"
+        );
+        drop(snapshot_lease);
+        assert!(
+            !path.exists(),
+            "the final lease drop should delete an unreferenced file"
         );
     }
 

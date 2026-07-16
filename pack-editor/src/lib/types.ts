@@ -64,6 +64,10 @@ export interface SaveProgress {
   total: number;
 }
 
+export interface SaveDone {
+  has_unsaved_changes: boolean;
+}
+
 // behaviour.json (shared/src/behaviour/schema.rs) -- field names are the exact JSON keys.
 
 export interface TextItem {

@@ -51,7 +51,7 @@ use tokio::sync::{watch, Mutex, RwLock};
 
 use shared::encode::HardwareEncoder;
 
-pub type PackState = Arc<Mutex<Option<MediaPack>>>;
+pub type PackState = Arc<Mutex<Option<Arc<MediaPack>>>>;
 
 pub struct AppState {
     pub pack: PackState,
@@ -290,7 +290,7 @@ async fn new_pack(state: State<'_, AppState>) -> Result<PackInfo, String> {
         has_destination: false,
     };
     remember_draft(pack.id(), info.name.clone())?;
-    *state.pack.lock().await = Some(pack);
+    *state.pack.lock().await = Some(Arc::new(pack));
     Ok(info)
 }
 
@@ -326,7 +326,7 @@ async fn open_pack_dialog(
         has_destination: true,
     };
     remember_pack(&path, info.name.clone())?;
-    *state.pack.lock().await = Some(pack);
+    *state.pack.lock().await = Some(Arc::new(pack));
     Ok(Some(info))
 }
 
@@ -358,7 +358,7 @@ async fn open_recent_pack(
     } else {
         remember_draft(pack.id(), info.name.clone())?;
     }
-    *state.pack.lock().await = Some(pack);
+    *state.pack.lock().await = Some(Arc::new(pack));
     Ok(info)
 }
 
@@ -463,7 +463,7 @@ async fn import_edgeware_pack_dialog(
         has_destination: false,
     };
     remember_draft(pack.id(), info.name.clone())?;
-    *state.pack.lock().await = Some(pack);
+    *state.pack.lock().await = Some(Arc::new(pack));
 
     let pack_state = state.pack.clone();
     let encoder = state
@@ -513,8 +513,13 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
         let Some(file) = file else { return Ok(None) };
         let path: PathBuf = file.into_path().map_err(|e| e.to_string())?;
         let _write_guard = state.upload_lock.write().await;
-        let mut lock = state.pack.lock().await;
-        let pack = lock.as_ref().ok_or("No pack open")?;
+        let pack = state
+            .pack
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or("No pack open")?;
         let draft_id = pack.id();
         let app_cb = app.clone();
         if let Some(new_pack) = pack
@@ -534,8 +539,18 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
             };
             forget_draft(draft_id)?;
             remember_pack(&path, info.name.clone())?;
-            *lock = Some(new_pack);
-            let _ = app.emit("save:done", ());
+            let mut lock = state.pack.lock().await;
+            if lock
+                .as_ref()
+                .is_none_or(|current| !Arc::ptr_eq(current, &pack))
+            {
+                return Err("The pack was closed while saving".into());
+            }
+            *lock = Some(Arc::new(new_pack));
+            let _ = app.emit(
+                "save:done",
+                serde_json::json!({ "has_unsaved_changes": false }),
+            );
             return Ok(Some(info));
         }
         return Ok(None);
@@ -544,8 +559,8 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
     // Write lock pauses any in-flight uploads until they finish their current file,
     // then holds exclusive access for the duration of the save.
     let _write_guard = state.upload_lock.write().await;
-    let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
+    let pack = state.pack.lock().await.as_ref().cloned();
+    if let Some(pack) = pack {
         let app_cb = app.clone();
         pack.save(move |saved, t| {
             let _ = app_cb.emit(
@@ -558,10 +573,14 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
         if let Some(path) = pack.path() {
             remember_pack(path, pack.name())?;
         }
-        let _ = app.emit("save:done", ());
+        let has_unsaved_changes = !pack.is_saved().await;
+        let _ = app.emit(
+            "save:done",
+            serde_json::json!({ "has_unsaved_changes": has_unsaved_changes }),
+        );
         return Ok(Some(PackInfo {
             name: pack.name(),
-            has_unsaved_changes: false,
+            has_unsaved_changes,
             has_destination: true,
         }));
     }
@@ -590,8 +609,8 @@ async fn save_pack_as_dialog(
     let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
 
     let _write_guard = state.upload_lock.write().await;
-    let mut lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
+    let pack = state.pack.lock().await.as_ref().cloned();
+    if let Some(pack) = pack {
         let draft_id = pack.path().is_none().then(|| pack.id());
         let app_cb = app.clone();
         let new_pack = pack
@@ -614,8 +633,18 @@ async fn save_pack_as_dialog(
                 forget_draft(id)?;
             }
             remember_pack(&path, info.name.clone())?;
-            *lock = Some(new_pack);
-            let _ = app.emit("save:done", ());
+            let mut lock = state.pack.lock().await;
+            if lock
+                .as_ref()
+                .is_none_or(|current| !Arc::ptr_eq(current, &pack))
+            {
+                return Err("The pack was closed while saving".into());
+            }
+            *lock = Some(Arc::new(new_pack));
+            let _ = app.emit(
+                "save:done",
+                serde_json::json!({ "has_unsaved_changes": false }),
+            );
             return Ok(Some(info));
         }
     }
