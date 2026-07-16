@@ -30,9 +30,6 @@
 </script>
 
 <div class="media-toolbar flex items-center gap-2 min-h-11 px-3 bg-bg border-b border-border shrink-0">
-  <span class="file-count text-xs text-muted whitespace-nowrap">{store.files.length} file{store.files.length === 1 ? "" : "s"}</span>
-  <div class="divider w-px h-5 bg-border"></div>
-
   <Field class="search w-56" size="compact" hideLabel label="Search media" type="search" value={store.searchQuery} placeholder="Search media…" oninput={(value) => (store.searchQuery = value)} />
   <Select class="w-28" size="compact" hideLabel label="Media type" value={store.mediaTypeFilter} options={typeOptions} onchange={(value) => (store.mediaTypeFilter = value as typeof store.mediaTypeFilter)} />
 
@@ -72,6 +69,7 @@
   >Clear filters</Button>
 
   <div class="flex-1"></div>
+  <span class="file-count font-mono text-[11px] text-muted whitespace-nowrap">{store.files.length} file{store.files.length === 1 ? "" : "s"}</span>
   <Popover align="end" label="Import media">
     {#snippet trigger(toggle, open)}<Button size="compact" variant="primary" onclick={toggle} ariaLabel="Import media" ariaHaspopup="menu" ariaExpanded={open}><span class="w-4 h-4"><Icon src={ArrowUpTray} mini /></span> Import</Button>{/snippet}
     {#snippet children(close)}
@@ -90,7 +88,7 @@
     .media-toolbar :global(.search) { width: min(224px, 35vw); flex: 1 1 150px; }
   }
   @media (max-width: 620px) {
-    .file-count, .divider { display: none; }
+    .file-count { display: none; }
     .media-toolbar :global(.search) { min-width: 120px; }
   }
 </style>

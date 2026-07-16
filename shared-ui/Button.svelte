@@ -46,8 +46,8 @@
   .secondary:hover:not(:disabled) { border-color: var(--ui-border-strong); background: var(--ui-surface-raised); }
   .quiet { background: transparent; color: var(--ui-muted); }
   .quiet:hover:not(:disabled) { background: var(--ui-surface-raised); color: var(--ui-text); }
-  .destructive { border-color: var(--ui-danger-border); background: var(--ui-danger-bg); color: var(--ui-danger); }
-  .destructive:hover:not(:disabled) { border-color: var(--ui-danger); background: #481919; }
+  .destructive { border-color: var(--ui-danger-border); background: transparent; color: var(--ui-danger); }
+  .destructive:hover:not(:disabled) { border-color: var(--ui-danger); background: var(--ui-danger-bg); }
   .spinner { width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>

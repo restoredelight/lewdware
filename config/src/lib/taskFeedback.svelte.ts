@@ -42,7 +42,10 @@ class TaskFeedback {
   progress(id: string, message: string) { this.set(id, "progress", message); }
   warning(id: string, message: string) { this.set(id, "warning", message); }
   error(id: string, message: string) { this.set(id, "error", message); }
-  success(id: string, message: string) { this.set(id, "success", message); }
+  // Successful outcomes are silent: the result is already visible in the UI.
+  success(id: string, _message?: string) { this.dismiss(id); }
+  // Brief visible confirmation, only for actions with no other visible effect (e.g. copying).
+  confirm(id: string, message: string) { this.set(id, "success", message); }
 
   dismiss(id = this.active?.id) {
     if (!id) return;

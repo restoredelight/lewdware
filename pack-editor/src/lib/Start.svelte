@@ -132,7 +132,11 @@
 <main class="start-screen">
   <section class="welcome" aria-labelledby="welcome-title">
     <header>
-      <div class="app-mark" aria-hidden="true"><Icon src={DocumentPlus} /></div>
+      <div class="app-mark" aria-hidden="true">
+        <span class="frame f1"></span>
+        <span class="frame f2"></span>
+        <span class="frame f3"><span class="frame-bar"><span class="frame-dot"></span></span></span>
+      </div>
       <div>
         <p class="eyebrow">Lewdware</p>
         <h1 id="welcome-title">Pack Editor</h1>
@@ -200,7 +204,7 @@
 
 {#if showUnsavedDialog}
   <Dialog
-    title="Unsaved Changes Found"
+    title="Unsaved changes found"
     description="This pack has unsaved changes from a previous session."
     buttons={[
       { label: "Cancel", onclick: onUnsavedCancel },
@@ -216,9 +220,14 @@
   .start-screen { display: grid; min-height: 100vh; padding: 32px; place-items: center; overflow-y: auto; background: var(--ui-bg); color: var(--ui-text); }
   .welcome { width: min(680px, 100%); }
   header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
-  .app-mark { display: grid; width: 48px; height: 48px; flex: none; place-items: center; border: 1px solid color-mix(in srgb, var(--ui-accent) 40%, var(--ui-border)); border-radius: 12px; background: color-mix(in srgb, var(--ui-accent) 12%, var(--ui-surface)); color: var(--ui-accent-foreground); }
-  .app-mark :global(svg) { width: 25px; height: 25px; }
-  .eyebrow { margin: 0 0 2px; color: var(--ui-accent-foreground); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  .app-mark { position: relative; width: 54px; height: 42px; flex: none; margin: 12px 4px 2px 14px; }
+  .frame { position: absolute; inset: 0; display: block; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-md); background: var(--ui-bg); }
+  .frame.f1 { transform: translate(-13px, -11px); opacity: .45; }
+  .frame.f2 { transform: translate(-6px, -5px); opacity: .7; }
+  .frame.f3 { border-color: var(--ui-accent); background: var(--ui-surface); box-shadow: 4px 4px 0 rgb(0 0 0 / .5); }
+  .frame-bar { display: flex; height: 12px; padding: 0 5px; align-items: center; border-bottom: 1px solid var(--ui-border); border-radius: var(--ui-radius-md) var(--ui-radius-md) 0 0; background: var(--ui-surface-raised); }
+  .frame-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--ui-accent); }
+  .eyebrow { margin: 0 0 2px; color: var(--ui-muted); font-family: var(--ui-font-mono); font-size: 12px; font-weight: 700; }
   h1 { margin: 0; font-size: 24px; line-height: 1.15; letter-spacing: -.02em; }
   .intro { max-width: 520px; margin: 6px 0 0; color: var(--ui-muted); font-size: 14px; line-height: 1.45; }
   .primary-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -230,7 +239,7 @@
   .action-copy p, .migration p { margin: 7px 0 18px; color: var(--ui-muted); font-size: 12px; line-height: 1.5; }
   .migration { display: grid; margin-top: 12px; padding: 14px 16px; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: color-mix(in srgb, var(--ui-surface) 65%, transparent); }
   .recent { margin-top: 20px; }
-  .recent > h2 { margin: 0 0 8px; color: var(--ui-muted); font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+  .recent > h2 { margin: 0 0 8px; color: var(--ui-muted); font-family: var(--ui-font-mono); font-size: 12px; font-weight: 700; }
   .recent-list { overflow: hidden; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: var(--ui-surface); }
   .recent-row { display: flex; min-width: 0; align-items: center; border-bottom: 1px solid var(--ui-border); }
   .recent-row:last-child { border-bottom: 0; }

@@ -68,7 +68,7 @@
         <p class="truncate text-sm font-medium" title={file.file_name}>{file.file_name}</p>
         <p class="mt-0.5 text-[11px] text-white/65">{idx + 1} of {files.length}</p>
       </div>
-      <button onclick={close} class="pointer-events-auto w-9 h-9 shrink-0 grid place-items-center rounded-full bg-black/60 text-white/80 hover:bg-black/80 hover:text-white transition-colors" aria-label="Close preview"><span class="block w-5 h-5"><Icon src={XMark} /></span></button>
+      <button onclick={close} class="pointer-events-auto cursor-pointer w-9 h-9 shrink-0 grid place-items-center rounded-full bg-black/60 text-white/80 hover:bg-black/80 hover:text-white transition-colors" aria-label="Close preview"><span class="block w-5 h-5"><Icon src={XMark} /></span></button>
     </div>
   {/if}
 
@@ -76,7 +76,7 @@
   {#if hasPrev}
     <button
       onclick={(e) => { e.stopPropagation(); navigate(-1); }}
-      class="absolute left-2 top-1/2 -translate-y-1/2 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors text-xl"
+      class="absolute cursor-pointer left-2 top-1/2 -translate-y-1/2 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors text-xl"
       aria-label="Previous"
     ><span class="w-5 h-5"><Icon src={ChevronLeft} /></span></button>
   {/if}
@@ -85,7 +85,7 @@
   {#if hasNext}
     <button
       onclick={(e) => { e.stopPropagation(); navigate(1); }}
-      class="absolute right-2 top-1/2 -translate-y-1/2 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors text-xl"
+      class="absolute cursor-pointer right-2 top-1/2 -translate-y-1/2 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors text-xl"
       aria-label="Next"
     ><span class="w-5 h-5"><Icon src={ChevronRight} /></span></button>
   {/if}

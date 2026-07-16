@@ -148,7 +148,7 @@
 </script>
 
 <div class="flex-1 overflow-y-auto">
-<div class="w-full max-w-4xl mx-auto flex flex-col gap-8 p-8">
+<div class="w-full max-w-4xl mx-auto flex flex-col gap-6 p-8">
   <header class="max-w-2xl">
     <h1 class="ui-page-title">General</h1>
     <p class="mt-1.5 mb-0 text-sm text-muted">
@@ -161,7 +161,7 @@
     <h2 class="ui-section-title">Session</h2>
     <p class="text-xs text-muted m-0">Launch Lewdware with the currently selected pack and mode.</p>
     <Card class="flex items-center gap-4 p-4">
-      <span class="w-2.5 h-2.5 shrink-0 rounded-full {running ? 'bg-[var(--ui-success)]' : 'bg-muted'} {engineAction ? 'animate-pulse' : ''}"></span>
+      <span class="w-2.5 h-2.5 shrink-0 rounded-full {running ? 'bg-accent' : 'bg-muted'} {engineAction ? 'animate-pulse' : ''}"></span>
       <div class="min-w-0 flex-1">
         <h3 class="m-0 text-sm font-semibold text-text">{running ? "Lewdware is running" : "Lewdware is stopped"}</h3>
         <p class="m-0 mt-1 text-xs text-muted">{running ? "The current session is active on the selected monitors." : hasPack ? "Ready to launch with the selected pack and mode." : "Select a media pack before launching."}</p>
@@ -228,7 +228,7 @@
       onkeydown={handleKeyDown}
       onblur={() => (recording = false)}
     >
-      {#if recording}<span class="font-normal italic">Press a key…</span>{:else}<kbd class="font-sans">{panicKeyDisplay}</kbd>{/if}
+      {#if recording}<span class="font-normal italic">Press a key…</span>{:else}<kbd>{panicKeyDisplay}</kbd>{/if}
     </button>
     </Card>
   </section>

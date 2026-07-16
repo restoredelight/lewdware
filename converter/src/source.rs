@@ -18,6 +18,13 @@ use zip::ZipArchive;
 /// front end's job (see `behaviour-design/edgeware-compat.md`). `extract_file` exists for exactly
 /// that: a front end (e.g. the dev batch driver) that needs a `ConvertedMedia.source_path`'s
 /// actual bytes to feed an encoder.
+/// OS-generated cruft that can end up alongside real media (AppleDouble sidecar files from a
+/// zip built on macOS, Windows thumbnail/folder-view caches) but isn't itself media -- excluded
+/// here so it never reaches ffprobe and shows up as a spurious "unrecognized file" error.
+fn is_junk_entry(name: &str) -> bool {
+    name.starts_with("._") || name == ".DS_Store" || name == "Thumbs.db" || name == "desktop.ini"
+}
+
 pub trait PackSource {
     /// Reads a small file's full contents (JSON config files only). `None` if missing or
     /// unreadable.
@@ -56,6 +63,7 @@ impl PackSource for DirSource {
             .filter_map(|e| e.ok())
             .filter(|e| e.path().is_file())
             .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|name| !is_junk_entry(name))
             .collect();
         names.sort();
         names
@@ -100,6 +108,14 @@ impl ZipSource {
             .filter(|name| !name.ends_with('/'))
             .filter_map(|name| name.strip_prefix(root_prefix.as_str()))
             .filter(|name| !name.is_empty())
+            .filter(|name| {
+                !name
+                    .rsplit('/')
+                    .next()
+                    .map(is_junk_entry)
+                    .unwrap_or(false)
+                    && !name.split('/').any(|seg| seg == "__MACOSX")
+            })
             .map(|name| name.to_string())
             .collect();
         entries.sort();
@@ -241,6 +257,40 @@ mod tests {
         assert_eq!(source.list_dir("missing"), Vec::<String>::new());
         assert!(source.file_exists("img/a.png"));
         assert!(!source.file_exists("img/c.png"));
+    }
+
+    #[test]
+    fn dir_source_filters_junk_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("img")).unwrap();
+        fs::write(dir.path().join("img/a.png"), b"a").unwrap();
+        fs::write(dir.path().join("img/._a.png"), b"junk").unwrap();
+        fs::write(dir.path().join("img/.DS_Store"), b"junk").unwrap();
+
+        let source = DirSource::new(dir.path());
+        assert_eq!(source.list_dir("img"), vec!["a.png"]);
+    }
+
+    #[test]
+    fn zip_source_filters_junk_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("pack.zip");
+        {
+            let file = fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+            writer.start_file("img/a.png", options).unwrap();
+            writer.write_all(b"a").unwrap();
+            writer.start_file("img/._a.png", options).unwrap();
+            writer.write_all(b"junk").unwrap();
+            writer.start_file("__MACOSX/img/._a.png", options).unwrap();
+            writer.write_all(b"junk").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let source = ZipSource::open(&zip_path).unwrap();
+        assert_eq!(source.list_dir("img"), vec!["a.png"]);
+        assert!(!source.file_exists("__MACOSX/img/._a.png"));
     }
 
     #[test]

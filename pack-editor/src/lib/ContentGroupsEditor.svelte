@@ -70,7 +70,7 @@
     {/if}
     {#each groups as group, index}
       <Card class="flex flex-col gap-3 p-3">
-        <div class="flex items-center justify-between"><span class="text-xs font-semibold text-muted uppercase tracking-wide">Group {index + 1}</span><Button size="compact" variant="destructive" class="!h-7" onclick={() => removeGroup(index)}>Remove</Button></div>
+        <div class="flex items-center justify-between"><span class="font-mono text-[11px] font-semibold text-muted">Group {index + 1}</span><Button size="compact" variant="destructive" class="!h-7" onclick={() => removeGroup(index)}>Remove</Button></div>
         <div class="flex items-start gap-2">
           <div class="flex-1 flex flex-col gap-1.5">
             <label class="text-xs font-medium text-muted" for={`group-name-${index}`}>Group name</label>

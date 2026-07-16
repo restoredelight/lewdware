@@ -16,10 +16,12 @@
 {/if}
 
 <style>
-  .status { display: flex; width: max-content; max-width: min(460px, 45vw); min-width: 180px; height: 26px; padding: 0 7px; align-items: center; gap: 5px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); background: var(--ui-bg); color: var(--ui-muted); font-size: 11px; }
+  .status { display: flex; width: max-content; max-width: min(460px, 45vw); min-width: 180px; height: 26px; padding: 0 7px; align-items: center; gap: 5px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); background: var(--ui-bg); color: var(--ui-muted); font-family: var(--ui-font-mono); font-size: 11px; }
+  /* Progress appears only once an operation has taken a moment — fast tasks never flash a badge. */
+  .progress { animation: status-appear 120ms ease 250ms backwards; }
+  @keyframes status-appear { from { opacity: 0; } }
   .message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .queued { flex: none; padding: 1px 4px; border-radius: 999px; background: rgb(0 0 0 / .08); font-size: 9px; font-weight: 700; }
-  .success { color: var(--ui-success); border-color: var(--ui-success-border); background: var(--ui-success-bg); }
   .warning { color: var(--ui-warning); border-color: var(--ui-warning-border); background: var(--ui-warning-bg); }
   .error { color: var(--ui-danger); border-color: var(--ui-danger-border); background: var(--ui-danger-bg); }
   .spinner { width: 12px; height: 12px; flex: none; border: 2px solid var(--ui-accent); border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }

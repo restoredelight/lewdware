@@ -252,24 +252,23 @@
   <!-- Toolbar -->
   <header class="flex items-center gap-2 px-3 h-11 bg-surface border-b border-border shrink-0">
     <span class="pack-title text-sm font-semibold text-text truncate">{store.packName}</span>
-    <span
-      class="recovery-status flex items-center gap-1.5 text-xs {store.recoveryStatus === 'error' ? 'text-[var(--ui-danger)]' : store.recoveryStatus === 'saved' ? 'text-muted' : 'text-[var(--ui-warning)]'}"
-      role={store.recoveryStatus === "error" ? "alert" : undefined}
-      title={store.recoveryError ?? (store.recoveryStatus === "backed-up" ? "Changes are stored in the application data directory and can be recovered after a crash." : undefined)}
-    >
-      <span class="w-1.5 h-1.5 rounded-full {store.recoveryStatus === 'error' ? 'bg-[var(--ui-danger)]' : store.recoveryStatus === 'saved' ? 'bg-muted' : 'bg-[var(--ui-warning)]'} {store.recoveryStatus === 'pending' ? 'animate-pulse' : ''}"></span>
-      <span class="recovery-label">{#if store.recoveryStatus === "saved"}
-        Saved
-      {:else if store.recoveryStatus === "pending"}
-        Backing up changes…
-      {:else if store.recoveryStatus === "error"}
-        Local backup failed
-      {:else if store.packHasDestination}
-        Unsaved · backed up locally
-      {:else}
-        Draft backed up locally
-      {/if}</span>
-    </span>
+    {#if store.recoveryStatus === "error"}
+      <span class="recovery-status flex items-center gap-1.5 font-mono text-[11px] text-[var(--ui-danger)]" role="alert" title={store.recoveryError ?? "Changes could not be backed up locally."}>
+        <span class="w-1.5 h-1.5 shrink-0 rounded-full bg-[var(--ui-danger)]"></span>
+        <span class="recovery-label">Backup failed</span>
+      </span>
+    {:else if store.recoveryStatus !== "saved"}
+      <span
+        class="w-1.5 h-1.5 shrink-0 rounded-full bg-muted {store.recoveryStatus === 'pending' ? 'animate-pulse' : ''}"
+        role="status"
+        aria-label="Unsaved changes"
+        title={store.recoveryStatus === "pending"
+          ? "Backing up changes…"
+          : store.packHasDestination
+            ? "Unsaved changes — backed up locally"
+            : "Draft — backed up locally; choose a destination on first save"}
+      ></span>
+    {/if}
     <div class="flex-1"></div>
     <TaskStatus />
     <div class="flex items-center">
@@ -287,7 +286,7 @@
       {/snippet}
       {#snippet children(close)}
         <div class="w-48 py-1">
-          <button role="menuitem" onclick={() => { close(); saveAs(); }} class="w-full flex items-center justify-between gap-3 text-left text-xs px-3 py-2 hover:bg-bg"><span>Save As…</span><kbd class="text-[10px] text-muted font-sans">{modifierLabel}+Shift+S</kbd></button>
+          <button role="menuitem" onclick={() => { close(); saveAs(); }} class="w-full flex items-center justify-between gap-3 text-left text-xs px-3 py-2 hover:bg-bg"><span>Save As…</span><kbd class="text-[10px] text-muted">{modifierLabel}+Shift+S</kbd></button>
           {#if !store.packSaved && store.packHasDestination}<button role="menuitem" onclick={() => { close(); discard(); }} class="w-full text-left text-xs px-3 py-2 text-[var(--ui-warning)] hover:bg-bg">Discard changes</button>{/if}
           <div class="border-t border-border my-1"></div>
           <button role="menuitem" onclick={() => { close(); requestClosePack(); }} class="w-full text-left text-xs px-3 py-2 text-[var(--ui-danger)] hover:bg-[var(--ui-danger-bg)]">Close pack</button>
@@ -358,6 +357,14 @@
 
 <style>
   .pack-title { min-width: 48px; }
+  .drop-overlay { background: rgb(0 0 0 / .62); }
+  .drop-window { position: relative; width: min(380px, calc(100vw - 64px)); border: 1px solid var(--ui-accent); border-radius: var(--ui-radius-md); background: var(--ui-surface); box-shadow: var(--ui-shadow-pop); }
+  .drop-window::before, .drop-window::after { content: ""; position: absolute; inset: 0; z-index: -1; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: rgb(10 8 9 / .4); }
+  .drop-window::before { transform: translate(-18px, -16px); opacity: .5; }
+  .drop-window::after { transform: translate(-9px, -8px); }
+  .drop-titlebar { display: flex; height: 32px; padding: 0 10px; align-items: center; gap: 8px; border-bottom: 1px solid var(--ui-border); border-radius: var(--ui-radius-md) var(--ui-radius-md) 0 0; background: var(--ui-surface-raised); color: var(--ui-text); font-family: var(--ui-font-mono); font-size: 11.5px; font-weight: 700; }
+  .drop-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--ui-accent); }
+  .drop-body { padding: 20px 16px; color: var(--ui-muted); font-size: 13px; }
   @media (max-width: 760px) {
     .pack-title { max-width: 28vw; }
     .recovery-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -368,7 +375,7 @@
 
 {#if showClosePackDialog}
   <Dialog
-    title="Unsaved Changes"
+    title="Unsaved changes"
     description="You have unsaved changes. What would you like to do?"
     buttons={[
       { label: "Cancel", onclick: () => (showClosePackDialog = false) },
@@ -407,11 +414,10 @@
 
 <!-- Drag and drop overlay -->
 {#if store.dragActive}
-  <div
-    class="fixed inset-0 z-[60] flex items-center justify-center bg-accent/10 border-4 border-dashed border-accent pointer-events-none"
-  >
-    <span class="text-lg font-medium text-accent-foreground bg-surface/90 rounded px-4 py-2 shadow-lg">
-      Drop to import
-    </span>
+  <div class="drop-overlay fixed inset-0 z-[60] grid place-items-center pointer-events-none">
+    <div class="drop-window">
+      <div class="drop-titlebar"><span class="drop-dot"></span><span>Import</span></div>
+      <div class="drop-body">Drop files or folders to import them into this pack.</div>
+    </div>
   </div>
 {/if}

@@ -6,6 +6,10 @@
 
   type Props = { transition: Transition; from: Stage; to: Stage; onstage: (id: string) => void };
   let { transition, from, to, onstage }: Props = $props();
+  let rootEl = $state<HTMLElement>();
+  // WebKitGTK doesn't reliably clamp scrollTop when the panel's content shrinks,
+  // so reset the scroll when this editor switches to a different transition.
+  $effect(() => { transition.id; rootEl?.scrollTo(0, 0); });
   const groups: { label: string; legacy: TransitionValue; values: { key: TransitionValue; label: string }[] }[] = [
     { label: "Event intervals", legacy: "events", values: [
       { key: "popup_interval", label: "Popups" }, { key: "web_interval", label: "Web links" },
@@ -34,7 +38,8 @@
   }
 </script>
 
-<main class="transition-editor">
+<main class="transition-editor" bind:this={rootEl}>
+<div class="panel">
   <header>
     <div><span class="eyebrow">Transition</span><h2><button onclick={() => onstage(from.id)}>{from.label}</button><span>to</span><button onclick={() => onstage(to.id)}>{to.label}</button></h2><p>Choose how values change after {from.label} has finished.</p></div>
   </header>
@@ -56,8 +61,9 @@
     {/each}
   </section>
   <p class="end-note">Content selections and enabled or disabled features switch to {to.label}’s values when this transition ends.</p>
+</div>
 </main>
 
 <style>
-  .transition-editor{display:flex;width:100%;max-width:800px;min-width:0;padding:24px;overflow-y:auto;flex-direction:column;gap:14px}.eyebrow{color:var(--ui-muted);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}h2{display:flex;margin:3px 0 0;align-items:center;gap:8px;font-size:20px}h2 span{color:var(--ui-muted);font-size:13px;font-weight:400}h2 button{padding:0;border:0;background:transparent;color:var(--ui-text);font:inherit;text-decoration:underline;text-decoration-color:var(--ui-border-strong);text-underline-offset:3px;cursor:pointer}header p,.section-title p{margin:4px 0 0;color:var(--ui-muted);font-size:12px}.card{display:flex;padding:16px;flex-direction:column;gap:12px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-md);background:var(--ui-surface)}.card.disabled{opacity:.65}.section-title h3{margin:0;font-size:16px}.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:end;gap:12px}.fields>label{display:flex;min-width:0;flex-direction:column;gap:5px;color:var(--ui-text);font-size:12px;font-weight:600}.fields input{width:100%;height:36px;padding:0 9px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-sm);background:var(--ui-bg);color:var(--ui-text)}fieldset{min-width:0;margin:0;padding:12px 0 0;border:0;border-top:1px solid var(--ui-border)}legend{padding:0;color:var(--ui-text);font-size:12px;font-weight:650}.value-grid{display:grid;margin-top:9px;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 16px}.value{display:flex;min-width:0;align-items:center;gap:9px;color:var(--ui-text);font-size:12px;cursor:pointer}.end-note{margin:0;padding:0 4px;color:var(--ui-muted);font-size:11px}@media(max-width:700px){.transition-editor{padding:16px}.fields,.value-grid{grid-template-columns:1fr}}
+  .transition-editor{flex:1;min-width:0;padding:24px;overflow-y:auto}.panel{display:flex;width:100%;max-width:800px;min-width:0;margin-inline:auto;flex-direction:column;gap:14px}.eyebrow{color:var(--ui-muted);font-family:var(--ui-font-mono);font-size:11px;font-weight:700}h2{display:flex;margin:3px 0 0;align-items:center;gap:8px;font-size:20px}h2 span{color:var(--ui-muted);font-size:13px;font-weight:400}h2 button{padding:0;border:0;background:transparent;color:var(--ui-text);font:inherit;text-decoration:underline;text-decoration-color:var(--ui-border-strong);text-underline-offset:3px;cursor:pointer}header p,.section-title p{margin:4px 0 0;color:var(--ui-muted);font-size:12px}.card{display:flex;padding:16px;flex-direction:column;gap:12px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-md);background:var(--ui-surface)}.card.disabled{opacity:.65}.section-title h3{margin:0;font-size:16px}.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:end;gap:12px}.fields>label{display:flex;min-width:0;flex-direction:column;gap:5px;color:var(--ui-text);font-size:12px;font-weight:600}.fields input{width:100%;height:36px;padding:0 9px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-sm);background:var(--ui-bg);color:var(--ui-text)}fieldset{min-width:0;margin:0;padding:12px 0 0;border:0;border-top:1px solid var(--ui-border)}legend{padding:0;color:var(--ui-text);font-size:12px;font-weight:650}.value-grid{display:grid;margin-top:9px;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 16px}.value{display:flex;min-width:0;align-items:center;gap:9px;color:var(--ui-text);font-size:12px;cursor:pointer}.end-note{margin:0;padding:0 4px;color:var(--ui-muted);font-size:11px}@media(max-width:700px){.transition-editor{padding:16px}.fields,.value-grid{grid-template-columns:1fr}}
 </style>

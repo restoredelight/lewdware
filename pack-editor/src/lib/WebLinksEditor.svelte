@@ -62,7 +62,7 @@
     {/if}
     {#each links as link, index}
       <Card class="flex flex-col gap-3 p-3">
-        <div class="flex items-center justify-between"><span class="text-xs font-semibold text-muted uppercase tracking-wide">Web link {index + 1}</span><Button size="compact" variant="destructive" class="!h-7" onclick={() => removeLink(index)}>Remove</Button></div>
+        <div class="flex items-center justify-between"><span class="font-mono text-[11px] font-semibold text-muted">Web link {index + 1}</span><Button size="compact" variant="destructive" class="!h-7" onclick={() => removeLink(index)}>Remove</Button></div>
         <label class="text-xs font-medium text-muted" for={`web-link-url-${index}`}>URL</label>
         <div class="flex items-start gap-2">
           <input

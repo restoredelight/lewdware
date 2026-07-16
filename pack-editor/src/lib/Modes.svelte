@@ -143,6 +143,6 @@
   .mode-icon { display: inline-flex; width: 28px; height: 28px; flex: none; color: var(--ui-accent-foreground); }
   .mode-copy { min-width: 0; flex: 1; } .mode-copy h3, .mode-copy p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mode-copy p { margin: 3px 0; color: var(--ui-muted); font-size: 11px; } .mode-copy small { color: var(--ui-muted); font-size: 10px; }
-  .recommended { flex: none; padding: 3px 7px; border: 1px solid var(--ui-success-border); border-radius: 999px; background: var(--ui-success-bg); color: var(--ui-success); font-size: 10px; font-weight: 600; }
+  .recommended { flex: none; padding: 3px 7px; border: 1px solid var(--ui-border-strong); border-radius: 999px; background: var(--ui-surface-raised); color: var(--ui-text); font-size: 10px; font-weight: 600; }
   @media (max-width: 650px) { .page { padding: 16px; } header, .recommendation { align-items: stretch; flex-direction: column; gap: 12px; } .recommendation :global(.mode-select) { width: 100%; } .recommended { display: none; } }
 </style>

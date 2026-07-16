@@ -13,24 +13,17 @@
 //! pipeline before the Content/Experience tabs had anything to show was an artificial delay, not a
 //! real one.
 
-use std::{
-    io,
-    path::Path,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread::available_parallelism,
-};
+use std::{io, path::Path, sync::Arc, thread::available_parallelism};
 
 use anyhow::{anyhow, Context};
 use converter::{convert, ConversionOutput, ConvertedMedia, DirSource, PackSource, ZipSource};
 use futures::{stream, StreamExt};
 use shared::encode::{encode_file, hash_file, HardwareEncoder};
 use tauri::Emitter;
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::{oneshot, watch, RwLock};
 use uuid::Uuid;
 
+use crate::encode::{wait_cancelled, DiscardOnDrop};
 use crate::pack::MediaFile;
 
 #[derive(Debug)]
@@ -91,7 +84,7 @@ pub async fn run_import(
     app: tauri::AppHandle,
     encoder: HardwareEncoder,
     upload_lock: Arc<RwLock<()>>,
-    cancel: Arc<AtomicBool>,
+    mut cancel: watch::Receiver<bool>,
 ) {
     let dir = {
         let lock = pack_state.lock().await;
@@ -106,43 +99,43 @@ pub async fn run_import(
 
     let limit = available_parallelism().map(|x| x.get()).ok();
 
-    stream::iter(media)
-        .for_each_concurrent(limit, |item| {
-            let pack_state = pack_state.clone();
-            let app = app.clone();
-            let dir = dir.clone();
-            let encoder = encoder.clone();
-            let upload_lock = upload_lock.clone();
-            let cancel = cancel.clone();
-            let source = source.clone();
-            async move {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = app.emit("upload:file-done", ());
-                    return;
+    let process_all = stream::iter(media).for_each_concurrent(limit, |item| {
+        let pack_state = pack_state.clone();
+        let app = app.clone();
+        let dir = dir.clone();
+        let encoder = encoder.clone();
+        let upload_lock = upload_lock.clone();
+        let source = source.clone();
+        async move {
+            // Hold the read lock for the duration of this file, same as a normal upload --
+            // lets a save acquire the write lock and run exclusively between files.
+            let _read_guard = upload_lock.read().await;
+            let source_path = item.source_path.clone();
+            match import_one_media(&pack_state, source, item, &dir, encoder).await {
+                Ok(Some(media_file)) => {
+                    let _ = app.emit("upload:added", &media_file);
                 }
-                // Hold the read lock for the duration of this file, same as a normal upload --
-                // lets a save acquire the write lock and run exclusively between files.
-                let _read_guard = upload_lock.read().await;
-                let source_path = item.source_path.clone();
-                match import_one_media(&pack_state, source, item, &dir, encoder).await {
-                    Ok(Some(media_file)) => {
-                        let _ = app.emit("upload:added", &media_file);
-                    }
-                    Ok(None) => {}
-                    Err(ImportErrorKind::Skipped) => {
-                        let _ = app.emit("upload:skipped", &source_path);
-                    }
-                    Err(err) => {
-                        let _ = app.emit(
-                            "upload:error",
-                            serde_json::json!({ "path": source_path, "error": err.to_string() }),
-                        );
-                    }
+                Ok(None) => {}
+                Err(ImportErrorKind::Skipped) => {
+                    let _ = app.emit("upload:skipped", &source_path);
                 }
-                let _ = app.emit("upload:file-done", ());
+                Err(err) => {
+                    let _ = app.emit(
+                        "upload:error",
+                        serde_json::json!({ "path": source_path, "error": err.to_string() }),
+                    );
+                }
             }
-        })
-        .await;
+            let _ = app.emit("upload:file-done", ());
+        }
+    });
+    tokio::pin!(process_all);
+
+    // Dropping the stream is the cancellation -- see encode::process_files.
+    tokio::select! {
+        _ = &mut process_all => {}
+        _ = wait_cancelled(&mut cancel) => {}
+    }
 
     let _ = app.emit("upload:done", ());
 }
@@ -157,7 +150,10 @@ async fn import_one_media(
     let extract_path = dir.join("media").join(format!("import-{}", Uuid::new_v4()));
     let extract_dest = extract_path.clone();
     let extract_source_path = media.source_path.clone();
-    tokio::task::spawn_blocking(move || source.extract_file(&extract_source_path, &extract_dest))
+    let extract =
+        tokio::task::spawn_blocking(move || source.extract_file(&extract_source_path, &extract_dest));
+    DiscardOnDrop::new(extract, extract_path.clone())
+        .finish()
         .await
         .map_err(|e| ImportErrorKind::Other(e.into()))?
         .map_err(ImportErrorKind::ExtractError)?;
@@ -166,13 +162,15 @@ async fn import_one_media(
     let encode_input = extract_path.clone();
 
     let (tx, rx) = oneshot::channel();
+    let encode_output = output_path.clone();
     rayon::spawn(move || {
-        let result = encode_file(&encode_input, &output_path, encoder);
+        let result = encode_file(&encode_input, &encode_output, encoder);
         let _ = std::fs::remove_file(&encode_input);
         let _ = tx.send(result);
     });
 
-    let encoded = rx
+    let encoded = DiscardOnDrop::new(rx, output_path)
+        .finish()
         .await
         .map_err(|e| ImportErrorKind::Other(e.into()))?
         .map_err(ImportErrorKind::EncodeError)?;

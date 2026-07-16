@@ -39,7 +39,7 @@
 </script>
 
 <div class="flex-1 overflow-y-auto">
-<div class="w-full max-w-4xl mx-auto flex flex-col gap-8 p-8">
+<div class="w-full max-w-4xl mx-auto flex flex-col gap-6 p-8">
   <header class="max-w-2xl">
     <h1 class="ui-page-title">Permissions &amp; Volume</h1>
     <p class="mt-1.5 mb-0 text-sm text-muted">
@@ -57,7 +57,7 @@
       {#each toggles as toggle (toggle.key)}
         <div class="flex items-center gap-4 px-4 py-3">
           <div class="min-w-0 flex-1"><h3 class="m-0 text-sm font-medium text-text">{toggle.label}</h3><p class="m-0 mt-1 text-xs text-muted">{toggle.description}</p></div>
-          <span class="text-xs font-medium {store.config?.capabilities[toggle.key] ? 'text-[var(--ui-success)]' : 'text-muted'}">{store.config?.capabilities[toggle.key] ? "Allowed" : "Denied"}</span>
+          <span class="text-xs font-medium {store.config?.capabilities[toggle.key] ? 'text-text' : 'text-muted'}">{store.config?.capabilities[toggle.key] ? "Allowed" : "Denied"}</span>
           <Toggle checked={store.config?.capabilities[toggle.key] ?? false} ariaLabel={`Allow ${toggle.label.toLowerCase()}`} onchange={(checked) => store.setCapability(toggle.key, checked)} />
         </div>
       {/each}

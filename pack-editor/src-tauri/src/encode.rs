@@ -1,10 +1,8 @@
 use std::{
+    future::Future,
     io,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, OnceLock,
-    },
+    sync::{Arc, OnceLock},
     thread::available_parallelism,
 };
 
@@ -12,7 +10,7 @@ use anyhow::anyhow;
 use futures::{stream, StreamExt};
 use infer::MatcherType;
 use shared::encode::{encode_file, hash_file, HardwareEncoder};
-use tokio::sync::{oneshot, RwLock, Semaphore};
+use tokio::sync::{oneshot, watch, RwLock, Semaphore};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -23,6 +21,7 @@ use crate::pack::MediaFile;
 #[derive(Debug)]
 pub enum ProcessErrorKind {
     Skipped,
+    Unrecognized,
     EncodeError(anyhow::Error),
     PackError(anyhow::Error),
     HashError(io::Error),
@@ -33,10 +32,59 @@ impl std::fmt::Display for ProcessErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Skipped => write!(f, "Duplicate (skipped)"),
+            Self::Unrecognized => write!(f, "Not a recognizable image/video/audio file"),
             Self::EncodeError(e) => write!(f, "Encode error: {e}"),
             Self::PackError(e) => write!(f, "Pack error: {e}"),
             Self::HashError(e) => write!(f, "Hash error: {e}"),
             Self::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Resolves when the current import batch is cancelled; pends forever if it can't be.
+pub(crate) async fn wait_cancelled(cancel: &mut watch::Receiver<bool>) {
+    if cancel.wait_for(|cancelled| *cancelled).await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Wraps a handle to work running outside this future (a rayon encode, a blocking extract).
+/// If the wrapping future is dropped before the work lands — the import was cancelled — the
+/// work itself can't be interrupted, so await it in a detached task and delete its output file.
+pub(crate) struct DiscardOnDrop<F: Future + Send + Unpin + 'static>
+where
+    F::Output: Send,
+{
+    work: Option<F>,
+    output: PathBuf,
+}
+
+impl<F: Future + Send + Unpin + 'static> DiscardOnDrop<F>
+where
+    F::Output: Send,
+{
+    pub(crate) fn new(work: F, output: PathBuf) -> Self {
+        Self { work: Some(work), output }
+    }
+
+    pub(crate) async fn finish(mut self) -> F::Output {
+        let result = self.work.as_mut().expect("finish called once").await;
+        self.work = None;
+        result
+    }
+}
+
+impl<F: Future + Send + Unpin + 'static> Drop for DiscardOnDrop<F>
+where
+    F::Output: Send,
+{
+    fn drop(&mut self) {
+        if let Some(work) = self.work.take() {
+            let output = std::mem::take(&mut self.output);
+            tauri::async_runtime::spawn(async move {
+                let _ = work.await;
+                let _ = tokio::fs::remove_file(&output).await;
+            });
         }
     }
 }
@@ -52,6 +100,19 @@ fn encode_semaphore() -> &'static Semaphore {
     })
 }
 
+/// OS-generated cruft that can end up sitting next to real media (AppleDouble sidecar files and
+/// the `__MACOSX/` mirror directory a zip built on macOS carries, Windows thumbnail/folder-view
+/// caches) but isn't itself media -- excluded here so it never reaches ffprobe and shows up as a
+/// spurious error.
+pub fn is_junk_path(path: &Path) -> bool {
+    let is_junk_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with("._") || n == ".DS_Store" || n == "Thumbs.db" || n == "desktop.ini")
+        .unwrap_or(false);
+    is_junk_name || path.components().any(|c| c.as_os_str() == "__MACOSX")
+}
+
 pub fn explore_folder(path: &Path, recursive: bool) -> Vec<PathBuf> {
     let mut walkdir = WalkDir::new(path);
     if !recursive {
@@ -60,7 +121,11 @@ pub fn explore_folder(path: &Path, recursive: bool) -> Vec<PathBuf> {
     walkdir
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file() && is_media_path(e.path()).unwrap_or(false))
+        .filter(|e| {
+            e.path().is_file()
+                && !is_junk_path(e.path())
+                && is_media_path(e.path()).unwrap_or(false)
+        })
         .map(|e| e.path().to_path_buf())
         .collect()
 }
@@ -92,7 +157,7 @@ pub async fn process_files(
     app: tauri::AppHandle,
     encoder: HardwareEncoder,
     upload_lock: Arc<RwLock<()>>,
-    cancel: Arc<AtomicBool>,
+    mut cancel: watch::Receiver<bool>,
 ) {
     let total = paths.len();
     let _ = app.emit("upload:start", serde_json::json!({ "total": total }));
@@ -107,44 +172,46 @@ pub async fn process_files(
 
     let limit = available_parallelism().map(|x| x.get()).ok();
 
-    stream::iter(paths)
-        .for_each_concurrent(limit, |path| {
-            let pack_state = pack_state.clone();
-            let app = app.clone();
-            let dir = dir.clone();
-            let encoder = encoder.clone();
-            let upload_lock = upload_lock.clone();
-            let cancel = cancel.clone();
-            async move {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = app.emit("upload:file-done", ());
-                    return;
+    let process_all = stream::iter(paths).for_each_concurrent(limit, |path| {
+        let pack_state = pack_state.clone();
+        let app = app.clone();
+        let dir = dir.clone();
+        let encoder = encoder.clone();
+        let upload_lock = upload_lock.clone();
+        async move {
+            // Hold read lock for duration of file processing so save can acquire
+            // the write lock and run exclusively between file uploads.
+            let _read_guard = upload_lock.read().await;
+            match process_one_file(&pack_state, &path, &dir, encoder).await {
+                Ok(Some(media_file)) => {
+                    let _ = app.emit("upload:added", &media_file);
                 }
-                // Hold read lock for duration of file processing so save can acquire
-                // the write lock and run exclusively between file uploads.
-                let _read_guard = upload_lock.read().await;
-                match process_one_file(&pack_state, &path, &dir, encoder).await {
-                    Ok(Some(media_file)) => {
-                        let _ = app.emit("upload:added", &media_file);
-                    }
-                    Ok(None) => {}
-                    Err(ProcessErrorKind::Skipped) => {
-                        let _ = app.emit("upload:skipped", path.to_string_lossy().as_ref());
-                    }
-                    Err(err) => {
-                        let _ = app.emit(
-                            "upload:error",
-                            serde_json::json!({
-                                "path": path.to_string_lossy(),
-                                "error": err.to_string()
-                            }),
-                        );
-                    }
+                Ok(None) => {}
+                Err(ProcessErrorKind::Skipped) => {
+                    let _ = app.emit("upload:skipped", path.to_string_lossy().as_ref());
                 }
-                let _ = app.emit("upload:file-done", ());
+                Err(err) => {
+                    let _ = app.emit(
+                        "upload:error",
+                        serde_json::json!({
+                            "path": path.to_string_lossy(),
+                            "error": err.to_string()
+                        }),
+                    );
+                }
             }
-        })
-        .await;
+            let _ = app.emit("upload:file-done", ());
+        }
+    });
+    tokio::pin!(process_all);
+
+    // Dropping the stream is the cancellation: queued paths are never visited, in-flight
+    // files stop at their next await, and encodes already running on the rayon pool finish
+    // detached with their output discarded (see DiscardOnDrop).
+    tokio::select! {
+        _ = &mut process_all => {}
+        _ = wait_cancelled(&mut cancel) => {}
+    }
 
     let _ = app.emit("upload:done", ());
 }
@@ -187,18 +254,20 @@ async fn process_one_file(
     let path_owned = path.to_path_buf();
 
     let (tx, rx) = oneshot::channel();
+    let encode_output = output_path.clone();
     rayon::spawn(move || {
-        let _ = tx.send(encode_file(&path_owned, &output_path, encoder));
+        let _ = tx.send(encode_file(&path_owned, &encode_output, encoder));
     });
 
-    let encoded = rx
+    let encoded = DiscardOnDrop::new(rx, output_path)
+        .finish()
         .await
         .map_err(|e| ProcessErrorKind::Other(e.into()))?
         .map_err(ProcessErrorKind::EncodeError)?;
 
     let encoded = match encoded {
         Some(e) => e,
-        None => return Ok(None),
+        None => return Err(ProcessErrorKind::Unrecognized),
     };
 
     let mut lock = pack_state.lock().await;

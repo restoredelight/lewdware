@@ -7,10 +7,7 @@ mod thumbnail;
 use std::{
     io::Cursor,
     path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, OnceLock,
-    },
+    sync::{Arc, OnceLock},
 };
 
 use pack::{MediaFile, MediaPack, TagSummary};
@@ -50,7 +47,7 @@ async fn check_for_update() -> Result<Option<String>, String> {
 }
 use shared::read_pack::{Metadata, RecommendedMode};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 
 use shared::encode::HardwareEncoder;
 
@@ -61,7 +58,7 @@ pub struct AppState {
     pub media_port: OnceLock<u16>,
     pub hardware_encoder: OnceLock<HardwareEncoder>,
     pub upload_lock: Arc<RwLock<()>>,
-    pub cancel_flag: Arc<AtomicBool>,
+    pub cancel_uploads: watch::Sender<bool>,
 }
 
 impl AppState {
@@ -71,7 +68,7 @@ impl AppState {
             media_port: OnceLock::new(),
             hardware_encoder: OnceLock::new(),
             upload_lock: Arc::new(RwLock::new(())),
-            cancel_flag: Arc::new(AtomicBool::new(false)),
+            cancel_uploads: watch::channel(false).0,
         }
     }
 }
@@ -475,8 +472,8 @@ async fn import_edgeware_pack_dialog(
         .cloned()
         .unwrap_or(HardwareEncoder::SoftwareFallback);
     let upload_lock = state.upload_lock.clone();
-    let cancel = state.cancel_flag.clone();
-    cancel.store(false, Ordering::SeqCst);
+    state.cancel_uploads.send_replace(false);
+    let cancel = state.cancel_uploads.subscribe();
 
     tauri::async_runtime::spawn(import::run_import(
         pack_state,
@@ -1094,8 +1091,8 @@ async fn add_files_dialog(state: State<'_, AppState>, app: AppHandle) -> Result<
         .cloned()
         .unwrap_or(HardwareEncoder::SoftwareFallback);
     let upload_lock = state.upload_lock.clone();
-    let cancel = state.cancel_flag.clone();
-    cancel.store(false, Ordering::SeqCst);
+    state.cancel_uploads.send_replace(false);
+    let cancel = state.cancel_uploads.subscribe();
     tauri::async_runtime::spawn(encode::process_files(
         pack_state,
         paths,
@@ -1143,8 +1140,8 @@ async fn add_folder_dialog(
         .cloned()
         .unwrap_or(HardwareEncoder::SoftwareFallback);
     let upload_lock = state.upload_lock.clone();
-    let cancel = state.cancel_flag.clone();
-    cancel.store(false, Ordering::SeqCst);
+    state.cancel_uploads.send_replace(false);
+    let cancel = state.cancel_uploads.subscribe();
     tauri::async_runtime::spawn(encode::process_files(
         pack_state,
         paths,
@@ -1167,7 +1164,8 @@ async fn add_paths(
         for path in paths {
             if path.is_dir() {
                 result.extend(encode::explore_folder(&path, false));
-            } else if encode::is_media_path(&path).unwrap_or(false) {
+            } else if !encode::is_junk_path(&path) && encode::is_media_path(&path).unwrap_or(false)
+            {
                 result.push(path);
             }
         }
@@ -1187,8 +1185,8 @@ async fn add_paths(
         .cloned()
         .unwrap_or(HardwareEncoder::SoftwareFallback);
     let upload_lock = state.upload_lock.clone();
-    let cancel = state.cancel_flag.clone();
-    cancel.store(false, Ordering::SeqCst);
+    state.cancel_uploads.send_replace(false);
+    let cancel = state.cancel_uploads.subscribe();
     tauri::async_runtime::spawn(encode::process_files(
         pack_state,
         paths,
@@ -1202,7 +1200,7 @@ async fn add_paths(
 
 #[tauri::command]
 async fn cancel_upload(state: State<'_, AppState>) -> Result<(), String> {
-    state.cancel_flag.store(true, Ordering::SeqCst);
+    state.cancel_uploads.send_replace(true);
     Ok(())
 }
 

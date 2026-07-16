@@ -258,7 +258,7 @@
 {/snippet}
 
 <div class="flex-1 overflow-y-auto">
-<div class="w-full max-w-4xl mx-auto flex flex-col gap-8 p-8">
+<div class="w-full max-w-4xl mx-auto flex flex-col gap-6 p-8">
   <header class="max-w-2xl">
     <h1 class="ui-page-title">Pack &amp; Mode</h1>
     <p class="mt-1.5 mb-0 text-sm text-muted">

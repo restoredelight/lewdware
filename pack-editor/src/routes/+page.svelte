@@ -41,28 +41,24 @@
     api.getMediaPort().then((port) => (store.mediaPort = port));
 
     const unsubs = [
+      // Import feedback (progress, errors, completion) is owned by the UploadProgress window.
       listen<{ total: number }>("upload:start", (e) => {
         if (store.uploadBatches === 0) {
           pendingImportToken = history.reserve("Import still in progress");
           pendingImportFiles = [];
         }
         store.onUploadStart(e.payload.total);
-        taskFeedback.progress("upload", "Importing files…", store.uploadDone, store.uploadTotal);
       }),
       listen<MediaFile>("upload:added", (e) => {
         store.addFile(e.payload, true);
         pendingImportFiles.push(structuredClone(e.payload));
         if (pendingImportToken !== null) history.touchPending(pendingImportToken);
       }),
-      listen<UploadError>("upload:error", (e) => { store.addUploadError(e.payload); taskFeedback.error("upload-error", `Could not import ${e.payload.path}`); }),
-      listen("upload:file-done", () => { store.onUploadFileDone(); taskFeedback.progress("upload", "Importing files…", store.uploadDone, store.uploadTotal); }),
+      listen<UploadError>("upload:error", (e) => { store.addUploadError(e.payload); }),
+      listen("upload:file-done", () => { store.onUploadFileDone(); }),
       listen("upload:done", () => {
         store.onUploadDone();
-        if (store.uploadBatches === 0) {
-          finalizeImportHistory();
-          if (store.uploadErrors.length) taskFeedback.error("upload-error", `Import finished with ${store.uploadErrors.length} error${store.uploadErrors.length === 1 ? "" : "s"}`);
-          else taskFeedback.success("upload", "Import complete");
-        }
+        if (store.uploadBatches === 0) finalizeImportHistory();
       }),
       listen<SaveProgress>("save:progress", (e) => {
         store.saveActive = true;
@@ -143,7 +139,7 @@
 
 {#if showCloseDialog}
   <Dialog
-    title="Unsaved Changes"
+    title="Unsaved changes"
     description="You have unsaved changes. What would you like to do?"
     buttons={[
       { label: "Cancel", onclick: onCloseCancel },

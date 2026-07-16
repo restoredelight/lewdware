@@ -136,7 +136,7 @@
 </script>
 
 <div class="flex-1 overflow-y-auto">
-<div class="w-full max-w-4xl mx-auto flex flex-col gap-8 p-8">
+<div class="w-full max-w-4xl mx-auto flex flex-col gap-6 p-8">
   <header class="max-w-2xl">
     <h1 class="ui-page-title">Scheduling</h1>
     <p class="text-sm text-muted mt-1.5 mb-0">
@@ -159,7 +159,7 @@
           {/if}
         </p>
       </div>
-      <span class="text-xs font-medium {store.config?.schedule.enabled ? 'text-[var(--ui-success)]' : 'text-muted'}">
+      <span class="text-xs font-medium {store.config?.schedule.enabled ? 'text-text' : 'text-muted'}">
         {store.config?.schedule.enabled ? "Enabled" : "Disabled"}
       </span>
       <Toggle ariaLabel="Enable scheduling" checked={store.config?.schedule.enabled ?? false} disabled={enablePending} onchange={() => toggleEnabled()} />
@@ -194,13 +194,13 @@
           </div>
           <div class="flex flex-col gap-1.5">
             <span class="text-xs font-semibold text-text">Days</span>
-            <div class="flex items-center gap-1" role="group" aria-label={`Days for window ${i + 1}`}>
+            <div class="inline-flex self-start overflow-hidden rounded-sm border border-border" role="group" aria-label={`Days for window ${i + 1}`}>
             {#each DAY_LABELS as label, dayIndex (dayIndex)}
               <button
                 onclick={() => toggleWindowDay(i, window, dayIndex)}
                 aria-pressed={window.days[dayIndex]}
-                class="w-10 h-8 cursor-pointer rounded text-xs font-medium transition-colors
-                       {window.days[dayIndex] ? 'bg-accent text-white' : 'bg-bg border border-border text-muted'}"
+                class="w-11 h-8 cursor-pointer border-r border-border last:border-r-0 font-mono text-[11px] font-medium transition-colors
+                       {window.days[dayIndex] ? 'bg-surface-2 text-text shadow-[inset_0_-2px_0_var(--ui-accent-hover)]' : 'bg-bg text-muted hover:text-text'}"
               >
                 {label}
               </button>
@@ -252,13 +252,13 @@
       {#each store.config?.schedule.quiet_hours ?? [] as quiet, i (i)}
         <Card class="flex flex-col gap-4 p-4">
           <div class="flex items-start justify-between gap-4"><div><h3 class="m-0 text-sm font-semibold text-text">Quiet period {i + 1}</h3><p class="m-0 mt-1 text-xs text-muted">{quietSummary(quiet)}</p></div><Button size="compact" variant="destructive" onclick={() => (pendingRemoval = { kind: "quiet", index: i })}>Remove</Button></div>
-          <div class="flex flex-col gap-1.5"><span class="text-xs font-semibold text-text">Days</span><div class="flex items-center gap-1" role="group" aria-label={`Days for quiet period ${i + 1}`}>
+          <div class="flex flex-col gap-1.5"><span class="text-xs font-semibold text-text">Days</span><div class="inline-flex self-start overflow-hidden rounded-sm border border-border" role="group" aria-label={`Days for quiet period ${i + 1}`}>
             {#each DAY_LABELS as label, dayIndex (dayIndex)}
               <button
                 onclick={() => toggleQuietDay(i, quiet, dayIndex)}
                 aria-pressed={quiet.days[dayIndex]}
-                class="w-10 h-8 cursor-pointer rounded text-xs font-medium transition-colors
-                       {quiet.days[dayIndex] ? 'bg-accent text-white' : 'bg-bg border border-border text-muted'}"
+                class="w-11 h-8 cursor-pointer border-r border-border last:border-r-0 font-mono text-[11px] font-medium transition-colors
+                       {quiet.days[dayIndex] ? 'bg-surface-2 text-text shadow-[inset_0_-2px_0_var(--ui-accent-hover)]' : 'bg-bg text-muted hover:text-text'}"
               >{label}</button>
             {/each}
           </div>{#if !quiet.days.some(Boolean)}<span class="text-xs text-[var(--ui-warning)]">Select at least one day for this quiet period to take effect.</span>{/if}</div>

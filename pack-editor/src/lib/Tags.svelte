@@ -196,7 +196,7 @@
   header :global(.root) { width: 220px; }
   .table { overflow: hidden; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: var(--ui-surface); }
   .table-head, .tag-row { display: grid; grid-template-columns: minmax(120px, 1fr) 70px 80px 90px minmax(310px, auto); min-height: 45px; padding: 0 12px; align-items: center; gap: 8px; border-bottom: 1px solid var(--ui-border); }
-  .table-head { min-height: 34px; color: var(--ui-muted); background: var(--ui-bg); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .table-head { min-height: 34px; color: var(--ui-muted); background: var(--ui-bg); font-family: var(--ui-font-mono); font-size: 11px; font-weight: 700; }
   .tag-row { font-size: 12px; } .tag-row > span { color: var(--ui-muted); }
   .row-actions { display: flex; justify-content: flex-end; gap: 2px; }
   .edit-row { display: grid; padding: 12px; grid-template-columns: minmax(180px, 1fr) minmax(180px, 260px) auto; align-items: center; gap: 14px; border-bottom: 1px solid var(--ui-border); background: var(--ui-bg); }

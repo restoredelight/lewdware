@@ -18,15 +18,15 @@
     | "web_links"
     | "wallpaper";
 
-  const tabs: { id: Tab; label: string; group: string }[] = [
-    { id: "groups", label: "Content Groups", group: "Organization" },
-    { id: "captions", label: "Captions", group: "Messages" },
-    { id: "prompts", label: "Prompts", group: "Messages" },
-    { id: "notifications", label: "Notifications", group: "Messages" },
-    { id: "subliminals", label: "Subliminals", group: "Messages" },
-    { id: "web_links", label: "Web Links", group: "Other" },
+  const tabs = $derived<{ id: Tab; label: string; group: string; badge?: number }[]>([
+    { id: "groups", label: "Content Groups", group: "Organization", badge: store.behaviour?.content.content_groups.length },
+    { id: "captions", label: "Captions", group: "Messages", badge: store.behaviour?.content.captions.length },
+    { id: "prompts", label: "Prompts", group: "Messages", badge: store.behaviour?.content.prompts.length },
+    { id: "notifications", label: "Notifications", group: "Messages", badge: store.behaviour?.content.notifications.length },
+    { id: "subliminals", label: "Subliminals", group: "Messages", badge: store.behaviour?.content.subliminals.length },
+    { id: "web_links", label: "Web Links", group: "Other", badge: store.behaviour?.content.web_links.length },
     { id: "wallpaper", label: "Wallpaper & Splash", group: "Other" },
-  ];
+  ]);
 
   const sectionInfo: Record<Tab, { title: string; description: string }> = {
     groups: { title: "Content Groups", description: "Create collections people can enable or disable. Media and messages with any of a group’s tags belong to that collection." },
@@ -40,6 +40,14 @@
 
   let activeTab = $state<Tab>("groups");
   let narrowWindow = $state(false);
+  let panel = $state<HTMLDivElement>();
+
+  // WebKitGTK doesn't reliably clamp scrollTop when the panel's content shrinks,
+  // leaving a shorter tab blank and unscrollable.
+  $effect(() => {
+    activeTab;
+    panel?.scrollTo(0, 0);
+  });
 
   onMount(() => {
     const query = window.matchMedia("(max-width: 700px)");
@@ -68,7 +76,8 @@
         <Tabs {tabs} active={activeTab} orientation={narrowWindow ? "horizontal" : "vertical"} onselect={(id) => (activeTab = id as Tab)} />
       </aside>
 
-      <div class="flex-1 min-w-0 overflow-y-auto p-6 max-[700px]:p-4">
+      <div class="flex-1 min-w-0 overflow-y-auto p-6 max-[700px]:p-4" bind:this={panel}>
+        <div class="w-full max-w-[800px] mx-auto">
         <div class="mb-5 max-w-2xl">
           <h2 class="text-lg font-semibold text-text">{sectionInfo[activeTab].title}</h2>
           <p class="text-sm text-muted mt-1">{sectionInfo[activeTab].description}</p>
@@ -94,6 +103,7 @@
             <section class="flex flex-col gap-2"><div><h3 class="text-sm font-semibold text-text">Splash</h3><p class="text-xs text-muted">Tags identifying a startup splash image. Leave empty to disable it.</p></div><TagPicker tags={store.behaviour!.content.splash_tags} id="splash-tags" />{#if store.behaviour!.content.splash_tags.length === 0}<p class="text-xs text-muted italic">No splash tags selected. No startup image will be shown.</p>{/if}</section>
           </div>
         {/if}
+        </div>
       </div>
     </div>
   {/if}

@@ -3,16 +3,20 @@
 @import "../../../shared-ui/styles/base.css";
 
 @theme {
-  --color-bg: #030712;
-  --color-surface: #0f1117;
+  --color-bg: #0a0809;
+  --color-surface: #141113;
   --color-accent: #c70036;
   --color-accent-hover: #e8003f;
-  --color-border: #252836;
-  --color-text: #e8e8e8;
-  --color-muted: #8b8fa8;
-  --color-surface-2: #1a1d26;
+  --color-border: #2c2529;
+  --color-text: #f5f2f3;
+  --color-muted: #9e9398;
+  --color-surface-2: #1f191c;
   --color-accent-foreground: #ff668f;
   --color-focus: #ff4d7d;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
 }
 
 * {
@@ -25,8 +29,8 @@ html {
 
 body {
   margin: 0;
-  background-color: #030712;
-  color: #e8e8e8;
+  background-color: var(--ui-bg);
+  color: var(--ui-text);
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
   line-height: 1.4;
@@ -44,10 +48,10 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #252836;
+  background: var(--ui-border);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a3d50;
+  background: var(--ui-border-strong);
 }

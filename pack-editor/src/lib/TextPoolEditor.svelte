@@ -52,7 +52,7 @@
     {/if}
     {#each pool as item, index}
       <Card class="flex flex-col gap-3 p-3">
-        <div class="flex items-center justify-between"><span class="text-xs font-semibold text-muted uppercase tracking-wide">{title.replace(/s$/, '')} {index + 1}</span><Button size="compact" variant="destructive" class="!h-7" onclick={() => removeItem(index)}>Remove</Button></div>
+        <div class="flex items-center justify-between"><span class="font-mono text-[11px] font-semibold text-muted">{title.replace(/s$/, '')} {index + 1}</span><Button size="compact" variant="destructive" class="!h-7" onclick={() => removeItem(index)}>Remove</Button></div>
         <div class="flex items-start gap-2">
           <label class="sr-only" for={`${idPrefix}-text-${index}`}>{title.replace(/s$/, '')} text</label>
           <textarea
