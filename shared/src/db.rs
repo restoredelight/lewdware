@@ -42,4 +42,7 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-const MIGRATIONS: [&str; 1] = [include_str!("migrations/0001_init_schema.sql")];
+const MIGRATIONS: [&str; 2] = [
+    include_str!("migrations/0001_init_schema.sql"),
+    include_str!("migrations/0002_add_artists.sql"),
+];

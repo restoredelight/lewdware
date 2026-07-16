@@ -36,11 +36,19 @@ pub struct MediaFile {
     pub file_name: String,
     pub hash: String,
     pub tags: Vec<String>,
+    pub artists: Vec<String>,
+    pub source_url: Option<String>,
     pub size: u64,
 }
 
 #[derive(Serialize, Clone, Debug)]
 pub struct TagSummary {
+    pub name: String,
+    pub media_count: u64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ArtistSummary {
     pub name: String,
     pub media_count: u64,
 }
@@ -1064,6 +1072,8 @@ impl MediaPack {
             file_info,
             hash: hash.to_string(),
             tags: vec![],
+            artists: vec![],
+            source_url: None,
             size,
         }))
     }
@@ -1083,6 +1093,7 @@ impl MediaPack {
                 let vars = repeat_vars(ids.len());
                 tx.execute(&format!("INSERT OR REPLACE INTO undo_history.media SELECT * FROM main.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
                 tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_tags SELECT mt.media_id, t.name FROM main.media_tags mt JOIN main.tags t ON t.id = mt.tag_id WHERE mt.media_id IN ({vars})"), params_from_iter(&ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_artists SELECT ma.media_id, a.name FROM main.media_artists ma JOIN main.artists a ON a.id = ma.artist_id WHERE ma.media_id IN ({vars})"), params_from_iter(&ids))?;
                 tx.execute(&format!("DELETE FROM main.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
                 tx.commit()?;
                 Ok(())
@@ -1110,6 +1121,8 @@ impl MediaPack {
                 tx.execute(&format!("INSERT OR REPLACE INTO main.media SELECT * FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
                 tx.execute(&format!("INSERT OR IGNORE INTO main.tags (name) SELECT DISTINCT tag FROM undo_history.media_tags WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
                 tx.execute(&format!("INSERT OR IGNORE INTO main.media_tags SELECT h.media_id, t.id FROM undo_history.media_tags h JOIN main.tags t ON t.name = h.tag WHERE h.media_id IN ({vars})"), params_from_iter(&ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO main.artists (name) SELECT DISTINCT artist FROM undo_history.media_artists WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
+                tx.execute(&format!("INSERT OR IGNORE INTO main.media_artists SELECT h.media_id, a.id FROM undo_history.media_artists h JOIN main.artists a ON a.name = h.artist WHERE h.media_id IN ({vars})"), params_from_iter(&ids))?;
                 tx.execute(&format!("DELETE FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
                 tx.commit()?;
                 Ok(())
@@ -1149,6 +1162,10 @@ impl MediaPack {
                 params_from_iter(&ids),
             )?;
             tx.execute(
+                &format!("DELETE FROM media_artists WHERE media_id IN ({vars})"),
+                params_from_iter(&ids),
+            )?;
+            tx.execute(
                 &format!("DELETE FROM media WHERE id IN ({vars})"),
                 params_from_iter(&ids),
             )?;
@@ -1170,7 +1187,7 @@ impl MediaPack {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, file_type, file_name, width, height, transparent, duration, audio, hash, length FROM media",
+                "SELECT id, file_type, file_name, width, height, transparent, duration, audio, hash, length, source_url FROM media",
             )?;
             let mut files: Vec<MediaFile> = {
                 let rows = stmt.query_and_then([], |row| -> Result<_> {
@@ -1187,13 +1204,15 @@ impl MediaPack {
                         })?,
                         hash: blake3::Hash::from_bytes(row.get("hash")?).to_string(),
                         tags: vec![],
+                        artists: vec![],
+                        source_url: row.get("source_url")?,
                         size: row.get::<_, Option<u64>>("length")?.unwrap_or(0),
                     })
                 })?;
                 rows.collect::<Result<Vec<_>>>()?
             };
 
-            // Build id → index map then load all tag associations in one query.
+            // Build id → index map then load all tag/artist associations in one query each.
             let id_to_idx: std::collections::HashMap<u64, usize> =
                 files.iter().enumerate().map(|(i, f)| (f.id, i)).collect();
 
@@ -1207,6 +1226,19 @@ impl MediaPack {
                 let (media_id, tag_name) = row?;
                 if let Some(&idx) = id_to_idx.get(&media_id) {
                     files[idx].tags.push(tag_name);
+                }
+            }
+
+            let mut artist_stmt = conn.prepare(
+                "SELECT ma.media_id, a.name FROM media_artists ma JOIN artists a ON ma.artist_id = a.id",
+            )?;
+            let artist_rows = artist_stmt.query_map([], |row| {
+                Ok((row.get::<_, u64>("media_id")?, row.get::<_, String>("name")?))
+            })?;
+            for row in artist_rows {
+                let (media_id, artist_name) = row?;
+                if let Some(&idx) = id_to_idx.get(&media_id) {
+                    files[idx].artists.push(artist_name);
                 }
             }
 
@@ -1639,6 +1671,265 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
+    pub async fn get_artists(&self, id: u64) -> Result<Vec<String>> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT artists.name FROM media_artists LEFT JOIN artists ON media_artists.artist_id = artists.id WHERE media_artists.media_id = ?",
+            )?;
+            let rows = stmt.query_map(params![id], |row| row.get("name"))?;
+            rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+        })
+        .await
+    }
+
+    pub async fn add_artist(&self, id: u64, artist: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |conn| {
+            let artist_id: u64 = conn.query_row(
+                "SELECT id FROM artists WHERE name = ?",
+                params![artist],
+                |row| row.get("id"),
+            )?;
+            conn.execute(
+                "INSERT INTO media_artists (media_id, artist_id) VALUES (?, ?)",
+                params![id, artist_id],
+            )?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn create_and_add_artist(&self, id: u64, artist: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            let artist_id: u64 = tx.query_row(
+                "INSERT INTO artists (name) VALUES (?) RETURNING id",
+                params![artist],
+                |row| row.get("id"),
+            )?;
+            tx.execute(
+                "INSERT INTO media_artists (media_id, artist_id) VALUES (?, ?)",
+                params![id, artist_id],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn remove_artist(&self, id: u64, artist: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |conn| {
+            conn.execute(
+                "DELETE FROM media_artists WHERE media_id = ? AND artist_id IN (SELECT id FROM artists WHERE name = ?)",
+                params![id, artist],
+            )?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn get_all_artists(&self) -> Result<Vec<String>> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |conn| {
+            let mut stmt = conn.prepare("SELECT name FROM artists")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>("name"))?;
+            rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+        })
+        .await
+    }
+
+    pub async fn get_artist_summaries(&self) -> Result<Vec<ArtistSummary>> {
+        self.db_execute(move |conn| {
+            let mut stmt = conn.prepare("SELECT artists.name, COUNT(media_artists.media_id) FROM artists LEFT JOIN media_artists ON media_artists.artist_id = artists.id GROUP BY artists.id ORDER BY artists.name COLLATE NOCASE")?;
+            let rows = stmt.query_map([], |row| Ok(ArtistSummary { name: row.get(0)?, media_count: row.get(1)? }))?;
+            rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+        }).await
+    }
+
+    pub async fn rename_artist(&self, from: String, to: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            let target_exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM artists WHERE name = ?)",
+                params![to],
+                |row| row.get(0),
+            )?;
+            if target_exists {
+                bail!("An artist named \"{to}\" already exists. Merge the artists instead.");
+            }
+            let changed =
+                tx.execute("UPDATE artists SET name = ? WHERE name = ?", params![to, from])?;
+            if changed == 0 {
+                tx.execute("INSERT INTO artists (name) VALUES (?)", params![to])?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn merge_artist(&self, from: String, to: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            tx.execute("INSERT OR IGNORE INTO artists (name) VALUES (?)", params![to])?;
+            tx.execute("INSERT OR IGNORE INTO media_artists (media_id, artist_id) SELECT media_artists.media_id, target.id FROM media_artists JOIN artists source ON source.id = media_artists.artist_id JOIN artists target ON target.name = ? WHERE source.name = ?", params![to, from])?;
+            tx.execute("DELETE FROM media_artists WHERE artist_id IN (SELECT id FROM artists WHERE name = ?)", params![from])?;
+            tx.execute("DELETE FROM artists WHERE name = ?", params![from])?;
+            tx.commit()?;
+            Ok(())
+        }).await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn delete_artist(&self, artist: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "DELETE FROM media_artists WHERE artist_id IN (SELECT id FROM artists WHERE name = ?)",
+                params![artist],
+            )?;
+            tx.execute("DELETE FROM artists WHERE name = ?", params![artist])?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn restore_merged_artist(
+        &self,
+        from: String,
+        to: String,
+        source_ids: Vec<u64>,
+        target_ids: Vec<u64>,
+    ) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT OR IGNORE INTO artists (name) VALUES (?)",
+                params![from],
+            )?;
+            let source_id: u64 = tx.query_row(
+                "SELECT id FROM artists WHERE name = ?",
+                params![from],
+                |r| r.get(0),
+            )?;
+            let target_id: u64 = tx.query_row(
+                "SELECT id FROM artists WHERE name = ?",
+                params![to],
+                |r| r.get(0),
+            )?;
+            for id in &source_ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO media_artists VALUES (?, ?)",
+                    params![id, source_id],
+                )?;
+            }
+            for id in source_ids.iter().filter(|id| !target_ids.contains(id)) {
+                tx.execute(
+                    "DELETE FROM media_artists WHERE media_id = ? AND artist_id = ?",
+                    params![id, target_id],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn restore_deleted_artist(&self, artist: String, ids: Vec<u64>) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT OR IGNORE INTO artists (name) VALUES (?)",
+                params![artist],
+            )?;
+            let artist_id: u64 = tx.query_row(
+                "SELECT id FROM artists WHERE name = ?",
+                params![artist],
+                |r| r.get(0),
+            )?;
+            for id in &ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO media_artists VALUES (?, ?)",
+                    params![id, artist_id],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn add_artist_to_files(&self, ids: Vec<u64>, artist: String) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            tx.execute("INSERT OR IGNORE INTO artists (name) VALUES (?)", params![artist])?;
+            let artist_id: u64 = tx.query_row(
+                "SELECT id FROM artists WHERE name = ?",
+                params![artist],
+                |row| row.get("id"),
+            )?;
+            for id in &ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO media_artists (media_id, artist_id) VALUES (?, ?)",
+                    params![id, artist_id],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn remove_artist_from_files(&self, ids: Vec<u64>, artist: String) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let tx = conn.transaction()?;
+            for id in &ids {
+                tx.execute("DELETE FROM media_artists WHERE media_id = ? AND artist_id IN (SELECT id FROM artists WHERE name = ?)", params![id, artist])?;
+            }
+            tx.commit()?;
+            Ok(())
+        }).await?;
+        self.mark_unsaved().await
+    }
+
+    pub async fn set_source_url(&self, id: u64, url: Option<String>) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |conn| {
+            conn.execute(
+                "UPDATE media SET source_url = ? WHERE id = ?",
+                params![url, id],
+            )?;
+            Ok(())
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
     pub async fn check_hash(&self, hash: &blake3::Hash) -> Result<bool> {
         let hash_bytes = *hash.as_bytes();
         self.db_execute(move |conn| {
@@ -1999,10 +2290,15 @@ const HISTORY_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS media (
     id INTEGER PRIMARY KEY, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
     "offset" INTEGER, length INTEGER, path TEXT, width INTEGER, height INTEGER,
-    transparent INTEGER, duration REAL, audio INTEGER, hash BLOB NOT NULL, thumbnail BLOB
+    transparent INTEGER, duration REAL, audio INTEGER, hash BLOB NOT NULL, thumbnail BLOB,
+    source_url TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS media_tags (
     media_id INTEGER NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (media_id, tag),
+    FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE IF NOT EXISTS media_artists (
+    media_id INTEGER NOT NULL, artist TEXT NOT NULL, PRIMARY KEY (media_id, artist),
     FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE
 ) STRICT;
 CREATE TABLE IF NOT EXISTS modes (id INTEGER PRIMARY KEY, file BLOB NOT NULL) STRICT;
@@ -2012,10 +2308,15 @@ const HISTORY_SCHEMA_ATTACHED: &str = r#"
 CREATE TABLE IF NOT EXISTS undo_history.media (
     id INTEGER PRIMARY KEY, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
     "offset" INTEGER, length INTEGER, path TEXT, width INTEGER, height INTEGER,
-    transparent INTEGER, duration REAL, audio INTEGER, hash BLOB NOT NULL, thumbnail BLOB
+    transparent INTEGER, duration REAL, audio INTEGER, hash BLOB NOT NULL, thumbnail BLOB,
+    source_url TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS undo_history.media_tags (
     media_id INTEGER NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (media_id, tag),
+    FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE IF NOT EXISTS undo_history.media_artists (
+    media_id INTEGER NOT NULL, artist TEXT NOT NULL, PRIMARY KEY (media_id, artist),
     FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE
 ) STRICT;
 CREATE TABLE IF NOT EXISTS undo_history.modes (id INTEGER PRIMARY KEY, file BLOB NOT NULL) STRICT;

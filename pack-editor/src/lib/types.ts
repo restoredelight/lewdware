@@ -9,9 +9,12 @@ export interface MediaFile {
   file_name: string;
   hash: string;
   tags: string[];
+  artists: string[];
+  source_url: string | null;
   size: number;
 }
 export interface TagSummary { name: string; media_count: number; }
+export interface ArtistSummary { name: string; media_count: number; }
 
 export interface EmbeddedMode {
   id: number;

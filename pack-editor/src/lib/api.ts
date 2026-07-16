@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Behaviour, EmbeddedMode, ImportResult, MediaFile, MetadataDto, PackInfo, RecentPack, TagSummary } from "./types.js";
+import type { ArtistSummary, Behaviour, EmbeddedMode, ImportResult, MediaFile, MetadataDto, PackInfo, RecentPack, TagSummary } from "./types.js";
 
 export const api = {
   newPack: () => invoke<PackInfo>("new_pack"),
@@ -20,6 +20,7 @@ export const api = {
   restoreFiles: (ids: number[]) => invoke<void>("restore_files", { ids }),
   purgeHistoryFiles: (ids: number[]) => invoke<void>("purge_history_files", { ids }),
   setFileTitle: (id: number, name: string) => invoke<void>("set_file_title", { id, name }),
+  setFileSourceUrl: (id: number, url: string | null) => invoke<void>("set_file_source_url", { id, url }),
   getModes: () => invoke<EmbeddedMode[]>("get_modes"),
   addModeDialog: () => invoke<EmbeddedMode | null>("add_mode_dialog"),
   removeMode: (id: number) => invoke<void>("remove_mode", { id }),
@@ -41,6 +42,22 @@ export const api = {
   deleteTag: (tag: string, behaviour: Behaviour) => invoke<void>("delete_tag", { tag, behaviour }),
   restoreMergedTag: (from: string, to: string, sourceIds: number[], targetIds: number[], behaviour: Behaviour) => invoke<void>("restore_merged_tag", { from, to, sourceIds, targetIds, behaviour }),
   restoreDeletedTag: (tag: string, ids: number[], behaviour: Behaviour) => invoke<void>("restore_deleted_tag", { tag, ids, behaviour }),
+
+  getAllArtists: () => invoke<string[]>("get_all_artists"),
+  getFileArtists: (id: number) => invoke<string[]>("get_file_artists", { id }),
+  addArtistToFile: (id: number, artist: string) => invoke<void>("add_artist_to_file", { id, artist }),
+  removeArtistFromFile: (id: number, artist: string) =>
+    invoke<void>("remove_artist_from_file", { id, artist }),
+  createAndAddArtist: (id: number, artist: string) =>
+    invoke<void>("create_and_add_artist", { id, artist }),
+  addArtistToFiles: (ids: number[], artist: string) => invoke<void>("add_artist_to_files", { ids, artist }),
+  removeArtistFromFiles: (ids: number[], artist: string) => invoke<void>("remove_artist_from_files", { ids, artist }),
+  getArtistSummaries: () => invoke<ArtistSummary[]>("get_artist_summaries"),
+  renameArtist: (from: string, to: string) => invoke<void>("rename_artist", { from, to }),
+  mergeArtist: (from: string, to: string) => invoke<void>("merge_artist", { from, to }),
+  deleteArtist: (artist: string) => invoke<void>("delete_artist", { artist }),
+  restoreMergedArtist: (from: string, to: string, sourceIds: number[], targetIds: number[]) => invoke<void>("restore_merged_artist", { from, to, sourceIds, targetIds }),
+  restoreDeletedArtist: (artist: string, ids: number[]) => invoke<void>("restore_deleted_artist", { artist, ids }),
 
   getPackMetadata: () => invoke<MetadataDto>("get_pack_metadata"),
   setPackMetadata: (dto: MetadataDto) => invoke<void>("set_pack_metadata", { dto }),

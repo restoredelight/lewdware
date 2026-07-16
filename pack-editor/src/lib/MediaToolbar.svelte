@@ -9,7 +9,7 @@
   import { ArrowUpTray, Icon } from "svelte-hero-icons";
 
   const sortValue = $derived(`${store.sortBy}:${store.sortDir}`);
-  const filtersActive = $derived(store.searchQuery !== "" || store.mediaTypeFilter !== "all" || store.tagFilter.size > 0);
+  const filtersActive = $derived(store.searchQuery !== "" || store.mediaTypeFilter !== "all" || store.tagFilter.size > 0 || store.artistFilter.size > 0);
 
   const typeOptions = [
     { value: "all", label: "All types" }, { value: "image", label: "Images" },
@@ -26,7 +26,7 @@
     store.sortBy = sortBy as typeof store.sortBy;
     store.sortDir = sortDir as typeof store.sortDir;
   }
-  function clearFilters() { store.searchQuery = ""; store.mediaTypeFilter = "all"; store.tagFilter = new Set(); }
+  function clearFilters() { store.searchQuery = ""; store.mediaTypeFilter = "all"; store.tagFilter = new Set(); store.artistFilter = new Set(); }
 </script>
 
 <div class="media-toolbar flex items-center gap-2 min-h-11 px-3 bg-bg border-b border-border shrink-0">
@@ -54,6 +54,32 @@
         {/if}
         {#if store.tagFilter.size}
           <div class="border-t border-border px-3 pt-1 mt-1"><button role="menuitem" onclick={() => { store.tagFilter = new Set(); close(); }} class="text-xs text-muted hover:text-text py-1">Clear tags</button></div>
+        {/if}
+      </div>
+    {/snippet}
+  </Popover>
+
+  <Popover label="Filter by artists">
+    {#snippet trigger(toggle, open)}
+      <button onclick={toggle} aria-haspopup="menu" aria-expanded={open} class="h-8 flex items-center gap-1.5 px-2.5 rounded border text-xs font-medium transition-colors {store.artistFilter.size ? 'border-accent text-accent-foreground bg-accent/10' : 'border-border text-text bg-surface hover:bg-surface-2'}">
+        Artists
+        {#if store.artistFilter.size}<span class="min-w-4 h-4 px-1 rounded-full bg-accent text-white text-[10px] grid place-items-center">{store.artistFilter.size}</span>{/if}
+      </button>
+    {/snippet}
+    {#snippet children(close)}
+      <div class="w-52 max-h-64 overflow-y-auto py-1">
+        {#if store.allArtists.length === 0}
+          <p class="text-xs text-muted px-3 py-2">No artists defined</p>
+        {:else}
+          {#each store.allArtists as artist (artist)}
+            <label class="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer hover:bg-bg">
+              <Checkbox checked={store.artistFilter.has(artist)} ariaLabel={artist} onchange={(checked) => { const next = new Set(store.artistFilter); if (checked) next.add(artist); else next.delete(artist); store.artistFilter = next; }} />
+              {artist}
+            </label>
+          {/each}
+        {/if}
+        {#if store.artistFilter.size}
+          <div class="border-t border-border px-3 pt-1 mt-1"><button role="menuitem" onclick={() => { store.artistFilter = new Set(); close(); }} class="text-xs text-muted hover:text-text py-1">Clear artists</button></div>
         {/if}
       </div>
     {/snippet}

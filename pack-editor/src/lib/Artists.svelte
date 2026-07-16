@@ -1,0 +1,189 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { Icon, MagnifyingGlass, PencilSquare, Trash } from "svelte-hero-icons";
+  import Button from "$ui/Button.svelte";
+  import Dialog from "$ui/Dialog.svelte";
+  import Field from "$ui/Field.svelte";
+  import Select from "$ui/Select.svelte";
+  import { api } from "./api.js";
+  import { store } from "./store.svelte.js";
+  import type { ArtistSummary } from "./types.js";
+  import { history } from "./history.svelte.js";
+  import EmptyState from "$ui/EmptyState.svelte";
+
+  let summaries = $state<ArtistSummary[]>([]);
+  let query = $state("");
+  let editing = $state<string | null>(null);
+  let mode = $state<"rename" | "merge">("rename");
+  let value = $state("");
+  let deleting = $state<string | null>(null);
+  let error = $state<string | null>(null);
+  let busy = $state(false);
+
+  const rows = $derived(
+    summaries
+      .filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase()))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  );
+
+  onMount(async () => {
+    summaries = await api.getArtistSummaries();
+  });
+
+  function begin(artist: string, nextMode: "rename" | "merge") {
+    editing = artist; mode = nextMode; value = nextMode === "rename" ? artist : ""; error = null;
+  }
+
+  function updateLocal(from: string, to: string | null, tracked = false) {
+    store.files = store.files.map((file) => ({ ...file, artists: [...new Set(file.artists.flatMap((artist) => artist === from ? (to ? [to] : []) : [artist]))] }));
+    store.allArtists = [...new Set(store.files.flatMap((file) => file.artists))];
+    if (!tracked) store.markLocallyBackedUp();
+  }
+
+  function restoreLocalArtist(artist: string, ids: number[], target: string | null, targetIds: number[]) {
+    const sourceSet = new Set(ids);
+    const targetSet = new Set(targetIds);
+    store.files = store.files.map((file) => {
+      let artists = file.artists.filter((item) => item !== artist && item !== target);
+      if (sourceSet.has(file.id)) artists.push(artist);
+      if (target && targetSet.has(file.id)) artists.push(target);
+      return { ...file, artists: [...new Set(artists)] };
+    });
+    store.allArtists = [...new Set(store.files.flatMap((file) => file.artists))];
+  }
+
+  async function apply() {
+    if (!editing) return;
+    const target = value.trim();
+    if (!target || target === editing) return;
+    if (mode === "rename" && rows.some((row) => row.name === target)) { error = `An artist named “${target}” already exists. Merge the artists instead.`; return; }
+    busy = true; error = null;
+    try {
+      const source = editing;
+      const editMode = mode;
+      const sourceIds = store.files.filter((file) => file.artists.includes(source)).map((file) => file.id);
+      const targetIds = store.files.filter((file) => file.artists.includes(target)).map((file) => file.id);
+      if (editMode === "rename") await api.renameArtist(source, target);
+      else await api.mergeArtist(source, target);
+      updateLocal(source, target, true);
+      const operation = editMode === "rename" ? "Rename" : "Merge";
+      history.record({
+        label: `${operation} artist “${source}”`,
+        undo: async () => {
+          if (editMode === "rename") {
+            await api.renameArtist(target, source);
+          } else {
+            await api.restoreMergedArtist(source, target, sourceIds, targetIds);
+          }
+          restoreLocalArtist(source, sourceIds, target, targetIds);
+          summaries = await api.getArtistSummaries();
+        },
+        redo: async () => {
+          if (editMode === "rename") await api.renameArtist(source, target);
+          else await api.mergeArtist(source, target);
+          updateLocal(source, target, true);
+          summaries = await api.getArtistSummaries();
+        },
+      });
+      summaries = await api.getArtistSummaries();
+      editing = null;
+    } catch (err) { error = String(err); }
+    finally { busy = false; }
+  }
+
+  async function confirmDelete() {
+    if (!deleting) return;
+    const artist = deleting; deleting = null; busy = true; error = null;
+    try {
+      const sourceIds = store.files.filter((file) => file.artists.includes(artist)).map((file) => file.id);
+      await api.deleteArtist(artist);
+      updateLocal(artist, null, true);
+      history.record({
+        label: `Delete artist “${artist}”`,
+        undo: async () => {
+          await api.restoreDeletedArtist(artist, sourceIds);
+          restoreLocalArtist(artist, sourceIds, null, []);
+          summaries = await api.getArtistSummaries();
+        },
+        redo: async () => {
+          await api.deleteArtist(artist);
+          updateLocal(artist, null, true);
+          summaries = await api.getArtistSummaries();
+        },
+      });
+      summaries = await api.getArtistSummaries();
+    } catch (err) { error = String(err); }
+    finally { busy = false; }
+  }
+
+  function showMedia(artist: string) {
+    store.artistFilter = new Set([artist]);
+    store.activeView = "media";
+  }
+</script>
+
+<div class="page">
+  <header><div><h2>Artists</h2><p>Manage attribution recorded across media.</p></div><Field label="Search artists" hideLabel value={query} placeholder="Search artists…" oninput={(next) => (query = next)} /></header>
+  {#if error}<div class="error" role="alert">{error}<button onclick={() => (error = null)}>Dismiss</button></div>{/if}
+  {#if rows.length === 0}
+    <EmptyState
+      title={query ? "No matching artists" : "No artists yet"}
+      description={query ? "No artists match this search. Clear it to see every artist in the pack." : "Artists are created when you tag media with attribution in the inspector."}
+      actionLabel={query ? "Clear search" : "Go to Media"}
+      onclick={() => query ? (query = "") : (store.activeView = "media")}
+    />
+  {:else}
+    <div class="table" aria-label="Pack artists">
+      <div class="table-head"><span>Artist</span><span>Media</span><span></span></div>
+      {#each rows as row (row.name)}
+        <div class="artist-row">
+          <strong>{row.name}</strong><span>{row.media_count}</span>
+          <div class="row-actions">
+            <Button size="compact" variant="quiet" onclick={() => showMedia(row.name)} disabled={row.media_count === 0}><Icon src={MagnifyingGlass} mini size="14px" /> Media</Button>
+            <Button size="compact" variant="quiet" onclick={() => begin(row.name, "rename")}><Icon src={PencilSquare} mini size="14px" /> Rename</Button>
+            <Button size="compact" variant="quiet" onclick={() => begin(row.name, "merge")}>Merge</Button>
+            <Button size="compact" variant="quiet" ariaLabel={`Delete ${row.name}`} title="Delete artist" onclick={() => (deleting = row.name)}><Icon src={Trash} mini size="14px" /></Button>
+          </div>
+        </div>
+        {#if editing === row.name}
+          <div class="edit-row">
+            <div><strong>{mode === "rename" ? `Rename “${row.name}”` : `Merge “${row.name}” into`}</strong><small>{mode === "rename" ? "Every media item will be updated." : "References will be combined and duplicates removed."}</small></div>
+            {#if mode === "rename"}<Field label="New artist name" hideLabel value={value} placeholder="New artist name" oninput={(next) => (value = next)} />
+            {:else}<Select label="Target artist" hideLabel value={value} options={rows.filter((item) => item.name !== row.name).map((item) => ({ value: item.name, label: item.name }))} onchange={(next) => (value = next)} />{/if}
+            <div class="edit-actions"><Button size="compact" onclick={() => (editing = null)}>Cancel</Button><Button size="compact" variant="primary" onclick={apply} loading={busy} disabled={!value.trim() || value.trim() === row.name}>{mode === "rename" ? "Rename" : "Merge"}</Button></div>
+          </div>
+        {/if}
+      {/each}
+    </div>
+  {/if}
+</div>
+
+{#if deleting}
+  {@const usage = rows.find((row) => row.name === deleting)}
+  <Dialog title={`Delete “${deleting}”?`} description={`This removes the artist from ${usage?.media_count ?? 0} media item(s). No media files will be deleted.`} buttons={[{ label: "Cancel", onclick: () => (deleting = null) }, { label: "Delete artist", destructive: true, onclick: confirmDelete }]} onclose={() => (deleting = null)} />
+{/if}
+
+<style>
+  .page { height: 100%; padding: 24px; overflow-y: auto; }
+  header { display: flex; margin-bottom: 18px; align-items: end; justify-content: space-between; gap: 24px; }
+  header h2 { margin: 0; font-size: 20px; } header p { margin: 4px 0 0; color: var(--ui-muted); font-size: 13px; }
+  header :global(.root) { width: 220px; }
+  .table { overflow: hidden; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: var(--ui-surface); }
+  .table-head, .artist-row { display: grid; grid-template-columns: minmax(120px, 1fr) 70px minmax(310px, auto); min-height: 45px; padding: 0 12px; align-items: center; gap: 8px; border-bottom: 1px solid var(--ui-border); }
+  .table-head { min-height: 34px; color: var(--ui-muted); background: var(--ui-bg); font-family: var(--ui-font-mono); font-size: 11px; font-weight: 700; }
+  .artist-row { font-size: 12px; } .artist-row > span { color: var(--ui-muted); }
+  .row-actions { display: flex; justify-content: flex-end; gap: 2px; }
+  .edit-row { display: grid; padding: 12px; grid-template-columns: minmax(180px, 1fr) minmax(180px, 260px) auto; align-items: center; gap: 14px; border-bottom: 1px solid var(--ui-border); background: var(--ui-bg); }
+  .edit-row strong, .edit-row small { display: block; } .edit-row strong { font-size: 12px; } .edit-row small { margin-top: 3px; color: var(--ui-muted); font-size: 10px; }
+  .edit-actions { display: flex; gap: 6px; }
+  .error { display: flex; margin-bottom: 12px; padding: 9px 11px; justify-content: space-between; border: 1px solid var(--ui-danger-border); border-radius: var(--ui-radius-sm); background: var(--ui-danger-bg); color: var(--ui-danger); font-size: 12px; }
+  .error button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+  @media (max-width: 950px) { .table-head, .artist-row { grid-template-columns: minmax(100px, 1fr) 48px; } .table-head span:last-child { display: none; } .row-actions { grid-column: 1 / -1; padding-bottom: 8px; justify-content: flex-start; } .edit-row { grid-template-columns: 1fr; } }
+  @media (max-width: 620px) {
+    .page { padding: 16px; }
+    header { align-items: stretch; flex-direction: column; gap: 10px; }
+    header :global(.root) { width: 100%; }
+    .table-head, .artist-row { grid-template-columns: minmax(90px, 1fr) 44px; padding-inline: 8px; gap: 4px; }
+    .row-actions { flex-wrap: wrap; }
+  }
+</style>

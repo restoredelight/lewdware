@@ -63,8 +63,16 @@
   });
   const commonTags = $derived([...tagCounts].filter(([, count]) => count === selCount).map(([tag]) => tag).sort());
   const mixedTags = $derived([...tagCounts].filter(([, count]) => count < selCount).map(([tag, count]) => ({ tag, count })).sort((a, b) => a.tag.localeCompare(b.tag)));
+  const artistCounts = $derived.by(() => {
+    const counts = new Map<string, number>();
+    for (const file of selected) for (const artist of file.artists) counts.set(artist, (counts.get(artist) ?? 0) + 1);
+    return counts;
+  });
+  const commonArtists = $derived([...artistCounts].filter(([, count]) => count === selCount).map(([artist]) => artist).sort());
+  const mixedArtists = $derived([...artistCounts].filter(([, count]) => count < selCount).map(([artist, count]) => ({ artist, count })).sort((a, b) => a.artist.localeCompare(b.artist)));
   let titleValue = $state("");
   let titleError = $state<string | null>(null);
+  let sourceValue = $state("");
   let inspectorBody = $state<HTMLDivElement>();
   let inspectorWidth = $state(256);
   let resizing = $state(false);
@@ -108,6 +116,7 @@
   }
 
   $effect(() => { titleValue = primary?.file_name ?? ""; titleError = null; });
+  $effect(() => { sourceValue = primary?.source_url ?? ""; });
   $effect(() => {
     // The browser otherwise tries to preserve an anchor when the single-item fields are
     // replaced by the multi-selection summary, which can leave the new Tags section scrolled
@@ -138,6 +147,44 @@
       label: affected.length === 1 ? `Remove tag “${tag}”` : `Remove tag “${tag}” from ${affected.length} items`,
       undo: async () => { await api.addTagToFiles(affected, tag); store.addTagToFiles(affected, tag, true); },
       redo: async () => { await api.removeTagFromFiles(affected, tag); store.removeTagFromFiles(affected, tag, true); },
+    });
+  }
+  async function addArtist(artist: string) {
+    const ids = selected.map((file) => file.id);
+    const affected = selected.filter((file) => !file.artists.includes(artist)).map((file) => file.id);
+    if (!affected.length) return;
+    await api.addArtistToFiles(ids, artist);
+    store.addArtistToFiles(ids, artist, true);
+    history.record({
+      label: affected.length === 1 ? `Add artist “${artist}”` : `Add artist “${artist}” to ${affected.length} items`,
+      undo: async () => { await api.removeArtistFromFiles(affected, artist); store.removeArtistFromFiles(affected, artist, true); },
+      redo: async () => { await api.addArtistToFiles(affected, artist); store.addArtistToFiles(affected, artist, true); },
+    });
+  }
+  async function removeArtist(artist: string) {
+    const ids = selected.map((file) => file.id);
+    const affected = selected.filter((file) => file.artists.includes(artist)).map((file) => file.id);
+    if (!affected.length) return;
+    await api.removeArtistFromFiles(ids, artist);
+    store.removeArtistFromFiles(ids, artist, true);
+    history.record({
+      label: affected.length === 1 ? `Remove artist “${artist}”` : `Remove artist “${artist}” from ${affected.length} items`,
+      undo: async () => { await api.addArtistToFiles(affected, artist); store.addArtistToFiles(affected, artist, true); },
+      redo: async () => { await api.removeArtistFromFiles(affected, artist); store.removeArtistFromFiles(affected, artist, true); },
+    });
+  }
+  async function saveSource() {
+    if (!primary || selCount !== 1) return;
+    const id = primary.id;
+    const before = primary.source_url;
+    const after = sourceValue.trim() || null;
+    if (after === before) return;
+    await api.setFileSourceUrl(id, after);
+    store.updateFileSourceUrl(id, after, true);
+    history.record({
+      label: `Set source for “${primary.file_name}”`,
+      undo: async () => { await api.setFileSourceUrl(id, before); store.updateFileSourceUrl(id, before, true); },
+      redo: async () => { await api.setFileSourceUrl(id, after); store.updateFileSourceUrl(id, after, true); },
     });
   }
   async function rename() {
@@ -212,6 +259,15 @@
             </div>
           </div>
           {#if titleError}<p class="field-error" role="alert">{titleError}</p>{/if}
+          <div class="title-field">
+            <label for={`media-source-${primary.id}`}>Source URL</label>
+            <div class="title-control">
+              <input id={`media-source-${primary.id}`} type="url" placeholder="https://…" bind:value={sourceValue} onblur={saveSource} onkeydown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { sourceValue = primary.source_url ?? ""; event.currentTarget.blur(); } }} />
+              {#if primary.source_url}
+                <IconButton label={`Open source “${primary.source_url}”`} onclick={() => window.open(primary.source_url!, "_blank", "noopener")}><Icon src={Eye} mini size="15px" /></IconButton>
+              {/if}
+            </div>
+          </div>
         {/if}
       </section>
 
@@ -223,6 +279,19 @@
           <div class="mixed-tags">
             {#each mixedTags as item (item.tag)}
               <span class="mixed-tag"><span>{item.tag} <small>{item.count}/{selCount}</small></span><button onclick={() => addTag(item.tag)} aria-label={`Add ${item.tag} to all selected items`} title="Add to all"><Icon src={Plus} mini size="13px" /></button><button onclick={() => removeTag(item.tag)} aria-label={`Remove ${item.tag} from selected items`} title="Remove from selection"><Icon src={XMark} mini size="13px" /></button></span>
+            {/each}
+          </div>
+        {/if}
+      </section>
+
+      <section>
+        <div class="section-heading"><h2>Artists</h2><span>{commonArtists.length} shared</span></div>
+        <TagInput tags={commonArtists} suggestions={store.allArtists} label={selCount === 1 ? "Artists" : "Artists on all selected items"} placeholder={selCount === 1 ? "Add artist…" : "Add to all…"} onadd={addArtist} onremove={removeArtist} />
+        {#if mixedArtists.length > 0}
+          <p class="mixed-label">On some selected items</p>
+          <div class="mixed-tags">
+            {#each mixedArtists as item (item.artist)}
+              <span class="mixed-tag"><span>{item.artist} <small>{item.count}/{selCount}</small></span><button onclick={() => addArtist(item.artist)} aria-label={`Add ${item.artist} to all selected items`} title="Add to all"><Icon src={Plus} mini size="13px" /></button><button onclick={() => removeArtist(item.artist)} aria-label={`Remove ${item.artist} from selected items`} title="Remove from selection"><Icon src={XMark} mini size="13px" /></button></span>
             {/each}
           </div>
         {/if}

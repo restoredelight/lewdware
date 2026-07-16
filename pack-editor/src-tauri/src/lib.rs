@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use pack::{MediaFile, MediaPack, TagSummary};
+use pack::{ArtistSummary, MediaFile, MediaPack, TagSummary};
 use serde::{Deserialize, Serialize};
 use shared::behaviour::v3::Behaviour;
 use shared::mode;
@@ -809,6 +809,19 @@ async fn set_file_title(state: State<'_, AppState>, id: u64, name: String) -> Re
     Ok(())
 }
 
+#[tauri::command]
+async fn set_file_source_url(
+    state: State<'_, AppState>,
+    id: u64,
+    url: Option<String>,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.set_source_url(id, url).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // ── Tags ─────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -980,6 +993,171 @@ async fn remove_tag_from_files(
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         pack.remove_tag_from_files(ids, tag)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// ── Artists ──────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_all_artists(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let lock = state.pack.lock().await;
+    match lock.as_ref() {
+        Some(pack) => pack.get_all_artists().await.map_err(|e| e.to_string()),
+        None => Ok(vec![]),
+    }
+}
+
+#[tauri::command]
+async fn get_file_artists(state: State<'_, AppState>, id: u64) -> Result<Vec<String>, String> {
+    let lock = state.pack.lock().await;
+    match lock.as_ref() {
+        Some(pack) => pack.get_artists(id).await.map_err(|e| e.to_string()),
+        None => Ok(vec![]),
+    }
+}
+
+#[tauri::command]
+async fn add_artist_to_file(
+    state: State<'_, AppState>,
+    id: u64,
+    artist: String,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.add_artist(id, artist).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn remove_artist_from_file(
+    state: State<'_, AppState>,
+    id: u64,
+    artist: String,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.remove_artist(id, artist)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn create_and_add_artist(
+    state: State<'_, AppState>,
+    id: u64,
+    artist: String,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.create_and_add_artist(id, artist)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_artist_summaries(state: State<'_, AppState>) -> Result<Vec<ArtistSummary>, String> {
+    let lock = state.pack.lock().await;
+    match lock.as_ref() {
+        Some(pack) => pack.get_artist_summaries().await.map_err(|e| e.to_string()),
+        None => Ok(vec![]),
+    }
+}
+
+#[tauri::command]
+async fn rename_artist(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.rename_artist(from, to).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn merge_artist(state: State<'_, AppState>, from: String, to: String) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.merge_artist(from, to).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_artist(state: State<'_, AppState>, artist: String) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.delete_artist(artist).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn restore_merged_artist(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    source_ids: Vec<u64>,
+    target_ids: Vec<u64>,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.restore_merged_artist(from, to, source_ids, target_ids)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn restore_deleted_artist(
+    state: State<'_, AppState>,
+    artist: String,
+    ids: Vec<u64>,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.restore_deleted_artist(artist, ids)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn add_artist_to_files(
+    state: State<'_, AppState>,
+    ids: Vec<u64>,
+    artist: String,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.add_artist_to_files(ids, artist)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn remove_artist_from_files(
+    state: State<'_, AppState>,
+    ids: Vec<u64>,
+    artist: String,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.remove_artist_from_files(ids, artist)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -1297,6 +1475,7 @@ pub fn run() {
             restore_mode,
             purge_history_mode,
             set_file_title,
+            set_file_source_url,
             get_all_tags,
             get_file_tags,
             add_tag_to_file,
@@ -1310,6 +1489,19 @@ pub fn run() {
             restore_deleted_tag,
             add_tag_to_files,
             remove_tag_from_files,
+            get_all_artists,
+            get_file_artists,
+            add_artist_to_file,
+            remove_artist_from_file,
+            create_and_add_artist,
+            get_artist_summaries,
+            rename_artist,
+            merge_artist,
+            delete_artist,
+            restore_merged_artist,
+            restore_deleted_artist,
+            add_artist_to_files,
+            remove_artist_from_files,
             get_pack_metadata,
             set_pack_metadata,
             save_pack_metadata,

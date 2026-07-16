@@ -75,6 +75,7 @@ class AppStore {
   // Files and tags
   files = $state<MediaFile[]>([]);
   allTags = $state<string[]>([]);
+  allArtists = $state<string[]>([]);
 
   // Selection
   selectedIds = $state(new Set<number>());
@@ -85,12 +86,13 @@ class AppStore {
   openedId = $state<number | null>(null);
 
   // View routing
-  activeView = $state<"media" | "tags" | "content" | "experience" | "modes" | "options">("media");
+  activeView = $state<"media" | "tags" | "artists" | "content" | "experience" | "modes" | "options">("media");
 
   // Filtering
   searchQuery = $state("");
   mediaTypeFilter = $state<"all" | "image" | "video" | "audio">("all");
   tagFilter = $state(new Set<string>());
+  artistFilter = $state(new Set<string>());
 
   // Sorting
   sortBy = $state<"created" | "name" | "size">("created");
@@ -139,6 +141,7 @@ class AppStore {
     const query = this.searchQuery.toLowerCase();
     const typeFilter = this.mediaTypeFilter;
     const tagFilter = this.tagFilter;
+    const artistFilter = this.artistFilter;
     const sortBy = this.sortBy;
     const dirMul = this.sortDir === "asc" ? 1 : -1;
 
@@ -146,6 +149,7 @@ class AppStore {
       if (typeFilter !== "all" && f.file_info.type !== typeFilter) return false;
       if (query && !f.file_name.toLowerCase().includes(query)) return false;
       if (tagFilter.size > 0 && !f.tags.some((t) => tagFilter.has(t))) return false;
+      if (artistFilter.size > 0 && !f.artists.some((a) => artistFilter.has(a))) return false;
       return true;
     });
 
@@ -181,6 +185,19 @@ class AppStore {
     if (!tracked) this.markLocallyBackedUp();
   }
 
+  addArtistToFiles(ids: number[], artist: string, tracked = false) {
+    const idSet = new Set(ids);
+    this.files = this.files.map((file) => idSet.has(file.id) && !file.artists.includes(artist) ? { ...file, artists: [...file.artists, artist] } : file);
+    if (!this.allArtists.includes(artist)) this.allArtists = [...this.allArtists, artist];
+    if (!tracked) this.markLocallyBackedUp();
+  }
+
+  removeArtistFromFiles(ids: number[], artist: string, tracked = false) {
+    const idSet = new Set(ids);
+    this.files = this.files.map((file) => idSet.has(file.id) ? { ...file, artists: file.artists.filter((item) => item !== artist) } : file);
+    if (!tracked) this.markLocallyBackedUp();
+  }
+
   requestMediaRemoval(ids = [...this.selectedIds]) {
     this.pendingMediaRemoval = ids.filter((id) => this.files.some((file) => file.id === id));
   }
@@ -193,7 +210,7 @@ class AppStore {
     return this.files.find((f) => f.id === id) ?? null;
   });
 
-  openPack(name: string, files: MediaFile[], tags: string[], saved = true, hasDestination = true) {
+  openPack(name: string, files: MediaFile[], tags: string[], artists: string[] = [], saved = true, hasDestination = true) {
     this.packOpen = true;
     this.packName = name;
     this.packSaved = saved;
@@ -205,6 +222,7 @@ class AppStore {
     this.recoveryErrorKind = null;
     this.files = files;
     this.allTags = tags;
+    this.allArtists = artists;
     this.selectedIds = new Set();
     this.primaryId = null;
     this.gridActiveId = null;
@@ -213,6 +231,7 @@ class AppStore {
     this.searchQuery = "";
     this.mediaTypeFilter = "all";
     this.tagFilter = new Set();
+    this.artistFilter = new Set();
     this.metadata = null;
     this.importWarnings = [];
     this.behaviour = null;
@@ -227,6 +246,7 @@ class AppStore {
     this.pendingMediaRemoval = [];
     this.files = [];
     this.allTags = [];
+    this.allArtists = [];
     this.selectedIds = new Set();
     this.primaryId = null;
     this.gridActiveId = null;
@@ -234,6 +254,7 @@ class AppStore {
     this.searchQuery = "";
     this.mediaTypeFilter = "all";
     this.tagFilter = new Set();
+    this.artistFilter = new Set();
     this.importWarnings = [];
     this.behaviour = null;
     this.suspendedExperience = null;
@@ -244,6 +265,10 @@ class AppStore {
     if (file.tags.length > 0) {
       const newTags = file.tags.filter((t) => !this.allTags.includes(t));
       if (newTags.length > 0) this.allTags = [...this.allTags, ...newTags];
+    }
+    if (file.artists.length > 0) {
+      const newArtists = file.artists.filter((a) => !this.allArtists.includes(a));
+      if (newArtists.length > 0) this.allArtists = [...this.allArtists, ...newArtists];
     }
     if (!tracked) this.markLocallyBackedUp();
   }
@@ -272,6 +297,14 @@ class AppStore {
     }
   }
 
+  updateFileSourceUrl(id: number, url: string | null, tracked = false) {
+    const idx = this.files.findIndex((f) => f.id === id);
+    if (idx >= 0) {
+      this.files[idx] = { ...this.files[idx], source_url: url };
+      if (!tracked) this.markLocallyBackedUp();
+    }
+  }
+
   addTagToFile(id: number, tag: string) {
     const idx = this.files.findIndex((f) => f.id === id);
     if (idx >= 0) {
@@ -285,6 +318,22 @@ class AppStore {
     if (idx >= 0) {
       const f = this.files[idx];
       this.files[idx] = { ...f, tags: f.tags.filter((t) => t !== tag) };
+    }
+  }
+
+  addArtistToFile(id: number, artist: string) {
+    const idx = this.files.findIndex((f) => f.id === id);
+    if (idx >= 0) {
+      const f = this.files[idx];
+      this.files[idx] = { ...f, artists: [...f.artists, artist] };
+    }
+  }
+
+  removeArtistFromFile(id: number, artist: string) {
+    const idx = this.files.findIndex((f) => f.id === id);
+    if (idx >= 0) {
+      const f = this.files[idx];
+      this.files[idx] = { ...f, artists: f.artists.filter((a) => a !== artist) };
     }
   }
 

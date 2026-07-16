@@ -4,7 +4,7 @@
   import IconButton from "$ui/IconButton.svelte";
   import Popover from "$ui/Popover.svelte";
   import Dialog from "$ui/Dialog.svelte";
-  import { ArrowUturnLeft, ArrowUturnRight, ChevronLeft, ChevronRight, CodeBracketSquare, Cog6Tooth, DocumentText, EllipsisVertical, Icon, Sparkles, Squares2x2, Tag } from "svelte-hero-icons";
+  import { ArrowUturnLeft, ArrowUturnRight, ChevronLeft, ChevronRight, CodeBracketSquare, Cog6Tooth, DocumentText, EllipsisVertical, Icon, PaintBrush, Sparkles, Squares2x2, Tag } from "svelte-hero-icons";
   import { onMount } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { api } from "./api.js";
@@ -20,6 +20,7 @@
   import ImportWarnings from "./ImportWarnings.svelte";
   import MediaToolbar from "./MediaToolbar.svelte";
   import Tags from "./Tags.svelte";
+  import Artists from "./Artists.svelte";
   import { cancelBehaviourSave, flushBehaviourSave, initializeBehaviourHistory } from "./behaviourSave.svelte.js";
   import { cancelMetadataSave, flushMetadataSave, initializeMetadataHistory } from "./metadataSave.svelte.js";
   import { history } from "./history.svelte.js";
@@ -37,6 +38,7 @@
   const navigationTabs = [
     { id: "media", label: "Media", icon: Squares2x2 },
     { id: "tags", label: "Tags", icon: Tag },
+    { id: "artists", label: "Artists", icon: PaintBrush },
     { id: "content", label: "Content", icon: DocumentText },
     { id: "experience", label: "Experience", icon: Sparkles },
     { id: "modes", label: "Modes", icon: CodeBracketSquare },
@@ -167,13 +169,15 @@
     const meta = await api.discardChanges();
     store.metadata = meta;
     store.markPackSaved();
-    const [files, tags, behaviour] = await Promise.all([
+    const [files, tags, artists, behaviour] = await Promise.all([
       api.getFiles(),
       api.getAllTags(),
+      api.getAllArtists(),
       api.getBehaviour(),
     ]);
     store.files = files;
     store.allTags = tags;
+    store.allArtists = artists;
     store.behaviour = behaviour;
     store.suspendedExperience = null;
     initializeMetadataHistory(meta);
@@ -320,7 +324,7 @@
               </div>
             {:else if store.filteredFiles.length === 0}
               <div class="flex items-center justify-center h-full p-8">
-                <div class="w-full max-w-lg"><EmptyState title="No matching media" description="No media matches the current search, type, or tag filters." actionLabel="Clear filters" onclick={() => { store.searchQuery = ""; store.mediaTypeFilter = "all"; store.tagFilter = new Set(); }} /></div>
+                <div class="w-full max-w-lg"><EmptyState title="No matching media" description="No media matches the current search, type, or tag filters." actionLabel="Clear filters" onclick={() => { store.searchQuery = ""; store.mediaTypeFilter = "all"; store.tagFilter = new Set(); store.artistFilter = new Set(); }} /></div>
               </div>
             {:else}
               <MediaGrid />
@@ -334,6 +338,8 @@
         </div>
       {:else if store.activeView === "tags"}
         <Tags />
+      {:else if store.activeView === "artists"}
+        <Artists />
       {:else if store.activeView === "experience"}
         <div class="flex-1 min-h-0 flex flex-col">
           <Experience />

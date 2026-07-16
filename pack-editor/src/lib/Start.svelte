@@ -30,8 +30,8 @@
   });
 
   async function finishOpen(info: PackInfo) {
-    const [files, tags] = await Promise.all([api.getFiles(), api.getAllTags()]);
-    store.openPack(info.name, files, tags, !info.has_unsaved_changes, info.has_destination);
+    const [files, tags, artists] = await Promise.all([api.getFiles(), api.getAllTags(), api.getAllArtists()]);
+    store.openPack(info.name, files, tags, artists, !info.has_unsaved_changes, info.has_destination);
     history.reset(!info.has_unsaved_changes);
   }
 
@@ -114,7 +114,7 @@
     try {
       const result = await api.importEdgewarePackDialog();
       if (!result) return;
-      store.openPack(result.info.name, [], [], false, false);
+      store.openPack(result.info.name, [], [], [], false, false);
       history.reset(false);
       store.importWarnings = result.warnings;
       // behaviour.json/metadata are already written by the time this command returns (see
