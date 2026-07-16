@@ -73,10 +73,26 @@ async fn run_services(
 ) {
     crate::panic_key::spawn_panic_thread(control_tx.clone(), config.panic_button);
 
+    // Push side of `Request::Subscribe`: Control publishes, the IPC server streams to
+    // subscribers. Seeded with an idle status so a subscriber that connects before Control's
+    // first publish still gets a coherent snapshot.
+    let (status_tx, status_rx) = tokio::sync::watch::channel(shared::ipc::StatusInfo {
+        session: shared::ipc::SessionState::Idle,
+        session_kind: None,
+        mode_path: None,
+        warning: None,
+        last_runtime_error: None,
+        last_exit: None,
+        schedule: shared::ipc::ScheduleStatus {
+            enabled: config.schedule.enabled,
+            next_session: None,
+        },
+    });
+
     {
         let control_tx = control_tx.clone();
         tokio::spawn(async move {
-            if let Err(err) = crate::ipc_server::run(control_tx).await {
+            if let Err(err) = crate::ipc_server::run(control_tx, status_rx).await {
                 tracing::error!("ipc server exited: {err}");
             }
         });
@@ -90,7 +106,7 @@ async fn run_services(
         });
     }
 
-    Control::new(control_tx, config.schedule)
+    Control::new(control_tx, config.schedule, status_tx)
         .run(control_rx)
         .await;
 }

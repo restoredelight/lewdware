@@ -7,7 +7,7 @@ use shared::ipc::{
     SendHalf, SessionKind, SessionState, SessionSummary, StatusInfo,
 };
 use shared::schedule::{Boundary, BoundaryKind};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::session::{self, SessionCommand, SessionExit};
 use crate::{backoff, engine, schedule, wallpaper};
@@ -133,12 +133,16 @@ pub struct Control {
     /// `GraceElapsed`/`GraceCancelled` from a timer/grace flow armed for an earlier evaluation,
     /// same "stale message" idiom `episode_seq` uses for backoff/idle timers.
     schedule_generation: u64,
+    /// Push side of `Request::Subscribe`: every handled message re-publishes the current
+    /// `StatusInfo` here (deduplicated), and the IPC server streams it to subscribers.
+    status_tx: watch::Sender<StatusInfo>,
 }
 
 impl Control {
     pub fn new(
         control_tx: mpsc::Sender<ControlMessage>,
         initial_schedule: shared::schedule::ScheduleConfig,
+        status_tx: watch::Sender<StatusInfo>,
     ) -> Self {
         Self {
             episode: None,
@@ -146,6 +150,7 @@ impl Control {
             control_tx,
             schedule: schedule::ScheduleEngine::new(initial_schedule),
             schedule_generation: 0,
+            status_tx,
         }
     }
 
@@ -154,10 +159,26 @@ impl Control {
         // A schedule already mid-window at boot (the autostart-at-login case) must start
         // immediately, not wait for the next boundary.
         self.reevaluate_schedule().await;
+        self.publish_status();
 
         while let Some(msg) = rx.recv().await {
             self.handle(msg).await;
+            // Every message is a potential state change; `publish_status` dedupes, so
+            // over-publishing here is harmless.
+            self.publish_status();
         }
+    }
+
+    fn publish_status(&mut self) {
+        let status = self.status_info();
+        self.status_tx.send_if_modified(|current| {
+            if *current == status {
+                false
+            } else {
+                *current = status;
+                true
+            }
+        });
     }
 
     async fn handle(&mut self, msg: ControlMessage) {
@@ -212,6 +233,11 @@ impl Control {
     async fn handle_request(&mut self, req: Request) -> Response {
         match req {
             Request::Status => Response::Status(self.status_info()),
+            // Handled by the IPC server itself (it owns the connection); reaching here means a
+            // buggy client sent it as a one-shot request.
+            Request::Subscribe => Response::Error {
+                message: "Subscribe is a streaming request".to_string(),
+            },
             Request::StartSession { mode_path, dev } => {
                 if let Some(episode) = self.episode.as_ref().filter(|e| e.is_active()) {
                     return Response::Busy {

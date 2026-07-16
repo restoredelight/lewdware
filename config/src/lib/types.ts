@@ -80,6 +80,12 @@ export interface EngineStatusDto {
   warning: string | null;
 }
 
+/** Payload of the `supervisor:status` event, pushed on every supervisor state change. */
+export interface SupervisorStatusDto {
+  engine: EngineStatusDto;
+  schedule: ScheduleStatusDto;
+}
+
 export interface Key {
   name: string;
   code: string;
@@ -96,6 +102,8 @@ export interface Modifiers {
 export interface MonitorDto {
   id: string;
   name: string;
+  width: number;
+  height: number;
   primary: boolean;
   disabled: boolean;
 }

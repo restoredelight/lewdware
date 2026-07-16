@@ -294,6 +294,8 @@ impl From<ConfigDto> for AppConfig {
 pub struct MonitorDto {
     pub id: String,
     pub name: String,
+    pub width: u32,
+    pub height: u32,
     pub primary: bool,
     pub disabled: bool,
 }
@@ -687,11 +689,12 @@ async fn get_monitors(app_handle: AppHandle, state: State<'_>) -> Result<Vec<Mon
             let id = m.name()?.to_string();
             let primary = Some(&id) == primary_name.as_ref();
             let size = m.size();
-            let name = format!("{id} ({}x{})", size.width, size.height);
             let is_disabled = disabled.contains(&id);
             Some(MonitorDto {
+                name: id.clone(),
                 id,
-                name,
+                width: size.width,
+                height: size.height,
                 primary,
                 disabled: is_disabled,
             })
@@ -965,7 +968,7 @@ async fn stop_lewdware() -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct EngineStatusDto {
     running: bool,
     /// Why the engine failed to start, if the last launch we made died before reaching a
@@ -977,18 +980,17 @@ pub struct EngineStatusDto {
     warning: Option<String>,
 }
 
-#[tauri::command]
-async fn lewdware_running() -> EngineStatusDto {
-    let Ok(shared::ipc::Response::Status(info)) =
-        shared::ipc::request(&shared::ipc::Request::Status).await
-    else {
-        return EngineStatusDto {
+impl EngineStatusDto {
+    fn stopped() -> Self {
+        Self {
             running: false,
             error: None,
             warning: None,
-        };
-    };
+        }
+    }
+}
 
+fn engine_status_from(info: &shared::ipc::StatusInfo) -> EngineStatusDto {
     let error = match &info.session {
         shared::ipc::SessionState::GaveUp { last_error, .. } => last_error
             .clone()
@@ -1004,33 +1006,89 @@ async fn lewdware_running() -> EngineStatusDto {
                 | shared::ipc::SessionState::RestartPending { .. }
         ),
         error,
-        warning: info.warning,
+        warning: info.warning.clone(),
+    }
+}
+
+#[tauri::command]
+async fn lewdware_running() -> EngineStatusDto {
+    match shared::ipc::request(&shared::ipc::Request::Status).await {
+        Ok(shared::ipc::Response::Status(info)) => engine_status_from(&info),
+        _ => EngineStatusDto::stopped(),
+    }
+}
+
+/// Pushed to the webview as the `supervisor:status` event whenever the supervisor's state
+/// changes (and once with a "stopped" payload when it goes away).
+#[derive(Serialize, Clone)]
+pub struct SupervisorStatusDto {
+    engine: EngineStatusDto,
+    schedule: ScheduleStatusDto,
+}
+
+/// Follows the supervisor's status stream for the lifetime of the app, forwarding every update
+/// to the webview. When no supervisor is reachable (it self-terminates when idle), retries
+/// quietly — the connect attempt against a local socket is cheap.
+async fn forward_supervisor_status(app: tauri::AppHandle) {
+    use tauri::Emitter;
+    loop {
+        if let Ok(mut subscription) = shared::ipc::subscribe().await {
+            while let Ok(info) = subscription.next().await {
+                let _ = app.emit(
+                    "supervisor:status",
+                    SupervisorStatusDto {
+                        engine: engine_status_from(&info),
+                        schedule: schedule_status_from(&info),
+                    },
+                );
+            }
+        }
+        // No stream (or it just ended). That usually means the supervisor exited — but a
+        // supervisor predating `Subscribe` drops the stream while still answering one-shot
+        // requests, so confirm with `Status` before reporting stopped. Against such a
+        // supervisor this loop degrades into accurate 2s polling instead of lying.
+        let payload = match shared::ipc::request(&shared::ipc::Request::Status).await {
+            Ok(shared::ipc::Response::Status(info)) => SupervisorStatusDto {
+                engine: engine_status_from(&info),
+                schedule: schedule_status_from(&info),
+            },
+            _ => SupervisorStatusDto {
+                engine: EngineStatusDto::stopped(),
+                schedule: ScheduleStatusDto {
+                    enabled: false,
+                    next_session: None,
+                },
+            },
+        };
+        let _ = app.emit("supervisor:status", payload);
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 }
 
 // ─── Scheduling ────────────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ScheduleStatusDto {
     enabled: bool,
     /// RFC3339, or `null` if nothing's scheduled -- the frontend renders it via `Date`.
     next_session: Option<String>,
 }
 
-#[tauri::command]
-async fn get_schedule_status() -> ScheduleStatusDto {
-    let Ok(shared::ipc::Response::Status(info)) =
-        shared::ipc::request(&shared::ipc::Request::Status).await
-    else {
-        return ScheduleStatusDto {
-            enabled: false,
-            next_session: None,
-        };
-    };
-
+fn schedule_status_from(info: &shared::ipc::StatusInfo) -> ScheduleStatusDto {
     ScheduleStatusDto {
         enabled: info.schedule.enabled,
         next_session: info.schedule.next_session.map(|t| t.to_rfc3339()),
+    }
+}
+
+#[tauri::command]
+async fn get_schedule_status() -> ScheduleStatusDto {
+    match shared::ipc::request(&shared::ipc::Request::Status).await {
+        Ok(shared::ipc::Response::Status(info)) => schedule_status_from(&info),
+        _ => ScheduleStatusDto {
+            enabled: false,
+            next_session: None,
+        },
     }
 }
 
@@ -1232,6 +1290,7 @@ pub fn run() {
                 let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
                 window.set_icon(icon)?;
             }
+            tauri::async_runtime::spawn(forward_supervisor_status(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

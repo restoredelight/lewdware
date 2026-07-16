@@ -20,6 +20,7 @@ use converter::{convert, ConversionOutput, ConvertedMedia, DirSource, PackSource
 use futures::{stream, StreamExt};
 use shared::encode::{encode_file, hash_file, HardwareEncoder};
 use tauri::Emitter;
+use tempfile::TempDir;
 use tokio::sync::{oneshot, watch, RwLock};
 use uuid::Uuid;
 
@@ -86,11 +87,25 @@ pub async fn run_import(
     upload_lock: Arc<RwLock<()>>,
     mut cancel: watch::Receiver<bool>,
 ) {
-    let dir = {
+    let (dir, pack_id) = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {
-            Some(pack) => pack.dir().to_path_buf(),
+            Some(pack) => (pack.dir().to_path_buf(), pack.id()),
             None => return,
+        }
+    };
+    let staging = match tempfile::Builder::new()
+        .prefix("pack-editor-import-")
+        .tempdir_in(&dir)
+    {
+        Ok(staging) => Arc::new(staging),
+        Err(error) => {
+            let _ = app.emit(
+                "upload:error",
+                serde_json::json!({ "path": dir, "error": format!("Could not create import staging directory: {error}") }),
+            );
+            let _ = app.emit("upload:done", ());
+            return;
         }
     };
 
@@ -106,12 +121,21 @@ pub async fn run_import(
         let encoder = encoder.clone();
         let upload_lock = upload_lock.clone();
         let source = source.clone();
+        let staging = staging.clone();
         async move {
-            // Hold the read lock for the duration of this file, same as a normal upload --
-            // lets a save acquire the write lock and run exclusively between files.
-            let _read_guard = upload_lock.read().await;
             let source_path = item.source_path.clone();
-            match import_one_media(&pack_state, source, item, &dir, encoder).await {
+            match import_one_media(
+                &pack_state,
+                pack_id,
+                source,
+                item,
+                &dir,
+                &staging,
+                encoder,
+                &upload_lock,
+            )
+            .await
+            {
                 Ok(Some(media_file)) => {
                     let _ = app.emit("upload:added", &media_file);
                 }
@@ -142,23 +166,27 @@ pub async fn run_import(
 
 async fn import_one_media(
     pack_state: &crate::PackState,
+    pack_id: Uuid,
     source: Arc<dyn PackSource + Send + Sync>,
     media: ConvertedMedia,
     dir: &Path,
+    staging: &Arc<TempDir>,
     encoder: HardwareEncoder,
+    upload_lock: &RwLock<()>,
 ) -> Result<Option<MediaFile>, ImportErrorKind> {
-    let extract_path = dir.join("media").join(format!("import-{}", Uuid::new_v4()));
+    let extract_path = staging.path().join(format!("source-{}", Uuid::new_v4()));
     let extract_dest = extract_path.clone();
     let extract_source_path = media.source_path.clone();
-    let extract =
-        tokio::task::spawn_blocking(move || source.extract_file(&extract_source_path, &extract_dest));
-    DiscardOnDrop::new(extract, extract_path.clone())
+    let extract = tokio::task::spawn_blocking(move || {
+        source.extract_file(&extract_source_path, &extract_dest)
+    });
+    DiscardOnDrop::new(extract, extract_path.clone(), staging.clone())
         .finish()
         .await
         .map_err(|e| ImportErrorKind::Other(e.into()))?
         .map_err(ImportErrorKind::ExtractError)?;
 
-    let output_path = dir.join("media").join(Uuid::new_v4().to_string());
+    let output_path = staging.path().join(Uuid::new_v4().to_string());
     let encode_input = extract_path.clone();
 
     let (tx, rx) = oneshot::channel();
@@ -169,12 +197,12 @@ async fn import_one_media(
         let _ = tx.send(result);
     });
 
-    let encoded = DiscardOnDrop::new(rx, output_path)
+    let encoded = DiscardOnDrop::new(rx, output_path, staging.clone())
         .finish()
         .await
         .map_err(|e| ImportErrorKind::Other(e.into()))?
         .map_err(ImportErrorKind::EncodeError)?;
-    let encoded = match encoded {
+    let mut encoded = match encoded {
         Some(e) => e,
         None => return Err(ImportErrorKind::Unrecognized),
     };
@@ -185,10 +213,22 @@ async fn import_one_media(
         .map_err(|e| ImportErrorKind::Other(e.into()))?
         .map_err(ImportErrorKind::HashError)?;
 
+    let _read_guard = upload_lock.read().await;
     let mut lock = pack_state.lock().await;
     let pack = lock
         .as_mut()
-        .ok_or_else(|| ImportErrorKind::Other(anyhow!("Pack was closed")))?;
+        .filter(|pack| pack.id() == pack_id)
+        .ok_or_else(|| ImportErrorKind::Other(anyhow!("The pack was closed while encoding")))?;
+    let final_path = dir.join("media").join(
+        encoded
+            .path
+            .file_name()
+            .ok_or_else(|| ImportErrorKind::Other(anyhow!("Encoded file has no name")))?,
+    );
+    tokio::fs::rename(&encoded.path, &final_path)
+        .await
+        .map_err(|e| ImportErrorKind::Other(e.into()))?;
+    encoded.path = final_path;
     let added = pack
         .add_file(encoded, Path::new(&media.suggested_name), hash)
         .await

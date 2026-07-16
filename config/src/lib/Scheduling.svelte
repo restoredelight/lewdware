@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
-  import { api } from "./api";
   import { store } from "./store.svelte";
   import Toggle from "$ui/Toggle.svelte";
   import Button from "$ui/Button.svelte";
@@ -12,30 +10,11 @@
 
   const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-  let status = $state<{ enabled: boolean; next_session: string | null }>({
-    enabled: false,
-    next_session: null,
-  });
-  let pollInterval: ReturnType<typeof setInterval>;
+  // Kept fresh by the `supervisor:status` push event; see +page.svelte.
+  const status = $derived(store.scheduleStatus);
   let enableError = $state<string | null>(null);
   let enablePending = $state(false);
   let pendingRemoval = $state<{ kind: "window" | "quiet"; index: number } | null>(null);
-
-  async function refreshStatus() {
-    try {
-      status = await api.getScheduleStatus();
-      taskFeedback.dismiss("schedule-status");
-    } catch (err) {
-      taskFeedback.warning("schedule-status", `Couldn’t refresh schedule status: ${String(err)}`);
-    }
-  }
-
-  onMount(async () => {
-    await refreshStatus();
-    pollInterval = setInterval(refreshStatus, 3000);
-  });
-
-  onDestroy(() => clearInterval(pollInterval));
 
   async function toggleEnabled() {
     const next = !(store.config?.schedule.enabled ?? false);
@@ -45,7 +24,7 @@
       // `store.config.schedule.enabled` only changes once this resolves, so the switch's visual
       // state (driven directly off that value below) never needs an optimistic flip or a revert.
       await store.setScheduleEnabled(next);
-      await refreshStatus();
+      await store.refreshSupervisorStatus();
       taskFeedback.success("schedule-enabled", next ? "Scheduling enabled" : "Scheduling disabled");
     } catch (err) {
       enableError = String(err);
@@ -71,7 +50,15 @@
 
   function formatNextSession(iso: string | null): string {
     if (!iso) return "";
-    return new Date(iso).toLocaleString();
+    const date = new Date(iso);
+    const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    if (sameDay(date, today)) return `today · ${time}`;
+    if (sameDay(date, tomorrow)) return `tomorrow · ${time}`;
+    return `${date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} · ${time}`;
   }
 
   function toggleWindowDay(index: number, window: WindowDto, dayIndex: number) {
@@ -151,7 +138,7 @@
         <h2 class="m-0 text-sm font-semibold text-text">Automatic scheduling</h2>
         <p class="m-0 mt-1 text-xs text-muted">
           {#if store.config?.schedule.enabled && status.next_session}
-            Next session: {formatNextSession(status.next_session)}
+            <span class="font-mono text-[11px]">Next session: {formatNextSession(status.next_session)}</span>
           {:else if store.config?.schedule.enabled}
             Enabled, but no upcoming session matches the current rules.
           {:else}

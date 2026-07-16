@@ -2,6 +2,7 @@ import { api } from "./api";
 import type {
   Capabilities,
   ConfigDto,
+  EngineStatusDto,
   Key,
   ModeGroupDto,
   ModeId,
@@ -9,6 +10,8 @@ import type {
   OptionValue,
   MonitorDto,
   QuietHoursDto,
+  ScheduleStatusDto,
+  SupervisorStatusDto,
   Volume,
   WindowDto,
 } from "./types";
@@ -54,11 +57,30 @@ class AppStore {
   loading = $state(false);
   loadError = $state<string | null>(null);
   busyActions = $state<string[]>([]);
+  // Kept fresh by the `supervisor:status` push event (see +page.svelte); the initial values
+  // come from one fetch at startup.
+  engineStatus = $state<EngineStatusDto>({ running: false, error: null, warning: null });
+  scheduleStatus = $state<ScheduleStatusDto>({ enabled: false, next_session: null });
   private saveQueue: Promise<void> = Promise.resolve();
   private pendingSaves = 0;
 
   get ready() {
     return this.config !== null;
+  }
+
+  applySupervisorStatus(status: SupervisorStatusDto) {
+    this.engineStatus = status.engine;
+    this.scheduleStatus = status.schedule;
+  }
+
+  async refreshSupervisorStatus() {
+    try {
+      const [engine, schedule] = await Promise.all([api.lewdwareRunning(), api.getScheduleStatus()]);
+      this.engineStatus = engine;
+      this.scheduleStatus = schedule;
+    } catch (err) {
+      taskFeedback.warning("supervisor-status", `Couldn’t read Lewdware status: ${String(err)}`);
+    }
   }
 
   async load() {

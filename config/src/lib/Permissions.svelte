@@ -74,7 +74,7 @@
         <Card class="flex flex-col gap-3 p-4">
           <div class="flex items-center justify-between">
             <span class="text-sm font-medium text-text">{slider.label}</span>
-            <span class="rounded bg-bg px-2 py-1 text-xs font-semibold text-text tabular-nums">
+            <span class="rounded bg-bg px-2 py-1 font-mono text-[11px] font-semibold text-text tabular-nums">
               {Math.round((store.config?.volume[slider.key] ?? 0) * 100)}%
             </span>
           </div>

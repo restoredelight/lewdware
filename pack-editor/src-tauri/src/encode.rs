@@ -10,6 +10,7 @@ use anyhow::anyhow;
 use futures::{stream, StreamExt};
 use infer::MatcherType;
 use shared::encode::{encode_file, hash_file, HardwareEncoder};
+use tempfile::TempDir;
 use tokio::sync::{oneshot, watch, RwLock, Semaphore};
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -57,14 +58,19 @@ where
 {
     work: Option<F>,
     output: PathBuf,
+    staging: Option<Arc<TempDir>>,
 }
 
 impl<F: Future + Send + Unpin + 'static> DiscardOnDrop<F>
 where
     F::Output: Send,
 {
-    pub(crate) fn new(work: F, output: PathBuf) -> Self {
-        Self { work: Some(work), output }
+    pub(crate) fn new(work: F, output: PathBuf, staging: Arc<TempDir>) -> Self {
+        Self {
+            work: Some(work),
+            output,
+            staging: Some(staging),
+        }
     }
 
     pub(crate) async fn finish(mut self) -> F::Output {
@@ -81,9 +87,11 @@ where
     fn drop(&mut self) {
         if let Some(work) = self.work.take() {
             let output = std::mem::take(&mut self.output);
+            let staging = self.staging.take();
             tauri::async_runtime::spawn(async move {
                 let _ = work.await;
                 let _ = tokio::fs::remove_file(&output).await;
+                drop(staging);
             });
         }
     }
@@ -162,11 +170,25 @@ pub async fn process_files(
     let total = paths.len();
     let _ = app.emit("upload:start", serde_json::json!({ "total": total }));
 
-    let dir = {
+    let (dir, pack_id) = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {
-            Some(pack) => pack.dir().to_path_buf(),
+            Some(pack) => (pack.dir().to_path_buf(), pack.id()),
             None => return,
+        }
+    };
+    let staging = match tempfile::Builder::new()
+        .prefix("pack-editor-upload-")
+        .tempdir_in(&dir)
+    {
+        Ok(staging) => Arc::new(staging),
+        Err(error) => {
+            let _ = app.emit(
+                "upload:error",
+                serde_json::json!({ "path": dir, "error": format!("Could not create upload staging directory: {error}") }),
+            );
+            let _ = app.emit("upload:done", ());
+            return;
         }
     };
 
@@ -178,11 +200,19 @@ pub async fn process_files(
         let dir = dir.clone();
         let encoder = encoder.clone();
         let upload_lock = upload_lock.clone();
+        let staging = staging.clone();
         async move {
-            // Hold read lock for duration of file processing so save can acquire
-            // the write lock and run exclusively between file uploads.
-            let _read_guard = upload_lock.read().await;
-            match process_one_file(&pack_state, &path, &dir, encoder).await {
+            match process_one_file(
+                &pack_state,
+                pack_id,
+                &path,
+                &dir,
+                &staging,
+                encoder,
+                &upload_lock,
+            )
+            .await
+            {
                 Ok(Some(media_file)) => {
                     let _ = app.emit("upload:added", &media_file);
                 }
@@ -218,9 +248,12 @@ pub async fn process_files(
 
 async fn process_one_file(
     pack_state: &crate::PackState,
+    pack_id: Uuid,
     path: &Path,
     dir: &Path,
+    staging: &Arc<TempDir>,
     encoder: HardwareEncoder,
+    upload_lock: &RwLock<()>,
 ) -> Result<Option<MediaFile>, ProcessErrorKind> {
     let path_owned = path.to_path_buf();
     let hash = tokio::task::spawn_blocking(move || hash_file(&path_owned))
@@ -250,7 +283,7 @@ async fn process_one_file(
         .map_err(|e| ProcessErrorKind::Other(anyhow!("{e}")))?;
 
     let id = Uuid::new_v4();
-    let output_path = dir.join("media").join(id.to_string());
+    let output_path = staging.path().join(id.to_string());
     let path_owned = path.to_path_buf();
 
     let (tx, rx) = oneshot::channel();
@@ -259,32 +292,46 @@ async fn process_one_file(
         let _ = tx.send(encode_file(&path_owned, &encode_output, encoder));
     });
 
-    let encoded = DiscardOnDrop::new(rx, output_path)
+    let encoded = DiscardOnDrop::new(rx, output_path, staging.clone())
         .finish()
         .await
         .map_err(|e| ProcessErrorKind::Other(e.into()))?
         .map_err(ProcessErrorKind::EncodeError)?;
 
-    let encoded = match encoded {
+    let mut encoded = match encoded {
         Some(e) => e,
         None => return Err(ProcessErrorKind::Unrecognized),
     };
 
+    // Saving only needs to exclude the atomic commit into the managed media directory and the
+    // corresponding database update. Encoding itself happens in pack-local staging storage.
+    let _read_guard = upload_lock.read().await;
     let mut lock = pack_state.lock().await;
-    if let Some(pack) = lock.as_mut() {
-        let media = pack
-            .add_file(encoded, path, hash)
-            .await
-            .map_err(ProcessErrorKind::PackError)?;
-        match media {
-            // The pre-check above already handles the common case; this only
-            // fires when a race let a since-inserted duplicate through, and the
-            // DB's own uniqueness constraint caught it - treat it the same as
-            // the pre-check's skip.
-            Some(media) => Ok(Some(media)),
-            None => Err(ProcessErrorKind::Skipped),
-        }
-    } else {
-        Err(ProcessErrorKind::Other(anyhow!("Pack was closed")))
+    let pack = lock
+        .as_mut()
+        .filter(|pack| pack.id() == pack_id)
+        .ok_or_else(|| ProcessErrorKind::Other(anyhow!("The pack was closed while encoding")))?;
+    let final_path = dir.join("media").join(
+        encoded
+            .path
+            .file_name()
+            .ok_or_else(|| ProcessErrorKind::Other(anyhow!("Encoded file has no name")))?,
+    );
+    tokio::fs::rename(&encoded.path, &final_path)
+        .await
+        .map_err(|e| ProcessErrorKind::Other(e.into()))?;
+    encoded.path = final_path;
+
+    let media = pack
+        .add_file(encoded, path, hash)
+        .await
+        .map_err(ProcessErrorKind::PackError)?;
+    match media {
+        // The pre-check above already handles the common case; this only
+        // fires when a race let a since-inserted duplicate through, and the
+        // DB's own uniqueness constraint caught it - treat it the same as
+        // the pre-check's skip.
+        Some(media) => Ok(Some(media)),
+        None => Err(ProcessErrorKind::Skipped),
     }
 }

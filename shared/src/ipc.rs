@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type")]
 pub enum Request {
     Status,
+    /// Turns the connection into a long-lived status stream: the supervisor immediately writes
+    /// one `Response::Status` line, then another on every state change, until the client
+    /// disconnects. The push counterpart to `Status` polling.
+    Subscribe,
     StartSession {
         mode_path: Option<PathBuf>,
         dev: bool,
@@ -224,6 +228,44 @@ mod client {
         Ok(serde_json::from_str(line.trim_end())?)
     }
 
+    /// A live status stream from the supervisor (`Request::Subscribe`). Yields the current
+    /// status immediately, then again on every state change; errors once the supervisor goes
+    /// away, at which point the caller reconnects (or treats the supervisor as stopped).
+    pub struct StatusSubscription {
+        reader: BufReader<RecvHalf>,
+        // Keeps the write half open for the lifetime of the subscription.
+        _send: SendHalf,
+    }
+
+    impl StatusSubscription {
+        pub async fn next(&mut self) -> Result<super::StatusInfo> {
+            let mut line = String::new();
+            let n = self.reader.read_line(&mut line).await?;
+            if n == 0 {
+                anyhow::bail!("status subscription closed");
+            }
+            match serde_json::from_str(line.trim_end())? {
+                Response::Status(info) => Ok(info),
+                other => Err(anyhow!("unexpected response on status subscription: {other:?}")),
+            }
+        }
+    }
+
+    /// Opens a status subscription to the resident supervisor. Fails if none is reachable —
+    /// callers decide whether that means "stopped" or "spawn one".
+    pub async fn subscribe() -> Result<StatusSubscription> {
+        let name = control_socket_name()?;
+        let conn = Stream::connect(name)
+            .await
+            .context("could not connect to the supervisor")?;
+        write_line(&conn, &serde_json::to_string(&Request::Subscribe)?).await?;
+        let (recv, send) = conn.split();
+        Ok(StatusSubscription {
+            reader: BufReader::new(recv),
+            _send: send,
+        })
+    }
+
     /// Ensures a supervisor is reachable, spawning one on demand (per scheduling.md: "the config
     /// app always talks to the supervisor, starting it on demand if absent") if `request` can't
     /// reach one yet.
@@ -300,6 +342,7 @@ mod tests {
     #[test]
     fn request_variants_roundtrip() {
         roundtrip(Request::Status);
+        roundtrip(Request::Subscribe);
         roundtrip(Request::StartSession {
             mode_path: Some(PathBuf::from("/tmp/mode.lwmode")),
             dev: true,

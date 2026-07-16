@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import type { SupervisorStatusDto } from "$lib/types";
   import { store } from "$lib/store.svelte";
   import General from "$lib/General.svelte";
   import PackMode from "$lib/PackMode.svelte";
@@ -11,6 +13,13 @@
 
   onMount(() => {
     void store.load();
+    void store.refreshSupervisorStatus();
+    const unlisten = listen<SupervisorStatusDto>("supervisor:status", (event) => {
+      store.applySupervisorStatus(event.payload);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   });
 
   const tabs = [
@@ -31,6 +40,12 @@
     <nav class="p-3" aria-label="Settings sections">
       <Tabs {tabs} active={store.activeTab} orientation="vertical" onselect={(id) => (store.activeTab = id as typeof store.activeTab)} />
     </nav>
+    {#if store.engineStatus.running}
+      <div class="mt-auto flex items-center gap-2 border-t border-border px-4 py-2.5 font-mono text-[11px] text-muted" role="status">
+        <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span>
+        <span>running</span>
+      </div>
+    {/if}
   </aside>
 
   <!-- Main content -->

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount } from "svelte";
   import { api } from "./api";
   import { store } from "./store.svelte";
   import type { Key } from "./types";
@@ -8,25 +8,15 @@
   import Card from "$ui/Card.svelte";
   import { taskFeedback } from "./taskFeedback.svelte";
 
-  let running = $state(false);
+  // Rejections from the launch command itself; engine-level errors (a crash after a successful
+  // launch, giving up on restarts) arrive via the pushed store.engineStatus.
   let launchError = $state<string | null>(null);
-  let launchWarning = $state<string | null>(null);
-  let pollInterval: ReturnType<typeof setInterval>;
   let inputMonitoringGranted = $state(true);
   let inputMonitoringPromptFailed = $state(false);
   let engineAction = $state<"launch" | "stop" | null>(null);
 
-  async function checkRunning() {
-    try {
-      const status = await api.lewdwareRunning();
-      running = status.running;
-      launchError = status.error;
-      launchWarning = status.warning;
-      taskFeedback.dismiss("engine-status");
-    } catch (err) {
-      taskFeedback.warning("engine-status", `Couldn’t refresh Lewdware status: ${String(err)}`);
-    }
-  }
+  const engineStatus = $derived(store.engineStatus);
+  const running = $derived(engineStatus.running);
 
   async function checkInputMonitoringGranted() {
     try {
@@ -37,21 +27,18 @@
   }
 
   onMount(async () => {
-    await Promise.all([checkRunning(), checkInputMonitoringGranted()]);
-    pollInterval = setInterval(async () => await checkRunning(), 1000);
+    await checkInputMonitoringGranted();
   });
-
-  onDestroy(() => clearInterval(pollInterval));
 
   async function launch() {
     engineAction = "launch";
+    launchError = null;
     taskFeedback.progress("engine", "Launching Lewdware…");
     try {
       if (!(await store.saveConfig())) throw new Error("settings could not be saved");
       await api.launchLewdware();
-      running = true;
-      launchError = null;
-      launchWarning = null;
+      // The push subscription may take a beat to reach a freshly spawned supervisor.
+      void store.refreshSupervisorStatus();
       taskFeedback.success("engine", "Lewdware launched");
     } catch (err) {
       launchError = String(err);
@@ -63,12 +50,10 @@
 
   async function stop() {
     engineAction = "stop";
+    launchError = null;
     taskFeedback.progress("engine", "Stopping Lewdware…");
     try {
       await api.stopLewdware();
-      running = false;
-      launchError = null;
-      launchWarning = null;
       taskFeedback.success("engine", "Lewdware stopped");
     } catch (err) {
       taskFeedback.error("engine", `Lewdware couldn’t be stopped: ${String(err)}`);
@@ -178,14 +163,14 @@
         <Button size="compact" variant="secondary" class="ml-auto" onclick={() => (store.activeTab = "pack_mode")}>Choose pack</Button>
       </div>
     {/if}
-    {#if !running && launchError}
+    {#if !running && (launchError || engineStatus.error)}
       <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[var(--ui-danger-bg)] border border-[var(--ui-danger-border)] text-sm text-[var(--ui-danger)]">
-        <span>Lewdware failed to start: {launchError}</span>
+        <span>Lewdware failed to start: {launchError ?? engineStatus.error}</span>
       </div>
     {/if}
-    {#if running && launchWarning}
+    {#if running && engineStatus.warning}
       <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[var(--ui-warning-bg)] border border-[var(--ui-warning-border)] text-sm text-[var(--ui-warning)]">
-        <span>{launchWarning}</span>
+        <span>{engineStatus.warning}</span>
       </div>
     {/if}
   </section>
@@ -245,6 +230,7 @@
           <label class="flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-surface-2 transition-colors first:rounded-t-md last:rounded-b-md">
             <Checkbox checked={!monitor.disabled} ariaLabel={monitor.name} onchange={(checked) => store.setMonitorEnabled(monitor.id, checked)} />
             <span class="min-w-0 flex-1 text-sm text-text truncate">{monitor.name}</span>
+            <span class="shrink-0 font-mono text-[11px] text-muted">{monitor.width}×{monitor.height}</span>
             {#if monitor.primary}<span class="rounded-full border border-border bg-bg px-2 py-0.5 text-[10px] font-semibold text-muted">Primary</span>{/if}
           </label>
         {/each}

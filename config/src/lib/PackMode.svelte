@@ -169,6 +169,25 @@
     return true;
   }
 
+  type EntryChunk =
+    | { kind: "options"; items: (ModeOptionDto & { kind: "Option" })[] }
+    | { kind: "group"; group: OptionGroupEntryDto };
+
+  // Consecutive options share one card (Permissions-style rows); groups get their own.
+  function chunkEntries(entries: OptionEntryDto[]): EntryChunk[] {
+    const chunks: EntryChunk[] = [];
+    for (const entry of entries) {
+      if (entry.kind === "Option") {
+        const last = chunks.at(-1);
+        if (last?.kind === "options") last.items.push(entry);
+        else chunks.push({ kind: "options", items: [entry] });
+      } else {
+        chunks.push({ kind: "group", group: entry });
+      }
+    }
+    return chunks;
+  }
+
   // Keys of groups the user has manually collapsed (groups start open).
   const collapsedGroups = new Set<string>();
   let collapsedGroupsVersion = $state(0);
@@ -188,29 +207,24 @@
   }
 </script>
 
-{#snippet optionInput(opt: ModeOptionDto)}
+{#snippet optionControl(opt: ModeOptionDto)}
   {@const typeKey = optionTypeKey(opt)}
 
   {#if typeKey === "Boolean"}
-    <div class="flex items-center gap-2 w-fit">
-      <Toggle ariaLabel={opt.label} checked={opt.value === true} onchange={(checked) => store.setModeOption(opt.key, checked)} />
-      <span class="text-sm text-muted">
-        {opt.value === true ? "On" : "Off"}
-      </span>
-    </div>
+    <Toggle ariaLabel={opt.label} checked={opt.value === true} onchange={(checked) => store.setModeOption(opt.key, checked)} />
 
   {:else if typeKey === "String"}
     <input
       type="text"
       value={opt.value as string}
       oninput={(e) => store.setModeOption(opt.key, e.currentTarget.value)}
-      class="px-3 py-1.5 border border-border rounded text-sm bg-surface
-             text-text w-64"
+      class="w-56 rounded-sm border border-border bg-bg px-2.5 py-1.5 text-sm text-text transition-colors hover:border-[var(--ui-border-strong)]"
     />
 
   {:else if typeKey === "Enum"}
     <Select
-      class="w-64"
+      class="w-56"
+      size="compact"
       hideLabel
       label={opt.label}
       value={opt.value as string}
@@ -221,27 +235,24 @@
   {:else if typeKey === "Integer" || typeKey === "Number"}
     {#if isSlider(opt)}
       {@const displayVal = sliderDisplayValue(opt)}
-      <div class="flex items-center gap-4">
-        <Slider
-          ariaLabel={opt.label}
-          min={getMin(opt) ?? 0}
-          max={getMax(opt) ?? 100}
-          step={getStep(opt) ?? 1}
-          value={displayVal}
-          oninput={(value) => handleNumberInput(opt, String(value))}
-          class="flex-1 max-w-xs"
-        />
-        <input
-          type="number"
-          value={opt.value as number}
-          min={getMin(opt)}
-          max={getMax(opt)}
-          step={getStep(opt)}
-          oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
-          class="px-3 py-1.5 border border-border rounded text-sm bg-surface
-                 text-text w-24"
-        />
-      </div>
+      <Slider
+        ariaLabel={opt.label}
+        min={getMin(opt) ?? 0}
+        max={getMax(opt) ?? 100}
+        step={getStep(opt) ?? 1}
+        value={displayVal}
+        oninput={(value) => handleNumberInput(opt, String(value))}
+        class="w-40 sm:w-52"
+      />
+      <input
+        type="number"
+        value={opt.value as number}
+        min={getMin(opt)}
+        max={getMax(opt)}
+        step={getStep(opt)}
+        oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
+        class="w-20 rounded-sm border border-border bg-bg px-2.5 py-1.5 text-sm text-text transition-colors hover:border-[var(--ui-border-strong)]"
+      />
     {:else}
       <input
         type="number"
@@ -250,8 +261,7 @@
         max={getMax(opt)}
         step={getStep(opt)}
         oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
-        class="px-3 py-1.5 border border-border rounded text-sm bg-surface
-               text-text w-32"
+        class="w-24 rounded-sm border border-border bg-bg px-2.5 py-1.5 text-sm text-text transition-colors hover:border-[var(--ui-border-strong)]"
       />
     {/if}
   {/if}
@@ -319,8 +329,8 @@
             role="radio"
             aria-checked={selected}
             class="flex-1 min-h-10 flex cursor-pointer disabled:cursor-not-allowed items-center gap-3 px-3 py-2 rounded-md text-sm
-                   text-left transition-colors
-                   {selected ? 'bg-accent/10 text-accent-foreground font-medium' : 'text-text hover:bg-surface-2'}"
+                   text-left text-text transition-colors
+                   {selected ? 'bg-surface-2 font-medium shadow-[inset_2px_0_0_var(--ui-accent-hover)]' : 'hover:bg-surface-2'}"
           >
             <span class="w-4 h-4 rounded-full border grid place-items-center shrink-0 {selected ? 'border-accent bg-accent' : 'border-border-strong'}">
               {#if selected}<span class="w-2 h-2 text-white"><Icon src={Check} mini /></span>{/if}
@@ -358,7 +368,7 @@
         <p class="mt-1 mb-0 text-xs text-muted">Customize the selected mode. Changes are applied automatically.</p>
       </div>
 
-      <div class="flex flex-col gap-5">
+      <div class="flex flex-col gap-3">
         {@render optionEntries(store.modeOptions)}
       </div>
     </section>
@@ -381,29 +391,23 @@
 {/if}
 
 {#snippet optionRow(opt: ModeOptionDto)}
+  {@const typeKey = optionTypeKey(opt)}
   {@const isDisabled = opt.optional && opt.value === null}
-  <div class="flex flex-col gap-3 rounded-md border border-border bg-surface p-4">
-    <div class="flex items-start justify-between gap-4">
-      <div class="min-w-0">
-        <h3 class="m-0 text-sm font-medium text-text">{opt.label}</h3>
-        {#if opt.description}<p class="m-0 mt-1 text-xs text-muted">{opt.description}</p>{/if}
-      </div>
-      {#if opt.optional}
-        <div class="flex shrink-0 items-center gap-2">
-          <span class="text-xs text-muted">{isDisabled ? "Disabled" : "Enabled"}</span>
-          <Toggle ariaLabel={`Enable ${opt.label}`} checked={!isDisabled} onchange={(checked) => handleOptionalToggle(opt, checked)} />
-        </div>
-      {/if}
+  <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3">
+    <div class="min-w-0 flex-1 basis-52">
+      <h3 class="m-0 text-sm font-medium text-text">{opt.label}</h3>
+      {#if opt.description}<p class="m-0 mt-0.5 text-xs text-muted">{opt.description}</p>{/if}
     </div>
-
-    {#if opt.optional}
-      <div class="transition-opacity" class:opacity-40={isDisabled}>
-        <fieldset disabled={isDisabled} class="contents">
-            {@render optionInput(opt)}
-        </fieldset>
-      </div>
+    {#if typeKey === "Boolean" && !opt.optional}
+      {@render optionControl(opt)}
     {:else}
-      {@render optionInput(opt)}
+      <div class="flex shrink-0 items-center gap-3">
+        <!-- A disabled optional renders no control at all — the toggle alone says "off". -->
+        {#if !isDisabled}{@render optionControl(opt)}{/if}
+        {#if opt.optional}
+          <Toggle ariaLabel={`Enable ${opt.label}`} checked={!isDisabled} onchange={(checked) => handleOptionalToggle(opt, checked)} />
+        {/if}
+      </div>
     {/if}
   </div>
 {/snippet}
@@ -427,21 +431,28 @@
     </button>
 
     {#if !collapsed}
-      <div class="flex flex-col gap-3 border-t border-border bg-bg/40 p-4">
-        {@render optionEntries(group.entries)}
+      <div class="border-t border-border">
+        {@render optionEntries(group.entries, true)}
       </div>
     {/if}
   </Card>
 {/snippet}
 
-{#snippet optionEntries(entries: OptionEntryDto[])}
-  {#each entries as entry (entry.kind === "Option" ? entry.key : `group:${entry.key}`)}
-    {#if isVisible(entry.show_when)}
-      {#if entry.kind === "Option"}
-        {@render optionRow(entry)}
-      {:else}
-        {@render optionGroup(entry)}
-      {/if}
+{#snippet optionEntries(entries: OptionEntryDto[], bare: boolean = false)}
+  {@const chunks = chunkEntries(entries.filter((entry) => isVisible(entry.show_when)))}
+  {#each chunks as chunk, index (chunk.kind === "group" ? `group:${chunk.group.key}` : `options:${chunk.items[0].key}`)}
+    {#if chunk.kind === "options"}
+      <div class="divide-y divide-border {bare ? '' : 'rounded-md border border-border bg-surface'}">
+        {#each chunk.items as opt (opt.key)}
+          {@render optionRow(opt)}
+        {/each}
+      </div>
+    {:else if bare}
+      <div class="border-t border-border p-3 {index === 0 ? 'border-t-0' : ''}">
+        {@render optionGroup(chunk.group)}
+      </div>
+    {:else}
+      {@render optionGroup(chunk.group)}
     {/if}
   {/each}
 {/snippet}
