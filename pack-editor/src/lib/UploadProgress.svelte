@@ -4,6 +4,7 @@
 
   let showErrors = $state(false);
   let stopping = $state(false);
+  let minimized = $state(false);
   const percent = $derived(store.uploadTotal > 0 ? Math.min(100, (store.uploadDone / store.uploadTotal) * 100) : 0);
 
   $effect(() => {
@@ -16,55 +17,85 @@
   }
 </script>
 
-<div class="import-window" role="status" aria-live="polite">
+<div class="import-window" class:minimized role="status" aria-live="polite">
   <header class="titlebar">
     <span class="dot" aria-hidden="true"></span>
     <h2>Import</h2>
+    {#if minimized}
+      <span class="mini-readout">
+        {store.uploading ? `${Math.round(percent)}%` : `${store.uploadDone} done`}
+      </span>
+    {/if}
+    <button
+      type="button"
+      class="icon-btn"
+      aria-label={minimized ? "Expand import window" : "Minimize import window"}
+      aria-expanded={!minimized}
+      onclick={() => (minimized = !minimized)}
+    >
+      {#if minimized}
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5L6 4l3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+      {:else}
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+      {/if}
+    </button>
     {#if !store.uploading && store.uploadErrors.length > 0}
       <button type="button" class="close" aria-label="Dismiss import errors" onclick={() => store.clearUploadErrors()}>
         <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       </button>
     {/if}
   </header>
-  <div class="body">
-    {#if store.uploading}
-      <div class="bar"><i style={`width:${percent}%`}></i></div>
-      <div class="row">
-        <span class="readout">{store.uploadDone} / {store.uploadTotal} files</span>
-        <button type="button" class="stop" disabled={stopping} onclick={stop} title="Stop processing remaining files; completed imports will stay in the pack">{stopping ? "Stopping…" : "Stop"}</button>
-      </div>
-    {:else}
-      <div class="row">
-        <span class="readout">{store.uploadDone} file{store.uploadDone === 1 ? "" : "s"} processed</span>
-      </div>
-    {/if}
-
-    {#if store.uploadErrors.length > 0}
-      <button type="button" class="errors-toggle" aria-expanded={showErrors} onclick={() => (showErrors = !showErrors)}>
-        {store.uploadErrors.length} error{store.uploadErrors.length === 1 ? "" : "s"}
-        <span aria-hidden="true">{showErrors ? "▴" : "▾"}</span>
-      </button>
-      {#if showErrors}
-        <ul class="errors">
-          {#each store.uploadErrors as err}
-            <li><span class="path">{err.path}</span><span class="reason">{err.error}</span></li>
-          {/each}
-        </ul>
+  {#if minimized && store.uploading}
+    <div class="mini-bar"><i style={`width:${percent}%`}></i></div>
+  {/if}
+  {#if !minimized}
+    <div class="body">
+      {#if store.uploading}
+        <div class="bar"><i style={`width:${percent}%`}></i></div>
+        <div class="row">
+          <span class="readout">{store.uploadDone} / {store.uploadTotal} files</span>
+          <button type="button" class="stop" disabled={stopping} onclick={stop} title="Stop processing remaining files; completed imports will stay in the pack">{stopping ? "Stopping…" : "Stop"}</button>
+        </div>
+      {:else}
+        <div class="row">
+          <span class="readout">{store.uploadDone} file{store.uploadDone === 1 ? "" : "s"} processed</span>
+        </div>
       {/if}
-    {/if}
-  </div>
+
+      {#if store.uploadErrors.length > 0}
+        <button type="button" class="errors-toggle" aria-expanded={showErrors} onclick={() => (showErrors = !showErrors)}>
+          {store.uploadErrors.length} error{store.uploadErrors.length === 1 ? "" : "s"}
+          <span aria-hidden="true">{showErrors ? "▴" : "▾"}</span>
+        </button>
+        {#if showErrors}
+          <ul class="errors">
+            {#each store.uploadErrors as err}
+              <li><span class="path">{err.path}</span><span class="reason">{err.error}</span></li>
+            {/each}
+          </ul>
+        {/if}
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
   .import-window { position: fixed; right: 16px; bottom: 16px; z-index: 40; width: min(320px, calc(100vw - 32px)); border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-md); background: var(--ui-surface); box-shadow: var(--ui-shadow-pop); }
   .import-window::before { content: ""; position: absolute; inset: 0; z-index: -1; transform: translate(-10px, -10px); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: rgb(10 8 9 / .4); backdrop-filter: blur(10px); }
+  .import-window.minimized { width: max-content; border-radius: var(--ui-radius-md); }
   .titlebar { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface-raised); border-radius: var(--ui-radius-md) var(--ui-radius-md) 0 0; }
+  .minimized .titlebar { border-bottom: 0; border-radius: var(--ui-radius-md); }
+  .minimized .titlebar:has(+ .mini-bar) { border-radius: var(--ui-radius-md) var(--ui-radius-md) 0 0; }
   .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--ui-accent); }
-  h2 { flex: 1; margin: 0; color: var(--ui-text); font-family: var(--ui-font-mono); font-size: 11.5px; font-weight: 700; line-height: 1.3; }
-  .close { display: grid; width: 22px; height: 22px; flex: none; margin-right: -4px; padding: 0; place-items: center; border: 0; border-radius: var(--ui-radius-sm); background: transparent; color: var(--ui-muted); cursor: pointer; }
-  .close:hover { background: var(--ui-surface); color: var(--ui-text); }
-  .close:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -1px; }
-  .close svg { width: 11px; height: 11px; }
+  h2 { flex: 1; margin: 0; color: var(--ui-text); font-family: var(--ui-font-mono); font-size: 11.5px; font-weight: 700; line-height: 1.3; white-space: nowrap; }
+  .mini-readout { flex: none; color: var(--ui-muted); font-family: var(--ui-font-mono); font-size: 11px; }
+  .icon-btn, .close { display: grid; width: 22px; height: 22px; flex: none; padding: 0; place-items: center; border: 0; border-radius: var(--ui-radius-sm); background: transparent; color: var(--ui-muted); cursor: pointer; }
+  .close { margin-right: -4px; }
+  .icon-btn:hover, .close:hover { background: var(--ui-surface); color: var(--ui-text); }
+  .icon-btn:focus-visible, .close:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -1px; }
+  .icon-btn svg, .close svg { width: 11px; height: 11px; }
+  .mini-bar { height: 3px; overflow: hidden; background: var(--ui-border); border-radius: 0 0 var(--ui-radius-md) var(--ui-radius-md); }
+  .mini-bar i { display: block; height: 100%; border-radius: 999px; background: var(--ui-accent); transition: width 200ms; }
   .body { display: flex; padding: 10px 12px 11px; flex-direction: column; gap: 8px; }
   .bar { height: 3px; overflow: hidden; border-radius: 999px; background: var(--ui-border); }
   .bar i { display: block; height: 100%; border-radius: 999px; background: var(--ui-accent); transition: width 200ms; }
