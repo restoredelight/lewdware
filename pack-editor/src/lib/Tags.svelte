@@ -15,6 +15,7 @@
   import EmptyState from "$ui/EmptyState.svelte";
 
   let summaries = $state<TagSummary[]>([]);
+  let summariesLoaded = $state(false);
   let query = $state("");
   let editing = $state<string | null>(null);
   let mode = $state<"rename" | "merge">("rename");
@@ -35,6 +36,7 @@
   onMount(async () => {
     if (!store.behaviour) store.behaviour = await api.getBehaviour();
     summaries = await api.getTagSummaries();
+    summariesLoaded = true;
   });
 
   function begin(tag: string, nextMode: "rename" | "merge") {
@@ -150,7 +152,7 @@
 <div class="page">
   <header><div><h2>Tags</h2><p>Manage the vocabulary used across media, Content, and Experience.</p></div><Field label="Search tags" hideLabel value={query} placeholder="Search tags…" oninput={(next) => (query = next)} /></header>
   {#if error}<div class="error" role="alert">{error}<button onclick={() => (error = null)}>Dismiss</button></div>{/if}
-  {#if !store.behaviour}<p class="loading">Loading…</p>
+  {#if !store.behaviour || !summariesLoaded}<p class="loading">Loading…</p>
   {:else if rows.length === 0}
     <EmptyState
       title={query ? "No matching tags" : "No tags yet"}

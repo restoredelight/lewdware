@@ -12,6 +12,7 @@
   import EmptyState from "$ui/EmptyState.svelte";
 
   let summaries = $state<ArtistSummary[]>([]);
+  let loaded = $state(false);
   let query = $state("");
   let editing = $state<string | null>(null);
   let mode = $state<"rename" | "merge">("rename");
@@ -28,6 +29,7 @@
 
   onMount(async () => {
     summaries = await api.getArtistSummaries();
+    loaded = true;
   });
 
   function begin(artist: string, nextMode: "rename" | "merge") {
@@ -125,7 +127,8 @@
 <div class="page">
   <header><div><h2>Artists</h2><p>Manage attribution recorded across media.</p></div><Field label="Search artists" hideLabel value={query} placeholder="Search artists…" oninput={(next) => (query = next)} /></header>
   {#if error}<div class="error" role="alert">{error}<button onclick={() => (error = null)}>Dismiss</button></div>{/if}
-  {#if rows.length === 0}
+  {#if !loaded}<p class="loading">Loading…</p>
+  {:else if rows.length === 0}
     <EmptyState
       title={query ? "No matching artists" : "No artists yet"}
       description={query ? "No artists match this search. Clear it to see every artist in the pack." : "Artists are created when you tag media with attribution in the inspector."}
@@ -178,6 +181,7 @@
   .edit-actions { display: flex; gap: 6px; }
   .error { display: flex; margin-bottom: 12px; padding: 9px 11px; justify-content: space-between; border: 1px solid var(--ui-danger-border); border-radius: var(--ui-radius-sm); background: var(--ui-danger-bg); color: var(--ui-danger); font-size: 12px; }
   .error button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+  .loading { padding: 36px; border: 1px dashed var(--ui-border); border-radius: var(--ui-radius-md); color: var(--ui-muted); text-align: center; font-size: 13px; }
   @media (max-width: 950px) { .table-head, .artist-row { grid-template-columns: minmax(100px, 1fr) 48px; } .table-head span:last-child { display: none; } .row-actions { grid-column: 1 / -1; padding-bottom: 8px; justify-content: flex-start; } .edit-row { grid-template-columns: 1fr; } }
   @media (max-width: 620px) {
     .page { padding: 16px; }
