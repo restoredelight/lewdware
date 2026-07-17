@@ -5,7 +5,7 @@
   import Popover from "$ui/Popover.svelte";
   import Dialog from "$ui/Dialog.svelte";
   import { ArrowUturnLeft, ArrowUturnRight, ChevronLeft, ChevronRight, CodeBracketSquare, Cog6Tooth, DocumentText, EllipsisVertical, Icon, PaintBrush, Sparkles, Squares2x2, Tag } from "svelte-hero-icons";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { api } from "./api.js";
   import { store } from "./store.svelte.js";
@@ -26,13 +26,15 @@
   import { history } from "./history.svelte.js";
   import TaskStatus from "./TaskStatus.svelte";
   import { taskFeedback } from "./taskFeedback.svelte.js";
+  import type { MediaFile } from "./types.js";
   import EmptyState from "$ui/EmptyState.svelte";
 
-  let saving = $state(false);
   let saveError = $state<string | null>(null);
   let navCollapsed = $state(false);
   let narrowWindow = $state(false);
   let showClosePackDialog = $state(false);
+  let closePackAfterSave = $state(false);
+  let removingMedia = $state(false);
   let modifierLabel = $state("Ctrl");
   let packTitle = $state(store.packName);
   let packTitleInput = $state<HTMLInputElement>();
@@ -51,6 +53,13 @@
   $effect(() => {
     const name = store.packName;
     if (packTitleInput !== document.activeElement) packTitle = name;
+  });
+
+  $effect(() => {
+    if (!closePackAfterSave || store.saveActive) return;
+    closePackAfterSave = false;
+    if (store.packSaved) void finishClosePack();
+    else showClosePackDialog = true;
   });
 
   onMount(() => {
@@ -164,7 +173,7 @@
   }
 
   async function save() {
-    saving = true;
+    if (!store.beginSave()) return;
     saveError = null;
     if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
     else taskFeedback.progress("save", "Saving pack…");
@@ -175,19 +184,21 @@
       if (info) {
         store.packName = info.name;
         store.packHasDestination = info.has_destination;
-      } else taskFeedback.dismiss("save");
+      } else {
+        store.endSave();
+        taskFeedback.dismiss("save");
+      }
     } catch (err) {
       // The backend only emits save:done on success, so a failed save would
       // otherwise leave the "Saving… X/Y" progress bar stuck on screen forever.
-      store.saveActive = false;
       saveError = String(err);
       taskFeedback.error("save", `Save failed: ${saveError}`);
-    } finally {
-      saving = false;
+      store.endSave();
     }
   }
 
   async function saveAs() {
+    if (!store.beginSave()) return;
     saveError = null;
     if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
     else taskFeedback.progress("save", "Choosing save location…");
@@ -198,14 +209,19 @@
       if (info) {
         store.packName = info.name;
         store.packHasDestination = true;
-      } else taskFeedback.dismiss("save");
+      } else {
+        store.endSave();
+        taskFeedback.dismiss("save");
+      }
     } catch (err) {
       saveError = String(err);
       taskFeedback.error("save", `Save failed: ${saveError}`);
+      store.endSave();
     }
   }
 
   async function discard() {
+    if (store.saveActive) return;
     cancelMetadataSave();
     cancelBehaviourSave();
     const meta = await api.discardChanges();
@@ -235,23 +251,35 @@
   }
 
   async function requestClosePack() {
-    if (store.packSaved) await finishClosePack();
+    if (store.saveActive) {
+      closePackAfterSave = true;
+      taskFeedback.progress("save", "Finishing save before closing pack…", store.saveDone, store.saveTotal || null);
+    } else if (store.packSaved) await finishClosePack();
     else showClosePackDialog = true;
   }
 
   async function saveAndClosePack() {
     showClosePackDialog = false;
+    if (!store.beginSave()) {
+      closePackAfterSave = true;
+      return;
+    }
     saveError = null;
     try {
       await flushMetadataSave();
       await flushBehaviourSave();
       const info = await api.savePack();
-      if (!info) { taskFeedback.dismiss("save"); return; }
-      await finishClosePack();
+      if (!info) {
+        store.endSave();
+        taskFeedback.dismiss("save");
+        return;
+      }
+      if (info.has_unsaved_changes) showClosePackDialog = true;
+      else await finishClosePack();
     } catch (err) {
-      store.saveActive = false;
       saveError = String(err);
       taskFeedback.error("save", `Save failed: ${saveError}`);
+      store.endSave();
     }
   }
 
@@ -271,24 +299,38 @@
   }
 
   async function confirmMediaRemoval() {
+    if (removingMedia) return;
     const ids = store.pendingMediaRemoval;
     if (!ids.length) return;
-    const removed = store.files.filter((file) => ids.includes(file.id)).map((file) => structuredClone($state.snapshot(file)));
+    removingMedia = true;
+    await tick();
+    const idSet = new Set(ids);
+    const removed = store.files
+      .filter((file) => idSet.has(file.id))
+      .map((file) => $state.snapshot(file) as MediaFile);
     const activeIndex = store.gridActiveId == null ? -1 : store.filteredFiles.findIndex((file) => file.id === store.gridActiveId);
-    await api.removeFiles(ids);
-    store.cancelMediaRemoval();
-    store.removeFilesById(ids, true);
-    history.record({
-      label: removed.length === 1 ? `Remove “${removed[0].file_name}”` : `Remove ${removed.length} media items`,
-      storageBytes: removed.reduce((total, file) => total + file.size, 0),
-      undo: async () => { await api.restoreFiles(ids); store.restoreFiles(removed); },
-      redo: async () => { await api.removeFiles(ids); store.removeFilesById(ids, true); },
-      dispose: () => api.purgeHistoryFiles(ids),
-    });
-    const remaining = store.filteredFiles;
-    if (remaining.length > 0) {
-      const next = remaining[Math.min(Math.max(activeIndex, 0), remaining.length - 1)];
-      store.selectSingle(next.id);
+    taskFeedback.progress("media-removal", `Removing ${ids.length} media item${ids.length === 1 ? "" : "s"}…`);
+    try {
+      await api.removeFiles(ids);
+      store.cancelMediaRemoval();
+      store.removeFilesById(ids, true);
+      history.record({
+        label: removed.length === 1 ? `Remove “${removed[0].file_name}”` : `Remove ${removed.length} media items`,
+        storageBytes: removed.reduce((total, file) => total + file.size, 0),
+        undo: async () => { await api.restoreFiles(ids); store.restoreFiles(removed); },
+        redo: async () => { await api.removeFiles(ids); store.removeFilesById(ids, true); },
+        dispose: () => api.purgeHistoryFiles(ids),
+      });
+      const remaining = store.filteredFiles;
+      if (remaining.length > 0) {
+        const next = remaining[Math.min(Math.max(activeIndex, 0), remaining.length - 1)];
+        store.selectSingle(next.id);
+      }
+      taskFeedback.success("media-removal");
+    } catch (error) {
+      taskFeedback.error("media-removal", `Could not remove media: ${String(error)}`);
+    } finally {
+      removingMedia = false;
     }
   }
 
@@ -335,15 +377,15 @@
         <span class="w-4 h-4"><Icon src={ArrowUturnRight} mini /></span>
       </IconButton>
     </div>
-    <Button size="compact" variant="primary" onclick={save} disabled={store.packSaved} loading={saving} title={`Save (${modifierLabel}+S)`}>{saving ? "Saving…" : "Save"}</Button>
+    <Button size="compact" variant="primary" onclick={save} disabled={store.packSaved} loading={store.saveActive} title={`Save (${modifierLabel}+S)`}>{store.saveActive ? "Saving…" : "Save"}</Button>
     <Popover align="end" label="Pack actions">
       {#snippet trigger(toggle, open)}
         <button onclick={toggle} aria-label="More pack actions" aria-haspopup="menu" aria-expanded={open} class="w-8 h-8 grid place-items-center rounded text-muted hover:text-text hover:bg-surface-2"><Icon src={EllipsisVertical} mini size="16px" /></button>
       {/snippet}
       {#snippet children(close)}
         <div class="w-48 py-1">
-          <button role="menuitem" onclick={() => { close(); saveAs(); }} class="w-full flex items-center justify-between gap-3 text-left text-xs px-3 py-2 hover:bg-bg"><span>Save As…</span><kbd class="text-[10px] text-muted">{modifierLabel}+Shift+S</kbd></button>
-          {#if !store.packSaved && store.packHasDestination}<button role="menuitem" onclick={() => { close(); discard(); }} class="w-full text-left text-xs px-3 py-2 text-[var(--ui-warning)] hover:bg-bg">Discard changes</button>{/if}
+          <button role="menuitem" disabled={store.saveActive} onclick={() => { close(); saveAs(); }} class="w-full flex items-center justify-between gap-3 text-left text-xs px-3 py-2 hover:bg-bg disabled:opacity-40 disabled:cursor-not-allowed"><span>Save As…</span><kbd class="text-[10px] text-muted">{modifierLabel}+Shift+S</kbd></button>
+          {#if !store.packSaved && store.packHasDestination}<button role="menuitem" disabled={store.saveActive} onclick={() => { close(); discard(); }} class="w-full text-left text-xs px-3 py-2 text-[var(--ui-warning)] hover:bg-bg disabled:opacity-40 disabled:cursor-not-allowed">Discard changes</button>{/if}
           <div class="border-t border-border my-1"></div>
           <button role="menuitem" onclick={() => { close(); requestClosePack(); }} class="w-full text-left text-xs px-3 py-2 text-[var(--ui-danger)] hover:bg-[var(--ui-danger-bg)]">Close pack</button>
         </div>
@@ -456,10 +498,10 @@
       ? `“${removalFile?.file_name ?? "This item"}” will be removed from this pack. The original file on your computer will not be deleted.`
       : `These ${removalCount} media items will be removed from this pack. The original files on your computer will not be deleted.`}
     buttons={[
-      { label: "Cancel", onclick: () => store.cancelMediaRemoval() },
-      { label: removalCount === 1 ? "Remove item" : `Remove ${removalCount} items`, destructive: true, onclick: confirmMediaRemoval },
+      { label: "Cancel", disabled: removingMedia, onclick: () => store.cancelMediaRemoval() },
+      { label: removingMedia ? "Removing…" : removalCount === 1 ? "Remove item" : `Remove ${removalCount} items`, destructive: true, loading: removingMedia, onclick: confirmMediaRemoval },
     ]}
-    onclose={() => store.cancelMediaRemoval()}
+    onclose={removingMedia ? undefined : () => store.cancelMediaRemoval()}
   />
 {/if}
 

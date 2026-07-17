@@ -561,13 +561,19 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
     let _write_guard = state.upload_lock.write().await;
     let pack = state.pack.lock().await.as_ref().cloned();
     if let Some(pack) = pack {
-        let app_cb = app.clone();
-        pack.save(move |saved, t| {
-            let _ = app_cb.emit(
-                "save:progress",
-                serde_json::json!({ "saved": saved, "total": t }),
-            );
-        })
+        let progress_app = app.clone();
+        let fallback_app = app.clone();
+        pack.save_with_in_place_notification(
+            move |saved, t| {
+                let _ = progress_app.emit(
+                    "save:progress",
+                    serde_json::json!({ "saved": saved, "total": t }),
+                );
+            },
+            move || {
+                let _ = fallback_app.emit("save:in-place", ());
+            },
+        )
         .await
         .map_err(|e| e.to_string())?;
         if let Some(path) = pack.path() {

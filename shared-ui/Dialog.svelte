@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import Button from "./Button.svelte";
 
-  export type DialogButton = { label: string; primary?: boolean; destructive?: boolean; onclick: () => void };
+  export type DialogButton = { label: string; primary?: boolean; destructive?: boolean; disabled?: boolean; loading?: boolean; onclick: () => void };
   type Props = { title: string; description: string; buttons: DialogButton[]; onclose?: () => void };
   let { title, description, buttons, onclose }: Props = $props();
   let panel: HTMLDivElement;
@@ -51,7 +51,7 @@
       <div class="actions">
         {#each buttons as action}
           <span>
-            <Button size="compact" variant={action.destructive ? "destructive" : action.primary ? "primary" : "secondary"} onclick={action.onclick}>{action.label}</Button>
+            <Button size="compact" variant={action.destructive ? "destructive" : action.primary ? "primary" : "secondary"} disabled={action.disabled} loading={action.loading} onclick={action.onclick}>{action.label}</Button>
           </span>
         {/each}
       </div>

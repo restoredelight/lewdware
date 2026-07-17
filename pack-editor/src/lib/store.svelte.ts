@@ -130,8 +130,23 @@ class AppStore {
 
   // Save
   saveActive = $state(false);
+  saveBlocksPreviews = $state(false);
   saveDone = $state(0);
   saveTotal = $state(0);
+
+  beginSave() {
+    if (this.saveActive) return false;
+    this.saveActive = true;
+    this.saveBlocksPreviews = false;
+    this.saveDone = 0;
+    this.saveTotal = 0;
+    return true;
+  }
+
+  endSave() {
+    this.saveActive = false;
+    this.saveBlocksPreviews = false;
+  }
 
   // Options form state
   metadata = $state<MetadataDto | null>(null);
@@ -199,7 +214,8 @@ class AppStore {
   }
 
   requestMediaRemoval(ids = [...this.selectedIds]) {
-    this.pendingMediaRemoval = ids.filter((id) => this.files.some((file) => file.id === id));
+    const available = new Set(this.files.map((file) => file.id));
+    this.pendingMediaRemoval = ids.filter((id) => available.has(id));
   }
 
   cancelMediaRemoval() { this.pendingMediaRemoval = []; }
@@ -216,6 +232,7 @@ class AppStore {
     this.packSaved = saved;
     this.untrackedDirty = !saved;
     this.packHasDestination = hasDestination;
+    this.endSave();
     this.metadataBackupPending = false;
     this.behaviourBackupPending = false;
     this.recoveryError = null;
@@ -243,6 +260,7 @@ class AppStore {
     this.packName = "";
     this.markPackSaved();
     this.packHasDestination = false;
+    this.endSave();
     this.pendingMediaRemoval = [];
     this.files = [];
     this.allTags = [];

@@ -1,21 +1,25 @@
 use std::{
     fs::{self, create_dir_all},
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc, Condvar, Mutex, OnceLock, RwLock as StdRwLock, Weak,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex, OnceLock, RwLock as StdRwLock, Weak,
     },
     thread::{available_parallelism, sleep},
     time::Duration,
 };
 
 use anyhow::{anyhow, bail, Result};
-use r2d2::{Pool, PooledConnection};
+use r2d2::{ManageConnection, Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{
     backup::{Backup, StepResult},
-    named_params, params, params_from_iter, OpenFlags, OptionalExtension,
+    named_params, params,
+    types::Value,
+    vtab::array::{self, Array},
+    OpenFlags, OptionalExtension,
 };
 use serde::{Deserialize, Serialize};
 use shared::{
@@ -231,7 +235,6 @@ pub struct MediaPackView {
     archive_io: Arc<RwLock<()>>,
     dir: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
-    _thread_pool: Arc<rayon::ThreadPool>,
 }
 
 struct SaveSnapshot {
@@ -243,6 +246,11 @@ struct SaveSnapshot {
     _staging: tempfile::TempDir,
 }
 
+struct PreparedGeneration {
+    file: tempfile::NamedTempFile,
+    header: Header,
+}
+
 #[derive(Debug)]
 pub struct MediaData {
     pub id: i64,
@@ -250,15 +258,12 @@ pub struct MediaData {
     pub length: u64,
 }
 
-/// A single already-embedded file that needs to move from `source_offset` (its
-/// still-valid position from the last save) to `dest_offset` (its new, compacted
-/// position), both within the same pack file.
 #[derive(Debug)]
-struct ShiftJob {
-    id: i64,
+struct CopyRun {
     source_offset: u64,
     dest_offset: u64,
     length: u64,
+    files: usize,
 }
 
 /// A newly-staged file (still a loose file under `dir/media/`) that needs
@@ -272,77 +277,6 @@ struct NewFileJob {
     full_path: PathBuf,
     dest_offset: u64,
     expected_length: u64,
-}
-
-/// The write requested by a single completed copy job. Sent to the dedicated DB
-/// writer thread rather than executed by the worker itself, so all writes for a
-/// save go through one connection with zero contention.
-enum DbUpdateKind {
-    Shift { id: i64, offset: u64 },
-    NewFile { id: i64, offset: u64, length: u64 },
-    DropMissing { id: i64 },
-}
-
-struct DbUpdateRequest {
-    kind: DbUpdateKind,
-    ack: std::sync::mpsc::Sender<Result<()>>,
-}
-
-/// Runs on a single dedicated thread for the duration of one `write_files` call,
-/// draining update requests from parallel copy workers and applying them one at a
-/// time - so those workers never contend with each other for SQLite's single
-/// write lock. Exits once `rx` is closed (all senders dropped) and everything
-/// already sent has been drained.
-fn run_db_writer(
-    conn: PooledConnection<SqliteConnectionManager>,
-    rx: std::sync::mpsc::Receiver<DbUpdateRequest>,
-    loose_files: Option<LooseFileRegistry>,
-) {
-    while let Ok(req) = rx.recv() {
-        let result = (|| -> Result<()> {
-            match req.kind {
-                DbUpdateKind::Shift { id, offset } => {
-                    conn.execute(
-                        "UPDATE media SET offset = ? WHERE id = ?",
-                        params![offset, id],
-                    )?;
-                }
-                DbUpdateKind::NewFile { id, offset, length } => {
-                    conn.execute(
-                        "UPDATE media SET offset = ?, length = ?, path = NULL WHERE id = ?",
-                        params![offset, length, id],
-                    )?;
-                    if let Some(loose_files) = &loose_files {
-                        loose_files.release_live(id as u64);
-                    }
-                }
-                DbUpdateKind::DropMissing { id } => {
-                    conn.execute("DELETE FROM media WHERE id = ?", params![id])?;
-                }
-            }
-            Ok(())
-        })();
-        // The requester always waits for this ack, so a send failure here would
-        // only mean it gave up some other way (e.g. panicked) - nothing to do.
-        let _ = req.ack.send(result);
-    }
-}
-
-/// Sends one update to the DB writer thread and blocks until it's been applied
-/// and acknowledged - so callers only consider a file "done" once its row is
-/// actually durable, matching the immediate-per-file write the sequential code
-/// used to do directly.
-fn send_db_update(
-    db_tx: &std::sync::mpsc::Sender<DbUpdateRequest>,
-    kind: DbUpdateKind,
-) -> Result<()> {
-    let (ack_tx, ack_rx) = std::sync::mpsc::channel();
-    db_tx
-        .send(DbUpdateRequest { kind, ack: ack_tx })
-        .map_err(|_| anyhow!("db writer thread is gone"))?;
-    ack_rx
-        .recv()
-        .map_err(|_| anyhow!("db writer thread is gone"))?
 }
 
 pub enum FileData {
@@ -382,7 +316,7 @@ impl MediaPack {
         if !db_path.is_file() {
             bail!("draft database is missing");
         }
-        let manager = SqliteConnectionManager::file(&db_path);
+        let manager = sqlite_connection_manager(&db_path);
         let db_pool = Pool::builder().build(manager)?;
         let pool = db_pool.clone();
         spawn_blocking(move || -> Result<_> {
@@ -457,7 +391,7 @@ impl MediaPack {
             .await?;
 
         let db_path = dir.join("index.db");
-        let manager = SqliteConnectionManager::file(&db_path);
+        let manager = sqlite_connection_manager(&db_path);
         let db_pool = Pool::builder().build(manager)?;
 
         let pool = db_pool.clone();
@@ -564,7 +498,7 @@ impl MediaPack {
             db_file.flush().await?;
         }
 
-        let manager = SqliteConnectionManager::file(&db_path);
+        let manager = sqlite_connection_manager(&db_path);
         // Sized to comfortably cover the parallel-copy worker count in write_files,
         // so workers grabbing a connection to record their offset never queue on
         // the pool itself (they may still briefly serialize on SQLite's own write
@@ -605,17 +539,11 @@ impl MediaPack {
     }
 
     pub fn get_view(&self) -> Result<MediaPackView> {
-        let threads = (available_parallelism()?.get() / 2).max(1);
         Ok(MediaPackView {
             path: self.path.clone(),
             archive_io: self.archive_io.clone(),
             dir: self.dir.clone(),
             db_pool: self.db_pool.clone(),
-            _thread_pool: Arc::new(
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(threads)
-                    .build()?,
-            ),
         })
     }
 
@@ -792,13 +720,6 @@ impl MediaPack {
         OpenOptions::new().read(true).open(path).await
     }
 
-    async fn open_write(&self) -> io::Result<File> {
-        let path = self.path.as_ref().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "pack has not been saved yet")
-        })?;
-        OpenOptions::new().write(true).open(path).await
-    }
-
     async fn create_save_snapshot(&self) -> Result<SaveSnapshot> {
         let staging = tempfile::Builder::new()
             .prefix("pack-editor-save-")
@@ -863,7 +784,7 @@ impl MediaPack {
         })
         .await??;
 
-        let db_pool = Pool::builder().build(SqliteConnectionManager::file(&db_path))?;
+        let db_pool = Pool::builder().build(sqlite_connection_manager(&db_path))?;
         Ok(SaveSnapshot {
             revision,
             metadata,
@@ -913,9 +834,133 @@ impl MediaPack {
         Ok(self.revision.load(Ordering::SeqCst) == snapshot.revision)
     }
 
+    async fn write_snapshot_tail(
+        &self,
+        snapshot: &SaveSnapshot,
+        archive_path: &Path,
+        offset: u64,
+    ) -> Result<Header> {
+        let snapshot_pool = snapshot.db_pool.clone();
+        spawn_blocking(move || -> Result<()> {
+            snapshot_pool.get()?.execute("VACUUM", [])?;
+            Ok(())
+        })
+        .await??;
+
+        let mut file = OpenOptions::new().write(true).open(archive_path).await?;
+        file.seek(SeekFrom::Start(offset)).await?;
+        let index_length = {
+            let mut dbf = File::open(&snapshot.db_path).await?;
+            tokio::io::copy(&mut dbf, &mut file).await?
+        };
+        let metadata = snapshot.metadata.to_buf()?;
+        let metadata_length = metadata.len() as u64;
+        file.write_all(&metadata).await?;
+        file.set_len(offset + index_length + metadata_length)
+            .await?;
+
+        let header = Header {
+            id: self.header.read().unwrap().id,
+            index_offset: offset,
+            index_length,
+            metadata_offset: offset + index_length,
+            metadata_length,
+        };
+        file.seek(SeekFrom::Start(0)).await?;
+        file.write_all(&header.to_buf()?).await?;
+        file.sync_data().await?;
+        Ok(header)
+    }
+
+    async fn prepare_generation(
+        &self,
+        snapshot: &SaveSnapshot,
+        on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
+    ) -> Result<PreparedGeneration> {
+        let source = self
+            .path
+            .as_ref()
+            .ok_or_else(|| anyhow!("pack has not been assigned a save location"))?
+            .clone();
+        let source_for_clone = source.clone();
+        let generation = spawn_blocking(move || clone_archive(&source_for_clone)).await??;
+        let generation_path = generation.path().to_path_buf();
+        let offset = self
+            .write_files_from(
+                snapshot.db_pool.clone(),
+                None,
+                Some(generation_path.clone()),
+                true,
+                on_progress,
+            )
+            .await?;
+        let header = self
+            .write_snapshot_tail(snapshot, &generation_path, offset)
+            .await?;
+        Ok(PreparedGeneration {
+            file: generation,
+            header,
+        })
+    }
+
+    async fn commit_generation(
+        &self,
+        snapshot: &SaveSnapshot,
+        generation: PreparedGeneration,
+    ) -> Result<()> {
+        let _archive_guard = self.archive_io.write().await;
+        let target = self.path.clone().unwrap();
+        spawn_blocking(move || -> Result<()> {
+            let persisted = generation
+                .file
+                .persist(&target)
+                .map_err(|error| error.error)?;
+            persisted.sync_all()?;
+            sync_parent_directory(&target)?;
+            Ok(())
+        })
+        .await??;
+        *self.header.write().unwrap() = generation.header;
+
+        let _mutation_guard = self.saving.write().await;
+        if self.reconcile_save_snapshot(snapshot).await? {
+            self.mark_saved().await?;
+        }
+        Ok(())
+    }
+
+    async fn save_in_place(
+        &self,
+        snapshot: &SaveSnapshot,
+        on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
+    ) -> Result<()> {
+        let _archive_guard = self.archive_io.write().await;
+        let offset = self
+            .write_files_from(snapshot.db_pool.clone(), None, None, false, on_progress)
+            .await?;
+        let path = self.path.as_ref().unwrap();
+        let header = self.write_snapshot_tail(snapshot, path, offset).await?;
+        *self.header.write().unwrap() = header;
+
+        let _mutation_guard = self.saving.write().await;
+        if self.reconcile_save_snapshot(snapshot).await? {
+            self.mark_saved().await?;
+        }
+        Ok(())
+    }
+
     pub async fn save(
         &self,
         on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
+    ) -> Result<()> {
+        self.save_with_in_place_notification(on_progress, || {})
+            .await
+    }
+
+    pub async fn save_with_in_place_notification(
+        &self,
+        on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
+        on_in_place: impl FnOnce() + Send + 'static,
     ) -> Result<()> {
         if self.path.is_none() {
             bail!("pack has not been assigned a save location");
@@ -928,55 +973,21 @@ impl MediaPack {
         if self.saved.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let snapshot = self.create_save_snapshot().await?;
-        let _archive_guard = self.archive_io.write().await;
         let on_progress = Arc::new(on_progress);
-
-        tracing::warn!("Writing files");
-
-        let offset = self
-            .write_files_from(snapshot.db_pool.clone(), None, None, on_progress)
-            .await?;
-
-        tracing::warn!("Finished writing files");
-
-        let snapshot_pool = snapshot.db_pool.clone();
-        spawn_blocking(move || -> Result<()> {
-            snapshot_pool.get()?.execute("VACUUM", [])?;
-            Ok(())
-        })
-        .await??;
-
-        let mut file = self.open_write().await?;
-        file.seek(SeekFrom::Start(offset)).await?;
-
-        let index_length = {
-            let mut dbf = File::open(&snapshot.db_path).await?;
-            tokio::io::copy(&mut dbf, &mut file).await?
-        };
-
-        let buf = snapshot.metadata.to_buf()?;
-        let metadata_length = buf.len() as u64;
-        file.write_all(&buf).await?;
-        file.set_len(offset + metadata_length + index_length)
-            .await?;
-
-        let header = Header {
-            id: self.header.read().unwrap().id,
-            index_offset: offset,
-            index_length,
-            metadata_offset: offset + index_length,
-            metadata_length,
-        };
-
-        file.seek(SeekFrom::Start(0)).await?;
-        file.write_all(&header.to_buf()?).await?;
-        *self.header.write().unwrap() = header;
-        file.sync_data().await?;
-
-        let _mutation_guard = self.saving.write().await;
-        if self.reconcile_save_snapshot(&snapshot).await? {
-            self.mark_saved().await?;
+        let snapshot = self.create_save_snapshot().await?;
+        match self
+            .prepare_generation(&snapshot, on_progress.clone())
+            .await
+        {
+            Ok(generation) => self.commit_generation(&snapshot, generation).await?,
+            Err(error) if is_storage_full(&error) => {
+                tracing::warn!("generation save ran out of space; falling back in place");
+                on_in_place();
+                drop(snapshot);
+                let snapshot = self.create_save_snapshot().await?;
+                self.save_in_place(&snapshot, on_progress).await?;
+            }
+            Err(error) => return Err(error),
         }
         Ok(())
     }
@@ -990,6 +1001,7 @@ impl MediaPack {
             self.db_pool.clone(),
             Some(self.loose_files.clone()),
             to_path,
+            false,
             on_progress,
         )
         .await
@@ -1000,256 +1012,145 @@ impl MediaPack {
         db_pool: Pool<SqliteConnectionManager>,
         loose_files: Option<LooseFileRegistry>,
         to_path: Option<PathBuf>,
+        destination_is_clone: bool,
         on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
     ) -> Result<u64> {
         let dir = self.dir.clone();
         let path = self.path.clone();
-        let worker_pool = db_pool.clone();
-
-        spawn_blocking(move || {
-            let conn = db_pool.get()?;
+        spawn_blocking(move || -> Result<u64> {
+            let mut conn = db_pool.get()?;
             let out_path = to_path
                 .clone()
                 .or_else(|| path.clone())
                 .ok_or_else(|| anyhow!("pack has not been assigned a save location"))?;
-
-            let mut num_files: usize =
-                conn.query_row_and_then("SELECT COUNT(*) as files FROM media", params![], |row| {
-                    row.get("files")
-                })?;
-
-            let mut offset = HEADER_SIZE as u64;
-
-            let mut get_stmt = conn.prepare(
-                "SELECT id, offset, length FROM media WHERE offset IS NOT NULL ORDER BY offset",
-            )?;
-
-            let mut media = get_stmt
-                .query_map(params![], |row| {
-                    Ok(MediaData {
-                        id: row.get("id")?,
-                        offset: row.get("offset")?,
-                        length: row.get("length")?,
-                    })
-                })?
-                .peekable();
-
-            if to_path.is_none() {
-                while media
-                    .next_if(|x| {
-                        x.as_ref().is_ok_and(|d| {
-                            if d.offset == offset {
-                                offset += d.length;
-                                true
-                            } else {
-                                false
-                            }
+            let embedded = {
+                let mut statement = conn.prepare(
+                    "SELECT id, offset, length FROM media WHERE offset IS NOT NULL ORDER BY offset",
+                )?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok(MediaData {
+                            id: row.get("id")?,
+                            offset: row.get("offset")?,
+                            length: row.get("length")?,
                         })
-                    })
-                    .is_some()
-                {
-                    num_files -= 1;
-                }
-            }
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            };
 
-            // Shared across both phases below: on_progress's denominator, which can
-            // still shrink in the second phase if a staged file turns out to be
-            // missing on disk.
-            let num_files = AtomicUsize::new(num_files);
-
-            // Precompute each remaining file's compacted destination alongside its
-            // still-valid original (source) range, before moving any bytes. This is
-            // pure arithmetic over DB rows - no file I/O yet.
-            let mut jobs = Vec::new();
-            for media_result in media {
-                let media_data = media_result?;
-                jobs.push(ShiftJob {
-                    id: media_data.id,
-                    source_offset: media_data.offset,
-                    dest_offset: offset,
-                    length: media_data.length,
-                });
-                offset += media_data.length;
-            }
-
-            // All DB writes for both phases below go through a single dedicated
-            // writer thread instead of each worker grabbing its own pooled
-            // connection. SQLite only ever allows one writer at a time regardless,
-            // so N workers racing for that lock via busy-timeout retries doesn't
-            // buy any real parallelism - it only adds contention, and under
-            // sustained load from thousands of rapid small writes that contention
-            // can genuinely exceed the busy_timeout and surface as "database is
-            // locked". A single writer has zero contention by construction. Workers
-            // still wait for an ack before considering their file done, so a file
-            // is never reported/removed until its DB row is actually durable -
-            // same per-file crash-safety guarantee as before, just funneled through
-            // one thread instead of one connection per worker.
-            let (db_tx, db_rx) = std::sync::mpsc::channel::<DbUpdateRequest>();
-            let writer_conn = worker_pool.get()?;
-            let writer_loose_files = loose_files.clone();
-            let writer_handle =
-                std::thread::spawn(move || run_db_writer(writer_conn, db_rx, writer_loose_files));
-
-            let result: Result<()> = (|| {
-                // Run the shifts in parallel. For an in-place save, `path` and
-                // `out_path` are the same file, so a job's write can only start once
-                // no other in-flight job still needs to read from the range it's
-                // about to overwrite - `in_flight` + `cvar` gate that. Checking
-                // against actual in-flight jobs (rather than a precomputed "depends
-                // on job N" shortcut) is deliberate: the safe set of predecessors a
-                // job depends on isn't always just its immediate predecessor, so
-                // anything less than a live check risks a job overwriting data
-                // another job hasn't read yet.
-                //
-                // Registration into `in_flight` happens here, on this single
-                // coordinating thread, strictly in job order, *before* the job is
-                // handed to a worker - not inside the worker itself. rayon's
-                // work-stealing scheduler doesn't run spawned tasks in submission
-                // order, so if each worker registered itself only once it actually
-                // started, a later job could start (and see an empty/incomplete
-                // `in_flight`) before an earlier job it truly conflicts with had
-                // even begun. Registering on the coordinator, in order, guarantees
-                // that by the time job j is considered, every earlier job is
-                // already accounted for in `in_flight` (still running) or has
-                // already been removed from it (its read completed).
-                let saved_count = AtomicUsize::new(0);
-                let in_flight: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
-                let cvar = Condvar::new();
-                let errors: Mutex<Vec<anyhow::Error>> = Mutex::new(Vec::new());
-
-                rayon::scope(|scope| {
-                    for job in &jobs {
-                        {
-                            let mut guard = in_flight.lock().unwrap();
-                            loop {
-                                let overlap = guard.iter().any(|&(src_off, src_len)| {
-                                    job.dest_offset < src_off + src_len
-                                        && job.dest_offset + job.length > src_off
-                                });
-                                if !overlap {
-                                    guard.push((job.source_offset, job.length));
-                                    break;
-                                }
-                                guard = cvar.wait(guard).unwrap();
-                            }
-                        }
-
-                        let path = path
-                            .as_ref()
-                            .expect("embedded media requires a source pack");
-                        let out_path = &out_path;
-                        let in_flight = &in_flight;
-                        let cvar = &cvar;
-                        let db_tx = &db_tx;
-                        let saved_count = &saved_count;
-                        let on_progress = &on_progress;
-                        let errors = &errors;
-                        let num_files = &num_files;
-                        scope.spawn(move |_| {
-                            match copy_shift_job(job, path, out_path, in_flight, cvar, db_tx) {
-                                Ok(()) => {
-                                    let n = saved_count.fetch_add(1, Ordering::SeqCst) + 1;
-                                    on_progress(n, num_files.load(Ordering::SeqCst));
-                                }
-                                Err(err) => errors.lock().unwrap().push(err),
-                            }
+            let copy_every_embedded_file = to_path.is_some() && !destination_is_clone;
+            let mut offset = HEADER_SIZE as u64;
+            let mut embedded_offsets = Vec::with_capacity(embedded.len());
+            let mut runs: Vec<CopyRun> = Vec::new();
+            for media in embedded {
+                let destination = offset;
+                embedded_offsets.push((media.id, destination));
+                if copy_every_embedded_file || media.offset != destination {
+                    if let Some(run) = runs.last_mut().filter(|run| {
+                        run.source_offset + run.length == media.offset
+                            && run.dest_offset + run.length == destination
+                    }) {
+                        run.length += media.length;
+                        run.files += 1;
+                    } else {
+                        runs.push(CopyRun {
+                            source_offset: media.offset,
+                            dest_offset: destination,
+                            length: media.length,
+                            files: 1,
                         });
                     }
-                });
-
-                if let Some(err) = errors.into_inner().unwrap().into_iter().next() {
-                    return Err(err);
                 }
+                offset += media.length;
+            }
 
-                // Newly-staged files: unlike the shift jobs above, these each read
-                // from their own separate loose file under dir/media/, so there's no
-                // self-overlap risk at all and no in-flight gating is needed - only
-                // the destination ranges need to stay disjoint, which the
-                // precomputed cumulative offsets below already guarantee.
-                let mut get_stmt =
+            let staged = {
+                let mut statement =
                     conn.prepare("SELECT id, path, length FROM media WHERE path IS NOT NULL")?;
-                let media = get_stmt.query_map(params![], |row| {
-                    Ok((
-                        row.get::<_, i64>("id")?,
-                        row.get::<_, String>("path")?,
-                        row.get::<_, Option<u64>>("length")?,
-                    ))
-                })?;
-
-                let mut new_jobs = Vec::new();
-                for media_result in media {
-                    let (id, media_path, length) = media_result?;
-                    let full_path = dir.join("media").join(&media_path);
-                    // Older staged files from before file size was recorded at
-                    // upload time won't have a `length` yet - fall back to a stat.
-                    let expected_length = match length {
-                        Some(l) => l,
-                        None => fs::metadata(&full_path)?.len(),
-                    };
-                    new_jobs.push(NewFileJob {
-                        id,
-                        full_path,
-                        dest_offset: offset,
-                        expected_length,
-                    });
-                    offset += expected_length;
-                }
-
-                // Pre-size the file to its final length in one call, rather than
-                // letting each parallel write extend it individually - avoids the
-                // (brief, but serializing) inode-extension locking every OS does for
-                // writes that grow a file, and keeps every write below the same kind
-                // of "write into an already-sized region" operation as the shifts
-                // above.
-                fs::OpenOptions::new()
-                    .write(true)
-                    .open(&out_path)?
-                    .set_len(offset)?;
-
-                let saved_count = AtomicUsize::new(0);
-                let errors: Mutex<Vec<anyhow::Error>> = Mutex::new(Vec::new());
-
-                rayon::scope(|scope| {
-                    for job in &new_jobs {
-                        let out_path = &out_path;
-                        let db_tx = &db_tx;
-                        let saved_count = &saved_count;
-                        let on_progress = &on_progress;
-                        let errors = &errors;
-                        let num_files = &num_files;
-                        scope.spawn(move |_| {
-                            match copy_new_file_job(job, out_path, db_tx) {
-                                Ok(true) => {
-                                    let n = saved_count.fetch_add(1, Ordering::SeqCst) + 1;
-                                    on_progress(n, num_files.load(Ordering::SeqCst));
-                                }
-                                Ok(false) => {
-                                    // Staged file was missing; already dropped from
-                                    // the DB and the progress denominator.
-                                    num_files.fetch_sub(1, Ordering::SeqCst);
-                                }
-                                Err(err) => errors.lock().unwrap().push(err),
-                            }
-                        });
-                    }
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, i64>("id")?,
+                            row.get::<_, String>("path")?,
+                            row.get::<_, Option<u64>>("length")?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            };
+            let mut new_jobs = Vec::with_capacity(staged.len());
+            for (id, media_path, length) in staged {
+                let full_path = dir.join("media").join(media_path);
+                let expected_length = match length {
+                    Some(length) => length,
+                    None => fs::metadata(&full_path)?.len(),
+                };
+                new_jobs.push(NewFileJob {
+                    id,
+                    full_path,
+                    dest_offset: offset,
+                    expected_length,
                 });
-
-                if let Some(err) = errors.into_inner().unwrap().into_iter().next() {
-                    return Err(err);
-                }
-
-                Ok(())
-            })();
-
-            // Closing the channel (by dropping the sender) lets the writer thread's
-            // recv loop end once it's drained everything already sent; join it
-            // before returning either way so we never leave it running detached.
-            drop(db_tx);
-            if writer_handle.join().is_err() {
-                tracing::error!("db writer thread panicked");
+                offset += expected_length;
             }
 
-            result?;
+            let total = runs.iter().map(|run| run.files).sum::<usize>() + new_jobs.len();
+            let mut completed = 0;
+            let mut buffer = vec![0; 4 * 1024 * 1024];
+            if !runs.is_empty() {
+                let source_path = path
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("embedded media requires a source pack"))?;
+                let mut source = fs::File::open(source_path)?;
+                let mut destination = fs::OpenOptions::new().write(true).open(&out_path)?;
+                for run in &runs {
+                    copy_range_forward(&mut source, &mut destination, run, &mut buffer)?;
+                    completed += run.files;
+                    on_progress(completed, total);
+                }
+            }
+
+            let mut destination = fs::OpenOptions::new().write(true).open(&out_path)?;
+            destination.set_len(offset)?;
+            for job in &new_jobs {
+                let source = fs::File::open(&job.full_path).map_err(|error| {
+                    anyhow!(
+                        "could not open staged media {}: {error}",
+                        job.full_path.display()
+                    )
+                })?;
+                destination.seek(SeekFrom::Start(job.dest_offset))?;
+                let copied = io::copy(&mut source.take(job.expected_length), &mut destination)?;
+                if copied != job.expected_length {
+                    bail!(
+                        "staged media changed size while saving: {}",
+                        job.full_path.display()
+                    );
+                }
+                completed += 1;
+                on_progress(completed, total);
+            }
+
+            let tx = conn.transaction()?;
+            for (id, destination) in embedded_offsets {
+                tx.execute(
+                    "UPDATE media SET offset = ? WHERE id = ?",
+                    params![destination, id],
+                )?;
+            }
+            for job in &new_jobs {
+                tx.execute(
+                    "UPDATE media SET offset = ?, length = ?, path = NULL WHERE id = ?",
+                    params![job.dest_offset, job.expected_length, job.id],
+                )?;
+            }
+            tx.commit()?;
+            if let Some(loose_files) = loose_files {
+                for job in &new_jobs {
+                    loose_files.release_live(job.id as u64);
+                }
+            }
             Ok(offset)
         })
         .await?
@@ -1541,12 +1442,31 @@ impl MediaPack {
             conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
             conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
             let result = (|| -> Result<()> {
+                let selected = media_id_array(&db_ids)?;
                 let tx = conn.transaction()?;
-                let vars = repeat_vars(db_ids.len());
-                tx.execute(&format!("INSERT OR REPLACE INTO undo_history.media SELECT * FROM main.media WHERE id IN ({vars})"), params_from_iter(&db_ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_tags SELECT mt.media_id, t.name FROM main.media_tags mt JOIN main.tags t ON t.id = mt.tag_id WHERE mt.media_id IN ({vars})"), params_from_iter(&db_ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_artists SELECT ma.media_id, a.name FROM main.media_artists ma JOIN main.artists a ON a.id = ma.artist_id WHERE ma.media_id IN ({vars})"), params_from_iter(&db_ids))?;
-                tx.execute(&format!("DELETE FROM main.media WHERE id IN ({vars})"), params_from_iter(&db_ids))?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO undo_history.media
+                         SELECT m.* FROM main.media m JOIN rarray(?) s ON s.value = m.id",
+                    params![&selected],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO undo_history.media_tags
+                         SELECT mt.media_id, t.name FROM main.media_tags mt
+                         JOIN rarray(?) s ON s.value = mt.media_id
+                         JOIN main.tags t ON t.id = mt.tag_id",
+                    params![&selected],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO undo_history.media_artists
+                         SELECT ma.media_id, a.name FROM main.media_artists ma
+                         JOIN rarray(?) s ON s.value = ma.media_id
+                         JOIN main.artists a ON a.id = ma.artist_id",
+                    params![&selected],
+                )?;
+                tx.execute(
+                    "DELETE FROM main.media WHERE id IN (SELECT value FROM rarray(?))",
+                    params![&selected],
+                )?;
                 tx.commit()?;
                 Ok(())
             })();
@@ -1570,20 +1490,50 @@ impl MediaPack {
             conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
             conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
             let result = (|| -> Result<()> {
+                let selected = media_id_array(&db_ids)?;
                 let tx = conn.transaction()?;
-                let vars = repeat_vars(db_ids.len());
-                tx.execute(&format!("INSERT OR REPLACE INTO main.media SELECT * FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&db_ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.tags (name) SELECT DISTINCT tag FROM undo_history.media_tags WHERE media_id IN ({vars})"), params_from_iter(&db_ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.media_tags SELECT h.media_id, t.id FROM undo_history.media_tags h JOIN main.tags t ON t.name = h.tag WHERE h.media_id IN ({vars})"), params_from_iter(&db_ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.artists (name) SELECT DISTINCT artist FROM undo_history.media_artists WHERE media_id IN ({vars})"), params_from_iter(&db_ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.media_artists SELECT h.media_id, a.id FROM undo_history.media_artists h JOIN main.artists a ON a.name = h.artist WHERE h.media_id IN ({vars})"), params_from_iter(&db_ids))?;
-                tx.execute(&format!("DELETE FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&db_ids))?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO main.media
+                         SELECT m.* FROM undo_history.media m JOIN rarray(?) s ON s.value = m.id",
+                    params![&selected],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO main.tags (name)
+                         SELECT DISTINCT h.tag FROM undo_history.media_tags h
+                         JOIN rarray(?) s ON s.value = h.media_id",
+                    params![&selected],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO main.media_tags
+                         SELECT h.media_id, t.id FROM undo_history.media_tags h
+                         JOIN rarray(?) s ON s.value = h.media_id
+                         JOIN main.tags t ON t.name = h.tag",
+                    params![&selected],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO main.artists (name)
+                         SELECT DISTINCT h.artist FROM undo_history.media_artists h
+                         JOIN rarray(?) s ON s.value = h.media_id",
+                    params![&selected],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO main.media_artists
+                         SELECT h.media_id, a.id FROM undo_history.media_artists h
+                         JOIN rarray(?) s ON s.value = h.media_id
+                         JOIN main.artists a ON a.name = h.artist",
+                    params![&selected],
+                )?;
+                tx.execute(
+                    "DELETE FROM undo_history.media WHERE id IN (SELECT value FROM rarray(?))",
+                    params![&selected],
+                )?;
                 tx.commit()?;
                 Ok(())
             })();
             let _ = conn.execute("DETACH DATABASE undo_history", []);
             result
-        }).await?;
+        })
+        .await?;
         self.loose_files.move_to_live(&ids);
         self.mark_unsaved().await
     }
@@ -1599,32 +1549,34 @@ impl MediaPack {
         }
         let db_ids = ids.clone();
         let purged_paths = spawn_blocking(move || -> Result<Vec<(u64, PathBuf)>> {
-            let mut conn = rusqlite::Connection::open(history_path)?;
+            let mut conn = sqlite_connection_manager(&history_path).connect()?;
             conn.execute_batch(HISTORY_SCHEMA)?;
-            let vars = repeat_vars(db_ids.len());
+            let selected = media_id_array(&db_ids)?;
+            let tx = conn.transaction()?;
             let paths = {
-                let mut stmt = conn.prepare(&format!(
-                    "SELECT id, path FROM media WHERE path IS NOT NULL AND id IN ({vars})"
-                ))?;
+                let mut stmt = tx.prepare(
+                    "SELECT m.id, m.path FROM media m
+                     JOIN rarray(?) s ON s.value = m.id
+                     WHERE m.path IS NOT NULL",
+                )?;
                 let rows = stmt
-                    .query_map(params_from_iter(&db_ids), |row| {
+                    .query_map(params![&selected], |row| {
                         Ok((row.get(0)?, PathBuf::from(row.get::<_, String>(1)?)))
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 rows
             };
-            let tx = conn.transaction()?;
             tx.execute(
-                &format!("DELETE FROM media_tags WHERE media_id IN ({vars})"),
-                params_from_iter(&db_ids),
+                "DELETE FROM media_tags WHERE media_id IN (SELECT value FROM rarray(?))",
+                params![&selected],
             )?;
             tx.execute(
-                &format!("DELETE FROM media_artists WHERE media_id IN ({vars})"),
-                params_from_iter(&db_ids),
+                "DELETE FROM media_artists WHERE media_id IN (SELECT value FROM rarray(?))",
+                params![&selected],
             )?;
             tx.execute(
-                &format!("DELETE FROM media WHERE id IN ({vars})"),
-                params_from_iter(&db_ids),
+                "DELETE FROM media WHERE id IN (SELECT value FROM rarray(?))",
+                params![&selected],
             )?;
             tx.commit()?;
             Ok(paths)
@@ -2632,99 +2584,22 @@ impl MediaPackView {
     }
 }
 
-/// Copies one already-embedded file from `job.source_offset` to `job.dest_offset`
-/// within `path`/`out_path` (the same file for an in-place save), then records the
-/// new offset in the DB immediately - so a crash mid-save never leaves the DB
-/// pointing at a range whose original bytes may have already been overwritten by
-/// another job's write.
-///
-/// Callers must have already registered `(job.source_offset, job.length)` in
-/// `in_flight` (see the dispatch loop in `write_files`) before spawning this -
-/// registration must happen on a single thread, strictly in job order, to be a
-/// valid safety gate. This function only removes the entry once the read is done.
-fn copy_shift_job(
-    job: &ShiftJob,
-    path: &Path,
-    out_path: &Path,
-    in_flight: &Mutex<Vec<(u64, u64)>>,
-    cvar: &Condvar,
-    db_tx: &std::sync::mpsc::Sender<DbUpdateRequest>,
+fn copy_range_forward(
+    source: &mut fs::File,
+    destination: &mut fs::File,
+    run: &CopyRun,
+    buffer: &mut [u8],
 ) -> Result<()> {
-    let copy_result = (|| -> Result<()> {
-        let mut in_file = fs::File::open(path)?;
-        in_file.seek(SeekFrom::Start(job.source_offset))?;
-        let mut bounded = in_file.take(job.length);
-        let mut out_file = fs::OpenOptions::new().write(true).open(out_path)?;
-        out_file.seek(SeekFrom::Start(job.dest_offset))?;
-        io::copy(&mut bounded, &mut out_file)?;
-        Ok(())
-    })();
-
-    // The read is done (or failed) either way, so this job's source range no
-    // longer needs protecting from concurrent writers.
-    {
-        let mut guard = in_flight.lock().unwrap();
-        guard.retain(|&(src_off, _)| src_off != job.source_offset);
-        cvar.notify_all();
+    source.seek(SeekFrom::Start(run.source_offset))?;
+    destination.seek(SeekFrom::Start(run.dest_offset))?;
+    let mut remaining = run.length;
+    while remaining > 0 {
+        let amount = remaining.min(buffer.len() as u64) as usize;
+        source.read_exact(&mut buffer[..amount])?;
+        destination.write_all(&buffer[..amount])?;
+        remaining -= amount as u64;
     }
-
-    copy_result?;
-
-    send_db_update(
-        db_tx,
-        DbUpdateKind::Shift {
-            id: job.id,
-            offset: job.dest_offset,
-        },
-    )
-}
-
-/// Copies one newly-staged loose file into `out_path` at `job.dest_offset`, then
-/// records its offset/length in the DB and only then removes the staging file -
-/// in that order, so a crash never leaves a row with neither a valid pack offset
-/// nor its staging copy. No overlap gating is needed here: unlike
-/// `copy_shift_job`, the source is always a separate file from `out_path`, so
-/// concurrent jobs can never race on the same bytes.
-///
-/// Returns `Ok(false)` (not an error) if the staged file was missing on disk -
-/// its DB row has already been dropped in that case, and the caller is expected
-/// to adjust the progress denominator accordingly.
-fn copy_new_file_job(
-    job: &NewFileJob,
-    out_path: &Path,
-    db_tx: &std::sync::mpsc::Sender<DbUpdateRequest>,
-) -> Result<bool> {
-    let media_file = match fs::File::open(&job.full_path) {
-        Ok(f) => f,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            tracing::error!(
-                "Staged file missing, dropping from pack: {}",
-                job.full_path.display()
-            );
-            send_db_update(db_tx, DbUpdateKind::DropMissing { id: job.id })?;
-            return Ok(false);
-        }
-        Err(err) => return Err(err.into()),
-    };
-
-    let mut out_file = fs::OpenOptions::new().write(true).open(out_path)?;
-    out_file.seek(SeekFrom::Start(job.dest_offset))?;
-    // Bounded to expected_length so an unexpectedly-larger on-disk file can never
-    // overrun into the next job's precomputed (and, since we pre-sized the file,
-    // already-allocated) region.
-    let mut bounded = media_file.take(job.expected_length);
-    let size = io::copy(&mut bounded, &mut out_file)?;
-
-    send_db_update(
-        db_tx,
-        DbUpdateKind::NewFile {
-            id: job.id,
-            offset: job.dest_offset,
-            length: size,
-        },
-    )?;
-
-    Ok(true)
+    Ok(())
 }
 
 /// Whether `err` (as returned by a query through `db_execute`, which wraps the
@@ -2766,6 +2641,76 @@ fn remove_sqlite_sidecars(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn clone_archive(source: &Path) -> Result<tempfile::NamedTempFile> {
+    let parent = source
+        .parent()
+        .ok_or_else(|| anyhow!("pack destination has no parent directory"))?;
+    let generation = tempfile::Builder::new()
+        .prefix(".pack-editor-generation-")
+        .tempfile_in(parent)?;
+    let source_file = fs::File::open(source)?;
+    if !try_reflink(&source_file, generation.as_file())? {
+        generation.as_file().set_len(0)?;
+        fs::copy(source, generation.path())?;
+    }
+    generation
+        .as_file()
+        .set_permissions(fs::metadata(source)?.permissions())?;
+    Ok(generation)
+}
+
+#[cfg(target_os = "linux")]
+fn try_reflink(source: &fs::File, destination: &fs::File) -> io::Result<bool> {
+    use std::os::fd::AsRawFd;
+
+    // Linux FICLONE. Unsupported filesystems return one of several errors, in
+    // which case the caller transparently performs a regular copy instead.
+    const FICLONE: libc::c_ulong = 0x4004_9409;
+    let result = unsafe { libc::ioctl(destination.as_raw_fd(), FICLONE, source.as_raw_fd()) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(code)
+            if matches!(
+                code,
+                libc::EOPNOTSUPP
+                    | libc::ENOTTY
+                    | libc::EINVAL
+                    | libc::EXDEV
+                    | libc::ENOSYS
+                    | libc::EPERM
+            ) =>
+        {
+            Ok(false)
+        }
+        _ => Err(error),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn try_reflink(_source: &fs::File, _destination: &fs::File) -> io::Result<bool> {
+    Ok(false)
+}
+
+fn sync_parent_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open(path.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()?;
+    }
+    Ok(())
+}
+
+fn is_storage_full(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<io::Error>()
+            .and_then(io::Error::raw_os_error)
+            .is_some_and(|code| code == libc::ENOSPC || code == libc::EDQUOT || code == 112)
+    })
+}
+
 /// Produces the next name to try after `name` collided with an existing file: appends
 /// " (1)" before the extension, or bumps an existing " (n)" suffix to " (n+1)" so repeated
 /// collisions count up instead of piling up " (1) (1) (1)"-style.
@@ -2791,11 +2736,16 @@ fn next_candidate_name(name: &str) -> String {
     }
 }
 
-fn repeat_vars(count: usize) -> String {
-    assert_ne!(count, 0);
-    let mut s = "?,".repeat(count);
-    s.pop();
-    s
+fn media_id_array(ids: &[u64]) -> Result<Array> {
+    let values = ids
+        .iter()
+        .map(|&id| Ok(Value::Integer(i64::try_from(id)?)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Rc::new(values))
+}
+
+fn sqlite_connection_manager(path: &Path) -> SqliteConnectionManager {
+    SqliteConnectionManager::file(path).with_init(|conn| array::load_module(conn))
 }
 
 const HISTORY_SCHEMA: &str = r#"
@@ -2844,7 +2794,7 @@ fn resolve_range(range: Range, size: u64) -> Result<(u64, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Condvar};
 
     use proptest::prelude::*;
     use rusqlite::params;
@@ -3088,6 +3038,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generation_save_does_not_block_archive_previews_while_copying() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("generation-preview.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Generation preview").await;
+        let first = insert_staged_audio(&pack, &[1; 1024]).await;
+        let second_bytes = vec![2; 2 * 1024 * 1024];
+        let second = insert_staged_audio(&pack, &second_bytes).await;
+        pack.save(|_, _| {}).await.unwrap();
+        pack.remove_files(vec![first]).await.unwrap();
+
+        let view = pack.get_view().unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let save = pack.save({
+            let started_tx = started_tx.clone();
+            let gate = gate.clone();
+            move |_, _| {
+                if let Some(tx) = started_tx.lock().unwrap().take() {
+                    let _ = tx.send(());
+                    let (released, wake) = &*gate;
+                    let mut released = released.lock().unwrap();
+                    while !*released {
+                        released = wake.wait(released).unwrap();
+                    }
+                }
+            }
+        });
+        let preview = async {
+            started_rx.await.unwrap();
+            let result =
+                tokio::time::timeout(Duration::from_secs(1), view.get_file_data(second)).await;
+            let (released, wake) = &*gate;
+            *released.lock().unwrap() = true;
+            wake.notify_all();
+            let data = result
+                .expect("preview should read the old generation while the new one is written")
+                .unwrap()
+                .0;
+            assert_eq!(data, second_bytes);
+        };
+        let (saved, ()) = tokio::join!(save, preview);
+        saved.unwrap();
+    }
+
+    #[tokio::test]
+    async fn synchronous_in_place_fallback_compacts_in_source_order() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("in-place-fallback.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "In-place fallback").await;
+        let contents: Vec<Vec<u8>> = (0..8u8)
+            .map(|value| vec![value; 1024 + value as usize * 127])
+            .collect();
+        let mut ids = Vec::new();
+        for content in &contents {
+            ids.push(insert_staged_audio(&pack, content).await);
+        }
+        pack.save(|_, _| {}).await.unwrap();
+        pack.remove_files(vec![ids[1], ids[4]]).await.unwrap();
+
+        let snapshot = pack.create_save_snapshot().await.unwrap();
+        pack.save_in_place(&snapshot, Arc::new(|_, _| {}))
+            .await
+            .unwrap();
+        drop(pack);
+
+        let reopened = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        let view = reopened.get_view().unwrap();
+        for (index, expected) in contents.iter().enumerate() {
+            if index == 1 || index == 4 {
+                continue;
+            }
+            assert_eq!(view.get_file_data(ids[index]).await.unwrap().0, *expected);
+        }
+    }
+
+    #[tokio::test]
     async fn file_content_survives_save_and_reopen() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
@@ -3203,6 +3232,56 @@ mod tests {
             .unwrap();
         assert!(pack.get_tags(first).await.unwrap().is_empty());
         assert!(pack.get_tags(second).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bulk_remove_and_restore_exceeds_sqlite_variable_limit() {
+        const COUNT: u64 = 35_000;
+        let output = tempdir().unwrap();
+        let data = tempdir().unwrap();
+        let pack = new_test_pack(
+            &output.path().join("large-removal.lwpack"),
+            data.path(),
+            "Large removal",
+        )
+        .await;
+        pack.db_execute(|mut conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut insert = tx.prepare(
+                    "INSERT INTO media
+                     (id, file_name, file_type, offset, length, duration, hash)
+                     VALUES (?, ?, 'audio', ?, 1, 1.0, ?)",
+                )?;
+                for id in 1..=COUNT {
+                    insert.execute(params![
+                        id,
+                        format!("bulk-{id}.opus"),
+                        HEADER_SIZE as u64 + id - 1,
+                        blake3::hash(&id.to_le_bytes()).as_bytes().to_vec(),
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let ids = (1..=COUNT).collect::<Vec<_>>();
+        pack.remove_files(ids.clone()).await.unwrap();
+        assert!(pack.get_files().await.unwrap().is_empty());
+        let history = rusqlite::Connection::open(pack.dir().join("history.db")).unwrap();
+        assert_eq!(
+            history
+                .query_row("SELECT COUNT(*) FROM media", [], |row| row.get::<_, u64>(0))
+                .unwrap(),
+            COUNT
+        );
+        drop(history);
+
+        pack.restore_files(ids).await.unwrap();
+        assert_eq!(pack.get_files().await.unwrap().len() as u64, COUNT);
     }
 
     #[tokio::test]
@@ -3611,12 +3690,8 @@ mod tests {
         }
     }
 
-    // Exercises the parallel gap-closing path in write_files: files embedded by a
-    // first save, then a scattered subset deleted, then a second save that must
-    // shift every surviving file after each deletion point to a new, compacted
-    // offset. Varying content and lengths per file mean any job overwriting a
-    // range another job hasn't read yet shows up as a content mismatch, not a
-    // silent pass.
+    // Exercises compact generation layout after scattered deletions. Varying
+    // content and lengths expose a bad run boundary, offset, or truncation.
     #[tokio::test]
     async fn deleting_files_then_resaving_preserves_surviving_content() {
         let tmp = tempdir().unwrap();
@@ -3641,14 +3716,25 @@ mod tests {
         pack.save(|_, _| {}).await.unwrap();
 
         // Delete a scattered subset (near the start, middle, and end) so the
-        // gap-closing loop has to shift a large tail of survivors across several
-        // separate deletion points with varying cumulative offsets.
+        // writer has to shift several contiguous runs by different amounts.
         let deleted_indices = [2usize, 3, 9, 15, 20];
         let deleted_ids: Vec<u64> = deleted_indices.iter().map(|&i| ids[i]).collect();
         pack.remove_files(deleted_ids).await.unwrap();
 
-        // Second save: triggers the parallel shift/compaction logic under test.
+        // Second save creates a gapless replacement generation.
         pack.save(|_, _| {}).await.unwrap();
+        let expected_index_offset = HEADER_SIZE as u64
+            + contents
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !deleted_indices.contains(index))
+                .map(|(_, content)| content.len() as u64)
+                .sum::<u64>();
+        assert_eq!(
+            pack.header.read().unwrap().index_offset,
+            expected_index_offset,
+            "generation saves must leave no gaps between embedded media"
+        );
         drop(pack);
 
         let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
@@ -3666,13 +3752,10 @@ mod tests {
         }
     }
 
-    // Exercises the parallel newly-staged-file path in write_files: many loose
-    // files, varying lengths, all copied concurrently into a pre-sized (set_len)
-    // region of the pack file. Any job writing into the wrong precomputed slot,
-    // or a mis-sized set_len leaving slots overlapping, shows up as a content
-    // mismatch here.
+    // Exercises the sequential newly-staged-file layout: varying lengths expose
+    // any bad cumulative offset or truncation before the snapshot tail is written.
     #[tokio::test]
-    async fn many_new_files_survive_parallel_first_save() {
+    async fn many_new_files_survive_sequential_first_save() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
         let pack_path = tmp.path().join("test.lwpack");

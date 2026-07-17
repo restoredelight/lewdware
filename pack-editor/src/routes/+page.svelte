@@ -17,6 +17,13 @@
   let pendingImportToken: number | null = null;
   let pendingImportFiles: MediaFile[] = [];
 
+  $effect(() => {
+    if (!pendingClose || store.saveActive) return;
+    pendingClose = false;
+    if (!store.packOpen || store.packSaved) void api.confirmClose();
+    else showCloseDialog = true;
+  });
+
   function finalizeImportHistory() {
     if (pendingImportToken === null) return;
     const token = pendingImportToken;
@@ -67,21 +74,24 @@
         if (store.uploading) taskFeedback.warning("save", `Saving during upload (${e.payload.saved}/${e.payload.total}) — unfinished files excluded`);
         else taskFeedback.progress("save", "Saving pack…", e.payload.saved, e.payload.total);
       }),
+      listen("save:in-place", () => {
+        store.saveBlocksPreviews = true;
+      }),
       listen<SaveDone>("save:done", (event) => {
-        store.saveActive = false;
+        store.endSave();
+        taskFeedback.dismiss("preview");
         if (event.payload.has_unsaved_changes) {
           taskFeedback.warning("save", "Pack saved — newer changes remain unsaved");
         } else {
           history.markSaved();
           taskFeedback.success("save", "Pack saved");
         }
-        if (pendingClose) {
-          pendingClose = false;
-          if (!event.payload.has_unsaved_changes) api.confirmClose();
-        }
       }),
       listen("close-requested", () => {
-        if (!store.packOpen || store.packSaved) {
+        if (store.saveActive) {
+          pendingClose = true;
+          taskFeedback.progress("save", "Finishing save before closing…", store.saveDone, store.saveTotal || null);
+        } else if (!store.packOpen || store.packSaved) {
           api.confirmClose();
         } else {
           showCloseDialog = true;
@@ -97,6 +107,8 @@
   async function onCloseSave() {
     showCloseDialog = false;
     pendingClose = true;
+    if (store.saveActive) return;
+    store.beginSave();
     if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
     else taskFeedback.progress("save", "Saving pack…");
     try {
@@ -105,13 +117,14 @@
       const info = await api.savePack();
       if (!info) {
         pendingClose = false;
+        store.endSave();
         taskFeedback.dismiss("save");
         return;
       }
       store.packHasDestination = info.has_destination;
     } catch (err) {
       pendingClose = false;
-      store.saveActive = false;
+      store.endSave();
       alert(`Save failed: ${err}\n\nThe pack was not closed.`);
       taskFeedback.error("save", `Save failed: ${String(err)}`);
     }

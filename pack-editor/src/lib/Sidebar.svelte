@@ -10,6 +10,7 @@
   import EmptyState from "$ui/EmptyState.svelte";
   import IconButton from "$ui/IconButton.svelte";
   import { copyFileName } from "./clipboard.js";
+  import { openMediaPreview } from "./mediaPreview.js";
 
   function formatDuration(s: number): string {
     const h = Math.floor(s / 3600);
@@ -232,12 +233,12 @@
   ></div>
   {#if primary}
     <!-- Preview -->
-    <button class="preview shrink-0 bg-bg flex items-center justify-center" style="height: 160px" onclick={() => (store.openedId = primary.id)} aria-label={`Preview ${primary.file_name}`}>
+    <button class="preview shrink-0 bg-bg flex items-center justify-center" style="height: 160px" onclick={() => openMediaPreview(primary.id)} aria-label={`Preview ${primary.file_name}`}>
       {#if primary.file_info.type === "audio"}
         <span class="w-12 h-12 text-muted"><Icon src={MusicalNote} /></span>
       {:else}
         <img
-          src="{store.mediaBase}/preview/{primary.id}"
+          src="{store.mediaBase}/{store.saveBlocksPreviews ? 'thumbnail' : 'preview'}/{primary.id}"
           alt={primary.file_name}
           draggable="false"
           class="max-w-full max-h-full object-contain"
