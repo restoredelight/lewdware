@@ -9,6 +9,7 @@ use std::{
 use anyhow::anyhow;
 use futures::{stream, StreamExt};
 use infer::MatcherType;
+use serde::Serialize;
 use shared::encode::{encode_file, hash_file, HardwareEncoder};
 use tempfile::TempDir;
 use tokio::sync::{oneshot, watch, RwLock, Semaphore};
@@ -18,6 +19,28 @@ use walkdir::WalkDir;
 use tauri::Emitter;
 
 use crate::pack::MediaFile;
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct UploadErrorPayload {
+    path: String,
+    file_name: String,
+    error: String,
+}
+
+impl UploadErrorPayload {
+    pub(crate) fn new(path: &Path, error: impl Into<String>) -> Self {
+        let file_name = path
+            .file_name()
+            .unwrap_or_else(|| path.as_os_str())
+            .to_string_lossy()
+            .into_owned();
+        Self {
+            path: path.to_string_lossy().into_owned(),
+            file_name,
+            error: error.into(),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum ProcessErrorKind {
@@ -192,7 +215,10 @@ pub async fn process_files(
         Err(error) => {
             let _ = app.emit(
                 "upload:error",
-                serde_json::json!({ "path": dir, "error": format!("Could not create upload staging directory: {error}") }),
+                UploadErrorPayload::new(
+                    &dir,
+                    format!("Could not create upload staging directory: {error}"),
+                ),
             );
             let _ = app.emit("upload:done", ());
             return;
@@ -206,13 +232,16 @@ pub async fn process_files(
                 Err(error) => {
                     let _ = app.emit(
                         "upload:error",
-                        serde_json::json!({ "path": dir, "error": format!("Could not begin import: {error}") }),
+                        UploadErrorPayload::new(&dir, format!("Could not begin import: {error}")),
                     );
                     let _ = app.emit("upload:done", ());
                     return;
                 }
             },
-            None => return,
+            None => {
+                let _ = app.emit("upload:done", ());
+                return;
+            }
         }
     };
 
@@ -248,10 +277,7 @@ pub async fn process_files(
                 Err(err) => {
                     let _ = app.emit(
                         "upload:error",
-                        serde_json::json!({
-                            "path": path.to_string_lossy(),
-                            "error": err.to_string()
-                        }),
+                        UploadErrorPayload::new(&path, err.to_string()),
                     );
                 }
             }
@@ -274,7 +300,10 @@ pub async fn process_files(
             if let Err(error) = pack.finish_media_import(history_id).await {
                 let _ = app.emit(
                     "upload:error",
-                    serde_json::json!({ "path": dir, "error": format!("Could not finalize import history: {error}") }),
+                    UploadErrorPayload::new(
+                        &dir,
+                        format!("Could not finalize import history: {error}"),
+                    ),
                 );
             }
         }
@@ -368,5 +397,20 @@ async fn process_one_file(
         // the pre-check's skip.
         Some(media) => Ok(Some(media)),
         None => Err(ProcessErrorKind::Skipped),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::UploadErrorPayload;
+
+    #[test]
+    fn upload_errors_include_the_file_name_and_full_path() {
+        let path = Path::new("media").join("imports").join("clip.mp4");
+        let payload = UploadErrorPayload::new(&path, "failed");
+        assert_eq!(payload.file_name, "clip.mp4");
+        assert_eq!(payload.path, path.to_string_lossy());
     }
 }

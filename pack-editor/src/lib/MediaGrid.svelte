@@ -74,6 +74,7 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
+      e.preventDefault();
       store.clearSelection();
       anchorId = null;
       announcement = "Selection cleared";
@@ -99,12 +100,6 @@
     if (e.key === "Delete" && store.selectedIds.size > 0) {
       e.preventDefault();
       deleteSelected();
-      return;
-    }
-    if (e.key === "Escape" && store.selectedIds.size > 0) {
-      e.preventDefault();
-      store.clearSelection();
-      announceSelection();
       return;
     }
     if ((e.key === "Home" || e.key === "End") && files.length > 0) {
@@ -277,7 +272,7 @@
                     <span class="w-10 h-10 text-muted"><Icon src={MusicalNote} /></span>
                   {:else}
                     <img
-                      src="{store.mediaBase}/thumbnail/{file.id}"
+                      src={store.mediaUrl(`/thumbnail/${file.id}`)}
                       alt={file.file_name}
                       loading="lazy"
                       draggable="false"

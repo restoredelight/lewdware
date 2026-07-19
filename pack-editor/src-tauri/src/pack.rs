@@ -115,7 +115,12 @@ struct Lock {
 
 impl Lock {
     fn new(path: PathBuf) -> Result<Self> {
-        let file = fs::File::create(&path)?;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
         file.try_lock()?;
         Ok(Self { file, path })
     }
@@ -127,7 +132,9 @@ impl Drop for Lock {
             tracing::error!("{err}");
         }
         if let Err(err) = fs::remove_file(&self.path) {
-            tracing::error!("{err}");
+            if err.kind() != io::ErrorKind::NotFound {
+                tracing::error!("{err}");
+            }
         }
     }
 }
@@ -322,7 +329,41 @@ pub struct Range {
     pub end: Option<u64>,
 }
 
+#[derive(Debug)]
+pub(crate) struct InvalidRange;
+
+impl std::fmt::Display for InvalidRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Invalid range")
+    }
+}
+
+impl std::error::Error for InvalidRange {}
+
+/// Keep individual HTTP responses small. Media clients are expected to request the
+/// next range when a file is larger than this chunk.
+const MAX_FILE_RANGE_BYTES: u64 = 4 * 1024 * 1024;
+
+fn draft_lock_path(data_dir: &Path, id: Uuid) -> PathBuf {
+    data_dir
+        .join("Lewdware Pack Editor")
+        .join(format!("{id}.lock"))
+}
+
 impl MediaPack {
+    pub(crate) fn remove_recoverable_draft(data_dir: &Path, id: Uuid) -> Result<()> {
+        let dir = data_dir.join("Lewdware Pack Editor").join(id.to_string());
+        if !dir.exists() {
+            return Ok(());
+        }
+        let _lock = Lock::new(draft_lock_path(data_dir, id))?;
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub async fn new_unsaved(data_dir: &Path, name: &str) -> Result<Self> {
         let header = Header::new();
         let metadata = Metadata {
@@ -337,6 +378,7 @@ impl MediaPack {
         if !dir.join("UNSAVED").is_file() {
             bail!("draft no longer exists");
         }
+        let lock = Lock::new(draft_lock_path(data_dir, id))?;
         let metadata = Metadata::from_buf(&fs::read(dir.join("Metadata"))?)?;
         let db_path = dir.join("index.db");
         if !db_path.is_file() {
@@ -360,7 +402,7 @@ impl MediaPack {
             archive_io: Arc::new(RwLock::new(())),
             save_serial: Arc::new(AsyncMutex::new(())),
             garbage_collection: GarbageCollector::start(db_pool.clone(), dir.join("media")),
-            _lock: None,
+            _lock: Some(lock),
             header: StdRwLock::new(header),
             dir,
             metadata: StdRwLock::new(metadata),
@@ -411,6 +453,12 @@ impl MediaPack {
 
         create_dir_all(&dir)?;
         create_dir_all(dir.join("media"))?;
+        // Saved packs are protected by their adjacent pack-file lock. Drafts have no pack
+        // path, so use a sibling lock keyed by their working directory identity.
+        let lock = match lock {
+            Some(lock) => Some(lock),
+            None => Some(Lock::new(draft_lock_path(data_dir, header.id))?),
+        };
 
         let metadata_path = dir.join("Metadata");
         File::create(&metadata_path)
@@ -741,6 +789,10 @@ impl MediaPack {
         let _save = self.save_serial.lock().await;
         let _mutations = self.saving.write().await;
         self.garbage_collection.shutdown().await;
+    }
+
+    pub async fn close_and_discard(&self) {
+        self.close().await;
         self.delete_on_drop.store(true, Ordering::SeqCst);
     }
 
@@ -2901,7 +2953,10 @@ impl MediaPack {
 
 impl Drop for MediaPack {
     fn drop(&mut self) {
-        if self.saved.load(Ordering::Relaxed) || self.delete_on_drop.load(Ordering::Relaxed) {
+        let explicitly_discarded = self.delete_on_drop.load(Ordering::Relaxed);
+        let safely_saved =
+            self.saved.load(Ordering::Relaxed) && !self.dir.join("UNSAVED").is_file();
+        if explicitly_discarded || safely_saved {
             if let Err(err) = fs::remove_dir_all(&self.dir) {
                 tracing::error!("{err}");
             }
@@ -3350,11 +3405,28 @@ fn sqlite_connection_manager(path: &Path) -> SqliteConnectionManager {
 }
 
 fn resolve_range(range: Range, size: u64) -> Result<(u64, u64)> {
-    match (range.start, range.end) {
-        (Some(start), Some(end)) => Ok((start, (end + 1).min(size))),
-        (Some(start), None) => Ok((start, size)),
-        _ => bail!("Invalid range"),
+    if size == 0 {
+        return Err(InvalidRange.into());
     }
+
+    let (start, requested_end) = match (range.start, range.end) {
+        (Some(start), Some(end)) if start <= end && start < size => {
+            (start, end.saturating_add(1).min(size))
+        }
+        (Some(start), None) if start < size => (start, size),
+        // RFC 9110 suffix-byte-range-spec: `bytes=-N` requests the final N bytes.
+        (None, Some(suffix)) if suffix > 0 => (
+            size.saturating_sub(suffix)
+                .max(size.saturating_sub(MAX_FILE_RANGE_BYTES)),
+            size,
+        ),
+        _ => return Err(InvalidRange.into()),
+    };
+    let end = requested_end.min(start.saturating_add(MAX_FILE_RANGE_BYTES));
+    if start >= end {
+        return Err(InvalidRange.into());
+    }
+    Ok((start, end))
 }
 
 #[cfg(test)]
@@ -3377,10 +3449,103 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn range_resolution_rejects_invalid_bounds_and_clamps_valid_ones() {
+        assert!(resolve_range(
+            Range {
+                start: Some(500),
+                end: Some(100),
+            },
+            1_000,
+        )
+        .is_err());
+        assert!(resolve_range(
+            Range {
+                start: Some(5_000),
+                end: None,
+            },
+            1_000,
+        )
+        .is_err());
+        assert!(resolve_range(
+            Range {
+                start: Some(0),
+                end: Some(u64::MAX),
+            },
+            1_000,
+        )
+        .is_ok_and(|range| range == (0, 1_000)));
+        assert!(resolve_range(
+            Range {
+                start: Some(0),
+                end: None,
+            },
+            0,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn range_resolution_caps_large_responses() {
+        let size = MAX_FILE_RANGE_BYTES * 3;
+        assert_eq!(
+            resolve_range(
+                Range {
+                    start: Some(10),
+                    end: None,
+                },
+                size,
+            )
+            .unwrap(),
+            (10, 10 + MAX_FILE_RANGE_BYTES),
+        );
+        assert_eq!(
+            resolve_range(
+                Range {
+                    start: None,
+                    end: Some(size),
+                },
+                size,
+            )
+            .unwrap(),
+            (size - MAX_FILE_RANGE_BYTES, size),
+        );
+    }
+
     async fn new_test_pack(pack_path: &Path, data_dir: &Path, name: &str) -> MediaPack {
         MediaPack::new(pack_path.to_path_buf(), data_dir, name)
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn draft_lock_blocks_concurrent_recovery_and_normal_close_preserves_the_draft() {
+        let data = tempdir().unwrap();
+        let pack = MediaPack::new_unsaved(data.path(), "Locked draft")
+            .await
+            .unwrap();
+        let id = pack.id();
+        let dir = pack.dir().to_path_buf();
+        let lock_path = draft_lock_path(data.path(), id);
+
+        assert!(lock_path.is_file());
+        assert!(!dir.join(".lock").exists());
+
+        assert!(MediaPack::recover_unsaved(data.path(), id).await.is_err());
+        assert!(MediaPack::remove_recoverable_draft(data.path(), id).is_err());
+        assert!(dir.join("UNSAVED").is_file());
+
+        pack.close().await;
+        drop(pack);
+        assert!(dir.join("UNSAVED").is_file());
+        assert!(!lock_path.exists());
+
+        let recovered = MediaPack::recover_unsaved(data.path(), id).await.unwrap();
+        assert!(lock_path.is_file());
+        recovered.close_and_discard().await;
+        drop(recovered);
+        assert!(!dir.exists());
+        assert!(!lock_path.exists());
     }
 
     #[tokio::test]

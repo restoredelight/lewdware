@@ -109,11 +109,7 @@ impl ZipSource {
             .filter_map(|name| name.strip_prefix(root_prefix.as_str()))
             .filter(|name| !name.is_empty())
             .filter(|name| {
-                !name
-                    .rsplit('/')
-                    .next()
-                    .map(is_junk_entry)
-                    .unwrap_or(false)
+                !name.rsplit('/').next().map(is_junk_entry).unwrap_or(false)
                     && !name.split('/').any(|seg| seg == "__MACOSX")
             })
             .map(|name| name.to_string())

@@ -54,18 +54,13 @@ describe("metadata save scheduler", () => {
     expect(mocks.api.setPackMetadata).toHaveBeenCalledOnce();
   });
 
-  it("creates undo and redo snapshots", async () => {
+  it("records the persisted edit in backend history", async () => {
     const save = await scheduler();
     save.initializeMetadataHistory(metadata("Initial"));
     save.scheduleMetadataSave(metadata("Changed"));
     await save.flushMetadataSave();
-    const command = mocks.history.record.mock.calls[0][0];
-    await command.undo();
-    expect(mocks.api.setPackMetadata).toHaveBeenLastCalledWith(metadata("Initial"));
-    expect(mocks.store.metadata).toEqual(metadata("Initial"));
-    await command.redo();
-    expect(mocks.api.setPackMetadata).toHaveBeenLastCalledWith(metadata("Changed"));
-    expect(mocks.store.metadata).toEqual(metadata("Changed"));
+    expect(mocks.history.record).toHaveBeenCalledWith({ label: "Edit pack metadata" });
+    expect(mocks.api.setPackMetadata).toHaveBeenCalledOnce();
   });
 
   it("retains failed metadata and succeeds when flushed again", async () => {

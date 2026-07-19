@@ -7,7 +7,10 @@ const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 
 class AppStore {
   // Media server
   mediaPort = $state(0);
-  get mediaBase() { return `http://127.0.0.1:${this.mediaPort}`; }
+  mediaToken = $state("");
+  mediaUrl(path: string) {
+    return `http://127.0.0.1:${this.mediaPort}${path}?token=${encodeURIComponent(this.mediaToken)}`;
+  }
 
   // Pack
   packOpen = $state(false);
@@ -112,6 +115,7 @@ class AppStore {
   uploadDone = $state(0);
   uploadBatches = $state(0);
   uploadErrors = $state<UploadError[]>([]);
+  uploadSkipped = $state(0);
   _showDoneBriefly = $state(false);
   _doneTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -282,6 +286,14 @@ class AppStore {
     this.importWarnings = [];
     this.behaviour = null;
     this.suspendedExperience = null;
+    this.uploadTotal = 0;
+    this.uploadDone = 0;
+    this.uploadBatches = 0;
+    this.uploadErrors = [];
+    this.uploadSkipped = 0;
+    this._showDoneBriefly = false;
+    if (this._doneTimer !== null) clearTimeout(this._doneTimer);
+    this._doneTimer = null;
   }
 
   addFile(file: MediaFile, tracked = false) {
@@ -410,6 +422,7 @@ class AppStore {
     if (this.uploadBatches === 0) {
       this.uploadTotal = total;
       this.uploadDone = 0;
+      this.uploadSkipped = 0;
     } else {
       this.uploadTotal += total;
     }
@@ -433,6 +446,10 @@ class AppStore {
 
   addUploadError(error: UploadError) {
     this.uploadErrors.push(error);
+  }
+
+  onUploadSkipped() {
+    this.uploadSkipped++;
   }
 
   clearUploadErrors() {

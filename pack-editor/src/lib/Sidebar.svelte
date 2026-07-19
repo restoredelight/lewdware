@@ -226,7 +226,7 @@
         <span class="w-12 h-12 text-muted"><Icon src={MusicalNote} /></span>
       {:else}
         <img
-          src="{store.mediaBase}/{store.saveBlocksPreviews ? 'thumbnail' : 'preview'}/{primary.id}"
+          src={store.mediaUrl(`/${store.saveBlocksPreviews ? 'thumbnail' : 'preview'}/${primary.id}`)}
           alt={primary.file_name}
           draggable="false"
           class="max-w-full max-h-full object-contain"

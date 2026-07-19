@@ -13,16 +13,48 @@
   import { taskFeedback } from "$lib/taskFeedback.svelte.js";
 
   let showCloseDialog = $state(false);
+  let closeError = $state<string | null>(null);
   let pendingClose = $state(false);
+  let checkingClose = false;
   let pendingImportToken: number | null = null;
   let pendingImportFiles: MediaFile[] = [];
 
   $effect(() => {
     if (!pendingClose || store.saveActive) return;
     pendingClose = false;
-    if (!store.packOpen || store.packSaved) void api.confirmClose();
-    else showCloseDialog = true;
+    void resolveCloseRequest();
   });
+
+  async function resolveCloseRequest() {
+    if (checkingClose) return;
+    if (store.uploading) {
+      taskFeedback.warning("pack-action", "Stop the import before closing Lewdware Pack Editor");
+      return;
+    }
+    if (store.saveActive) {
+      pendingClose = true;
+      taskFeedback.progress("save", "Finishing save before closing…", store.saveDone, store.saveTotal || null);
+      return;
+    }
+    if (!store.packOpen) {
+      await api.confirmClose();
+      return;
+    }
+    checkingClose = true;
+    try {
+      await flushMetadataSave();
+      await flushBehaviourSave();
+      const saved = await api.isPackSaved();
+      store.packSaved = saved;
+      if (saved) await api.confirmClose();
+      else showCloseDialog = true;
+    } catch (error) {
+      showCloseDialog = true;
+      taskFeedback.error("pack-action", `Could not verify whether the pack is saved: ${String(error)}`);
+    } finally {
+      checkingClose = false;
+    }
+  }
 
   function finalizeImportHistory() {
     if (pendingImportToken === null) return;
@@ -41,7 +73,12 @@
   }
 
   onMount(() => {
-    api.getMediaPort().then((port) => (store.mediaPort = port));
+    api.getMediaServer()
+      .then((server) => {
+        store.mediaPort = server.port;
+        store.mediaToken = server.token;
+      })
+      .catch((error) => taskFeedback.error("media-server", `Previews unavailable: ${String(error)}`));
 
     const unsubs = [
       // Import feedback (progress, errors, completion) is owned by the UploadProgress window.
@@ -58,6 +95,7 @@
         if (pendingImportToken !== null) history.touchPending(pendingImportToken);
       }),
       listen<UploadError>("upload:error", (e) => { store.addUploadError(e.payload); }),
+      listen("upload:skipped", () => { store.onUploadSkipped(); }),
       listen("upload:file-done", () => { store.onUploadFileDone(); }),
       listen("upload:done", () => {
         store.onUploadDone();
@@ -67,8 +105,7 @@
         store.saveActive = true;
         store.saveDone = e.payload.saved;
         store.saveTotal = e.payload.total;
-        if (store.uploading) taskFeedback.warning("save", `Saving during upload (${e.payload.saved}/${e.payload.total}) — unfinished files excluded`);
-        else taskFeedback.progress("save", "Saving pack…", e.payload.saved, e.payload.total);
+        taskFeedback.progress("save", "Saving pack…", e.payload.saved, e.payload.total);
       }),
       listen("save:in-place", () => {
         store.saveBlocksPreviews = true;
@@ -83,18 +120,7 @@
           taskFeedback.success("save", "Pack saved");
         }
       }),
-      listen("close-requested", () => {
-        if (store.uploading) {
-          taskFeedback.warning("pack-action", "Stop the import before closing Lewdware Pack Editor");
-        } else if (store.saveActive) {
-          pendingClose = true;
-          taskFeedback.progress("save", "Finishing save before closing…", store.saveDone, store.saveTotal || null);
-        } else if (!store.packOpen || store.packSaved) {
-          api.confirmClose();
-        } else {
-          showCloseDialog = true;
-        }
-      }),
+      listen("close-requested", () => { void resolveCloseRequest(); }),
     ];
 
     return () => {
@@ -107,7 +133,8 @@
     pendingClose = true;
     if (store.saveActive) return;
     store.beginSave();
-    if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
+    if (store.uploading && !store.packHasDestination) taskFeedback.warning("save", "Waiting for the import to finish before the first save…");
+    else if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
     else taskFeedback.progress("save", "Saving pack…");
     try {
       await flushMetadataSave();
@@ -123,7 +150,7 @@
     } catch (err) {
       pendingClose = false;
       store.endSave();
-      alert(`Save failed: ${err}\n\nThe pack was not closed.`);
+      closeError = `Save failed: ${String(err)} The pack was not closed.`;
       taskFeedback.error("save", `Save failed: ${String(err)}`);
     }
   }
@@ -133,11 +160,11 @@
     cancelBehaviourSave();
     cancelMetadataSave();
     try {
-      await api.discardChanges();
-      store.markPackSaved();
+      await api.discardPack();
       await api.confirmClose();
     } catch (err) {
-      alert(`Could not discard changes: ${err}\n\nThe pack was not closed.`);
+      closeError = `Could not discard changes: ${String(err)} The pack was not closed.`;
+      taskFeedback.error("pack-action", `Could not discard changes: ${String(err)}`);
     }
   }
 
@@ -150,6 +177,15 @@
   <Editor />
 {:else}
   <Start />
+{/if}
+
+{#if closeError}
+  <Dialog
+    title="Could not close the editor"
+    description={closeError}
+    buttons={[{ label: "OK", primary: true, onclick: () => (closeError = null) }]}
+    onclose={() => (closeError = null)}
+  />
 {/if}
 
 {#if showCloseDialog}

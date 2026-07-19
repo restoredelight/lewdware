@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::{schema as legacy, Content};
+use super::{Content, schema as legacy};
 
 pub const VERSION: u32 = 3;
 
@@ -554,12 +554,14 @@ mod tests {
 
         behaviour.rewrite_tag("new", None);
         assert!(behaviour.content.content_groups[0].tags.is_empty());
-        assert!(behaviour.experience.as_ref().unwrap().timeline.stages[0]
-            .content
-            .tags
-            .as_ref()
-            .unwrap()
-            .is_empty());
+        assert!(
+            behaviour.experience.as_ref().unwrap().timeline.stages[0]
+                .content
+                .tags
+                .as_ref()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

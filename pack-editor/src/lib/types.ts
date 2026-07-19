@@ -56,6 +56,7 @@ export interface ImportResult {
 
 export interface UploadError {
   path: string;
+  file_name: string;
   error: string;
 }
 
@@ -66,6 +67,11 @@ export interface SaveProgress {
 
 export interface SaveDone {
   has_unsaved_changes: boolean;
+}
+
+export interface MediaServerInfo {
+  port: number;
+  token: string;
 }
 
 // behaviour.json (shared/src/behaviour/schema.rs) -- field names are the exact JSON keys.

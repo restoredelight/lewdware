@@ -78,13 +78,17 @@
       } else await finishOpen(info);
     } catch (err) {
       error = `Could not open ${recent.name}. ${String(err)}`;
-      recents = recents.filter((item) => (item.path ?? item.draft_id) !== (recent.path ?? recent.draft_id));
     } finally { busy = null; }
   }
 
   async function removeRecent(recent: RecentPack) {
-    await api.removeRecentPack(recent);
-    recents = recents.filter((item) => (item.path ?? item.draft_id) !== (recent.path ?? recent.draft_id));
+    error = null;
+    try {
+      await api.removeRecentPack(recent);
+      recents = recents.filter((item) => (item.path ?? item.draft_id) !== (recent.path ?? recent.draft_id));
+    } catch (err) {
+      error = `Could not remove ${recent.name}. ${String(err)}`;
+    }
   }
 
   async function onUnsavedLoad() {

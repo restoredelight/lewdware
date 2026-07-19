@@ -25,7 +25,7 @@ use tempfile::TempDir;
 use tokio::sync::{oneshot, watch, RwLock};
 use uuid::Uuid;
 
-use crate::encode::{wait_cancelled, DiscardOnDrop};
+use crate::encode::{wait_cancelled, DiscardOnDrop, UploadErrorPayload};
 use crate::pack::MediaFile;
 
 #[derive(Debug)]
@@ -106,7 +106,10 @@ pub async fn run_import(
         Err(error) => {
             let _ = app.emit(
                 "upload:error",
-                serde_json::json!({ "path": dir, "error": format!("Could not create import staging directory: {error}") }),
+                UploadErrorPayload::new(
+                    &dir,
+                    format!("Could not create import staging directory: {error}"),
+                ),
             );
             let _ = app.emit("upload:done", ());
             return;
@@ -120,7 +123,7 @@ pub async fn run_import(
                 Err(error) => {
                     let _ = app.emit(
                         "upload:error",
-                        serde_json::json!({ "path": dir, "error": format!("Could not begin import: {error}") }),
+                        UploadErrorPayload::new(&dir, format!("Could not begin import: {error}")),
                     );
                     let _ = app.emit("upload:done", ());
                     return;
@@ -168,7 +171,7 @@ pub async fn run_import(
                 Err(err) => {
                     let _ = app.emit(
                         "upload:error",
-                        serde_json::json!({ "path": source_path, "error": err.to_string() }),
+                        UploadErrorPayload::new(Path::new(&source_path), err.to_string()),
                     );
                 }
             }
@@ -189,7 +192,10 @@ pub async fn run_import(
             if let Err(error) = pack.finish_media_import(history_id).await {
                 let _ = app.emit(
                     "upload:error",
-                    serde_json::json!({ "path": dir, "error": format!("Could not finalize import history: {error}") }),
+                    UploadErrorPayload::new(
+                        &dir,
+                        format!("Could not finalize import history: {error}"),
+                    ),
                 );
             }
         }

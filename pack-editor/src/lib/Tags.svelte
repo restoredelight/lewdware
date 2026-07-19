@@ -23,14 +23,14 @@
   let error = $state<string | null>(null);
   let busy = $state(false);
 
-  const rows = $derived.by(() => {
+  const allRows = $derived.by(() => {
     if (!store.behaviour) return [];
     const media = new Map(summaries.map((item) => [item.name, item.media_count]));
-    const names = new Set([...media.keys(), ...behaviourTags(store.behaviour)]);
+    const names = new Set([...store.allTags, ...media.keys(), ...behaviourTags(store.behaviour)]);
     return [...names].map((name) => ({ name, media: media.get(name) ?? 0, ...tagUsage(store.behaviour!, name) }))
-      .filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase()))
       .sort((a, b) => a.name.localeCompare(b.name));
   });
+  const rows = $derived(allRows.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase())));
 
   onMount(async () => {
     if (!store.behaviour) store.behaviour = await api.getBehaviour();
@@ -44,7 +44,8 @@
 
   function updateLocal(from: string, to: string | null, tracked = false) {
     store.files = store.files.map((file) => ({ ...file, tags: [...new Set(file.tags.flatMap((tag) => tag === from ? (to ? [to] : []) : [tag]))] }));
-    store.allTags = [...new Set([...store.files.flatMap((file) => file.tags), ...(store.behaviour ? behaviourTags(store.behaviour) : [])])];
+    const renamedSuggestions = store.allTags.flatMap((tag) => tag === from ? (to ? [to] : []) : [tag]);
+    store.allTags = [...new Set([...renamedSuggestions, ...store.files.flatMap((file) => file.tags), ...(store.behaviour ? behaviourTags(store.behaviour) : [])])];
     if (!tracked) store.markLocallyBackedUp();
   }
 
@@ -52,7 +53,7 @@
     if (!editing || !store.behaviour) return;
     const target = value.trim();
     if (!target || target === editing) return;
-    if (mode === "rename" && rows.some((row) => row.name === target)) { error = `A tag named “${target}” already exists. Merge the tags instead.`; return; }
+    if (mode === "rename" && allRows.some((row) => row.name === target)) { error = `A tag named “${target}” already exists. Merge the tags instead.`; return; }
     busy = true; error = null;
     try {
       await flushBehaviourSave();
@@ -125,7 +126,7 @@
           <div class="edit-row">
             <div><strong>{mode === "rename" ? `Rename “${row.name}”` : `Merge “${row.name}” into`}</strong><small>{mode === "rename" ? "Every media and behaviour reference will be updated." : "References will be combined and duplicates removed."}</small></div>
             {#if mode === "rename"}<Field label="New tag name" hideLabel value={value} placeholder="New tag name" oninput={(next) => (value = next)} />
-            {:else}<Select label="Target tag" hideLabel value={value} options={rows.filter((item) => item.name !== row.name).map((item) => ({ value: item.name, label: item.name }))} onchange={(next) => (value = next)} />{/if}
+            {:else}<Select label="Target tag" hideLabel value={value} options={allRows.filter((item) => item.name !== row.name).map((item) => ({ value: item.name, label: item.name }))} onchange={(next) => (value = next)} />{/if}
             <div class="edit-actions"><Button size="compact" onclick={() => (editing = null)}>Cancel</Button><Button size="compact" variant="primary" onclick={apply} loading={busy} disabled={!value.trim() || value.trim() === row.name}>{mode === "rename" ? "Rename" : "Merge"}</Button></div>
           </div>
         {/if}

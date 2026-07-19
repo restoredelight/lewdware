@@ -246,7 +246,9 @@ mod client {
             }
             match serde_json::from_str(line.trim_end())? {
                 Response::Status(info) => Ok(info),
-                other => Err(anyhow!("unexpected response on status subscription: {other:?}")),
+                other => Err(anyhow!(
+                    "unexpected response on status subscription: {other:?}"
+                )),
             }
         }
     }

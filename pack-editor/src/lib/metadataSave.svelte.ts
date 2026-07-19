@@ -17,15 +17,6 @@ export function initializeMetadataHistory(metadata: MetadataDto): void {
   baseline = copy(metadata);
 }
 
-async function applyHistorySnapshot(metadata: MetadataDto): Promise<void> {
-  const snapshot = copy(metadata);
-  await api.setPackMetadata(snapshot);
-  await api.savePackMetadata();
-  store.metadata = copy(snapshot);
-  baseline = copy(snapshot);
-  store.markBackupComplete("metadata");
-}
-
 async function writePending(): Promise<void> {
   if (inFlight) await inFlight;
   const metadata = pending;
@@ -39,11 +30,8 @@ async function writePending(): Promise<void> {
     await inFlight;
     const before = baseline ? copy(baseline) : copy(metadata);
     if (JSON.stringify(before) !== JSON.stringify(metadata)) {
-      const after = copy(metadata);
       history.record({
         label: "Edit pack metadata",
-        undo: () => applyHistorySnapshot(before),
-        redo: () => applyHistorySnapshot(after),
       });
     }
     baseline = copy(metadata);

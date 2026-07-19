@@ -37,7 +37,13 @@ fn parse_version(v: &str) -> (u32, u32, u32) {
 #[tauri::command]
 async fn check_for_update() -> Result<Option<String>, String> {
     let current = env!("CARGO_PKG_VERSION");
-    let resp = reqwest::get("https://lewdware.net/download/pack-editor-latest.json")
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get("https://lewdware.net/download/pack-editor-latest.json")
+        .send()
         .await
         .map_err(|e| e.to_string())?;
     let manifest: UpdateManifest = resp.json().await.map_err(|e| e.to_string())?;
@@ -57,7 +63,7 @@ pub type PackState = Arc<Mutex<Option<Arc<MediaPack>>>>;
 
 pub struct AppState {
     pub pack: PackState,
-    pub media_port: OnceLock<u16>,
+    pub media_server: OnceLock<MediaServerInfo>,
     pub hardware_encoder: OnceLock<HardwareEncoder>,
     pub upload_lock: Arc<RwLock<()>>,
     pub cancel_uploads: watch::Sender<bool>,
@@ -67,12 +73,18 @@ impl AppState {
     fn new() -> Self {
         Self {
             pack: Arc::new(Mutex::new(None)),
-            media_port: OnceLock::new(),
+            media_server: OnceLock::new(),
             hardware_encoder: OnceLock::new(),
             upload_lock: Arc::new(RwLock::new(())),
             cancel_uploads: watch::channel(false).0,
         }
     }
+}
+
+#[derive(Serialize, Clone)]
+pub struct MediaServerInfo {
+    pub port: u16,
+    pub token: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -230,12 +242,26 @@ fn get_recent_packs() -> Vec<RecentPack> {
 }
 
 #[tauri::command]
-fn remove_recent_pack(path: Option<String>, draft_id: Option<String>) -> Result<(), String> {
-    let mut recents = load_recents();
-    recents.retain(|r| r.path != path || r.draft_id != draft_id);
+async fn remove_recent_pack(
+    state: State<'_, AppState>,
+    path: Option<String>,
+    draft_id: Option<String>,
+) -> Result<(), String> {
+    let draft_id = draft_id
+        .map(|id| uuid::Uuid::parse_str(&id).map_err(|error| error.to_string()))
+        .transpose()?;
     if let Some(id) = draft_id {
-        let _ = std::fs::remove_dir_all(editor_data_dir()?.join(id));
+        let lock = state.pack.lock().await;
+        if lock.as_ref().is_some_and(|pack| pack.id() == id) {
+            return Err("Cannot remove the draft while it is open".into());
+        }
+        drop(lock);
+        let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
+        MediaPack::remove_recoverable_draft(&data_dir, id).map_err(|error| error.to_string())?;
     }
+    let mut recents = load_recents();
+    let draft_id = draft_id.map(|id| id.to_string());
+    recents.retain(|r| r.path != path || r.draft_id != draft_id);
     write_recents(&recents)
 }
 
@@ -680,8 +706,34 @@ async fn close_pack(state: State<'_, AppState>) -> Result<(), String> {
     let _uploads = state.upload_lock.write().await;
     let pack = state.pack.lock().await.take();
     let draft_id = pack.as_ref().filter(|p| p.is_untitled()).map(|p| p.id());
+    let forget_draft_after_close = if let Some(pack) = &pack {
+        pack.is_saved().await
+    } else {
+        false
+    };
     if let Some(pack) = &pack {
         pack.close().await;
+    }
+    drop(pack);
+    if forget_draft_after_close {
+        if let Some(id) = draft_id {
+            let _ = forget_draft(id);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn discard_pack(state: State<'_, AppState>) -> Result<(), String> {
+    state.cancel_uploads.send_replace(true);
+    let _uploads = state.upload_lock.write().await;
+    let pack = state.pack.lock().await.take();
+    let draft_id = pack
+        .as_ref()
+        .filter(|pack| pack.is_untitled())
+        .map(|pack| pack.id());
+    if let Some(pack) = &pack {
+        pack.close_and_discard().await;
     }
     drop(pack);
     if let Some(id) = draft_id {
@@ -1333,11 +1385,13 @@ async fn cancel_upload(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-// ── Media server port ────────────────────────────────────────────────────────
+// ── Media server connection ──────────────────────────────────────────────────
 
 #[tauri::command]
-fn get_media_port(state: State<'_, AppState>) -> u16 {
-    *state.media_port.get().unwrap_or(&0)
+fn get_media_server(state: State<'_, AppState>) -> Result<MediaServerInfo, String> {
+    state.media_server.get().cloned().ok_or_else(|| {
+        "Media previews are unavailable because the local server failed to start".into()
+    })
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -1349,6 +1403,23 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin({
+            #[cfg(target_os = "windows")]
+            {
+                tauri_plugin_prevent_default::Builder::new()
+                    .platform(
+                        tauri_plugin_prevent_default::PlatformOptions::new()
+                            .browser_accelerator_keys(false)
+                            .default_context_menus(false)
+                            .default_script_dialogs(false),
+                    )
+                    .build()
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                tauri_plugin_prevent_default::init()
+            }
+        })
         .manage(AppState::new())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -1386,17 +1457,18 @@ pub fn run() {
                 .set(HardwareEncoder::detect_and_test());
 
             let pack = state.pack.clone();
+            let token = uuid::Uuid::new_v4().simple().to_string();
             let (tx, rx) = std::sync::mpsc::channel();
             tauri::async_runtime::spawn(async move {
-                match media_server::start(pack).await {
+                match media_server::start(pack, token.clone()).await {
                     Ok(port) => {
-                        tx.send(port).ok();
+                        tx.send(MediaServerInfo { port, token }).ok();
                     }
                     Err(e) => tracing::error!("media server failed to start: {e}"),
                 }
             });
-            if let Ok(port) = rx.recv() {
-                state.media_port.set(port).ok();
+            if let Ok(server) = rx.recv() {
+                state.media_server.set(server).ok();
             }
             if let Some(window) = app.get_webview_window("main") {
                 let win = window.clone();
@@ -1419,6 +1491,7 @@ pub fn run() {
             save_pack,
             save_pack_as_dialog,
             discard_changes,
+            discard_pack,
             close_pack,
             confirm_close,
             is_pack_saved,
@@ -1464,7 +1537,7 @@ pub fn run() {
             add_folder_dialog,
             add_paths,
             cancel_upload,
-            get_media_port,
+            get_media_server,
             check_for_update,
         ])
         .run(tauri::generate_context!())

@@ -35,10 +35,15 @@
   });
 
   function scheduleSave() {
-    if (!form.name.trim()) return;
-    store.packName = form.name.trim();
+    const name = form.name.trim() || store.packName;
+    if (form.name.trim()) store.packName = form.name.trim();
     store.metadata = { ...form };
-    scheduleMetadataSave(form);
+    scheduleMetadataSave({ ...form, name });
+  }
+
+  function finishNameEdit() {
+    form.name = form.name.trim() || store.packName;
+    scheduleSave();
   }
 </script>
 
@@ -49,7 +54,7 @@
   </header>
 
   <div class="flex flex-col gap-3 max-w-lg">
-    <Field label="Name" value={form.name} required placeholder="Pack name" oninput={(value) => { form.name = value; scheduleSave(); }} />
+    <Field label="Name" value={form.name} required placeholder="Pack name" oninput={(value) => { form.name = value; scheduleSave(); }} onchange={finishNameEdit} />
 
     <Field label="Creator" value={form.creator} placeholder="Creator name" oninput={(value) => { form.creator = value; scheduleSave(); }} />
 

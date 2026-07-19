@@ -140,6 +140,10 @@
         </div>
       {/if}
 
+      {#if store.uploadSkipped > 0}
+        <div class="skipped">{store.uploadSkipped} duplicate{store.uploadSkipped === 1 ? "" : "s"} skipped</div>
+      {/if}
+
       {#if store.uploadErrors.length > 0}
         <button type="button" class="errors-toggle" aria-expanded={showErrors} onclick={() => (showErrors = !showErrors)}>
           {store.uploadErrors.length} error{store.uploadErrors.length === 1 ? "" : "s"}
@@ -148,7 +152,10 @@
         {#if showErrors}
           <ul class="errors">
             {#each store.uploadErrors as err}
-              <li><span class="path">{err.path}</span><span class="reason">{err.error}</span></li>
+              <li>
+                <span class="path" title={err.path}>{err.file_name}</span>
+                <span class="reason">{err.error}</span>
+              </li>
             {/each}
           </ul>
         {/if}
@@ -176,6 +183,7 @@
   .mini-bar { height: 3px; overflow: hidden; background: var(--ui-border); border-radius: 0 0 var(--ui-radius-md) var(--ui-radius-md); }
   .mini-bar i { display: block; height: 100%; border-radius: 999px; background: var(--ui-accent); }
   .body { display: flex; padding: 10px 12px 11px; flex-direction: column; gap: 8px; border-radius: 0 0 var(--ui-radius-md) var(--ui-radius-md); background: #141113; }
+  .skipped { color: var(--ui-muted); font-size: 11px; }
   .bar { height: 3px; overflow: hidden; border-radius: 999px; background: var(--ui-border); }
   .bar i { display: block; height: 100%; border-radius: 999px; background: var(--ui-accent); }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -188,6 +196,6 @@
   .errors-toggle:hover { text-decoration: underline; text-underline-offset: 3px; }
   .errors { display: flex; max-height: 160px; margin: 0; padding: 0 0 0 1px; overflow-y: auto; flex-direction: column; gap: 6px; list-style: none; }
   .errors li { display: flex; min-width: 0; flex-direction: column; gap: 1px; font-size: 11px; }
-  .path { overflow: hidden; color: var(--ui-muted); font-family: var(--ui-font-mono); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
-  .reason { color: var(--ui-danger); line-height: 1.35; }
+  .path { overflow: hidden; color: var(--ui-muted); font-family: var(--ui-font-mono); font-size: 10.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .reason { overflow-wrap: anywhere; color: var(--ui-danger); line-height: 1.35; }
 </style>

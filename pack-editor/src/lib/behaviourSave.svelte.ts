@@ -20,14 +20,6 @@ export function initializeBehaviourHistory(value: Behaviour) {
   baseline = clone(value);
 }
 
-async function applyHistorySnapshot(value: Behaviour) {
-  const snapshot = clone(value);
-  await api.setBehaviour(snapshot);
-  store.behaviour = clone(snapshot);
-  baseline = clone(snapshot);
-  store.markBackupComplete("behaviour");
-}
-
 function persist() {
   // Chained rather than fired standalone: if `flushBehaviourSave` forces an early write while an
   // earlier debounced write is still in flight, this guarantees they apply in the order they were
@@ -40,8 +32,6 @@ function persist() {
     if (JSON.stringify(before) !== JSON.stringify(after)) {
       history.record({
         label: "Edit pack behaviour",
-        undo: () => applyHistorySnapshot(before),
-        redo: () => applyHistorySnapshot(after),
       });
     }
     baseline = clone(after);

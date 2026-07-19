@@ -50,7 +50,7 @@
   <section class="card">
     <div class="section-title"><div><h3>Timing</h3><p>A zero-second transition changes everything immediately.</p></div></div>
     <div class="fields">
-      <label>Duration (seconds)<input type="number" min="0" step="1" bind:value={transition.duration_seconds} oninput={scheduleBehaviourSave}/></label>
+      <label>Duration (seconds)<input type="number" min="0" step="1" value={transition.duration_seconds} oninput={(event)=>{const value=event.currentTarget.valueAsNumber;if(Number.isFinite(value)){transition.duration_seconds=value;scheduleBehaviourSave()}}}/></label>
       <Select label="Easing" value={transition.easing} disabled={transition.duration_seconds === 0} options={[{value:"linear",label:"Linear"},{value:"ease_in",label:"Ease in"},{value:"ease_out",label:"Ease out"},{value:"ease_in_out",label:"Ease in and out"}]} onchange={(value)=>{transition.easing=value as Transition["easing"];scheduleBehaviourSave()}}/>
     </div>
   </section>

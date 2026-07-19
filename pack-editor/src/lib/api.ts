@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ArtistSummary, Behaviour, EmbeddedMode, HistoryStatus, ImportResult, MediaFile, MetadataDto, PackInfo, RecentPack, TagSummary } from "./types.js";
+import type { ArtistSummary, Behaviour, EmbeddedMode, HistoryStatus, ImportResult, MediaFile, MediaServerInfo, MetadataDto, PackInfo, RecentPack, TagSummary } from "./types.js";
 
 export const api = {
   newPack: () => invoke<PackInfo>("new_pack"),
@@ -11,6 +11,7 @@ export const api = {
   savePack: () => invoke<PackInfo | null>("save_pack"),
   savePackAsDialog: () => invoke<PackInfo | null>("save_pack_as_dialog"),
   discardChanges: () => invoke<MetadataDto>("discard_changes"),
+  discardPack: () => invoke<void>("discard_pack"),
   closePack: () => invoke<void>("close_pack"),
   confirmClose: () => invoke<void>("confirm_close"),
   isPackSaved: () => invoke<boolean>("is_pack_saved"),
@@ -67,5 +68,5 @@ export const api = {
   addPaths: (paths: string[]) => invoke<void>("add_paths", { paths }),
   cancelUpload: () => invoke<void>("cancel_upload"),
 
-  getMediaPort: () => invoke<number>("get_media_port"),
+  getMediaServer: () => invoke<MediaServerInfo>("get_media_server"),
 };

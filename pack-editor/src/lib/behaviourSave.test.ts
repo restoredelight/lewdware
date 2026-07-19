@@ -69,20 +69,14 @@ describe("behaviour save scheduler", () => {
     expect(finished).toBe(true);
   });
 
-  it("records reversible snapshots that persist before updating the store", async () => {
+  it("records the persisted edit in backend history", async () => {
     const save = await scheduler();
     save.initializeBehaviourHistory(mocks.store.behaviour!);
     mocks.store.behaviour = value(7);
     save.scheduleBehaviourSave();
     await save.flushBehaviourSave();
-    const command = mocks.history.record.mock.calls[0][0];
-
-    await command.undo();
-    expect(mocks.api.setBehaviour).toHaveBeenLastCalledWith(value(0));
-    expect(mocks.store.behaviour).toEqual(value(0));
-    await command.redo();
-    expect(mocks.api.setBehaviour).toHaveBeenLastCalledWith(value(7));
-    expect(mocks.store.behaviour).toEqual(value(7));
+    expect(mocks.history.record).toHaveBeenCalledWith({ label: "Edit pack behaviour" });
+    expect(mocks.api.setBehaviour).toHaveBeenCalledOnce();
   });
 
   it("reports failures and allows a later save to recover the promise chain", async () => {

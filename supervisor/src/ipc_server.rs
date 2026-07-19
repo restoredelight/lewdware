@@ -66,7 +66,10 @@ async fn handle_connection(
 async fn stream_status(conn: Stream, mut status_rx: watch::Receiver<StatusInfo>) -> Result<()> {
     loop {
         let status = status_rx.borrow_and_update().clone();
-        if write_response(&conn, &Response::Status(status)).await.is_err() {
+        if write_response(&conn, &Response::Status(status))
+            .await
+            .is_err()
+        {
             return Ok(());
         }
         if status_rx.changed().await.is_err() {

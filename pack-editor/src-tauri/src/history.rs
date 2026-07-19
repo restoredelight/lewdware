@@ -278,10 +278,7 @@ pub fn finish_media_import(connection: &mut Connection, history_id: i64) -> Resu
                 "UPDATE history_entries SET before_state_id = ? WHERE sequence = ?",
                 params![before_state, sequence + 1],
             )?;
-            tx.execute(
-                "UPDATE history_entries SET sequence = sequence - 1 WHERE sequence > ?",
-                [sequence],
-            )?;
+            shift_sequences_down(&tx, Some(sequence))?;
             tx.execute(
                 "UPDATE history_state SET cursor = MAX(0, cursor - 1) WHERE singleton = 1 AND cursor > ?",
                 [sequence],
@@ -459,9 +456,31 @@ fn trim(tx: &Transaction<'_>) -> Result<()> {
             break;
         }
         tx.execute("DELETE FROM history_entries WHERE sequence = 0", [])?;
-        tx.execute("UPDATE history_entries SET sequence = sequence - 1", [])?;
+        shift_sequences_down(tx, None)?;
         tx.execute(
             "UPDATE history_state SET cursor = cursor - 1 WHERE singleton = 1",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Shift sequence values without depending on SQLite's row-update order under the UNIQUE
+/// constraint. The negative intermediate values cannot collide with live history sequences.
+fn shift_sequences_down(tx: &Transaction<'_>, after: Option<i64>) -> Result<()> {
+    if let Some(after) = after {
+        tx.execute(
+            "UPDATE history_entries SET sequence = -sequence - 1 WHERE sequence > ?",
+            [after],
+        )?;
+        tx.execute(
+            "UPDATE history_entries SET sequence = -sequence - 2 WHERE sequence < ?",
+            [-after - 1],
+        )?;
+    } else {
+        tx.execute("UPDATE history_entries SET sequence = -sequence - 1", [])?;
+        tx.execute(
+            "UPDATE history_entries SET sequence = -sequence - 2 WHERE sequence < 0",
             [],
         )?;
     }

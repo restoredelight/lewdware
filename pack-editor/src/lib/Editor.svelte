@@ -105,11 +105,16 @@
   });
 
   onMount(async () => {
-    const metadata = await api.getPackMetadata();
-    store.metadata = metadata;
-    store.packName = metadata.name;
-    packTitle = metadata.name;
-    initializeMetadataHistory(metadata);
+    try {
+      const metadata = await api.getPackMetadata();
+      store.metadata = metadata;
+      store.packName = metadata.name;
+      packTitle = metadata.name;
+      initializeMetadataHistory(metadata);
+    } catch (error) {
+      saveError = `Could not load pack metadata: ${String(error)}`;
+      taskFeedback.error("metadata-load", saveError);
+    }
   });
 
   function editPackTitle(value: string) {
@@ -175,7 +180,8 @@
   async function save() {
     if (!store.beginSave()) return;
     saveError = null;
-    if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
+    if (store.uploading && !store.packHasDestination) taskFeedback.warning("save", "Waiting for the import to finish before the first save…");
+    else if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
     else taskFeedback.progress("save", "Saving pack…");
     try {
       await flushMetadataSave();
@@ -200,7 +206,7 @@
   async function saveAs() {
     if (!store.beginSave()) return;
     saveError = null;
-    if (store.uploading) taskFeedback.warning("save", "Saving now — unfinished uploads won’t be included");
+    if (store.uploading) taskFeedback.warning("save", "Waiting for the import to finish before Save As…");
     else taskFeedback.progress("save", "Choosing save location…");
     try {
       await flushMetadataSave();
@@ -227,23 +233,32 @@
     }
     cancelMetadataSave();
     cancelBehaviourSave();
-    const meta = await api.discardChanges();
-    store.metadata = meta;
-    store.markPackSaved();
-    const [files, tags, artists, behaviour] = await Promise.all([
-      api.getFiles(),
-      api.getAllTags(),
-      api.getAllArtists(),
-      api.getBehaviour(),
-    ]);
-    store.files = files;
-    store.allTags = tags;
-    store.allArtists = artists;
-    store.behaviour = behaviour;
-    store.suspendedExperience = null;
-    initializeMetadataHistory(meta);
-    initializeBehaviourHistory(behaviour);
-    history.reset(true);
+    saveError = null;
+    try {
+      const meta = await api.discardChanges();
+      store.metadata = meta;
+      store.packName = meta.name;
+      packTitle = meta.name;
+      store.markPackSaved();
+      const [files, tags, artists, behaviour] = await Promise.all([
+        api.getFiles(),
+        api.getAllTags(),
+        api.getAllArtists(),
+        api.getBehaviour(),
+      ]);
+      store.files = files;
+      store.allTags = tags;
+      store.allArtists = artists;
+      store.behaviour = behaviour;
+      store.suspendedExperience = null;
+      initializeMetadataHistory(meta);
+      initializeBehaviourHistory(behaviour);
+      history.reset(true);
+      taskFeedback.success("pack-action", "Changes discarded");
+    } catch (err) {
+      saveError = `Could not discard changes: ${String(err)}`;
+      taskFeedback.error("pack-action", saveError);
+    }
   }
 
   async function finishClosePack() {
@@ -261,8 +276,18 @@
     if (store.saveActive) {
       closePackAfterSave = true;
       taskFeedback.progress("save", "Finishing save before closing pack…", store.saveDone, store.saveTotal || null);
-    } else if (store.packSaved) await finishClosePack();
-    else showClosePackDialog = true;
+    } else {
+      try {
+        await flushMetadataSave();
+        await flushBehaviourSave();
+        const saved = await api.isPackSaved();
+        store.packSaved = saved;
+        if (saved) await finishClosePack();
+        else showClosePackDialog = true;
+      } catch (error) {
+        taskFeedback.error("pack-action", `Could not verify whether the pack is saved: ${String(error)}`);
+      }
+    }
   }
 
   async function saveAndClosePack() {
@@ -304,9 +329,8 @@
     cancelMetadataSave();
     saveError = null;
     try {
-      await api.discardChanges();
-      store.markPackSaved();
-      await finishClosePack();
+      await api.discardPack();
+      store.closePack();
     } catch (err) {
       saveError = `Could not discard changes: ${String(err)}`;
       taskFeedback.error("pack-action", saveError);
