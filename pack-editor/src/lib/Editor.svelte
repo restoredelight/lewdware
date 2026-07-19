@@ -351,34 +351,36 @@
 <div class="flex flex-col h-screen bg-bg text-text select-none">
   <!-- Toolbar -->
   <header class="flex items-center gap-2 px-3 h-11 bg-surface border-b border-border shrink-0">
-    <input
-      bind:this={packTitleInput}
-      class="pack-title text-sm font-semibold text-text truncate"
-      aria-label="Pack title"
-      title="Edit pack title"
-      value={packTitle}
-      disabled={!store.metadata}
-      oninput={(event) => editPackTitle(event.currentTarget.value)}
-      onblur={finishPackTitleEdit}
-      onkeydown={handlePackTitleKeydown}
-    />
-    {#if store.recoveryStatus === "error"}
-      <span class="recovery-status flex items-center gap-1.5 font-mono text-[11px] text-[var(--ui-danger)]" role="alert" title={store.recoveryError ?? "Changes could not be backed up locally."}>
-        <span class="w-1.5 h-1.5 shrink-0 rounded-full bg-[var(--ui-danger)]"></span>
-        <span class="recovery-label">Backup failed</span>
-      </span>
-    {:else if store.recoveryStatus !== "saved"}
-      <span
-        class="w-1.5 h-1.5 shrink-0 rounded-full bg-muted {store.recoveryStatus === 'pending' ? 'animate-pulse' : ''}"
-        role="status"
-        aria-label="Unsaved changes"
-        title={store.recoveryStatus === "pending"
-          ? "Backing up changes…"
-          : store.packHasDestination
-            ? "Unsaved changes — backed up locally"
-            : "Draft — backed up locally; choose a destination on first save"}
-      ></span>
-    {/if}
+    <div class="flex items-center gap-0">
+      <input
+        bind:this={packTitleInput}
+        class="pack-title text-sm font-semibold text-text truncate"
+        aria-label="Pack title"
+        title="Edit pack title"
+        value={packTitle}
+        disabled={!store.metadata}
+        oninput={(event) => editPackTitle(event.currentTarget.value)}
+        onblur={finishPackTitleEdit}
+        onkeydown={handlePackTitleKeydown}
+      />
+      {#if store.recoveryStatus === "error"}
+        <span class="recovery-status flex items-center gap-1.5 font-mono text-[11px] text-[var(--ui-danger)]" role="alert" title={store.recoveryError ?? "Changes could not be backed up locally."}>
+          <span class="w-1.5 h-1.5 shrink-0 rounded-full bg-[var(--ui-danger)]"></span>
+          <span class="recovery-label">Backup failed</span>
+        </span>
+      {:else if store.recoveryStatus !== "saved"}
+        <span
+          class="w-1.5 h-1.5 shrink-0 rounded-full bg-muted {store.recoveryStatus === 'pending' ? 'animate-pulse' : ''}"
+          role="status"
+          aria-label="Unsaved changes"
+          title={store.recoveryStatus === "pending"
+            ? "Backing up changes…"
+            : store.packHasDestination
+              ? "Unsaved changes — backed up locally"
+              : "Draft — backed up locally; choose a destination on first save"}
+        ></span>
+      {/if}
+    </div>
     <div class="flex-1"></div>
     <TaskStatus />
     <div class="flex items-center">
@@ -470,7 +472,7 @@
 </div>
 
 <style>
-  .pack-title { min-width: 48px; max-width: min(36vw, 360px); padding: 2px 4px; border: 1px solid transparent; border-radius: var(--ui-radius-sm); background: transparent; outline: none; }
+  .pack-title { field-sizing: content; min-width: 1ch; max-width: min(36vw, 360px); padding: 2px 2px 2px 4px; border: 1px solid transparent; border-radius: var(--ui-radius-sm); background: transparent; outline: none; }
   .pack-title:hover:not(:disabled) { border-color: var(--ui-border); background: var(--ui-bg); }
   .pack-title:focus { border-color: var(--ui-focus); background: var(--ui-bg); }
   .pack-title:disabled { opacity: 1; }

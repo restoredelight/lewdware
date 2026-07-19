@@ -190,7 +190,7 @@
         <h2>Moving from Edgeware?</h2>
         <p>Import an Edgeware pack and convert it into an editable Lewdware pack.</p>
       </div>
-      <Button size="compact" variant="quiet" onclick={importEdgeware} loading={busy === "import"} disabled={busy !== null}>Import Edgeware pack…</Button>
+      <Button size="compact" onclick={importEdgeware} loading={busy === "import"} disabled={busy !== null}>Import Edgeware pack…</Button>
     </div>
 
     {#if error}
