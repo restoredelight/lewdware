@@ -42,18 +42,6 @@
     if (!tracked) store.markLocallyBackedUp();
   }
 
-  function restoreLocalArtist(artist: string, ids: number[], target: string | null, targetIds: number[]) {
-    const sourceSet = new Set(ids);
-    const targetSet = new Set(targetIds);
-    store.files = store.files.map((file) => {
-      let artists = file.artists.filter((item) => item !== artist && item !== target);
-      if (sourceSet.has(file.id)) artists.push(artist);
-      if (target && targetSet.has(file.id)) artists.push(target);
-      return { ...file, artists: [...new Set(artists)] };
-    });
-    store.allArtists = [...new Set(store.files.flatMap((file) => file.artists))];
-  }
-
   async function apply() {
     if (!editing) return;
     const target = value.trim();
@@ -63,29 +51,12 @@
     try {
       const source = editing;
       const editMode = mode;
-      const sourceIds = store.files.filter((file) => file.artists.includes(source)).map((file) => file.id);
-      const targetIds = store.files.filter((file) => file.artists.includes(target)).map((file) => file.id);
       if (editMode === "rename") await api.renameArtist(source, target);
       else await api.mergeArtist(source, target);
       updateLocal(source, target, true);
       const operation = editMode === "rename" ? "Rename" : "Merge";
       history.record({
         label: `${operation} artist “${source}”`,
-        undo: async () => {
-          if (editMode === "rename") {
-            await api.renameArtist(target, source);
-          } else {
-            await api.restoreMergedArtist(source, target, sourceIds, targetIds);
-          }
-          restoreLocalArtist(source, sourceIds, target, targetIds);
-          summaries = await api.getArtistSummaries();
-        },
-        redo: async () => {
-          if (editMode === "rename") await api.renameArtist(source, target);
-          else await api.mergeArtist(source, target);
-          updateLocal(source, target, true);
-          summaries = await api.getArtistSummaries();
-        },
       });
       summaries = await api.getArtistSummaries();
       editing = null;
@@ -97,21 +68,10 @@
     if (!deleting) return;
     const artist = deleting; deleting = null; busy = true; error = null;
     try {
-      const sourceIds = store.files.filter((file) => file.artists.includes(artist)).map((file) => file.id);
       await api.deleteArtist(artist);
       updateLocal(artist, null, true);
       history.record({
         label: `Delete artist “${artist}”`,
-        undo: async () => {
-          await api.restoreDeletedArtist(artist, sourceIds);
-          restoreLocalArtist(artist, sourceIds, null, []);
-          summaries = await api.getArtistSummaries();
-        },
-        redo: async () => {
-          await api.deleteArtist(artist);
-          updateLocal(artist, null, true);
-          summaries = await api.getArtistSummaries();
-        },
       });
       summaries = await api.getArtistSummaries();
     } catch (err) { error = String(err); }

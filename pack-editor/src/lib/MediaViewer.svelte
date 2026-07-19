@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { store } from "./store.svelte.js";
   import { ChevronLeft, ChevronRight, Icon, XMark } from "svelte-hero-icons";
+  import { openMediaPreview } from "./mediaPreview.js";
 
   const file = $derived(store.openedFile);
   const files = $derived(store.filteredFiles);
@@ -23,7 +24,7 @@
     const idx = files.findIndex((f) => f.id === store.openedId);
     if (idx === -1) return;
     const next = idx + dir;
-    if (next >= 0 && next < files.length) store.openedId = files[next].id;
+    if (next >= 0 && next < files.length) openMediaPreview(files[next].id);
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -69,6 +70,12 @@
         <p class="mt-0.5 text-[11px] text-white/65">{idx + 1} of {files.length}</p>
       </div>
       <button onclick={close} class="pointer-events-auto cursor-pointer w-9 h-9 shrink-0 grid place-items-center rounded-full bg-black/60 text-white/80 hover:bg-black/80 hover:text-white transition-colors" aria-label="Close preview"><span class="block w-5 h-5"><Icon src={XMark} /></span></button>
+    </div>
+  {/if}
+
+  {#if store.saveBlocksPreviews}
+    <div class="absolute z-10 top-3 left-1/2 -translate-x-1/2 rounded-md border border-white/15 bg-black/75 px-3 py-2 text-[11px] font-medium text-white/80 shadow-lg backdrop-blur-sm" role="status">
+      Saving pack — playback may pause briefly
     </div>
   {/if}
 

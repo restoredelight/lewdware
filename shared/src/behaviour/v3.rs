@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Content, schema as legacy};
+use super::{schema as legacy, Content};
 
 pub const VERSION: u32 = 3;
 
@@ -51,6 +51,58 @@ impl Behaviour {
             return vec![];
         };
         experience.timeline.validate()
+    }
+
+    /// Rewrites every reference to a media tag in this behaviour document.
+    ///
+    /// `replacement = None` removes the tag. Duplicate references are removed while preserving
+    /// their original order, which is important when merging one tag into another.
+    pub fn rewrite_tag(&mut self, from: &str, replacement: Option<&str>) {
+        fn rewrite(tags: &mut Vec<String>, from: &str, replacement: Option<&str>) {
+            let mut seen = HashSet::new();
+            tags.retain_mut(|tag| {
+                if tag == from {
+                    let Some(replacement) = replacement else {
+                        return false;
+                    };
+                    replacement.clone_into(tag);
+                }
+                seen.insert(tag.clone())
+            });
+        }
+
+        let content = &mut self.content;
+        for group in &mut content.content_groups {
+            rewrite(&mut group.tags, from, replacement);
+        }
+        for item in &mut content.captions {
+            rewrite(&mut item.tags, from, replacement);
+        }
+        for item in &mut content.prompts {
+            rewrite(&mut item.tags, from, replacement);
+        }
+        for item in &mut content.notifications {
+            rewrite(&mut item.tags, from, replacement);
+        }
+        for item in &mut content.subliminals {
+            rewrite(&mut item.tags, from, replacement);
+        }
+        for item in &mut content.web_links {
+            rewrite(&mut item.tags, from, replacement);
+        }
+        rewrite(&mut content.wallpaper_tags, from, replacement);
+        rewrite(&mut content.splash_tags, from, replacement);
+
+        if let Some(experience) = &mut self.experience {
+            for stage in &mut experience.timeline.stages {
+                if let Some(tags) = &mut stage.content.tags {
+                    rewrite(tags, from, replacement);
+                }
+                if let Some(tags) = &mut stage.content.wallpaper_tags {
+                    rewrite(tags, from, replacement);
+                }
+            }
+        }
     }
 }
 
@@ -460,6 +512,54 @@ mod tests {
         .unwrap();
         let decoded = Behaviour::from_json_bytes(&migrated.to_json_bytes().unwrap()).unwrap();
         assert_eq!(decoded, migrated);
+    }
+
+    #[test]
+    fn rewriting_a_tag_updates_every_behaviour_reference_and_deduplicates_merges() {
+        let mut behaviour = Behaviour::from_json_bytes(br#"{
+          "version": 3,
+          "content": {
+            "content_groups": [{"id":"group","label":"Group","tags":["old","new"],"enabled_by_default":true}],
+            "captions": [{"text":"Caption","tags":["old"]}],
+            "prompts": [{"text":"Prompt","tags":["old"]}],
+            "notifications": [{"text":"Notification","tags":["old"]}],
+            "subliminals": [{"text":"Subliminal","tags":["old"]}],
+            "web_links": [{"url":"https://example.com","tags":["old"]}],
+            "wallpaper_tags": ["old"],
+            "splash_tags": ["old"]
+          },
+          "experience": {"timeline":{"stages":[{
+            "id":"stage","label":"Stage","content":{"tags":["old"],"wallpaper_tags":["old"]}
+          }],"transitions":[]}}
+        }"#).unwrap();
+
+        behaviour.rewrite_tag("old", Some("new"));
+        assert_eq!(behaviour.content.content_groups[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.captions[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.prompts[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.notifications[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.subliminals[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.web_links[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.wallpaper_tags, vec!["new"]);
+        assert_eq!(behaviour.content.splash_tags, vec!["new"]);
+        let stage = &behaviour.experience.as_ref().unwrap().timeline.stages[0];
+        assert_eq!(
+            stage.content.tags.as_deref(),
+            Some(["new".into()].as_slice())
+        );
+        assert_eq!(
+            stage.content.wallpaper_tags.as_deref(),
+            Some(["new".into()].as_slice())
+        );
+
+        behaviour.rewrite_tag("new", None);
+        assert!(behaviour.content.content_groups[0].tags.is_empty());
+        assert!(behaviour.experience.as_ref().unwrap().timeline.stages[0]
+            .content
+            .tags
+            .as_ref()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

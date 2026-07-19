@@ -167,6 +167,10 @@ pub async fn process_files(
     upload_lock: Arc<RwLock<()>>,
     mut cancel: watch::Receiver<bool>,
 ) {
+    // Close, discard and identity-changing Save As operations take the write side. Holding this
+    // for the complete batch gives those operations a reliable way to cancel and drain imports,
+    // including their pending history entry, rather than merely waiting for the final DB commit.
+    let _batch_guard = upload_lock.read().await;
     let total = paths.len();
     let _ = app.emit("upload:start", serde_json::json!({ "total": total }));
 
@@ -174,7 +178,10 @@ pub async fn process_files(
         let lock = pack_state.lock().await;
         match lock.as_ref() {
             Some(pack) => (pack.dir().to_path_buf(), pack.id()),
-            None => return,
+            None => {
+                let _ = app.emit("upload:done", ());
+                return;
+            }
         }
     };
     let staging = match tempfile::Builder::new()
@@ -189,6 +196,23 @@ pub async fn process_files(
             );
             let _ = app.emit("upload:done", ());
             return;
+        }
+    };
+    let history_id = {
+        let lock = pack_state.lock().await;
+        match lock.as_ref().filter(|pack| pack.id() == pack_id) {
+            Some(pack) => match pack.begin_media_import().await {
+                Ok(id) => id,
+                Err(error) => {
+                    let _ = app.emit(
+                        "upload:error",
+                        serde_json::json!({ "path": dir, "error": format!("Could not begin import: {error}") }),
+                    );
+                    let _ = app.emit("upload:done", ());
+                    return;
+                }
+            },
+            None => return,
         }
     };
 
@@ -210,6 +234,7 @@ pub async fn process_files(
                 &staging,
                 encoder,
                 &upload_lock,
+                history_id,
             )
             .await
             {
@@ -243,6 +268,18 @@ pub async fn process_files(
         _ = wait_cancelled(&mut cancel) => {}
     }
 
+    {
+        let lock = pack_state.lock().await;
+        if let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) {
+            if let Err(error) = pack.finish_media_import(history_id).await {
+                let _ = app.emit(
+                    "upload:error",
+                    serde_json::json!({ "path": dir, "error": format!("Could not finalize import history: {error}") }),
+                );
+            }
+        }
+    }
+
     let _ = app.emit("upload:done", ());
 }
 
@@ -253,7 +290,8 @@ async fn process_one_file(
     dir: &Path,
     staging: &Arc<TempDir>,
     encoder: HardwareEncoder,
-    upload_lock: &RwLock<()>,
+    _upload_lock: &RwLock<()>,
+    history_id: i64,
 ) -> Result<Option<MediaFile>, ProcessErrorKind> {
     let path_owned = path.to_path_buf();
     let hash = tokio::task::spawn_blocking(move || hash_file(&path_owned))
@@ -303,9 +341,6 @@ async fn process_one_file(
         None => return Err(ProcessErrorKind::Unrecognized),
     };
 
-    // Saving only needs to exclude the atomic commit into the managed media directory and the
-    // corresponding database update. Encoding itself happens in pack-local staging storage.
-    let _read_guard = upload_lock.read().await;
     let mut lock = pack_state.lock().await;
     let pack = lock
         .as_mut()
@@ -323,7 +358,7 @@ async fn process_one_file(
     encoded.path = final_path;
 
     let media = pack
-        .add_file(encoded, path, hash)
+        .add_file_to_import(encoded, path, hash, Some(history_id))
         .await
         .map_err(ProcessErrorKind::PackError)?;
     match media {

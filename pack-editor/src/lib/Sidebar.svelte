@@ -10,6 +10,7 @@
   import EmptyState from "$ui/EmptyState.svelte";
   import IconButton from "$ui/IconButton.svelte";
   import { copyFileName } from "./clipboard.js";
+  import { openMediaPreview } from "./mediaPreview.js";
 
   function formatDuration(s: number): string {
     const h = Math.floor(s / 3600);
@@ -133,8 +134,6 @@
     store.addTagToFiles(ids, tag, true);
     history.record({
       label: affected.length === 1 ? `Add tag “${tag}”` : `Add tag “${tag}” to ${affected.length} items`,
-      undo: async () => { await api.removeTagFromFiles(affected, tag); store.removeTagFromFiles(affected, tag, true); },
-      redo: async () => { await api.addTagToFiles(affected, tag); store.addTagToFiles(affected, tag, true); },
     });
   }
   async function removeTag(tag: string) {
@@ -145,8 +144,6 @@
     store.removeTagFromFiles(ids, tag, true);
     history.record({
       label: affected.length === 1 ? `Remove tag “${tag}”` : `Remove tag “${tag}” from ${affected.length} items`,
-      undo: async () => { await api.addTagToFiles(affected, tag); store.addTagToFiles(affected, tag, true); },
-      redo: async () => { await api.removeTagFromFiles(affected, tag); store.removeTagFromFiles(affected, tag, true); },
     });
   }
   async function addArtist(artist: string) {
@@ -157,8 +154,6 @@
     store.addArtistToFiles(ids, artist, true);
     history.record({
       label: affected.length === 1 ? `Add artist “${artist}”` : `Add artist “${artist}” to ${affected.length} items`,
-      undo: async () => { await api.removeArtistFromFiles(affected, artist); store.removeArtistFromFiles(affected, artist, true); },
-      redo: async () => { await api.addArtistToFiles(affected, artist); store.addArtistToFiles(affected, artist, true); },
     });
   }
   async function removeArtist(artist: string) {
@@ -169,8 +164,6 @@
     store.removeArtistFromFiles(ids, artist, true);
     history.record({
       label: affected.length === 1 ? `Remove artist “${artist}”` : `Remove artist “${artist}” from ${affected.length} items`,
-      undo: async () => { await api.addArtistToFiles(affected, artist); store.addArtistToFiles(affected, artist, true); },
-      redo: async () => { await api.removeArtistFromFiles(affected, artist); store.removeArtistFromFiles(affected, artist, true); },
     });
   }
   async function saveSource() {
@@ -183,8 +176,6 @@
     store.updateFileSourceUrl(id, after, true);
     history.record({
       label: `Set source for “${primary.file_name}”`,
-      undo: async () => { await api.setFileSourceUrl(id, before); store.updateFileSourceUrl(id, before, true); },
-      redo: async () => { await api.setFileSourceUrl(id, after); store.updateFileSourceUrl(id, after, true); },
     });
   }
   async function rename() {
@@ -198,8 +189,6 @@
       store.updateFileName(id, after, true);
       history.record({
         label: `Rename “${before}”`,
-        undo: async () => { await api.setFileTitle(id, before); store.updateFileName(id, before, true); },
-        redo: async () => { await api.setFileTitle(id, after); store.updateFileName(id, after, true); },
       });
     }
     catch (error) { titleError = String(error); titleValue = primary.file_name; }
@@ -232,12 +221,12 @@
   ></div>
   {#if primary}
     <!-- Preview -->
-    <button class="preview shrink-0 bg-bg flex items-center justify-center" style="height: 160px" onclick={() => (store.openedId = primary.id)} aria-label={`Preview ${primary.file_name}`}>
+    <button class="preview shrink-0 bg-bg flex items-center justify-center" style="height: 160px" onclick={() => openMediaPreview(primary.id)} aria-label={`Preview ${primary.file_name}`}>
       {#if primary.file_info.type === "audio"}
         <span class="w-12 h-12 text-muted"><Icon src={MusicalNote} /></span>
       {:else}
         <img
-          src="{store.mediaBase}/preview/{primary.id}"
+          src="{store.mediaBase}/{store.saveBlocksPreviews ? 'thumbnail' : 'preview'}/{primary.id}"
           alt={primary.file_name}
           draggable="false"
           class="max-w-full max-h-full object-contain"

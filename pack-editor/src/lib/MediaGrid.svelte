@@ -5,6 +5,7 @@
   import { store } from "./store.svelte.js";
   import type { MediaFile } from "./types.js";
   import { copyFileName } from "./clipboard.js";
+  import { openMediaPreview } from "./mediaPreview.js";
 
   // Item geometry (px). ITEM_H is the fixed virtualization slot; the visible tile inside
   // it hugs its content (thumbnail + up to two caption lines) and may be shorter.
@@ -68,7 +69,7 @@
   }
 
   function handleDblClick(file: MediaFile) {
-    store.openedId = file.id;
+    openMediaPreview(file.id);
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -79,7 +80,7 @@
       return;
     }
     if (e.key === "Enter" && store.gridActiveId != null) {
-      store.openedId = store.gridActiveId;
+      openMediaPreview(store.gridActiveId);
       return;
     }
     if (e.key === " " && store.gridActiveId != null) {

@@ -28,14 +28,3 @@ export function tagUsage(behaviour: Behaviour, tag: string) {
 export function behaviourTags(behaviour: Behaviour): string[] {
   return [...new Set(lists(behaviour).flatMap((list) => list.tags))];
 }
-
-export function rewriteTag(behaviour: Behaviour, from: string, to: string | null): Behaviour {
-  // Callers unwrap reactive state at their framework boundary; this utility stays framework-
-  // agnostic and keeps its input immutable.
-  const copy = structuredClone(behaviour);
-  for (const list of lists(copy)) {
-    const rewritten = list.tags.flatMap((tag) => tag === from ? (to ? [to] : []) : [tag]);
-    list.tags.splice(0, list.tags.length, ...new Set(rewritten));
-  }
-  return copy;
-}

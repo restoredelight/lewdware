@@ -26,11 +26,13 @@ blake3 = "1.8"
 dirs = "6"
 futures = "0.3"
 infer = "0.19"
+libc = "0.2"
 mime_guess = "2"
 r2d2 = "0.8"
 r2d2_sqlite = { version = "0.34.0", features = ["bundled"] }
 rayon = "1"
-rusqlite = { version = "0.39.0", features = ["bundled", "fallible_uint"] }
+reflink-copy = "0.1"
+rusqlite = { version = "0.39.0", features = ["array", "backup", "bundled", "fallible_uint", "session", "vtab"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -40,4 +42,3 @@ walkdir = "2"
 
 [dev-dependencies]
 proptest = "1"
-

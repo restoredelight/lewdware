@@ -63,9 +63,6 @@
       modes = [...modes, mode];
       history.record({
         label: `Add mode “${mode.name}”`,
-        undo: async () => { await api.removeMode(mode.id); modes = modes.filter((item) => item.id !== mode.id); },
-        redo: async () => { await api.restoreMode(mode.id); modes = [...modes, mode].sort((a, b) => a.id - b.id); },
-        dispose: () => api.purgeHistoryMode(mode.id),
       });
     } catch (cause) { error = String(cause); }
     finally { adding = false; }
@@ -85,9 +82,6 @@
       history.record({
         label: `Remove mode “${mode.name}”`,
         storageBytes: mode.size,
-        undo: async () => { await api.restoreMode(mode.id); modes = [...modes, mode].sort((a, b) => a.id - b.id); },
-        redo: async () => { await api.removeMode(mode.id); modes = modes.filter((item) => item.id !== mode.id); },
-        dispose: () => api.purgeHistoryMode(mode.id),
       });
     } catch (cause) { error = String(cause); }
   }

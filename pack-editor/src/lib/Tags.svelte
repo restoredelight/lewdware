@@ -8,9 +8,8 @@
   import { api } from "./api.js";
   import { flushBehaviourSave, initializeBehaviourHistory } from "./behaviourSave.svelte.js";
   import { store } from "./store.svelte.js";
-  import { behaviourTags, rewriteTag, tagUsage } from "./tagReferences.js";
+  import { behaviourTags, tagUsage } from "./tagReferences.js";
   import type { TagSummary } from "./types.js";
-  import type { Behaviour } from "./types.js";
   import { history } from "./history.svelte.js";
   import EmptyState from "$ui/EmptyState.svelte";
 
@@ -43,26 +42,10 @@
     editing = tag; mode = nextMode; value = nextMode === "rename" ? tag : ""; error = null;
   }
 
-  const cloneBehaviour = (behaviour: Behaviour) => structuredClone($state.snapshot(behaviour));
-
   function updateLocal(from: string, to: string | null, tracked = false) {
     store.files = store.files.map((file) => ({ ...file, tags: [...new Set(file.tags.flatMap((tag) => tag === from ? (to ? [to] : []) : [tag]))] }));
     store.allTags = [...new Set([...store.files.flatMap((file) => file.tags), ...(store.behaviour ? behaviourTags(store.behaviour) : [])])];
     if (!tracked) store.markLocallyBackedUp();
-  }
-
-  function restoreLocalTag(tag: string, ids: number[], target: string | null, targetIds: number[], behaviour: Behaviour) {
-    const sourceSet = new Set(ids);
-    const targetSet = new Set(targetIds);
-    store.files = store.files.map((file) => {
-      let tags = file.tags.filter((item) => item !== tag && item !== target);
-      if (sourceSet.has(file.id)) tags.push(tag);
-      if (target && targetSet.has(file.id)) tags.push(target);
-      return { ...file, tags: [...new Set(tags)] };
-    });
-    store.behaviour = cloneBehaviour(behaviour);
-    initializeBehaviourHistory(store.behaviour);
-    store.allTags = [...new Set([...store.files.flatMap((file) => file.tags), ...behaviourTags(store.behaviour)])];
   }
 
   async function apply() {
@@ -75,35 +58,15 @@
       await flushBehaviourSave();
       const source = editing;
       const editMode = mode;
-      const before = cloneBehaviour(store.behaviour);
-      const after = rewriteTag(before, source, target);
-      const sourceIds = store.files.filter((file) => file.tags.includes(source)).map((file) => file.id);
-      const targetIds = store.files.filter((file) => file.tags.includes(target)).map((file) => file.id);
-      if (editMode === "rename") await api.renameTag(source, target, after);
-      else await api.mergeTag(source, target, after);
+      const after = editMode === "rename"
+        ? await api.renameTag(source, target)
+        : await api.mergeTag(source, target);
       store.behaviour = after;
       initializeBehaviourHistory(after);
       updateLocal(source, target, true);
       const operation = editMode === "rename" ? "Rename" : "Merge";
       history.record({
         label: `${operation} tag “${source}”`,
-        undo: async () => {
-          if (editMode === "rename") {
-            await api.renameTag(target, source, before);
-          } else {
-            await api.restoreMergedTag(source, target, sourceIds, targetIds, before);
-          }
-          restoreLocalTag(source, sourceIds, target, targetIds, before);
-          summaries = await api.getTagSummaries();
-        },
-        redo: async () => {
-          if (editMode === "rename") await api.renameTag(source, target, after);
-          else await api.mergeTag(source, target, after);
-          store.behaviour = cloneBehaviour(after);
-          initializeBehaviourHistory(store.behaviour);
-          updateLocal(source, target, true);
-          summaries = await api.getTagSummaries();
-        },
       });
       summaries = await api.getTagSummaries();
       editing = null;
@@ -116,27 +79,12 @@
     const tag = deleting; deleting = null; busy = true; error = null;
     try {
       await flushBehaviourSave();
-      const before = cloneBehaviour(store.behaviour);
-      const after = rewriteTag(before, tag, null);
-      const sourceIds = store.files.filter((file) => file.tags.includes(tag)).map((file) => file.id);
-      await api.deleteTag(tag, after);
+      const after = await api.deleteTag(tag);
       store.behaviour = after;
       initializeBehaviourHistory(after);
       updateLocal(tag, null, true);
       history.record({
         label: `Delete tag “${tag}”`,
-        undo: async () => {
-          await api.restoreDeletedTag(tag, sourceIds, before);
-          restoreLocalTag(tag, sourceIds, null, [], before);
-          summaries = await api.getTagSummaries();
-        },
-        redo: async () => {
-          await api.deleteTag(tag, after);
-          store.behaviour = cloneBehaviour(after);
-          initializeBehaviourHistory(store.behaviour);
-          updateLocal(tag, null, true);
-          summaries = await api.getTagSummaries();
-        },
       });
       summaries = await api.getTagSummaries();
     } catch (err) { error = String(err); }

@@ -64,6 +64,10 @@ export interface SaveProgress {
   total: number;
 }
 
+export interface SaveDone {
+  has_unsaved_changes: boolean;
+}
+
 // behaviour.json (shared/src/behaviour/schema.rs) -- field names are the exact JSON keys.
 
 export interface TextItem {
@@ -126,4 +130,11 @@ export interface Behaviour {
   version: number;
   content: Content;
   experience: Experience | null;
+}
+export interface HistoryStatus {
+  can_undo: boolean;
+  can_redo: boolean;
+  undo_label: string | null;
+  redo_label: string | null;
+  at_saved_state: boolean;
 }

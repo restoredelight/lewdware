@@ -87,6 +87,9 @@ pub async fn run_import(
     upload_lock: Arc<RwLock<()>>,
     mut cancel: watch::Receiver<bool>,
 ) {
+    // See encode::process_files: lifecycle operations drain this whole batch, not just one
+    // file's final commit, before replacing or deleting the pack working directory.
+    let _batch_guard = upload_lock.read().await;
     let (dir, pack_id) = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {
@@ -106,6 +109,23 @@ pub async fn run_import(
             );
             let _ = app.emit("upload:done", ());
             return;
+        }
+    };
+    let history_id = {
+        let lock = pack_state.lock().await;
+        match lock.as_ref().filter(|pack| pack.id() == pack_id) {
+            Some(pack) => match pack.begin_media_import().await {
+                Ok(id) => id,
+                Err(error) => {
+                    let _ = app.emit(
+                        "upload:error",
+                        serde_json::json!({ "path": dir, "error": format!("Could not begin import: {error}") }),
+                    );
+                    let _ = app.emit("upload:done", ());
+                    return;
+                }
+            },
+            None => return,
         }
     };
 
@@ -133,6 +153,7 @@ pub async fn run_import(
                 &staging,
                 encoder,
                 &upload_lock,
+                history_id,
             )
             .await
             {
@@ -161,6 +182,18 @@ pub async fn run_import(
         _ = wait_cancelled(&mut cancel) => {}
     }
 
+    {
+        let lock = pack_state.lock().await;
+        if let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) {
+            if let Err(error) = pack.finish_media_import(history_id).await {
+                let _ = app.emit(
+                    "upload:error",
+                    serde_json::json!({ "path": dir, "error": format!("Could not finalize import history: {error}") }),
+                );
+            }
+        }
+    }
+
     let _ = app.emit("upload:done", ());
 }
 
@@ -172,7 +205,8 @@ async fn import_one_media(
     dir: &Path,
     staging: &Arc<TempDir>,
     encoder: HardwareEncoder,
-    upload_lock: &RwLock<()>,
+    _upload_lock: &RwLock<()>,
+    history_id: i64,
 ) -> Result<Option<MediaFile>, ImportErrorKind> {
     let extract_path = staging.path().join(format!("source-{}", Uuid::new_v4()));
     let extract_dest = extract_path.clone();
@@ -213,7 +247,6 @@ async fn import_one_media(
         .map_err(|e| ImportErrorKind::Other(e.into()))?
         .map_err(ImportErrorKind::HashError)?;
 
-    let _read_guard = upload_lock.read().await;
     let mut lock = pack_state.lock().await;
     let pack = lock
         .as_mut()
@@ -230,7 +263,12 @@ async fn import_one_media(
         .map_err(|e| ImportErrorKind::Other(e.into()))?;
     encoded.path = final_path;
     let added = pack
-        .add_file(encoded, Path::new(&media.suggested_name), hash)
+        .add_file_to_import(
+            encoded,
+            Path::new(&media.suggested_name),
+            hash,
+            Some(history_id),
+        )
         .await
         .map_err(ImportErrorKind::PackError)?;
     let mut media_file = match added {

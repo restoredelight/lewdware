@@ -1,4 +1,6 @@
+mod editor_db;
 mod encode;
+mod history;
 mod import;
 mod media_server;
 mod pack;
@@ -51,7 +53,7 @@ use tokio::sync::{watch, Mutex, RwLock};
 
 use shared::encode::HardwareEncoder;
 
-pub type PackState = Arc<Mutex<Option<MediaPack>>>;
+pub type PackState = Arc<Mutex<Option<Arc<MediaPack>>>>;
 
 pub struct AppState {
     pub pack: PackState,
@@ -290,7 +292,7 @@ async fn new_pack(state: State<'_, AppState>) -> Result<PackInfo, String> {
         has_destination: false,
     };
     remember_draft(pack.id(), info.name.clone())?;
-    *state.pack.lock().await = Some(pack);
+    *state.pack.lock().await = Some(Arc::new(pack));
     Ok(info)
 }
 
@@ -326,7 +328,7 @@ async fn open_pack_dialog(
         has_destination: true,
     };
     remember_pack(&path, info.name.clone())?;
-    *state.pack.lock().await = Some(pack);
+    *state.pack.lock().await = Some(Arc::new(pack));
     Ok(Some(info))
 }
 
@@ -358,7 +360,7 @@ async fn open_recent_pack(
     } else {
         remember_draft(pack.id(), info.name.clone())?;
     }
-    *state.pack.lock().await = Some(pack);
+    *state.pack.lock().await = Some(Arc::new(pack));
     Ok(info)
 }
 
@@ -463,7 +465,7 @@ async fn import_edgeware_pack_dialog(
         has_destination: false,
     };
     remember_draft(pack.id(), info.name.clone())?;
-    *state.pack.lock().await = Some(pack);
+    *state.pack.lock().await = Some(Arc::new(pack));
 
     let pack_state = state.pack.clone();
     let encoder = state
@@ -512,9 +514,14 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
         .map_err(|e| e.to_string())?;
         let Some(file) = file else { return Ok(None) };
         let path: PathBuf = file.into_path().map_err(|e| e.to_string())?;
-        let _write_guard = state.upload_lock.write().await;
-        let mut lock = state.pack.lock().await;
-        let pack = lock.as_ref().ok_or("No pack open")?;
+        let _uploads = state.upload_lock.write().await;
+        let pack = state
+            .pack
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or("No pack open")?;
         let draft_id = pack.id();
         let app_cb = app.clone();
         if let Some(new_pack) = pack
@@ -534,34 +541,51 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
             };
             forget_draft(draft_id)?;
             remember_pack(&path, info.name.clone())?;
-            *lock = Some(new_pack);
-            let _ = app.emit("save:done", ());
+            let mut lock = state.pack.lock().await;
+            if lock
+                .as_ref()
+                .is_none_or(|current| !Arc::ptr_eq(current, &pack))
+            {
+                return Err("The pack was closed while saving".into());
+            }
+            *lock = Some(Arc::new(new_pack));
+            let _ = app.emit(
+                "save:done",
+                serde_json::json!({ "has_unsaved_changes": false }),
+            );
             return Ok(Some(info));
         }
         return Ok(None);
     }
 
-    // Write lock pauses any in-flight uploads until they finish their current file,
-    // then holds exclusive access for the duration of the save.
-    let _write_guard = state.upload_lock.write().await;
-    let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        let app_cb = app.clone();
-        pack.save(move |saved, t| {
-            let _ = app_cb.emit(
-                "save:progress",
-                serde_json::json!({ "saved": saved, "total": t }),
-            );
-        })
+    let pack = state.pack.lock().await.as_ref().cloned();
+    if let Some(pack) = pack {
+        let progress_app = app.clone();
+        let fallback_app = app.clone();
+        pack.save_with_in_place_notification(
+            move |saved, t| {
+                let _ = progress_app.emit(
+                    "save:progress",
+                    serde_json::json!({ "saved": saved, "total": t }),
+                );
+            },
+            move || {
+                let _ = fallback_app.emit("save:in-place", ());
+            },
+        )
         .await
         .map_err(|e| e.to_string())?;
         if let Some(path) = pack.path() {
             remember_pack(path, pack.name())?;
         }
-        let _ = app.emit("save:done", ());
+        let has_unsaved_changes = !pack.is_saved().await;
+        let _ = app.emit(
+            "save:done",
+            serde_json::json!({ "has_unsaved_changes": has_unsaved_changes }),
+        );
         return Ok(Some(PackInfo {
             name: pack.name(),
-            has_unsaved_changes: false,
+            has_unsaved_changes,
             has_destination: true,
         }));
     }
@@ -589,10 +613,11 @@ async fn save_pack_as_dialog(
     let Some(path) = file else { return Ok(None) };
     let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
 
-    let _write_guard = state.upload_lock.write().await;
-    let mut lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        let draft_id = pack.path().is_none().then(|| pack.id());
+    let _uploads = state.upload_lock.write().await;
+    let pack = state.pack.lock().await.as_ref().cloned();
+    if let Some(pack) = pack {
+        let was_untitled = pack.path().is_none();
+        let draft_id = was_untitled.then(|| pack.id());
         let app_cb = app.clone();
         let new_pack = pack
             .save_as(&path, move |saved, t| {
@@ -614,8 +639,22 @@ async fn save_pack_as_dialog(
                 forget_draft(id)?;
             }
             remember_pack(&path, info.name.clone())?;
-            *lock = Some(new_pack);
-            let _ = app.emit("save:done", ());
+            let mut lock = state.pack.lock().await;
+            if lock
+                .as_ref()
+                .is_none_or(|current| !Arc::ptr_eq(current, &pack))
+            {
+                return Err("The pack was closed while saving".into());
+            }
+            *lock = Some(Arc::new(new_pack));
+            drop(lock);
+            if !was_untitled {
+                pack.close().await;
+            }
+            let _ = app.emit(
+                "save:done",
+                serde_json::json!({ "has_unsaved_changes": false }),
+            );
             return Ok(Some(info));
         }
     }
@@ -624,6 +663,8 @@ async fn save_pack_as_dialog(
 
 #[tauri::command]
 async fn discard_changes(state: State<'_, AppState>) -> Result<MetadataDto, String> {
+    state.cancel_uploads.send_replace(true);
+    let _uploads = state.upload_lock.write().await;
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         let metadata = pack.discard_changes().await.map_err(|e| e.to_string())?;
@@ -635,18 +676,16 @@ async fn discard_changes(state: State<'_, AppState>) -> Result<MetadataDto, Stri
 
 #[tauri::command]
 async fn close_pack(state: State<'_, AppState>) -> Result<(), String> {
+    state.cancel_uploads.send_replace(true);
+    let _uploads = state.upload_lock.write().await;
     let pack = state.pack.lock().await.take();
     let draft_id = pack.as_ref().filter(|p| p.is_untitled()).map(|p| p.id());
-    let cleanup = pack
-        .as_ref()
-        .filter(|p| p.is_untitled())
-        .map(|p| p.dir().to_path_buf());
+    if let Some(pack) = &pack {
+        pack.close().await;
+    }
     drop(pack);
     if let Some(id) = draft_id {
         let _ = forget_draft(id);
-    }
-    if let Some(dir) = cleanup {
-        let _ = std::fs::remove_dir_all(dir);
     }
     Ok(())
 }
@@ -667,6 +706,38 @@ async fn is_pack_saved(state: State<'_, AppState>) -> Result<bool, String> {
     }
 }
 
+#[tauri::command]
+async fn get_history_status(state: State<'_, AppState>) -> Result<history::Status, String> {
+    let lock = state.pack.lock().await;
+    match lock.as_ref() {
+        Some(pack) => pack
+            .history_status()
+            .await
+            .map_err(|error| error.to_string()),
+        None => Ok(history::Status {
+            can_undo: false,
+            can_redo: false,
+            undo_label: None,
+            redo_label: None,
+            at_saved_state: true,
+        }),
+    }
+}
+
+#[tauri::command]
+async fn undo(state: State<'_, AppState>) -> Result<history::Status, String> {
+    let lock = state.pack.lock().await;
+    let pack = lock.as_ref().ok_or("No pack open")?;
+    pack.undo().await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn redo(state: State<'_, AppState>) -> Result<history::Status, String> {
+    let lock = state.pack.lock().await;
+    let pack = lock.as_ref().ok_or("No pack open")?;
+    pack.redo().await.map_err(|error| error.to_string())
+}
+
 // ── Files ────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -683,26 +754,6 @@ async fn remove_files(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), S
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         pack.remove_files(ids).await.map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn restore_files(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), String> {
-    let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.restore_files(ids).await.map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn purge_history_files(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), String> {
-    let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.purge_history_files(ids)
-            .await
-            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -772,28 +823,6 @@ async fn remove_mode(state: State<'_, AppState>, id: u64) -> Result<(), String> 
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         pack.remove_mode(id)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn restore_mode(state: State<'_, AppState>, id: u64) -> Result<(), String> {
-    let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.restore_mode(id)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn purge_history_mode(state: State<'_, AppState>, id: u64) -> Result<(), String> {
-    let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.purge_history_mode(id)
             .await
             .map_err(|error| error.to_string())?;
     }
@@ -895,15 +924,10 @@ async fn rename_tag(
     state: State<'_, AppState>,
     from: String,
     to: String,
-    behaviour: Behaviour,
-) -> Result<(), String> {
+) -> Result<Behaviour, String> {
     let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.rename_tag(from, to, &behaviour)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    let pack = lock.as_ref().ok_or("No pack open")?;
+    pack.rename_tag(from, to).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -911,64 +935,17 @@ async fn merge_tag(
     state: State<'_, AppState>,
     from: String,
     to: String,
-    behaviour: Behaviour,
-) -> Result<(), String> {
+) -> Result<Behaviour, String> {
     let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.merge_tag(from, to, &behaviour)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    let pack = lock.as_ref().ok_or("No pack open")?;
+    pack.merge_tag(from, to).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn delete_tag(
-    state: State<'_, AppState>,
-    tag: String,
-    behaviour: Behaviour,
-) -> Result<(), String> {
+async fn delete_tag(state: State<'_, AppState>, tag: String) -> Result<Behaviour, String> {
     let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.delete_tag(tag, &behaviour)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn restore_merged_tag(
-    state: State<'_, AppState>,
-    from: String,
-    to: String,
-    source_ids: Vec<u64>,
-    target_ids: Vec<u64>,
-    behaviour: Behaviour,
-) -> Result<(), String> {
-    let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.restore_merged_tag(from, to, source_ids, target_ids, &behaviour)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn restore_deleted_tag(
-    state: State<'_, AppState>,
-    tag: String,
-    ids: Vec<u64>,
-    behaviour: Behaviour,
-) -> Result<(), String> {
-    let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.restore_deleted_tag(tag, ids, &behaviour)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    let pack = lock.as_ref().ok_or("No pack open")?;
+    pack.delete_tag(tag).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1102,38 +1079,6 @@ async fn delete_artist(state: State<'_, AppState>, artist: String) -> Result<(),
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         pack.delete_artist(artist)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn restore_merged_artist(
-    state: State<'_, AppState>,
-    from: String,
-    to: String,
-    source_ids: Vec<u64>,
-    target_ids: Vec<u64>,
-) -> Result<(), String> {
-    let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.restore_merged_artist(from, to, source_ids, target_ids)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn restore_deleted_artist(
-    state: State<'_, AppState>,
-    artist: String,
-    ids: Vec<u64>,
-) -> Result<(), String> {
-    let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.restore_deleted_artist(artist, ids)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -1471,15 +1416,14 @@ pub fn run() {
             close_pack,
             confirm_close,
             is_pack_saved,
+            get_history_status,
+            undo,
+            redo,
             get_files,
             remove_files,
-            restore_files,
-            purge_history_files,
             get_modes,
             add_mode_dialog,
             remove_mode,
-            restore_mode,
-            purge_history_mode,
             set_file_title,
             set_file_source_url,
             get_all_tags,
@@ -1491,8 +1435,6 @@ pub fn run() {
             rename_tag,
             merge_tag,
             delete_tag,
-            restore_merged_tag,
-            restore_deleted_tag,
             add_tag_to_files,
             remove_tag_from_files,
             get_all_artists,
@@ -1504,8 +1446,6 @@ pub fn run() {
             rename_artist,
             merge_artist,
             delete_artist,
-            restore_merged_artist,
-            restore_deleted_artist,
             add_artist_to_files,
             remove_artist_from_files,
             get_pack_metadata,

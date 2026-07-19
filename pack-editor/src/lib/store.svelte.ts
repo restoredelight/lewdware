@@ -20,6 +20,7 @@ class AppStore {
   recoveryError = $state<string | null>(null);
   recoveryErrorKind = $state<"metadata" | "behaviour" | null>(null);
   pendingMediaRemoval = $state<number[]>([]);
+  historyRevision = $state(0);
 
   recoveryStatus = $derived<"saved" | "pending" | "backed-up" | "error">(
     this.packSaved
@@ -70,6 +71,11 @@ class AppStore {
     this.behaviourBackupPending = false;
     this.recoveryError = null;
     this.recoveryErrorKind = null;
+  }
+
+  applyBackendHistoryState(atSavedState: boolean) {
+    this.untrackedDirty = false;
+    this.packSaved = atSavedState;
   }
 
   // Files and tags
@@ -130,8 +136,23 @@ class AppStore {
 
   // Save
   saveActive = $state(false);
+  saveBlocksPreviews = $state(false);
   saveDone = $state(0);
   saveTotal = $state(0);
+
+  beginSave() {
+    if (this.saveActive) return false;
+    this.saveActive = true;
+    this.saveBlocksPreviews = false;
+    this.saveDone = 0;
+    this.saveTotal = 0;
+    return true;
+  }
+
+  endSave() {
+    this.saveActive = false;
+    this.saveBlocksPreviews = false;
+  }
 
   // Options form state
   metadata = $state<MetadataDto | null>(null);
@@ -199,7 +220,8 @@ class AppStore {
   }
 
   requestMediaRemoval(ids = [...this.selectedIds]) {
-    this.pendingMediaRemoval = ids.filter((id) => this.files.some((file) => file.id === id));
+    const available = new Set(this.files.map((file) => file.id));
+    this.pendingMediaRemoval = ids.filter((id) => available.has(id));
   }
 
   cancelMediaRemoval() { this.pendingMediaRemoval = []; }
@@ -216,6 +238,7 @@ class AppStore {
     this.packSaved = saved;
     this.untrackedDirty = !saved;
     this.packHasDestination = hasDestination;
+    this.endSave();
     this.metadataBackupPending = false;
     this.behaviourBackupPending = false;
     this.recoveryError = null;
@@ -243,6 +266,7 @@ class AppStore {
     this.packName = "";
     this.markPackSaved();
     this.packHasDestination = false;
+    this.endSave();
     this.pendingMediaRemoval = [];
     this.files = [];
     this.allTags = [];
@@ -282,11 +306,6 @@ class AppStore {
     if (this.primaryId != null && idSet.has(this.primaryId)) this.primaryId = null;
     if (this.gridActiveId != null && idSet.has(this.gridActiveId)) this.gridActiveId = null;
     if (!tracked) this.markLocallyBackedUp();
-  }
-
-  restoreFiles(files: MediaFile[]) {
-    const restored = new Set(files.map((file) => file.id));
-    this.files = [...this.files.filter((file) => !restored.has(file.id)), ...files];
   }
 
   updateFileName(id: number, name: string, tracked = false) {

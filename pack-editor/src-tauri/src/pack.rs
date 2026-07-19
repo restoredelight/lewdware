@@ -1,33 +1,45 @@
 use std::{
     fs::{self, create_dir_all},
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Condvar, Mutex, RwLock as StdRwLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock as StdRwLock,
     },
-    thread::available_parallelism,
+    thread::{available_parallelism, sleep},
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Result};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{named_params, params, params_from_iter, OptionalExtension};
+use rayon::prelude::*;
+use rusqlite::{
+    backup::{Backup, StepResult},
+    named_params, params,
+    types::Value,
+    vtab::array::{self, Array},
+    OpenFlags, OptionalExtension, TransactionBehavior,
+};
 use serde::{Deserialize, Serialize};
 use shared::{
-    db::migrate,
+    behaviour::v3::Behaviour,
     encode::{FileInfo, FileInfoParts, FileType},
     read_pack::{Header, Metadata, HEADER_SIZE},
 };
 use tokio::{
     fs::{remove_file, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    sync::RwLock,
+    sync::{Mutex as AsyncMutex, RwLock},
     task::spawn_blocking,
 };
 use uuid::Uuid;
 
 use shared::encode::EncodedFile;
+
+use crate::editor_db;
+use crate::history;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MediaFile {
@@ -51,6 +63,49 @@ pub struct TagSummary {
 pub struct ArtistSummary {
     pub name: String,
     pub media_count: u64,
+}
+
+enum AddFileResult {
+    Inserted(u64),
+    Restored(u64),
+    Duplicate,
+}
+
+fn read_behaviour(connection: &rusqlite::Connection) -> Result<Behaviour> {
+    let blob = connection
+        .query_row(
+            "SELECT blob FROM pack_data WHERE name = 'behaviour'",
+            [],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?;
+    blob.as_deref()
+        .map(Behaviour::from_json_bytes)
+        .transpose()
+        .map(|behaviour| behaviour.unwrap_or_default())
+        .map_err(Into::into)
+}
+
+fn tag_media_ids(tx: &rusqlite::Transaction<'_>, tag: &str) -> Result<Vec<u64>> {
+    let mut statement = tx.prepare(
+        "SELECT mt.media_id FROM media_tags mt
+         JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?",
+    )?;
+    let ids = statement
+        .query_map([tag], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
+
+fn artist_media_ids(tx: &rusqlite::Transaction<'_>, artist: &str) -> Result<Vec<u64>> {
+    let mut statement = tx.prepare(
+        "SELECT ma.media_id FROM media_artists ma
+         JOIN artists a ON a.id = ma.artist_id WHERE a.name = ?",
+    )?;
+    let ids = statement
+        .query_map([artist], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
 }
 
 struct Lock {
@@ -81,6 +136,8 @@ pub struct MediaPack {
     path: Option<PathBuf>,
     data_dir: PathBuf,
     saving: Arc<RwLock<()>>,
+    archive_io: Arc<RwLock<()>>,
+    save_serial: Arc<AsyncMutex<()>>,
     _lock: Option<Lock>,
     header: StdRwLock<Header>,
     dir: PathBuf,
@@ -88,14 +145,38 @@ pub struct MediaPack {
     db_pool: Pool<SqliteConnectionManager>,
     db_path: PathBuf,
     saved: AtomicBool,
+    revision: AtomicU64,
+    closing: AtomicBool,
+    delete_on_drop: AtomicBool,
 }
 
 pub struct MediaPackView {
     path: Option<PathBuf>,
-    saving: Arc<RwLock<()>>,
+    archive_io: Arc<RwLock<()>>,
     dir: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
-    _thread_pool: Arc<rayon::ThreadPool>,
+}
+
+struct SaveSnapshot {
+    save_id: String,
+    revision: u64,
+    generation_id: String,
+    editor_state_id: String,
+    pending_history: bool,
+    metadata: Metadata,
+    runtime_path: PathBuf,
+    db_pool: Pool<SqliteConnectionManager>,
+    _staging: tempfile::TempDir,
+}
+
+struct PreparedGeneration {
+    file: tempfile::NamedTempFile,
+    header: Header,
+}
+
+enum GenerationPersistence {
+    Durable,
+    ReplacedButNotSynced(anyhow::Error),
 }
 
 #[derive(Debug)]
@@ -105,15 +186,12 @@ pub struct MediaData {
     pub length: u64,
 }
 
-/// A single already-embedded file that needs to move from `source_offset` (its
-/// still-valid position from the last save) to `dest_offset` (its new, compacted
-/// position), both within the same pack file.
 #[derive(Debug)]
-struct ShiftJob {
-    id: i64,
+struct CopyRun {
     source_offset: u64,
     dest_offset: u64,
     length: u64,
+    media_ids: Vec<i64>,
 }
 
 /// A newly-staged file (still a loose file under `dir/media/`) that needs
@@ -127,73 +205,6 @@ struct NewFileJob {
     full_path: PathBuf,
     dest_offset: u64,
     expected_length: u64,
-}
-
-/// The write requested by a single completed copy job. Sent to the dedicated DB
-/// writer thread rather than executed by the worker itself, so all writes for a
-/// save go through one connection with zero contention.
-enum DbUpdateKind {
-    Shift { id: i64, offset: u64 },
-    NewFile { id: i64, offset: u64, length: u64 },
-    DropMissing { id: i64 },
-}
-
-struct DbUpdateRequest {
-    kind: DbUpdateKind,
-    ack: std::sync::mpsc::Sender<Result<()>>,
-}
-
-/// Runs on a single dedicated thread for the duration of one `write_files` call,
-/// draining update requests from parallel copy workers and applying them one at a
-/// time - so those workers never contend with each other for SQLite's single
-/// write lock. Exits once `rx` is closed (all senders dropped) and everything
-/// already sent has been drained.
-fn run_db_writer(
-    conn: PooledConnection<SqliteConnectionManager>,
-    rx: std::sync::mpsc::Receiver<DbUpdateRequest>,
-) {
-    while let Ok(req) = rx.recv() {
-        let result = (|| -> Result<()> {
-            match req.kind {
-                DbUpdateKind::Shift { id, offset } => {
-                    conn.execute(
-                        "UPDATE media SET offset = ? WHERE id = ?",
-                        params![offset, id],
-                    )?;
-                }
-                DbUpdateKind::NewFile { id, offset, length } => {
-                    conn.execute(
-                        "UPDATE media SET offset = ?, length = ?, path = NULL WHERE id = ?",
-                        params![offset, length, id],
-                    )?;
-                }
-                DbUpdateKind::DropMissing { id } => {
-                    conn.execute("DELETE FROM media WHERE id = ?", params![id])?;
-                }
-            }
-            Ok(())
-        })();
-        // The requester always waits for this ack, so a send failure here would
-        // only mean it gave up some other way (e.g. panicked) - nothing to do.
-        let _ = req.ack.send(result);
-    }
-}
-
-/// Sends one update to the DB writer thread and blocks until it's been applied
-/// and acknowledged - so callers only consider a file "done" once its row is
-/// actually durable, matching the immediate-per-file write the sequential code
-/// used to do directly.
-fn send_db_update(
-    db_tx: &std::sync::mpsc::Sender<DbUpdateRequest>,
-    kind: DbUpdateKind,
-) -> Result<()> {
-    let (ack_tx, ack_rx) = std::sync::mpsc::channel();
-    db_tx
-        .send(DbUpdateRequest { kind, ack: ack_tx })
-        .map_err(|_| anyhow!("db writer thread is gone"))?;
-    ack_rx
-        .recv()
-        .map_err(|_| anyhow!("db writer thread is gone"))?
 }
 
 pub enum FileData {
@@ -233,20 +244,23 @@ impl MediaPack {
         if !db_path.is_file() {
             bail!("draft database is missing");
         }
-        let manager = SqliteConnectionManager::file(&db_path);
+        let manager = sqlite_connection_manager(&db_path);
         let db_pool = Pool::builder().build(manager)?;
         let pool = db_pool.clone();
         spawn_blocking(move || -> Result<_> {
             let conn = pool.get()?;
-            migrate(&conn)
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            editor_db::initialize(&conn)
         })
         .await??;
         let mut header = Header::new();
         header.id = id;
-        Ok(Self {
+        let pack = Self {
             path: None,
             data_dir: data_dir.to_path_buf(),
             saving: Arc::new(RwLock::new(())),
+            archive_io: Arc::new(RwLock::new(())),
+            save_serial: Arc::new(AsyncMutex::new(())),
             _lock: None,
             header: StdRwLock::new(header),
             dir,
@@ -254,7 +268,12 @@ impl MediaPack {
             db_pool,
             db_path,
             saved: AtomicBool::new(false),
-        })
+            revision: AtomicU64::new(0),
+            closing: AtomicBool::new(false),
+            delete_on_drop: AtomicBool::new(false),
+        };
+        pack.sweep_loose_files().await?;
+        Ok(pack)
     }
 
     pub async fn new(path: PathBuf, data_dir: &Path, name: &str) -> Result<Self> {
@@ -301,33 +320,51 @@ impl MediaPack {
             .await?;
 
         let db_path = dir.join("index.db");
-        let manager = SqliteConnectionManager::file(&db_path);
+        let manager = sqlite_connection_manager(&db_path);
         let db_pool = Pool::builder().build(manager)?;
 
         let pool = db_pool.clone();
+        let metadata_for_db = metadata.clone();
         spawn_blocking(move || -> Result<_> {
             let conn = pool.get()?;
-            migrate(&conn)
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            editor_db::initialize_empty(&conn, &metadata_for_db)
         })
         .await??;
 
         File::create(dir.join("UNSAVED")).await?;
 
-        Ok(Self {
+        let pack = Self {
             path,
             data_dir: data_dir.to_path_buf(),
             saving: Arc::new(RwLock::new(())),
+            archive_io: Arc::new(RwLock::new(())),
+            save_serial: Arc::new(AsyncMutex::new(())),
             _lock: lock,
             header: StdRwLock::new(header),
             dir,
             metadata: StdRwLock::new(metadata),
             db_pool,
             saved: AtomicBool::new(false),
+            revision: AtomicU64::new(0),
+            closing: AtomicBool::new(false),
+            delete_on_drop: AtomicBool::new(false),
             db_path,
-        })
+        };
+        pack.sweep_loose_files().await?;
+        Ok(pack)
     }
 
     pub async fn open(path: PathBuf, data_dir: &Path) -> Result<Self> {
+        Self::open_internal(path, data_dir, true, false).await
+    }
+
+    async fn open_internal(
+        path: PathBuf,
+        data_dir: &Path,
+        sweep_orphans: bool,
+        reuse_working_db: bool,
+    ) -> Result<Self> {
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -350,8 +387,9 @@ impl MediaPack {
 
         let db_path = dir.join("index.db");
         let has_unsaved = fs::exists(dir.join("UNSAVED"))? && fs::exists(&db_path)?;
+        let has_working_db = has_unsaved || (reuse_working_db && fs::exists(&db_path)?);
 
-        let metadata = if has_unsaved {
+        let mut metadata = if has_working_db {
             let metadata_path = dir.join("Metadata");
             match fs::read(&metadata_path)
                 .map_err(|err| anyhow!(err))
@@ -377,17 +415,31 @@ impl MediaPack {
             Metadata::from_buf(&buf)?
         };
 
-        if !has_unsaved {
+        let runtime_path = dir.join("saved-index.db");
+        let has_archive = !header.is_default() && header.index_length > 0;
+        let db_data = if has_archive {
             file.seek(SeekFrom::Start(header.index_offset)).await?;
             let mut db_data = vec![0u8; header.index_length as usize];
             file.read_exact(&mut db_data).await?;
+            Some(db_data)
+        } else {
+            None
+        };
 
-            let mut db_file = File::create(&db_path).await?;
+        if !has_working_db {
+            // The working database uses WAL. Never place a freshly extracted main
+            // database beside sidecars belonging to the previous working copy:
+            // SQLite could otherwise replay stale pages into the extracted index.
+            remove_sqlite_sidecars(&db_path)?;
+            let _ = fs::remove_file(&db_path);
+        }
+        if let Some(db_data) = db_data {
+            let mut db_file = File::create(&runtime_path).await?;
             db_file.write_all(&db_data).await?;
             db_file.flush().await?;
         }
 
-        let manager = SqliteConnectionManager::file(&db_path);
+        let manager = sqlite_connection_manager(&db_path);
         // Sized to comfortably cover the parallel-copy worker count in write_files,
         // so workers grabbing a connection to record their offset never queue on
         // the pool itself (they may still briefly serialize on SQLite's own write
@@ -396,38 +448,75 @@ impl MediaPack {
         let db_pool = Pool::builder().max_size(pool_size).build(manager)?;
 
         let pool = db_pool.clone();
+        let runtime = has_archive.then_some(runtime_path.clone());
+        let metadata_for_db = metadata.clone();
         spawn_blocking(move || -> Result<_> {
-            let conn = pool.get()?;
-            migrate(&conn)
+            let mut conn = pool.get()?;
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            if !has_working_db {
+                let runtime = runtime
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("pack has no index"))?;
+                editor_db::import_runtime(&mut conn, &runtime, &metadata_for_db)?;
+            } else {
+                editor_db::initialize(&conn)?;
+                if let Some(runtime) = &runtime {
+                    editor_db::reconcile_archive(&mut conn, runtime)?;
+                } else {
+                    conn.execute("DELETE FROM save_sessions", [])?;
+                }
+                editor_db::reset_session(&mut conn, has_unsaved)?;
+            }
+            if let Some(runtime) = runtime {
+                let _ = fs::remove_file(runtime);
+            }
+            Ok(())
         })
         .await??;
+        if has_working_db {
+            let pool = db_pool.clone();
+            let stored = spawn_blocking(move || -> Result<Vec<u8>> {
+                Ok(pool.get()?.query_row(
+                    "SELECT metadata FROM pack_metadata WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .await??;
+            metadata = Metadata::from_buf(&stored)?;
+            fs::write(dir.join("Metadata"), &stored)?;
+        }
 
-        Ok(Self {
+        let pack = Self {
             path: Some(path),
             data_dir: data_dir.to_path_buf(),
             saving: Arc::new(RwLock::new(())),
+            archive_io: Arc::new(RwLock::new(())),
+            save_serial: Arc::new(AsyncMutex::new(())),
             _lock: Some(lock),
             header: StdRwLock::new(header),
             dir,
             metadata: StdRwLock::new(metadata),
             db_pool,
             saved: AtomicBool::new(!has_unsaved),
+            revision: AtomicU64::new(0),
+            closing: AtomicBool::new(false),
+            delete_on_drop: AtomicBool::new(false),
             db_path,
-        })
+        };
+        if sweep_orphans {
+            pack.sweep_loose_files().await?;
+        }
+        pack.process_pending_file_deletions().await?;
+        Ok(pack)
     }
 
     pub fn get_view(&self) -> Result<MediaPackView> {
-        let threads = (available_parallelism()?.get() / 2).max(1);
         Ok(MediaPackView {
             path: self.path.clone(),
-            saving: self.saving.clone(),
+            archive_io: self.archive_io.clone(),
             dir: self.dir.clone(),
             db_pool: self.db_pool.clone(),
-            _thread_pool: Arc::new(
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(threads)
-                    .build()?,
-            ),
         })
     }
 
@@ -447,6 +536,65 @@ impl MediaPack {
         &self.dir
     }
 
+    /// Remove physical media files that have no durable loose-source row.
+    async fn sweep_loose_files(&self) -> Result<()> {
+        let pool = self.db_pool.clone();
+        let referenced = spawn_blocking(move || -> Result<_> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare("SELECT path FROM loose_media")?;
+            let paths = stmt
+                .query_map([], |row| row.get::<_, String>(0).map(PathBuf::from))?
+                .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
+            Ok(paths)
+        })
+        .await??;
+        let media_dir = self.dir.join("media");
+        spawn_blocking(move || -> Result<()> {
+            for entry in fs::read_dir(&media_dir)? {
+                let entry = entry?;
+                let relative = PathBuf::from(entry.file_name());
+                if entry.file_type()?.is_file() && !referenced.contains(&relative) {
+                    fs::remove_file(entry.path())?;
+                }
+            }
+            if let Some(pack_dir) = media_dir.parent() {
+                for entry in fs::read_dir(pack_dir)? {
+                    let entry = entry?;
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if entry.file_type()?.is_dir()
+                        && (name.starts_with("pack-editor-upload-")
+                            || name.starts_with("pack-editor-import-")
+                            || name.starts_with("pack-editor-save-")
+                            || name.starts_with("pack-editor-save-as-")
+                            || name.starts_with("pack-editor-restore-"))
+                    {
+                        fs::remove_dir_all(entry.path())?;
+                    }
+                }
+            }
+            Ok(())
+        })
+        .await??;
+        if let Some(path) = &self.path {
+            let parent = path.parent().unwrap_or_else(|| Path::new("."));
+            let prefix = format!(".pack-editor-generation-{}-", self.id());
+            for entry in fs::read_dir(parent)? {
+                let entry = entry?;
+                if entry.file_type()?.is_file()
+                    && entry.file_name().to_string_lossy().starts_with(&prefix)
+                {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_pending_file_deletions(&self) -> Result<()> {
+        process_pending_file_deletions(self.db_pool.clone(), self.dir.join("media")).await
+    }
+
     pub fn is_untitled(&self) -> bool {
         self.path.is_none()
     }
@@ -456,9 +604,31 @@ impl MediaPack {
         self.saved.load(Ordering::Relaxed)
     }
 
+    pub async fn close(&self) {
+        self.closing.store(true, Ordering::SeqCst);
+        let _save = self.save_serial.lock().await;
+        let _mutations = self.saving.write().await;
+        self.delete_on_drop.store(true, Ordering::SeqCst);
+    }
+
     pub async fn mark_unsaved(&self) -> Result<()> {
+        self.mark_unsaved_now()?;
+        let pool = self.db_pool.clone();
+        let media_dir = self.dir.join("media");
+        let saving = self.saving.clone();
+        tokio::spawn(async move {
+            let _guard = saving.write().await;
+            if let Err(error) = process_pending_file_deletions(pool, media_dir).await {
+                tracing::error!("loose-media garbage collection failed: {error}");
+            }
+        });
+        Ok(())
+    }
+
+    fn mark_unsaved_now(&self) -> Result<()> {
+        self.revision.fetch_add(1, Ordering::SeqCst);
         if self.saved.load(Ordering::Relaxed) {
-            File::create(self.dir.join("UNSAVED")).await?;
+            fs::File::create(self.dir.join("UNSAVED"))?;
             self.saved.store(false, Ordering::Relaxed);
         }
         Ok(())
@@ -496,47 +666,227 @@ impl MediaPack {
         OpenOptions::new().read(true).open(path).await
     }
 
-    async fn open_write(&self) -> io::Result<File> {
-        let path = self.path.as_ref().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "pack has not been saved yet")
-        })?;
-        OpenOptions::new().write(true).open(path).await
+    async fn create_save_snapshot(&self) -> Result<SaveSnapshot> {
+        let staging = tempfile::Builder::new()
+            .prefix("pack-editor-save-")
+            .tempdir_in(&self.dir)?;
+        let db_path = staging.path().join("index.db");
+        let runtime_path = staging.path().join("runtime.db");
+        let save_id = Uuid::new_v4().to_string();
+        let generation_id = Uuid::new_v4().to_string();
+
+        // Establish the SQLite and in-memory parts of the snapshot at one precise
+        // mutation boundary. The open read transaction pins the current WAL view,
+        // so the expensive backup can continue after this application lock is
+        // released without preventing other pooled connections from writing.
+        let _mutation_guard = self.saving.write().await;
+        let session_pool = self.db_pool.clone();
+        let save_id_for_session = save_id.clone();
+        let generation_for_session = generation_id.clone();
+        let (editor_state_id, pending_history) =
+            spawn_blocking(move || -> Result<(String, bool)> {
+                let mut connection = session_pool.get()?;
+                let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let snapshot_state: String = tx.query_row(
+                    "SELECT current_state_id FROM editor_state WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let pending_history: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM history_entries WHERE status = 'pending')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                tx.execute(
+                    "INSERT INTO save_sessions(id, generation_id, editor_state_id)
+                 VALUES (?, ?, ?)",
+                    params![save_id_for_session, generation_for_session, snapshot_state],
+                )?;
+                tx.execute(
+                    "INSERT INTO snapshot_media(save_id, media_id)
+                 SELECT ?, id FROM media WHERE deleted = 0",
+                    [&save_id_for_session],
+                )?;
+                tx.commit()?;
+                Ok((snapshot_state, pending_history))
+            })
+            .await??;
+        let live_db_path = self.db_path.clone();
+        let source = spawn_blocking(move || -> Result<_> {
+            // This must not come from r2d2: if establishing or copying the
+            // snapshot fails, closing this dedicated connection reliably rolls
+            // back its transaction instead of returning transaction state to the
+            // live pool.
+            let conn = rusqlite::Connection::open_with_flags(
+                live_db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )?;
+            conn.busy_timeout(Duration::from_millis(5000))?;
+            conn.execute_batch("BEGIN DEFERRED")?;
+            let _: String = conn.query_row(
+                "SELECT current_state_id FROM editor_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(conn)
+        })
+        .await??;
+        let revision = self.revision.load(Ordering::SeqCst);
+        let metadata = self.metadata.read().unwrap().clone();
+        drop(_mutation_guard);
+
+        let destination = db_path.clone();
+        spawn_blocking(move || -> Result<()> {
+            let mut destination = rusqlite::Connection::open(destination)?;
+            destination.busy_timeout(Duration::from_millis(5000))?;
+            let backup = Backup::new(&source, &mut destination)?;
+            loop {
+                match backup.step(256)? {
+                    StepResult::Done => break,
+                    StepResult::More => std::thread::yield_now(),
+                    StepResult::Busy | StepResult::Locked => sleep(Duration::from_millis(1)),
+                    _ => sleep(Duration::from_millis(1)),
+                }
+            }
+            // Release the pinned WAL snapshot before vacuuming the private copy.
+            // On any earlier error or panic, normal RAII cleanup does the same.
+            drop(backup);
+            drop(source);
+            // Journal mode is stored in the database and is copied by the backup.
+            // Keep WAL on the live working DB, but make this self-contained snapshot
+            // use a rollback journal: later offset updates must land in index.db
+            // itself because that single file is what gets embedded in the pack.
+            destination.pragma_update(None, "journal_mode", "DELETE")?;
+            destination.execute_batch("VACUUM")?;
+            Ok(())
+        })
+        .await??;
+
+        let db_pool = Pool::builder().build(sqlite_connection_manager(&db_path))?;
+        Ok(SaveSnapshot {
+            save_id,
+            revision,
+            generation_id,
+            editor_state_id,
+            pending_history,
+            metadata,
+            runtime_path,
+            db_pool,
+            _staging: staging,
+        })
     }
 
-    pub async fn save(
+    async fn reconcile_save_snapshot(
         &self,
-        on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
-    ) -> Result<()> {
-        if self.path.is_none() {
-            bail!("pack has not been assigned a save location");
-        }
-        if self.saved.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        let _handle = self.saving.write().await;
-        let on_progress = Arc::new(on_progress);
+        snapshot: &SaveSnapshot,
+        mark_snapshot_saved: bool,
+    ) -> Result<bool> {
+        let pool = snapshot.db_pool.clone();
+        let rows = spawn_blocking(move || -> Result<Vec<(u64, Vec<u8>, u64, u64)>> {
+            let conn = pool.get()?;
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.hash, p.\"offset\", p.length FROM media m
+                 JOIN pack_media p ON p.media_id = m.id WHERE m.deleted = 0",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await??;
 
-        tracing::warn!("Writing files");
+        let live_pool = self.db_pool.clone();
+        let generation_id = snapshot.generation_id.clone();
+        let editor_state_id = snapshot.editor_state_id.clone();
+        let snapshot_is_current = self.revision.load(Ordering::SeqCst) == snapshot.revision;
+        let saved_state_id =
+            if !mark_snapshot_saved || (snapshot.pending_history && !snapshot_is_current) {
+                None
+            } else {
+                Some(editor_state_id)
+            };
+        spawn_blocking(move || -> Result<()> {
+            let mut conn = live_pool.get()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            for (id, hash, offset, length) in rows {
+                let matches: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM media WHERE id = ? AND hash = ?)",
+                    params![id, hash],
+                    |row| row.get(0),
+                )?;
+                if matches {
+                    tx.execute(
+                        "INSERT INTO pack_media(media_id, generation_id, \"offset\", length)
+                         VALUES (?, ?, ?, ?)
+                         ON CONFLICT(media_id) DO UPDATE SET
+                           generation_id = excluded.generation_id,
+                           \"offset\" = excluded.\"offset\", length = excluded.length",
+                        params![id, generation_id, offset, length],
+                    )?;
+                    tx.execute(
+                        "INSERT OR IGNORE INTO pending_file_deletions(path)
+                         SELECT path FROM loose_media WHERE media_id = ?",
+                        [id],
+                    )?;
+                    tx.execute("DELETE FROM loose_media WHERE media_id = ?", [id])?;
+                }
+            }
+            tx.execute(
+                "DELETE FROM pack_media WHERE generation_id <> ?",
+                [&generation_id],
+            )?;
+            tx.execute(
+                "UPDATE editor_state SET archive_generation = ?, saved_state_id = ?
+                 WHERE singleton = 1",
+                params![generation_id, saved_state_id],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await??;
+        self.process_pending_file_deletions().await?;
+        Ok(snapshot_is_current)
+    }
 
-        let offset = self.write_files(None, on_progress).await?;
+    async fn clear_save_session(&self, save_id: &str) -> Result<()> {
+        let pool = self.db_pool.clone();
+        let save_id = save_id.to_string();
+        spawn_blocking(move || -> Result<()> {
+            pool.get()?
+                .execute("DELETE FROM save_sessions WHERE id = ?", [&save_id])?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
 
-        tracing::warn!("Finished writing files");
+    async fn write_snapshot_tail(
+        &self,
+        snapshot: &SaveSnapshot,
+        archive_path: &Path,
+        offset: u64,
+    ) -> Result<Header> {
+        let snapshot_pool = snapshot.db_pool.clone();
+        let runtime_path = snapshot.runtime_path.clone();
+        spawn_blocking(move || -> Result<()> {
+            let connection = snapshot_pool.get()?;
+            editor_db::export_runtime(&connection, &runtime_path)?;
+            Ok(())
+        })
+        .await??;
 
-        self.db_execute(|conn| conn.execute("VACUUM", []).map_err(|err| err.into()))
-            .await?;
-
-        let mut file = self.open_write().await?;
+        let mut file = OpenOptions::new().write(true).open(archive_path).await?;
         file.seek(SeekFrom::Start(offset)).await?;
-
         let index_length = {
-            let mut dbf = File::open(&self.db_path).await?;
+            let mut dbf = File::open(&snapshot.runtime_path).await?;
             tokio::io::copy(&mut dbf, &mut file).await?
         };
-
-        let buf = self.metadata.read().unwrap().to_buf()?;
-        let metadata_length = buf.len() as u64;
-        file.write_all(&buf).await?;
-        file.set_len(offset + metadata_length + index_length)
+        let metadata = snapshot.metadata.to_buf()?;
+        let metadata_length = metadata.len() as u64;
+        file.write_all(&metadata).await?;
+        file.set_len(offset + index_length + metadata_length)
             .await?;
 
         let header = Header {
@@ -546,15 +896,277 @@ impl MediaPack {
             metadata_offset: offset + index_length,
             metadata_length,
         };
-
         file.seek(SeekFrom::Start(0)).await?;
         file.write_all(&header.to_buf()?).await?;
-        *self.header.write().unwrap() = header;
         file.sync_data().await?;
+        Ok(header)
+    }
 
-        self.clean_media()?;
-        self.mark_saved().await?;
+    async fn prepare_generation(
+        &self,
+        snapshot: &SaveSnapshot,
+        on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
+    ) -> Result<PreparedGeneration> {
+        self.materialize_deleted_snapshot_media(snapshot).await?;
+        let source = self
+            .path
+            .as_ref()
+            .ok_or_else(|| anyhow!("pack has not been assigned a save location"))?
+            .clone();
+        let source_for_clone = source.clone();
+        let pack_id = self.id();
+        let generation =
+            spawn_blocking(move || clone_archive(&source_for_clone, pack_id)).await??;
+        let generation_path = generation.path().to_path_buf();
+        let offset = self
+            .write_files_from(
+                snapshot.db_pool.clone(),
+                Some(generation_path.clone()),
+                true,
+                snapshot.generation_id.clone(),
+                Some((self.db_pool.clone(), snapshot.save_id.clone())),
+                on_progress,
+            )
+            .await?;
+        let header = self
+            .write_snapshot_tail(snapshot, &generation_path, offset)
+            .await?;
+        Ok(PreparedGeneration {
+            file: generation,
+            header,
+        })
+    }
+
+    async fn materialize_deleted_snapshot_media(&self, snapshot: &SaveSnapshot) -> Result<()> {
+        let source_path = match &self.path {
+            Some(path) => path.clone(),
+            None => return Ok(()),
+        };
+        let snapshot_pool = snapshot.db_pool.clone();
+        let live_pool = self.db_pool.clone();
+        let media_dir = self.dir.join("media");
+        spawn_blocking(move || -> Result<()> {
+            let snapshot_connection = snapshot_pool.get()?;
+            let rows = {
+                let mut statement = snapshot_connection.prepare(
+                    "SELECT m.id, m.hash, p.\"offset\", p.length
+                     FROM media m JOIN pack_media p ON p.media_id = m.id
+                     LEFT JOIN loose_media l ON l.media_id = m.id
+                     WHERE m.deleted = 1 AND l.media_id IS NULL",
+                )?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, u64>(0)?,
+                            row.get::<_, Vec<u8>>(1)?,
+                            row.get::<_, u64>(2)?,
+                            row.get::<_, u64>(3)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            };
+            if rows.is_empty() {
+                return Ok(());
+            }
+            let mut source = fs::File::open(source_path)?;
+            for (id, hash, offset, length) in rows {
+                let stored = format!("history-{}", Uuid::new_v4());
+                let full_path = media_dir.join(&stored);
+                let mut destination = fs::File::create(&full_path)?;
+                source.seek(SeekFrom::Start(offset))?;
+                io::copy(&mut (&mut source).take(length), &mut destination)?;
+                destination.sync_data()?;
+
+                let mut live = live_pool.get()?;
+                let tx = live.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM media WHERE id = ? AND hash = ?)",
+                    params![id, hash],
+                    |row| row.get(0),
+                )?;
+                if exists {
+                    tx.execute(
+                        "INSERT INTO loose_media(media_id, path, length) VALUES (?, ?, ?)
+                         ON CONFLICT(media_id) DO NOTHING",
+                        params![id, stored, length],
+                    )?;
+                } else {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO pending_file_deletions(path) VALUES (?)",
+                        [&stored],
+                    )?;
+                }
+                tx.commit()?;
+            }
+            Ok(())
+        })
+        .await??;
         Ok(())
+    }
+
+    async fn commit_generation(
+        &self,
+        snapshot: &SaveSnapshot,
+        generation: PreparedGeneration,
+    ) -> Result<()> {
+        let _mutation_guard = self.saving.write().await;
+        self.validate_generation_commit(snapshot).await?;
+        let _archive_guard = self.archive_io.write().await;
+        let target = self.path.clone().unwrap();
+        let persistence = spawn_blocking(move || -> Result<GenerationPersistence> {
+            let persisted = generation
+                .file
+                .persist(&target)
+                .map_err(|error| error.error)?;
+            let sync_result = persisted
+                .sync_all()
+                .and_then(|_| sync_parent_directory(&target));
+            Ok(match sync_result {
+                Ok(()) => GenerationPersistence::Durable,
+                Err(error) => GenerationPersistence::ReplacedButNotSynced(error.into()),
+            })
+        })
+        .await??;
+        *self.header.write().unwrap() = generation.header;
+
+        let durable = matches!(persistence, GenerationPersistence::Durable);
+        let snapshot_is_current = self.reconcile_save_snapshot(snapshot, durable).await?;
+        match persistence {
+            GenerationPersistence::Durable => {
+                if snapshot_is_current {
+                    self.mark_saved().await?;
+                }
+                Ok(())
+            }
+            GenerationPersistence::ReplacedButNotSynced(error) => Err(error),
+        }
+    }
+
+    async fn validate_generation_commit(&self, snapshot: &SaveSnapshot) -> Result<()> {
+        let snapshot_pool = snapshot.db_pool.clone();
+        let included =
+            spawn_blocking(move || -> Result<std::collections::HashMap<u64, Vec<u8>>> {
+                let connection = snapshot_pool.get()?;
+                let mut statement =
+                    connection.prepare("SELECT id, hash FROM media WHERE deleted = 0")?;
+                let rows = statement
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect::<rusqlite::Result<_>>()?;
+                Ok(rows)
+            })
+            .await??;
+        let pool = self.db_pool.clone();
+        spawn_blocking(move || -> Result<()> {
+            let connection = pool.get()?;
+            let mut statement = connection.prepare(
+                "SELECT m.id, m.hash FROM media m
+                 JOIN pack_media p ON p.media_id = m.id
+                 LEFT JOIN loose_media l ON l.media_id = m.id
+                 WHERE l.media_id IS NULL",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, hash) in rows {
+                if included.get(&id) != Some(&hash) {
+                    bail!("media {id} would lose its only source during generation commit");
+                }
+            }
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn save_in_place(
+        &self,
+        snapshot: &SaveSnapshot,
+        on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
+    ) -> Result<()> {
+        // The fallback rewrites the live archive. Keep the editor fully quiescent until its
+        // header, embedded database and live source map agree again.
+        let _mutation_guard = self.saving.write().await;
+        let _archive_guard = self.archive_io.write().await;
+        let offset = self
+            .write_files_from(
+                snapshot.db_pool.clone(),
+                None,
+                false,
+                snapshot.generation_id.clone(),
+                Some((self.db_pool.clone(), snapshot.save_id.clone())),
+                on_progress,
+            )
+            .await?;
+        let path = self.path.as_ref().unwrap();
+        let header = self.write_snapshot_tail(snapshot, path, offset).await?;
+        *self.header.write().unwrap() = header;
+
+        if self.reconcile_save_snapshot(snapshot, true).await? {
+            self.mark_saved().await?;
+        }
+        Ok(())
+    }
+
+    pub async fn save(
+        &self,
+        on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
+    ) -> Result<()> {
+        self.save_with_in_place_notification(on_progress, || {})
+            .await
+    }
+
+    pub async fn save_with_in_place_notification(
+        &self,
+        on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
+        on_in_place: impl FnOnce() + Send + 'static,
+    ) -> Result<()> {
+        if self.closing.load(Ordering::SeqCst) {
+            bail!("pack is closing");
+        }
+        if self.path.is_none() {
+            bail!("pack has not been assigned a save location");
+        }
+        if self.saved.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let _save_guard = self.save_serial.lock().await;
+        // Another queued save may already have persisted the current revision.
+        if self.saved.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let on_progress = Arc::new(on_progress);
+        let snapshot = self.create_save_snapshot().await?;
+        let initial_save_id = snapshot.save_id.clone();
+        let generation_result = match self
+            .prepare_generation(&snapshot, on_progress.clone())
+            .await
+        {
+            Ok(generation) => self.commit_generation(&snapshot, generation).await,
+            Err(error) => Err(error),
+        };
+        let result = match generation_result {
+            Err(error) if is_storage_full(&error) => {
+                tracing::warn!("generation save ran out of space; falling back in place");
+                on_in_place();
+                self.clear_save_session(&snapshot.save_id).await?;
+                drop(snapshot);
+                let snapshot = self.create_save_snapshot().await?;
+                let result = self.save_in_place(&snapshot, on_progress).await;
+                let cleanup = self.clear_save_session(&snapshot.save_id).await;
+                result.and(cleanup)
+            }
+            result => result,
+        };
+        if let Err(cleanup) = self.clear_save_session(&initial_save_id).await {
+            if result.is_ok() {
+                return Err(cleanup);
+            }
+            tracing::error!("could not clear failed save session: {cleanup}");
+        }
+        result
     }
 
     async fn write_files(
@@ -562,254 +1174,230 @@ impl MediaPack {
         to_path: Option<PathBuf>,
         on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
     ) -> Result<u64> {
+        self.write_files_from(
+            self.db_pool.clone(),
+            to_path,
+            false,
+            Uuid::new_v4().to_string(),
+            None,
+            on_progress,
+        )
+        .await
+    }
+
+    async fn write_files_from(
+        &self,
+        db_pool: Pool<SqliteConnectionManager>,
+        to_path: Option<PathBuf>,
+        destination_is_clone: bool,
+        generation_id: String,
+        snapshot_tracking: Option<(Pool<SqliteConnectionManager>, String)>,
+        on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
+    ) -> Result<u64> {
         let dir = self.dir.clone();
         let path = self.path.clone();
-        let db_pool = self.db_pool.clone();
-
-        self.db_execute(move |conn| {
+        spawn_blocking(move || -> Result<u64> {
+            let mut conn = db_pool.get()?;
             let out_path = to_path
                 .clone()
                 .or_else(|| path.clone())
                 .ok_or_else(|| anyhow!("pack has not been assigned a save location"))?;
-
-            let mut num_files: usize =
-                conn.query_row_and_then("SELECT COUNT(*) as files FROM media", params![], |row| {
-                    row.get("files")
-                })?;
-
-            let mut offset = HEADER_SIZE as u64;
-
-            let mut get_stmt = conn.prepare(
-                "SELECT id, offset, length FROM media WHERE offset IS NOT NULL ORDER BY offset",
-            )?;
-
-            let mut media = get_stmt
-                .query_map(params![], |row| {
-                    Ok(MediaData {
-                        id: row.get("id")?,
-                        offset: row.get("offset")?,
-                        length: row.get("length")?,
-                    })
-                })?
-                .peekable();
-
-            if to_path.is_none() {
-                while media
-                    .next_if(|x| {
-                        x.as_ref().is_ok_and(|d| {
-                            if d.offset == offset {
-                                offset += d.length;
-                                true
-                            } else {
-                                false
-                            }
+            let embedded = {
+                let mut statement = conn.prepare(
+                    "SELECT m.id, p.\"offset\", p.length FROM media m
+                     JOIN pack_media p ON p.media_id = m.id
+                     WHERE m.deleted = 0 ORDER BY p.\"offset\"",
+                )?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok(MediaData {
+                            id: row.get("id")?,
+                            offset: row.get("offset")?,
+                            length: row.get("length")?,
                         })
-                    })
-                    .is_some()
-                {
-                    num_files -= 1;
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            };
+
+            let copy_every_embedded_file = to_path.is_some() && !destination_is_clone;
+            let mut offset = HEADER_SIZE as u64;
+            let mut embedded_offsets = Vec::with_capacity(embedded.len());
+            let mut runs: Vec<CopyRun> = Vec::new();
+            let mut unchanged_ids = Vec::new();
+            for media in embedded {
+                let destination = offset;
+                embedded_offsets.push((media.id, destination));
+                if copy_every_embedded_file || media.offset != destination {
+                    if let Some(run) = runs.last_mut().filter(|run| {
+                        run.source_offset + run.length == media.offset
+                            && run.dest_offset + run.length == destination
+                    }) {
+                        run.length += media.length;
+                        run.media_ids.push(media.id);
+                    } else {
+                        runs.push(CopyRun {
+                            source_offset: media.offset,
+                            dest_offset: destination,
+                            length: media.length,
+                            media_ids: vec![media.id],
+                        });
+                    }
+                } else {
+                    unchanged_ids.push(media.id);
                 }
+                offset += media.length;
             }
 
-            // Shared across both phases below: on_progress's denominator, which can
-            // still shrink in the second phase if a staged file turns out to be
-            // missing on disk.
-            let num_files = AtomicUsize::new(num_files);
-
-            // Precompute each remaining file's compacted destination alongside its
-            // still-valid original (source) range, before moving any bytes. This is
-            // pure arithmetic over DB rows - no file I/O yet.
-            let mut jobs = Vec::new();
-            for media_result in media {
-                let media_data = media_result?;
-                jobs.push(ShiftJob {
-                    id: media_data.id,
-                    source_offset: media_data.offset,
-                    dest_offset: offset,
-                    length: media_data.length,
-                });
-                offset += media_data.length;
+            if let Some((pool, save_id)) = &snapshot_tracking {
+                release_snapshot_media(pool, save_id, &unchanged_ids)?;
             }
 
-            // All DB writes for both phases below go through a single dedicated
-            // writer thread instead of each worker grabbing its own pooled
-            // connection. SQLite only ever allows one writer at a time regardless,
-            // so N workers racing for that lock via busy-timeout retries doesn't
-            // buy any real parallelism - it only adds contention, and under
-            // sustained load from thousands of rapid small writes that contention
-            // can genuinely exceed the busy_timeout and surface as "database is
-            // locked". A single writer has zero contention by construction. Workers
-            // still wait for an ack before considering their file done, so a file
-            // is never reported/removed until its DB row is actually durable -
-            // same per-file crash-safety guarantee as before, just funneled through
-            // one thread instead of one connection per worker.
-            let (db_tx, db_rx) = std::sync::mpsc::channel::<DbUpdateRequest>();
-            let writer_conn = db_pool.get()?;
-            let writer_handle = std::thread::spawn(move || run_db_writer(writer_conn, db_rx));
-
-            let result: Result<()> = (|| {
-                // Run the shifts in parallel. For an in-place save, `path` and
-                // `out_path` are the same file, so a job's write can only start once
-                // no other in-flight job still needs to read from the range it's
-                // about to overwrite - `in_flight` + `cvar` gate that. Checking
-                // against actual in-flight jobs (rather than a precomputed "depends
-                // on job N" shortcut) is deliberate: the safe set of predecessors a
-                // job depends on isn't always just its immediate predecessor, so
-                // anything less than a live check risks a job overwriting data
-                // another job hasn't read yet.
-                //
-                // Registration into `in_flight` happens here, on this single
-                // coordinating thread, strictly in job order, *before* the job is
-                // handed to a worker - not inside the worker itself. rayon's
-                // work-stealing scheduler doesn't run spawned tasks in submission
-                // order, so if each worker registered itself only once it actually
-                // started, a later job could start (and see an empty/incomplete
-                // `in_flight`) before an earlier job it truly conflicts with had
-                // even begun. Registering on the coordinator, in order, guarantees
-                // that by the time job j is considered, every earlier job is
-                // already accounted for in `in_flight` (still running) or has
-                // already been removed from it (its read completed).
-                let saved_count = AtomicUsize::new(0);
-                let in_flight: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
-                let cvar = Condvar::new();
-                let errors: Mutex<Vec<anyhow::Error>> = Mutex::new(Vec::new());
-
-                rayon::scope(|scope| {
-                    for job in &jobs {
-                        {
-                            let mut guard = in_flight.lock().unwrap();
-                            loop {
-                                let overlap = guard.iter().any(|&(src_off, src_len)| {
-                                    job.dest_offset < src_off + src_len
-                                        && job.dest_offset + job.length > src_off
-                                });
-                                if !overlap {
-                                    guard.push((job.source_offset, job.length));
-                                    break;
-                                }
-                                guard = cvar.wait(guard).unwrap();
-                            }
+            let staged = {
+                let mut statement = conn.prepare(
+                    "SELECT m.id, l.path, l.length FROM media m
+                     JOIN loose_media l ON l.media_id = m.id
+                     LEFT JOIN pack_media p ON p.media_id = m.id
+                     WHERE m.deleted = 0 AND p.media_id IS NULL",
+                )?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, i64>("id")?,
+                            row.get::<_, String>("path")?,
+                            row.get::<_, u64>("length")?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            };
+            let mut new_jobs = Vec::with_capacity(staged.len());
+            for (id, media_path, expected_length) in staged {
+                let full_path = dir.join("media").join(&media_path);
+                match fs::metadata(&full_path) {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        tracing::warn!(
+                            "dropping staged media {id} because {} no longer exists",
+                            full_path.display()
+                        );
+                        conn.execute("DELETE FROM media WHERE id = ?", [id])?;
+                        if let Some((live_pool, _)) = &snapshot_tracking {
+                            let mut live = live_pool.get()?;
+                            let tx = live.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                            // The active item can no longer be saved, but its row and associations
+                            // may still be required by an older history entry. Soft-delete it first,
+                            // then physically collect it only when no history/save snapshot retains
+                            // it, matching every other media GC path.
+                            tx.execute(
+                                "UPDATE media SET deleted = 1 WHERE id = ?
+                                 AND NOT EXISTS (SELECT 1 FROM pack_media WHERE media_id = media.id)
+                                 AND EXISTS (SELECT 1 FROM loose_media WHERE media_id = media.id AND path = ?)",
+                                params![id, media_path],
+                            )?;
+                            tx.execute(
+                                "DELETE FROM media WHERE id = ? AND deleted = 1
+                                 AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = media.id)
+                                 AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = media.id)",
+                                [id],
+                            )?;
+                            tx.commit()?;
                         }
-
-                        let path = path
-                            .as_ref()
-                            .expect("embedded media requires a source pack");
-                        let out_path = &out_path;
-                        let in_flight = &in_flight;
-                        let cvar = &cvar;
-                        let db_tx = &db_tx;
-                        let saved_count = &saved_count;
-                        let on_progress = &on_progress;
-                        let errors = &errors;
-                        let num_files = &num_files;
-                        scope.spawn(move |_| {
-                            match copy_shift_job(job, path, out_path, in_flight, cvar, db_tx) {
-                                Ok(()) => {
-                                    let n = saved_count.fetch_add(1, Ordering::SeqCst) + 1;
-                                    on_progress(n, num_files.load(Ordering::SeqCst));
-                                }
-                                Err(err) => errors.lock().unwrap().push(err),
-                            }
-                        });
+                        continue;
                     }
+                    Err(error) => return Err(error.into()),
+                }
+                new_jobs.push(NewFileJob {
+                    id,
+                    full_path,
+                    dest_offset: offset,
+                    expected_length,
                 });
-
-                if let Some(err) = errors.into_inner().unwrap().into_iter().next() {
-                    return Err(err);
-                }
-
-                // Newly-staged files: unlike the shift jobs above, these each read
-                // from their own separate loose file under dir/media/, so there's no
-                // self-overlap risk at all and no in-flight gating is needed - only
-                // the destination ranges need to stay disjoint, which the
-                // precomputed cumulative offsets below already guarantee.
-                let mut get_stmt =
-                    conn.prepare("SELECT id, path, length FROM media WHERE path IS NOT NULL")?;
-                let media = get_stmt.query_map(params![], |row| {
-                    Ok((
-                        row.get::<_, i64>("id")?,
-                        row.get::<_, String>("path")?,
-                        row.get::<_, Option<u64>>("length")?,
-                    ))
-                })?;
-
-                let mut new_jobs = Vec::new();
-                for media_result in media {
-                    let (id, media_path, length) = media_result?;
-                    let full_path = dir.join("media").join(&media_path);
-                    // Older staged files from before file size was recorded at
-                    // upload time won't have a `length` yet - fall back to a stat.
-                    let expected_length = match length {
-                        Some(l) => l,
-                        None => fs::metadata(&full_path)?.len(),
-                    };
-                    new_jobs.push(NewFileJob {
-                        id,
-                        full_path,
-                        dest_offset: offset,
-                        expected_length,
-                    });
-                    offset += expected_length;
-                }
-
-                // Pre-size the file to its final length in one call, rather than
-                // letting each parallel write extend it individually - avoids the
-                // (brief, but serializing) inode-extension locking every OS does for
-                // writes that grow a file, and keeps every write below the same kind
-                // of "write into an already-sized region" operation as the shifts
-                // above.
-                fs::OpenOptions::new()
-                    .write(true)
-                    .open(&out_path)?
-                    .set_len(offset)?;
-
-                let saved_count = AtomicUsize::new(0);
-                let errors: Mutex<Vec<anyhow::Error>> = Mutex::new(Vec::new());
-
-                rayon::scope(|scope| {
-                    for job in &new_jobs {
-                        let out_path = &out_path;
-                        let db_tx = &db_tx;
-                        let saved_count = &saved_count;
-                        let on_progress = &on_progress;
-                        let errors = &errors;
-                        let num_files = &num_files;
-                        scope.spawn(move |_| {
-                            match copy_new_file_job(job, out_path, db_tx) {
-                                Ok(true) => {
-                                    let n = saved_count.fetch_add(1, Ordering::SeqCst) + 1;
-                                    on_progress(n, num_files.load(Ordering::SeqCst));
-                                }
-                                Ok(false) => {
-                                    // Staged file was missing; already dropped from
-                                    // the DB and the progress denominator.
-                                    num_files.fetch_sub(1, Ordering::SeqCst);
-                                }
-                                Err(err) => errors.lock().unwrap().push(err),
-                            }
-                        });
-                    }
-                });
-
-                if let Some(err) = errors.into_inner().unwrap().into_iter().next() {
-                    return Err(err);
-                }
-
-                Ok(())
-            })();
-
-            // Closing the channel (by dropping the sender) lets the writer thread's
-            // recv loop end once it's drained everything already sent; join it
-            // before returning either way so we never leave it running detached.
-            drop(db_tx);
-            if writer_handle.join().is_err() {
-                tracing::error!("db writer thread panicked");
+                offset += expected_length;
             }
 
-            result?;
+            let total = runs.iter().map(|run| run.media_ids.len()).sum::<usize>() + new_jobs.len();
+            let completed = AtomicUsize::new(0);
+            if !runs.is_empty() {
+                let source_path = path
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("embedded media requires a source pack"))?;
+                let copy_run = |run: &CopyRun| -> Result<()> {
+                    let mut source = fs::File::open(source_path)?;
+                    let mut destination = fs::OpenOptions::new().write(true).open(&out_path)?;
+                    let mut buffer = vec![0; 4 * 1024 * 1024];
+                    copy_range_forward(&mut source, &mut destination, run, &mut buffer)?;
+                    if let Some((pool, save_id)) = &snapshot_tracking {
+                        release_snapshot_media(pool, save_id, &run.media_ids)?;
+                    }
+                    let done = completed.fetch_add(run.media_ids.len(), Ordering::Relaxed)
+                        + run.media_ids.len();
+                    on_progress(done, total);
+                    Ok(())
+                };
+                if source_path != &out_path {
+                    runs.par_iter().try_for_each(copy_run)?;
+                } else {
+                    // In-place compaction writes earlier ranges over the same file that later
+                    // runs still read. Forward order is safe; parallel execution is not.
+                    for run in &runs {
+                        copy_run(run)?;
+                    }
+                }
+            }
+
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&out_path)?
+                .set_len(offset)?;
+            new_jobs.par_iter().try_for_each(|job| -> Result<()> {
+                let source = fs::File::open(&job.full_path).map_err(|error| {
+                    anyhow!(
+                        "could not open staged media {}: {error}",
+                        job.full_path.display()
+                    )
+                })?;
+                let mut destination = fs::OpenOptions::new().write(true).open(&out_path)?;
+                destination.seek(SeekFrom::Start(job.dest_offset))?;
+                let copied = io::copy(&mut source.take(job.expected_length), &mut destination)?;
+                if copied != job.expected_length {
+                    bail!(
+                        "staged media changed size while saving: {}",
+                        job.full_path.display()
+                    );
+                }
+                if let Some((pool, save_id)) = &snapshot_tracking {
+                    release_snapshot_media(pool, save_id, &[job.id])?;
+                }
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                on_progress(done, total);
+                Ok(())
+            })?;
+
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            for (id, destination) in embedded_offsets {
+                tx.execute(
+                    "UPDATE pack_media SET \"offset\" = ? WHERE media_id = ?",
+                    params![destination, id],
+                )?;
+            }
+            for job in &new_jobs {
+                tx.execute(
+                    "INSERT INTO pack_media(media_id, generation_id, \"offset\", length)
+                     VALUES (?, ?, ?, ?)
+                     ON CONFLICT(media_id) DO UPDATE SET generation_id = excluded.generation_id,
+                       \"offset\" = excluded.\"offset\", length = excluded.length",
+                    params![job.id, generation_id, job.dest_offset, job.expected_length],
+                )?;
+            }
+            tx.execute(
+                "UPDATE editor_state SET archive_generation = ? WHERE singleton = 1",
+                [&generation_id],
+            )?;
+            tx.commit()?;
             Ok(offset)
         })
-        .await
+        .await?
     }
 
     pub async fn save_as(
@@ -817,11 +1405,15 @@ impl MediaPack {
         path: &Path,
         on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
     ) -> Result<Option<Self>> {
+        if self.closing.load(Ordering::SeqCst) {
+            bail!("pack is closing");
+        }
         if self.path.as_deref() == Some(path) {
             self.save(on_progress).await?;
             return Ok(None);
         }
 
+        let _save_guard = self.save_serial.lock().await;
         let _handle = self.saving.write().await;
 
         let mut file = OpenOptions::new()
@@ -843,12 +1435,21 @@ impl MediaPack {
                 .write_files(Some(path.to_path_buf()), on_progress)
                 .await?;
 
-            self.db_execute(|conn| conn.execute("VACUUM", []).map_err(|err| err.into()))
-                .await?;
+            let export = tempfile::Builder::new()
+                .prefix("pack-editor-save-as-")
+                .tempdir_in(&self.dir)?;
+            let runtime_path = export.path().join("runtime.db");
+            let pool = self.db_pool.clone();
+            let runtime_for_export = runtime_path.clone();
+            spawn_blocking(move || -> Result<()> {
+                let connection = pool.get()?;
+                editor_db::export_runtime(&connection, &runtime_for_export)
+            })
+            .await??;
 
             file.seek(SeekFrom::Start(offset)).await?;
             let index_length = {
-                let mut dbf = File::open(&self.db_path).await?;
+                let mut dbf = File::open(&runtime_path).await?;
                 tokio::io::copy(&mut dbf, &mut file).await?
             };
 
@@ -876,7 +1477,7 @@ impl MediaPack {
             self.mark_saved().await?;
         }
 
-        let opened = Self::open(path.to_path_buf(), &self.data_dir).await?;
+        let opened = Self::open_internal(path.to_path_buf(), &self.data_dir, false, true).await?;
         if first_save {
             self.saved.store(false, Ordering::Relaxed);
         }
@@ -888,7 +1489,9 @@ impl MediaPack {
             return Ok(self.metadata.read().unwrap().clone());
         }
 
+        let _save_guard = self.save_serial.lock().await;
         let _handle = self.saving.write().await;
+        let _archive_guard = self.archive_io.write().await;
         let mut file = self.open_read().await?;
 
         // Extract all header fields before any .await so Ref<Header> doesn't cross await points
@@ -912,16 +1515,31 @@ impl MediaPack {
             Some(Metadata::from_buf(&buf)?)
         };
 
+        if not_saved_yet {
+            bail!("cannot discard a pack that has never been saved");
+        }
         file.seek(SeekFrom::Start(index_offset)).await?;
         let mut db_data = vec![0u8; index_length as usize];
         file.read_exact(&mut db_data).await?;
 
-        let mut db_file = File::create(&self.db_path).await?;
-        db_file.write_all(&db_data).await?;
-        db_file.flush().await?;
+        // Restore through SQLite rather than overwriting index.db underneath the
+        // live pool. In WAL mode the latter can leave existing connections tied to
+        // stale pages or replay an old sidecar over the restored database.
+        let staging = tempfile::Builder::new()
+            .prefix("pack-editor-restore-")
+            .tempdir_in(&self.dir)?;
+        let restore_path = staging.path().join("index.db");
+        tokio::fs::write(&restore_path, db_data).await?;
+        let pool = self.db_pool.clone();
+        let restored_metadata = metadata.clone().unwrap();
+        spawn_blocking(move || -> Result<()> {
+            let mut destination = pool.get()?;
+            editor_db::replace_from_runtime(&mut destination, &restore_path, &restored_metadata)?;
+            Ok(())
+        })
+        .await??;
 
-        let _ = fs::remove_file(self.dir.join("history.db"));
-        self.clean_media()?;
+        self.sweep_loose_files().await?;
 
         let final_meta = if let Some(m) = metadata {
             *self.metadata.write().unwrap() = m.clone();
@@ -940,6 +1558,17 @@ impl MediaPack {
 
     pub async fn set_metadata(&self, metadata: &Metadata) -> Result<()> {
         let _handle = self.saving.read().await;
+        let data = metadata.to_buf()?;
+        self.db_execute(move |mut connection| {
+            history::record(&mut connection, "Edit pack metadata", 0, &[], |tx| {
+                tx.execute(
+                    "UPDATE pack_metadata SET metadata = ? WHERE singleton = 1",
+                    [&data],
+                )?;
+                Ok(())
+            })
+        })
+        .await?;
         *self.metadata.write().unwrap() = metadata.clone();
         self.mark_unsaved().await
     }
@@ -959,35 +1588,6 @@ impl MediaPack {
         Ok(())
     }
 
-    fn clean_media(&self) -> Result<()> {
-        // Rows staged for undo still point at their encoded working files. A save must not remove
-        // those files: history deliberately survives saves and may move the rows back afterwards.
-        let history_path = self.dir.join("history.db");
-        let retained = if history_path.exists() {
-            let conn = rusqlite::Connection::open(history_path)?;
-            conn.execute_batch(HISTORY_SCHEMA)?;
-            let mut stmt = conn.prepare("SELECT path FROM media WHERE path IS NOT NULL")?;
-            let paths = stmt
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
-            paths
-        } else {
-            std::collections::HashSet::new()
-        };
-        for entry in fs::read_dir(self.dir.join("media"))? {
-            if let Err(err) = entry.and_then(|e| {
-                if retained.contains(&e.file_name().to_string_lossy().to_string()) {
-                    Ok(())
-                } else {
-                    fs::remove_file(e.path())
-                }
-            }) {
-                tracing::error!("{err}");
-            }
-        }
-        Ok(())
-    }
-
     /// Returns `Ok(None)` if `hash` is already present - a DB-level `UNIQUE`
     /// constraint on `media.hash`, not just the caller's own pre-check, so this
     /// is safe even when two uploads with identical content race each other (the
@@ -1000,13 +1600,39 @@ impl MediaPack {
     /// `next_candidate_name`) rather than rejected. The returned `MediaFile.file_name` reflects
     /// whatever name it actually landed on, which callers should use instead of assuming their
     /// requested name was applied verbatim.
-    pub async fn add_file(
+    #[cfg(test)]
+    async fn add_file(
         &self,
         encoded_file: EncodedFile,
         path: &Path,
         hash: blake3::Hash,
     ) -> Result<Option<MediaFile>> {
+        self.add_file_to_import(encoded_file, path, hash, None)
+            .await
+    }
+
+    pub async fn begin_media_import(&self) -> Result<i64> {
         let _handle = self.saving.read().await;
+        self.db_execute(move |mut connection| history::begin_media_import(&mut connection))
+            .await
+    }
+
+    pub async fn finish_media_import(&self, history_id: i64) -> Result<history::Status> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut connection| {
+            history::finish_media_import(&mut connection, history_id)
+        })
+        .await
+    }
+
+    pub async fn add_file_to_import(
+        &self,
+        encoded_file: EncodedFile,
+        path: &Path,
+        hash: blake3::Hash,
+        history_id: Option<i64>,
+    ) -> Result<Option<MediaFile>> {
+        let handle = self.saving.read().await;
 
         let FileInfoParts {
             file_type,
@@ -1018,30 +1644,58 @@ impl MediaPack {
         } = encoded_file.info.to_parts();
 
         let mut file_name = file_name(path);
-        let file_path = encoded_file.path.to_string_lossy().to_string();
+        let file_path = encoded_file
+            .path
+            .strip_prefix(self.dir.join("media"))
+            .unwrap_or(&encoded_file.path)
+            .to_string_lossy()
+            .to_string();
         let file_info = encoded_file.info.clone();
         let file_type_str = file_type.as_str();
         let thumbnail = encoded_file.thumbnail.clone();
         let hash_bytes = *hash.as_bytes();
         let size = tokio::fs::metadata(&encoded_file.path).await?.len();
         let source_url = encoded_file.source_url.clone();
+        let encoded_path = encoded_file.path.clone();
 
-        let id = loop {
+        let add_result = loop {
             let file_name_clone = file_name.clone();
             let file_path = file_path.clone();
             let thumbnail = thumbnail.clone();
             let source_url = source_url.clone();
 
             let insert_result = self
-                .db_execute(move |conn| {
-                    conn.query_row(
-                        "INSERT INTO media (file_name, file_type, path, length, width, height, transparent, duration, audio, hash, thumbnail, source_url)
-                        VALUES (:file_name, :file_type, :path, :length, :width, :height, :transparent, :duration, :audio, :hash, :thumbnail, :source_url) RETURNING id",
+                .db_execute(move |mut conn| {
+                    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                    let existing: Option<(u64, bool, u64)> = tx
+                        .query_row(
+                            "SELECT m.id, m.deleted, COALESCE(l.length, p.length, 0)
+                             FROM media m
+                             LEFT JOIN loose_media l ON l.media_id = m.id
+                             LEFT JOIN pack_media p ON p.media_id = m.id
+                             WHERE m.hash = ?",
+                            [hash_bytes],
+                            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                        )
+                        .optional()?;
+                    if let Some((id, deleted, existing_size)) = existing {
+                        if !deleted {
+                            tx.commit()?;
+                            return Ok(AddFileResult::Duplicate);
+                        }
+                        tx.execute("UPDATE media SET deleted = 0 WHERE id = ?", [id])?;
+                        if let Some(history_id) = history_id {
+                            history::add_imported_media(&tx, history_id, id, existing_size)?;
+                        }
+                        tx.commit()?;
+                        return Ok(AddFileResult::Restored(id));
+                    }
+                    let id = tx.query_row(
+                        "INSERT INTO media (file_name, file_type, width, height, transparent, duration, audio, hash, thumbnail, source_url)
+                        VALUES (:file_name, :file_type, :width, :height, :transparent, :duration, :audio, :hash, :thumbnail, :source_url) RETURNING id",
                         named_params! {
                             ":file_name": file_name_clone,
                             ":file_type": file_type_str,
-                            ":path": file_path,
-                            ":length": size,
                             ":width": width,
                             ":height": height,
                             ":transparent": transparent,
@@ -1052,14 +1706,29 @@ impl MediaPack {
                             ":source_url": source_url,
                         },
                         |row| row.get::<_, u64>("id"),
-                    )
-                    .map_err(|err| err.into())
+                    )?;
+                    tx.execute(
+                        "INSERT INTO loose_media(media_id, path, length) VALUES (?, ?, ?)",
+                        params![id, file_path, size],
+                    )?;
+                    if let Some(history_id) = history_id {
+                        history::add_imported_media(&tx, history_id, id, size)?;
+                    }
+                    tx.commit()?;
+                    Ok(AddFileResult::Inserted(id))
                 })
                 .await;
 
             match insert_result {
-                Ok(id) => break id,
-                Err(err) if violates_unique_constraint(&err, "hash") => return Ok(None),
+                Ok(result) => break result,
+                Err(err) if violates_unique_constraint(&err, "hash") => {
+                    match tokio::fs::remove_file(&encoded_path).await {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                    return Ok(None);
+                }
                 Err(err) if violates_unique_constraint(&err, "file_name") => {
                     file_name = next_candidate_name(&file_name);
                 }
@@ -1067,11 +1736,39 @@ impl MediaPack {
             }
         };
 
+        let id = match add_result {
+            AddFileResult::Inserted(id) => id,
+            AddFileResult::Restored(id) => {
+                match tokio::fs::remove_file(&encoded_path).await {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+                self.mark_unsaved_now()?;
+                drop(handle);
+                return self
+                    .get_files()
+                    .await?
+                    .into_iter()
+                    .find(|file| file.id == id)
+                    .map(Some)
+                    .ok_or_else(|| anyhow!("restored media {id} is not active"));
+            }
+            AddFileResult::Duplicate => {
+                match tokio::fs::remove_file(&encoded_path).await {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+                return Ok(None);
+            }
+        };
+        // Do this synchronously immediately after the database commit. Upload cancellation can
+        // drop the async task at its next await; the recovery marker must already exist by then.
+        self.mark_unsaved_now()?;
         if !encoded_file.artists.is_empty() {
             self.add_artists(id, encoded_file.artists.clone()).await?;
         }
-
-        self.mark_unsaved().await?;
 
         Ok(Some(MediaFile {
             id,
@@ -1090,103 +1787,95 @@ impl MediaPack {
             return Ok(());
         }
         let _handle = self.saving.read().await;
-        let history_path = self.dir.join("history.db").to_string_lossy().to_string();
+        let label = if ids.len() == 1 {
+            "Remove media item".to_string()
+        } else {
+            format!("Remove {} media items", ids.len())
+        };
         self.db_execute(move |mut conn| {
-            let _ = conn.execute("DETACH DATABASE undo_history", []);
-            conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
-            conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
-            let result = (|| -> Result<()> {
-                let tx = conn.transaction()?;
-                let vars = repeat_vars(ids.len());
-                tx.execute(&format!("INSERT OR REPLACE INTO undo_history.media SELECT * FROM main.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_tags SELECT mt.media_id, t.name FROM main.media_tags mt JOIN main.tags t ON t.id = mt.tag_id WHERE mt.media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO undo_history.media_artists SELECT ma.media_id, a.name FROM main.media_artists ma JOIN main.artists a ON a.id = ma.artist_id WHERE ma.media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("DELETE FROM main.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
-                tx.commit()?;
-                Ok(())
-            })();
-            let _ = conn.execute("DETACH DATABASE undo_history", []);
-            result
+            history::record_media_visibility(&mut conn, &label, &ids, true)
         })
         .await?;
         self.mark_unsaved().await
     }
 
-    pub async fn restore_files(&self, ids: Vec<u64>) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let _handle = self.saving.read().await;
-        let history_path = self.dir.join("history.db").to_string_lossy().to_string();
-        self.db_execute(move |mut conn| {
-            let _ = conn.execute("DETACH DATABASE undo_history", []);
-            conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
-            conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
-            let result = (|| -> Result<()> {
-                let tx = conn.transaction()?;
-                let vars = repeat_vars(ids.len());
-                tx.execute(&format!("INSERT OR REPLACE INTO main.media SELECT * FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.tags (name) SELECT DISTINCT tag FROM undo_history.media_tags WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.media_tags SELECT h.media_id, t.id FROM undo_history.media_tags h JOIN main.tags t ON t.name = h.tag WHERE h.media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.artists (name) SELECT DISTINCT artist FROM undo_history.media_artists WHERE media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("INSERT OR IGNORE INTO main.media_artists SELECT h.media_id, a.id FROM undo_history.media_artists h JOIN main.artists a ON a.name = h.artist WHERE h.media_id IN ({vars})"), params_from_iter(&ids))?;
-                tx.execute(&format!("DELETE FROM undo_history.media WHERE id IN ({vars})"), params_from_iter(&ids))?;
-                tx.commit()?;
-                Ok(())
-            })();
-            let _ = conn.execute("DETACH DATABASE undo_history", []);
-            result
-        }).await?;
-        self.mark_unsaved().await
+    pub async fn history_status(&self) -> Result<history::Status> {
+        self.db_execute(move |conn| history::status(&conn)).await
     }
 
-    pub async fn purge_history_files(&self, ids: Vec<u64>) -> Result<()> {
+    pub async fn undo(&self) -> Result<history::Status> {
+        let _handle = self.saving.read().await;
+        let status = self
+            .db_execute(move |mut conn| history::undo(&mut conn))
+            .await?;
+        self.reload_metadata_from_db().await?;
+        if status.at_saved_state {
+            self.mark_saved().await?;
+        } else {
+            self.mark_unsaved().await?;
+        }
+        Ok(status)
+    }
+
+    pub async fn redo(&self) -> Result<history::Status> {
+        let _handle = self.saving.read().await;
+        let status = self
+            .db_execute(move |mut conn| history::redo(&mut conn))
+            .await?;
+        self.reload_metadata_from_db().await?;
+        if status.at_saved_state {
+            self.mark_saved().await?;
+        } else {
+            self.mark_unsaved().await?;
+        }
+        Ok(status)
+    }
+
+    async fn reload_metadata_from_db(&self) -> Result<()> {
+        let bytes = self
+            .db_execute(move |conn| {
+                conn.query_row(
+                    "SELECT metadata FROM pack_metadata WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .map_err(Into::into)
+            })
+            .await?;
+        *self.metadata.write().unwrap() = Metadata::from_buf(&bytes)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    async fn purge_history_files(&self, ids: Vec<u64>) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
         let _handle = self.saving.read().await;
-        let history_path = self.dir.join("history.db");
-        if !history_path.exists() {
-            return Ok(());
-        }
-        let media_dir = self.dir.join("media");
-        spawn_blocking(move || -> Result<()> {
-            let mut conn = rusqlite::Connection::open(history_path)?;
-            conn.execute_batch(HISTORY_SCHEMA)?;
-            let vars = repeat_vars(ids.len());
-            let paths = {
-                let mut stmt = conn.prepare(&format!(
-                    "SELECT path FROM media WHERE path IS NOT NULL AND id IN ({vars})"
-                ))?;
-                let paths = stmt
-                    .query_map(params_from_iter(&ids), |row| row.get::<_, String>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                paths
-            };
-            let tx = conn.transaction()?;
+        let db_ids = ids.clone();
+        self.db_execute(move |mut conn| {
+            let selected = media_id_array(&db_ids)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute(
-                &format!("DELETE FROM media_tags WHERE media_id IN ({vars})"),
-                params_from_iter(&ids),
+                "INSERT OR IGNORE INTO pending_file_deletions(path)
+                 SELECT l.path FROM loose_media l JOIN media m ON m.id = l.media_id
+                 WHERE m.deleted = 1 AND m.id IN (SELECT value FROM rarray(?))
+                   AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = m.id)
+                   AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = m.id)",
+                params![&selected],
             )?;
             tx.execute(
-                &format!("DELETE FROM media_artists WHERE media_id IN ({vars})"),
-                params_from_iter(&ids),
-            )?;
-            tx.execute(
-                &format!("DELETE FROM media WHERE id IN ({vars})"),
-                params_from_iter(&ids),
+                "DELETE FROM media WHERE deleted = 1
+                 AND id IN (SELECT value FROM rarray(?))
+                 AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = media.id)
+                 AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = media.id)",
+                params![&selected],
             )?;
             tx.commit()?;
-            for path in paths {
-                if let Err(error) = fs::remove_file(media_dir.join(path)) {
-                    if error.kind() != io::ErrorKind::NotFound {
-                        return Err(error.into());
-                    }
-                }
-            }
             Ok(())
         })
-        .await??;
+        .await?;
+        self.process_pending_file_deletions().await?;
         Ok(())
     }
 
@@ -1194,7 +1883,13 @@ impl MediaPack {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, file_type, file_name, width, height, transparent, duration, audio, hash, length, source_url FROM media",
+                "SELECT m.id, m.file_type, m.file_name, m.width, m.height, m.transparent,
+                        m.duration, m.audio, m.hash, COALESCE(l.length, p.length) AS length,
+                        m.source_url
+                 FROM media m
+                 LEFT JOIN loose_media l ON l.media_id = m.id
+                 LEFT JOIN pack_media p ON p.media_id = m.id
+                 WHERE m.deleted = 0",
             )?;
             let mut files: Vec<MediaFile> = {
                 let rows = stmt.query_and_then([], |row| -> Result<_> {
@@ -1278,14 +1973,23 @@ impl MediaPack {
 
     pub async fn add_mode(&self, file: Vec<u8>) -> Result<u64> {
         let _handle = self.saving.read().await;
+        let storage_bytes = file.len() as u64;
         let id = self
-            .db_execute(move |conn| {
-                conn.query_row(
-                    "INSERT INTO modes (file) VALUES (?) RETURNING id",
-                    params![file],
-                    |row| row.get(0),
+            .db_execute(move |mut connection| {
+                history::record(
+                    &mut connection,
+                    "Add custom mode",
+                    storage_bytes,
+                    &[],
+                    |tx| {
+                        tx.query_row(
+                            "INSERT INTO modes (file) VALUES (?) RETURNING id",
+                            params![file],
+                            |row| row.get(0),
+                        )
+                        .map_err(Into::into)
+                    },
                 )
-                .map_err(Into::into)
             })
             .await?;
         self.mark_unsaved().await?;
@@ -1294,221 +1998,121 @@ impl MediaPack {
 
     pub async fn remove_mode(&self, id: u64) -> Result<()> {
         let _handle = self.saving.read().await;
-        let history_path = self.dir.join("history.db").to_string_lossy().to_string();
-        self.db_execute(move |mut conn| {
-            let _ = conn.execute("DETACH DATABASE undo_history", []);
-            conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
-            conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
-            let result = (|| -> Result<()> {
-                let tx = conn.transaction()?;
-                tx.execute("INSERT OR REPLACE INTO undo_history.modes SELECT * FROM main.modes WHERE id = ?", params![id])?;
-                tx.execute("DELETE FROM main.modes WHERE id = ?", params![id])?;
-                tx.commit()?;
-                Ok(())
-            })();
-            let _ = conn.execute("DETACH DATABASE undo_history", []);
-            result
-        }).await?;
-        self.mark_unsaved().await
-    }
-
-    pub async fn restore_mode(&self, id: u64) -> Result<()> {
-        let _handle = self.saving.read().await;
-        let history_path = self.dir.join("history.db").to_string_lossy().to_string();
-        self.db_execute(move |mut conn| {
-            let _ = conn.execute("DETACH DATABASE undo_history", []);
-            conn.execute("ATTACH DATABASE ? AS undo_history", params![history_path])?;
-            conn.execute_batch(HISTORY_SCHEMA_ATTACHED)?;
-            let result = (|| -> Result<()> {
-                let tx = conn.transaction()?;
-                tx.execute("INSERT OR REPLACE INTO main.modes SELECT * FROM undo_history.modes WHERE id = ?", params![id])?;
-                tx.execute("DELETE FROM undo_history.modes WHERE id = ?", params![id])?;
-                tx.commit()?;
-                Ok(())
-            })();
-            let _ = conn.execute("DETACH DATABASE undo_history", []);
-            result
-        }).await?;
-        self.mark_unsaved().await
-    }
-
-    pub async fn purge_history_mode(&self, id: u64) -> Result<()> {
-        let _handle = self.saving.read().await;
-        let history_path = self.dir.join("history.db");
-        if !history_path.exists() {
-            return Ok(());
-        }
-        spawn_blocking(move || -> Result<()> {
-            let conn = rusqlite::Connection::open(history_path)?;
-            conn.execute_batch(HISTORY_SCHEMA)?;
-            conn.execute("DELETE FROM modes WHERE id = ?", params![id])?;
-            Ok(())
+        self.db_execute(move |mut connection| {
+            let storage_bytes: u64 = connection.query_row(
+                "SELECT length(file) FROM modes WHERE id = ?",
+                [id],
+                |row| row.get(0),
+            )?;
+            history::record(
+                &mut connection,
+                "Remove custom mode",
+                storage_bytes,
+                &[],
+                |tx| {
+                    tx.execute("DELETE FROM modes WHERE id = ?", [id])?;
+                    Ok(())
+                },
+            )
         })
-        .await??;
-        Ok(())
+        .await?;
+        self.mark_unsaved().await
     }
 
     pub async fn get_tag_summaries(&self) -> Result<Vec<TagSummary>> {
         self.db_execute(move |conn| {
-            let mut stmt = conn.prepare("SELECT tags.name, COUNT(media_tags.media_id) FROM tags LEFT JOIN media_tags ON media_tags.tag_id = tags.id GROUP BY tags.id ORDER BY tags.name COLLATE NOCASE")?;
-            let rows = stmt.query_map([], |row| Ok(TagSummary { name: row.get(0)?, media_count: row.get(1)? }))?;
+            let mut stmt = conn.prepare(
+                "SELECT tags.name, COUNT(media.id) FROM tags
+                 LEFT JOIN media_tags ON media_tags.tag_id = tags.id
+                 LEFT JOIN media ON media.id = media_tags.media_id AND media.deleted = 0
+                 GROUP BY tags.id ORDER BY tags.name COLLATE NOCASE",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(TagSummary {
+                    name: row.get(0)?,
+                    media_count: row.get(1)?,
+                })
+            })?;
             rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
-        }).await
-    }
-
-    pub async fn rename_tag<B: Serialize + Sync>(
-        &self,
-        from: String,
-        to: String,
-        behaviour: &B,
-    ) -> Result<()> {
-        let _handle = self.saving.read().await;
-        let blob = serde_json::to_vec_pretty(behaviour)?;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            let target_exists: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM tags WHERE name = ?)",
-                params![to],
-                |row| row.get(0),
-            )?;
-            if target_exists {
-                bail!("A tag named \"{to}\" already exists. Merge the tags instead.");
-            }
-            let changed =
-                tx.execute("UPDATE tags SET name = ? WHERE name = ?", params![to, from])?;
-            if changed == 0 {
-                tx.execute("INSERT INTO tags (name) VALUES (?)", params![to])?;
-            }
-            tx.execute(
-                "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
-                params![blob],
-            )?;
-            tx.commit()?;
-            Ok(())
         })
-        .await?;
-        self.mark_unsaved().await
+        .await
     }
 
-    pub async fn merge_tag<B: Serialize + Sync>(
-        &self,
-        from: String,
-        to: String,
-        behaviour: &B,
-    ) -> Result<()> {
+    pub async fn rename_tag(&self, from: String, to: String) -> Result<Behaviour> {
         let _handle = self.saving.read().await;
-        let blob = serde_json::to_vec_pretty(behaviour)?;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
+        let behaviour = self
+            .db_execute(move |mut conn| {
+                history::record_with_media_refs(&mut conn, "Rename tag", 0, |tx| {
+                    let media_ids = tag_media_ids(tx, &from)?;
+                    let target_exists: bool = tx.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM tags WHERE name = ?)",
+                        params![to],
+                        |row| row.get(0),
+                    )?;
+                    if target_exists {
+                        bail!("A tag named \"{to}\" already exists. Merge the tags instead.");
+                    }
+                    let changed =
+                        tx.execute("UPDATE tags SET name = ? WHERE name = ?", params![to, from])?;
+                    if changed == 0 {
+                        tx.execute("INSERT INTO tags (name) VALUES (?)", params![to])?;
+                    }
+                    let mut behaviour = read_behaviour(tx)?;
+                    behaviour.rewrite_tag(&from, Some(&to));
+                    tx.execute(
+                        "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
+                        params![behaviour.to_json_bytes()?],
+                    )?;
+                    Ok((behaviour, media_ids))
+                })
+            })
+            .await?;
+        self.mark_unsaved().await?;
+        Ok(behaviour)
+    }
+
+    pub async fn merge_tag(&self, from: String, to: String) -> Result<Behaviour> {
+        let _handle = self.saving.read().await;
+        let behaviour = self.db_execute(move |mut conn| {
+            history::record_with_media_refs(&mut conn, "Merge tags", 0, |tx| {
+            let media_ids = tag_media_ids(tx, &from)?;
             tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![to])?;
             tx.execute("INSERT OR IGNORE INTO media_tags (media_id, tag_id) SELECT media_tags.media_id, target.id FROM media_tags JOIN tags source ON source.id = media_tags.tag_id JOIN tags target ON target.name = ? WHERE source.name = ?", params![to, from])?;
             tx.execute("DELETE FROM media_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ?)", params![from])?;
             tx.execute("DELETE FROM tags WHERE name = ?", params![from])?;
-            tx.execute("INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)", params![blob])?;
-            tx.commit()?;
-            Ok(())
+            let mut behaviour = read_behaviour(tx)?;
+            behaviour.rewrite_tag(&from, Some(&to));
+            tx.execute("INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)", params![behaviour.to_json_bytes()?])?;
+            Ok((behaviour, media_ids))
+            })
         }).await?;
-        self.mark_unsaved().await
+        self.mark_unsaved().await?;
+        Ok(behaviour)
     }
 
-    pub async fn delete_tag<B: Serialize + Sync>(&self, tag: String, behaviour: &B) -> Result<()> {
+    pub async fn delete_tag(&self, tag: String) -> Result<Behaviour> {
         let _handle = self.saving.read().await;
-        let blob = serde_json::to_vec_pretty(behaviour)?;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            tx.execute(
-                "DELETE FROM media_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ?)",
-                params![tag],
-            )?;
-            tx.execute("DELETE FROM tags WHERE name = ?", params![tag])?;
-            tx.execute(
-                "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
-                params![blob],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
-        .await?;
-        self.mark_unsaved().await
-    }
-
-    pub async fn restore_merged_tag<B: Serialize + Sync>(
-        &self,
-        from: String,
-        to: String,
-        source_ids: Vec<u64>,
-        target_ids: Vec<u64>,
-        behaviour: &B,
-    ) -> Result<()> {
-        let _handle = self.saving.read().await;
-        let blob = serde_json::to_vec_pretty(behaviour)?;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            tx.execute(
-                "INSERT OR IGNORE INTO tags (name) VALUES (?)",
-                params![from],
-            )?;
-            let source_id: u64 =
-                tx.query_row("SELECT id FROM tags WHERE name = ?", params![from], |r| {
-                    r.get(0)
-                })?;
-            let target_id: u64 =
-                tx.query_row("SELECT id FROM tags WHERE name = ?", params![to], |r| {
-                    r.get(0)
-                })?;
-            for id in &source_ids {
-                tx.execute(
-                    "INSERT OR IGNORE INTO media_tags VALUES (?, ?)",
-                    params![id, source_id],
+        let behaviour = self
+            .db_execute(move |mut conn| {
+                history::record_with_media_refs(&mut conn, "Delete tag", 0, |tx| {
+                    let media_ids = tag_media_ids(tx, &tag)?;
+                    tx.execute(
+                    "DELETE FROM media_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ?)",
+                    params![tag],
                 )?;
-            }
-            for id in source_ids.iter().filter(|id| !target_ids.contains(id)) {
-                tx.execute(
-                    "DELETE FROM media_tags WHERE media_id = ? AND tag_id = ?",
-                    params![id, target_id],
-                )?;
-            }
-            tx.execute(
-                "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
-                params![blob],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
-        .await?;
-        self.mark_unsaved().await
-    }
-
-    pub async fn restore_deleted_tag<B: Serialize + Sync>(
-        &self,
-        tag: String,
-        ids: Vec<u64>,
-        behaviour: &B,
-    ) -> Result<()> {
-        let _handle = self.saving.read().await;
-        let blob = serde_json::to_vec_pretty(behaviour)?;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
-            let tag_id: u64 =
-                tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |r| {
-                    r.get(0)
-                })?;
-            for id in &ids {
-                tx.execute(
-                    "INSERT OR IGNORE INTO media_tags VALUES (?, ?)",
-                    params![id, tag_id],
-                )?;
-            }
-            tx.execute(
-                "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
-                params![blob],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
-        .await?;
-        self.mark_unsaved().await
+                    tx.execute("DELETE FROM tags WHERE name = ?", params![tag])?;
+                    let mut behaviour = read_behaviour(tx)?;
+                    behaviour.rewrite_tag(&tag, None);
+                    tx.execute(
+                        "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
+                        params![behaviour.to_json_bytes()?],
+                    )?;
+                    Ok((behaviour, media_ids))
+                })
+            })
+            .await?;
+        self.mark_unsaved().await?;
+        Ok(behaviour)
     }
 
     pub async fn get_tags(&self, id: u64) -> Result<Vec<String>> {
@@ -1525,16 +2129,18 @@ impl MediaPack {
 
     pub async fn add_tag(&self, id: u64, tag: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |conn| {
-            let tag_id: u64 =
-                conn.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
-                    row.get("id")
-                })?;
-            conn.execute(
-                "INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?)",
-                params![id, tag_id],
-            )?;
-            Ok(())
+        self.db_execute(move |mut connection| {
+            history::record(&mut connection, "Add media tag", 0, &[id], |tx| {
+                let tag_id: u64 =
+                    tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
+                        row.get("id")
+                    })?;
+                tx.execute(
+                    "INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+                    params![id, tag_id],
+                )?;
+                Ok(())
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -1542,19 +2148,25 @@ impl MediaPack {
 
     pub async fn create_and_add_tag(&self, id: u64, tag: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            let tag_id: u64 = tx.query_row(
-                "INSERT INTO tags (name) VALUES (?) RETURNING id",
-                params![tag],
-                |row| row.get("id"),
-            )?;
-            tx.execute(
-                "INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?)",
-                params![id, tag_id],
-            )?;
-            tx.commit()?;
-            Ok(())
+        self.db_execute(move |mut connection| {
+            history::record(
+                &mut connection,
+                "Create and add media tag",
+                0,
+                &[id],
+                |tx| {
+                    let tag_id: u64 = tx.query_row(
+                        "INSERT INTO tags (name) VALUES (?) RETURNING id",
+                        params![tag],
+                        |row| row.get("id"),
+                    )?;
+                    tx.execute(
+                        "INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+                        params![id, tag_id],
+                    )?;
+                    Ok(())
+                },
+            )
         })
         .await?;
         self.mark_unsaved().await
@@ -1569,7 +2181,7 @@ impl MediaPack {
         }
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             for tag in &tags {
                 tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
                 let tag_id: u64 =
@@ -1598,7 +2210,7 @@ impl MediaPack {
         }
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             for artist in &artists {
                 tx.execute(
                     "INSERT OR IGNORE INTO artists (name) VALUES (?)",
@@ -1627,12 +2239,19 @@ impl MediaPack {
     pub async fn set_pack_data(&self, name: &str, blob: Vec<u8>) -> Result<()> {
         let _handle = self.saving.read().await;
         let name = name.to_string();
-        self.db_execute(move |conn| {
-            conn.execute(
-                "INSERT OR REPLACE INTO pack_data (name, blob) VALUES (?, ?)",
-                params![name, blob],
-            )?;
-            Ok(())
+        let label = if name == "behaviour" {
+            "Edit pack behaviour".to_string()
+        } else {
+            format!("Edit pack data “{name}”")
+        };
+        self.db_execute(move |mut connection| {
+            history::record(&mut connection, &label, 0, &[], |tx| {
+                tx.execute(
+                    "INSERT OR REPLACE INTO pack_data (name, blob) VALUES (?, ?)",
+                    params![name, blob],
+                )?;
+                Ok(())
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -1659,12 +2278,14 @@ impl MediaPack {
 
     pub async fn remove_tag(&self, id: u64, tag: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |conn| {
-            conn.execute(
-                "DELETE FROM media_tags WHERE media_id = ? AND tag_id IN (SELECT id FROM tags WHERE name = ?)",
-                params![id, tag],
-            )?;
-            Ok(())
+        self.db_execute(move |mut connection| {
+            history::record(&mut connection, "Remove media tag", 0, &[id], |tx| {
+                tx.execute(
+                    "DELETE FROM media_tags WHERE media_id = ? AND tag_id IN (SELECT id FROM tags WHERE name = ?)",
+                    params![id, tag],
+                )?;
+                Ok(())
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -1675,21 +2296,21 @@ impl MediaPack {
             return Ok(());
         }
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
-            let tag_id: u64 =
-                tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
-                    row.get("id")
-                })?;
-            for id in &ids {
-                tx.execute(
-                    "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)",
-                    params![id, tag_id],
-                )?;
-            }
-            tx.commit()?;
-            Ok(())
+        self.db_execute(move |mut connection| {
+            history::record(&mut connection, "Add tag to media", 0, &ids, |tx| {
+                tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
+                let tag_id: u64 =
+                    tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
+                        row.get("id")
+                    })?;
+                for id in &ids {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+                        params![id, tag_id],
+                    )?;
+                }
+                Ok(())
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -1700,13 +2321,13 @@ impl MediaPack {
             return Ok(());
         }
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            for id in &ids {
-                tx.execute("DELETE FROM media_tags WHERE media_id = ? AND tag_id IN (SELECT id FROM tags WHERE name = ?)", params![id, tag])?;
-            }
-            tx.commit()?;
-            Ok(())
+        self.db_execute(move |mut connection| {
+            history::record(&mut connection, "Remove tag from media", 0, &ids, |tx| {
+                for id in &ids {
+                    tx.execute("DELETE FROM media_tags WHERE media_id = ? AND tag_id IN (SELECT id FROM tags WHERE name = ?)", params![id, tag])?;
+                }
+                Ok(())
+            })
         }).await?;
         self.mark_unsaved().await
     }
@@ -1725,17 +2346,19 @@ impl MediaPack {
 
     pub async fn add_artist(&self, id: u64, artist: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |conn| {
-            let artist_id: u64 = conn.query_row(
-                "SELECT id FROM artists WHERE name = ?",
-                params![artist],
-                |row| row.get("id"),
-            )?;
-            conn.execute(
-                "INSERT INTO media_artists (media_id, artist_id) VALUES (?, ?)",
-                params![id, artist_id],
-            )?;
-            Ok(())
+        self.db_execute(move |mut connection| {
+            history::record(&mut connection, "Add media artist", 0, &[id], |tx| {
+                let artist_id: u64 = tx.query_row(
+                    "SELECT id FROM artists WHERE name = ?",
+                    params![artist],
+                    |row| row.get("id"),
+                )?;
+                tx.execute(
+                    "INSERT INTO media_artists (media_id, artist_id) VALUES (?, ?)",
+                    params![id, artist_id],
+                )?;
+                Ok(())
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -1743,19 +2366,25 @@ impl MediaPack {
 
     pub async fn create_and_add_artist(&self, id: u64, artist: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            let artist_id: u64 = tx.query_row(
-                "INSERT INTO artists (name) VALUES (?) RETURNING id",
-                params![artist],
-                |row| row.get("id"),
-            )?;
-            tx.execute(
-                "INSERT INTO media_artists (media_id, artist_id) VALUES (?, ?)",
-                params![id, artist_id],
-            )?;
-            tx.commit()?;
-            Ok(())
+        self.db_execute(move |mut connection| {
+            history::record(
+                &mut connection,
+                "Create and add media artist",
+                0,
+                &[id],
+                |tx| {
+                    let artist_id: u64 = tx.query_row(
+                        "INSERT INTO artists (name) VALUES (?) RETURNING id",
+                        params![artist],
+                        |row| row.get("id"),
+                    )?;
+                    tx.execute(
+                        "INSERT INTO media_artists (media_id, artist_id) VALUES (?, ?)",
+                        params![id, artist_id],
+                    )?;
+                    Ok(())
+                },
+            )
         })
         .await?;
         self.mark_unsaved().await
@@ -1763,12 +2392,14 @@ impl MediaPack {
 
     pub async fn remove_artist(&self, id: u64, artist: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |conn| {
-            conn.execute(
-                "DELETE FROM media_artists WHERE media_id = ? AND artist_id IN (SELECT id FROM artists WHERE name = ?)",
-                params![id, artist],
-            )?;
-            Ok(())
+        self.db_execute(move |mut connection| {
+            history::record(&mut connection, "Remove media artist", 0, &[id], |tx| {
+                tx.execute(
+                    "DELETE FROM media_artists WHERE media_id = ? AND artist_id IN (SELECT id FROM artists WHERE name = ?)",
+                    params![id, artist],
+                )?;
+                Ok(())
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -1786,33 +2417,45 @@ impl MediaPack {
 
     pub async fn get_artist_summaries(&self) -> Result<Vec<ArtistSummary>> {
         self.db_execute(move |conn| {
-            let mut stmt = conn.prepare("SELECT artists.name, COUNT(media_artists.media_id) FROM artists LEFT JOIN media_artists ON media_artists.artist_id = artists.id GROUP BY artists.id ORDER BY artists.name COLLATE NOCASE")?;
-            let rows = stmt.query_map([], |row| Ok(ArtistSummary { name: row.get(0)?, media_count: row.get(1)? }))?;
+            let mut stmt = conn.prepare(
+                "SELECT artists.name, COUNT(media.id) FROM artists
+                 LEFT JOIN media_artists ON media_artists.artist_id = artists.id
+                 LEFT JOIN media ON media.id = media_artists.media_id AND media.deleted = 0
+                 GROUP BY artists.id ORDER BY artists.name COLLATE NOCASE",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(ArtistSummary {
+                    name: row.get(0)?,
+                    media_count: row.get(1)?,
+                })
+            })?;
             rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
-        }).await
+        })
+        .await
     }
 
     pub async fn rename_artist(&self, from: String, to: String) -> Result<()> {
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            let target_exists: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM artists WHERE name = ?)",
-                params![to],
-                |row| row.get(0),
-            )?;
-            if target_exists {
-                bail!("An artist named \"{to}\" already exists. Merge the artists instead.");
-            }
-            let changed = tx.execute(
-                "UPDATE artists SET name = ? WHERE name = ?",
-                params![to, from],
-            )?;
-            if changed == 0 {
-                tx.execute("INSERT INTO artists (name) VALUES (?)", params![to])?;
-            }
-            tx.commit()?;
-            Ok(())
+            history::record_with_media_refs(&mut conn, "Rename artist", 0, |tx| {
+                let media_ids = artist_media_ids(tx, &from)?;
+                let target_exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM artists WHERE name = ?)",
+                    params![to],
+                    |row| row.get(0),
+                )?;
+                if target_exists {
+                    bail!("An artist named \"{to}\" already exists. Merge the artists instead.");
+                }
+                let changed = tx.execute(
+                    "UPDATE artists SET name = ? WHERE name = ?",
+                    params![to, from],
+                )?;
+                if changed == 0 {
+                    tx.execute("INSERT INTO artists (name) VALUES (?)", params![to])?;
+                }
+                Ok(((), media_ids))
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -1821,13 +2464,14 @@ impl MediaPack {
     pub async fn merge_artist(&self, from: String, to: String) -> Result<()> {
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
+            history::record_with_media_refs(&mut conn, "Merge artists", 0, |tx| {
+            let media_ids = artist_media_ids(tx, &from)?;
             tx.execute("INSERT OR IGNORE INTO artists (name) VALUES (?)", params![to])?;
             tx.execute("INSERT OR IGNORE INTO media_artists (media_id, artist_id) SELECT media_artists.media_id, target.id FROM media_artists JOIN artists source ON source.id = media_artists.artist_id JOIN artists target ON target.name = ? WHERE source.name = ?", params![to, from])?;
             tx.execute("DELETE FROM media_artists WHERE artist_id IN (SELECT id FROM artists WHERE name = ?)", params![from])?;
             tx.execute("DELETE FROM artists WHERE name = ?", params![from])?;
-            tx.commit()?;
-            Ok(())
+            Ok(((), media_ids))
+            })
         }).await?;
         self.mark_unsaved().await
     }
@@ -1835,82 +2479,15 @@ impl MediaPack {
     pub async fn delete_artist(&self, artist: String) -> Result<()> {
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
+            history::record_with_media_refs(&mut conn, "Delete artist", 0, |tx| {
+            let media_ids = artist_media_ids(tx, &artist)?;
             tx.execute(
                 "DELETE FROM media_artists WHERE artist_id IN (SELECT id FROM artists WHERE name = ?)",
                 params![artist],
             )?;
             tx.execute("DELETE FROM artists WHERE name = ?", params![artist])?;
-            tx.commit()?;
-            Ok(())
-        })
-        .await?;
-        self.mark_unsaved().await
-    }
-
-    pub async fn restore_merged_artist(
-        &self,
-        from: String,
-        to: String,
-        source_ids: Vec<u64>,
-        target_ids: Vec<u64>,
-    ) -> Result<()> {
-        let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            tx.execute(
-                "INSERT OR IGNORE INTO artists (name) VALUES (?)",
-                params![from],
-            )?;
-            let source_id: u64 = tx.query_row(
-                "SELECT id FROM artists WHERE name = ?",
-                params![from],
-                |r| r.get(0),
-            )?;
-            let target_id: u64 =
-                tx.query_row("SELECT id FROM artists WHERE name = ?", params![to], |r| {
-                    r.get(0)
-                })?;
-            for id in &source_ids {
-                tx.execute(
-                    "INSERT OR IGNORE INTO media_artists VALUES (?, ?)",
-                    params![id, source_id],
-                )?;
-            }
-            for id in source_ids.iter().filter(|id| !target_ids.contains(id)) {
-                tx.execute(
-                    "DELETE FROM media_artists WHERE media_id = ? AND artist_id = ?",
-                    params![id, target_id],
-                )?;
-            }
-            tx.commit()?;
-            Ok(())
-        })
-        .await?;
-        self.mark_unsaved().await
-    }
-
-    pub async fn restore_deleted_artist(&self, artist: String, ids: Vec<u64>) -> Result<()> {
-        let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            tx.execute(
-                "INSERT OR IGNORE INTO artists (name) VALUES (?)",
-                params![artist],
-            )?;
-            let artist_id: u64 = tx.query_row(
-                "SELECT id FROM artists WHERE name = ?",
-                params![artist],
-                |r| r.get(0),
-            )?;
-            for id in &ids {
-                tx.execute(
-                    "INSERT OR IGNORE INTO media_artists VALUES (?, ?)",
-                    params![id, artist_id],
-                )?;
-            }
-            tx.commit()?;
-            Ok(())
+            Ok(((), media_ids))
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -1922,24 +2499,24 @@ impl MediaPack {
         }
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
-            tx.execute(
-                "INSERT OR IGNORE INTO artists (name) VALUES (?)",
-                params![artist],
-            )?;
-            let artist_id: u64 = tx.query_row(
-                "SELECT id FROM artists WHERE name = ?",
-                params![artist],
-                |row| row.get("id"),
-            )?;
-            for id in &ids {
+            history::record(&mut conn, "Add artist to media", 0, &ids, |tx| {
                 tx.execute(
-                    "INSERT OR IGNORE INTO media_artists (media_id, artist_id) VALUES (?, ?)",
-                    params![id, artist_id],
+                    "INSERT OR IGNORE INTO artists (name) VALUES (?)",
+                    params![artist],
                 )?;
-            }
-            tx.commit()?;
-            Ok(())
+                let artist_id: u64 = tx.query_row(
+                    "SELECT id FROM artists WHERE name = ?",
+                    params![artist],
+                    |row| row.get("id"),
+                )?;
+                for id in &ids {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO media_artists (media_id, artist_id) VALUES (?, ?)",
+                        params![id, artist_id],
+                    )?;
+                }
+                Ok(())
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -1951,24 +2528,26 @@ impl MediaPack {
         }
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
-            let tx = conn.transaction()?;
+            history::record(&mut conn, "Remove artist from media", 0, &ids, |tx| {
             for id in &ids {
                 tx.execute("DELETE FROM media_artists WHERE media_id = ? AND artist_id IN (SELECT id FROM artists WHERE name = ?)", params![id, artist])?;
             }
-            tx.commit()?;
             Ok(())
+            })
         }).await?;
         self.mark_unsaved().await
     }
 
     pub async fn set_source_url(&self, id: u64, url: Option<String>) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |conn| {
-            conn.execute(
-                "UPDATE media SET source_url = ? WHERE id = ?",
-                params![url, id],
-            )?;
-            Ok(())
+        self.db_execute(move |mut connection| {
+            history::record(&mut connection, "Set media source", 0, &[id], |tx| {
+                tx.execute(
+                    "UPDATE media SET source_url = ? WHERE id = ?",
+                    params![url, id],
+                )?;
+                Ok(())
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -1979,7 +2558,7 @@ impl MediaPack {
         self.db_execute(move |conn| {
             Ok(conn
                 .query_row(
-                    "SELECT 1 FROM media WHERE hash = ?",
+                    "SELECT 1 FROM media WHERE hash = ? AND deleted = 0",
                     params![hash_bytes],
                     |_| Ok(1),
                 )
@@ -1997,12 +2576,14 @@ impl MediaPack {
         let _handle = self.saving.read().await;
         let name_clone = name.clone();
         let result = self
-            .db_execute(move |conn| {
-                conn.execute(
-                    "UPDATE media SET file_name = ? WHERE id = ?",
-                    params![name_clone, id],
-                )?;
-                Ok(())
+            .db_execute(move |mut connection| {
+                history::record(&mut connection, "Rename media item", 0, &[id], |tx| {
+                    tx.execute(
+                        "UPDATE media SET file_name = ? WHERE id = ?",
+                        params![name_clone, id],
+                    )?;
+                    Ok(())
+                })
             })
             .await;
 
@@ -2020,7 +2601,7 @@ impl MediaPack {
 
 impl Drop for MediaPack {
     fn drop(&mut self) {
-        if self.saved.load(Ordering::Relaxed) {
+        if self.saved.load(Ordering::Relaxed) || self.delete_on_drop.load(Ordering::Relaxed) {
             if let Err(err) = fs::remove_dir_all(&self.dir) {
                 tracing::error!("{err}");
             }
@@ -2053,7 +2634,11 @@ impl MediaPackView {
         let (offset, length, path, file_type, transparent) = self
             .db_execute(move |conn| {
                 conn.query_row_and_then(
-                    "SELECT offset, length, path, file_type, transparent FROM media WHERE id = ?",
+                    "SELECT p.\"offset\", p.length, l.path, m.file_type, m.transparent
+                     FROM media m
+                     LEFT JOIN pack_media p ON p.media_id = m.id
+                     LEFT JOIN loose_media l ON l.media_id = m.id
+                     WHERE m.id = ?",
                     params![id],
                     |row| -> Result<_> {
                         Ok((
@@ -2094,20 +2679,20 @@ impl MediaPackView {
     }
 
     pub async fn get_preview(&self, id: u64) -> Result<Vec<u8>> {
-        let _handle = self.saving.read().await;
+        let _handle = self.archive_io.read().await;
         let (file_data, file_type, transparent) = self.get_raw_file(id).await?;
         crate::thumbnail::generate_preview(file_data, file_type == FileType::Image, transparent)
             .await
     }
 
     pub async fn get_display(&self, id: u64) -> Result<Vec<u8>> {
-        let _handle = self.saving.read().await;
+        let _handle = self.archive_io.read().await;
         let (file_data, _, _) = self.get_raw_file(id).await?;
         crate::thumbnail::generate_display_image(file_data).await
     }
 
     pub async fn get_file_data(&self, id: u64) -> Result<(Vec<u8>, FileType)> {
-        let _handle = self.saving.read().await;
+        let _handle = self.archive_io.read().await;
         let (file_data, file_type, _) = self.get_raw_file(id).await?;
         let data = match file_data {
             FileData::Path(path) => tokio::fs::read(path).await?,
@@ -2117,12 +2702,17 @@ impl MediaPackView {
     }
 
     pub async fn get_file_range(&self, id: u64, range: Range) -> Result<(DataRange, FileType)> {
-        let _handle = self.saving.read().await;
+        let _handle = self.archive_io.read().await;
 
         let (offset, length, path, file_type) = self
             .db_execute(move |conn| {
                 conn.query_row_and_then(
-                    "SELECT offset, length, path, file_type FROM media WHERE id = ?",
+                    "SELECT p.\"offset\", COALESCE(p.length, l.length) AS length,
+                            l.path, m.file_type
+                     FROM media m
+                     LEFT JOIN pack_media p ON p.media_id = m.id
+                     LEFT JOIN loose_media l ON l.media_id = m.id
+                     WHERE m.id = ?",
                     params![id],
                     |row| -> Result<_> {
                         Ok((
@@ -2136,10 +2726,9 @@ impl MediaPackView {
             })
             .await?;
 
-        let mut file = self.open_read().await?;
-
         let data_range = match (offset, length, path) {
             (Some(offset), Some(length), _) => {
+                let mut file = self.open_read().await?;
                 let (start, end) = resolve_range(range, length)?;
                 file.seek(SeekFrom::Start(offset + start)).await?;
                 let mut buf = vec![0u8; (end - start) as usize];
@@ -2173,103 +2762,64 @@ impl MediaPackView {
     }
 }
 
-/// Copies one already-embedded file from `job.source_offset` to `job.dest_offset`
-/// within `path`/`out_path` (the same file for an in-place save), then records the
-/// new offset in the DB immediately - so a crash mid-save never leaves the DB
-/// pointing at a range whose original bytes may have already been overwritten by
-/// another job's write.
-///
-/// Callers must have already registered `(job.source_offset, job.length)` in
-/// `in_flight` (see the dispatch loop in `write_files`) before spawning this -
-/// registration must happen on a single thread, strictly in job order, to be a
-/// valid safety gate. This function only removes the entry once the read is done.
-fn copy_shift_job(
-    job: &ShiftJob,
-    path: &Path,
-    out_path: &Path,
-    in_flight: &Mutex<Vec<(u64, u64)>>,
-    cvar: &Condvar,
-    db_tx: &std::sync::mpsc::Sender<DbUpdateRequest>,
+async fn process_pending_file_deletions(
+    pool: Pool<SqliteConnectionManager>,
+    media_dir: PathBuf,
 ) -> Result<()> {
-    let copy_result = (|| -> Result<()> {
-        let mut in_file = fs::File::open(path)?;
-        in_file.seek(SeekFrom::Start(job.source_offset))?;
-        let mut bounded = in_file.take(job.length);
-        let mut out_file = fs::OpenOptions::new().write(true).open(out_path)?;
-        out_file.seek(SeekFrom::Start(job.dest_offset))?;
-        io::copy(&mut bounded, &mut out_file)?;
+    spawn_blocking(move || -> Result<()> {
+        let conn = pool.get()?;
+        let paths = {
+            let mut statement = conn.prepare("SELECT path FROM pending_file_deletions")?;
+            let paths = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            paths
+        };
+        for stored in paths {
+            let path = PathBuf::from(&stored);
+            let full_path = if path.is_absolute() {
+                path
+            } else {
+                media_dir.join(path)
+            };
+            match fs::remove_file(full_path) {
+                Ok(()) => {
+                    conn.execute(
+                        "DELETE FROM pending_file_deletions WHERE path = ?",
+                        [&stored],
+                    )?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    conn.execute(
+                        "DELETE FROM pending_file_deletions WHERE path = ?",
+                        [&stored],
+                    )?;
+                }
+                Err(error) => tracing::error!("could not delete loose media {stored}: {error}"),
+            }
+        }
         Ok(())
-    })();
-
-    // The read is done (or failed) either way, so this job's source range no
-    // longer needs protecting from concurrent writers.
-    {
-        let mut guard = in_flight.lock().unwrap();
-        guard.retain(|&(src_off, _)| src_off != job.source_offset);
-        cvar.notify_all();
-    }
-
-    copy_result?;
-
-    send_db_update(
-        db_tx,
-        DbUpdateKind::Shift {
-            id: job.id,
-            offset: job.dest_offset,
-        },
-    )
+    })
+    .await??;
+    Ok(())
 }
 
-/// Copies one newly-staged loose file into `out_path` at `job.dest_offset`, then
-/// records its offset/length in the DB and only then removes the staging file -
-/// in that order, so a crash never leaves a row with neither a valid pack offset
-/// nor its staging copy. No overlap gating is needed here: unlike
-/// `copy_shift_job`, the source is always a separate file from `out_path`, so
-/// concurrent jobs can never race on the same bytes.
-///
-/// Returns `Ok(false)` (not an error) if the staged file was missing on disk -
-/// its DB row has already been dropped in that case, and the caller is expected
-/// to adjust the progress denominator accordingly.
-fn copy_new_file_job(
-    job: &NewFileJob,
-    out_path: &Path,
-    db_tx: &std::sync::mpsc::Sender<DbUpdateRequest>,
-) -> Result<bool> {
-    let media_file = match fs::File::open(&job.full_path) {
-        Ok(f) => f,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            tracing::error!(
-                "Staged file missing, dropping from pack: {}",
-                job.full_path.display()
-            );
-            send_db_update(db_tx, DbUpdateKind::DropMissing { id: job.id })?;
-            return Ok(false);
-        }
-        Err(err) => return Err(err.into()),
-    };
-
-    let mut out_file = fs::OpenOptions::new().write(true).open(out_path)?;
-    out_file.seek(SeekFrom::Start(job.dest_offset))?;
-    // Bounded to expected_length so an unexpectedly-larger on-disk file can never
-    // overrun into the next job's precomputed (and, since we pre-sized the file,
-    // already-allocated) region.
-    let mut bounded = media_file.take(job.expected_length);
-    let size = io::copy(&mut bounded, &mut out_file)?;
-
-    send_db_update(
-        db_tx,
-        DbUpdateKind::NewFile {
-            id: job.id,
-            offset: job.dest_offset,
-            length: size,
-        },
-    )?;
-
-    if let Err(err) = fs::remove_file(&job.full_path) {
-        tracing::error!("{err}");
+fn copy_range_forward(
+    source: &mut fs::File,
+    destination: &mut fs::File,
+    run: &CopyRun,
+    buffer: &mut [u8],
+) -> Result<()> {
+    source.seek(SeekFrom::Start(run.source_offset))?;
+    destination.seek(SeekFrom::Start(run.dest_offset))?;
+    let mut remaining = run.length;
+    while remaining > 0 {
+        let amount = remaining.min(buffer.len() as u64) as usize;
+        source.read_exact(&mut buffer[..amount])?;
+        destination.write_all(&buffer[..amount])?;
+        remaining -= amount as u64;
     }
-
-    Ok(true)
+    Ok(())
 }
 
 /// Whether `err` (as returned by a query through `db_execute`, which wraps the
@@ -2298,6 +2848,64 @@ fn file_name(path: &Path) -> String {
         .to_string()
 }
 
+fn remove_sqlite_sidecars(path: &Path) -> io::Result<()> {
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        match fs::remove_file(PathBuf::from(sidecar)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
+fn clone_archive(source: &Path, pack_id: Uuid) -> Result<tempfile::NamedTempFile> {
+    let parent = source
+        .parent()
+        .ok_or_else(|| anyhow!("pack destination has no parent directory"))?;
+    let generation = tempfile::Builder::new()
+        .prefix(&format!(".pack-editor-generation-{pack_id}-"))
+        .tempfile_in(parent)?;
+
+    // Reflink implementations such as macOS clonefile require the destination
+    // not to exist. Keep TempPath's delete-on-drop guard while removing the
+    // placeholder created by NamedTempFile, then reopen the resulting file.
+    let (placeholder, generation_path) = generation.into_parts();
+    drop(placeholder);
+    fs::remove_file(&generation_path)?;
+    if reflink_copy::reflink(source, &generation_path).is_err() {
+        fs::copy(source, &generation_path)?;
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&generation_path)?;
+    let generation = tempfile::NamedTempFile::from_parts(file, generation_path);
+    generation
+        .as_file()
+        .set_permissions(fs::metadata(source)?.permissions())?;
+    Ok(generation)
+}
+
+fn sync_parent_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open(path.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()?;
+    }
+    Ok(())
+}
+
+fn is_storage_full(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<io::Error>()
+            .and_then(io::Error::raw_os_error)
+            .is_some_and(|code| code == libc::ENOSPC || code == libc::EDQUOT || code == 112)
+    })
+}
+
 /// Produces the next name to try after `name` collided with an existing file: appends
 /// " (1)" before the extension, or bumps an existing " (n)" suffix to " (n+1)" so repeated
 /// collisions count up instead of piling up " (1) (1) (1)"-style.
@@ -2323,48 +2931,56 @@ fn next_candidate_name(name: &str) -> String {
     }
 }
 
-fn repeat_vars(count: usize) -> String {
-    assert_ne!(count, 0);
-    let mut s = "?,".repeat(count);
-    s.pop();
-    s
+#[cfg(test)]
+fn media_id_array(ids: &[u64]) -> Result<Array> {
+    let values = ids
+        .iter()
+        .map(|&id| Ok(Value::Integer(i64::try_from(id)?)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Rc::new(values))
 }
 
-const HISTORY_SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS media (
-    id INTEGER PRIMARY KEY, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
-    "offset" INTEGER, length INTEGER, path TEXT, width INTEGER, height INTEGER,
-    transparent INTEGER, duration REAL, audio INTEGER, hash BLOB NOT NULL, thumbnail BLOB,
-    source_url TEXT
-) STRICT;
-CREATE TABLE IF NOT EXISTS media_tags (
-    media_id INTEGER NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (media_id, tag),
-    FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE
-) STRICT;
-CREATE TABLE IF NOT EXISTS media_artists (
-    media_id INTEGER NOT NULL, artist TEXT NOT NULL, PRIMARY KEY (media_id, artist),
-    FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE
-) STRICT;
-CREATE TABLE IF NOT EXISTS modes (id INTEGER PRIMARY KEY, file BLOB NOT NULL) STRICT;
-"#;
+fn release_snapshot_media(
+    pool: &Pool<SqliteConnectionManager>,
+    save_id: &str,
+    ids: &[i64],
+) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let selected: Array = Rc::new(ids.iter().copied().map(Value::Integer).collect());
+    let mut connection = pool.get()?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute(
+        "DELETE FROM snapshot_media
+         WHERE save_id = ?1 AND media_id IN (SELECT value FROM rarray(?2))",
+        params![save_id, &selected],
+    )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO pending_file_deletions(path)
+         SELECT l.path FROM loose_media l JOIN media m ON m.id = l.media_id
+         WHERE m.deleted = 1 AND m.id IN (SELECT value FROM rarray(?1))
+           AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = m.id)
+           AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = m.id)",
+        params![&selected],
+    )?;
+    tx.execute(
+        "DELETE FROM media WHERE deleted = 1
+         AND id IN (SELECT value FROM rarray(?1))
+         AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = media.id)
+         AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = media.id)",
+        params![&selected],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
 
-const HISTORY_SCHEMA_ATTACHED: &str = r#"
-CREATE TABLE IF NOT EXISTS undo_history.media (
-    id INTEGER PRIMARY KEY, file_name TEXT NOT NULL, file_type TEXT NOT NULL,
-    "offset" INTEGER, length INTEGER, path TEXT, width INTEGER, height INTEGER,
-    transparent INTEGER, duration REAL, audio INTEGER, hash BLOB NOT NULL, thumbnail BLOB,
-    source_url TEXT
-) STRICT;
-CREATE TABLE IF NOT EXISTS undo_history.media_tags (
-    media_id INTEGER NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (media_id, tag),
-    FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE
-) STRICT;
-CREATE TABLE IF NOT EXISTS undo_history.media_artists (
-    media_id INTEGER NOT NULL, artist TEXT NOT NULL, PRIMARY KEY (media_id, artist),
-    FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE
-) STRICT;
-CREATE TABLE IF NOT EXISTS undo_history.modes (id INTEGER PRIMARY KEY, file BLOB NOT NULL) STRICT;
-"#;
+fn sqlite_connection_manager(path: &Path) -> SqliteConnectionManager {
+    SqliteConnectionManager::file(path).with_init(|conn| {
+        array::load_module(conn)?;
+        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
+    })
+}
 
 fn resolve_range(range: Range, size: u64) -> Result<(u64, u64)> {
     match (range.start, range.end) {
@@ -2376,7 +2992,10 @@ fn resolve_range(range: Range, size: u64) -> Result<(u64, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        sync::{Condvar, Mutex},
+    };
 
     use proptest::prelude::*;
     use rusqlite::params;
@@ -2420,7 +3039,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_modes_roundtrip_through_undo_history() {
+    async fn embedded_modes_roundtrip_through_database_history() {
         let output = tempdir().unwrap();
         let data = tempdir().unwrap();
         let pack = new_test_pack(&output.path().join("modes.lwpack"), data.path(), "Modes").await;
@@ -2431,28 +3050,258 @@ mod tests {
 
         pack.remove_mode(id).await.unwrap();
         assert!(pack.get_modes().await.unwrap().is_empty());
-        let history = rusqlite::Connection::open(pack.dir().join("history.db")).unwrap();
-        let staged: Vec<u8> = history
-            .query_row("SELECT file FROM modes WHERE id = ?", params![id], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(staged, bytes);
-        drop(history);
-
-        pack.restore_mode(id).await.unwrap();
+        pack.undo().await.unwrap();
         assert_eq!(pack.get_modes().await.unwrap().len(), 1);
-        pack.remove_mode(id).await.unwrap();
-        pack.purge_history_mode(id).await.unwrap();
-        let history = rusqlite::Connection::open(pack.dir().join("history.db")).unwrap();
-        let retained: u64 = history
-            .query_row(
-                "SELECT COUNT(*) FROM modes WHERE id = ?",
-                params![id],
-                |row| row.get(0),
+        pack.redo().await.unwrap();
+        assert!(pack.get_modes().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn imported_media_undo_keeps_its_loose_source_for_redo() {
+        let output = tempdir().unwrap();
+        let data = tempdir().unwrap();
+        let pack = new_test_pack(
+            &output.path().join("import-history.lwpack"),
+            data.path(),
+            "Import history",
+        )
+        .await;
+        let bytes = b"backend-owned import history";
+        let staged = pack.dir.join("media").join("import-history.opus");
+        tokio::fs::write(&staged, bytes).await.unwrap();
+        let history_id = pack.begin_media_import().await.unwrap();
+        let media = pack
+            .add_file_to_import(
+                EncodedFile {
+                    info: FileInfo::Audio { duration: 1.0 },
+                    thumbnail: None,
+                    path: staged.clone(),
+                    artists: vec![],
+                    source_url: None,
+                },
+                Path::new("import-history.wav"),
+                blake3::hash(bytes),
+                Some(history_id),
             )
+            .await
+            .unwrap()
             .unwrap();
-        assert_eq!(retained, 0);
+        let status = pack.finish_media_import(history_id).await.unwrap();
+        assert!(status.can_undo);
+
+        pack.undo().await.unwrap();
+        assert!(pack.get_files().await.unwrap().is_empty());
+        assert!(staged.exists());
+        pack.redo().await.unwrap();
+        let restored = pack.get_files().await.unwrap();
+        assert_eq!(restored[0].id, media.id);
+        assert_eq!(
+            pack.get_view()
+                .unwrap()
+                .get_file_data(media.id)
+                .await
+                .unwrap()
+                .0,
+            bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn reimporting_soft_deleted_content_restores_its_existing_media_row() {
+        let output = tempdir().unwrap();
+        let data = tempdir().unwrap();
+        let pack = new_test_pack(
+            &output.path().join("restore-duplicate.lwpack"),
+            data.path(),
+            "Restore duplicate",
+        )
+        .await;
+        let bytes = b"same encoded media";
+        let first_path = pack.dir.join("media").join("first.opus");
+        tokio::fs::write(&first_path, bytes).await.unwrap();
+        let first_history = pack.begin_media_import().await.unwrap();
+        let first = pack
+            .add_file_to_import(
+                EncodedFile {
+                    info: FileInfo::Audio { duration: 1.0 },
+                    thumbnail: None,
+                    path: first_path,
+                    artists: vec![],
+                    source_url: None,
+                },
+                Path::new("first.wav"),
+                blake3::hash(bytes),
+                Some(first_history),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        pack.finish_media_import(first_history).await.unwrap();
+        pack.remove_files(vec![first.id]).await.unwrap();
+
+        let redundant_path = pack.dir.join("media").join("second.opus");
+        tokio::fs::write(&redundant_path, bytes).await.unwrap();
+        let second_history = pack.begin_media_import().await.unwrap();
+        let restored = pack
+            .add_file_to_import(
+                EncodedFile {
+                    info: FileInfo::Audio { duration: 1.0 },
+                    thumbnail: None,
+                    path: redundant_path.clone(),
+                    artists: vec![],
+                    source_url: None,
+                },
+                Path::new("second.wav"),
+                blake3::hash(bytes),
+                Some(second_history),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        pack.finish_media_import(second_history).await.unwrap();
+
+        assert_eq!(restored.id, first.id);
+        assert!(!redundant_path.exists());
+        pack.undo().await.unwrap();
+        assert!(pack.get_files().await.unwrap().is_empty());
+        pack.redo().await.unwrap();
+        assert_eq!(pack.get_files().await.unwrap()[0].id, first.id);
+    }
+
+    #[tokio::test]
+    async fn pending_import_is_not_trimmed_by_concurrent_history_entries() {
+        let output = tempdir().unwrap();
+        let data = tempdir().unwrap();
+        let pack = new_test_pack(
+            &output.path().join("pending-trim.lwpack"),
+            data.path(),
+            "Pending trim",
+        )
+        .await;
+        let history_id = pack.begin_media_import().await.unwrap();
+        for index in 0u64..105 {
+            pack.set_pack_data("test", index.to_le_bytes().to_vec())
+                .await
+                .unwrap();
+        }
+        let pending_exists = pack
+            .db_execute(move |connection| {
+                connection
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM history_entries
+                         WHERE id = ? AND status = 'pending')",
+                        [history_id],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert!(pending_exists);
+        pack.finish_media_import(history_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn undo_does_not_resurrect_garbage_from_a_discarded_redo_branch() {
+        let output = tempdir().unwrap();
+        let data = tempdir().unwrap();
+        let pack = new_test_pack(
+            &output.path().join("redo-garbage.lwpack"),
+            data.path(),
+            "Redo garbage",
+        )
+        .await;
+        let bytes = b"discarded redo bytes";
+        let staged = pack.dir.join("media").join("redo-garbage.opus");
+        tokio::fs::write(&staged, bytes).await.unwrap();
+        let history_id = pack.begin_media_import().await.unwrap();
+        pack.add_file_to_import(
+            EncodedFile {
+                info: FileInfo::Audio { duration: 1.0 },
+                thumbnail: None,
+                path: staged,
+                artists: vec![],
+                source_url: None,
+            },
+            Path::new("redo-garbage.wav"),
+            blake3::hash(bytes),
+            Some(history_id),
+        )
+        .await
+        .unwrap();
+        pack.finish_media_import(history_id).await.unwrap();
+        pack.undo().await.unwrap();
+
+        pack.set_metadata(&Metadata {
+            name: "A new branch".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        pack.undo().await.unwrap();
+        assert!(pack.get_files().await.unwrap().is_empty());
+        assert_eq!(
+            pack.history_status().await.unwrap().redo_label.as_deref(),
+            Some("Edit pack metadata")
+        );
+    }
+
+    #[tokio::test]
+    async fn reopening_reconciles_a_generation_committed_before_the_working_db() {
+        let output = tempdir().unwrap();
+        let data = tempdir().unwrap();
+        let path = output.path().join("generation-recovery.lwpack");
+        let pack = new_test_pack(&path, data.path(), "Generation recovery").await;
+        let bytes = b"generation recovery bytes";
+        let id = insert_staged_audio(&pack, bytes).await;
+        pack.save(|_, _| {}).await.unwrap();
+        pack.set_metadata(&Metadata {
+            name: "Unsaved metadata".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        pack.db_execute(move |conn| {
+            conn.execute(
+                "UPDATE pack_media SET generation_id = 'stale', \"offset\" = 999999 WHERE media_id = ?",
+                [id],
+            )?;
+            conn.execute(
+                "UPDATE editor_state SET archive_generation = 'stale' WHERE singleton = 1",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        drop(pack);
+
+        let reopened = MediaPack::open(path, data.path()).await.unwrap();
+        assert_eq!(reopened.name(), "Unsaved metadata");
+        assert_eq!(
+            reopened
+                .get_view()
+                .unwrap()
+                .get_file_data(id)
+                .await
+                .unwrap()
+                .0,
+            bytes
+        );
+        let generation: (String, String) = reopened
+            .db_execute(move |conn| {
+                conn.query_row(
+                    "SELECT p.generation_id, e.archive_generation FROM pack_media p
+                     CROSS JOIN editor_state e WHERE p.media_id = ? AND e.singleton = 1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(generation.0, generation.1);
+        assert_ne!(generation.0, "stale");
     }
 
     #[tokio::test]
@@ -2483,13 +3332,20 @@ mod tests {
 
         let hash_bytes = *blake3::hash(content).as_bytes();
         let filename_clone = filename.clone();
-        pack.db_execute(move |conn| {
-            let id: u64 = conn.query_row(
-                "INSERT INTO media (file_name, file_type, path, duration, hash) \
-                 VALUES (?, 'audio', ?, 1.0, ?) RETURNING id",
-                params![filename_clone, filename, hash_bytes],
+        let length = content.len() as u64;
+        pack.db_execute(move |mut conn| {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let id: u64 = tx.query_row(
+                "INSERT INTO media (file_name, file_type, duration, hash) \
+                 VALUES (?, 'audio', 1.0, ?) RETURNING id",
+                params![filename_clone, hash_bytes],
                 |row| row.get("id"),
             )?;
+            tx.execute(
+                "INSERT INTO loose_media(media_id, path, length) VALUES (?, ?, ?)",
+                params![id, filename, length],
+            )?;
+            tx.commit()?;
             Ok(id)
         })
         .await
@@ -2509,6 +3365,239 @@ mod tests {
         let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
         assert_eq!(pack2.name(), "My Pack");
         assert!(pack2.is_saved().await);
+    }
+
+    #[tokio::test]
+    async fn edits_during_snapshot_save_remain_dirty_and_are_not_written_into_that_snapshot() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("snapshot.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Before snapshot").await;
+        insert_staged_audio(&pack, &vec![7; 2 * 1024 * 1024]).await;
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let save = pack.save({
+            let started_tx = started_tx.clone();
+            move |_, _| {
+                if let Some(tx) = started_tx.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+            }
+        });
+        let edit = async {
+            started_rx.await.unwrap();
+            pack.set_metadata(&Metadata {
+                name: "Edited while saving".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        };
+        let (save_result, ()) = tokio::join!(save, edit);
+        save_result.unwrap();
+
+        assert!(
+            !pack.is_saved().await,
+            "a post-snapshot edit must remain dirty"
+        );
+        assert_eq!(pack.name(), "Edited while saving");
+
+        let mut file = File::open(&pack_path).await.unwrap();
+        let mut header_buf = [0; HEADER_SIZE];
+        file.read_exact(&mut header_buf).await.unwrap();
+        let header = Header::from_buf(header_buf).unwrap();
+        file.seek(SeekFrom::Start(header.metadata_offset))
+            .await
+            .unwrap();
+        let mut metadata_buf = vec![0; header.metadata_length as usize];
+        file.read_exact(&mut metadata_buf).await.unwrap();
+        assert_eq!(
+            Metadata::from_buf(&metadata_buf).unwrap().name,
+            "Before snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn discard_waits_for_an_in_flight_generation_save() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("discard-save-race.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Discard race").await;
+        insert_staged_audio(&pack, b"initial").await;
+        pack.save(|_, _| {}).await.unwrap();
+        insert_staged_audio(&pack, &vec![3; 4 * 1024 * 1024]).await;
+        pack.mark_unsaved().await.unwrap();
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let save = pack.save({
+            let started_tx = started_tx.clone();
+            move |_, _| {
+                if let Some(tx) = started_tx.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+            }
+        });
+        let discard = async {
+            started_rx.await.unwrap();
+            pack.discard_changes().await.unwrap();
+        };
+        let (save_result, ()) = tokio::join!(save, discard);
+        save_result.unwrap();
+
+        assert!(pack.is_saved().await);
+        assert_eq!(
+            pack.db_execute(move |connection| {
+                connection
+                    .query_row("SELECT COUNT(*) FROM save_sessions", [], |row| {
+                        row.get::<_, u64>(0)
+                    })
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap(),
+            0
+        );
+        for file in pack.get_files().await.unwrap() {
+            pack.get_view()
+                .unwrap()
+                .get_file_data(file.id)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn removing_loose_media_during_save_keeps_undo_bytes_alive() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("snapshot-remove.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Snapshot remove").await;
+        let bytes = vec![9; 2 * 1024 * 1024];
+        let path = pack.dir.join("media").join("snapshot-remove.opus");
+        tokio::fs::write(&path, &bytes).await.unwrap();
+        let media = pack
+            .add_file(
+                EncodedFile {
+                    info: FileInfo::Audio { duration: 1.0 },
+                    thumbnail: None,
+                    path: path.clone(),
+                    artists: vec![],
+                    source_url: None,
+                },
+                Path::new("snapshot-remove.wav"),
+                blake3::hash(&bytes),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let save = pack.save({
+            let started_tx = started_tx.clone();
+            move |_, _| {
+                if let Some(tx) = started_tx.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+            }
+        });
+        let remove = async {
+            started_rx.await.unwrap();
+            pack.remove_files(vec![media.id]).await.unwrap();
+        };
+        let (save_result, ()) = tokio::join!(save, remove);
+        save_result.unwrap();
+
+        assert!(!pack.is_saved().await);
+        pack.undo().await.unwrap();
+        let (restored, _) = pack
+            .get_view()
+            .unwrap()
+            .get_file_data(media.id)
+            .await
+            .unwrap();
+        assert_eq!(restored, bytes);
+    }
+
+    #[tokio::test]
+    async fn generation_save_does_not_block_archive_previews_while_copying() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("generation-preview.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Generation preview").await;
+        let first = insert_staged_audio(&pack, &[1; 1024]).await;
+        let second_bytes = vec![2; 2 * 1024 * 1024];
+        let second = insert_staged_audio(&pack, &second_bytes).await;
+        pack.save(|_, _| {}).await.unwrap();
+        pack.remove_files(vec![first]).await.unwrap();
+
+        let view = pack.get_view().unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let save = pack.save({
+            let started_tx = started_tx.clone();
+            let gate = gate.clone();
+            move |_, _| {
+                if let Some(tx) = started_tx.lock().unwrap().take() {
+                    let _ = tx.send(());
+                    let (released, wake) = &*gate;
+                    let mut released = released.lock().unwrap();
+                    while !*released {
+                        released = wake.wait(released).unwrap();
+                    }
+                }
+            }
+        });
+        let preview = async {
+            started_rx.await.unwrap();
+            let result =
+                tokio::time::timeout(Duration::from_secs(1), view.get_file_data(second)).await;
+            let (released, wake) = &*gate;
+            *released.lock().unwrap() = true;
+            wake.notify_all();
+            let data = result
+                .expect("preview should read the old generation while the new one is written")
+                .unwrap()
+                .0;
+            assert_eq!(data, second_bytes);
+        };
+        let (saved, ()) = tokio::join!(save, preview);
+        saved.unwrap();
+    }
+
+    #[tokio::test]
+    async fn synchronous_in_place_fallback_compacts_in_source_order() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("in-place-fallback.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "In-place fallback").await;
+        let contents: Vec<Vec<u8>> = (0..8u8)
+            .map(|value| vec![value; 1024 + value as usize * 127])
+            .collect();
+        let mut ids = Vec::new();
+        for content in &contents {
+            ids.push(insert_staged_audio(&pack, content).await);
+        }
+        pack.save(|_, _| {}).await.unwrap();
+        pack.remove_files(vec![ids[1], ids[4]]).await.unwrap();
+
+        let snapshot = pack.create_save_snapshot().await.unwrap();
+        pack.save_in_place(&snapshot, Arc::new(|_, _| {}))
+            .await
+            .unwrap();
+        drop(pack);
+
+        let reopened = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        let view = reopened.get_view().unwrap();
+        for (index, expected) in contents.iter().enumerate() {
+            if index == 1 || index == 4 {
+                continue;
+            }
+            assert_eq!(view.get_file_data(ids[index]).await.unwrap().0, *expected);
+        }
     }
 
     #[tokio::test]
@@ -2553,7 +3642,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn damaged_working_metadata_falls_back_to_saved_metadata_not_defaults() {
+    async fn damaged_metadata_backup_uses_the_authoritative_editor_database() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
         let pack_path = tmp.path().join("test.lwpack");
@@ -2572,7 +3661,7 @@ mod tests {
         drop(pack);
 
         let recovered = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
-        assert_eq!(recovered.name(), "Original Name");
+        assert_eq!(recovered.name(), "Modified Name");
         assert!(!recovered.is_saved().await);
     }
 
@@ -2630,6 +3719,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bulk_remove_and_restore_exceeds_sqlite_variable_limit() {
+        const COUNT: u64 = 35_000;
+        let output = tempdir().unwrap();
+        let data = tempdir().unwrap();
+        let pack = new_test_pack(
+            &output.path().join("large-removal.lwpack"),
+            data.path(),
+            "Large removal",
+        )
+        .await;
+        pack.db_execute(|mut conn| {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            {
+                let mut insert = tx.prepare(
+                    "INSERT INTO media
+                     (id, file_name, file_type, duration, hash)
+                     VALUES (?, ?, 'audio', 1.0, ?)",
+                )?;
+                for id in 1..=COUNT {
+                    insert.execute(params![
+                        id,
+                        format!("bulk-{id}.opus"),
+                        blake3::hash(&id.to_le_bytes()).as_bytes().to_vec(),
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let ids = (1..=COUNT).collect::<Vec<_>>();
+        pack.remove_files(ids.clone()).await.unwrap();
+        assert!(pack.get_files().await.unwrap().is_empty());
+        assert!(pack.history_status().await.unwrap().can_undo);
+        pack.undo().await.unwrap();
+        assert_eq!(pack.get_files().await.unwrap().len() as u64, COUNT);
+    }
+
+    #[tokio::test]
     async fn tag_management_updates_associations_and_behaviour_together() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
@@ -2639,21 +3769,24 @@ mod tests {
         pack.add_tags(media, vec!["old".to_string()]).await.unwrap();
 
         let mut behaviour = Behaviour::default();
-        behaviour.content.wallpaper_tags = vec!["new".to_string()];
-        pack.rename_tag("old".to_string(), "new".to_string(), &behaviour)
+        behaviour.content.wallpaper_tags = vec!["old".to_string()];
+        pack.set_pack_data("behaviour", behaviour.to_json_bytes().unwrap())
+            .await
+            .unwrap();
+        let behaviour = pack
+            .rename_tag("old".to_string(), "new".to_string())
             .await
             .unwrap();
 
         assert_eq!(pack.get_tags(media).await.unwrap(), vec!["new"]);
+        assert_eq!(behaviour.content.wallpaper_tags, vec!["new"]);
         let stored =
             Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
                 .unwrap();
         assert_eq!(stored.content.wallpaper_tags, vec!["new"]);
 
-        behaviour.content.wallpaper_tags.clear();
-        pack.delete_tag("new".to_string(), &behaviour)
-            .await
-            .unwrap();
+        let behaviour = pack.delete_tag("new".to_string()).await.unwrap();
+        assert!(behaviour.content.wallpaper_tags.is_empty());
         assert!(pack.get_tags(media).await.unwrap().is_empty());
         assert!(pack.get_tag_summaries().await.unwrap().is_empty());
     }
@@ -2673,7 +3806,6 @@ mod tests {
 
         pack.remove_files(vec![id]).await.unwrap();
         assert!(pack.get_files().await.unwrap().is_empty());
-        assert!(pack.dir().join("history.db").is_file());
         pack.save(|_, _| {}).await.unwrap();
 
         let history_tables_in_pack_index: u64 = pack.db_execute(|conn| {
@@ -2681,7 +3813,7 @@ mod tests {
         }).await.unwrap();
         assert_eq!(history_tables_in_pack_index, 0);
 
-        pack.restore_files(vec![id]).await.unwrap();
+        pack.undo().await.unwrap();
         let restored = pack.get_files().await.unwrap().remove(0);
         assert_eq!(restored.id, original.id);
         assert_eq!(restored.file_name, original.file_name);
@@ -2706,7 +3838,7 @@ mod tests {
         let staged_path: String = pack
             .db_execute(move |conn| {
                 conn.query_row(
-                    "SELECT path FROM media WHERE id = ?",
+                    "SELECT path FROM loose_media WHERE media_id = ?",
                     params![staged],
                     |row| row.get(0),
                 )
@@ -2715,6 +3847,12 @@ mod tests {
             .await
             .unwrap();
         pack.remove_files(vec![staged]).await.unwrap();
+        pack.db_execute(|conn| {
+            conn.execute("DELETE FROM history_entries", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
         pack.purge_history_files(vec![staged]).await.unwrap();
 
         assert!(!pack.dir().join("media").join(staged_path).exists());
@@ -2727,12 +3865,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![active]
         );
-        let history = rusqlite::Connection::open(pack.dir().join("history.db")).unwrap();
-        let remaining: u64 = history
-            .query_row("SELECT COUNT(*) FROM media", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(remaining, 0);
-        pack.restore_files(vec![staged]).await.unwrap();
         assert_eq!(
             pack.get_files()
                 .await
@@ -2745,7 +3877,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restoring_a_merge_recovers_source_target_and_dual_associations_atomically() {
+    async fn undoing_a_merge_recovers_source_target_and_dual_associations_atomically() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
         let pack = new_test_pack(&tmp.path().join("tags.lwpack"), data_dir.path(), "Tags").await;
@@ -2763,21 +3895,30 @@ mod tests {
             .unwrap();
         let mut before = Behaviour::default();
         before.content.wallpaper_tags = vec!["source".into()];
-        let mut after = before.clone();
-        after.content.wallpaper_tags = vec!["target".into()];
-
-        pack.merge_tag("source".into(), "target".into(), &after)
+        pack.set_pack_data("behaviour", serde_json::to_vec_pretty(&before).unwrap())
             .await
             .unwrap();
-        pack.restore_merged_tag(
-            "source".into(),
-            "target".into(),
-            vec![source_only, both],
-            vec![target_only, both],
-            &before,
-        )
-        .await
-        .unwrap();
+
+        pack.merge_tag("source".into(), "target".into())
+            .await
+            .unwrap();
+        let retained_media: u64 = pack
+            .db_execute(move |connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM history_media_refs
+                         WHERE history_id = (SELECT id FROM history_entries
+                                             WHERE label = 'Merge tags'
+                                             ORDER BY sequence DESC LIMIT 1)",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(retained_media, 2);
+        pack.undo().await.unwrap();
 
         assert_eq!(pack.get_tags(source_only).await.unwrap(), vec!["source"]);
         assert_eq!(pack.get_tags(target_only).await.unwrap(), vec!["target"]);
@@ -2791,33 +3932,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_merge_restoration_rolls_back_every_change() {
-        let tmp = tempdir().unwrap();
-        let data_dir = tempdir().unwrap();
-        let pack =
-            new_test_pack(&tmp.path().join("rollback.lwpack"), data_dir.path(), "Tags").await;
-        let media = insert_staged_audio(&pack, b"media").await;
-        let result = pack
-            .restore_merged_tag(
-                "source".into(),
-                "missing-target".into(),
-                vec![media],
-                vec![],
-                &Behaviour::default(),
-            )
-            .await;
-        assert!(result.is_err());
-        assert!(!pack
-            .get_all_tags()
-            .await
-            .unwrap()
-            .contains(&"source".to_string()));
-        assert!(pack.get_tags(media).await.unwrap().is_empty());
-        assert!(pack.get_pack_data("behaviour").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn restoring_a_deleted_tag_recovers_associations_and_behaviour() {
+    async fn undoing_a_deleted_tag_recovers_associations_and_behaviour() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
         let pack = new_test_pack(
@@ -2832,11 +3947,11 @@ mod tests {
             .unwrap();
         let mut before = Behaviour::default();
         before.content.splash_tags = vec!["restore-me".into()];
-        let after = Behaviour::default();
-        pack.delete_tag("restore-me".into(), &after).await.unwrap();
-        pack.restore_deleted_tag("restore-me".into(), vec![media], &before)
+        pack.set_pack_data("behaviour", serde_json::to_vec_pretty(&before).unwrap())
             .await
             .unwrap();
+        pack.delete_tag("restore-me".into()).await.unwrap();
+        pack.undo().await.unwrap();
         assert_eq!(pack.get_tags(media).await.unwrap(), vec!["restore-me"]);
         let stored =
             Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
@@ -3035,12 +4150,67 @@ mod tests {
         }
     }
 
-    // Exercises the parallel gap-closing path in write_files: files embedded by a
-    // first save, then a scattered subset deleted, then a second save that must
-    // shift every surviving file after each deletion point to a new, compacted
-    // offset. Varying content and lengths per file mean any job overwriting a
-    // range another job hasn't read yet shows up as a content mismatch, not a
-    // silent pass.
+    #[tokio::test]
+    async fn a_missing_loose_source_is_dropped_without_aborting_other_media() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("missing-loose.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Missing loose").await;
+        let missing = insert_staged_audio(&pack, b"will disappear").await;
+        pack.set_source_url(missing, Some("https://example.com/missing".into()))
+            .await
+            .unwrap();
+        let survivor_bytes = b"must still save";
+        let survivor = insert_staged_audio(&pack, survivor_bytes).await;
+        let missing_path: String = pack
+            .db_execute(move |conn| {
+                conn.query_row(
+                    "SELECT path FROM loose_media WHERE media_id = ?",
+                    [missing],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        tokio::fs::remove_file(pack.dir().join("media").join(missing_path))
+            .await
+            .unwrap();
+
+        pack.save(|_, _| {}).await.unwrap();
+        let files = pack.get_files().await.unwrap();
+        assert_eq!(
+            files.iter().map(|file| file.id).collect::<Vec<_>>(),
+            vec![survivor]
+        );
+        assert_eq!(
+            pack.get_view()
+                .unwrap()
+                .get_file_data(survivor)
+                .await
+                .unwrap()
+                .0,
+            survivor_bytes
+        );
+        let retained: (bool, bool) = pack
+            .db_execute(move |connection| {
+                connection
+                    .query_row(
+                        "SELECT m.deleted,
+                                EXISTS(SELECT 1 FROM history_media_refs h WHERE h.media_id = m.id)
+                         FROM media m WHERE m.id = ?",
+                        [missing],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(retained, (true, true));
+    }
+
+    // Exercises compact generation layout after scattered deletions. Varying
+    // content and lengths expose a bad run boundary, offset, or truncation.
     #[tokio::test]
     async fn deleting_files_then_resaving_preserves_surviving_content() {
         let tmp = tempdir().unwrap();
@@ -3065,14 +4235,25 @@ mod tests {
         pack.save(|_, _| {}).await.unwrap();
 
         // Delete a scattered subset (near the start, middle, and end) so the
-        // gap-closing loop has to shift a large tail of survivors across several
-        // separate deletion points with varying cumulative offsets.
+        // writer has to shift several contiguous runs by different amounts.
         let deleted_indices = [2usize, 3, 9, 15, 20];
         let deleted_ids: Vec<u64> = deleted_indices.iter().map(|&i| ids[i]).collect();
         pack.remove_files(deleted_ids).await.unwrap();
 
-        // Second save: triggers the parallel shift/compaction logic under test.
+        // Second save creates a gapless replacement generation.
         pack.save(|_, _| {}).await.unwrap();
+        let expected_index_offset = HEADER_SIZE as u64
+            + contents
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !deleted_indices.contains(index))
+                .map(|(_, content)| content.len() as u64)
+                .sum::<u64>();
+        assert_eq!(
+            pack.header.read().unwrap().index_offset,
+            expected_index_offset,
+            "generation saves must leave no gaps between embedded media"
+        );
         drop(pack);
 
         let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
@@ -3090,13 +4271,10 @@ mod tests {
         }
     }
 
-    // Exercises the parallel newly-staged-file path in write_files: many loose
-    // files, varying lengths, all copied concurrently into a pre-sized (set_len)
-    // region of the pack file. Any job writing into the wrong precomputed slot,
-    // or a mis-sized set_len leaving slots overlapping, shows up as a content
-    // mismatch here.
+    // Exercises the sequential newly-staged-file layout: varying lengths expose
+    // any bad cumulative offset or truncation before the snapshot tail is written.
     #[tokio::test]
-    async fn many_new_files_survive_parallel_first_save() {
+    async fn many_new_files_survive_sequential_first_save() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
         let pack_path = tmp.path().join("test.lwpack");
@@ -3256,12 +4434,81 @@ mod tests {
             second.is_none(),
             "duplicate hash should be rejected, not inserted"
         );
+        assert!(
+            !pack.dir.join("media").join("upload-2").exists(),
+            "an unreferenced encoded file should be deleted on final drop"
+        );
 
         let files = pack.get_files().await.unwrap();
         assert_eq!(
             files.len(),
             1,
             "only one row should exist for the duplicate hash"
+        );
+    }
+
+    #[tokio::test]
+    async fn referenced_loose_file_survives_pack_drop_and_orphans_are_swept_on_reopen() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("leases.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Leases").await;
+
+        let encoded_path = pack.dir.join("media").join("referenced.opus");
+        tokio::fs::write(&encoded_path, b"referenced")
+            .await
+            .unwrap();
+        let media = pack
+            .add_file(
+                EncodedFile {
+                    info: FileInfo::Audio { duration: 1.0 },
+                    thumbnail: None,
+                    path: encoded_path.clone(),
+                    artists: vec![],
+                    source_url: None,
+                },
+                Path::new("referenced.wav"),
+                blake3::hash(b"referenced"),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        let orphan_path = pack.dir.join("media").join("orphan.opus");
+        tokio::fs::write(&orphan_path, b"orphan").await.unwrap();
+        let abandoned_staging = pack.dir.join("pack-editor-upload-abandoned");
+        tokio::fs::create_dir(&abandoned_staging).await.unwrap();
+        tokio::fs::write(abandoned_staging.join("partial.opus"), b"partial")
+            .await
+            .unwrap();
+
+        drop(pack);
+        assert!(
+            encoded_path.exists(),
+            "a durable live row must survive application teardown"
+        );
+
+        let reopened = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        assert!(encoded_path.exists());
+        assert!(!orphan_path.exists());
+        assert!(!abandoned_staging.exists());
+        assert_eq!(reopened.get_files().await.unwrap()[0].id, media.id);
+        reopened.remove_files(vec![media.id]).await.unwrap();
+        assert!(
+            encoded_path.exists(),
+            "undo history must retain the loose file"
+        );
+        reopened
+            .db_execute(|conn| {
+                conn.execute("DELETE FROM history_entries", [])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        reopened.purge_history_files(vec![media.id]).await.unwrap();
+        assert!(
+            !encoded_path.exists(),
+            "history eviction must release the final durable owner"
         );
     }
 
@@ -3417,15 +4664,22 @@ mod tests {
             .unwrap();
 
         let hash_bytes = *blake3::hash(&content).as_bytes();
+        let length = content.len() as u64;
         let filename_clone = filename.clone();
         let id = pack
-            .db_execute(move |conn| {
-                let id: u64 = conn.query_row(
-                    "INSERT INTO media (file_name, file_type, path, duration, hash) \
-                     VALUES (?, 'audio', ?, 1.0, ?) RETURNING id",
-                    params![filename_clone, filename, hash_bytes],
+            .db_execute(move |mut conn| {
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let id: u64 = tx.query_row(
+                    "INSERT INTO media (file_name, file_type, duration, hash) \
+                     VALUES (?, 'audio', 1.0, ?) RETURNING id",
+                    params![filename_clone, hash_bytes],
                     |row| row.get("id"),
                 )?;
+                tx.execute(
+                    "INSERT INTO loose_media(media_id, path, length) VALUES (?, ?, ?)",
+                    params![id, filename, length],
+                )?;
+                tx.commit()?;
                 Ok(id)
             })
             .await

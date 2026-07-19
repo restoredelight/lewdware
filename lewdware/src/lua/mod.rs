@@ -688,8 +688,8 @@ mod tests {
 
         if with_image {
             db.execute(
-                "INSERT INTO media (file_name, file_type, width, height, transparent, hash) \
-                 VALUES ('pic.avif', 'image', 64, 64, 0, x'00')",
+                "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash) \
+                 VALUES ('pic.avif', 'image', 0, 0, 64, 64, 0, x'00')",
                 [],
             )
             .unwrap();
@@ -751,8 +751,8 @@ mod tests {
         shared::db::migrate(&db).unwrap();
 
         db.execute(
-            "INSERT INTO media (file_name, file_type, width, height, transparent, hash) \
-             VALUES ('pic.avif', 'image', 64, 64, 0, x'00')",
+            "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash) \
+             VALUES ('pic.avif', 'image', 0, 0, 64, 64, 0, x'00')",
             [],
         )
         .unwrap();
@@ -799,9 +799,8 @@ mod tests {
     }
 
     /// Build a `.lwpack` fixture with the given tagged image rows (name, tags) and, if `Some`, a
-    /// `pack_data` row named `"behaviour"` holding the given bytes. Media rows get no real file
-    /// bytes/offsets -- fine for `list`/`random` queries, which never read `offset`/`length` (see
-    /// `MediaPack::parse_media`); only `get_image_data`/`get_image_file` would need that.
+    /// `pack_data` row named `"behaviour"` holding the given bytes. Media rows use empty archive
+    /// ranges because `list`/`random` queries never read their bytes (see `MediaPack::parse_media`).
     fn pack_fixture_with_data(
         media: &[(&str, &[&str])],
         behaviour_bytes: Option<&[u8]>,
@@ -813,8 +812,8 @@ mod tests {
         for (index, (file_name, tags)) in media.iter().enumerate() {
             let hash = vec![index as u8];
             db.execute(
-                "INSERT INTO media (file_name, file_type, width, height, transparent, hash) \
-                 VALUES (?, 'image', 64, 64, 0, ?)",
+                "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash) \
+                 VALUES (?, 'image', 0, 0, 64, 64, 0, ?)",
                 rusqlite::params![file_name, hash],
             )
             .unwrap();

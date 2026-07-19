@@ -533,14 +533,14 @@ mod tests {
         // `pic.avif` carries both tags, `other.avif` only the first — enough to distinguish
         // any/all/none semantics (and duplicate rows) in the assertions below.
         db.execute(
-            "INSERT INTO media (file_name, file_type, width, height, transparent, hash)
-             VALUES ('pic.avif', 'image', 64, 32, 1, x'00')",
+            "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash)
+             VALUES ('pic.avif', 'image', 0, 0, 64, 32, 1, x'00')",
             [],
         )
         .unwrap();
         db.execute(
-            "INSERT INTO media (file_name, file_type, width, height, transparent, hash)
-             VALUES ('other.avif', 'image', 16, 16, 0, x'01')",
+            "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash)
+             VALUES ('other.avif', 'image', 0, 0, 16, 16, 0, x'01')",
             [],
         )
         .unwrap();
@@ -748,8 +748,8 @@ mod tests {
         let db = Connection::open_in_memory().unwrap();
         migrate(&db).unwrap();
         db.execute(
-            "INSERT INTO media (file_name, file_type, width, height, transparent, duration, hash)
-             VALUES ('clip.mp4', 'video', 64, 48, 0, 1.0, x'00')",
+            "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, duration, hash)
+             VALUES ('clip.mp4', 'video', 0, 0, 64, 48, 0, 1.0, x'00')",
             [],
         )
         .unwrap();
