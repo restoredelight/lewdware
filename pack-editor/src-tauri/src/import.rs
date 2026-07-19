@@ -5,7 +5,8 @@
 //! end) and `design/release-plan.md`'s M6 bullet.
 //!
 //! Mirrors `encode.rs`'s `process_files`/`process_one_file` shape closely -- same
-//! extract-encode-hash-insert pipeline, just pulling input bytes from a `PackSource` instead of
+//! extract-hash-encode-insert pipeline (hashing the extracted source, not the encoded output --
+//! see `import_one_media`'s own comment), just pulling input bytes from a `PackSource` instead of
 //! an already-local path. behaviour.json/metadata are written synchronously in the
 //! `import_edgeware_pack_dialog` command itself (`lib.rs`), before this module's media pipeline
 //! ever starts: they're keyed by tag, not by any specific media file's id, so they have no actual
@@ -220,6 +221,35 @@ async fn import_one_media(
         .map_err(|e| ImportErrorKind::Other(e.into()))?
         .map_err(ImportErrorKind::ExtractError)?;
 
+    // Hash the extracted source, not the encoded output: hashes are purely a dedup key, and
+    // ffmpeg's output isn't guaranteed byte-for-byte deterministic (across runs, machines,
+    // encoder settings), so hashing post-encode risks the same source producing different
+    // hashes on different imports. Hashing here -- as encode::process_one_file also does --
+    // additionally means a known duplicate can skip the extract's own encode+hash-of-output
+    // work entirely instead of paying for it and then discarding the result.
+    let hash_path = extract_path.clone();
+    let hash = tokio::task::spawn_blocking(move || hash_file(&hash_path))
+        .await
+        .map_err(|e| ImportErrorKind::Other(e.into()))?
+        .map_err(ImportErrorKind::HashError)?;
+
+    // Duplicates are always rejected (add_file_to_import enforces this with a DB-level
+    // constraint) -- checking here just avoids wasting an encode on a file we already know
+    // will be rejected. See encode::process_one_file's identical check.
+    {
+        let lock = pack_state.lock().await;
+        if let Some(pack) = lock.as_ref() {
+            if pack
+                .check_hash(&hash)
+                .await
+                .map_err(ImportErrorKind::Other)?
+            {
+                let _ = std::fs::remove_file(&extract_path);
+                return Err(ImportErrorKind::Skipped);
+            }
+        }
+    }
+
     // Matches encode::process_one_file's own gating: without it, this path's outer
     // for_each_concurrent(available_parallelism()) is the only limit on how many `encode_file`
     // calls run at once, which -- combined with avifenc's own default of using every core per
@@ -249,12 +279,6 @@ async fn import_one_media(
         Some(e) => e,
         None => return Err(ImportErrorKind::Unrecognized),
     };
-
-    let hash_path = encoded.path.clone();
-    let hash = tokio::task::spawn_blocking(move || hash_file(&hash_path))
-        .await
-        .map_err(|e| ImportErrorKind::Other(e.into()))?
-        .map_err(ImportErrorKind::HashError)?;
 
     let mut lock = pack_state.lock().await;
     let pack = lock
