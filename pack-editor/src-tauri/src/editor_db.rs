@@ -152,6 +152,20 @@ fn detach_result<T>(result: Result<T>, detach: rusqlite::Result<usize>) -> Resul
     }
 }
 
+pub fn is_corrupt_database_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(sqlite, _))
+                if matches!(
+                    sqlite.code,
+                    rusqlite::ffi::ErrorCode::DatabaseCorrupt
+                        | rusqlite::ffi::ErrorCode::NotADatabase
+                )
+        )
+    })
+}
+
 pub fn initialize(connection: &Connection) -> Result<()> {
     configure_connection(connection)?;
     let tx = connection.unchecked_transaction()?;

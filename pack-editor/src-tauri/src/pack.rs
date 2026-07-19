@@ -527,10 +527,10 @@ impl MediaPack {
             .await;
             match archive_db {
                 Ok(db_data) => Some(db_data),
-                Err(error) if has_working_db => {
-                    // An interrupted in-place save can truncate or overwrite the old embedded
-                    // index after its recoverable media-offset batches were committed to the
-                    // working database. The UNSAVED database is authoritative in this case.
+                Err(error) if has_unsaved && error.kind() == io::ErrorKind::UnexpectedEof => {
+                    // An interrupted in-place save can truncate the old embedded index after its
+                    // recoverable media-offset batches were committed to the working database.
+                    // The UNSAVED database is authoritative in this case.
                     tracing::warn!(
                         "could not read the saved pack index; recovering from the working database: {error}"
                     );
@@ -578,7 +578,17 @@ impl MediaPack {
             } else {
                 editor_db::initialize(&conn)?;
                 if let Some(runtime) = &runtime {
-                    editor_db::reconcile_archive(&mut conn, runtime)?;
+                    if let Err(error) = editor_db::reconcile_archive(&mut conn, runtime) {
+                        if has_unsaved && editor_db::is_corrupt_database_error(&error) {
+                            tracing::warn!(
+                                "saved pack index is corrupt after an interrupted in-place save; \
+                                 recovering from the working database: {error}"
+                            );
+                            conn.execute("DELETE FROM save_sessions", [])?;
+                        } else {
+                            return Err(error);
+                        }
+                    }
                 } else {
                     conn.execute("DELETE FROM save_sessions", [])?;
                 }
@@ -965,7 +975,8 @@ impl MediaPack {
                 params![generation_id, saved_state_id],
             )?;
             tx.commit()?;
-            conn.execute("DETACH DATABASE save_snapshot", [])?;
+            // This is a dedicated connection. Closing it below reliably discards the attachment;
+            // a fallible DETACH after commit must not turn a durable save into a reported failure.
             Ok(media_count)
         })
         .await??;
@@ -1502,8 +1513,11 @@ impl MediaPack {
                 } else {
                     // In-place compaction writes earlier ranges over the same file that later
                     // files still read. Move files in source order, then establish a durability
-                    // boundary before committing their new live offsets. A crash can invalidate
-                    // at most the currently uncommitted batch.
+                    // boundary before committing their new live offsets. The OS may write back
+                    // any subset before sync_data, so a crash can corrupt any file in the active
+                    // batch; completed batches remain durable and correctly indexed. Strictly
+                    // limiting this to one file would require an archive sync and DB commit per
+                    // file, which this bounded batching deliberately avoids.
                     const MAX_BATCH_FILES: usize = 64;
                     const MAX_BATCH_BYTES: u64 = 64 * 1024 * 1024;
                     let (live_pool, save_id) = snapshot_tracking.as_ref().ok_or_else(|| {
@@ -1590,6 +1604,10 @@ impl MediaPack {
                         .sum::<u64>();
                     let copy_started = Instant::now();
                     let mut copied_ids = Vec::with_capacity(jobs.len());
+                    // Every job in a batch writes into disjoint ranges of the same out_path,
+                    // sequentially on this worker - reopening the destination per file was
+                    // costing an extra open()/close() pair per staged file for no benefit.
+                    let mut destination = fs::OpenOptions::new().write(true).open(&out_path)?;
                     for job in jobs {
                         let source = fs::File::open(&job.full_path).map_err(|error| {
                             anyhow!(
@@ -1597,8 +1615,6 @@ impl MediaPack {
                                 job.full_path.display()
                             )
                         })?;
-                        let mut destination =
-                            fs::OpenOptions::new().write(true).open(&out_path)?;
                         destination.seek(SeekFrom::Start(job.dest_offset))?;
                         let copied =
                             io::copy(&mut source.take(job.expected_length), &mut destination)?;
@@ -4010,6 +4026,43 @@ mod tests {
             .unwrap()
             .set_len(index_offset)
             .unwrap();
+        drop(pack);
+
+        let reopened = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        assert!(!reopened.is_saved().await);
+        assert_eq!(
+            reopened
+                .get_view()
+                .unwrap()
+                .get_file_data(media_id)
+                .await
+                .unwrap()
+                .0,
+            bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn unsaved_recovery_tolerates_a_readable_but_corrupt_archive_index() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("corrupt-in-place-index.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Corrupt in-place index").await;
+        let bytes = b"media remains valid before the overwritten database";
+        let media_id = insert_staged_audio(&pack, bytes).await;
+        pack.save(|_, _| {}).await.unwrap();
+        pack.set_pack_data("unsaved", vec![1]).await.unwrap();
+
+        let (index_offset, index_length) = {
+            let header = pack.header.read().unwrap();
+            (header.index_offset, header.index_length)
+        };
+        let mut archive = fs::OpenOptions::new().write(true).open(&pack_path).unwrap();
+        archive.seek(SeekFrom::Start(index_offset)).unwrap();
+        archive
+            .write_all(&vec![0xa5; index_length as usize])
+            .unwrap();
+        archive.sync_data().unwrap();
         drop(pack);
 
         let reopened = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
