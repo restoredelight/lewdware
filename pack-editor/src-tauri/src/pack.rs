@@ -8,7 +8,7 @@ use std::{
         Arc, RwLock as StdRwLock,
     },
     thread::{available_parallelism, sleep},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, bail, Result};
@@ -31,8 +31,8 @@ use shared::{
 use tokio::{
     fs::{remove_file, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    sync::{Mutex as AsyncMutex, RwLock},
-    task::spawn_blocking,
+    sync::{mpsc, oneshot, Mutex as AsyncMutex, RwLock},
+    task::{spawn_blocking, JoinHandle},
 };
 use uuid::Uuid;
 
@@ -138,6 +138,7 @@ pub struct MediaPack {
     saving: Arc<RwLock<()>>,
     archive_io: Arc<RwLock<()>>,
     save_serial: Arc<AsyncMutex<()>>,
+    garbage_collection: GarbageCollector,
     _lock: Option<Lock>,
     header: StdRwLock<Header>,
     dir: PathBuf,
@@ -165,6 +166,7 @@ struct SaveSnapshot {
     pending_history: bool,
     metadata: Metadata,
     runtime_path: PathBuf,
+    db_path: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
     _staging: tempfile::TempDir,
 }
@@ -177,6 +179,102 @@ struct PreparedGeneration {
 enum GenerationPersistence {
     Durable,
     ReplacedButNotSynced(anyhow::Error),
+}
+
+enum GarbageCollectorCommand {
+    Collect,
+    CollectAndWait(oneshot::Sender<Result<()>>),
+    Shutdown(oneshot::Sender<()>),
+}
+
+struct GarbageCollector {
+    sender: mpsc::Sender<GarbageCollectorCommand>,
+    handle: AsyncMutex<Option<JoinHandle<()>>>,
+}
+
+impl GarbageCollector {
+    fn start(pool: Pool<SqliteConnectionManager>, media_dir: PathBuf) -> Self {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let handle = tokio::spawn(async move {
+            while let Some(command) = receiver.recv().await {
+                match command {
+                    GarbageCollectorCommand::Collect => {
+                        if let Err(error) =
+                            process_pending_file_deletions(pool.clone(), media_dir.clone()).await
+                        {
+                            tracing::error!("loose-media garbage collection failed: {error}");
+                        }
+                    }
+                    GarbageCollectorCommand::CollectAndWait(reply) => {
+                        let result =
+                            process_pending_file_deletions(pool.clone(), media_dir.clone()).await;
+                        let _ = reply.send(result);
+                    }
+                    GarbageCollectorCommand::Shutdown(reply) => {
+                        let _ = reply.send(());
+                        break;
+                    }
+                }
+            }
+        });
+        Self {
+            sender,
+            handle: AsyncMutex::new(Some(handle)),
+        }
+    }
+
+    fn wake(&self) {
+        match self.sender.try_send(GarbageCollectorCommand::Collect) {
+            Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::debug!("garbage collector is already shut down");
+            }
+        }
+    }
+
+    async fn collect(&self) -> Result<()> {
+        let (reply, response) = oneshot::channel();
+        self.sender
+            .send(GarbageCollectorCommand::CollectAndWait(reply))
+            .await
+            .map_err(|_| anyhow!("garbage collector is shut down"))?;
+        response
+            .await
+            .map_err(|_| anyhow!("garbage collector stopped without replying"))?
+    }
+
+    async fn shutdown(&self) {
+        let (reply, response) = oneshot::channel();
+        if self
+            .sender
+            .send(GarbageCollectorCommand::Shutdown(reply))
+            .await
+            .is_ok()
+        {
+            let _ = response.await;
+        }
+        if let Some(handle) = self.handle.lock().await.take() {
+            let _ = handle.await;
+        }
+    }
+}
+
+impl Drop for GarbageCollector {
+    fn drop(&mut self) {
+        if let Ok(mut handle) = self.handle.try_lock() {
+            if let Some(handle) = handle.take() {
+                handle.abort();
+            }
+        }
+    }
+}
+
+fn log_save_phase(phase: &'static str, started: Instant) {
+    tracing::info!(
+        phase,
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        "save phase completed"
+    );
 }
 
 #[derive(Debug)]
@@ -261,6 +359,7 @@ impl MediaPack {
             saving: Arc::new(RwLock::new(())),
             archive_io: Arc::new(RwLock::new(())),
             save_serial: Arc::new(AsyncMutex::new(())),
+            garbage_collection: GarbageCollector::start(db_pool.clone(), dir.join("media")),
             _lock: None,
             header: StdRwLock::new(header),
             dir,
@@ -340,6 +439,7 @@ impl MediaPack {
             saving: Arc::new(RwLock::new(())),
             archive_io: Arc::new(RwLock::new(())),
             save_serial: Arc::new(AsyncMutex::new(())),
+            garbage_collection: GarbageCollector::start(db_pool.clone(), dir.join("media")),
             _lock: lock,
             header: StdRwLock::new(header),
             dir,
@@ -418,13 +518,30 @@ impl MediaPack {
         let runtime_path = dir.join("saved-index.db");
         let has_archive = !header.is_default() && header.index_length > 0;
         let db_data = if has_archive {
-            file.seek(SeekFrom::Start(header.index_offset)).await?;
-            let mut db_data = vec![0u8; header.index_length as usize];
-            file.read_exact(&mut db_data).await?;
-            Some(db_data)
+            let archive_db = async {
+                file.seek(SeekFrom::Start(header.index_offset)).await?;
+                let mut db_data = vec![0u8; header.index_length as usize];
+                file.read_exact(&mut db_data).await?;
+                Ok::<_, io::Error>(db_data)
+            }
+            .await;
+            match archive_db {
+                Ok(db_data) => Some(db_data),
+                Err(error) if has_working_db => {
+                    // An interrupted in-place save can truncate or overwrite the old embedded
+                    // index after its recoverable media-offset batches were committed to the
+                    // working database. The UNSAVED database is authoritative in this case.
+                    tracing::warn!(
+                        "could not read the saved pack index; recovering from the working database: {error}"
+                    );
+                    None
+                }
+                Err(error) => return Err(error.into()),
+            }
         } else {
             None
         };
+        let has_archive_db = db_data.is_some();
 
         if !has_working_db {
             // The working database uses WAL. Never place a freshly extracted main
@@ -448,7 +565,7 @@ impl MediaPack {
         let db_pool = Pool::builder().max_size(pool_size).build(manager)?;
 
         let pool = db_pool.clone();
-        let runtime = has_archive.then_some(runtime_path.clone());
+        let runtime = has_archive_db.then_some(runtime_path.clone());
         let metadata_for_db = metadata.clone();
         spawn_blocking(move || -> Result<_> {
             let mut conn = pool.get()?;
@@ -493,6 +610,7 @@ impl MediaPack {
             saving: Arc::new(RwLock::new(())),
             archive_io: Arc::new(RwLock::new(())),
             save_serial: Arc::new(AsyncMutex::new(())),
+            garbage_collection: GarbageCollector::start(db_pool.clone(), dir.join("media")),
             _lock: Some(lock),
             header: StdRwLock::new(header),
             dir,
@@ -592,7 +710,11 @@ impl MediaPack {
     }
 
     async fn process_pending_file_deletions(&self) -> Result<()> {
-        process_pending_file_deletions(self.db_pool.clone(), self.dir.join("media")).await
+        self.garbage_collection.collect().await
+    }
+
+    fn schedule_pending_file_deletions(&self) {
+        self.garbage_collection.wake();
     }
 
     pub fn is_untitled(&self) -> bool {
@@ -608,20 +730,13 @@ impl MediaPack {
         self.closing.store(true, Ordering::SeqCst);
         let _save = self.save_serial.lock().await;
         let _mutations = self.saving.write().await;
+        self.garbage_collection.shutdown().await;
         self.delete_on_drop.store(true, Ordering::SeqCst);
     }
 
     pub async fn mark_unsaved(&self) -> Result<()> {
         self.mark_unsaved_now()?;
-        let pool = self.db_pool.clone();
-        let media_dir = self.dir.join("media");
-        let saving = self.saving.clone();
-        tokio::spawn(async move {
-            let _guard = saving.write().await;
-            if let Err(error) = process_pending_file_deletions(pool, media_dir).await {
-                tracing::error!("loose-media garbage collection failed: {error}");
-            }
-        });
+        self.schedule_pending_file_deletions();
         Ok(())
     }
 
@@ -667,6 +782,7 @@ impl MediaPack {
     }
 
     async fn create_save_snapshot(&self) -> Result<SaveSnapshot> {
+        let snapshot_started = Instant::now();
         let staging = tempfile::Builder::new()
             .prefix("pack-editor-save-")
             .tempdir_in(&self.dir)?;
@@ -711,6 +827,8 @@ impl MediaPack {
                 Ok((snapshot_state, pending_history))
             })
             .await??;
+        log_save_phase("snapshot_register_media", snapshot_started);
+        let backup_started = Instant::now();
         let live_db_path = self.db_path.clone();
         let source = spawn_blocking(move || -> Result<_> {
             // This must not come from r2d2: if establishing or copying the
@@ -761,6 +879,7 @@ impl MediaPack {
             Ok(())
         })
         .await??;
+        log_save_phase("snapshot_backup_and_vacuum", backup_started);
 
         let db_pool = Pool::builder().build(sqlite_connection_manager(&db_path))?;
         Ok(SaveSnapshot {
@@ -771,6 +890,7 @@ impl MediaPack {
             pending_history,
             metadata,
             runtime_path,
+            db_path,
             db_pool,
             _staging: staging,
         })
@@ -781,23 +901,9 @@ impl MediaPack {
         snapshot: &SaveSnapshot,
         mark_snapshot_saved: bool,
     ) -> Result<bool> {
-        let pool = snapshot.db_pool.clone();
-        let rows = spawn_blocking(move || -> Result<Vec<(u64, Vec<u8>, u64, u64)>> {
-            let conn = pool.get()?;
-            let mut stmt = conn.prepare(
-                "SELECT m.id, m.hash, p.\"offset\", p.length FROM media m
-                 JOIN pack_media p ON p.media_id = m.id WHERE m.deleted = 0",
-            )?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })
-        .await??;
-
-        let live_pool = self.db_pool.clone();
+        let reconcile_started = Instant::now();
+        let live_db_path = self.db_path.clone();
+        let snapshot_db_path = snapshot.db_path.clone();
         let generation_id = snapshot.generation_id.clone();
         let editor_state_id = snapshot.editor_state_id.clone();
         let snapshot_is_current = self.revision.load(Ordering::SeqCst) == snapshot.revision;
@@ -807,32 +913,48 @@ impl MediaPack {
             } else {
                 Some(editor_state_id)
             };
-        spawn_blocking(move || -> Result<()> {
-            let mut conn = live_pool.get()?;
+        let media_count = spawn_blocking(move || -> Result<u64> {
+            // A dedicated connection guarantees that ATTACH state is discarded on every error.
+            let mut conn = rusqlite::Connection::open(live_db_path)?;
+            conn.busy_timeout(Duration::from_millis(5000))?;
+            conn.pragma_update(None, "foreign_keys", true)?;
+            conn.execute(
+                "ATTACH DATABASE ? AS save_snapshot",
+                [snapshot_db_path.to_string_lossy().as_ref()],
+            )?;
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            for (id, hash, offset, length) in rows {
-                let matches: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM media WHERE id = ? AND hash = ?)",
-                    params![id, hash],
-                    |row| row.get(0),
-                )?;
-                if matches {
-                    tx.execute(
-                        "INSERT INTO pack_media(media_id, generation_id, \"offset\", length)
-                         VALUES (?, ?, ?, ?)
-                         ON CONFLICT(media_id) DO UPDATE SET
-                           generation_id = excluded.generation_id,
-                           \"offset\" = excluded.\"offset\", length = excluded.length",
-                        params![id, generation_id, offset, length],
-                    )?;
-                    tx.execute(
-                        "INSERT OR IGNORE INTO pending_file_deletions(path)
-                         SELECT path FROM loose_media WHERE media_id = ?",
-                        [id],
-                    )?;
-                    tx.execute("DELETE FROM loose_media WHERE media_id = ?", [id])?;
-                }
-            }
+            let media_count: u64 = tx.query_row(
+                "SELECT COUNT(*) FROM save_snapshot.media m
+                 JOIN save_snapshot.pack_media p ON p.media_id = m.id
+                 JOIN main.media live ON live.id = m.id AND live.hash = m.hash
+                 WHERE m.deleted = 0",
+                [],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "INSERT INTO pack_media(media_id, generation_id, \"offset\", length)
+                 SELECT snapshot.id, ?1, packed.\"offset\", packed.length
+                 FROM save_snapshot.media snapshot
+                 JOIN save_snapshot.pack_media packed ON packed.media_id = snapshot.id
+                 JOIN main.media live ON live.id = snapshot.id AND live.hash = snapshot.hash
+                 WHERE snapshot.deleted = 0
+                 ON CONFLICT(media_id) DO UPDATE SET
+                   generation_id = excluded.generation_id,
+                   \"offset\" = excluded.\"offset\", length = excluded.length",
+                [&generation_id],
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO pending_file_deletions(path)
+                 SELECT loose.path FROM loose_media loose
+                 JOIN pack_media packed ON packed.media_id = loose.media_id
+                 WHERE packed.generation_id = ?",
+                [&generation_id],
+            )?;
+            tx.execute(
+                "DELETE FROM loose_media WHERE media_id IN
+                 (SELECT media_id FROM pack_media WHERE generation_id = ?)",
+                [&generation_id],
+            )?;
             tx.execute(
                 "DELETE FROM pack_media WHERE generation_id <> ?",
                 [&generation_id],
@@ -843,10 +965,17 @@ impl MediaPack {
                 params![generation_id, saved_state_id],
             )?;
             tx.commit()?;
-            Ok(())
+            conn.execute("DETACH DATABASE save_snapshot", [])?;
+            Ok(media_count)
         })
         .await??;
-        self.process_pending_file_deletions().await?;
+        tracing::info!(
+            phase = "reconcile_live_database",
+            elapsed_ms = reconcile_started.elapsed().as_secs_f64() * 1000.0,
+            media_count,
+            "save phase completed"
+        );
+        self.schedule_pending_file_deletions();
         Ok(snapshot_is_current)
     }
 
@@ -868,6 +997,7 @@ impl MediaPack {
         archive_path: &Path,
         offset: u64,
     ) -> Result<Header> {
+        let export_started = Instant::now();
         let snapshot_pool = snapshot.db_pool.clone();
         let runtime_path = snapshot.runtime_path.clone();
         spawn_blocking(move || -> Result<()> {
@@ -876,7 +1006,9 @@ impl MediaPack {
             Ok(())
         })
         .await??;
+        log_save_phase("export_runtime_database", export_started);
 
+        let tail_started = Instant::now();
         let mut file = OpenOptions::new().write(true).open(archive_path).await?;
         file.seek(SeekFrom::Start(offset)).await?;
         let index_length = {
@@ -898,7 +1030,10 @@ impl MediaPack {
         };
         file.seek(SeekFrom::Start(0)).await?;
         file.write_all(&header.to_buf()?).await?;
+        log_save_phase("write_database_metadata_and_header", tail_started);
+        let sync_started = Instant::now();
         file.sync_data().await?;
+        log_save_phase("sync_generation_data", sync_started);
         Ok(header)
     }
 
@@ -907,7 +1042,9 @@ impl MediaPack {
         snapshot: &SaveSnapshot,
         on_progress: Arc<dyn Fn(usize, usize) + Send + Sync>,
     ) -> Result<PreparedGeneration> {
+        let materialize_started = Instant::now();
         self.materialize_deleted_snapshot_media(snapshot).await?;
+        log_save_phase("materialize_deleted_snapshot_media", materialize_started);
         let source = self
             .path
             .as_ref()
@@ -915,9 +1052,12 @@ impl MediaPack {
             .clone();
         let source_for_clone = source.clone();
         let pack_id = self.id();
+        let clone_started = Instant::now();
         let generation =
             spawn_blocking(move || clone_archive(&source_for_clone, pack_id)).await??;
+        log_save_phase("clone_archive", clone_started);
         let generation_path = generation.path().to_path_buf();
+        let write_started = Instant::now();
         let offset = self
             .write_files_from(
                 snapshot.db_pool.clone(),
@@ -928,6 +1068,7 @@ impl MediaPack {
                 on_progress,
             )
             .await?;
+        log_save_phase("write_media_files", write_started);
         let header = self
             .write_snapshot_tail(snapshot, &generation_path, offset)
             .await?;
@@ -1010,18 +1151,28 @@ impl MediaPack {
         snapshot: &SaveSnapshot,
         generation: PreparedGeneration,
     ) -> Result<()> {
+        let mutation_wait_started = Instant::now();
         let _mutation_guard = self.saving.write().await;
+        log_save_phase("wait_for_generation_commit_lock", mutation_wait_started);
+        let validation_started = Instant::now();
         self.validate_generation_commit(snapshot).await?;
+        log_save_phase("validate_generation", validation_started);
+        let archive_wait_started = Instant::now();
         let _archive_guard = self.archive_io.write().await;
+        log_save_phase("wait_for_archive_commit_lock", archive_wait_started);
         let target = self.path.clone().unwrap();
         let persistence = spawn_blocking(move || -> Result<GenerationPersistence> {
+            let persist_started = Instant::now();
             let persisted = generation
                 .file
                 .persist(&target)
                 .map_err(|error| error.error)?;
+            log_save_phase("persist_generation", persist_started);
+            let sync_started = Instant::now();
             let sync_result = persisted
                 .sync_all()
                 .and_then(|_| sync_parent_directory(&target));
+            log_save_phase("sync_persisted_generation", sync_started);
             Ok(match sync_result {
                 Ok(()) => GenerationPersistence::Durable,
                 Err(error) => GenerationPersistence::ReplacedButNotSynced(error.into()),
@@ -1031,7 +1182,9 @@ impl MediaPack {
         *self.header.write().unwrap() = generation.header;
 
         let durable = matches!(persistence, GenerationPersistence::Durable);
+        let reconcile_started = Instant::now();
         let snapshot_is_current = self.reconcile_save_snapshot(snapshot, durable).await?;
+        log_save_phase("reconcile_save_snapshot_total", reconcile_started);
         match persistence {
             GenerationPersistence::Durable => {
                 if snapshot_is_current {
@@ -1137,6 +1290,7 @@ impl MediaPack {
         if self.saved.load(Ordering::Relaxed) {
             return Ok(());
         }
+        let save_started = Instant::now();
         let on_progress = Arc::new(on_progress);
         let snapshot = self.create_save_snapshot().await?;
         let initial_save_id = snapshot.save_id.clone();
@@ -1166,6 +1320,12 @@ impl MediaPack {
             }
             tracing::error!("could not clear failed save session: {cleanup}");
         }
+        tracing::info!(
+            phase = "save_total",
+            elapsed_ms = save_started.elapsed().as_secs_f64() * 1000.0,
+            success = result.is_ok(),
+            "save completed"
+        );
         result
     }
 
@@ -1202,6 +1362,7 @@ impl MediaPack {
                 .clone()
                 .or_else(|| path.clone())
                 .ok_or_else(|| anyhow!("pack has not been assigned a save location"))?;
+            let in_place = to_path.is_none();
             let embedded = {
                 let mut statement = conn.prepare(
                     "SELECT m.id, p.\"offset\", p.length FROM media m
@@ -1230,7 +1391,8 @@ impl MediaPack {
                 embedded_offsets.push((media.id, destination));
                 if copy_every_embedded_file || media.offset != destination {
                     if let Some(run) = runs.last_mut().filter(|run| {
-                        run.source_offset + run.length == media.offset
+                        !in_place
+                            && run.source_offset + run.length == media.offset
                             && run.dest_offset + run.length == destination
                     }) {
                         run.length += media.length;
@@ -1335,13 +1497,45 @@ impl MediaPack {
                     on_progress(done, total);
                     Ok(())
                 };
-                if source_path != &out_path {
+                if !in_place {
                     runs.par_iter().try_for_each(copy_run)?;
                 } else {
                     // In-place compaction writes earlier ranges over the same file that later
-                    // runs still read. Forward order is safe; parallel execution is not.
+                    // files still read. Move files in source order, then establish a durability
+                    // boundary before committing their new live offsets. A crash can invalidate
+                    // at most the currently uncommitted batch.
+                    const MAX_BATCH_FILES: usize = 64;
+                    const MAX_BATCH_BYTES: u64 = 64 * 1024 * 1024;
+                    let (live_pool, save_id) = snapshot_tracking.as_ref().ok_or_else(|| {
+                        anyhow!("in-place compaction requires live snapshot tracking")
+                    })?;
+                    let mut source = fs::File::open(source_path)?;
+                    let mut destination =
+                        fs::OpenOptions::new().write(true).open(&out_path)?;
+                    let mut buffer = vec![0; 4 * 1024 * 1024];
+                    let mut batch = Vec::with_capacity(MAX_BATCH_FILES);
+                    let mut batch_bytes = 0u64;
                     for run in &runs {
-                        copy_run(run)?;
+                        debug_assert_eq!(run.media_ids.len(), 1);
+                        copy_range_forward(&mut source, &mut destination, run, &mut buffer)?;
+                        batch.push((run.media_ids[0], run.dest_offset));
+                        batch_bytes += run.length;
+                        if batch.len() >= MAX_BATCH_FILES || batch_bytes >= MAX_BATCH_BYTES {
+                            destination.sync_data()?;
+                            commit_in_place_media(live_pool, save_id, &batch)?;
+                            let done = completed.fetch_add(batch.len(), Ordering::Relaxed)
+                                + batch.len();
+                            on_progress(done, total);
+                            batch.clear();
+                            batch_bytes = 0;
+                        }
+                    }
+                    if !batch.is_empty() {
+                        destination.sync_data()?;
+                        commit_in_place_media(live_pool, save_id, &batch)?;
+                        let done =
+                            completed.fetch_add(batch.len(), Ordering::Relaxed) + batch.len();
+                        on_progress(done, total);
                     }
                 }
             }
@@ -1350,30 +1544,113 @@ impl MediaPack {
                 .write(true)
                 .open(&out_path)?
                 .set_len(offset)?;
-            new_jobs.par_iter().try_for_each(|job| -> Result<()> {
-                let source = fs::File::open(&job.full_path).map_err(|error| {
-                    anyhow!(
-                        "could not open staged media {}: {error}",
-                        job.full_path.display()
-                    )
-                })?;
-                let mut destination = fs::OpenOptions::new().write(true).open(&out_path)?;
-                destination.seek(SeekFrom::Start(job.dest_offset))?;
-                let copied = io::copy(&mut source.take(job.expected_length), &mut destination)?;
-                if copied != job.expected_length {
-                    bail!(
-                        "staged media changed size while saving: {}",
-                        job.full_path.display()
-                    );
+            // Releasing snapshot reachability opens and commits a live-database
+            // transaction. Doing that once per small staged file makes SQLite the
+            // bottleneck even though the byte copies themselves run in parallel.
+            // Use several batches per Rayon worker so releases remain progressive
+            // during long saves without paying one transaction per file.
+            let target_batches = rayon::current_num_threads().saturating_mul(4).max(1);
+            let target_batch_files = new_jobs.len().div_ceil(target_batches).max(1);
+            const MAX_STAGED_BATCH_BYTES: u64 = 64 * 1024 * 1024;
+            let mut staged_batches = Vec::new();
+            let mut batch_start = 0;
+            let mut batch_bytes = 0u64;
+            for (index, job) in new_jobs.iter().enumerate() {
+                let exceeds_file_target = index - batch_start >= target_batch_files;
+                let exceeds_byte_limit = index > batch_start
+                    && batch_bytes.saturating_add(job.expected_length) > MAX_STAGED_BATCH_BYTES;
+                if exceeds_file_target || exceeds_byte_limit {
+                    staged_batches.push((batch_start, index));
+                    batch_start = index;
+                    batch_bytes = 0;
                 }
-                if let Some((pool, save_id)) = &snapshot_tracking {
-                    release_snapshot_media(pool, save_id, &[job.id])?;
-                }
-                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                on_progress(done, total);
-                Ok(())
-            })?;
+                batch_bytes = batch_bytes.saturating_add(job.expected_length);
+            }
+            if batch_start < new_jobs.len() {
+                staged_batches.push((batch_start, new_jobs.len()));
+            }
+            let staged_started = Instant::now();
+            let batch_count = AtomicUsize::new(0);
+            let copy_micros = AtomicU64::new(0);
+            let max_copy_micros = AtomicU64::new(0);
+            let release_micros = AtomicU64::new(0);
+            let max_release_micros = AtomicU64::new(0);
+            let staged_bytes = new_jobs
+                .iter()
+                .map(|job| job.expected_length)
+                .sum::<u64>();
+            staged_batches
+                .par_iter()
+                .try_for_each(|&(start, end)| -> Result<()> {
+                    let jobs = &new_jobs[start..end];
+                    let batch_number = batch_count.fetch_add(1, Ordering::Relaxed) + 1;
+                    let batch_bytes = jobs
+                        .iter()
+                        .map(|job| job.expected_length)
+                        .sum::<u64>();
+                    let copy_started = Instant::now();
+                    let mut copied_ids = Vec::with_capacity(jobs.len());
+                    for job in jobs {
+                        let source = fs::File::open(&job.full_path).map_err(|error| {
+                            anyhow!(
+                                "could not open staged media {}: {error}",
+                                job.full_path.display()
+                            )
+                        })?;
+                        let mut destination =
+                            fs::OpenOptions::new().write(true).open(&out_path)?;
+                        destination.seek(SeekFrom::Start(job.dest_offset))?;
+                        let copied =
+                            io::copy(&mut source.take(job.expected_length), &mut destination)?;
+                        if copied != job.expected_length {
+                            bail!(
+                                "staged media changed size while saving: {}",
+                                job.full_path.display()
+                            );
+                        }
+                        copied_ids.push(job.id);
+                    }
+                    let copied_micros = copy_started.elapsed().as_micros() as u64;
+                    copy_micros.fetch_add(copied_micros, Ordering::Relaxed);
+                    max_copy_micros.fetch_max(copied_micros, Ordering::Relaxed);
 
+                    let release_started = Instant::now();
+                    if let Some((pool, save_id)) = &snapshot_tracking {
+                        release_snapshot_media(pool, save_id, &copied_ids)?;
+                    }
+                    let released_micros = release_started.elapsed().as_micros() as u64;
+                    release_micros.fetch_add(released_micros, Ordering::Relaxed);
+                    max_release_micros.fetch_max(released_micros, Ordering::Relaxed);
+                    tracing::debug!(
+                        phase = "write_staged_media_batch",
+                        batch_number,
+                        files = jobs.len(),
+                        bytes = batch_bytes,
+                        copy_ms = copied_micros as f64 / 1000.0,
+                        snapshot_release_ms = released_micros as f64 / 1000.0,
+                        "staged-media batch completed"
+                    );
+                    let done = completed.fetch_add(jobs.len(), Ordering::Relaxed) + jobs.len();
+                    on_progress(done, total);
+                    Ok(())
+                })?;
+            tracing::info!(
+                phase = "write_staged_media_batches",
+                elapsed_ms = staged_started.elapsed().as_secs_f64() * 1000.0,
+                files = new_jobs.len(),
+                bytes = staged_bytes,
+                batches = batch_count.load(Ordering::Relaxed),
+                copy_worker_ms = copy_micros.load(Ordering::Relaxed) as f64 / 1000.0,
+                max_copy_batch_ms = max_copy_micros.load(Ordering::Relaxed) as f64 / 1000.0,
+                snapshot_release_worker_ms = release_micros.load(Ordering::Relaxed) as f64
+                    / 1000.0,
+                max_snapshot_release_batch_ms =
+                    max_release_micros.load(Ordering::Relaxed) as f64 / 1000.0,
+                "save phase completed"
+            );
+
+            let offsets_started = Instant::now();
+            let embedded_file_count = embedded_offsets.len();
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             for (id, destination) in embedded_offsets {
                 tx.execute(
@@ -1395,6 +1672,13 @@ impl MediaPack {
                 [&generation_id],
             )?;
             tx.commit()?;
+            tracing::info!(
+                phase = "record_snapshot_offsets",
+                elapsed_ms = offsets_started.elapsed().as_secs_f64() * 1000.0,
+                embedded_files = embedded_file_count,
+                staged_files = new_jobs.len(),
+                "save phase completed"
+            );
             Ok(offset)
         })
         .await?
@@ -2766,41 +3050,77 @@ async fn process_pending_file_deletions(
     pool: Pool<SqliteConnectionManager>,
     media_dir: PathBuf,
 ) -> Result<()> {
-    spawn_blocking(move || -> Result<()> {
-        let conn = pool.get()?;
-        let paths = {
-            let mut statement = conn.prepare("SELECT path FROM pending_file_deletions")?;
-            let paths = statement
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            paths
-        };
-        for stored in paths {
-            let path = PathBuf::from(&stored);
-            let full_path = if path.is_absolute() {
-                path
-            } else {
-                media_dir.join(path)
+    let started = Instant::now();
+    let (deleted, failed, scan_time, unlink_time, queue_time) =
+        spawn_blocking(move || -> Result<_> {
+            let mut conn = pool.get()?;
+            let scan_started = Instant::now();
+            let paths = {
+                let mut statement = conn.prepare("SELECT path FROM pending_file_deletions")?;
+                let paths = statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                paths
             };
-            match fs::remove_file(full_path) {
-                Ok(()) => {
-                    conn.execute(
-                        "DELETE FROM pending_file_deletions WHERE path = ?",
-                        [&stored],
-                    )?;
+            let scan_time = scan_started.elapsed();
+            let unlink_started = Instant::now();
+            let mut deleted_paths = Vec::with_capacity(paths.len());
+            let mut failed = 0;
+            for stored in paths {
+                let path = PathBuf::from(&stored);
+                let full_path = if path.is_absolute() {
+                    path
+                } else {
+                    media_dir.join(path)
+                };
+                match fs::remove_file(full_path) {
+                    Ok(()) => deleted_paths.push(stored),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        deleted_paths.push(stored)
+                    }
+                    Err(error) => {
+                        failed += 1;
+                        tracing::error!("could not delete loose media {stored}: {error}");
+                    }
                 }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    conn.execute(
-                        "DELETE FROM pending_file_deletions WHERE path = ?",
-                        [&stored],
-                    )?;
-                }
-                Err(error) => tracing::error!("could not delete loose media {stored}: {error}"),
             }
-        }
-        Ok(())
-    })
-    .await??;
+            let unlink_time = unlink_started.elapsed();
+
+            // Keep the durable queue entry until its file has actually gone. Clearing all successful
+            // entries in one transaction avoids an fsync-backed SQLite commit for every loose file;
+            // after a crash, already-unlinked paths are harmless and are cleared on the next pass.
+            let queue_started = Instant::now();
+            if !deleted_paths.is_empty() {
+                let selected: Array =
+                    Rc::new(deleted_paths.iter().cloned().map(Value::Text).collect());
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                tx.execute(
+                    "DELETE FROM pending_file_deletions
+                 WHERE path IN (SELECT value FROM rarray(?))",
+                    params![&selected],
+                )?;
+                tx.commit()?;
+            }
+            let queue_time = queue_started.elapsed();
+            Ok((
+                deleted_paths.len(),
+                failed,
+                scan_time,
+                unlink_time,
+                queue_time,
+            ))
+        })
+        .await??;
+    tracing::info!(
+        phase = "delete_loose_files",
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        deleted,
+        failed,
+        scan_ms = scan_time.as_secs_f64() * 1000.0,
+        unlink_ms = unlink_time.as_secs_f64() * 1000.0,
+        queue_commit_ms = queue_time.as_secs_f64() * 1000.0,
+        "save phase completed"
+    );
     Ok(())
 }
 
@@ -2951,10 +3271,20 @@ fn release_snapshot_media(
     let selected: Array = Rc::new(ids.iter().copied().map(Value::Integer).collect());
     let mut connection = pool.get()?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    release_snapshot_media_tx(&tx, save_id, &selected)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn release_snapshot_media_tx(
+    tx: &rusqlite::Transaction<'_>,
+    save_id: &str,
+    selected: &Array,
+) -> Result<()> {
     tx.execute(
         "DELETE FROM snapshot_media
          WHERE save_id = ?1 AND media_id IN (SELECT value FROM rarray(?2))",
-        params![save_id, &selected],
+        params![save_id, selected],
     )?;
     tx.execute(
         "INSERT OR IGNORE INTO pending_file_deletions(path)
@@ -2962,15 +3292,36 @@ fn release_snapshot_media(
          WHERE m.deleted = 1 AND m.id IN (SELECT value FROM rarray(?1))
            AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = m.id)
            AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = m.id)",
-        params![&selected],
+        params![selected],
     )?;
     tx.execute(
         "DELETE FROM media WHERE deleted = 1
          AND id IN (SELECT value FROM rarray(?1))
          AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = media.id)
          AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = media.id)",
-        params![&selected],
+        params![selected],
     )?;
+    Ok(())
+}
+
+fn commit_in_place_media(
+    pool: &Pool<SqliteConnectionManager>,
+    save_id: &str,
+    offsets: &[(i64, u64)],
+) -> Result<()> {
+    if offsets.is_empty() {
+        return Ok(());
+    }
+    let selected: Array = Rc::new(offsets.iter().map(|&(id, _)| Value::Integer(id)).collect());
+    let mut connection = pool.get()?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for &(id, offset) in offsets {
+        tx.execute(
+            "UPDATE pack_media SET \"offset\" = ? WHERE media_id = ?",
+            params![offset, id],
+        )?;
+    }
+    release_snapshot_media_tx(&tx, save_id, &selected)?;
     tx.commit()?;
     Ok(())
 }
@@ -3642,6 +3993,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unsaved_recovery_tolerates_an_interrupted_in_place_archive_tail() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack_path = tmp.path().join("interrupted-in-place.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Interrupted in place").await;
+        let bytes = b"media remains before the damaged database tail";
+        let media_id = insert_staged_audio(&pack, bytes).await;
+        pack.save(|_, _| {}).await.unwrap();
+        pack.set_pack_data("unsaved", vec![1]).await.unwrap();
+
+        let index_offset = pack.header.read().unwrap().index_offset;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&pack_path)
+            .unwrap()
+            .set_len(index_offset)
+            .unwrap();
+        drop(pack);
+
+        let reopened = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
+        assert!(!reopened.is_saved().await);
+        assert_eq!(
+            reopened
+                .get_view()
+                .unwrap()
+                .get_file_data(media_id)
+                .await
+                .unwrap()
+                .0,
+            bytes
+        );
+    }
+
+    #[tokio::test]
     async fn damaged_metadata_backup_uses_the_authoritative_editor_database() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
@@ -4303,6 +4688,111 @@ mod tests {
             let (data, _) = view.get_file_data(ids[i]).await.unwrap();
             assert_eq!(&data, content, "content mismatch for new file index {i}");
         }
+    }
+
+    /// Manual reproduction for high-file-count generation-save performance without running the
+    /// encoder/import pipeline. Run with:
+    /// `cargo test -p lewdware-pack-editor profile_generation_save_many_staged_files -- --ignored --nocapture`
+    /// Override the defaults with `PACK_EDITOR_PERF_MEDIA_COUNT`,
+    /// `PACK_EDITOR_PERF_MEDIA_BYTES`, and `PACK_EDITOR_PERF_ROOT`.
+    #[tokio::test]
+    #[ignore = "manual save performance profile"]
+    async fn profile_generation_save_many_staged_files() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .try_init();
+        let count = std::env::var("PACK_EDITOR_PERF_MEDIA_COUNT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(25_000);
+        let bytes_per_file = std::env::var("PACK_EDITOR_PERF_MEDIA_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(64 * 1024)
+            .max(std::mem::size_of::<u64>());
+        let total_media_bytes = count as u64 * bytes_per_file as u64;
+        let perf_root = std::env::var_os("PACK_EDITOR_PERF_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap().join("target"));
+        fs::create_dir_all(&perf_root).unwrap();
+        // Do not use tempfile's default /tmp: it is commonly a tmpfs and would make the archive
+        // sync timings and filesystem cleanup unrealistically cheap.
+        let tmp = tempfile::tempdir_in(&perf_root).unwrap();
+        let data_dir = tempfile::tempdir_in(&perf_root).unwrap();
+        let pack_path = tmp.path().join("many-staged-files.lwpack");
+        let pack = new_test_pack(&pack_path, data_dir.path(), "Many staged files").await;
+        // Establish a normal existing archive before adding the profiled files.
+        pack.save(|_, _| {}).await.unwrap();
+
+        let seed_started = Instant::now();
+        let media_dir = pack.dir.join("media");
+        pack.db_execute(move |mut connection| {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let mut bytes = vec![0xa5; bytes_per_file];
+            {
+                let mut insert_media = tx.prepare(
+                    "INSERT INTO media (file_name, file_type, duration, hash)
+                     VALUES (?, 'audio', 1.0, ?)",
+                )?;
+                let mut insert_loose =
+                    tx.prepare("INSERT INTO loose_media(media_id, path, length) VALUES (?, ?, ?)")?;
+                for index in 0..count {
+                    let filename = format!("perf-{index:08}.opus");
+                    bytes[..std::mem::size_of::<u64>()]
+                        .copy_from_slice(&(index as u64).to_le_bytes());
+                    fs::write(media_dir.join(&filename), &bytes)?;
+                    let mut hash = [0u8; 32];
+                    hash[..8].copy_from_slice(&(index as u64).to_le_bytes());
+                    insert_media.execute(params![filename, hash.as_slice()])?;
+                    let id = tx.last_insert_rowid();
+                    insert_loose.execute(params![id, filename, bytes.len() as u64])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        pack.mark_unsaved().await.unwrap();
+        eprintln!(
+            "seeded {count} staged files ({:.2} GiB total, {bytes_per_file} bytes each) in {:.3}s",
+            total_media_bytes as f64 / 1024.0_f64.powi(3),
+            seed_started.elapsed().as_secs_f64()
+        );
+
+        let progress_finished = Arc::new(Mutex::new(None::<Instant>));
+        let progress_for_callback = progress_finished.clone();
+        let save_started = Instant::now();
+        pack.save(move |completed, total| {
+            if total > 0 && completed == total {
+                progress_for_callback
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(Instant::now);
+            }
+        })
+        .await
+        .unwrap();
+        let elapsed = save_started.elapsed();
+        let after_progress = progress_finished
+            .lock()
+            .unwrap()
+            .map(|finished| finished.elapsed())
+            .unwrap_or_default();
+        eprintln!(
+            "saved {count} staged files ({:.2} GiB) in {:.3}s; {:.3}s elapsed after file progress completed",
+            total_media_bytes as f64 / 1024.0_f64.powi(3),
+            elapsed.as_secs_f64(),
+            after_progress.as_secs_f64()
+        );
+        let garbage_collection_started = Instant::now();
+        pack.process_pending_file_deletions().await.unwrap();
+        eprintln!(
+            "background loose-file garbage collection completed in {:.3}s",
+            garbage_collection_started.elapsed().as_secs_f64()
+        );
+        pack.close().await;
     }
 
     // Diagnostic stress test: many files, then a large scattered deletion, then a
