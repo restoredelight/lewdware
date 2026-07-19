@@ -31,8 +31,10 @@ cp "LICENSE" "$STAGE_DIR/usr/share/doc/lewdware/copyright"
 echo "🔨 Compiling applications..."
 cargo build -p lw --release
 
-echo "🔨 Building default mode..."
-(cd default-modes && ../target/release/lw mode build)
+echo "🔨 Building default modes..."
+for mode in sandbox experience; do
+  (cd "default-modes/$mode" && ../../target/release/lw mode build)
+done
 
 # Compile lewdware with a relative rpath targeting the bundled libs.
 # --features build-ffmpeg vendors and statically links FFmpeg from pristine
@@ -40,6 +42,9 @@ echo "🔨 Building default mode..."
 # Ubuntu's GPL-licensed libavcodec.so etc - see lewdware/Cargo.toml.
 echo "   Compiling lewdware with relative rpath..."
 cargo rustc -p lewdware --release --features build-ffmpeg -- -C link-args="-Wl,-rpath,\$ORIGIN/../lib/lewdware"
+
+echo "   Compiling supervisor..."
+cargo build -p lewdware-supervisor --release
 
 # Compile Tauri GUI
 echo "🔨 Building config GUI..."
@@ -55,7 +60,8 @@ echo "Staging binaries..."
 cp "target/release/lewdware" "$STAGE_DIR/usr/bin/lewdware"
 cp "target/release/lw" "$STAGE_DIR/usr/bin/lw"
 cp "target/release/lewdware-engine" "$STAGE_DIR/usr/lib/lewdware/lewdware-engine"
-chmod +x "$STAGE_DIR/usr/bin/"* "$STAGE_DIR/usr/lib/lewdware/lewdware-engine"
+cp "target/release/lewdware-supervisor" "$STAGE_DIR/usr/lib/lewdware/lewdware-supervisor"
+chmod +x "$STAGE_DIR/usr/bin/"* "$STAGE_DIR/usr/lib/lewdware/lewdware-engine" "$STAGE_DIR/usr/lib/lewdware/lewdware-supervisor"
 
 # 3. Dynamic Library Bundling (transitive deps of any dynamically-linked libs).
 # FFmpeg and dav1d are statically linked into lewdware-engine (see the
@@ -105,6 +111,7 @@ bundle_lib() {
 }
 
 bundle_lib "target/release/lewdware-engine"
+bundle_lib "target/release/lewdware-supervisor"
 bundle_lib "target/release/lw"
 bundle_lib "target/release/lewdware"
 
@@ -140,9 +147,9 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${DEB_ARCH}
-Depends: libasound2, libx11-6, libxi6, libxtst6, libxrandr2, libxcursor1
+Depends: libasound2, libdbus-1-3, libx11-6, libxi6, libxtst6, libxrandr2, libxcursor1
 Maintainer: restoredelight <restoreddelight@proton.me>
-Description: Lewdware (Main App, Config GUI, and lw CLI tool)
+Description: Lewdware (Config GUI, Supervisor, Engine, and lw CLI tool)
 EOF
 
 # 6. Build the Debian Package
@@ -170,12 +177,12 @@ if command -v rpmbuild &> /dev/null; then
 Name:           lewdware
 Version:        ${VERSION}
 Release:        1
-Summary:        Lewdware (Main App, Config GUI, and lw CLI tool)
+Summary:        Lewdware (Config GUI, Supervisor, Engine, and lw CLI tool)
 License:        MIT
-Requires:       alsa-lib, libX11, libXi, libXtst, libXrandr, libXcursor
+Requires:       alsa-lib, dbus-libs, libX11, libXi, libXtst, libXrandr, libXcursor
 
 %description
-Lewdware, containing the main app, config GUI, and lw CLI tool.
+Lewdware, containing the config GUI, supervisor, engine, and lw CLI tool.
 
 %install
 mkdir -p %{buildroot}/usr/bin
@@ -231,7 +238,7 @@ else
   echo "Warning: config AppImage not found! Skipping config GUI in tar.gz."
 fi
 
-# Copy dynamic libraries and the engine (internal, launched by config app)
+# Copy dynamic libraries, the supervisor, and the engine (internal processes)
 cp "$STAGE_DIR/usr/lib/lewdware/"* "$TAR_ROOT/lib/lewdware/"
 
 # Ship the MIT license alongside the binaries
@@ -241,12 +248,12 @@ cp "LICENSE" "$TAR_ROOT/LICENSE"
 cat << 'EOF' > "$TAR_ROOT/README.md"
 # Lewdware (and tools)
 
-This portable distribution contains the Lewdware Config app, Engine, and lw CLI.
+This portable distribution contains the Lewdware Config app, Supervisor, Engine, and lw CLI.
 
 ## Structure
 * `bin/lewdware`: Lewdware Config app (AppImage) — start here
 * `bin/lw`: Lewdware CLI
-* `lib/lewdware/`: Engine and any bundled dynamic libraries (FFmpeg and dav1d are statically linked into the engine)
+* `lib/lewdware/`: Supervisor, Engine, and any bundled dynamic libraries (FFmpeg and dav1d are statically linked into the engine)
 * `LICENSE`: MIT license covering this software
 
 ## Running

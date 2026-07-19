@@ -21,14 +21,17 @@ mkdir -p "$OUTPUT_DIR"
 echo "Compiling applications..."
 cargo build -p lw --release
 
-echo "Building default mode..."
-(cd default-modes && ../target/release/lw mode build)
+echo "Building default modes..."
+for mode in sandbox experience; do
+  (cd "default-modes/$mode" && ../../target/release/lw mode build)
+done
 
 # --features build-ffmpeg vendors and statically links FFmpeg from pristine
 # upstream source (LGPL-only, no --enable-gpl/libx264/libx265) instead of
 # linking Homebrew's ffmpeg, whose formula is declared GPL-3.0-or-later -
 # see lewdware/Cargo.toml.
 cargo build -p lewdware --release --features build-ffmpeg
+cargo build -p lewdware-supervisor --release
 
 # Compile Tauri GUI
 echo "Building config GUI..."
@@ -58,10 +61,11 @@ MAC_BIN_DIR="$BUILD_DIR/root/Applications/Lewdware.app/Contents/MacOS"
 FRAMEWORKS_DIR="$BUILD_DIR/root/Applications/Lewdware.app/Contents/Frameworks"
 mkdir -p "$FRAMEWORKS_DIR"
 
-# Copy CLI and Engine into the bundle
+# Copy CLI, Supervisor, and Engine into the bundle
 cp "target/release/lw" "$MAC_BIN_DIR/lw"
+cp "target/release/lewdware-supervisor" "$MAC_BIN_DIR/lewdware-supervisor"
 cp "target/release/lewdware-engine" "$MAC_BIN_DIR/lewdware-engine"
-chmod +x "$MAC_BIN_DIR/lw" "$MAC_BIN_DIR/lewdware-engine"
+chmod +x "$MAC_BIN_DIR/lw" "$MAC_BIN_DIR/lewdware-supervisor" "$MAC_BIN_DIR/lewdware-engine"
 
 # 3. Dynamic Library Bundling and Relinking (dylib)
 # FFmpeg and dav1d are statically linked into lewdware-engine (see the
@@ -91,12 +95,14 @@ bundle_dylib() {
 }
 
 bundle_dylib "$MAC_BIN_DIR/lewdware-engine"
+bundle_dylib "$MAC_BIN_DIR/lewdware-supervisor"
 bundle_dylib "$MAC_BIN_DIR/lw"
 bundle_dylib "$MAC_BIN_DIR/lewdware"
 
 find "$FRAMEWORKS_DIR" -type f -name "*.dylib" -exec codesign --force --sign - {} \;
 
 codesign --force --sign - "$MAC_BIN_DIR/lw"
+codesign --force --sign - "$MAC_BIN_DIR/lewdware-supervisor"
 codesign --force --sign - "$MAC_BIN_DIR/lewdware-engine"
 codesign --force --sign - "$MAC_BIN_DIR/lewdware"
 codesign --force --sign - "$BUILD_DIR/root/Applications/Lewdware.app"

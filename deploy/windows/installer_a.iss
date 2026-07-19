@@ -23,6 +23,8 @@ Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignor
 Source: "..\..\target\release\lewdware.exe"; DestDir: "{app}"; DestName: "lewdware.exe"; Flags: ignoreversion
 ; Engine (internal, launched by config app)
 Source: "..\..\target\release\lewdware-engine.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Supervisor (internal, owns session lifecycle and scheduling)
+Source: "..\..\target\release\lewdware-supervisor.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; CLI
 Source: "..\..\target\release\lw.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; DLLs (copied from staging)

@@ -42,13 +42,18 @@ Write-Host "Compiling applications..."
 cargo build -p lw --release
 Check-LastExitCode
 
-Write-Host "Building default mode..."
-Push-Location default-modes
-& "..\target\release\lw.exe" mode build
-Check-LastExitCode
-Pop-Location
+Write-Host "Building default modes..."
+foreach ($mode in @("sandbox", "experience")) {
+    Push-Location "default-modes\$mode"
+    & "..\..\target\release\lw.exe" mode build
+    Check-LastExitCode
+    Pop-Location
+}
 
 cargo build -p lewdware --release
+Check-LastExitCode
+
+cargo build -p lewdware-supervisor --release
 Check-LastExitCode
 
 # Compile Tauri GUI
