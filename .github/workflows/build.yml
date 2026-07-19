@@ -37,6 +37,8 @@ jobs:
             file \
             rpm \
             nasm \
+            cmake \
+            ninja-build \
             libssl-dev \
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
@@ -52,6 +54,9 @@ jobs:
             libgstreamer-plugins-base1.0-dev \
             patchelf \
             xdg-utils
+      # cmake/ninja-build (alongside nasm, above) are for build_avifenc_sidecar.sh, which builds
+      # libavif + a local libaom from source -- no prebuilt static Linux avifenc is published
+      # upstream (see deploy/linux/build_avifenc_sidecar.sh).
       # Note: no libavcodec-dev/libdav1d-dev etc. here on purpose. Ubuntu's
       # ffmpeg packages are built --enable-gpl (they depend on libx264-dev),
       # so linking against them would make the distributed lewdware binary a
@@ -112,8 +117,8 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install nasm
-          echo "BREW_DEPS=$(brew ls --versions nasm | tr '\n' ' ')" >> $GITHUB_ENV
+          brew install nasm cmake ninja
+          echo "BREW_DEPS=$(brew ls --versions nasm cmake ninja | tr '\n' ' ')" >> $GITHUB_ENV
       # Note: no `brew install ffmpeg` here on purpose. Homebrew's ffmpeg
       # formula is unconditionally built --enable-gpl --enable-libx264
       # --enable-libx265 (its declared license is literally GPL-3.0-or-later),
@@ -121,7 +126,9 @@ jobs:
       # GPL combined work. Installer A instead builds the `lewdware` crate
       # with --features build-ffmpeg, which vendors and statically links a
       # pristine, LGPL-only FFmpeg (see lewdware/Cargo.toml). `nasm` above is
-      # required to build that vendored copy.
+      # required to build that vendored copy. `cmake`/`ninja` are for
+      # build_avifenc_sidecar.sh, which builds libavif + a local libaom from
+      # source since no prebuilt static macOS avifenc is published upstream.
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable

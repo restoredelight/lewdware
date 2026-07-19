@@ -1369,10 +1369,16 @@ pub fn run() {
                 } else {
                     "lewdware-ffprobe"
                 };
+                let avifenc_name = if cfg!(target_os = "windows") {
+                    "lewdware-avifenc.exe"
+                } else {
+                    "lewdware-avifenc"
+                };
                 let ffmpeg = resource_dir.join("binaries").join(ffmpeg_name);
                 let ffprobe = resource_dir.join("binaries").join(ffprobe_name);
-                if ffmpeg.exists() && ffprobe.exists() {
-                    shared::encode::init_binary_paths(ffmpeg, ffprobe);
+                let avifenc = resource_dir.join("binaries").join(avifenc_name);
+                if ffmpeg.exists() && ffprobe.exists() && avifenc.exists() {
+                    shared::encode::init_binary_paths(ffmpeg, ffprobe, avifenc);
                 }
             }
             let _ = state

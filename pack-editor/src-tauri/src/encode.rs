@@ -99,7 +99,7 @@ where
 
 static ENCODE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
-fn encode_semaphore() -> &'static Semaphore {
+pub(crate) fn encode_semaphore() -> &'static Semaphore {
     ENCODE_SEMAPHORE.get_or_init(|| {
         let permits = available_parallelism()
             .map(|x| (x.get() / 4).max(2))

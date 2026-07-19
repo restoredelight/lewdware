@@ -39,6 +39,7 @@
     "resources": {
       "binaries/lewdware-ffmpeg*": "binaries/",
       "binaries/lewdware-ffprobe*": "binaries/",
+      "binaries/lewdware-avifenc*": "binaries/",
       "../../LICENSE": "LICENSE",
       "../THIRD_PARTY_LICENSES.md": "THIRD_PARTY_LICENSES.md",
       "../COPYING.GPLv3": "COPYING.GPLv3"

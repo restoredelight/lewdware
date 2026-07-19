@@ -72,7 +72,7 @@ jobs:
         run: |
           TRIPLE=$(rustc -vV | grep '^host:' | cut -d' ' -f2)
           mkdir -p pack-editor/src-tauri/binaries
-          for name in lewdware-ffmpeg lewdware-ffprobe; do
+          for name in lewdware-ffmpeg lewdware-ffprobe lewdware-avifenc; do
             stub="pack-editor/src-tauri/binaries/${name}-${TRIPLE}"
             printf '#!/bin/sh\n' > "$stub"
             chmod +x "$stub"

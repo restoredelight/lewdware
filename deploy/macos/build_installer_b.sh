@@ -9,6 +9,9 @@ ARCH=$(uname -m)
 # 1. stage FFmpeg and ffprobe if not already present
 "$(dirname "$0")/download_ffmpeg_sidecars.sh"
 
+# 1b. Build the avifenc sidecar if not already present
+"$(dirname "$0")/build_avifenc_sidecar.sh"
+
 # 2. Build the Tauri app
 echo "Building pack-editor-tauri GUI..."
 cd pack-editor

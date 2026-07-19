@@ -43,6 +43,41 @@ If you redistribute pack-editor (or a modified version of it), you must
 continue to satisfy these GPLv3 obligations for the bundled `ffmpeg`/`ffprobe`
 binaries, in addition to the MIT terms covering pack-editor's own source.
 
+## Bundled avifenc binary (BSD-2-Clause, permissive)
+
+The pack-editor binary also invokes `avifenc` as a subprocess to encode
+images to AVIF (see `shared/src/encode.rs`'s `encode_image`), and bundles a
+prebuilt/self-built copy alongside its own binary
+(`src-tauri/binaries/lewdware-avifenc`; see
+`src-tauri/tauri.conf.json`'s `bundle.resources`,
+`deploy/linux/build_avifenc_sidecar.sh`,
+`deploy/macos/build_avifenc_sidecar.sh`, and
+`deploy/windows/download_avifenc_sidecar.ps1`).
+
+Unlike FFmpeg, this binary carries no GPL obligations. It's built from
+[libavif](https://github.com/AOMediaCodec/libavif) (BSD-2-Clause) with only
+the `libaom` AV1 codec enabled, encode-only -- no `dav1d`, `rav1e`, or
+SVT-AV1 -- plus the small helper libraries (`libpng`, `zlib`, `libjpeg`)
+libavif's own build pulls in for its command-line tools. All of these are
+permissively licensed (BSD/zlib/IJG-style); `libaom` itself is BSD-2-Clause
+with an accompanying royalty-free patent grant from the Alliance for Open
+Media. None of this requires the GPLv3 source-availability/license-text
+obligations that the bundled FFmpeg does.
+
+- Linux and macOS: built from source at a pinned libavif release tag (see
+  `deploy/linux/build_avifenc_sidecar.sh` /
+  `deploy/macos/build_avifenc_sidecar.sh` for the exact CMake configuration
+  and version), since libavif does not publish a prebuilt static binary for
+  either platform.
+- Windows: libavif's own official prebuilt static release artifact for the
+  same pinned tag (which may additionally bundle `dav1d`/`rav1e` -- still all
+  permissively licensed, just unused by pack-editor's `-c aom` invocation).
+- Corresponding source: <https://github.com/AOMediaCodec/libavif>,
+  <https://aomedia.googlesource.com/aom/> (or the CMake-vendored copy libavif
+  itself fetches for `AVIF_CODEC_AOM=LOCAL` builds).
+- Copyright: libavif is Copyright 2019 Joe Drago; libaom is Copyright the
+  Alliance for Open Media.
+
 This file, [`COPYING.GPLv3`](./COPYING.GPLv3), and a copy of the root MIT
 `LICENSE` are themselves bundled into the distributed pack-editor installer
 (see `src-tauri/tauri.conf.json`'s `bundle.resources`), so they travel with

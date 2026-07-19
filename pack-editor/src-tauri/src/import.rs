@@ -220,6 +220,15 @@ async fn import_one_media(
         .map_err(|e| ImportErrorKind::Other(e.into()))?
         .map_err(ImportErrorKind::ExtractError)?;
 
+    // Matches encode::process_one_file's own gating: without it, this path's outer
+    // for_each_concurrent(available_parallelism()) is the only limit on how many `encode_file`
+    // calls run at once, which -- combined with avifenc's own default of using every core per
+    // invocation -- oversubscribes far worse than the upload path's tighter semaphore does.
+    let _permit = crate::encode::encode_semaphore()
+        .acquire()
+        .await
+        .map_err(|e| ImportErrorKind::Other(anyhow!("{e}")))?;
+
     let output_path = staging.path().join(Uuid::new_v4().to_string());
     let encode_input = extract_path.clone();
 

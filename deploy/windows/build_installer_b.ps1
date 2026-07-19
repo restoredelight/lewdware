@@ -14,6 +14,9 @@ function Check-LastExitCode {
 # 1. Stage FFmpeg & ffprobe if not already present
 & "$PSScriptRoot\download_ffmpeg_sidecars.ps1"
 
+# 1b. Stage the avifenc sidecar if not already present
+& "$PSScriptRoot\download_avifenc_sidecar.ps1"
+
 # 2. Build the Tauri app
 Write-Host "Building pack-editor GUI..."
 Push-Location pack-editor

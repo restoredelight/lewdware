@@ -27,19 +27,28 @@ struct Args {
     /// with `--ffmpeg`.
     #[arg(long)]
     ffprobe: Option<PathBuf>,
+    /// Override the `avifenc` binary used (defaults to a `PATH` lookup). Must be given together
+    /// with `--ffmpeg`/`--ffprobe`.
+    #[arg(long)]
+    avifenc: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // `shared::encode::get_ffmpeg_path`/`get_ffprobe_path` fall back to the app's bundled sidecar
-    // names (`lewdware-ffmpeg`/`lewdware-ffprobe`) when unset, since that's what the shipped app
-    // needs. This dev tool's whole premise is a plain local install, so default to the ordinary
-    // `ffmpeg`/`ffprobe` names instead of leaving that fallback in place.
-    match (args.ffmpeg, args.ffprobe) {
-        (Some(ffmpeg), Some(ffprobe)) => init_binary_paths(ffmpeg, ffprobe),
-        (None, None) => init_binary_paths(PathBuf::from("ffmpeg"), PathBuf::from("ffprobe")),
-        _ => bail!("--ffmpeg and --ffprobe must be given together"),
+    // `shared::encode::get_ffmpeg_path`/`get_ffprobe_path`/`get_avifenc_path` fall back to the
+    // app's bundled sidecar names (`lewdware-ffmpeg`/`lewdware-ffprobe`/`lewdware-avifenc`) when
+    // unset, since that's what the shipped app needs. This dev tool's whole premise is a plain
+    // local install, so default to the ordinary `ffmpeg`/`ffprobe`/`avifenc` names instead of
+    // leaving that fallback in place.
+    match (args.ffmpeg, args.ffprobe, args.avifenc) {
+        (Some(ffmpeg), Some(ffprobe), Some(avifenc)) => init_binary_paths(ffmpeg, ffprobe, avifenc),
+        (None, None, None) => init_binary_paths(
+            PathBuf::from("ffmpeg"),
+            PathBuf::from("ffprobe"),
+            PathBuf::from("avifenc"),
+        ),
+        _ => bail!("--ffmpeg, --ffprobe and --avifenc must be given together"),
     }
 
     let source: Box<dyn PackSource> = if args.input.is_dir() {

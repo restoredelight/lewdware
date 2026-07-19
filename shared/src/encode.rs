@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::OnceLock,
+    thread::available_parallelism,
 };
 
 use anyhow::{Context, Result, bail};
@@ -286,10 +287,12 @@ impl HardwareEncoder {
 
 static FFMPEG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static FFPROBE_PATH: OnceLock<PathBuf> = OnceLock::new();
+static AVIFENC_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-pub fn init_binary_paths(ffmpeg: PathBuf, ffprobe: PathBuf) {
+pub fn init_binary_paths(ffmpeg: PathBuf, ffprobe: PathBuf, avifenc: PathBuf) {
     let _ = FFMPEG_PATH.set(ffmpeg);
     let _ = FFPROBE_PATH.set(ffprobe);
+    let _ = AVIFENC_PATH.set(avifenc);
 }
 
 fn ffmpeg_filename() -> &'static str {
@@ -305,6 +308,14 @@ fn ffprobe_filename() -> &'static str {
         "lewdware-ffprobe.exe"
     } else {
         "lewdware-ffprobe"
+    }
+}
+
+fn avifenc_filename() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "lewdware-avifenc.exe"
+    } else {
+        "lewdware-avifenc"
     }
 }
 
@@ -354,13 +365,39 @@ pub fn get_ffprobe_path() -> PathBuf {
     PathBuf::from(name)
 }
 
-fn file_info(path: &Path) -> Result<Option<FileInfo>> {
+pub fn get_avifenc_path() -> PathBuf {
+    if let Some(p) = AVIFENC_PATH.get() {
+        return p.clone();
+    }
+
+    let name = avifenc_filename();
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        let path = exe_dir.join(name);
+        if path.exists() {
+            return path;
+        }
+        // macOS .app bundle
+        let resources = exe_dir.join("../Resources").join(name);
+        if resources.exists() {
+            return resources;
+        }
+    }
+
+    PathBuf::from(name)
+}
+
+/// Probes both the stream/format info needed to classify and size the file, and (for the
+/// video/audio case) its container metadata tags, in one ffprobe call -- `parse_media_info` and
+/// `extract_container_attribution` each just read a different part of the same JSON.
+fn file_info(path: &Path) -> Result<Option<(FileInfo, serde_json::Value)>> {
     let args = [
         "-v",
         "error",
         "-count_packets",
         "-show_entries",
-        "stream=codec_type,nb_read_packets,width,height,pix_fmt:format=duration",
+        "stream=codec_type,nb_read_packets,width,height,pix_fmt:format=duration:format_tags",
         "-output_format",
         "json",
     ];
@@ -375,29 +412,14 @@ fn file_info(path: &Path) -> Result<Option<FileInfo>> {
     }
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    Ok(parse_media_info(json))
+    Ok(parse_media_info(&json).map(|info| (info, json)))
 }
 
 /// Best-effort artist/source-url extraction from a video/audio container's own metadata tags
-/// (`artist`/`album_artist`/`composer`, `comment`) -- a separate, lightweight ffprobe call (just
-/// `format_tags`, no stream/packet counting) rather than folding into `file_info`'s probe, so a
-/// failure here can never affect the required width/height/duration detection. Never fails --
-/// any error (missing ffprobe, unreadable file, no tags) just yields an empty result.
-fn extract_container_attribution(path: &Path) -> ExtractedAttribution {
+/// (`artist`/`album_artist`/`composer`, `comment`), read from `file_info`'s own probe JSON.
+/// Never fails -- missing/malformed tags just yield an empty result.
+fn extract_container_attribution(json: &serde_json::Value) -> ExtractedAttribution {
     let mut out = ExtractedAttribution::default();
-    let Ok(output) = new_command(get_ffprobe_path())
-        .args(["-v", "error", "-show_entries", "format_tags", "-output_format", "json"])
-        .arg(path)
-        .output()
-    else {
-        return out;
-    };
-    if !output.status.success() {
-        return out;
-    }
-    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
-        return out;
-    };
     let Some(tags) = json
         .get("format")
         .and_then(|f| f.get("tags"))
@@ -421,14 +443,16 @@ pub fn encode_file(
     output: &Path,
     encoder: HardwareEncoder,
 ) -> Result<Option<EncodedFile>> {
-    let info = match file_info(input)? {
+    let (info, probe_json) = match file_info(input)? {
         Some(x) => x,
         None => return Ok(None),
     };
 
     let attribution = match info {
         FileInfo::Image { .. } => crate::attribution::extract_image_attribution(input),
-        FileInfo::Video { .. } | FileInfo::Audio { .. } => extract_container_attribution(input),
+        FileInfo::Video { .. } | FileInfo::Audio { .. } => {
+            extract_container_attribution(&probe_json)
+        }
     };
 
     let output = match info {
@@ -481,6 +505,19 @@ pub fn encode_file(
     }))
 }
 
+/// avifenc defaults to using every core for a single encode (`-j all`). Both `encode.rs`'s
+/// upload path and `import.rs`'s pack-import path already rate-limit how many `encode_file`
+/// calls run at once via a semaphore sized at `available_parallelism()/4` (floored at 2) --
+/// mirrored here, since this crate can't see that semaphore directly -- so an unconstrained
+/// avifenc multiplies past the machine's actual core count as soon as more than one image
+/// encodes concurrently. Capping each invocation to its "fair share" of cores instead measured
+/// ~1.75x faster for a concurrent batch than leaving it on `all`.
+fn avifenc_jobs() -> usize {
+    let cores = available_parallelism().map(|x| x.get()).unwrap_or(4);
+    let permits = (cores / 4).max(2);
+    (cores / permits).max(1)
+}
+
 fn encode_image(
     input: &Path,
     output: &Path,
@@ -492,8 +529,18 @@ fn encode_image(
     let thumb_temp = NamedTempFile::new()?;
     let thumb_path = thumb_temp.path();
 
+    // ffmpeg's libaom-av1 wrapper can't produce a working alpha auxiliary image for AVIF: it
+    // silently drops a yuva420p input (falls back to yuv420p), and a manual dual-stream encode
+    // hits an upstream libaom bitstream-conformance rejection (monochrome + identity-matrix
+    // output requires 4:4:4, but ffmpeg's wrapper still configures 4:2:0 for it). So ffmpeg here
+    // only resizes to a lossless intermediate PNG (keeping any real alpha) plus the thumbnail;
+    // `avifenc` below -- which sets up the alpha-plane encode correctly itself, and is faster
+    // than ffmpeg's wrapper besides -- does the actual AVIF encode.
+    let main_temp = NamedTempFile::with_suffix(".png")?;
+    let main_path = main_temp.path();
+
     let filter = format!(
-        "[0:v]scale=w='{width}':h='{height}',format=yuva420p[main]; \
+        "[0:v]scale=w='{width}':h='{height}',format=rgba[main]; \
          [0:v]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]; \
          [0:v]format=rgba,alphaextract,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YMIN[alpha]"
     );
@@ -508,20 +555,22 @@ fn encode_image(
     cmd.args([
         "-map",
         "[main]",
-        "-c:v",
-        "libaom-av1",
-        "-cpu-used",
-        "6",
-        "-crf",
-        "32",
-        "-b:v",
-        "0",
-        "-still-picture",
+        "-frames:v",
         "1",
         "-f",
-        "avif",
+        "image2",
+        "-vcodec",
+        "png",
+        // This PNG is a throwaway intermediate that avifenc immediately re-encodes, so its own
+        // size doesn't matter -- only write speed does. zlib-compressing it is pure waste: on a
+        // 2560x1440 frame this alone was ~60% of the whole ffmpeg step (more under high-entropy
+        // content), for a file avifenc reads once and discards.
+        "-compression_level",
+        "0",
+        "-pred",
+        "none",
     ])
-    .arg(output);
+    .arg(main_path);
 
     cmd.args(["-map", "[thumb]", "-frames:v", "1", "-f", "webp"])
         .arg(thumb_path);
@@ -553,6 +602,36 @@ fn encode_image(
     if !result.success() {
         tracing::error!("{stderr_buf}");
         bail!("ffmpeg failed for {}", input.display());
+    }
+
+    // -y 420: matches the chroma subsampling ffmpeg's libaom wrapper used previously (smaller
+    // and faster than aom/avifenc's 444 default, with no visible quality cost at this quality
+    // level).
+    //
+    // -q 60 is the knee of the size/quality curve (and avifenc's own default): measured across
+    // detailed, smooth-gradient and heavy-grain 2560px sources, a 10-point step below it buys
+    // ~0.0018 SSIM while the same step above it buys ~0.0007 for comparable bytes. Encode time is
+    // flat across the whole 40..80 range, so this trades only size against quality. Note this is
+    // deliberately a step up from the old -crf 32 (~q49), and costs ~30% more per image for it.
+    //
+    // --qalpha is held above -q on purpose: alpha is typically a near-binary mask where
+    // quantization shows as visible halos on cutout edges, and protecting it is cheap (+6% file
+    // size at worst, on a pathological smooth-gradient alpha). Not 100 -- lossless alpha is ~6x.
+    //
+    // -j: see avifenc_jobs.
+    let jobs = avifenc_jobs().to_string();
+    let avifenc_result = new_command(get_avifenc_path())
+        .args([
+            "-c", "aom", "-y", "420", "-s", "6", "-q", "60", "--qalpha", "80", "-j",
+        ])
+        .arg(&jobs)
+        .arg(main_path)
+        .arg(output)
+        .output()?;
+
+    if !avifenc_result.status.success() {
+        tracing::error!("{}", String::from_utf8_lossy(&avifenc_result.stderr));
+        bail!("avifenc failed for {}", input.display());
     }
 
     let mut thumbnail = Vec::new();
@@ -759,7 +838,7 @@ fn encode_audio(input: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn parse_media_info(json: serde_json::Value) -> Option<FileInfo> {
+fn parse_media_info(json: &serde_json::Value) -> Option<FileInfo> {
     let streams = json.get("streams")?.as_array()?;
 
     let video_stream = streams
