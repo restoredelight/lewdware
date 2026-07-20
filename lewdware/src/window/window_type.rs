@@ -12,7 +12,7 @@ use winit::{
 
 use crate::{
     egui::{EguiCPUWindow, EguiGpuRenderer},
-    lua::{self, DialogButton, DialogElementUpdate, PopupId, TextStyle},
+    lua::{self, DialogButton, DialogElement, DialogElementUpdate, ItemId, TextStyle},
     media::ImageData,
     text_font,
     video::{NextFrame, VideoDecoder, VideoFrame, VideoPixelFormat},
@@ -372,33 +372,8 @@ impl VideoWindow {
     }
 }
 
-/// A dialog element, fully resolved and ready to render — built by `app.rs`'s
-/// `PendingDialogElement::into_resolved` once any `image` element's data has decoded (see
-/// `PendingKind::Dialog`).
-pub enum DialogElementSpec {
-    Text {
-        id: Option<String>,
-        text: String,
-        style: TextStyle,
-    },
-    Image {
-        id: Option<String>,
-        data: ImageData,
-    },
-    Input {
-        id: String,
-        placeholder: Option<String>,
-        value: String,
-    },
-    Buttons {
-        id: Option<String>,
-        options: Vec<DialogButton>,
-    },
-}
-
-/// The render-time state of one dialog element — like `DialogElementSpec`, but an `image`
-/// element's pixels have been uploaded to an egui texture, and an `input` element's `value` is
-/// live (mutated in place as the user types).
+/// The render-time state of one dialog element. Image requirements have been uploaded to egui
+/// textures, and input values are mutated in place as the user types.
 enum DialogElementState {
     Text {
         id: Option<String>,
@@ -465,7 +440,7 @@ fn collect_dialog_values(elements: &[DialogElementState]) -> HashMap<String, Str
 
 fn send_dialog_interaction(
     lua_event_tx: &UnboundedSender<lua::Event>,
-    id: PopupId,
+    id: ItemId,
     interaction: DialogInteraction,
     elements: &[DialogElementState],
 ) {
@@ -496,7 +471,7 @@ fn send_dialog_interaction(
 fn resolve_pending_content_click(
     pending_content_click: &mut bool,
     lua_event_tx: &UnboundedSender<lua::Event>,
-    id: PopupId,
+    id: ItemId,
     consumed_by_element: bool,
 ) {
     if std::mem::take(pending_content_click) && !consumed_by_element {
@@ -662,7 +637,11 @@ pub struct DialogWindow {
 }
 
 impl DialogWindow {
-    pub fn new(inner_window: InnerWindow, elements: Vec<DialogElementSpec>) -> Result<Self> {
+    pub fn new<I>(
+        inner_window: InnerWindow,
+        elements: Vec<DialogElement<I>>,
+        mut resolve_image: impl FnMut(I) -> Result<ImageData>,
+    ) -> Result<Self> {
         let (egui_cpu, egui_gpu, decoration_overlay) = if inner_window.is_gpu() {
             let inner_size = inner_window.inner_size();
             let egui_gpu = EguiGpuRenderer::new(
@@ -709,8 +688,10 @@ impl DialogWindow {
         let elements: Vec<_> = elements
             .into_iter()
             .enumerate()
-            .map(|(index, spec)| Self::load_element(&context, index, spec))
-            .collect();
+            .map(|(index, element)| {
+                Self::load_element(&context, index, element, &mut resolve_image)
+            })
+            .collect::<Result<_>>()?;
         let default_button_id = find_default_button_id(&elements);
 
         Ok(Self {
@@ -734,16 +715,16 @@ impl DialogWindow {
     /// Turn a resolved element spec into render-ready state, uploading an `image` element's
     /// pixels as an egui texture (named uniquely per element, since texture names must be
     /// distinct within a `Context`).
-    fn load_element(
+    fn load_element<I>(
         context: &egui::Context,
         index: usize,
-        spec: DialogElementSpec,
-    ) -> DialogElementState {
-        match spec {
-            DialogElementSpec::Text { id, text, style } => {
-                DialogElementState::Text { id, text, style }
-            }
-            DialogElementSpec::Image { id, data } => {
+        element: DialogElement<I>,
+        resolve_image: &mut impl FnMut(I) -> Result<ImageData>,
+    ) -> Result<DialogElementState> {
+        Ok(match element {
+            DialogElement::Text { id, text, style } => DialogElementState::Text { id, text, style },
+            DialogElement::Image { id, image } => {
+                let data = resolve_image(image)?;
                 let width = data.width() as usize;
                 let height = data.height() as usize;
                 let color_image =
@@ -755,19 +736,17 @@ impl DialogWindow {
                 );
                 DialogElementState::Image { id, texture }
             }
-            DialogElementSpec::Input {
+            DialogElement::Input {
                 id,
                 placeholder,
-                value,
+                initial_value,
             } => DialogElementState::Input {
                 id,
                 placeholder,
-                value,
+                value: initial_value.unwrap_or_default(),
             },
-            DialogElementSpec::Buttons { id, options } => {
-                DialogElementState::Buttons { id, options }
-            }
-        }
+            DialogElement::Buttons { id, options } => DialogElementState::Buttons { id, options },
+        })
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) {

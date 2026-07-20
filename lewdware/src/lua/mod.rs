@@ -46,59 +46,58 @@ pub use api::{
     TextAlign, TextFont, TextStyle, WallpaperMode,
 };
 pub use media::{Media, MediaData, MediaType};
-pub use request::{AudioAction, LuaRequest, WindowAction};
+pub use request::{AudioAction, ItemAction, LuaRequest, WindowAction};
 pub use window::{Easing, FadeOpts, MoveOpts};
 
 pub enum Event {
     WindowClosed {
-        id: PopupId,
+        id: ItemId,
     },
     WindowSpawned {
-        id: PopupId,
+        id: ItemId,
     },
     MoveFinish {
-        id: PopupId,
+        id: ItemId,
         move_id: u64,
         x: i32,
         y: i32,
     },
     AudioFinish {
-        id: u64,
+        id: ItemId,
     },
     WindowClicked {
-        id: PopupId,
+        id: ItemId,
     },
     DialogSelect {
-        id: PopupId,
+        id: ItemId,
         button_id: String,
         values: HashMap<String, String>,
     },
     DialogSubmit {
-        id: PopupId,
+        id: ItemId,
         element_id: String,
         values: HashMap<String, String>,
     },
     FadeFinish {
-        id: PopupId,
+        id: ItemId,
         fade_id: u64,
     },
 }
 
-/// Identifies a popup (window) from the Lua API's perspective. Assigned by the main thread the
-/// moment it acks a spawn request, which may happen before the underlying winit window (and its
-/// own, unrelated `WindowId`) actually exists — see `spawn_image`/`spawn_video` in `app.rs`.
+/// Identifies a Lua-created window or audio handle. Allocated by the Lua request layer before the
+/// main thread receives the spawn request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PopupId(pub u64);
+pub struct ItemId(pub u64);
 
-impl From<PopupId> for u64 {
-    fn from(value: PopupId) -> Self {
+impl From<ItemId> for u64 {
+    fn from(value: ItemId) -> Self {
         value.0
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct WindowProps {
-    pub window_id: PopupId,
+    pub window_id: ItemId,
     pub width: u32,
     pub height: u32,
     pub outer_width: u32,
@@ -108,8 +107,8 @@ pub struct WindowProps {
     pub monitor: Monitor,
 }
 
-pub type Windows<T> = Rc<RefCell<HashMap<PopupId, Window<T>>>>;
-pub type AudioHandles<T> = Rc<RefCell<HashMap<u64, Rc<AudioHandle<T>>>>>;
+pub type Windows<T> = Rc<RefCell<HashMap<ItemId, Window<T>>>>;
+pub type AudioHandles<T> = Rc<RefCell<HashMap<ItemId, Rc<AudioHandle<T>>>>>;
 
 pub struct LuaThreadHandle {
     shutdown_tx: Option<oneshot::Sender<()>>,
@@ -902,9 +901,9 @@ mod tests {
         SpawnAudio { media_id: u64, volume: f32 },
         SpawnDialog,
         SpawnText,
-        CloseWindow { id: PopupId },
+        CloseWindow { id: ItemId },
         OpenLink { url: String },
-        SetTitle { id: PopupId, title: Option<String> },
+        SetTitle { id: ItemId, title: Option<String> },
         Exit,
     }
 
@@ -918,7 +917,7 @@ mod tests {
         }
     }
 
-    fn fake_window_props(id: PopupId) -> WindowProps {
+    fn fake_window_props(id: ItemId) -> WindowProps {
         WindowProps {
             window_id: id,
             width: 100,
@@ -946,17 +945,16 @@ mod tests {
         capabilities: Capabilities,
         master_volume: Volume,
     ) {
-        let mut next_id = 0u64;
         let mut closed_windows = HashSet::new();
         // Stands in for the real `DialogWindow`'s input-element state (see `window_type.rs`),
         // just enough for `values`/`value`/`update` to round-trip in tests.
-        let mut dialog_values: HashMap<PopupId, HashMap<String, String>> = HashMap::new();
+        let mut dialog_values: HashMap<ItemId, HashMap<String, String>> = HashMap::new();
 
         while let Ok(request) = request_rx.recv() {
             match request {
-                LuaRequest::SpawnImage { media_id, tx, .. } => {
-                    let id = PopupId(next_id);
-                    next_id += 1;
+                LuaRequest::SpawnImage {
+                    id, media_id, tx, ..
+                } => {
                     recorded
                         .lock()
                         .unwrap()
@@ -964,13 +962,12 @@ mod tests {
                     let _ = tx.send(Ok(fake_window_props(id)));
                 }
                 LuaRequest::SpawnVideo {
+                    id,
                     media_id,
                     volume,
                     tx,
                     ..
                 } => {
-                    let id = PopupId(next_id);
-                    next_id += 1;
                     // Mirrors `LewdwareApp::spawn_video`: master volume is applied where the raw
                     // value first arrives, so what's recorded is the effective volume.
                     let volume = volume * master_volume.video;
@@ -980,9 +977,9 @@ mod tests {
                         .push(Recorded::SpawnVideo { media_id, volume });
                     let _ = tx.send(Ok(fake_window_props(id)));
                 }
-                LuaRequest::SpawnDialog { elements, tx, .. } => {
-                    let id = PopupId(next_id);
-                    next_id += 1;
+                LuaRequest::SpawnDialog {
+                    id, elements, tx, ..
+                } => {
                     recorded.lock().unwrap().push(Recorded::SpawnDialog);
                     let values = elements
                         .into_iter()
@@ -998,13 +995,12 @@ mod tests {
                     dialog_values.insert(id, values);
                     let _ = tx.send(Ok(fake_window_props(id)));
                 }
-                LuaRequest::SpawnText { tx, .. } => {
-                    let id = PopupId(next_id);
-                    next_id += 1;
+                LuaRequest::SpawnText { id, tx, .. } => {
                     recorded.lock().unwrap().push(Recorded::SpawnText);
                     let _ = tx.send(Ok(fake_window_props(id)));
                 }
                 LuaRequest::SpawnAudio {
+                    id,
                     media_id,
                     volume,
                     tx,
@@ -1017,7 +1013,7 @@ mod tests {
                         .lock()
                         .unwrap()
                         .push(Recorded::SpawnAudio { media_id, volume });
-                    let _ = tx.send(0);
+                    let _ = tx.send(Ok(id));
                 }
                 LuaRequest::SetWallpaper { tx, .. } => {
                     let _ = tx.send(Ok(capabilities.wallpaper));
@@ -1049,7 +1045,10 @@ mod tests {
                     let _ = tx.send(());
                     break;
                 }
-                LuaRequest::WindowAction { id, action } => {
+                LuaRequest::ItemAction {
+                    id,
+                    action: ItemAction::Window(action),
+                } => {
                     if closed_windows.contains(&id) {
                         // Mirrors `LewdwareApp::process_lua_request`'s `else { true }` branch for
                         // a non-occupied entry: drop the whole action (and its `tx`) without
@@ -1124,7 +1123,10 @@ mod tests {
                         }
                     }
                 }
-                LuaRequest::AudioAction { action, .. } => match action {
+                LuaRequest::ItemAction {
+                    action: ItemAction::Audio(action),
+                    ..
+                } => match action {
                     AudioAction::Pause { tx } => {
                         let _ = tx.send(());
                     }
@@ -1370,9 +1372,40 @@ mod tests {
                     harness.recorded(),
                     vec![
                         Recorded::SpawnImage { media_id: 1 },
-                        Recorded::CloseWindow { id: PopupId(0) },
+                        Recorded::CloseWindow { id: ItemId(0) },
                     ]
                 );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn window_and_audio_handles_share_one_id_sequence() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local image = lewdware.media.get_image("pic.avif")
+                            local first = lewdware.popup.image(image)
+                            local audio = lewdware.play_audio({
+                                id = 0,
+                                name = "test",
+                                type = "audio",
+                                duration = 1.0,
+                            })
+                            local second = lewdware.popup.image(image)
+
+                            assert(first.id == 0)
+                            assert(audio.id == 1)
+                            assert(second.id == 2)
+                        "#,
+                    )],
+                    true,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
             })
             .await;
     }
@@ -1582,7 +1615,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let pack_file = pack_fixture(false);
-                let event_poster = Arc::new(|_event: UserEvent| true);
+                let event_poster = EmptyPoster();
 
                 let (media_manager, _metadata, pack_id, _handle) =
                     MediaManager::open(pack_file.path(), event_poster.clone(), None).unwrap();
@@ -1661,7 +1694,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let pack_file = pack_fixture(false);
-                let event_poster = Arc::new(|_event: UserEvent| true);
+                let event_poster = EmptyPoster();
 
                 let (media_manager, _metadata, _pack_id, _handle) =
                     MediaManager::open(pack_file.path(), event_poster.clone(), None).unwrap();
@@ -1821,7 +1854,7 @@ mod tests {
 
                 // Simulates a natural finish (or, equally, a decode failure -- both go through
                 // this same event) -- see `AudioHandle::on_finish`'s doc comment.
-                harness.send_event(Event::AudioFinish { id: 0 });
+                harness.send_event(Event::AudioFinish { id: ItemId(0) });
                 harness.pump_events();
 
                 harness.run_entrypoint("after_finish.lua").unwrap();
@@ -2064,8 +2097,8 @@ mod tests {
 
                 harness.run_entrypoint("main.lua").unwrap();
 
-                harness.send_event(Event::WindowClicked { id: PopupId(0) });
-                harness.send_event(Event::WindowClicked { id: PopupId(0) });
+                harness.send_event(Event::WindowClicked { id: ItemId(0) });
+                harness.send_event(Event::WindowClicked { id: ItemId(0) });
                 harness.pump_events();
 
                 harness.run_entrypoint("after_clicks.lua").unwrap();
@@ -2124,7 +2157,7 @@ mod tests {
 
                 harness.run_entrypoint("main.lua").unwrap();
 
-                harness.send_event(Event::WindowSpawned { id: PopupId(0) });
+                harness.send_event(Event::WindowSpawned { id: ItemId(0) });
                 harness.pump_events();
 
                 harness.run_entrypoint("after_spawn.lua").unwrap();
@@ -2207,12 +2240,12 @@ mod tests {
                 harness.run_entrypoint("check_values.lua").unwrap();
 
                 harness.send_event(Event::DialogSelect {
-                    id: PopupId(0),
+                    id: ItemId(0),
                     button_id: "yes".to_string(),
                     values: HashMap::from([("name".to_string(), "Alice".to_string())]),
                 });
                 harness.send_event(Event::DialogSubmit {
-                    id: PopupId(0),
+                    id: ItemId(0),
                     element_id: "name".to_string(),
                     values: HashMap::from([("name".to_string(), "Alice".to_string())]),
                 });
@@ -2298,7 +2331,7 @@ mod tests {
     #[test]
     fn media_manager_get_pack_data_round_trips_a_named_blob() {
         let pack_file = pack_fixture_with_data(&[], Some(b"hello behaviour"));
-        let event_poster = Arc::new(|_event: UserEvent| true);
+        let event_poster = EmptyPoster();
         let (media_manager, _metadata, _pack_id, _handle) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
@@ -2353,7 +2386,7 @@ mod tests {
         let behaviour_bytes = behaviour.to_json_bytes().unwrap();
         let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
 
-        let event_poster = Arc::new(|_event: UserEvent| true);
+        let event_poster = EmptyPoster();
         let (media_manager, _metadata, pack_id, _handle) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
@@ -2402,7 +2435,7 @@ mod tests {
         let behaviour_bytes = behaviour.to_json_bytes().unwrap();
         let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
 
-        let event_poster = Arc::new(|_event: UserEvent| true);
+        let event_poster = EmptyPoster();
         let (media_manager, _metadata, pack_id, _handle) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
@@ -2436,7 +2469,7 @@ mod tests {
     fn resolve_mode_config_sandbox_mode_with_no_behaviour_data() {
         let pack_file = pack_fixture_with_data(&[], None);
 
-        let event_poster = Arc::new(|_event: UserEvent| true);
+        let event_poster = EmptyPoster();
         let (media_manager, _metadata, pack_id, _handle) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
@@ -2976,7 +3009,6 @@ mod tests {
             .await;
     }
 
-
     #[tokio::test(start_paused = true)]
     async fn web_link_opens_with_random_arg_appended() {
         LocalSet::new()
@@ -3178,10 +3210,7 @@ mod tests {
                 harness.advance(Duration::from_millis(300)).await;
                 assert_eq!(
                     harness.recorded(),
-                    vec![
-                        Recorded::SpawnText,
-                        Recorded::CloseWindow { id: PopupId(0) },
-                    ]
+                    vec![Recorded::SpawnText, Recorded::CloseWindow { id: ItemId(0) },]
                 );
             })
             .await;
@@ -3420,7 +3449,7 @@ mod tests {
             .run_until(async {
                 let mut harness = spawn_one_prompt_dialog().await;
                 harness.send_event(Event::DialogSelect {
-                    id: PopupId(0),
+                    id: ItemId(0),
                     button_id: "submit".to_string(),
                     values: HashMap::new(),
                 });
@@ -3429,13 +3458,13 @@ mod tests {
                     harness.recorded(),
                     vec![
                         Recorded::SpawnDialog,
-                        Recorded::CloseWindow { id: PopupId(0) },
+                        Recorded::CloseWindow { id: ItemId(0) },
                     ]
                 );
 
                 let mut harness = spawn_one_prompt_dialog().await;
                 harness.send_event(Event::DialogSubmit {
-                    id: PopupId(0),
+                    id: ItemId(0),
                     element_id: "response".to_string(),
                     values: HashMap::new(),
                 });
@@ -3444,7 +3473,7 @@ mod tests {
                     harness.recorded(),
                     vec![
                         Recorded::SpawnDialog,
-                        Recorded::CloseWindow { id: PopupId(0) },
+                        Recorded::CloseWindow { id: ItemId(0) },
                     ]
                 );
             })
@@ -3732,13 +3761,13 @@ mod tests {
                 // simulate FadeFinish itself (a real animation-completion event in the real app),
                 // so the test supplies it directly, same as DialogSelect/DialogSubmit elsewhere.
                 harness.send_event(Event::FadeFinish {
-                    id: PopupId(0),
+                    id: ItemId(0),
                     fade_id: 0,
                 });
                 harness.pump_events();
                 harness.advance(Duration::from_millis(1600)).await; // SPLASH_HOLD_MS = 1500
                 harness.send_event(Event::FadeFinish {
-                    id: PopupId(0),
+                    id: ItemId(0),
                     fade_id: 1,
                 });
                 harness.pump_events();
@@ -3747,7 +3776,7 @@ mod tests {
                     harness.recorded(),
                     vec![
                         Recorded::SpawnImage { media_id: 1 },
-                        Recorded::CloseWindow { id: PopupId(0) },
+                        Recorded::CloseWindow { id: ItemId(0) },
                     ]
                 );
             })
@@ -3839,7 +3868,7 @@ mod tests {
                     vec![
                         Recorded::SpawnImage { media_id: 1 },
                         Recorded::SetTitle {
-                            id: PopupId(0),
+                            id: ItemId(0),
                             title: Some("Obey.".to_string()),
                         },
                     ]
@@ -4923,7 +4952,7 @@ mod tests {
     fn resolve_mode_config_experience_mode_reads_scoped_experience_options() {
         let pack_file = pack_fixture_with_data(&[], None);
 
-        let event_poster = Arc::new(|_event: UserEvent| true);
+        let event_poster = EmptyPoster();
         let (media_manager, _metadata, pack_id, _handle) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
@@ -4986,7 +5015,7 @@ mod tests {
         let behaviour_bytes = behaviour.to_json_bytes().unwrap();
         let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
 
-        let event_poster = Arc::new(|_event: UserEvent| true);
+        let event_poster = EmptyPoster();
         let (media_manager, _metadata, pack_id, _handle) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 

@@ -19,6 +19,7 @@ use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source, buffer::SamplesB
 
 use crate::{
     app::{EventPoster, UserEvent},
+    lua::ItemId,
     media::MediaSource,
 };
 
@@ -32,7 +33,7 @@ impl AudioPlayer {
         source: MediaSource,
         loop_audio: Arc<AtomicBool>,
         volume: f32,
-        id: Option<u64>,
+        id: Option<ItemId>,
         event_poster: Option<T>,
     ) -> Result<Self> {
         let (stream, sink) = setup_decoder(source, loop_audio)?;

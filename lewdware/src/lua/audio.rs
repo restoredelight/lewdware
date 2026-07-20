@@ -2,10 +2,13 @@ use std::cell::RefCell;
 
 use mlua::{ExternalResult, Lua, UserData, UserDataFields, UserDataMethods};
 
-use crate::{app::EventPoster, lua::{AudioHandles, Media, dev_log::log_noop, request::AudioRequestSender}};
+use crate::{
+    app::EventPoster,
+    lua::{AudioHandles, ItemId, Media, dev_log::log_noop, request::AudioRequestSender},
+};
 
 pub struct AudioHandle<T: EventPoster> {
-    id: u64,
+    id: ItemId,
     audio: Media,
     request_sender: AudioRequestSender<T>,
     audio_handles: AudioHandles<T>,
@@ -35,7 +38,7 @@ impl AudioState {
 
 impl<T: EventPoster> UserData for AudioHandle<T> {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("id", |_, this| Ok(this.id));
+        fields.add_field_method_get("id", |_, this| Ok(this.id.0));
         fields.add_field_method_get("audio", |_, this| Ok(this.audio.clone()));
         fields.add_field_method_get("finished", |_, this| {
             Ok(this.state.try_borrow().into_lua_err()?.finished)
@@ -83,7 +86,7 @@ impl<T: EventPoster> UserData for AudioHandle<T> {
 
 impl<T: EventPoster> AudioHandle<T> {
     pub fn new(
-        id: u64,
+        id: ItemId,
         audio: Media,
         request_sender: AudioRequestSender<T>,
         audio_handles: AudioHandles<T>,

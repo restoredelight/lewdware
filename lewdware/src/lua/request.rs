@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::mpsc::{self, SyncSender};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+    mpsc::{self, SyncSender},
+};
 
 use crate::{
     app::{EventPoster, UserEvent},
     error::{LewdwareError, Result},
     lua::{
-        PopupId, WindowProps,
+        ItemId, WindowProps,
         api::{
             DialogElement, DialogElementUpdate, Notification, PopupSpawnOpts, TextStyle,
             WallpaperMode,
@@ -21,6 +25,7 @@ use crate::{
 pub struct RequestSender<T: EventPoster> {
     request_tx: SyncSender<LuaRequest>,
     event_poster: T,
+    next_item_id: Arc<AtomicU64>,
 }
 
 #[derive(Debug)]
@@ -53,7 +58,12 @@ impl<T: EventPoster> RequestSender<T> {
         Self {
             request_tx,
             event_poster,
+            next_item_id: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    fn next_item_id(&self) -> ItemId {
+        ItemId(self.next_item_id.fetch_add(1, Ordering::Relaxed))
     }
 
     fn send<U>(
@@ -74,7 +84,9 @@ impl<T: EventPoster> RequestSender<T> {
     }
 
     pub fn spawn_image(&self, media_id: u64, window_opts: PopupSpawnOpts) -> Result<WindowProps> {
+        let id = self.next_item_id();
         self.send(|tx| LuaRequest::SpawnImage {
+            id,
             media_id,
             window_opts,
             tx,
@@ -89,7 +101,9 @@ impl<T: EventPoster> RequestSender<T> {
         volume: f32,
         window_opts: PopupSpawnOpts,
     ) -> Result<WindowProps> {
+        let id = self.next_item_id();
         self.send(|tx| LuaRequest::SpawnVideo {
+            id,
             media_id,
             loop_video,
             audio,
@@ -104,7 +118,9 @@ impl<T: EventPoster> RequestSender<T> {
         elements: Vec<DialogElement>,
         window_opts: PopupSpawnOpts,
     ) -> Result<WindowProps> {
+        let id = self.next_item_id();
         self.send(|tx| LuaRequest::SpawnDialog {
+            id,
             elements,
             window_opts,
             tx,
@@ -117,7 +133,9 @@ impl<T: EventPoster> RequestSender<T> {
         style: TextStyle,
         window_opts: PopupSpawnOpts,
     ) -> Result<WindowProps> {
+        let id = self.next_item_id();
         self.send(|tx| LuaRequest::SpawnText {
+            id,
             text,
             style,
             window_opts,
@@ -133,13 +151,15 @@ impl<T: EventPoster> RequestSender<T> {
         Ok(self.send(|tx| LuaRequest::ResetWallpaper { tx })?)
     }
 
-    pub fn spawn_audio(&self, media_id: u64, loop_audio: bool, volume: f32) -> Result<u64> {
-        Ok(self.send(|tx| LuaRequest::SpawnAudio {
+    pub fn spawn_audio(&self, media_id: u64, loop_audio: bool, volume: f32) -> Result<ItemId> {
+        let id = self.next_item_id();
+        self.send(|tx| LuaRequest::SpawnAudio {
+            id,
             media_id,
             loop_audio,
             volume,
             tx,
-        })?)
+        })?
     }
 
     pub fn open_link(&self, url: String) -> Result<bool> {
@@ -162,14 +182,14 @@ impl<T: EventPoster> RequestSender<T> {
         Ok(self.send(|tx| LuaRequest::Exit { tx })?)
     }
 
-    pub fn window_sender(&self, id: PopupId) -> WindowRequestSender<T> {
+    pub fn window_sender(&self, id: ItemId) -> WindowRequestSender<T> {
         WindowRequestSender {
             sender: self.clone(),
             id,
         }
     }
 
-    pub fn audio_sender(&self, id: u64) -> AudioRequestSender<T> {
+    pub fn audio_sender(&self, id: ItemId) -> AudioRequestSender<T> {
         AudioRequestSender {
             sender: self.clone(),
             id,
@@ -179,7 +199,7 @@ impl<T: EventPoster> RequestSender<T> {
 
 pub struct WindowRequestSender<T: EventPoster> {
     sender: RequestSender<T>,
-    id: PopupId,
+    id: ItemId,
 }
 
 /// Maps a closed/missing window (`WindowNotFound`) to `Ok(false)` and success to `Ok(true)` --
@@ -198,9 +218,9 @@ fn window_found(result: Result<()>) -> Result<bool> {
 
 impl<T: EventPoster> WindowRequestSender<T> {
     fn send<U>(&self, action_builder: impl FnOnce(mpsc::Sender<U>) -> WindowAction) -> Result<U> {
-        match self.sender.send(|tx| LuaRequest::WindowAction {
+        match self.sender.send(|tx| LuaRequest::ItemAction {
             id: self.id,
-            action: action_builder(tx),
+            action: ItemAction::Window(action_builder(tx)),
         }) {
             Err(SendError::SenderDropped) => Err(LewdwareError::WindowNotFound),
             x => x.map_err(|err| err.into()),
@@ -305,14 +325,14 @@ impl<T: EventPoster> WindowRequestSender<T> {
 #[derive(Clone)]
 pub struct AudioRequestSender<T: EventPoster> {
     sender: RequestSender<T>,
-    id: u64,
+    id: ItemId,
 }
 
 impl<T: EventPoster> AudioRequestSender<T> {
     fn send<U>(&self, action_builder: impl FnOnce(mpsc::Sender<U>) -> AudioAction) -> Result<U> {
-        match self.sender.send(|tx| LuaRequest::AudioAction {
+        match self.sender.send(|tx| LuaRequest::ItemAction {
             id: self.id,
-            action: action_builder(tx),
+            action: ItemAction::Audio(action_builder(tx)),
         }) {
             Err(SendError::SenderDropped) => Err(LewdwareError::AudioHandleNotFound),
             x => x.map_err(|err| err.into()),
@@ -338,11 +358,13 @@ impl<T: EventPoster> AudioRequestSender<T> {
 
 pub enum LuaRequest {
     SpawnImage {
+        id: ItemId,
         media_id: u64,
         window_opts: PopupSpawnOpts,
         tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnVideo {
+        id: ItemId,
         media_id: u64,
         loop_video: bool,
         audio: bool,
@@ -351,21 +373,24 @@ pub enum LuaRequest {
         tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnDialog {
+        id: ItemId,
         elements: Vec<DialogElement>,
         window_opts: PopupSpawnOpts,
         tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnText {
+        id: ItemId,
         text: String,
         style: TextStyle,
         window_opts: PopupSpawnOpts,
         tx: mpsc::Sender<Result<WindowProps>>,
     },
     SpawnAudio {
+        id: ItemId,
         media_id: u64,
         loop_audio: bool,
         volume: f32,
-        tx: mpsc::Sender<u64>,
+        tx: mpsc::Sender<Result<ItemId>>,
     },
     SetWallpaper {
         file: FileOrPath,
@@ -392,14 +417,16 @@ pub enum LuaRequest {
     Exit {
         tx: mpsc::Sender<()>,
     },
-    WindowAction {
-        id: PopupId,
-        action: WindowAction,
+    ItemAction {
+        id: ItemId,
+        action: ItemAction,
     },
-    AudioAction {
-        id: u64,
-        action: AudioAction,
-    },
+}
+
+#[derive(Debug)]
+pub enum ItemAction {
+    Window(WindowAction),
+    Audio(AudioAction),
 }
 
 #[derive(Debug)]

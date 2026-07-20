@@ -4,12 +4,14 @@ use mlua::{ExternalResult, FromLua, Lua, LuaSerdeExt, UserData, UserDataFields, 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    app::EventPoster, lua::{
-        DialogElementUpdate, Media, PopupId, WindowProps,
+    app::EventPoster,
+    lua::{
+        DialogElementUpdate, ItemId, Media, WindowProps,
         api::{Anchor, Coord},
         dev_log::log_noop,
         request::WindowRequestSender,
-    }, monitor::Monitor,
+    },
+    monitor::Monitor,
 };
 
 #[derive(Clone)]
@@ -330,7 +332,7 @@ impl<T: EventPoster> TextWindow<T> {
 }
 
 pub struct InnerWindow<T: EventPoster> {
-    id: PopupId,
+    id: ItemId,
     width: u32,
     height: u32,
     outer_width: u32,

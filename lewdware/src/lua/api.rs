@@ -67,13 +67,18 @@ impl<'de> Deserialize<'de> for Color {
 use rand::seq::IndexedRandom;
 
 use crate::{
-    app::EventPoster, lua::{
+    app::EventPoster,
+    lua::{
         AudioHandles, Media, MediaData, MediaType, Window, Windows,
         audio::AudioHandle,
         interval::{Interval, Timer},
         request::RequestSender,
         window::{DialogWindow, ImageWindow, TextWindow, VideoWindow},
-    }, media::{MediaManager, MediaTypes, TagFilter}, monitor::Monitor, utils::{calculate_media_popup_size, calculate_text_popup_size, random_position}, window::HEADER_HEIGHT,
+    },
+    media::{MediaManager, MediaTypes, TagFilter},
+    monitor::Monitor,
+    utils::{calculate_media_popup_size, calculate_text_popup_size, random_position},
+    window::HEADER_HEIGHT,
 };
 
 /// Data available once, at mode startup, as opposed to `create_api`'s other parameters, which are
@@ -1411,7 +1416,7 @@ impl FromLua for DialogButton {
 /// `InputElement`/`ButtonsElement` in the v1 draft — a deliberately closed vocabulary.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
-pub enum DialogElement {
+pub enum DialogElement<I = Media> {
     #[serde(rename = "text")]
     Text {
         id: Option<String>,
@@ -1420,7 +1425,7 @@ pub enum DialogElement {
         style: TextStyle,
     },
     #[serde(rename = "image")]
-    Image { id: Option<String>, image: Media },
+    Image { id: Option<String>, image: I },
     #[serde(rename = "input")]
     Input {
         id: String,
@@ -1435,7 +1440,29 @@ pub enum DialogElement {
     },
 }
 
-impl FromLua for DialogElement {
+impl<I> DialogElement<I> {
+    pub fn map_image<O>(self, map: impl FnOnce(I) -> O) -> DialogElement<O> {
+        match self {
+            Self::Text { id, text, style } => DialogElement::Text { id, text, style },
+            Self::Image { id, image } => DialogElement::Image {
+                id,
+                image: map(image),
+            },
+            Self::Input {
+                id,
+                placeholder,
+                initial_value,
+            } => DialogElement::Input {
+                id,
+                placeholder,
+                initial_value,
+            },
+            Self::Buttons { id, options } => DialogElement::Buttons { id, options },
+        }
+    }
+}
+
+impl FromLua for DialogElement<Media> {
     fn from_lua(value: mlua::Value, lua: &Lua) -> mlua::Result<Self> {
         lua.from_value(value)
     }
@@ -1598,7 +1625,11 @@ fn set_wallpaper<T: EventPoster>(
     request_sender.set_wallpaper(file, opts.mode).into_lua_err()
 }
 
-fn reset_wallpaper<T: EventPoster>(_: &Lua, _: (), request_sender: RequestSender<T>) -> mlua::Result<()> {
+fn reset_wallpaper<T: EventPoster>(
+    _: &Lua,
+    _: (),
+    request_sender: RequestSender<T>,
+) -> mlua::Result<()> {
     request_sender.reset_wallpaper().into_lua_err()
 }
 
@@ -1658,7 +1689,11 @@ fn play_audio<T: EventPoster>(
     Ok(audio_handle)
 }
 
-fn open_link<T: EventPoster>(_: &Lua, url: String, request_sender: RequestSender<T>) -> mlua::Result<bool> {
+fn open_link<T: EventPoster>(
+    _: &Lua,
+    url: String,
+    request_sender: RequestSender<T>,
+) -> mlua::Result<bool> {
     request_sender.open_link(url).into_lua_err()
 }
 
@@ -1684,11 +1719,19 @@ fn show_notification<T: EventPoster>(
         .into_lua_err()
 }
 
-fn list_monitors<T: EventPoster>(_: &Lua, _: (), request_sender: RequestSender<T>) -> mlua::Result<Vec<Monitor>> {
+fn list_monitors<T: EventPoster>(
+    _: &Lua,
+    _: (),
+    request_sender: RequestSender<T>,
+) -> mlua::Result<Vec<Monitor>> {
     request_sender.list_monitors().into_lua_err()
 }
 
-fn primary_monitor<T: EventPoster>(_: &Lua, _: (), request_sender: RequestSender<T>) -> mlua::Result<Monitor> {
+fn primary_monitor<T: EventPoster>(
+    _: &Lua,
+    _: (),
+    request_sender: RequestSender<T>,
+) -> mlua::Result<Monitor> {
     request_sender.primary_monitor().into_lua_err()
 }
 

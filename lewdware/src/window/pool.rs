@@ -61,7 +61,9 @@ impl WindowPool {
 
         // Dropping the window texture before moving the window can
         // cause the window to flash black before dissappearing
-        inner_window.window().set_outer_position(LogicalPosition::new(-32000i32, -32000i32));
+        inner_window
+            .window()
+            .set_outer_position(LogicalPosition::new(-32000i32, -32000i32));
 
         let window = inner_window.into_window();
 

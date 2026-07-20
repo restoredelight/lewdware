@@ -11,24 +11,54 @@ use std::{
 };
 use uuid::Uuid;
 
-use tokio::{sync::mpsc::channel, task::LocalSet};
+use tokio::{sync::mpsc::unbounded_channel, task::LocalSet};
 
 use crate::{
     audio::AudioPlayer,
     error::LewdwareError,
-    lua::{Media, MediaType, PopupId},
-    media::{FileOrPath, pack::MediaPack},
+    lua::{ItemId, Media, MediaType},
+    media::{FileOrPath, ImageData, pack::MediaPack},
     video::VideoDecoder,
 };
 
 /// Manages all the media (images, audio, videos). Trivially clonable.
 #[derive(Clone)]
 pub struct MediaManager {
-    tx: std_mpsc::SyncSender<MediaRequest>,
+    tx: std_mpsc::Sender<MediaRequest>,
     wgpu_device: Option<Arc<wgpu::Device>>,
 }
 
 pub type Result<T, E = MediaError> = std::result::Result<T, E>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RequirementId(pub u64);
+
+#[derive(Clone)]
+pub enum MediaRequirement {
+    Image {
+        media_id: u64,
+        width: u32,
+        height: u32,
+    },
+    Video {
+        media_id: u64,
+        loop_video: Arc<AtomicBool>,
+        play_audio: bool,
+        volume: f32,
+    },
+    Audio {
+        item_id: ItemId,
+        media_id: u64,
+        loop_audio: bool,
+        volume: f32,
+    },
+}
+
+pub enum ResolvedMedia {
+    Image(ImageData),
+    Video(VideoDecoder),
+    Audio(AudioPlayer),
+}
 
 impl MediaManager {
     /// Start up the media manager thread, opening the specified pack file. Returns the pack
@@ -69,14 +99,12 @@ impl MediaManager {
             .map_err(|_| MediaError::Internal("The response sender was dropped"))
     }
 
-    /// Enqueue a request that doesn't wait for a response — the manager thread delivers the
-    /// result later by sending a `UserEvent` directly (see `get_image_data`/`get_video_data`/
-    /// `get_audio_data` and `handle_request`). Non-blocking, so it's safe to call from the main
-    /// (winit) thread.
-    fn try_send(&self, request: MediaRequest) -> Result<()> {
+    /// Enqueue a request without waiting for a response. The unbounded ingress keeps this
+    /// non-blocking even when one item has many concurrent requirements.
+    fn enqueue(&self, request: MediaRequest) -> Result<()> {
         self.tx
-            .try_send(request)
-            .map_err(|_| MediaError::Internal("The media manager receiver was dropped or full"))
+            .send(request)
+            .map_err(|_| MediaError::Internal("The media manager receiver was dropped"))
     }
 
     pub fn get_media(&self, name: String, types: MediaTypes) -> Result<Option<Media>> {
@@ -114,20 +142,15 @@ impl MediaManager {
         self.send(|tx| MediaRequest::ListTags { response_tx: tx })?
     }
 
-    /// Request an image be decoded/resized to `(width, height)`. Returns as soon as the request
-    /// is enqueued — the result arrives later as a `UserEvent::ImageResolved { id, .. }`.
-    pub fn get_image_data(
+    pub fn resolve(
         &self,
-        id: PopupId,
-        media_id: u64,
-        width: u32,
-        height: u32,
+        requirement_id: RequirementId,
+        requirement: MediaRequirement,
     ) -> Result<()> {
-        self.try_send(MediaRequest::GetImageData {
-            id,
-            media_id,
-            width,
-            height,
+        self.enqueue(MediaRequest::Resolve {
+            requirement_id,
+            requirement,
+            wgpu_device: self.wgpu_device.clone(),
         })
     }
 
@@ -136,44 +159,6 @@ impl MediaManager {
             id,
             response_tx: tx,
         })?
-    }
-
-    /// Request a video decoder be set up. Returns as soon as the request is enqueued — the
-    /// result arrives later as a `UserEvent::VideoResolved { id, .. }`.
-    pub fn get_video_data(
-        &self,
-        id: PopupId,
-        media_id: u64,
-        loop_video: Arc<AtomicBool>,
-        play_audio: bool,
-        volume: f32,
-    ) -> Result<()> {
-        let wgpu_device = self.wgpu_device.clone();
-        self.try_send(MediaRequest::GetVideoData {
-            id,
-            media_id,
-            loop_video,
-            play_audio,
-            volume,
-            wgpu_device,
-        })
-    }
-
-    /// Request an audio decoder be set up. Returns as soon as the request is enqueued — the
-    /// result arrives later as a `UserEvent::AudioResolved { id, .. }`.
-    pub fn get_audio_data(
-        &self,
-        id: u64,
-        media_id: u64,
-        loop_audio: bool,
-        volume: f32,
-    ) -> Result<()> {
-        self.try_send(MediaRequest::GetAudioData {
-            id,
-            media_id,
-            loop_audio,
-            volume,
-        })
     }
 
     pub fn get_mode(&self, id: u64) -> anyhow::Result<Vec<u8>> {
@@ -197,12 +182,12 @@ fn spawn_media_manager_thread<T: EventPoster>(
     pack_path: &Path,
     event_poster: T,
 ) -> anyhow::Result<(
-    std_mpsc::SyncSender<MediaRequest>,
+    std_mpsc::Sender<MediaRequest>,
     Metadata,
     Uuid,
     thread::JoinHandle<()>,
 )> {
-    let (req_tx, req_rx) = std_mpsc::sync_channel(20);
+    let (req_tx, req_rx) = std_mpsc::channel();
 
     let file = MediaPack::open(pack_path)?;
     let metadata = file.metadata().clone();
@@ -214,16 +199,16 @@ fn spawn_media_manager_thread<T: EventPoster>(
             .build()
             .expect("Failed to build tokio runtime");
 
-        // `send`/`try_send` above use `std::sync::mpsc` so they can block the Lua thread (which
+        // The synchronous query path uses `std::sync::mpsc`, so it can block the Lua thread (which
         // is busy driving its own Tokio runtime) without risking the "blocking call from within a
         // runtime" panic that `Sender::blocking_send` guards against. That means `req_rx` can't be
         // awaited directly by the async loop below, so this thread bridges it into a Tokio channel
         // first. This bridge thread has no Tokio runtime of its own entered, so `blocking_send` is
         // safe here.
-        let (async_tx, mut async_rx) = channel(20);
+        let (async_tx, mut async_rx) = unbounded_channel();
         thread::spawn(move || {
             while let Ok(request) = req_rx.recv() {
-                if async_tx.blocking_send(request).is_err() {
+                if async_tx.send(request).is_err() {
                     break;
                 }
             }
@@ -254,7 +239,11 @@ fn spawn_media_manager_thread<T: EventPoster>(
     Ok((req_tx, metadata, pack_id, handle))
 }
 
-async fn handle_request<T: EventPoster>(pack: Rc<MediaPack>, request: MediaRequest, event_poster: T) {
+async fn handle_request<T: EventPoster>(
+    pack: Rc<MediaPack>,
+    request: MediaRequest,
+    event_poster: T,
+) {
     if !match request {
         MediaRequest::GetMedia {
             types,
@@ -272,56 +261,65 @@ async fn handle_request<T: EventPoster>(pack: Rc<MediaPack>, request: MediaReque
             response_tx,
         } => response_tx.send(pack.list_media(types, tags)).is_ok(),
         MediaRequest::ListTags { response_tx } => response_tx.send(pack.list_tags()).is_ok(),
-        MediaRequest::GetImageData {
-            id,
-            media_id,
-            width,
-            height,
+        MediaRequest::Resolve {
+            requirement_id,
+            requirement,
+            wgpu_device,
         } => {
-            let result = pack.get_image_data(media_id, width, height).await;
-            event_poster.post_event(UserEvent::ImageResolved { id, result })
+            let result = match requirement {
+                MediaRequirement::Image {
+                    media_id,
+                    width,
+                    height,
+                } => pack
+                    .get_image_data(media_id, width, height)
+                    .await
+                    .map(ResolvedMedia::Image),
+                MediaRequirement::Video {
+                    media_id,
+                    loop_video,
+                    play_audio,
+                    volume,
+                } => pack
+                    .get_video_data(media_id)
+                    .and_then(|data| {
+                        VideoDecoder::new(
+                            data.source,
+                            play_audio,
+                            loop_video,
+                            volume,
+                            data.transparent,
+                            wgpu_device,
+                        )
+                        .map_err(MediaError::VideoError)
+                    })
+                    .map(ResolvedMedia::Video),
+                MediaRequirement::Audio {
+                    item_id,
+                    media_id,
+                    loop_audio,
+                    volume,
+                } => pack
+                    .get_audio_data(media_id)
+                    .and_then(|source| {
+                        AudioPlayer::new(
+                            source,
+                            Arc::new(AtomicBool::new(loop_audio)),
+                            volume,
+                            Some(item_id),
+                            Some(event_poster.clone()),
+                        )
+                        .map_err(MediaError::AudioError)
+                    })
+                    .map(ResolvedMedia::Audio),
+            };
+            event_poster.post_event(UserEvent::MediaResolved {
+                requirement_id,
+                result,
+            })
         }
         MediaRequest::GetImageFile { id, response_tx } => {
             response_tx.send(pack.get_image_file(id).await).is_ok()
-        }
-        MediaRequest::GetVideoData {
-            id,
-            media_id,
-            play_audio,
-            loop_video,
-            volume,
-            wgpu_device,
-        } => {
-            let result = pack.get_video_data(media_id).and_then(|data| {
-                VideoDecoder::new(
-                    data.source,
-                    play_audio,
-                    loop_video,
-                    volume,
-                    data.transparent,
-                    wgpu_device,
-                )
-                .map_err(MediaError::VideoError)
-            });
-            event_poster.post_event(UserEvent::VideoResolved { id, result })
-        }
-        MediaRequest::GetAudioData {
-            id,
-            media_id,
-            loop_audio,
-            volume,
-        } => {
-            let result = pack.get_audio_data(media_id).and_then(|source| {
-                AudioPlayer::new(
-                    source,
-                    Arc::new(AtomicBool::new(loop_audio)),
-                    volume,
-                    Some(id),
-                    Some(event_poster.clone()),
-                )
-                .map_err(MediaError::AudioError)
-            });
-            event_poster.post_event(UserEvent::AudioResolved { id, result })
         }
         MediaRequest::GetModeData { id, response_tx } => {
             response_tx.send(pack.get_mode(id)).is_ok()
@@ -437,29 +435,14 @@ enum MediaRequest {
     ListTags {
         response_tx: std_mpsc::Sender<Result<Vec<String>>>,
     },
-    GetImageData {
-        id: PopupId,
-        media_id: u64,
-        width: u32,
-        height: u32,
+    Resolve {
+        requirement_id: RequirementId,
+        requirement: MediaRequirement,
+        wgpu_device: Option<Arc<wgpu::Device>>,
     },
     GetImageFile {
         id: u64,
         response_tx: std_mpsc::Sender<Result<FileOrPath>>,
-    },
-    GetVideoData {
-        id: PopupId,
-        media_id: u64,
-        play_audio: bool,
-        loop_video: Arc<AtomicBool>,
-        volume: f32,
-        wgpu_device: Option<Arc<wgpu::Device>>,
-    },
-    GetAudioData {
-        id: u64,
-        media_id: u64,
-        loop_audio: bool,
-        volume: f32,
     },
     GetModeData {
         id: u64,

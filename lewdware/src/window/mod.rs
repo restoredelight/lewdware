@@ -11,6 +11,4 @@ pub use inner_window::InnerWindow;
 pub(crate) use inner_window::RedrawRequester;
 pub use opts::WindowOpts;
 pub use pool::WindowPool;
-pub use window_type::{
-    DialogElementSpec, DialogWindow, ImageWindow, TextWindow, VideoWindow, WindowType,
-};
+pub use window_type::{DialogWindow, ImageWindow, TextWindow, VideoWindow, WindowType};

@@ -12,7 +12,7 @@ use winit::window::Window;
 
 use crate::app::UserEvent;
 use crate::error::LewdwareError;
-use crate::lua::{self, Coord, Easing, FadeOpts, MoveOpts, PopupId};
+use crate::lua::{self, Coord, Easing, FadeOpts, ItemId, MoveOpts};
 use crate::wgpu::WgpuState;
 use crate::window::header::HEADER_HEIGHT;
 use crate::window::opts::WindowOpts;
@@ -25,7 +25,7 @@ pub struct InnerWindow {
     /// The Lua-facing identifier for this popup — distinct from `window.id()` since it was
     /// allocated (and already handed to Lua) before this `InnerWindow` necessarily existed. Used
     /// for every event sent to the Lua thread instead of the winit `WindowId`.
-    popup_id: PopupId,
+    popup_id: ItemId,
     surface: Surface,
     decorations: bool,
     border_rendered: bool,
@@ -140,7 +140,7 @@ impl InnerWindow {
         opts: &WindowOpts,
         wgpu_state: Option<Arc<WgpuState>>,
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
-        popup_id: PopupId,
+        popup_id: ItemId,
         event_loop_proxy: EventLoopProxy<UserEvent>,
         redraw_wakeup_pending: Arc<AtomicBool>,
     ) -> Result<Self> {
@@ -835,7 +835,7 @@ impl InnerWindow {
         &self.window
     }
 
-    pub fn popup_id(&self) -> PopupId {
+    pub fn popup_id(&self) -> ItemId {
         self.popup_id
     }
 
