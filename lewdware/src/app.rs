@@ -77,8 +77,7 @@ enum ItemSlot {
 pub enum UserEvent {
     Exit,
     LuaRequest,
-    #[cfg(target_os = "windows")]
-    RedrawRequested,
+    #[allow(unused)] RedrawRequested,
     AudioFinish {
         id: ItemId,
     },
@@ -1372,7 +1371,6 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
             UserEvent::LuaRequest => {
                 self.process_lua_requests(event_loop);
             }
-            #[cfg(target_os = "windows")]
             UserEvent::RedrawRequested => {
                 // Allow requests made while the ensuing batch is being rendered to queue the
                 // next wake-up. The per-window flags themselves are drained in `about_to_wait`.

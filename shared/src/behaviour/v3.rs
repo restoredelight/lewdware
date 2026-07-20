@@ -149,14 +149,13 @@ impl Timeline {
                     "Every non-final stage needs an ending condition",
                 ));
             }
-            if let Some(end) = &stage.end {
-                if end.duration_seconds.is_none() && end.event_count.is_none() {
+            if let Some(end) = &stage.end
+                && end.duration_seconds.is_none() && end.event_count.is_none() {
                     issues.push(ValidationIssue::error(
                         format!("experience.timeline.stages[{index}].end"),
                         "An ending condition needs a duration or event count",
                     ));
                 }
-            }
         }
         for (index, pair) in self.stages.windows(2).enumerate() {
             let matches = self

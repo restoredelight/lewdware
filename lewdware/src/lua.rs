@@ -257,13 +257,13 @@ pub fn start_lua_thread<T: EventPoster>(
         let mut file: Box<dyn ReadSeek> = match config.mode.clone() {
             shared::user_config::Mode::Sandbox => {
                 let mode_data =
-                    include_bytes!("../../../default-modes/sandbox/build/Sandbox.lwmode");
+                    include_bytes!("../../default-modes/sandbox/build/Sandbox.lwmode");
 
                 Box::new(Cursor::new(mode_data))
             }
             shared::user_config::Mode::Experience => {
                 let mode_data =
-                    include_bytes!("../../../default-modes/experience/build/Experience.lwmode");
+                    include_bytes!("../../default-modes/experience/build/Experience.lwmode");
 
                 Box::new(Cursor::new(mode_data))
             }
