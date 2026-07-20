@@ -863,23 +863,8 @@ impl InnerWindow {
     }
 
     /// Consume this `InnerWindow` and return the underlying `Arc<Window>` for pool reuse.
-    /// `Drop` fires normally, sending `WindowClosed` to Lua and releasing GPU/CPU surfaces.
     pub fn into_window(self) -> Arc<Window> {
         self.window.clone()
-    }
-}
-
-impl Drop for InnerWindow {
-    fn drop(&mut self) {
-        if self
-            .lua_event_tx
-            .send(lua::Event::WindowClosed { id: self.popup_id })
-            .is_err()
-        {
-            // The Lua thread has already shut down (e.g. we're in the middle of quitting the
-            // app), so there's nothing listening for this event. Not an error.
-            tracing::debug!("Couldn't send WindowClosed event: Lua thread has shut down");
-        }
     }
 }
 

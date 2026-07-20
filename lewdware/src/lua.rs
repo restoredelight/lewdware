@@ -1144,6 +1144,7 @@ mod tests {
                     }
                     AudioAction::Stop { tx } => {
                         let _ = tx.send(());
+                        let _ = event_tx.send(Event::AudioFinish { id });
                     }
                 },
             }
@@ -1869,13 +1870,14 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn audio_handle_stop_is_immediate_and_suppresses_on_finish() {
+    async fn audio_handle_stop_is_immediate_and_calls_on_finish() {
         LocalSet::new()
             .run_until(async {
                 let mut harness = Harness::new(
-                    &[(
-                        "main.lua",
-                        r#"
+                    &[
+                        (
+                            "main.lua",
+                            r#"
                             local audio = lewdware.play_audio(
                                 { id = 0, name = "test", type = "audio", duration = 1.0 }
                             )
@@ -1886,16 +1888,25 @@ mod tests {
                             assert(audio.finished == false)
                             assert(audio:stop() == true, "stop should run while not finished")
                             assert(audio.finished == true, "finished immediately after stop()")
-                            assert(FINISH_COUNT == 0, "on_finish must not fire for an explicit stop")
+                            assert(FINISH_COUNT == 0, "completion event is asynchronous")
 
                             assert(audio:stop() == false, "a second stop is a no-op")
                             assert(audio:pause() == false, "no-op after stop")
-                        "#,
-                    )],
+                            "#,
+                        ),
+                        (
+                            "after_stop.lua",
+                            r#"
+                                assert(FINISH_COUNT == 1, "on_finish should fire after stop")
+                            "#,
+                        ),
+                    ],
                     false,
                 );
 
                 harness.run_entrypoint("main.lua").unwrap();
+                harness.pump_events();
+                harness.run_entrypoint("after_stop.lua").unwrap();
             })
             .await;
     }

@@ -121,9 +121,8 @@ impl<T: EventPoster> AudioHandle<T> {
         Ok(true)
     }
 
-    /// Called for a natural finish (including a non-looping track ending, or decoding turning out
-    /// to be impossible in the first place -- see the doc comment on `AudioState::finished`), but
-    /// never for an explicit `stop()`, which sets `finished` itself without going through here.
+    /// Called when playback terminates, including a non-looping track ending, decoding turning
+    /// out to be impossible, or an explicit `stop()`.
     pub fn on_finish(&self) -> anyhow::Result<()> {
         let callbacks = {
             let mut state = self.state.try_borrow_mut()?;

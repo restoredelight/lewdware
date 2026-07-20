@@ -66,8 +66,8 @@ impl AudioPlayer {
         self.sink.set_volume(volume);
     }
 
-    /// Permanently ends playback. Unlike `pause()`, there's no way back from this -- and unlike a
-    /// natural finish, this never posts `AudioFinish` (see the `stopped` field doc).
+    /// Permanently ends playback. Unlike `pause()`, there's no way back from this. The app owns
+    /// completion notification and emits it when the corresponding item is removed.
     pub fn stop(&self) {
         self.sink.stop();
     }

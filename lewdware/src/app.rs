@@ -64,7 +64,6 @@ pub struct LewdwareApp {
     redraw_wakeup_pending: Arc<AtomicBool>,
 }
 
-/// One lifecycle slot shared by popups and audio handles.
 #[allow(clippy::large_enum_variant)]
 enum ItemSlot {
     Pending(PendingItem),
@@ -167,10 +166,6 @@ impl LewdwareApp {
         }
     }
 
-    fn media_manager(&self) -> MediaManager {
-        self.media_manager.clone()
-    }
-
     fn insert_pending_item(
         &mut self,
         id: ItemId,
@@ -186,7 +181,6 @@ impl LewdwareApp {
                 }
             })
             .collect::<Vec<_>>();
-        let media_manager = (!requests.is_empty()).then(|| self.media_manager());
 
         match self.items.entry(id) {
             Entry::Vacant(entry) => {
@@ -197,15 +191,14 @@ impl LewdwareApp {
 
         for (requirement_id, media) in requests {
             self.requirement_owners.insert(requirement_id, id);
-            if let Err(err) = media_manager
-                .as_ref()
-                .expect("media manager exists when requirements are present")
+            if let Err(err) = self.media_manager
                 .resolve(requirement_id, media)
             {
                 self.remove_pending_item(id);
                 return Err(err.into());
             }
         }
+
         Ok(())
     }
 
@@ -216,6 +209,30 @@ impl LewdwareApp {
         for requirement in &item.requirements {
             self.requirement_owners.remove(&requirement.id);
         }
+        Some(item)
+    }
+
+    fn remove_item(&mut self, id: ItemId) -> Option<ItemSlot> {
+        let item = self.items.remove(&id)?;
+
+        if let ItemSlot::Pending(pending) = &item {
+            for requirement in &pending.requirements {
+                self.requirement_owners.remove(&requirement.id);
+            }
+        }
+
+        let event = match &item {
+            ItemSlot::Pending(pending) if pending.opts.is_window() => {
+                lua::Event::WindowClosed { id }
+            }
+            ItemSlot::Window(_) => lua::Event::WindowClosed { id },
+            ItemSlot::Pending(_) | ItemSlot::Audio(_) => lua::Event::AudioFinish { id },
+        };
+
+        if self.lua_event_tx.send(event).is_err() {
+            tracing::debug!("Couldn't send item completion event: Lua thread has shut down");
+        }
+
         Some(item)
     }
 
@@ -319,6 +336,7 @@ impl LewdwareApp {
             width: physical_size.width,
             height: physical_size.height,
         });
+
         self.insert_pending_item(
             id,
             PendingItemOpts::Image {
@@ -474,7 +492,6 @@ impl LewdwareApp {
             PendingItemOpts::Audio {
                 paused: false,
                 volume,
-                stopped: false,
                 audio: requirement.id,
             },
             vec![requirement],
@@ -651,23 +668,15 @@ impl LewdwareApp {
                 if let Entry::Occupied(mut entry) = self.items.entry(id) {
                     match action {
                         WindowAction::CloseWindow { tx } => {
-                            match entry.remove() {
+                            let _ = entry;
+                            match self
+                                .remove_item(id)
+                                .expect("occupied item still exists when closing")
+                            {
                                 ItemSlot::Window(window_type) => self.close_window(window_type),
-                                // No real window was ever created; synthesize the close event
-                                // `InnerWindow::Drop` would otherwise have sent.
                                 ItemSlot::Pending(item) => {
                                     for requirement in &item.requirements {
                                         self.requirement_owners.remove(&requirement.id);
-                                    }
-                                    if self
-                                        .lua_event_tx
-                                        .send(lua::Event::WindowClosed { id })
-                                        .is_err()
-                                    {
-                                        tracing::debug!(
-                                            "Couldn't send WindowClosed event: Lua thread has \
-                                             shut down"
-                                        );
                                     }
                                 }
                                 ItemSlot::Audio(_) => unreachable!("window action for audio item"),
@@ -936,12 +945,11 @@ impl LewdwareApp {
                         AudioAction::Stop { tx } => {
                             match entry.get_mut() {
                                 ItemSlot::Audio(player) => player.stop(),
-                                ItemSlot::Pending(PendingItem {
-                                    opts: PendingItemOpts::Audio { stopped, .. },
-                                    ..
-                                }) => *stopped = true,
+                                ItemSlot::Pending(_) => {}
                                 _ => {}
                             }
+                            let _ = entry;
+                            self.remove_item(id);
                             tx.send(()).is_ok()
                         }
                     }
@@ -969,17 +977,7 @@ impl LewdwareApp {
     /// `on_close` callback Lua would otherwise get from a real close.
     fn pending_item_failed(&mut self, id: ItemId, context: &str, err: impl std::fmt::Display) {
         tracing::error!("{context}: {err}");
-        let Some(item) = self.remove_pending_item(id) else {
-            return;
-        };
-        let event = if item.opts.is_window() {
-            lua::Event::WindowClosed { id }
-        } else {
-            lua::Event::AudioFinish { id }
-        };
-        if self.lua_event_tx.send(event).is_err() {
-            tracing::debug!("Couldn't send pending-item failure event: Lua thread has shut down");
-        }
+        self.remove_item(id);
     }
 
     /// Apply mutations made while a window item's media requirements were pending.
@@ -1053,14 +1051,11 @@ impl LewdwareApp {
             PendingItemOpts::Audio {
                 paused,
                 volume,
-                stopped,
                 audio,
             } => {
                 let player = requirements.take_audio(audio)?;
                 player.set_volume(volume);
-                if stopped {
-                    player.stop();
-                } else if !paused {
+                if !paused {
                     player.play();
                 }
                 self.items.insert(id, ItemSlot::Audio(player));
@@ -1266,7 +1261,11 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
             }
 
             if video_finished {
-                let ItemSlot::Window(window_type) = entry.remove() else {
+                let _ = entry;
+                let ItemSlot::Window(window_type) = self
+                    .remove_item(popup_id)
+                    .expect("ready video still exists when finishing")
+                else {
                     unreachable!("only ready video windows can finish")
                 };
                 self.close_window(window_type);
@@ -1276,7 +1275,8 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
             // Global event handling
             match event {
                 WindowEvent::CloseRequested => {
-                    if let ItemSlot::Window(window_type) = entry.remove() {
+                    let _ = entry;
+                    if let Some(ItemSlot::Window(window_type)) = self.remove_item(popup_id) {
                         self.close_window(window_type);
                     }
                 }
@@ -1342,10 +1342,13 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                             }
                         }
 
-                        if click_result.should_close
-                            && let ItemSlot::Window(window_type) = entry.remove()
-                        {
-                            self.close_window(window_type);
+                        if click_result.should_close {
+                            let _ = entry;
+                            if let Some(ItemSlot::Window(window_type)) =
+                                self.remove_item(popup_id)
+                            {
+                                self.close_window(window_type);
+                            }
                         }
                     }
                 }
@@ -1370,15 +1373,7 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                 self.redraw_wakeup_pending.store(false, Ordering::Release);
             }
             UserEvent::AudioFinish { id } => {
-                let removed = if matches!(self.items.get(&id), Some(ItemSlot::Pending(_))) {
-                    self.remove_pending_item(id).is_some()
-                } else {
-                    self.items.remove(&id).is_some()
-                };
-                if removed && let Err(err) = self.lua_event_tx.send(lua::Event::AudioFinish { id })
-                {
-                    tracing::error!("{err}");
-                }
+                self.remove_item(id);
             }
             UserEvent::MediaResolved {
                 requirement_id,
@@ -1393,8 +1388,8 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
         let mut poll = false;
         let mut finished_videos = Vec::new();
 
-        for (id, slot) in self.items.iter_mut() {
-            let ItemSlot::Window(window) = slot else {
+        for (id, item) in self.items.iter_mut() {
+            let ItemSlot::Window(window) = item else {
                 continue;
             };
 
@@ -1444,7 +1439,7 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
         }
 
         for id in finished_videos {
-            if let Some(ItemSlot::Window(window_type)) = self.items.remove(&id) {
+            if let Some(ItemSlot::Window(window_type)) = self.remove_item(id) {
                 self.close_window(window_type);
             }
         }

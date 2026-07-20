@@ -102,7 +102,6 @@ pub(super) enum PendingItemOpts {
         audio: RequirementId,
         paused: bool,
         volume: f32,
-        stopped: bool,
     },
 }
 
@@ -191,7 +190,6 @@ mod tests {
             opts: PendingItemOpts::Audio {
                 paused: false,
                 volume: 1.0,
-                stopped: false,
                 audio: RequirementId(99),
             },
             requirements,
