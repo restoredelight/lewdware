@@ -142,6 +142,12 @@ impl LuaThreadHandle {
     }
 }
 
+impl Drop for LuaThreadHandle {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 /// The currently loaded pack's identity and metadata, exposed to standalone modes as
 /// `lewdware.pack` (see `start_lua_thread` for why pack-embedded modes don't get one).
 pub struct PackInfo {
@@ -1174,7 +1180,7 @@ mod tests {
         ) -> Self {
             let event_poster = EmptyPoster();
 
-            let (media_manager, _metadata, _pack_id, _media_manager_handle) =
+            let (media_manager, _metadata, _pack_id) =
                 MediaManager::open(pack_file.path(), event_poster.clone(), None).unwrap();
 
             let (request_tx, request_rx) = std::sync::mpsc::sync_channel(20);
@@ -1617,7 +1623,7 @@ mod tests {
                 let pack_file = pack_fixture(false);
                 let event_poster = EmptyPoster();
 
-                let (media_manager, _metadata, pack_id, _handle) =
+                let (media_manager, _metadata, pack_id) =
                     MediaManager::open(pack_file.path(), event_poster.clone(), None).unwrap();
 
                 let (request_tx, _request_rx) = std::sync::mpsc::sync_channel(20);
@@ -1696,7 +1702,7 @@ mod tests {
                 let pack_file = pack_fixture(false);
                 let event_poster = EmptyPoster();
 
-                let (media_manager, _metadata, _pack_id, _handle) =
+                let (media_manager, _metadata, _pack_id) =
                     MediaManager::open(pack_file.path(), event_poster.clone(), None).unwrap();
 
                 // Timer:stop() never touches the request sender, so this can go nowhere -- no
@@ -2332,7 +2338,7 @@ mod tests {
     fn media_manager_get_pack_data_round_trips_a_named_blob() {
         let pack_file = pack_fixture_with_data(&[], Some(b"hello behaviour"));
         let event_poster = EmptyPoster();
-        let (media_manager, _metadata, _pack_id, _handle) =
+        let (media_manager, _metadata, _pack_id) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
         assert_eq!(
@@ -2387,7 +2393,7 @@ mod tests {
         let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
 
         let event_poster = EmptyPoster();
-        let (media_manager, _metadata, pack_id, _handle) =
+        let (media_manager, _metadata, pack_id) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
         let metadata = empty_default_mode_metadata();
@@ -2436,7 +2442,7 @@ mod tests {
         let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
 
         let event_poster = EmptyPoster();
-        let (media_manager, _metadata, pack_id, _handle) =
+        let (media_manager, _metadata, pack_id) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
         let metadata = empty_default_mode_metadata();
@@ -2470,7 +2476,7 @@ mod tests {
         let pack_file = pack_fixture_with_data(&[], None);
 
         let event_poster = EmptyPoster();
-        let (media_manager, _metadata, pack_id, _handle) =
+        let (media_manager, _metadata, pack_id) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
         let metadata = empty_default_mode_metadata();
@@ -4953,7 +4959,7 @@ mod tests {
         let pack_file = pack_fixture_with_data(&[], None);
 
         let event_poster = EmptyPoster();
-        let (media_manager, _metadata, pack_id, _handle) =
+        let (media_manager, _metadata, pack_id) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
         let mut entries = indexmap::IndexMap::new();
@@ -5016,7 +5022,7 @@ mod tests {
         let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
 
         let event_poster = EmptyPoster();
-        let (media_manager, _metadata, pack_id, _handle) =
+        let (media_manager, _metadata, pack_id) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
         let metadata = empty_default_mode_metadata();

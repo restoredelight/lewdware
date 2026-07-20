@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
 
 use anyhow::{Context, anyhow};
 use shared::user_config::AppConfig;
@@ -55,11 +54,10 @@ pub struct LewdwareApp {
     default_wallpaper: Option<String>,
     lua_request_rx: std::sync::mpsc::Receiver<lua::LuaRequest>,
     lua_event_tx: tokio::sync::mpsc::UnboundedSender<lua::Event>,
-    lua_thread_handle: LuaThreadHandle,
+    _lua_thread_handle: LuaThreadHandle,
     monitors: Monitors,
     window_pool: WindowPool,
-    media_manager: Option<MediaManager>,
-    media_manager_handle: Option<thread::JoinHandle<()>>,
+    media_manager: MediaManager,
     event_loop_proxy: EventLoopProxy<UserEvent>,
     /// Coalesces Windows redraw wake-ups: while this is true, one `RedrawRequested` user event is
     /// already queued and any further per-window redraw requests can ride on the same event.
@@ -123,7 +121,7 @@ impl LewdwareApp {
 
         let wgpu_device = wgpu_state.as_ref().map(|s| s.device.clone());
 
-        let (media_manager, pack_metadata, pack_id, media_manager_handle) =
+        let (media_manager, pack_metadata, pack_id) =
             MediaManager::open(pack_path, event_loop_proxy.clone(), wgpu_device)?;
 
         let (lua_event_tx, lua_request_rx, lua_thread_handle) = start_lua_thread(
@@ -151,11 +149,10 @@ impl LewdwareApp {
             default_wallpaper: wallpaper,
             lua_request_rx,
             lua_event_tx,
-            lua_thread_handle,
+            _lua_thread_handle: lua_thread_handle,
             monitors,
             window_pool: WindowPool::new(),
-            media_manager: Some(media_manager),
-            media_manager_handle: Some(media_manager_handle),
+            media_manager,
             event_loop_proxy,
             redraw_wakeup_pending: Arc::new(AtomicBool::new(false)),
         })
@@ -170,10 +167,8 @@ impl LewdwareApp {
         }
     }
 
-    fn media_manager(&self) -> Result<MediaManager> {
-        self.media_manager
-            .clone()
-            .ok_or(LewdwareError::Internal("Media manager not available"))
+    fn media_manager(&self) -> MediaManager {
+        self.media_manager.clone()
     }
 
     fn insert_pending_item(
@@ -191,9 +186,7 @@ impl LewdwareApp {
                 }
             })
             .collect::<Vec<_>>();
-        let media_manager = (!requests.is_empty())
-            .then(|| self.media_manager())
-            .transpose()?;
+        let media_manager = (!requests.is_empty()).then(|| self.media_manager());
 
         match self.items.entry(id) {
             Entry::Vacant(entry) => {
@@ -1460,20 +1453,6 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
-        }
-    }
-}
-
-impl Drop for LewdwareApp {
-    fn drop(&mut self) {
-        self.media_manager = None;
-
-        self.lua_thread_handle.shutdown();
-
-        if let Some(handle) = self.media_manager_handle.take()
-            && handle.join().is_err()
-        {
-            tracing::error!("Media manager thread panicked");
         }
     }
 }

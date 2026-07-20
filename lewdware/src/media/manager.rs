@@ -24,8 +24,27 @@ use crate::{
 /// Manages all the media (images, audio, videos). Trivially clonable.
 #[derive(Clone)]
 pub struct MediaManager {
-    tx: std_mpsc::Sender<MediaRequest>,
+    inner: Arc<MediaManagerInner>,
     wgpu_device: Option<Arc<wgpu::Device>>,
+}
+
+struct MediaManagerInner {
+    tx: Option<std_mpsc::Sender<MediaRequest>>,
+    join_handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for MediaManagerInner {
+    fn drop(&mut self) {
+        // Close the request channel before joining. This runs only after the last
+        // `MediaManager` clone has gone away.
+        self.tx.take();
+
+        if let Some(handle) = self.join_handle.take()
+            && handle.join().is_err()
+        {
+            tracing::error!("Media manager thread panicked");
+        }
+    }
 }
 
 pub type Result<T, E = MediaError> = std::result::Result<T, E>;
@@ -62,21 +81,26 @@ pub enum ResolvedMedia {
 
 impl MediaManager {
     /// Start up the media manager thread, opening the specified pack file. Returns the pack
-    /// metadata, the pack's stable UUID (from its header -- see `lewdware.pack`), and a handle
-    /// for the spawned thread.
-    ///
-    /// The returned `JoinHandle` should be joined once every clone of this `MediaManager` has
-    /// been dropped, so the thread's request channel closes and it can shut down, running the
-    /// `Drop` impl of its `MediaPack` (which owns a `NamedTempFile` for the pack's extracted
-    /// index). Otherwise that temp file is never cleaned up.
+    /// metadata and the pack's stable UUID (from its header -- see `lewdware.pack`). The worker
+    /// thread is shut down and joined when the last clone of the returned manager is dropped.
     pub fn open<T: EventPoster>(
         pack_path: &Path,
         event_poster: T,
         wgpu_device: Option<Arc<wgpu::Device>>,
-    ) -> anyhow::Result<(Self, Metadata, Uuid, thread::JoinHandle<()>)> {
+    ) -> anyhow::Result<(Self, Metadata, Uuid)> {
         let (tx, metadata, pack_id, handle) = spawn_media_manager_thread(pack_path, event_poster)?;
 
-        Ok((Self { tx, wgpu_device }, metadata, pack_id, handle))
+        Ok((
+            Self {
+                inner: Arc::new(MediaManagerInner {
+                    tx: Some(tx),
+                    join_handle: Some(handle),
+                }),
+                wgpu_device,
+            },
+            metadata,
+            pack_id,
+        ))
     }
 
     /// Enqueue a request and block the calling thread until a response arrives. Safe to call from
@@ -89,7 +113,14 @@ impl MediaManager {
     ) -> Result<T> {
         let (tx, rx) = std_mpsc::channel();
 
-        if self.tx.send(request_builder(tx)).is_err() {
+        if self
+            .inner
+            .tx
+            .as_ref()
+            .expect("media manager sender exists while the manager is alive")
+            .send(request_builder(tx))
+            .is_err()
+        {
             return Err(MediaError::Internal(
                 "The media manager receiver was dropped",
             ));
@@ -102,7 +133,10 @@ impl MediaManager {
     /// Enqueue a request without waiting for a response. The unbounded ingress keeps this
     /// non-blocking even when one item has many concurrent requirements.
     fn enqueue(&self, request: MediaRequest) -> Result<()> {
-        self.tx
+        self.inner
+            .tx
+            .as_ref()
+            .expect("media manager sender exists while the manager is alive")
             .send(request)
             .map_err(|_| MediaError::Internal("The media manager receiver was dropped"))
     }
