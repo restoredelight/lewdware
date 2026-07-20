@@ -8,6 +8,7 @@ use winit::{dpi::PhysicalSize, event::WindowEvent, window::Window};
 
 use crate::lua::Color;
 use crate::wgpu::WgpuState;
+use crate::window::RedrawRequester;
 
 /// GPU-accelerated egui renderer that does NOT own a wgpu surface. It renders into the caller's
 /// existing `wgpu::RenderPass<'static>` (obtained via [`InnerWindow::draw_wgpu`]).
@@ -24,6 +25,7 @@ pub struct EguiGpuRenderer {
     pub opacity_buffer: wgpu::Buffer,
     pub window_bind_group: wgpu::BindGroup,
     texture_size: PhysicalSize<u32>,
+    redraw: RedrawRequester,
 }
 
 impl EguiGpuRenderer {
@@ -37,6 +39,7 @@ impl EguiGpuRenderer {
         force_opaque: bool,
         background_color: Option<Color>,
         font_definitions: Option<egui::FontDefinitions>,
+        redraw: RedrawRequester,
     ) -> Result<Self> {
         let context = egui::Context::default();
         let viewport_id = egui::ViewportId::from_hash_of(window.id());
@@ -63,9 +66,9 @@ impl EguiGpuRenderer {
 
         context.request_repaint();
 
-        let window_clone = window.clone();
+        let repaint_redraw = redraw.clone();
         context.set_request_repaint_callback(move |_| {
-            window_clone.request_redraw();
+            repaint_redraw.request_redraw();
         });
 
         let mut visuals = egui::Visuals::light();
@@ -128,6 +131,7 @@ impl EguiGpuRenderer {
             opacity_buffer,
             window_bind_group,
             texture_size: inner_size,
+            redraw,
         })
     }
 
@@ -147,7 +151,7 @@ impl EguiGpuRenderer {
     pub fn handle_event(&mut self, window: &Arc<Window>, event: &WindowEvent) {
         let response = self.state.on_window_event(window, event);
         if response.repaint {
-            window.request_redraw();
+            self.redraw.request_redraw();
         }
     }
 
@@ -318,6 +322,7 @@ pub struct EguiCPUWindow {
     window: Arc<Window>,
     state: egui_winit::State,
     renderer: EguiSoftwareRender,
+    redraw: RedrawRequester,
 }
 
 impl EguiCPUWindow {
@@ -325,6 +330,7 @@ impl EguiCPUWindow {
         window: Arc<Window>,
         background_color: Option<Color>,
         font_definitions: Option<egui::FontDefinitions>,
+        redraw: RedrawRequester,
     ) -> Result<Self> {
         let context = egui::Context::default();
         let viewport_id = egui::ViewportId::from_hash_of(window.id());
@@ -345,9 +351,9 @@ impl EguiCPUWindow {
 
         context.request_repaint();
 
-        let window_clone = window.clone();
+        let repaint_redraw = redraw.clone();
         context.set_request_repaint_callback(move |_| {
-            window_clone.request_redraw();
+            repaint_redraw.request_redraw();
         });
 
         let mut visuals = egui::Visuals::light();
@@ -368,6 +374,7 @@ impl EguiCPUWindow {
             window,
             state,
             renderer,
+            redraw,
         })
     }
 
@@ -382,7 +389,7 @@ impl EguiCPUWindow {
     pub fn handle_event(&mut self, event: &WindowEvent) {
         let response = self.state.on_window_event(&self.window, event);
         if response.repaint {
-            self.window.request_redraw();
+            self.redraw.request_redraw();
         }
     }
 

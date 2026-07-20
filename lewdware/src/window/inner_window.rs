@@ -1,14 +1,16 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use shared::once;
 use tokio::sync::mpsc;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, PhysicalUnit};
+use winit::event_loop::EventLoopProxy;
 use winit::window::Window;
 
+use crate::app::UserEvent;
 use crate::error::LewdwareError;
 use crate::lua::{self, Coord, Easing, FadeOpts, MoveOpts, PopupId};
 use crate::wgpu::WgpuState;
@@ -19,6 +21,7 @@ use crate::window::{header::Header, surface::Surface};
 
 pub struct InnerWindow {
     window: Arc<winit::window::Window>,
+    redraw: RedrawRequester,
     /// The Lua-facing identifier for this popup — distinct from `window.id()` since it was
     /// allocated (and already handed to Lua) before this `InnerWindow` necessarily existed. Used
     /// for every event sent to the Lua thread instead of the winit `WindowId`.
@@ -49,6 +52,61 @@ pub struct InnerWindow {
     // a "click" requires both to land there, not just the release (see `handle_mouse_up`).
     content_hover: bool,
     content_clicked: bool,
+}
+
+/// A cloneable per-window dirty flag. On Windows, the first redraw request across the whole app
+/// also posts a user event to wake winit; the rest are batched until `about_to_wait` drains them.
+/// Other platforms retain winit's normal `request_redraw` path.
+#[derive(Clone)]
+pub(crate) struct RedrawRequester {
+    #[cfg(not(target_os = "windows"))]
+    window: Arc<Window>,
+    redraw: Arc<AtomicBool>,
+    #[cfg(target_os = "windows")]
+    event_loop_proxy: EventLoopProxy<UserEvent>,
+    #[cfg(target_os = "windows")]
+    wakeup_pending: Arc<AtomicBool>,
+}
+
+impl RedrawRequester {
+    fn new(
+        _window: Arc<Window>,
+        _event_loop_proxy: EventLoopProxy<UserEvent>,
+        _wakeup_pending: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            #[cfg(not(target_os = "windows"))]
+            window: _window,
+            redraw: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "windows")]
+            event_loop_proxy: _event_loop_proxy,
+            #[cfg(target_os = "windows")]
+            wakeup_pending: _wakeup_pending,
+        }
+    }
+
+    pub(crate) fn request_redraw(&self) {
+        self.redraw.store(true, Ordering::Release);
+
+        #[cfg(target_os = "windows")]
+        if !self.wakeup_pending.swap(true, Ordering::AcqRel)
+            && self
+                .event_loop_proxy
+                .send_event(UserEvent::RedrawRequested)
+                .is_err()
+        {
+            // Permit a retry if the event loop is temporarily unavailable. Once it has closed,
+            // this value no longer matters.
+            self.wakeup_pending.store(false, Ordering::Release);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        self.window.request_redraw();
+    }
+
+    fn take_requested(&self) -> bool {
+        self.redraw.swap(false, Ordering::AcqRel)
+    }
 }
 
 /// Returned by `InnerWindow::handle_mouse_up`, since a release can mean two independent things:
@@ -83,6 +141,8 @@ impl InnerWindow {
         wgpu_state: Option<Arc<WgpuState>>,
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
         popup_id: PopupId,
+        event_loop_proxy: EventLoopProxy<UserEvent>,
+        redraw_wakeup_pending: Arc<AtomicBool>,
     ) -> Result<Self> {
         let decorations = opts.popup_opts.decorations;
         let gpu = opts.popup_opts.gpu;
@@ -95,7 +155,8 @@ impl InnerWindow {
             LogicalSize::new(opts.popup_opts.outer_width, opts.popup_opts.outer_height)
                 .to_physical(scale_factor);
         let inner_size: PhysicalSize<u32> =
-            LogicalSize::new(opts.popup_opts.width, opts.popup_opts.height).to_physical(scale_factor);
+            LogicalSize::new(opts.popup_opts.width, opts.popup_opts.height)
+                .to_physical(scale_factor);
 
         let mut premultiplied_alpha = false;
 
@@ -163,15 +224,21 @@ impl InnerWindow {
             }
         };
 
+        let redraw = RedrawRequester::new(window.clone(), event_loop_proxy, redraw_wakeup_pending);
+
         let header = decorations.then(|| {
             Header::new(
-                window.clone(),
+                redraw.clone(),
                 inner_size,
                 scale_factor,
                 opts.popup_opts.title.clone(),
                 opts.popup_opts.closeable,
             )
         });
+
+        // Every newly-created surface needs one real content frame. This also covers egui's
+        // initial repaint request, which occurs before its repaint callback is installed.
+        redraw.request_redraw();
 
         let monitor_position = LogicalPosition::new(
             opts.position.x - opts.popup_opts.x,
@@ -181,6 +248,7 @@ impl InnerWindow {
 
         Ok(Self {
             window,
+            redraw,
             popup_id,
             surface,
             decorations,
@@ -326,13 +394,13 @@ impl InnerWindow {
                     wgpu::CurrentSurfaceTexture::Timeout => return Ok(None),
                     wgpu::CurrentSurfaceTexture::Outdated => {
                         surface.configure(&wgpu.device, surface_config);
-                        self.window.request_redraw();
+                        self.request_redraw();
                         return Ok(None);
                     }
                     wgpu::CurrentSurfaceTexture::Lost => {
                         *surface = wgpu.instance.create_surface(self.window.clone())?;
                         surface.configure(&wgpu.device, surface_config);
-                        self.window.request_redraw();
+                        self.request_redraw();
                         return Ok(None);
                     }
                     wgpu::CurrentSurfaceTexture::Occluded => return Ok(None),
@@ -486,7 +554,16 @@ impl InnerWindow {
     }
 
     pub fn request_redraw(&self) {
-        self.window.request_redraw();
+        self.redraw.request_redraw();
+    }
+
+    /// Clears and returns this window's dirty flag. Used by the Windows `about_to_wait` path.
+    pub fn take_redraw_requested(&self) -> bool {
+        self.redraw.take_requested()
+    }
+
+    pub fn redraw_requester(&self) -> RedrawRequester {
+        self.redraw.clone()
     }
 
     pub fn start_move(&mut self, id: u64, opts: MoveOpts) -> Result<(), LewdwareError> {
@@ -654,7 +731,7 @@ impl InnerWindow {
             && (is_finished || self.last_fade_update.elapsed() >= Duration::from_millis(33))
         {
             self.set_opacity(new_opacity);
-            self.window.request_redraw();
+            self.request_redraw();
             self.last_fade_update = Instant::now();
         }
 

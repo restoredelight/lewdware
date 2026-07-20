@@ -1,14 +1,13 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
-use winit::{
-    dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize},
-    window::Window,
-};
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
+
+use super::inner_window::RedrawRequester;
 
 pub struct Header {
-    window: Arc<Window>,
+    redraw: RedrawRequester,
     hover: bool,
     clicked: bool,
     needs_redraw: bool,
@@ -37,7 +36,7 @@ static FONT: LazyLock<Option<FontArc>> = LazyLock::new(|| {
 
 impl Header {
     pub fn new(
-        window: Arc<Window>,
+        redraw: RedrawRequester,
         window_size: PhysicalSize<u32>,
         scale_factor: f64,
         title: Option<String>,
@@ -51,7 +50,7 @@ impl Header {
         let pixmap = Pixmap::new(physical_size.width, physical_size.height).unwrap();
 
         Self {
-            window,
+            redraw,
             hover: false,
             clicked: false,
             needs_redraw: true,
@@ -261,7 +260,7 @@ impl Header {
 
     fn request_redraw(&mut self) {
         self.needs_redraw = true;
-        self.window.request_redraw();
+        self.redraw.request_redraw();
     }
 
     pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {

@@ -202,7 +202,7 @@ impl VideoWindow {
         let cpu_frame_buffer = vec![0u32; (inner_size.width * inner_size.height) as usize];
 
         video_player.play();
-        inner_window.window().request_redraw();
+        inner_window.request_redraw();
 
         Ok(Self {
             inner_window,
@@ -674,6 +674,7 @@ impl DialogWindow {
                 inner_window.force_opaque(),
                 inner_window.background_color(),
                 None,
+                inner_window.redraw_requester(),
             )?;
             let decoration_overlay = if inner_window.decorations() {
                 let outer_size = inner_window.outer_size();
@@ -694,6 +695,7 @@ impl DialogWindow {
                 inner_window.window().clone(),
                 inner_window.background_color(),
                 None,
+                inner_window.redraw_requester(),
             )?;
             (Some(egui_cpu), None, None)
         };
@@ -726,7 +728,7 @@ impl DialogWindow {
     /// comment on `pending_content_click`.
     pub fn mark_pending_content_click(&mut self) {
         self.pending_content_click = true;
-        self.inner_window.window().request_redraw();
+        self.inner_window.request_redraw();
     }
 
     /// Turn a resolved element spec into render-ready state, uploading an `image` element's
@@ -942,7 +944,7 @@ impl DialogWindow {
         }
 
         self.default_button_id = find_default_button_id(&self.elements);
-        self.inner_window.window().request_redraw();
+        self.inner_window.request_redraw();
 
         true
     }
@@ -1004,6 +1006,7 @@ impl TextWindow {
                 inner_window.force_opaque(),
                 background_color,
                 font_definitions,
+                inner_window.redraw_requester(),
             )?;
             let decoration_overlay = if inner_window.decorations() {
                 let outer_size = inner_window.outer_size();
@@ -1024,6 +1027,7 @@ impl TextWindow {
                 inner_window.window().clone(),
                 background_color,
                 font_definitions,
+                inner_window.redraw_requester(),
             )?;
             (Some(egui_cpu), None, None)
         };
@@ -1132,7 +1136,7 @@ impl TextWindow {
 
     pub fn set_text(&mut self, text: String) {
         self.text = text;
-        self.inner_window.window().request_redraw();
+        self.inner_window.request_redraw();
     }
 }
 

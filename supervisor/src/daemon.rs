@@ -43,11 +43,6 @@ fn run_linux(config: AppConfig) -> Result<()> {
     })
 }
 
-/// Tray-icon needs a real platform event loop pumped (macOS requires this on the main thread);
-/// `tao` is the lightweight, GPU-free event-loop crate tray-icon is designed to pair with -- not
-/// `winit`, which the "tiny by charter" supervisor doesn't need. So on these platforms the main
-/// thread is dedicated to pumping it, and everything else (IPC servers, session supervision, the
-/// panic-key thread) runs on a tokio runtime hosted on a background thread.
 #[cfg(not(target_os = "linux"))]
 fn run_non_linux(config: AppConfig) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;

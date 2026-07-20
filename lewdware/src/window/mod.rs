@@ -8,6 +8,7 @@ mod window_type;
 
 pub use header::HEADER_HEIGHT;
 pub use inner_window::InnerWindow;
+pub(crate) use inner_window::RedrawRequester;
 pub use opts::WindowOpts;
 pub use pool::WindowPool;
 pub use window_type::{

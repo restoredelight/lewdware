@@ -60,15 +60,12 @@ pub struct LewdwareApp {
     lua_thread_handle: LuaThreadHandle,
     monitors: Monitors,
     window_pool: WindowPool,
-    /// The main thread's own clone of the `MediaManager`, opened directly in [`LewdwareApp::new`]
-    /// (a clone is also handed to the Lua thread) and used to resolve popup media asynchronously
-    /// (see `spawn_image`/`spawn_video`/`spawn_audio`). Always `Some` outside of `Drop` — `new()`
-    /// bails out before constructing `Self` if the pack fails to open. Wrapped in `Option` only
-    /// so `Drop` can take it (dropping our clone so the manager thread's request channel can
-    /// close) before joining `media_manager_handle`, same idiom as `LuaThreadHandle`'s own
-    /// fields.
     media_manager: Option<MediaManager>,
     media_manager_handle: Option<thread::JoinHandle<()>>,
+    event_loop_proxy: EventLoopProxy<UserEvent>,
+    /// Coalesces Windows redraw wake-ups: while this is true, one `RedrawRequested` user event is
+    /// already queued and any further per-window redraw requests can ride on the same event.
+    redraw_wakeup_pending: Arc<AtomicBool>,
 }
 
 /// A popup that has been acked to Lua (its [`PopupId`] and [`WindowProps`] are already fixed)
@@ -98,10 +95,6 @@ struct PendingWindow {
 enum PendingKind {
     Image,
     Video {
-        // Shared with `MediaManager::get_video_data`'s in-flight request and (once resolved) the
-        // `VideoDecoder` itself -- see `spawn_video`'s doc comment. `set_loop()` while pending
-        // just stores into this directly, unlike `video_paused`/`video_volume` below, which have
-        // to be replayed onto the real decoder once it exists.
         loop_video: Arc<AtomicBool>,
         video_paused: bool,
         video_volume: f32,
@@ -211,6 +204,10 @@ enum AudioSlot {
 pub enum UserEvent {
     Exit,
     LuaRequest,
+    /// Wakes the Win32 event loop so `about_to_wait` can drain every dirty window itself. This is
+    /// deliberately app-wide rather than per-window, allowing many redraws to share one event.
+    #[cfg(target_os = "windows")]
+    RedrawRequested,
     AudioFinish {
         id: u64,
     },
@@ -268,7 +265,7 @@ impl LewdwareApp {
             MediaManager::open(pack_path, event_loop_proxy.clone(), wgpu_device)?;
 
         let (lua_event_tx, lua_request_rx, lua_thread_handle) = start_lua_thread(
-            event_loop_proxy,
+            event_loop_proxy.clone(),
             config.clone(),
             media_manager.clone(),
             PackInfo {
@@ -298,6 +295,8 @@ impl LewdwareApp {
             window_pool: WindowPool::new(),
             media_manager: Some(media_manager),
             media_manager_handle: Some(media_manager_handle),
+            event_loop_proxy,
+            redraw_wakeup_pending: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -365,6 +364,8 @@ impl LewdwareApp {
             self.wgpu_state.clone(),
             self.lua_event_tx.clone(),
             popup_id,
+            self.event_loop_proxy.clone(),
+            self.redraw_wakeup_pending.clone(),
         )
         .map_err(LewdwareError::WindowError)?;
 
@@ -388,16 +389,7 @@ impl LewdwareApp {
         self.window_ids
             .remove(&window_type.inner_window().window().id());
 
-        let transparent = window_type.inner_window().transparent();
-
-        #[cfg(target_os = "linux")]
-        window_type
-            .inner_window()
-            .window()
-            .set_outer_position(LogicalPosition::new(-32000i32, -32000i32));
-
-        let window = window_type.into_inner_window().into_window();
-        self.window_pool.release(window, transparent);
+        self.window_pool.release(window_type.into_inner_window());
     }
 
     fn spawn_image(
@@ -412,11 +404,10 @@ impl LewdwareApp {
         let media_manager = self.media_manager()?;
         let popup_id = self.next_popup_id();
 
-        let physical_size = LogicalSize::new(window_opts.popup_opts.width, window_opts.popup_opts.height)
-            .to_physical::<u32>(window_opts.monitor.scale_factor);
+        let physical_size =
+            LogicalSize::new(window_opts.popup_opts.width, window_opts.popup_opts.height)
+                .to_physical::<u32>(window_opts.monitor.scale_factor);
 
-        // Enqueues the decode and returns immediately — the media manager thread delivers the
-        // result later via `UserEvent::ImageResolved`, handled in `handle_image_resolved`.
         media_manager.get_image_data(
             popup_id,
             media_id,
@@ -1406,8 +1397,6 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        // Only `Ready` slots ever get a real winit window (and hence a `WindowId` registered
-        // here), so a hit always means an `Entry::Occupied` with a `PopupSlot::Ready` inside.
         let Some(&popup_id) = self.window_ids.get(&window_id) else {
             return;
         };
@@ -1417,6 +1406,15 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                 return;
             };
 
+            // A compositor/OS-driven redraw can still arrive independently of our requests. If
+            // it satisfies a dirty window here, don't render that window a second time when this
+            // batch reaches `about_to_wait`.
+            if event == WindowEvent::RedrawRequested {
+                window_type.inner_window().take_redraw_requested();
+            }
+
+            let mut video_finished = false;
+
             match window_type {
                 WindowType::Image(window) => {
                     if event == WindowEvent::RedrawRequested
@@ -1425,9 +1423,16 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                         tracing::error!("Error drawing image window: {}", err);
                     }
                 }
-                // Video windows are driven directly from `about_to_wait` instead of through
-                // `RedrawRequested` — see the comment there for why.
-                WindowType::Video(_) => {}
+                WindowType::Video(window) => {
+                    // Windows drains this request directly in `about_to_wait`; other platforms
+                    // retain winit's normal `RedrawRequested` delivery path.
+                    if !cfg!(target_os = "windows") && event == WindowEvent::RedrawRequested {
+                        match window.update() {
+                            Ok(finished) => video_finished = finished,
+                            Err(err) => tracing::error!("Error updating video window: {err}"),
+                        }
+                    }
+                }
                 WindowType::Text(window) => match &event {
                     WindowEvent::RedrawRequested => {
                         window.render().unwrap_or_else(|err| {
@@ -1448,6 +1453,14 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                         window.handle_event(event);
                     }
                 },
+            }
+
+            if video_finished {
+                let PopupSlot::Ready(window_type) = entry.remove() else {
+                    unreachable!("only ready video windows can finish")
+                };
+                self.close_window(window_type);
+                return;
             }
 
             // Global event handling
@@ -1539,6 +1552,12 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
             UserEvent::LuaRequest => {
                 self.process_lua_requests(event_loop);
             }
+            #[cfg(target_os = "windows")]
+            UserEvent::RedrawRequested => {
+                // Allow requests made while the ensuing batch is being rendered to queue the
+                // next wake-up. The per-window flags themselves are drained in `about_to_wait`.
+                self.redraw_wakeup_pending.store(false, Ordering::Release);
+            }
             UserEvent::AudioFinish { id } => {
                 if self.audio_players.remove(&id).is_some()
                     && let Err(err) = self.lua_event_tx.send(lua::Event::AudioFinish { id })
@@ -1559,39 +1578,56 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let mut moving_windows = false;
+        let mut poll = false;
         let mut finished_videos = Vec::new();
 
         for (id, slot) in self.windows.iter_mut() {
-            // Pending popups have no `InnerWindow` yet — nothing to animate/update until their
-            // media resolves (see the `*Resolved` `UserEvent` handlers).
             let PopupSlot::Ready(window) = slot else {
                 continue;
             };
 
-            // Video windows are driven directly here rather than via `request_redraw()` /
-            // `RedrawRequested`. On the Win32 backend, winit only reliably delivers
-            // `RedrawRequested` to the last couple of windows that requested it within the same
-            // `AboutToWait` cycle (https://github.com/rust-windowing/winit/issues/3648), so with
-            // 3+ simultaneous video windows the rest would silently stop advancing.
-            if let WindowType::Video(video_window) = window {
-                match video_window.update() {
-                    Ok(true) => finished_videos.push(*id),
-                    Ok(false) => {}
-                    Err(err) => tracing::error!("Error updating video window: {err}"),
+            if matches!(window, WindowType::Video(_)) {
+                window.inner_window().request_redraw();
+                poll = true;
+            }
+
+            let redraw_requested = window.inner_window().take_redraw_requested();
+
+            // Avoid the Win32 `WM_PAINT`/`RedrawRequested` path for every kind of popup, not just
+            // video. Each window is rendered at most once per event-loop batch, even if several
+            // callers dirtied it before this callback.
+            if cfg!(target_os = "windows") && redraw_requested {
+                match window {
+                    WindowType::Image(image_window) => {
+                        if let Err(err) = image_window.draw() {
+                            tracing::error!("Error drawing image window: {err}");
+                        }
+                    }
+                    WindowType::Text(text_window) => {
+                        if let Err(err) = text_window.render() {
+                            tracing::error!("Error rendering text window: {err}");
+                        }
+                    }
+                    WindowType::Dialog(dialog_window) => {
+                        if let Err(err) = dialog_window.render() {
+                            tracing::error!("Error rendering dialog window: {err}");
+                        }
+                    }
+                    WindowType::Video(video_window) => match video_window.update() {
+                        Ok(true) => finished_videos.push(*id),
+                        Ok(false) => {}
+                        Err(err) => tracing::error!("Error updating video window: {err}"),
+                    },
                 }
-                // Keep polling continuously while any video window exists, since we can no
-                // longer rely on `request_redraw()` to wake the loop back up for them.
-                moving_windows = true;
             }
 
             if window.inner_window().is_moving() {
                 window.inner_window_mut().update_position();
-                moving_windows = true;
+                poll = true;
             }
             if window.inner_window().is_fading() {
                 window.inner_window_mut().update_fade();
-                moving_windows = true; // reusing `moving_windows` to mean "animating windows"
+                poll = true;
             }
         }
 
@@ -1601,7 +1637,7 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
             }
         }
 
-        if moving_windows {
+        if poll {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
@@ -1611,19 +1647,10 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
 
 impl Drop for LewdwareApp {
     fn drop(&mut self) {
-        // Drop our own `MediaManager` clone *before* waiting for the Lua thread: the manager
-        // thread's request channel only closes (letting it clean up its temp files and exit)
-        // once every clone — ours and the Lua thread's — has been dropped.
         self.media_manager = None;
 
-        // Blocks until the Lua thread actually finishes, so its temp files get a chance to be
-        // cleaned up via `Drop` instead of being silently killed along with the process when
-        // `main` returns. This also drops the Lua thread's own `MediaManager` clone.
         self.lua_thread_handle.shutdown();
 
-        // Both `MediaManager` clones are gone now, so the media manager thread's request
-        // channel has closed and it's finishing up (or already has). Join it so its temp files
-        // are cleaned up before the process exits.
         if let Some(handle) = self.media_manager_handle.take()
             && handle.join().is_err()
         {
