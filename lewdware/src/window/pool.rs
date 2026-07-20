@@ -33,16 +33,19 @@ impl WindowPool {
         opts: &WindowOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<Arc<Window>> {
-        let pool = if opts.popup.transparent {
+        let pool = if opts.popup_opts.transparent {
             &mut self.transparent
         } else {
             &mut self.opaque
         };
         if let Some(window) = pool.pop() {
             let _ = window.request_inner_size(LogicalSize::new(
-                opts.popup.outer_width,
-                opts.popup.outer_height,
+                opts.popup_opts.outer_width,
+                opts.popup_opts.outer_height,
             ));
+
+            window.set_cursor_hittest(!opts.popup_opts.click_through)?;
+
             Ok(window)
         } else {
             new_window(opts, event_loop)
@@ -93,14 +96,14 @@ fn new_window(opts: &WindowOpts, event_loop: &ActiveEventLoop) -> Result<Arc<Win
     let mut attrs = WindowAttributes::default()
         .with_position(opts.position)
         .with_inner_size(LogicalSize::new(
-            opts.popup.outer_width,
-            opts.popup.outer_height,
+            opts.popup_opts.outer_width,
+            opts.popup_opts.outer_height,
         ))
         .with_decorations(false)
         .with_window_level(WindowLevel::AlwaysOnTop)
         .with_resizable(false)
         .with_visible(false)
-        .with_transparent(opts.popup.transparent);
+        .with_transparent(opts.popup_opts.transparent);
 
     #[cfg(target_os = "linux")]
     {

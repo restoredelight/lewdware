@@ -84,18 +84,18 @@ impl InnerWindow {
         lua_event_tx: mpsc::UnboundedSender<lua::Event>,
         popup_id: PopupId,
     ) -> Result<Self> {
-        let decorations = opts.popup.decorations;
-        let gpu = opts.popup.gpu;
-        let transparent = opts.popup.transparent;
-        let force_opaque = opts.popup.force_opaque;
+        let decorations = opts.popup_opts.decorations;
+        let gpu = opts.popup_opts.gpu;
+        let transparent = opts.popup_opts.transparent;
+        let force_opaque = opts.popup_opts.force_opaque;
         // Use opts directly rather than window.inner_size(): request_inner_size() is
         // async on X11, so a recycled pool window still reports its previous size here.
         let scale_factor = window.scale_factor();
         let outer_size: PhysicalSize<u32> =
-            LogicalSize::new(opts.popup.outer_width, opts.popup.outer_height)
+            LogicalSize::new(opts.popup_opts.outer_width, opts.popup_opts.outer_height)
                 .to_physical(scale_factor);
         let inner_size: PhysicalSize<u32> =
-            LogicalSize::new(opts.popup.width, opts.popup.height).to_physical(scale_factor);
+            LogicalSize::new(opts.popup_opts.width, opts.popup_opts.height).to_physical(scale_factor);
 
         let mut premultiplied_alpha = false;
 
@@ -168,14 +168,14 @@ impl InnerWindow {
                 window.clone(),
                 inner_size,
                 scale_factor,
-                opts.popup.title.clone(),
-                opts.popup.closeable,
+                opts.popup_opts.title.clone(),
+                opts.popup_opts.closeable,
             )
         });
 
         let monitor_position = LogicalPosition::new(
-            opts.position.x - opts.popup.x,
-            opts.position.y - opts.popup.y,
+            opts.position.x - opts.popup_opts.x,
+            opts.position.y - opts.popup_opts.y,
         );
         let monitor_size = LogicalSize::new(opts.monitor.width, opts.monitor.height);
 
@@ -190,7 +190,7 @@ impl InnerWindow {
             outer_size,
             monitor_position,
             monitor_size,
-            position: LogicalPosition::new(opts.popup.x, opts.popup.y),
+            position: LogicalPosition::new(opts.popup_opts.x, opts.popup_opts.y),
             lua_event_tx,
             current_move: None,
             last_move_update: Instant::now(),
@@ -200,8 +200,8 @@ impl InnerWindow {
             force_opaque,
             current_fade: None,
             last_fade_update: Instant::now(),
-            opacity: opts.popup.opacity,
-            background_color: opts.popup.background_color,
+            opacity: opts.popup_opts.opacity,
+            background_color: opts.popup_opts.background_color,
             content_hover: false,
             content_clicked: false,
         })
@@ -787,7 +787,7 @@ impl InnerWindow {
 
     /// Consume this `InnerWindow` and return the underlying `Arc<Window>` for pool reuse.
     /// `Drop` fires normally, sending `WindowClosed` to Lua and releasing GPU/CPU surfaces.
-    pub fn into_arc_window(self) -> Arc<Window> {
+    pub fn into_window(self) -> Arc<Window> {
         self.window.clone()
     }
 }

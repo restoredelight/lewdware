@@ -12,11 +12,10 @@ use std::{
 use anyhow::{Context, Result};
 use ffmpeg::codec;
 use ffmpeg_next::{self as ffmpeg, ffi, frame::Video};
+use winit::event_loop::EventLoopProxy;
 
 use crate::{
-    audio::AudioPlayer,
-    media::MediaSource,
-    zero_copy::{HardwareFrame, initialize_hardware_device, preferred_hw_type},
+    app::UserEvent, audio::AudioPlayer, media::MediaSource, zero_copy::{HardwareFrame, initialize_hardware_device, preferred_hw_type},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,7 +157,7 @@ impl VideoDecoder {
         )?;
 
         let audio_player = if play_audio {
-            match AudioPlayer::new(source, loop_video.clone(), volume, None, None) {
+            match AudioPlayer::new::<EventLoopProxy<UserEvent>>(source, loop_video.clone(), volume, None, None) {
                 Ok(audio_player) => Some(audio_player),
                 Err(err) => {
                     tracing::error!("{err}");

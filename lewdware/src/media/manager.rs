@@ -39,9 +39,9 @@ impl MediaManager {
     /// been dropped, so the thread's request channel closes and it can shut down, running the
     /// `Drop` impl of its `MediaPack` (which owns a `NamedTempFile` for the pack's extracted
     /// index). Otherwise that temp file is never cleaned up.
-    pub fn open(
+    pub fn open<T: EventPoster>(
         pack_path: &Path,
-        event_poster: EventPoster,
+        event_poster: T,
         wgpu_device: Option<Arc<wgpu::Device>>,
     ) -> anyhow::Result<(Self, Metadata, Uuid, thread::JoinHandle<()>)> {
         let (tx, metadata, pack_id, handle) = spawn_media_manager_thread(pack_path, event_poster)?;
@@ -193,9 +193,9 @@ impl MediaManager {
     }
 }
 
-fn spawn_media_manager_thread(
+fn spawn_media_manager_thread<T: EventPoster>(
     pack_path: &Path,
-    event_poster: EventPoster,
+    event_poster: T,
 ) -> anyhow::Result<(
     std_mpsc::SyncSender<MediaRequest>,
     Metadata,
@@ -254,7 +254,7 @@ fn spawn_media_manager_thread(
     Ok((req_tx, metadata, pack_id, handle))
 }
 
-async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster: EventPoster) {
+async fn handle_request<T: EventPoster>(pack: Rc<MediaPack>, request: MediaRequest, event_poster: T) {
     if !match request {
         MediaRequest::GetMedia {
             types,
@@ -279,7 +279,7 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster
             height,
         } => {
             let result = pack.get_image_data(media_id, width, height).await;
-            event_poster(UserEvent::ImageResolved { id, result })
+            event_poster.post_event(UserEvent::ImageResolved { id, result })
         }
         MediaRequest::GetImageFile { id, response_tx } => {
             response_tx.send(pack.get_image_file(id).await).is_ok()
@@ -303,7 +303,7 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster
                 )
                 .map_err(MediaError::VideoError)
             });
-            event_poster(UserEvent::VideoResolved { id, result })
+            event_poster.post_event(UserEvent::VideoResolved { id, result })
         }
         MediaRequest::GetAudioData {
             id,
@@ -321,7 +321,7 @@ async fn handle_request(pack: Rc<MediaPack>, request: MediaRequest, event_poster
                 )
                 .map_err(MediaError::AudioError)
             });
-            event_poster(UserEvent::AudioResolved { id, result })
+            event_poster.post_event(UserEvent::AudioResolved { id, result })
         }
         MediaRequest::GetModeData { id, response_tx } => {
             response_tx.send(pack.get_mode(id)).is_ok()

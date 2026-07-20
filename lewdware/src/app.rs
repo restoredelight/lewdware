@@ -228,15 +228,14 @@ pub enum UserEvent {
     },
 }
 
-/// A way to notify the main event loop that something is ready to process, decoupled from a
-/// concrete winit `EventLoopProxy` so the Lua thread and media manager thread (which only ever
-/// need to post an event, never to pump the loop themselves) can be exercised without a real
-/// windowing system — see the `lua::tests` harness.
-pub type EventPoster = Arc<dyn Fn(UserEvent) -> bool + Send + Sync>;
+pub trait EventPoster: Send + Sync + Clone + 'static {
+    fn post_event(&self, event: UserEvent) -> bool;
+}
 
-/// Wrap a real winit `EventLoopProxy` as an [`EventPoster`].
-pub fn event_loop_poster(proxy: EventLoopProxy<UserEvent>) -> EventPoster {
-    Arc::new(move |event| proxy.send_event(event).is_ok())
+impl EventPoster for EventLoopProxy<UserEvent> {
+    fn post_event(&self, event: UserEvent) -> bool {
+        self.send_event(event).is_ok()
+    }
 }
 
 impl LewdwareApp {
@@ -251,12 +250,12 @@ impl LewdwareApp {
         let wallpaper = match wallpaper::get() {
             Ok(wallpaper) => Some(wallpaper),
             Err(err) => {
-                tracing::error!("Error getting wallpaper: {}", err);
+                tracing::warn!("Error getting wallpaper: {}", err);
                 None
             }
         };
 
-        tracing::info!("{:?}", config);
+        tracing::debug!("{:?}", config);
 
         let pack_path = config
             .pack_path
@@ -265,15 +264,11 @@ impl LewdwareApp {
 
         let wgpu_device = wgpu_state.as_ref().map(|s| s.device.clone());
 
-        // Opened here rather than on the Lua thread, so the main thread has its own clone to
-        // resolve popup media asynchronously (see `spawn_image`/`spawn_video`/`spawn_audio`). A
-        // clone is also handed to the Lua thread below.
-        let event_poster = event_loop_poster(event_loop_proxy);
         let (media_manager, pack_metadata, pack_id, media_manager_handle) =
-            MediaManager::open(pack_path, event_poster.clone(), wgpu_device)?;
+            MediaManager::open(pack_path, event_loop_proxy.clone(), wgpu_device)?;
 
         let (lua_event_tx, lua_request_rx, lua_thread_handle) = start_lua_thread(
-            event_poster,
+            event_loop_proxy,
             config.clone(),
             media_manager.clone(),
             PackInfo {
@@ -306,28 +301,18 @@ impl LewdwareApp {
         })
     }
 
-    /// Allocate a new [`PopupId`]. See the doc comment on [`LewdwareApp::windows`] for why this
-    /// is a distinct identifier from winit's `WindowId`.
     fn next_popup_id(&mut self) -> PopupId {
         let id = self.next_popup_id;
         self.next_popup_id += 1;
         PopupId(id)
     }
 
-    /// Returns the main thread's `MediaManager` clone. See the doc comment on
-    /// [`LewdwareApp::media_manager`] for when this is `None`.
     fn media_manager(&self) -> Result<MediaManager> {
         self.media_manager
             .clone()
             .ok_or(LewdwareError::Internal("Media manager not available"))
     }
 
-    /// Turn a [`PopupSpawnOpts`] (already fully resolved on the Lua thread -- sizes, anchor math
-    /// and clamping are pure computation) into a [`WindowOpts`] by doing the one part that can
-    /// only happen here: looking up `monitor_id`'s *current* absolute position. This runs right
-    /// before the real window is built, which may be well after the popup was first acked to Lua
-    /// (media can still be decoding) -- so a monitor that's disconnected in the meantime is
-    /// caught here, not silently baked into a stale position.
     fn finalize_window_opts(
         &mut self,
         popup_opts: PopupSpawnOpts,
@@ -355,15 +340,12 @@ impl LewdwareApp {
         );
 
         Ok(WindowOpts {
-            popup: popup_opts,
+            popup_opts,
             monitor,
             position,
         })
     }
 
-    /// Acquire a window from the pool (or create one), configure it, and wrap it in an
-    /// [`InnerWindow`]. `popup_id` is already known (allocated when the spawn was first acked to
-    /// Lua) and is registered here in [`Self::window_ids`] for winit event routing.
     fn create_window(
         &mut self,
         popup_id: PopupId,
@@ -374,8 +356,6 @@ impl LewdwareApp {
             .window_pool
             .acquire(&opts, event_loop)
             .map_err(LewdwareError::WindowError)?;
-
-        let _ = window.set_cursor_hittest(!opts.popup.click_through);
 
         self.window_ids.insert(window.id(), popup_id);
 
@@ -391,36 +371,33 @@ impl LewdwareApp {
         Ok(inner_window)
     }
 
-    /// Build the [`WindowProps`] sent back to Lua as the spawn ack. Fully accurate even before
-    /// the real winit window exists — size/position/monitor never depended on decoded media.
     fn window_props(popup_id: PopupId, opts: &WindowOpts) -> WindowProps {
         WindowProps {
             window_id: popup_id,
-            width: opts.popup.width,
-            height: opts.popup.height,
-            outer_width: opts.popup.outer_width,
-            outer_height: opts.popup.outer_height,
-            x: opts.popup.x,
-            y: opts.popup.y,
+            width: opts.popup_opts.width,
+            height: opts.popup_opts.height,
+            outer_width: opts.popup_opts.outer_width,
+            outer_height: opts.popup_opts.outer_height,
+            x: opts.popup_opts.x,
+            y: opts.popup_opts.y,
             monitor: opts.monitor.clone(),
         }
     }
 
-    /// Release a window back to the pool. Moving offscreen rather than unmapping avoids
-    /// the KWin strut relayout freeze on Dock-type windows.
     fn close_window(&mut self, window_type: WindowType) {
         self.window_ids
             .remove(&window_type.inner_window().window().id());
+
         let transparent = window_type.inner_window().transparent();
-        // Move offscreen before dropping InnerWindow so the surface is still alive when KWin
-        // processes the XMoveWindow. Without this, transparent (wgpu) windows flash black at
-        // their visible position between surface drop and the pool's -32000 move.
+
+        #[cfg(target_os = "linux")]
         window_type
             .inner_window()
             .window()
             .set_outer_position(LogicalPosition::new(-32000i32, -32000i32));
-        let arc_window = window_type.into_inner_window().into_arc_window();
-        self.window_pool.release(arc_window, transparent);
+
+        let window = window_type.into_inner_window().into_window();
+        self.window_pool.release(window, transparent);
     }
 
     fn spawn_image(
@@ -435,7 +412,7 @@ impl LewdwareApp {
         let media_manager = self.media_manager()?;
         let popup_id = self.next_popup_id();
 
-        let physical_size = LogicalSize::new(window_opts.popup.width, window_opts.popup.height)
+        let physical_size = LogicalSize::new(window_opts.popup_opts.width, window_opts.popup_opts.height)
             .to_physical::<u32>(window_opts.monitor.scale_factor);
 
         // Enqueues the decode and returns immediately — the media manager thread delivers the
@@ -452,8 +429,8 @@ impl LewdwareApp {
             popup_id,
             PopupSlot::Pending(PendingWindow {
                 kind: PendingKind::Image,
-                opacity: window_opts.popup.opacity,
-                title: window_opts.popup.title.clone(),
+                opacity: window_opts.popup_opts.opacity,
+                title: window_opts.popup_opts.title.clone(),
                 pending_move: None,
                 pending_fade: None,
                 opts: window_opts,
@@ -472,9 +449,6 @@ impl LewdwareApp {
         opts: PopupSpawnOpts,
         event_loop: &ActiveEventLoop,
     ) -> Result<WindowProps> {
-        // Master volume is applied right here, where the raw value from Lua first enters the
-        // main thread -- everything downstream (the pending slot, the async decode, a later
-        // `set_volume()`) only ever sees this already-scaled effective volume.
         let volume = volume * self.config.volume.video;
 
         let window_opts = self.finalize_window_opts(opts, event_loop)?;
@@ -499,8 +473,8 @@ impl LewdwareApp {
                     video_paused: false,
                     video_volume: volume,
                 },
-                opacity: window_opts.popup.opacity,
-                title: window_opts.popup.title.clone(),
+                opacity: window_opts.popup_opts.opacity,
+                title: window_opts.popup_opts.title.clone(),
                 pending_move: None,
                 pending_fade: None,
                 opts: window_opts,
@@ -549,8 +523,8 @@ impl LewdwareApp {
             self.windows.insert(
                 popup_id,
                 PopupSlot::Pending(PendingWindow {
-                    opacity: resolved.popup.opacity,
-                    title: resolved.popup.title.clone(),
+                    opacity: resolved.popup_opts.opacity,
+                    title: resolved.popup_opts.title.clone(),
                     pending_move: None,
                     pending_fade: None,
                     kind: PendingKind::Dialog {
@@ -968,7 +942,7 @@ impl LewdwareApp {
                                     }
                                 }
                                 PopupSlot::Pending(pending) => {
-                                    if opacity != 1.0 && !pending.opts.popup.transparent {
+                                    if opacity != 1.0 && !pending.opts.popup_opts.transparent {
                                         Err(LewdwareError::Internal(
                                             "Cannot change opacity on a non-transparent window. \
                                              Ensure the window is created with transparency \
@@ -999,7 +973,7 @@ impl LewdwareApp {
                                     }
                                 }
                                 PopupSlot::Pending(pending) => {
-                                    if !pending.opts.popup.transparent {
+                                    if !pending.opts.popup_opts.transparent {
                                         Err(LewdwareError::Internal(
                                             "Cannot fade a non-transparent window. Ensure the \
                                              window is created with transparency enabled: use \
@@ -1397,19 +1371,13 @@ impl LewdwareApp {
 
         match result {
             Ok(audio_player) => {
-                // Applied unconditionally, same reasoning as `handle_video_resolved`'s
-                // `set_volume()` call: `volume` may have changed via `set_volume()` while this
-                // handle was still pending, after whatever volume was baked into `audio_player`
-                // at construction.
                 audio_player.set_volume(volume);
                 if stopped {
-                    // Suppresses the natural-finish `AudioFinish` post (see `AudioPlayer::stop`),
-                    // matching how a stop while `Ready` behaves -- `on_finish` never fires for an
-                    // explicit stop, whether it lands before or after decode resolves.
                     audio_player.stop();
                 } else if !paused {
                     audio_player.play();
                 }
+
                 self.audio_players
                     .insert(id, AudioSlot::Ready(audio_player));
             }

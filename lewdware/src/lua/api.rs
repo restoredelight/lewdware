@@ -67,17 +67,13 @@ impl<'de> Deserialize<'de> for Color {
 use rand::seq::IndexedRandom;
 
 use crate::{
-    lua::{
+    app::EventPoster, lua::{
         AudioHandles, Media, MediaData, MediaType, Window, Windows,
         audio::AudioHandle,
         interval::{Interval, Timer},
         request::RequestSender,
         window::{DialogWindow, ImageWindow, TextWindow, VideoWindow},
-    },
-    media::{MediaManager, MediaTypes, TagFilter},
-    monitor::Monitor,
-    utils::{calculate_media_popup_size, calculate_text_popup_size, random_position},
-    window::HEADER_HEIGHT,
+    }, media::{MediaManager, MediaTypes, TagFilter}, monitor::Monitor, utils::{calculate_media_popup_size, calculate_text_popup_size, random_position}, window::HEADER_HEIGHT,
 };
 
 /// Data available once, at mode startup, as opposed to `create_api`'s other parameters, which are
@@ -99,12 +95,12 @@ pub struct ApiOptions {
     pub dev_mode: bool,
 }
 
-pub fn create_api(
+pub fn create_api<T: EventPoster>(
     lua: &Lua,
-    request_sender: RequestSender,
+    request_sender: RequestSender<T>,
     media_manager: MediaManager,
-    windows: Windows,
-    audio_handles: AudioHandles,
+    windows: Windows<T>,
+    audio_handles: AudioHandles<T>,
     storage: crate::lua::storage::Storage,
     options: ApiOptions,
 ) -> mlua::Result<()> {
@@ -1045,9 +1041,9 @@ impl PopupSpawnOpts {
 /// earlier `lewdware.monitors.list()`/`primary()` call), or a random one from a fresh
 /// `list_monitors()` snapshot. Either way, only `.id` is trusted past this point -- see
 /// `PopupSpawnOpts`'s doc comment.
-fn resolve_monitor(
+fn resolve_monitor<T: EventPoster>(
     spawn_opts: &SpawnWindowOpts,
-    request_sender: &RequestSender,
+    request_sender: &RequestSender<T>,
 ) -> mlua::Result<Monitor> {
     match &spawn_opts.monitor {
         Some(monitor) => Ok(monitor.clone()),
@@ -1149,14 +1145,14 @@ impl FromLua for SpawnTextOpts {
     }
 }
 
-fn spawn_text_popup(
+fn spawn_text_popup<T: EventPoster>(
     _: &Lua,
     (text, opts): (String, Option<SpawnTextOpts>),
-    request_sender: RequestSender,
-    windows: Windows,
+    request_sender: RequestSender<T>,
+    windows: Windows<T>,
     gpu_available: bool,
     dev_mode: bool,
-) -> mlua::Result<Rc<TextWindow>> {
+) -> mlua::Result<Rc<TextWindow<T>>> {
     let mut opts = opts.unwrap_or_default();
 
     let monitor = resolve_monitor(&opts.window_opts, &request_sender)?;
@@ -1220,14 +1216,14 @@ impl FromLua for SpawnImageOpts {
     }
 }
 
-fn spawn_image_popup(
+fn spawn_image_popup<T: EventPoster>(
     _: &Lua,
     (image, opts): (Media, Option<SpawnImageOpts>),
-    request_sender: RequestSender,
-    windows: Windows,
+    request_sender: RequestSender<T>,
+    windows: Windows<T>,
     gpu_available: bool,
     dev_mode: bool,
-) -> mlua::Result<Rc<ImageWindow>> {
+) -> mlua::Result<Rc<ImageWindow<T>>> {
     let mut opts = opts.unwrap_or_default();
 
     let (image_width, image_height, media_transparent) = match image.media_data {
@@ -1322,14 +1318,14 @@ impl FromLua for SpawnVideoOpts {
     }
 }
 
-fn spawn_video_popup(
+fn spawn_video_popup<T: EventPoster>(
     _: &Lua,
     (video, opts): (Media, Option<SpawnVideoOpts>),
-    request_sender: RequestSender,
-    windows: Windows,
+    request_sender: RequestSender<T>,
+    windows: Windows<T>,
     gpu_available: bool,
     dev_mode: bool,
-) -> mlua::Result<Rc<VideoWindow>> {
+) -> mlua::Result<Rc<VideoWindow<T>>> {
     let mut opts = opts.unwrap_or_default();
 
     let (video_width, video_height, media_transparent) = match video.media_data {
@@ -1496,14 +1492,14 @@ impl FromLua for SpawnDialogOpts {
     }
 }
 
-fn spawn_dialog(
+fn spawn_dialog<T: EventPoster>(
     _: &Lua,
     opts: SpawnDialogOpts,
-    request_sender: RequestSender,
-    windows: Windows,
+    request_sender: RequestSender<T>,
+    windows: Windows<T>,
     gpu_available: bool,
     dev_mode: bool,
-) -> mlua::Result<Rc<DialogWindow>> {
+) -> mlua::Result<Rc<DialogWindow<T>>> {
     if dialog_has_more_than_one_default_button(&opts.elements) {
         return Err(mlua::Error::runtime(
             "at most one button in a dialog may be marked `default`",
@@ -1585,11 +1581,11 @@ impl FromLua for SetWallpaperOpts {
     }
 }
 
-fn set_wallpaper(
+fn set_wallpaper<T: EventPoster>(
     _: &Lua,
     (image, opts): (Media, Option<SetWallpaperOpts>),
     media_manager: MediaManager,
-    request_sender: RequestSender,
+    request_sender: RequestSender<T>,
 ) -> mlua::Result<bool> {
     let opts = opts.unwrap_or_default();
 
@@ -1602,7 +1598,7 @@ fn set_wallpaper(
     request_sender.set_wallpaper(file, opts.mode).into_lua_err()
 }
 
-fn reset_wallpaper(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> {
+fn reset_wallpaper<T: EventPoster>(_: &Lua, _: (), request_sender: RequestSender<T>) -> mlua::Result<()> {
     request_sender.reset_wallpaper().into_lua_err()
 }
 
@@ -1630,13 +1626,13 @@ impl FromLua for PlayAudioOpts {
     }
 }
 
-fn play_audio(
+fn play_audio<T: EventPoster>(
     _: &Lua,
     (audio, opts): (Media, Option<PlayAudioOpts>),
-    request_sender: RequestSender,
-    audio_handles: AudioHandles,
+    request_sender: RequestSender<T>,
+    audio_handles: AudioHandles<T>,
     dev_mode: bool,
-) -> mlua::Result<Rc<AudioHandle>> {
+) -> mlua::Result<Rc<AudioHandle<T>>> {
     let opts = opts.unwrap_or_default();
 
     if !matches!(audio.media_data, MediaData::Audio { .. }) {
@@ -1662,7 +1658,7 @@ fn play_audio(
     Ok(audio_handle)
 }
 
-fn open_link(_: &Lua, url: String, request_sender: RequestSender) -> mlua::Result<bool> {
+fn open_link<T: EventPoster>(_: &Lua, url: String, request_sender: RequestSender<T>) -> mlua::Result<bool> {
     request_sender.open_link(url).into_lua_err()
 }
 
@@ -1678,25 +1674,25 @@ impl FromLua for Notification {
     }
 }
 
-fn show_notification(
+fn show_notification<T: EventPoster>(
     _: &Lua,
     notification: Notification,
-    request_sender: RequestSender,
+    request_sender: RequestSender<T>,
 ) -> mlua::Result<bool> {
     request_sender
         .show_notification(notification)
         .into_lua_err()
 }
 
-fn list_monitors(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<Vec<Monitor>> {
+fn list_monitors<T: EventPoster>(_: &Lua, _: (), request_sender: RequestSender<T>) -> mlua::Result<Vec<Monitor>> {
     request_sender.list_monitors().into_lua_err()
 }
 
-fn primary_monitor(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<Monitor> {
+fn primary_monitor<T: EventPoster>(_: &Lua, _: (), request_sender: RequestSender<T>) -> mlua::Result<Monitor> {
     request_sender.primary_monitor().into_lua_err()
 }
 
-fn exit(_: &Lua, _: (), request_sender: RequestSender) -> mlua::Result<()> {
+fn exit<T: EventPoster>(_: &Lua, _: (), request_sender: RequestSender<T>) -> mlua::Result<()> {
     request_sender.exit().into_lua_err()
 }
 

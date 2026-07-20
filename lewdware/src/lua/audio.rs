@@ -2,13 +2,13 @@ use std::cell::RefCell;
 
 use mlua::{ExternalResult, Lua, UserData, UserDataFields, UserDataMethods};
 
-use crate::lua::{AudioHandles, Media, dev_log::log_noop, request::AudioRequestSender};
+use crate::{app::EventPoster, lua::{AudioHandles, Media, dev_log::log_noop, request::AudioRequestSender}};
 
-pub struct AudioHandle {
+pub struct AudioHandle<T: EventPoster> {
     id: u64,
     audio: Media,
-    request_sender: AudioRequestSender,
-    audio_handles: AudioHandles,
+    request_sender: AudioRequestSender<T>,
+    audio_handles: AudioHandles<T>,
     state: RefCell<AudioState>,
     dev_mode: bool,
 }
@@ -33,7 +33,7 @@ impl AudioState {
     }
 }
 
-impl UserData for AudioHandle {
+impl<T: EventPoster> UserData for AudioHandle<T> {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get("id", |_, this| Ok(this.id));
         fields.add_field_method_get("audio", |_, this| Ok(this.audio.clone()));
@@ -81,12 +81,12 @@ impl UserData for AudioHandle {
     }
 }
 
-impl AudioHandle {
+impl<T: EventPoster> AudioHandle<T> {
     pub fn new(
         id: u64,
         audio: Media,
-        request_sender: AudioRequestSender,
-        audio_handles: AudioHandles,
+        request_sender: AudioRequestSender<T>,
+        audio_handles: AudioHandles<T>,
         dev_mode: bool,
     ) -> Self {
         Self {
@@ -138,7 +138,7 @@ impl AudioHandle {
     }
 }
 
-impl Drop for AudioHandle {
+impl<T: EventPoster> Drop for AudioHandle<T> {
     fn drop(&mut self) {
         match self.audio_handles.try_borrow_mut() {
             Ok(mut handles) => {

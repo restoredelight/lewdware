@@ -25,41 +25,31 @@ use crate::{
 pub struct AudioPlayer {
     _stream: MixerDeviceSink,
     sink: Arc<Player>,
-    /// Set by `stop()` before the sink is actually stopped, so the background thread spawned
-    /// below (which wakes up when the sink empties, whether from a natural finish or a `stop()`)
-    /// can tell the two apart and only post `AudioFinish` for the former.
-    stopped: Arc<AtomicBool>,
 }
 
 impl AudioPlayer {
-    pub fn new(
+    pub fn new<T: EventPoster>(
         source: MediaSource,
         loop_audio: Arc<AtomicBool>,
         volume: f32,
         id: Option<u64>,
-        event_poster: Option<EventPoster>,
+        event_poster: Option<T>,
     ) -> Result<Self> {
         let (stream, sink) = setup_decoder(source, loop_audio)?;
         let sink = Arc::new(sink);
         sink.set_volume(volume);
 
-        let stopped = Arc::new(AtomicBool::new(false));
-
         if let (Some(id), Some(event_poster)) = (id, event_poster) {
             let sink_clone = sink.clone();
-            let stopped_clone = stopped.clone();
             thread::spawn(move || {
                 sink_clone.sleep_until_end();
-                if !stopped_clone.load(Ordering::SeqCst) {
-                    event_poster(UserEvent::AudioFinish { id });
-                }
+                event_poster.post_event(UserEvent::AudioFinish { id });
             });
         }
 
         Ok(Self {
             _stream: stream,
             sink,
-            stopped,
         })
     }
 
@@ -78,7 +68,6 @@ impl AudioPlayer {
     /// Permanently ends playback. Unlike `pause()`, there's no way back from this -- and unlike a
     /// natural finish, this never posts `AudioFinish` (see the `stopped` field doc).
     pub fn stop(&self) {
-        self.stopped.store(true, Ordering::SeqCst);
         self.sink.stop();
     }
 

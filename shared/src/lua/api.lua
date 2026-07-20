@@ -692,8 +692,8 @@ function AudioHandle:pause() end
 function AudioHandle:play() end
 
 ---Stop the audio track permanently, releasing its resources. Unlike
----`pause()`, a stopped track cannot be resumed. `on_finish()` callbacks do
----not fire for a `stop()`.
+---`pause()`, a stopped track cannot be resumed. This will result in `on_finish()`
+---callbacks being called.
 ---@return boolean
 function AudioHandle:stop() end
 

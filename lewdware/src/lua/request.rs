@@ -18,9 +18,9 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct RequestSender {
+pub struct RequestSender<T: EventPoster> {
     request_tx: SyncSender<LuaRequest>,
-    event_poster: EventPoster,
+    event_poster: T,
 }
 
 #[derive(Debug)]
@@ -48,25 +48,25 @@ impl std::fmt::Display for SendError {
     }
 }
 
-impl RequestSender {
-    pub fn new(request_tx: SyncSender<LuaRequest>, event_poster: EventPoster) -> Self {
+impl<T: EventPoster> RequestSender<T> {
+    pub fn new(request_tx: SyncSender<LuaRequest>, event_poster: T) -> Self {
         Self {
             request_tx,
             event_poster,
         }
     }
 
-    fn send<T>(
+    fn send<U>(
         &self,
-        request_builder: impl FnOnce(mpsc::Sender<T>) -> LuaRequest,
-    ) -> Result<T, SendError> {
+        request_builder: impl FnOnce(mpsc::Sender<U>) -> LuaRequest,
+    ) -> Result<U, SendError> {
         let (tx, rx) = mpsc::channel();
 
         if self.request_tx.send(request_builder(tx)).is_err() {
             return Err(SendError::RequestReceiverClosed);
         }
 
-        if !(self.event_poster)(UserEvent::LuaRequest) {
+        if !self.event_poster.post_event(UserEvent::LuaRequest) {
             return Err(SendError::EventLoopClosed);
         }
 
@@ -162,14 +162,14 @@ impl RequestSender {
         Ok(self.send(|tx| LuaRequest::Exit { tx })?)
     }
 
-    pub fn window_sender(&self, id: PopupId) -> WindowRequestSender {
+    pub fn window_sender(&self, id: PopupId) -> WindowRequestSender<T> {
         WindowRequestSender {
             sender: self.clone(),
             id,
         }
     }
 
-    pub fn audio_sender(&self, id: u64) -> AudioRequestSender {
+    pub fn audio_sender(&self, id: u64) -> AudioRequestSender<T> {
         AudioRequestSender {
             sender: self.clone(),
             id,
@@ -177,8 +177,8 @@ impl RequestSender {
     }
 }
 
-pub struct WindowRequestSender {
-    sender: RequestSender,
+pub struct WindowRequestSender<T: EventPoster> {
+    sender: RequestSender<T>,
     id: PopupId,
 }
 
@@ -196,8 +196,8 @@ fn window_found(result: Result<()>) -> Result<bool> {
     }
 }
 
-impl WindowRequestSender {
-    fn send<T>(&self, action_builder: impl FnOnce(mpsc::Sender<T>) -> WindowAction) -> Result<T> {
+impl<T: EventPoster> WindowRequestSender<T> {
+    fn send<U>(&self, action_builder: impl FnOnce(mpsc::Sender<U>) -> WindowAction) -> Result<U> {
         match self.sender.send(|tx| LuaRequest::WindowAction {
             id: self.id,
             action: action_builder(tx),
@@ -303,13 +303,13 @@ impl WindowRequestSender {
 }
 
 #[derive(Clone)]
-pub struct AudioRequestSender {
-    sender: RequestSender,
+pub struct AudioRequestSender<T: EventPoster> {
+    sender: RequestSender<T>,
     id: u64,
 }
 
-impl AudioRequestSender {
-    fn send<T>(&self, action_builder: impl FnOnce(mpsc::Sender<T>) -> AudioAction) -> Result<T> {
+impl<T: EventPoster> AudioRequestSender<T> {
+    fn send<U>(&self, action_builder: impl FnOnce(mpsc::Sender<U>) -> AudioAction) -> Result<U> {
         match self.sender.send(|tx| LuaRequest::AudioAction {
             id: self.id,
             action: action_builder(tx),

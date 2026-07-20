@@ -4,25 +4,24 @@ use mlua::{ExternalResult, FromLua, Lua, LuaSerdeExt, UserData, UserDataFields, 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    lua::{
+    app::EventPoster, lua::{
         DialogElementUpdate, Media, PopupId, WindowProps,
         api::{Anchor, Coord},
         dev_log::log_noop,
         request::WindowRequestSender,
-    },
-    monitor::Monitor,
+    }, monitor::Monitor,
 };
 
 #[derive(Clone)]
-pub enum Window {
-    Image(Rc<ImageWindow>),
-    Video(Rc<VideoWindow>),
-    Dialog(Rc<DialogWindow>),
-    Text(Rc<TextWindow>),
+pub enum Window<T: EventPoster> {
+    Image(Rc<ImageWindow<T>>),
+    Video(Rc<VideoWindow<T>>),
+    Dialog(Rc<DialogWindow<T>>),
+    Text(Rc<TextWindow<T>>),
 }
 
-impl Window {
-    pub fn inner_window(&self) -> &InnerWindow {
+impl<T: EventPoster> Window<T> {
+    pub fn inner_window(&self) -> &InnerWindow<T> {
         match self {
             Window::Image(image) => &image.inner_window,
             Window::Video(video) => &video.inner_window,
@@ -32,12 +31,12 @@ impl Window {
     }
 }
 
-pub struct ImageWindow {
-    inner_window: InnerWindow,
+pub struct ImageWindow<T: EventPoster> {
+    inner_window: InnerWindow<T>,
     image: Media,
 }
 
-impl UserData for ImageWindow {
+impl<T: EventPoster> UserData for ImageWindow<T> {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         InnerWindow::add_fields(fields);
 
@@ -50,11 +49,11 @@ impl UserData for ImageWindow {
     }
 }
 
-impl ImageWindow {
+impl<T: EventPoster> ImageWindow<T> {
     pub fn new(
         props: WindowProps,
         image: Media,
-        request_sender: WindowRequestSender,
+        request_sender: WindowRequestSender<T>,
         dev_mode: bool,
     ) -> Self {
         ImageWindow {
@@ -64,12 +63,12 @@ impl ImageWindow {
     }
 }
 
-pub struct VideoWindow {
-    inner_window: InnerWindow,
+pub struct VideoWindow<T: EventPoster> {
+    inner_window: InnerWindow<T>,
     video: Media,
 }
 
-impl UserData for VideoWindow {
+impl<T: EventPoster> UserData for VideoWindow<T> {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         InnerWindow::add_fields(fields);
 
@@ -126,11 +125,11 @@ impl UserData for VideoWindow {
     }
 }
 
-impl VideoWindow {
+impl<T: EventPoster> VideoWindow<T> {
     pub fn new(
         props: WindowProps,
         video: Media,
-        request_tx: WindowRequestSender,
+        request_tx: WindowRequestSender<T>,
         dev_mode: bool,
     ) -> Self {
         VideoWindow {
@@ -140,8 +139,8 @@ impl VideoWindow {
     }
 }
 
-pub struct DialogWindow {
-    inner_window: InnerWindow,
+pub struct DialogWindow<T: EventPoster> {
+    inner_window: InnerWindow<T>,
     state: RefCell<DialogWindowState>,
 }
 
@@ -159,7 +158,7 @@ impl DialogWindowState {
     }
 }
 
-impl UserData for DialogWindow {
+impl<T: EventPoster> UserData for DialogWindow<T> {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         InnerWindow::add_fields(fields);
 
@@ -227,8 +226,8 @@ impl UserData for DialogWindow {
     }
 }
 
-impl DialogWindow {
-    pub fn new(props: WindowProps, request_sender: WindowRequestSender, dev_mode: bool) -> Self {
+impl<T: EventPoster> DialogWindow<T> {
+    pub fn new(props: WindowProps, request_sender: WindowRequestSender<T>, dev_mode: bool) -> Self {
         Self {
             inner_window: InnerWindow::new(props, request_sender, dev_mode),
             state: RefCell::new(DialogWindowState::new()),
@@ -274,8 +273,8 @@ impl DialogWindow {
     }
 }
 
-pub struct TextWindow {
-    inner_window: InnerWindow,
+pub struct TextWindow<T: EventPoster> {
+    inner_window: InnerWindow<T>,
     state: RefCell<TextWindowState>,
 }
 
@@ -283,7 +282,7 @@ struct TextWindowState {
     text: String,
 }
 
-impl UserData for TextWindow {
+impl<T: EventPoster> UserData for TextWindow<T> {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         InnerWindow::add_fields(fields);
 
@@ -316,11 +315,11 @@ impl UserData for TextWindow {
     }
 }
 
-impl TextWindow {
+impl<T: EventPoster> TextWindow<T> {
     pub fn new(
         props: WindowProps,
         text: String,
-        request_sender: WindowRequestSender,
+        request_sender: WindowRequestSender<T>,
         dev_mode: bool,
     ) -> Self {
         Self {
@@ -330,7 +329,7 @@ impl TextWindow {
     }
 }
 
-pub struct InnerWindow {
+pub struct InnerWindow<T: EventPoster> {
     id: PopupId,
     width: u32,
     height: u32,
@@ -338,7 +337,7 @@ pub struct InnerWindow {
     outer_height: u32,
     state: RefCell<InnerWindowState>,
     monitor: Monitor,
-    request_sender: WindowRequestSender,
+    request_sender: WindowRequestSender<T>,
     dev_mode: bool,
 }
 
@@ -356,36 +355,36 @@ struct InnerWindowState {
     current_fade_id: u64,
 }
 
-trait HasInnerWindow {
-    fn inner_window(&self) -> &InnerWindow;
+trait HasInnerWindow<T: EventPoster> {
+    fn inner_window(&self) -> &InnerWindow<T>;
 }
 
-impl HasInnerWindow for ImageWindow {
-    fn inner_window(&self) -> &InnerWindow {
+impl<T: EventPoster> HasInnerWindow<T> for ImageWindow<T> {
+    fn inner_window(&self) -> &InnerWindow<T> {
         &self.inner_window
     }
 }
 
-impl HasInnerWindow for VideoWindow {
-    fn inner_window(&self) -> &InnerWindow {
+impl<T: EventPoster> HasInnerWindow<T> for VideoWindow<T> {
+    fn inner_window(&self) -> &InnerWindow<T> {
         &self.inner_window
     }
 }
 
-impl HasInnerWindow for DialogWindow {
-    fn inner_window(&self) -> &InnerWindow {
+impl<T: EventPoster> HasInnerWindow<T> for DialogWindow<T> {
+    fn inner_window(&self) -> &InnerWindow<T> {
         &self.inner_window
     }
 }
 
-impl HasInnerWindow for TextWindow {
-    fn inner_window(&self) -> &InnerWindow {
+impl<T: EventPoster> HasInnerWindow<T> for TextWindow<T> {
+    fn inner_window(&self) -> &InnerWindow<T> {
         &self.inner_window
     }
 }
 
-impl InnerWindow {
-    pub fn new(props: WindowProps, request_tx: WindowRequestSender, dev_mode: bool) -> Self {
+impl<T: EventPoster> InnerWindow<T> {
+    pub fn new(props: WindowProps, request_tx: WindowRequestSender<T>, dev_mode: bool) -> Self {
         Self {
             id: props.window_id,
             width: props.width,
@@ -410,7 +409,7 @@ impl InnerWindow {
         happened
     }
 
-    fn add_fields<T: HasInnerWindow, F: UserDataFields<T>>(fields: &mut F) {
+    fn add_fields<U: HasInnerWindow<T>, F: UserDataFields<U>>(fields: &mut F) {
         fields.add_field_method_get("id", |_, this| Ok(u64::from(this.inner_window().id)));
         fields.add_field_method_get("width", |_, this| Ok(this.inner_window().width));
         fields.add_field_method_get("height", |_, this| Ok(this.inner_window().height));
@@ -443,7 +442,7 @@ impl InnerWindow {
         });
     }
 
-    fn add_methods<T: HasInnerWindow + 'static, M: UserDataMethods<T>>(methods: &mut M) {
+    fn add_methods<U: HasInnerWindow<T> + 'static, M: UserDataMethods<U>>(methods: &mut M) {
         methods.add_method("close", |lua, this, _: ()| {
             let closed_now = this.inner_window().request_sender.close().into_lua_err()?;
 

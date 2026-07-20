@@ -10,7 +10,7 @@ use crate::monitor::Monitor;
 /// `popup.x`/`popup.y` to place the window). See
 /// [`LewdwareApp::finalize_window_opts`](crate::app::LewdwareApp::finalize_window_opts).
 pub struct WindowOpts {
-    pub popup: PopupSpawnOpts,
+    pub popup_opts: PopupSpawnOpts,
     pub monitor: Monitor,
     /// Absolute screen position (monitor offset + `popup.x`/`popup.y`). Used for initial
     /// placement and for repositioning a pooled window.
