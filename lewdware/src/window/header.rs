@@ -4,7 +4,7 @@ use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 
-use super::inner_window::RedrawRequester;
+use super::redraw::RedrawRequester;
 
 pub struct Header {
     redraw: RedrawRequester,

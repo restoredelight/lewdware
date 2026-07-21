@@ -11,7 +11,7 @@ use crate::wgpu::WgpuState;
 use crate::window::RedrawRequester;
 
 /// GPU-accelerated egui renderer that does NOT own a wgpu surface. It renders into the caller's
-/// existing `wgpu::RenderPass<'static>` (obtained via [`InnerWindow::draw_wgpu`]).
+/// existing `wgpu::RenderPass<'static>` (obtained via [`RenderTarget::draw_wgpu`]).
 pub struct EguiGpuRenderer {
     context: egui::Context,
     state: egui_winit::State,

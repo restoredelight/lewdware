@@ -28,10 +28,7 @@ use crate::media::{
 };
 use crate::monitor::Monitors;
 use crate::wgpu::WgpuState;
-use crate::window::{
-    DialogWindow, ImageWindow, InnerWindow, TextWindow, VideoWindow, WindowOpts, WindowPool,
-    WindowType,
-};
+use crate::window::{Popup, RenderOutcome, RenderTarget, WindowOpts, WindowPool, WindowState};
 
 mod pending;
 
@@ -67,7 +64,7 @@ pub struct LewdwareApp {
 #[allow(clippy::large_enum_variant)]
 enum ItemSlot {
     Pending(PendingItem),
-    Window(WindowType),
+    Window(Popup),
     Audio(AudioPlayer),
 }
 
@@ -279,7 +276,7 @@ impl LewdwareApp {
         popup_id: ItemId,
         opts: WindowOpts,
         event_loop: &ActiveEventLoop,
-    ) -> Result<InnerWindow> {
+    ) -> Result<(WindowState, RenderTarget)> {
         let window = self
             .window_pool
             .acquire(&opts, event_loop)
@@ -287,18 +284,26 @@ impl LewdwareApp {
 
         self.window_ids.insert(window.id(), popup_id);
 
-        let inner_window = InnerWindow::new(
-            window,
+        let mut state = WindowState::new(
+            window.clone(),
             &opts,
-            self.wgpu_state.clone(),
             self.lua_event_tx.clone(),
             popup_id,
             self.event_loop_proxy.clone(),
             self.redraw_wakeup_pending.clone(),
+        );
+
+        let target = RenderTarget::new(
+            window,
+            &opts,
+            self.wgpu_state.clone(),
+            state.redraw_requester(),
         )
         .map_err(LewdwareError::WindowError)?;
 
-        Ok(inner_window)
+        state.attach_decorations(&target);
+
+        Ok((state, target))
     }
 
     fn window_props(popup_id: ItemId, opts: &WindowOpts) -> WindowProps {
@@ -314,11 +319,11 @@ impl LewdwareApp {
         }
     }
 
-    fn close_window(&mut self, window_type: WindowType) {
-        self.window_ids
-            .remove(&window_type.inner_window().window().id());
+    fn close_window(&mut self, popup: Popup) {
+        self.window_ids.remove(&popup.state.window().id());
 
-        self.window_pool.release(window_type.into_inner_window());
+        let (state, target) = popup.into_parts();
+        self.window_pool.release(state, target);
     }
 
     fn spawn_image(
@@ -677,9 +682,12 @@ impl LewdwareApp {
                         }
                         WindowAction::PauseVideo { tx } => tx
                             .send(match entry.get_mut() {
-                                ItemSlot::Window(WindowType::Video(video_window)) => {
-                                    video_window.pause();
-                                    Ok(())
+                                ItemSlot::Window(popup) => {
+                                    if popup.pause() {
+                                        Ok(())
+                                    } else {
+                                        Err(LewdwareError::Internal("Invalid window type"))
+                                    }
                                 }
                                 ItemSlot::Pending(PendingItem {
                                     opts: PendingItemOpts::Video { paused, .. },
@@ -693,9 +701,12 @@ impl LewdwareApp {
                             .is_ok(),
                         WindowAction::PlayVideo { tx } => tx
                             .send(match entry.get_mut() {
-                                ItemSlot::Window(WindowType::Video(video_window)) => {
-                                    video_window.play();
-                                    Ok(())
+                                ItemSlot::Window(popup) => {
+                                    if popup.play() {
+                                        Ok(())
+                                    } else {
+                                        Err(LewdwareError::Internal("Invalid window type"))
+                                    }
                                 }
                                 ItemSlot::Pending(PendingItem {
                                     opts: PendingItemOpts::Video { paused, .. },
@@ -710,9 +721,12 @@ impl LewdwareApp {
                         WindowAction::SetVideoVolume { tx, volume } => {
                             let volume = volume * self.config.volume.video;
                             tx.send(match entry.get_mut() {
-                                ItemSlot::Window(WindowType::Video(video_window)) => {
-                                    video_window.set_volume(volume);
-                                    Ok(())
+                                ItemSlot::Window(popup) => {
+                                    if popup.set_volume(volume) {
+                                        Ok(())
+                                    } else {
+                                        Err(LewdwareError::Internal("Invalid window type"))
+                                    }
                                 }
                                 ItemSlot::Pending(PendingItem {
                                     opts:
@@ -731,9 +745,12 @@ impl LewdwareApp {
                         }
                         WindowAction::SetVideoLoop { tx, loop_video } => tx
                             .send(match entry.get_mut() {
-                                ItemSlot::Window(WindowType::Video(video_window)) => {
-                                    video_window.set_loop(loop_video);
-                                    Ok(())
+                                ItemSlot::Window(popup) => {
+                                    if popup.set_loop(loop_video) {
+                                        Ok(())
+                                    } else {
+                                        Err(LewdwareError::Internal("Invalid window type"))
+                                    }
                                 }
                                 ItemSlot::Pending(PendingItem {
                                     opts:
@@ -751,9 +768,7 @@ impl LewdwareApp {
                             .is_ok(),
                         WindowAction::Move { id, tx, opts } => tx
                             .send(match entry.get_mut() {
-                                ItemSlot::Window(window_type) => {
-                                    window_type.inner_window_mut().start_move(id, opts)
-                                }
+                                ItemSlot::Window(popup) => popup.state.start_move(id, opts),
                                 ItemSlot::Pending(item) => item
                                     .opts
                                     .window_mut()
@@ -764,10 +779,13 @@ impl LewdwareApp {
                             .is_ok(),
                         WindowAction::SetText { tx, text } => tx
                             .send(match entry.get_mut() {
-                                ItemSlot::Window(WindowType::Text(text_window)) => match text {
+                                ItemSlot::Window(popup) => match text {
                                     Some(text) => {
-                                        text_window.set_text(text);
-                                        Ok(())
+                                        if popup.set_text(text) {
+                                            Ok(())
+                                        } else {
+                                            Err(LewdwareError::Internal("Invalid window type"))
+                                        }
                                     }
                                     None => Err(LewdwareError::Internal(
                                         "Text windows require non-nil text",
@@ -778,32 +796,28 @@ impl LewdwareApp {
                             .is_ok(),
                         WindowAction::UpdateDialogElement { tx, id, props } => {
                             let updated = match entry.get_mut() {
-                                ItemSlot::Window(WindowType::Dialog(dialog)) => {
-                                    dialog.update_element(&id, props)
-                                }
+                                ItemSlot::Window(popup) => popup.update_element(&id, props),
                                 _ => false,
                             };
                             tx.send(updated).is_ok()
                         }
                         WindowAction::GetDialogValues { tx } => {
                             let values = match entry.get() {
-                                ItemSlot::Window(WindowType::Dialog(dialog)) => dialog.values(),
+                                ItemSlot::Window(popup) => popup.values(),
                                 _ => HashMap::new(),
                             };
                             tx.send(values).is_ok()
                         }
                         WindowAction::GetDialogValue { id, tx } => {
                             let value = match entry.get() {
-                                ItemSlot::Window(WindowType::Dialog(dialog)) => dialog.value(&id),
+                                ItemSlot::Window(popup) => popup.value(&id),
                                 _ => None,
                             };
                             tx.send(value).is_ok()
                         }
                         WindowAction::SetTitle { tx, title } => {
                             match entry.get_mut() {
-                                ItemSlot::Window(window_type) => {
-                                    window_type.inner_window_mut().set_title(title)
-                                }
+                                ItemSlot::Window(popup) => popup.state.set_title(title),
                                 ItemSlot::Pending(item) => {
                                     if let Some(pending) = item.opts.window_mut() {
                                         pending.title = title;
@@ -815,8 +829,8 @@ impl LewdwareApp {
                         }
                         WindowAction::SetOpacity { tx, opacity } => {
                             let result = match entry.get_mut() {
-                                ItemSlot::Window(window_type) => {
-                                    if opacity != 1.0 && !window_type.inner_window().transparent() {
+                                ItemSlot::Window(popup) => {
+                                    if opacity != 1.0 && !popup.state.transparent() {
                                         Err(LewdwareError::Internal(
                                             "Cannot change opacity on a non-transparent window. \
                                              Ensure the window is created with transparency \
@@ -825,7 +839,7 @@ impl LewdwareApp {
                                              `transparent = true`.",
                                         ))
                                     } else {
-                                        window_type.inner_window_mut().set_opacity(opacity);
+                                        popup.state.set_opacity(opacity);
                                         Ok(())
                                     }
                                 }
@@ -854,8 +868,8 @@ impl LewdwareApp {
                         }
                         WindowAction::Fade { id, tx, opts } => {
                             let result = match entry.get_mut() {
-                                ItemSlot::Window(window_type) => {
-                                    if !window_type.inner_window().transparent() {
+                                ItemSlot::Window(popup) => {
+                                    if !popup.state.transparent() {
                                         Err(LewdwareError::Internal(
                                             "Cannot fade a non-transparent window. Ensure the \
                                              window is created with transparency enabled: use \
@@ -863,7 +877,7 @@ impl LewdwareApp {
                                              a value below 1.0, or set `transparent = true`.",
                                         ))
                                     } else {
-                                        window_type.inner_window_mut().start_fade(id, opts)
+                                        popup.state.start_fade(id, opts)
                                     }
                                 }
                                 ItemSlot::Pending(item) => match item.opts.window_mut() {
@@ -974,19 +988,19 @@ impl LewdwareApp {
 
     /// Apply mutations made while a window item's media requirements were pending.
     fn apply_pending_mutations(
-        inner_window: &mut InnerWindow,
+        state: &mut WindowState,
         opacity: f32,
         title: Option<String>,
         pending_move: Option<(u64, MoveOpts)>,
         pending_fade: Option<(u64, FadeOpts)>,
     ) {
-        inner_window.set_opacity(opacity);
-        inner_window.set_title(title);
+        state.set_opacity(opacity);
+        state.set_title(title);
         if let Some((move_id, opts)) = pending_move {
-            let _ = inner_window.start_move(move_id, opts);
+            let _ = state.start_move(move_id, opts);
         }
         if let Some((fade_id, opts)) = pending_fade {
-            let _ = inner_window.start_fade(fade_id, opts);
+            let _ = state.start_fade(fade_id, opts);
         }
     }
 
@@ -1074,25 +1088,24 @@ impl LewdwareApp {
                     },
                 image,
             } => {
-                let inner_window = self.create_window(id, window, event_loop)?;
+                let (state, target) = self.create_window(id, window, event_loop)?;
                 let data = requirements.take_image(image)?;
-                let mut image_window =
-                    ImageWindow::new(inner_window, data).map_err(LewdwareError::WindowError)?;
+                let mut popup =
+                    Popup::new_image(state, target, data).map_err(LewdwareError::WindowError)?;
                 Self::apply_pending_mutations(
-                    &mut image_window.inner_window,
+                    &mut popup.state,
                     opacity,
                     title,
                     pending_move,
                     pending_fade,
                 );
-                let idx = image_window.draw().unwrap_or_else(|err| {
+                let outcome = popup.render().unwrap_or_else(|err| {
                     tracing::warn!("image pre-draw failed: {err}");
-                    None
+                    RenderOutcome::default()
                 });
-                image_window.inner_window.gpu_sync(idx);
-                image_window.inner_window.show();
-                self.items
-                    .insert(id, ItemSlot::Window(WindowType::Image(image_window)));
+                popup.target.gpu_sync(outcome.submission);
+                popup.state.show();
+                self.items.insert(id, ItemSlot::Window(popup));
             }
             PendingItemOpts::Video {
                 window:
@@ -1108,27 +1121,26 @@ impl LewdwareApp {
                 volume,
                 ..
             } => {
-                let inner_window = self.create_window(id, window, event_loop)?;
+                let (state, target) = self.create_window(id, window, event_loop)?;
                 let decoder = requirements.take_video(video)?;
-                let mut video_window =
-                    VideoWindow::new(inner_window, decoder).map_err(LewdwareError::WindowError)?;
+                let mut popup =
+                    Popup::new_video(state, target, decoder).map_err(LewdwareError::WindowError)?;
                 Self::apply_pending_mutations(
-                    &mut video_window.inner_window,
+                    &mut popup.state,
                     opacity,
                     title,
                     pending_move,
                     pending_fade,
                 );
                 if paused {
-                    video_window.pause();
+                    popup.pause();
                 }
-                video_window.set_volume(volume);
-                if let Err(err) = video_window.inner_window.pre_show() {
+                popup.set_volume(volume);
+                if let Err(err) = popup.target.pre_show() {
                     tracing::warn!("video pre-show failed: {err}");
                 }
-                video_window.inner_window.show();
-                self.items
-                    .insert(id, ItemSlot::Window(WindowType::Video(video_window)));
+                popup.state.show();
+                self.items.insert(id, ItemSlot::Window(popup));
             }
             PendingItemOpts::Dialog {
                 window:
@@ -1141,24 +1153,23 @@ impl LewdwareApp {
                     },
                 elements,
             } => {
-                let inner_window = self.create_window(id, window, event_loop)?;
-                let mut dialog_window = DialogWindow::new(inner_window, elements, |image| {
+                let (state, target) = self.create_window(id, window, event_loop)?;
+                let mut popup = Popup::new_dialog(state, target, elements, |image| {
                     requirements.take_image(image).map_err(Into::into)
                 })
                 .map_err(LewdwareError::WindowError)?;
                 Self::apply_pending_mutations(
-                    &mut dialog_window.inner_window,
+                    &mut popup.state,
                     opacity,
                     title,
                     pending_move,
                     pending_fade,
                 );
-                if let Err(err) = dialog_window.inner_window.pre_show() {
+                if let Err(err) = popup.target.pre_show() {
                     tracing::warn!("dialog pre-show failed: {err}");
                 }
-                dialog_window.inner_window.show();
-                self.items
-                    .insert(id, ItemSlot::Window(WindowType::Dialog(dialog_window)));
+                popup.state.show();
+                self.items.insert(id, ItemSlot::Window(popup));
             }
             PendingItemOpts::Text {
                 window:
@@ -1172,22 +1183,21 @@ impl LewdwareApp {
                 text,
                 style,
             } => {
-                let inner_window = self.create_window(id, window, event_loop)?;
-                let mut text_window = TextWindow::new(inner_window, text, style)
+                let (state, target) = self.create_window(id, window, event_loop)?;
+                let mut popup = Popup::new_text(state, target, text, style)
                     .map_err(LewdwareError::WindowError)?;
                 Self::apply_pending_mutations(
-                    &mut text_window.inner_window,
+                    &mut popup.state,
                     opacity,
                     title,
                     pending_move,
                     pending_fade,
                 );
-                if let Err(err) = text_window.inner_window.pre_show() {
+                if let Err(err) = popup.target.pre_show() {
                     tracing::warn!("text pre-show failed: {err}");
                 }
-                text_window.inner_window.show();
-                self.items
-                    .insert(id, ItemSlot::Window(WindowType::Text(text_window)));
+                popup.state.show();
+                self.items.insert(id, ItemSlot::Window(popup));
             }
         }
         Ok(())
@@ -1210,7 +1220,7 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
         };
 
         if let Entry::Occupied(mut entry) = self.items.entry(popup_id) {
-            let ItemSlot::Window(window_type) = entry.get_mut() else {
+            let ItemSlot::Window(popup) = entry.get_mut() else {
                 return;
             };
 
@@ -1218,50 +1228,24 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
             // it satisfies a dirty window here, don't render that window a second time when this
             // batch reaches `about_to_wait`.
             if event == WindowEvent::RedrawRequested {
-                window_type.inner_window().take_redraw_requested();
+                popup.state.take_redraw_requested();
             }
 
-            let mut video_finished = false;
+            let mut content_finished = false;
 
-            match window_type {
-                WindowType::Image(window) => {
-                    if event == WindowEvent::RedrawRequested
-                        && let Err(err) = window.draw()
-                    {
-                        tracing::error!("Error drawing image window: {}", err);
+            if event == WindowEvent::RedrawRequested {
+                // Video is driven from `about_to_wait` on Windows instead; see the comment there.
+                if !(cfg!(target_os = "windows") && popup.is_video()) {
+                    match popup.render() {
+                        Ok(outcome) => content_finished = outcome.finished,
+                        Err(err) => tracing::error!("Error rendering window: {err}"),
                     }
                 }
-                WindowType::Video(window) => {
-                    if !cfg!(target_os = "windows") && event == WindowEvent::RedrawRequested {
-                        match window.update() {
-                            Ok(finished) => video_finished = finished,
-                            Err(err) => tracing::error!("Error updating video window: {err}"),
-                        }
-                    }
-                }
-                WindowType::Text(window) => match &event {
-                    WindowEvent::RedrawRequested => {
-                        window.render().unwrap_or_else(|err| {
-                            tracing::error!("Error rendering text window: {}", err);
-                        });
-                    }
-                    event => {
-                        window.handle_event(event);
-                    }
-                },
-                WindowType::Dialog(window) => match &event {
-                    WindowEvent::RedrawRequested => {
-                        window.render().unwrap_or_else(|err| {
-                            tracing::error!("Error rendering dialog window: {}", err);
-                        });
-                    }
-                    event => {
-                        window.handle_event(event);
-                    }
-                },
+            } else {
+                popup.handle_event(&event);
             }
 
-            if video_finished {
+            if content_finished {
                 self.remove_item(popup_id);
 
                 return;
@@ -1273,13 +1257,13 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                     self.remove_item(popup_id);
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    if let ItemSlot::Window(window_type) = entry.get_mut() {
-                        window_type.inner_window_mut().handle_cursor_moved(position);
+                    if let ItemSlot::Window(popup) = entry.get_mut() {
+                        popup.state.handle_cursor_moved(position);
                     }
                 }
                 WindowEvent::CursorLeft { .. } => {
-                    if let ItemSlot::Window(window_type) = entry.get_mut() {
-                        window_type.inner_window_mut().handle_cursor_left();
+                    if let ItemSlot::Window(popup) = entry.get_mut() {
+                        popup.state.handle_cursor_left();
                     }
                 }
                 WindowEvent::MouseInput {
@@ -1287,8 +1271,8 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                     button: MouseButton::Left,
                     ..
                 } => {
-                    if let ItemSlot::Window(window_type) = entry.get_mut() {
-                        window_type.inner_window_mut().handle_mouse_down();
+                    if let ItemSlot::Window(popup) = entry.get_mut() {
+                        popup.state.handle_mouse_down();
                     }
                 }
                 WindowEvent::MouseInput {
@@ -1297,22 +1281,20 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                     ..
                 } => {
                     let click_result = match entry.get_mut() {
-                        ItemSlot::Window(window_type) => {
-                            Some(window_type.inner_window_mut().handle_mouse_up())
-                        }
+                        ItemSlot::Window(popup) => Some(popup.state.handle_mouse_up()),
                         ItemSlot::Pending(_) => None,
                         ItemSlot::Audio(_) => None,
                     };
 
                     if let Some(click_result) = click_result {
                         if click_result.content_click
-                            && let ItemSlot::Window(window_type) = entry.get_mut()
+                            && let ItemSlot::Window(popup) = entry.get_mut()
                         {
-                            let inner_window = window_type.inner_window();
-                            if inner_window
+                            let state = &popup.state;
+                            if state
                                 .lua_event_tx()
                                 .send(lua::Event::WindowClicked {
-                                    id: inner_window.popup_id(),
+                                    id: state.popup_id(),
                                 })
                                 .is_err()
                             {
@@ -1363,51 +1345,34 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
         let mut finished_videos = Vec::new();
 
         for (id, item) in self.items.iter_mut() {
-            let ItemSlot::Window(window) = item else {
+            let ItemSlot::Window(popup) = item else {
                 continue;
             };
 
-            if matches!(window, WindowType::Video(_)) {
-                window.inner_window().request_redraw();
+            if popup.is_video() {
+                popup.state.request_redraw();
                 poll = true;
             }
 
-            let redraw_requested = window.inner_window().take_redraw_requested();
+            let redraw_requested = popup.state.take_redraw_requested();
 
             // Handle rendering manually on Windows, rather than through RedrawRequested
             // See https://github.com/rust-windowing/winit/issues/3648
             if cfg!(target_os = "windows") && redraw_requested {
-                match window {
-                    WindowType::Image(image_window) => {
-                        if let Err(err) = image_window.draw() {
-                            tracing::error!("Error drawing image window: {err}");
-                        }
-                    }
-                    WindowType::Text(text_window) => {
-                        if let Err(err) = text_window.render() {
-                            tracing::error!("Error rendering text window: {err}");
-                        }
-                    }
-                    WindowType::Dialog(dialog_window) => {
-                        if let Err(err) = dialog_window.render() {
-                            tracing::error!("Error rendering dialog window: {err}");
-                        }
-                    }
-                    WindowType::Video(video_window) => match video_window.update() {
-                        Ok(true) => finished_videos.push(*id),
-                        Ok(false) => {}
-                        Err(err) => tracing::error!("Error updating video window: {err}"),
-                    },
+                match popup.render() {
+                    Ok(outcome) if outcome.finished => finished_videos.push(*id),
+                    Ok(_) => {}
+                    Err(err) => tracing::error!("Error rendering window: {err}"),
                 }
             }
 
-            if window.inner_window().is_moving() {
-                window.inner_window_mut().update_position();
+            if popup.state.is_moving() {
+                popup.state.update_position();
                 poll = true;
             }
 
-            if window.inner_window().is_fading() {
-                window.inner_window_mut().update_fade();
+            if popup.state.is_fading() {
+                popup.state.update_fade();
                 poll = true;
             }
         }

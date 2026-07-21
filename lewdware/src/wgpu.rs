@@ -51,10 +51,22 @@ pub struct WgpuState {
 
 impl WgpuState {
     pub async fn new(display_handle: OwnedDisplayHandle) -> Result<Self> {
-        #[allow(unused_mut)]
-        let mut instance_descriptor =
-            InstanceDescriptor::new_with_display_handle(Box::new(display_handle));
+        Self::build(InstanceDescriptor::new_with_display_handle(Box::new(
+            display_handle,
+        )))
+        .await
+    }
 
+    /// A device with no display handle attached. Surfaces cannot be created against it, so this
+    /// is only good for rendering into a texture — which is exactly what the tests do, and it
+    /// means they need no display server.
+    #[cfg(test)]
+    pub async fn headless() -> Result<Self> {
+        Self::build(InstanceDescriptor::new_without_display_handle()).await
+    }
+
+    #[allow(unused_mut)]
+    async fn build(mut instance_descriptor: InstanceDescriptor) -> Result<Self> {
         #[cfg(target_os = "windows")]
         {
             // A DX12 swapchain made directly from the window's HWND (the default) never

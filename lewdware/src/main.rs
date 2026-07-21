@@ -13,7 +13,6 @@ mod app;
 mod audio;
 mod egui;
 mod error;
-mod inner_window;
 mod lua;
 mod media;
 mod monitor;

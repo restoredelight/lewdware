@@ -5,8 +5,7 @@ use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowAttributes, WindowLevel};
 
-#[cfg(target_os = "linux")]
-use crate::window::InnerWindow;
+use crate::window::{RenderTarget, WindowState};
 
 use super::opts::WindowOpts;
 
@@ -56,16 +55,17 @@ impl WindowPool {
     }
 
     /// Park the window offscreen and return it to the pool for later reuse.
-    pub fn release(&mut self, inner_window: InnerWindow) {
-        let transparent = inner_window.transparent();
+    pub fn release(&mut self, state: WindowState, target: RenderTarget) {
+        let transparent = state.transparent();
 
         // Dropping the window texture before moving the window can
         // cause the window to flash black before dissappearing
-        inner_window
+        state
             .window()
             .set_outer_position(LogicalPosition::new(-32000i32, -32000i32));
+        drop(target);
 
-        let window = inner_window.into_window();
+        let window = state.into_window();
 
         if transparent {
             self.transparent.push(window);
@@ -96,7 +96,7 @@ impl WindowPool {
         new_window(opts, event_loop)
     }
 
-    pub fn release(&mut self, _inner_window: InnerWindow) {}
+    pub fn release(&mut self, _state: WindowState, _target: RenderTarget) {}
 }
 
 // ── Shared window creation ────────────────────────────────────────────────────

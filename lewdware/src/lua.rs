@@ -1138,7 +1138,7 @@ mod tests {
         event_rx: tokio::sync::mpsc::UnboundedReceiver<Event>,
         /// Lets a test simulate an `Event` the real main thread would send but that the fake
         /// handler doesn't model — e.g. `WindowSpawned`, which (unlike `WindowClosed`) is never
-        /// the reply to a `LuaRequest`: in the real app it fires from `InnerWindow::show()` once
+        /// the reply to a `LuaRequest`: in the real app it fires from `WindowState::show()` once
         /// a popup's media finishes decoding, which this harness has no equivalent of.
         event_tx: UnboundedSender<Event>,
         recorded: Arc<Mutex<Vec<Recorded>>>,
@@ -2062,7 +2062,7 @@ mod tests {
     /// callbacks (fires every time, unlike `on_spawn`), and the no-op-on-closed convention.
     /// `WindowClicked` events are injected manually here -- the actual physical hit-testing (press
     /// + release inside the content area, decorations excluded) lives in the winit/egui rendering
-    /// layer (`window/inner_window.rs`, `window/window_type.rs`), which this Lua-only harness
+    /// layer (`window/state.rs`, `window/window_type.rs`), which this Lua-only harness
     /// doesn't exercise.
     #[tokio::test(start_paused = true)]
     async fn window_on_click_fires_and_is_a_no_op_when_closed() {

@@ -16,13 +16,13 @@ pub struct GpuRenderer {
 /// Mirrors the `WindowOptions` uniform struct in the shaders. `premultiplied` tells the
 /// fragment shaders whether the surface expects premultiplied alpha (`CompositeAlphaMode::
 /// PreMultiplied`) or straight alpha (anything else, since e.g. `Opaque` ignores alpha
-/// entirely) — see `InnerWindow::premultiplied_alpha`.
+/// entirely) — see `RenderTarget::premultiplied_alpha`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct WindowUniform {
-    opacity: f32,
-    premultiplied: u32,
-    force_opaque: u32,
+pub struct WindowUniform {
+    pub opacity: f32,
+    pub premultiplied: u32,
+    pub force_opaque: u32,
 }
 
 pub enum GpuRendererType {
@@ -112,8 +112,6 @@ impl GpuRenderer {
         full_range: bool,
         pixel_format: VideoPixelFormat,
         packed_alpha: bool,
-        ui_width: u32,
-        ui_height: u32,
         opacity: f32,
         premultiplied_alpha: bool,
         force_opaque: bool,
@@ -147,8 +145,6 @@ impl GpuRenderer {
             full_range,
             pixel_format,
             packed_alpha,
-            ui_width,
-            ui_height,
         );
 
         Self {
@@ -164,16 +160,11 @@ impl GpuRenderer {
             .write_buffer(&self.opacity_buffer, 0, bytemuck::cast_slice(&[opacity]));
     }
 
-    /// Upload CPU-side frame buffer data: for Image writes to the frame texture; for Video
-    /// writes to the UI overlay texture.
-    pub fn upload_frame_buffer(&self, queue: &wgpu::Queue, data: &[u8], width: u32, height: u32) {
-        match &self.renderer_type {
-            GpuRendererType::Image { texture, .. } => {
-                upload_texture_data(queue, texture, data, width, height, width * 4, 4);
-            }
-            GpuRendererType::Video(video) => {
-                video.update_ui(queue, data, width, height);
-            }
+    /// Upload the image's pixels. Called once, at construction: unlike video, the content never
+    /// changes after that.
+    pub fn upload_image(&self, queue: &wgpu::Queue, data: &[u8], width: u32, height: u32) {
+        if let GpuRendererType::Image { texture, .. } = &self.renderer_type {
+            upload_texture_data(queue, texture, data, width, height, width * 4, 4);
         }
     }
 }
@@ -182,10 +173,6 @@ pub struct VideoRenderer {
     frame_textures: VideoFrameTextures,
     video_width: u32,
     video_height: u32,
-    // CPU-rendered UI / decorations overlay
-    ui_texture: wgpu::Texture,
-    ui_bind_group: wgpu::BindGroup,
-    ui_pipeline: Arc<wgpu::RenderPipeline>,
     // GPU imported textures ring: keeps last N frames alive for GPU safety.
     // The most recent entry (back) is the active frame for rendering.
     hardware_textures_ring: VecDeque<ImportedTextures>,
@@ -253,8 +240,6 @@ impl VideoRenderer {
         full_range: bool,
         pixel_format: VideoPixelFormat,
         packed_alpha: bool,
-        ui_width: u32,
-        ui_height: u32,
     ) -> Self {
         let device = &wgpu_state.device;
         // When packed_alpha, the decoded frame is twice the display height.
@@ -356,53 +341,12 @@ impl VideoRenderer {
             }
         };
 
-        let ui_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("UI Texture"),
-            size: wgpu::Extent3d {
-                width: ui_width,
-                height: ui_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        let ui_view = ui_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let ui_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("UI Bind Group"),
-            layout: &wgpu_state.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&ui_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&wgpu_state.sampler),
-                },
-            ],
-        });
-
-        let ui_pipeline = wgpu_state.get_pipeline(format);
-
         Self {
             frame_textures,
             video_width,
             video_height: decoded_height,
-            ui_texture,
-            ui_bind_group,
-            ui_pipeline,
             hardware_textures_ring: VecDeque::new(),
         }
-    }
-
-    pub fn update_ui(&self, queue: &wgpu::Queue, data: &[u8], width: u32, height: u32) {
-        upload_texture_data(queue, &self.ui_texture, data, width, height, width * 4, 4);
     }
 
     pub fn update_video(&mut self, wgpu_state: &WgpuState, frame: &VideoFrame) {
@@ -523,14 +467,6 @@ impl VideoRenderer {
             } => (pipeline, bind_group),
         }
     }
-
-    pub fn ui_bind_group(&self) -> &wgpu::BindGroup {
-        &self.ui_bind_group
-    }
-
-    pub fn ui_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.ui_pipeline
-    }
 }
 
 pub fn upload_texture_data(
@@ -607,191 +543,5 @@ impl VideoFrameTextures {
             VideoFrameTextures::Yuv420p { .. } => VideoPixelFormat::Yuv420p,
             VideoFrameTextures::Nv12 { .. } => VideoPixelFormat::Nv12,
         }
-    }
-}
-
-/// GPU overlay texture for window decorations (border + header). Used by prompt and choice
-/// windows when rendering egui via `EguiGpuRenderer`. The texture is the same size as the outer
-/// window and is composited on top of the egui layer using alpha blending.
-pub struct DecorationOverlay {
-    texture: wgpu::Texture,
-    // Bind group for the overlay texture (group 0, RGBA pipeline).
-    pub bind_group: wgpu::BindGroup,
-    // Opacity + premultiplied uniform (group 1, RGBA pipeline).
-    pub opacity_buffer: wgpu::Buffer,
-    pub window_bind_group: wgpu::BindGroup,
-    outer_width: u32,
-    outer_height: u32,
-}
-
-impl DecorationOverlay {
-    /// Create the decoration overlay. Draws a 1-pixel border into the texture immediately.
-    ///
-    /// * `border_offset` — physical pixels wide for the border (from `inner_offset().0`).
-    pub fn new(
-        wgpu_state: &WgpuState,
-        outer_width: u32,
-        outer_height: u32,
-        premultiplied_alpha: bool,
-        opacity: f32,
-        force_opaque: bool,
-    ) -> Self {
-        let device = &wgpu_state.device;
-
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Decoration Overlay Texture"),
-            size: wgpu::Extent3d {
-                width: outer_width,
-                height: outer_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Decoration Overlay Bind Group"),
-            layout: &wgpu_state.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&wgpu_state.sampler),
-                },
-            ],
-        });
-
-        let opacity_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Decoration Opacity Buffer"),
-            contents: bytemuck::bytes_of(&WindowUniform {
-                opacity,
-                premultiplied: premultiplied_alpha as u32,
-                force_opaque: force_opaque as u32,
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let window_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Decoration Window Bind Group"),
-            layout: &wgpu_state.window_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: opacity_buffer.as_entire_binding(),
-            }],
-        });
-
-        // Draw 1-pixel black border into the texture immediately.
-        let mut border_data = vec![0u8; (outer_width * outer_height * 4) as usize];
-        let black = [0u8, 0, 0, 255];
-        for x in 0..outer_width as usize {
-            border_data[x * 4..x * 4 + 4].copy_from_slice(&black);
-            let bot = ((outer_height as usize - 1) * outer_width as usize + x) * 4;
-            border_data[bot..bot + 4].copy_from_slice(&black);
-        }
-        for y in 0..outer_height as usize {
-            let left = y * outer_width as usize * 4;
-            border_data[left..left + 4].copy_from_slice(&black);
-            let right = (y * outer_width as usize + outer_width as usize - 1) * 4;
-            border_data[right..right + 4].copy_from_slice(&black);
-        }
-        upload_texture_data(
-            &wgpu_state.queue,
-            &texture,
-            &border_data,
-            outer_width,
-            outer_height,
-            outer_width * 4,
-            4,
-        );
-
-        Self {
-            texture,
-            bind_group,
-            opacity_buffer,
-            window_bind_group,
-            outer_width,
-            outer_height,
-        }
-    }
-
-    pub fn set_opacity(&self, queue: &wgpu::Queue, opacity: f32) {
-        queue.write_buffer(&self.opacity_buffer, 0, bytemuck::cast_slice(&[opacity]));
-    }
-
-    /// Upload a header pixmap into the overlay texture at `(origin_x, origin_y)`.
-    pub fn upload_header(
-        &self,
-        queue: &wgpu::Queue,
-        pixmap: &tiny_skia::Pixmap,
-        origin_x: u32,
-        origin_y: u32,
-    ) {
-        let width = pixmap.width();
-        let height = pixmap.height();
-        let data = pixmap.data();
-        let bytes_per_row = width * 4;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padding = (align - bytes_per_row % align) % align;
-        let padded_bpr = bytes_per_row + padding;
-
-        let padded: Vec<u8> = if padding == 0 {
-            data.to_vec()
-        } else {
-            let mut v = Vec::with_capacity((padded_bpr * height) as usize);
-            for row in data.chunks_exact(bytes_per_row as usize) {
-                v.extend_from_slice(row);
-                v.extend(std::iter::repeat_n(0u8, padding as usize));
-            }
-            v
-        };
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: origin_x,
-                    y: origin_y,
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            &padded,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_bpr),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-
-    /// Blit the decoration overlay into the active render pass (full outer-window viewport).
-    pub fn render(&self, rpass: &mut wgpu::RenderPass<'static>, pipeline: &wgpu::RenderPipeline) {
-        rpass.set_pipeline(pipeline);
-        rpass.set_bind_group(0, &self.bind_group, &[]);
-        rpass.set_bind_group(1, &self.window_bind_group, &[]);
-        rpass.set_viewport(
-            0.0,
-            0.0,
-            self.outer_width as f32,
-            self.outer_height as f32,
-            0.0,
-            1.0,
-        );
-        rpass.draw(0..4, 0..1);
     }
 }

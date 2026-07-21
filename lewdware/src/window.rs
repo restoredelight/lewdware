@@ -1,14 +1,19 @@
+mod decorations;
 mod gpu_renderer;
 mod header;
-mod inner_window;
+mod layer;
 pub mod opts;
 mod pool;
+mod popup;
+mod redraw;
+mod state;
 mod surface;
-mod window_type;
+mod target;
 
 pub use header::HEADER_HEIGHT;
-pub use inner_window::InnerWindow;
-pub(crate) use inner_window::RedrawRequester;
 pub use opts::WindowOpts;
 pub use pool::WindowPool;
-pub use window_type::{DialogWindow, ImageWindow, TextWindow, VideoWindow, WindowType};
+pub use popup::{Popup, RenderOutcome};
+pub(crate) use redraw::RedrawRequester;
+pub use state::WindowState;
+pub use target::RenderTarget;
