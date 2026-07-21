@@ -81,14 +81,6 @@ impl Tracker {
 /// Installs a dev-mode-only diagnostic that warns (once per callback invocation, via
 /// `tracing::warn!`) if a single Rust-invoked Lua callback -- the entrypoint, a timer, an
 /// `on_click`, etc. -- runs longer than [`WARN_AFTER`] without returning.
-///
-/// Purely observational: nothing is ever aborted or interrupted. A long-running callback might be
-/// entirely intentional (e.g. deliberate heavy startup work), and since Lewdware doesn't ship with
-/// any way to fix a mode's own code for it, silently killing callbacks would just be surprising
-/// rather than helpful -- this is meant to help a mode author notice a performance problem while
-/// developing (`lw mode dev`, which passes `--dev`), not to police released modes. Only ever
-/// called when `--dev` was passed, so a normal end-user launch never installs this hook and pays
-/// no overhead for it.
 pub fn install(lua: &Lua) -> mlua::Result<()> {
     let tracker = RefCell::new(Tracker::new());
 
@@ -100,10 +92,7 @@ pub fn install(lua: &Lua) -> mlua::Result<()> {
         move |_lua, debug| {
             if tracker.borrow_mut().on_event(debug.event(), WARN_AFTER) == Signal::Warn {
                 tracing::warn!(
-                    "A mode callback has been running for over {WARN_AFTER:?} without returning. \
-                     This is a dev-mode-only diagnostic (see `lw mode dev`) -- it doesn't affect \
-                     release builds, and nothing is being interrupted; it's just a heads-up in \
-                     case this is unintentionally slow."
+                    "A mode callback has been running for over {WARN_AFTER:?} without returning."
                 );
             }
 

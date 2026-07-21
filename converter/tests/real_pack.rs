@@ -1,6 +1,16 @@
 use std::path::{Path, PathBuf};
 
 use converter::{ZipSource, convert};
+use shared::behaviour::{EventSchedule, Interval};
+
+/// Every anchor `EventSchedule` the converter produces is a `Interval::Fixed` -- unwraps
+/// straight to the seconds value for test readability.
+fn anchor_seconds(schedule: &Option<EventSchedule>) -> Option<f64> {
+    schedule.as_ref().map(|s| match s.interval {
+        Interval::Fixed { seconds } => seconds,
+        Interval::Random { .. } => panic!("expected a fixed interval"),
+    })
+}
 
 /// The real, untracked `Edgeware++ Test Pack V2.zip` reference pack (18MB, sitting next to this
 /// repo checkout) is a far better `ZipSource` exercise than any small fixture: real sloppiness
@@ -116,56 +126,62 @@ fn real_test_pack_converts_without_hard_error() {
         Some(shared::read_pack::RecommendedMode::Experience)
     );
     let timeline = &experience.timeline;
-    assert_eq!(timeline.levels.len(), 5);
-    // Level 1 (index 0) applies immediately, matching Edgeware's own "applied at session start"
-    // semantics -- see `build_timeline`; it also doubles as the new schema's baseline level. No
-    // config.json here, so pacing falls back to Edgeware's own default corruptionTime (60s).
-    assert_eq!(timeline.levels[0].at_seconds, 0.0);
-    assert_eq!(timeline.levels[4].at_seconds, 4.0 * 60.0);
-    // Cumulative mood folding: level 5 adds "succubus" and removes "guitar" (added at level 2) on
-    // top of levels 1-4's own adds/removes -- see corruption.json's fixture-mirroring content in
+    assert_eq!(timeline.stages.len(), 5);
+    // Stage 1 (index 0) applies immediately, matching Edgeware's own "applied at session start"
+    // semantics -- see `build_timeline`; it also doubles as the new schema's baseline stage, so
+    // it has no trigger of its own. No config.json here, so pacing falls back to Edgeware's own
+    // default corruptionTime (60s) -- each stage but the last transitions to the next after 60s.
+    for stage in &timeline.stages[..4] {
+        assert_eq!(stage.end.as_ref().unwrap().duration_seconds, Some(60.0));
+    }
+    assert!(timeline.stages[4].end.is_none());
+    // Cumulative mood folding: stage 5 adds "succubus" and removes "guitar" (added at stage 2) on
+    // top of stages 1-4's own adds/removes -- see corruption.json's fixture-mirroring content in
     // `examples/corruption.json`.
-    let level_5_tags = timeline.levels[4].tags.as_ref().unwrap();
-    assert!(level_5_tags.contains(&"succubus".to_string()));
-    assert!(!level_5_tags.contains(&"guitar".to_string()));
+    let stage_5_tags = timeline.stages[4].content.tags.as_ref().unwrap();
+    assert!(stage_5_tags.contains(&"succubus".to_string()));
+    assert!(!stage_5_tags.contains(&"guitar".to_string()));
 
     // No config.json in this pack, but real Edgeware still spawns popups by its own
     // `assets/default_config.json` (popupMod 100, vidMod 10) -- an Experience-recommended
     // design with a corruption arc but zero popups ever would misrepresent the pack (see
-    // `resolve_popup_anchor_series`'s doc comment). No level's config override ever touches
-    // popupMod/vidMod here, so every level carries the same value.
+    // `resolve_popup_anchor_series`'s doc comment). No stage's config override ever touches
+    // popupMod/vidMod here, so every stage carries the same value.
     let expected_popup_anchor = 5000.0 / (10.0 * 110.0);
-    for (i, level) in timeline.levels.iter().enumerate() {
+    for (i, stage) in timeline.stages.iter().enumerate() {
         assert_eq!(
-            level.anchors.popup,
+            anchor_seconds(&stage.events.popup),
             Some(expected_popup_anchor),
-            "level {i} should carry the Edgeware-default popup anchor"
+            "stage {i} should carry the Edgeware-default popup anchor"
         );
     }
 
     // This pack's own corruption.json explicitly configures prompts: off at the baseline
-    // (`"1": {"promptMod": 0}`), on from level 4 onward (`"4": {"promptMod": 10, ...}`) -- real
+    // (`"1": {"promptMod": 0}`), on from stage 4 onward (`"4": {"promptMod": 10, ...}`) -- real
     // per-level pacing data that used to be silently dropped (the old schema's single scalar
-    // modifier couldn't represent it) but now converts into genuine per-level anchor changes (see
+    // modifier couldn't represent it) but now converts into genuine per-stage anchor changes (see
     // `resolve_anchor_series`).
     assert_eq!(
-        timeline.levels[0].anchors.prompt, None,
+        anchor_seconds(&timeline.stages[0].events.prompt),
+        None,
         "off at the baseline"
     );
     assert_eq!(
-        timeline.levels[1].anchors.prompt, None,
+        anchor_seconds(&timeline.stages[1].events.prompt),
+        None,
         "still off (carried forward)"
     );
     assert_eq!(
-        timeline.levels[2].anchors.prompt, None,
+        anchor_seconds(&timeline.stages[2].events.prompt),
+        None,
         "still off (carried forward)"
     );
     assert!(
-        timeline.levels[3].anchors.prompt.is_some(),
-        "on from level 4 (index 3) onward"
+        timeline.stages[3].events.prompt.is_some(),
+        "on from stage 4 (index 3) onward"
     );
     assert!(
-        timeline.levels[4].anchors.prompt.is_some(),
+        timeline.stages[4].events.prompt.is_some(),
         "stays on (carried forward)"
     );
     // promptMistakes has no Lewdware equivalent and should still warn + drop, even though

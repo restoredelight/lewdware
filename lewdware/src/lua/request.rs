@@ -202,12 +202,6 @@ pub struct WindowRequestSender<T: EventPoster> {
     id: ItemId,
 }
 
-/// Maps a closed/missing window (`WindowNotFound`) to `Ok(false)` and success to `Ok(true)` --
-/// the shared shape behind every `WindowRequestSender` method below except the handful with
-/// their own bespoke "closed" return (`values()`/`value()` return nil; `update_dialog_element`
-/// already followed this convention before the others caught up -- see its own doc comment).
-/// Any other error (e.g. `fade`'s opacity/transparency validation) still propagates as a real
-/// Lua error: only "the window is gone" becomes a quiet `false`.
 fn window_found(result: Result<()>) -> Result<bool> {
     match result {
         Ok(()) => Ok(true),

@@ -9,7 +9,7 @@ metadata:
   version: "1.0"
   recommended_mode: Experience
 behaviour:
-  version: 2
+  version: 3
   content:
     content_groups:
       - id: vanilla
@@ -50,62 +50,81 @@ behaviour:
     splash_tags: []
   experience:
     timeline:
-      levels:
-        - at_seconds: 0
-          at_popups: ~
-          anchors:
-            popup: 2
-            web: ~
-            notification: ~
-            prompt: ~
-            subliminal: ~
-          design:
-            movement_speed_min: ~
-            movement_speed_max: ~
-            mitosis_chance: ~
-            mitosis_count: ~
-          tags:
-            - corruption-moodless
-            - vanilla
-          wallpaper_tags:
-            - wallpaper
-        - at_seconds: 120
-          at_popups: 8
-          anchors:
-            popup: 2
-            web: ~
-            notification: ~
-            prompt: 20
-            subliminal: ~
-          design:
-            movement_speed_min: ~
-            movement_speed_max: ~
-            mitosis_chance: ~
-            mitosis_count: ~
-          tags:
-            - corruption-moodless
-            - kinky
-            - vanilla
-          wallpaper_tags: ~
-        - at_seconds: 240
-          at_popups: 16
-          anchors:
-            popup: 2
-            web: ~
-            notification: ~
-            prompt: 20
-            subliminal: ~
-          design:
-            movement_speed_min: ~
-            movement_speed_max: ~
-            mitosis_chance: ~
-            mitosis_count: ~
-          tags:
-            - corrupted
-            - corruption-moodless
-            - kinky
-          wallpaper_tags:
-            - corruption-wallpaper-wallpaper2-png
+      stages:
+        - id: stage-1
+          label: Stage 1
+          end:
+            duration_seconds: 120
+            event_count:
+              event: popup
+              count: 8
+              scope: session
+            strategy: any
+          content:
+            tags:
+              - corruption-moodless
+              - vanilla
+            wallpaper_tags:
+              - wallpaper
+          events:
+            popup:
+              interval:
+                kind: fixed
+                seconds: 2
+        - id: stage-2
+          label: Stage 2
+          end:
+            duration_seconds: 120
+            event_count:
+              event: popup
+              count: 16
+              scope: session
+            strategy: any
+          content:
+            tags:
+              - corruption-moodless
+              - kinky
+              - vanilla
+          events:
+            popup:
+              interval:
+                kind: fixed
+                seconds: 2
+            prompt:
+              interval:
+                kind: fixed
+                seconds: 20
+        - id: stage-3
+          label: Stage 3
+          content:
+            tags:
+              - corrupted
+              - corruption-moodless
+              - kinky
+            wallpaper_tags:
+              - corruption-wallpaper-wallpaper2-png
+          events:
+            popup:
+              interval:
+                kind: fixed
+                seconds: 2
+            prompt:
+              interval:
+                kind: fixed
+                seconds: 20
+      transitions:
+        - id: transition-1
+          from_stage: stage-1
+          to_stage: stage-2
+          duration_seconds: 0
+          easing: linear
+          affected: []
+        - id: transition-2
+          from_stage: stage-2
+          to_stage: stage-3
+          duration_seconds: 0
+          easing: linear
+          affected: []
 media:
   - source_path: img/kinky_a.png
     suggested_name: kinky_a.png

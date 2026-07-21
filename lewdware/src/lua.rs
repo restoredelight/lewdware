@@ -14,10 +14,7 @@ use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, syn
 use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
-    behaviour::{
-        Content, effective_config, effective_options,
-        v3::{Behaviour, Experience},
-    },
+    behaviour::{Behaviour, Content, Experience, effective_config, effective_options},
     mode::{Metadata, OptionValue, VERSION_MAJOR, read_mode_metadata},
     user_config::AppConfig,
 };
@@ -155,20 +152,6 @@ pub struct PackInfo {
     pub metadata: shared::read_pack::Metadata,
 }
 
-/// Resolves the config a mode actually runs with, and — only for the engine's two built-in
-/// default modes (`Sandbox`/`Experience`) — the pack's behaviour.json `content`/`experience`
-/// sections, handed to the default-modes library code as `__lewdware_content`/
-/// `__lewdware_experience` (see `create_api`) for its own query-layer filtering (e.g.
-/// `default-modes/shared/lib/media.lua` honoring disabled content groups). Standalone from
-/// `start_lua_thread` so it's unit-testable without a full thread spawn.
-///
-/// Custom modes (`Mode::Pack`/`Mode::File`) never see behaviour data or its synthesized
-/// `content_group.*` options — see `behaviour-design/default-mode.md`'s Ownership section ("the
-/// toggle is only shown where it is honored") — so they keep the plain schema-defaulting walk.
-///
-/// `Mode::Experience`'s stored values come from `experience_options[pack_id]` rather than
-/// `mode_options[mode]` — its meta-controls are calibrated per pack (see
-/// `behaviour-design/default-mode.md`, Ownership), unlike every other mode's global storage.
 fn resolve_mode_config(
     metadata: &Metadata,
     mode: &shared::user_config::Mode,
@@ -205,6 +188,7 @@ fn resolve_mode_config(
         return (mode_config, Content::default(), Experience::default());
     }
 
+    // Mode::Sandbox and Mode::Experience require custom options/data resolution
     let behaviour = media_manager
         .get_pack_data("behaviour".to_string())
         .inspect_err(|err| tracing::warn!("Failed to read pack behaviour data: {err}"))
@@ -221,7 +205,7 @@ fn resolve_mode_config(
         tracing::warn!(
             "This pack's behaviour.json (v{}) is newer than this engine understands (v{})",
             behaviour.version,
-            shared::behaviour::v3::VERSION
+            shared::behaviour::VERSION
         );
     }
 
@@ -262,8 +246,7 @@ pub fn start_lua_thread<T: EventPoster>(
 
         let mut file: Box<dyn ReadSeek> = match config.mode.clone() {
             shared::user_config::Mode::Sandbox => {
-                let mode_data =
-                    include_bytes!("../../default-modes/sandbox/build/Sandbox.lwmode");
+                let mode_data = include_bytes!("../../default-modes/sandbox/build/Sandbox.lwmode");
 
                 Box::new(Cursor::new(mode_data))
             }
@@ -661,7 +644,6 @@ mod tests {
         time::Duration,
     };
 
-    use shared::behaviour::{DesignValues, FrequencyAnchors, Level, Timeline as LegacyTimeline};
     use shared::user_config::{Capabilities, Volume};
     use tempfile::NamedTempFile;
     use tokio::sync::mpsc::UnboundedSender;
@@ -1130,8 +1112,8 @@ mod tests {
                     }
                 }
                 LuaRequest::ItemAction {
+                    id,
                     action: ItemAction::Audio(action),
-                    ..
                 } => match action {
                     AudioAction::Pause { tx } => {
                         let _ = tx.send(());
@@ -2553,7 +2535,7 @@ mod tests {
                     ),
                     (
                         "lib/media.lua",
-                        include_str!("../../../default-modes/shared/lib/media.lua"),
+                        include_str!("../../default-modes/shared/lib/media.lua"),
                     ),
                 ];
 
@@ -2596,11 +2578,11 @@ mod tests {
             ("main.lua", main),
             (
                 "lib/content.lua",
-                include_str!("../../../default-modes/shared/lib/content.lua"),
+                include_str!("../../default-modes/shared/lib/content.lua"),
             ),
             (
                 "lib/media.lua",
-                include_str!("../../../default-modes/shared/lib/media.lua"),
+                include_str!("../../default-modes/shared/lib/media.lua"),
             ),
         ]
     }
@@ -2613,39 +2595,39 @@ mod tests {
         vec![
             (
                 "main.lua",
-                include_str!("../../../default-modes/sandbox/src/main.lua"),
+                include_str!("../../default-modes/sandbox/src/main.lua"),
             ),
             (
                 "lib/media.lua",
-                include_str!("../../../default-modes/shared/lib/media.lua"),
+                include_str!("../../default-modes/shared/lib/media.lua"),
             ),
             (
                 "lib/content.lua",
-                include_str!("../../../default-modes/shared/lib/content.lua"),
+                include_str!("../../default-modes/shared/lib/content.lua"),
             ),
             (
                 "lib/notifications.lua",
-                include_str!("../../../default-modes/shared/lib/notifications.lua"),
+                include_str!("../../default-modes/shared/lib/notifications.lua"),
             ),
             (
                 "lib/web.lua",
-                include_str!("../../../default-modes/shared/lib/web.lua"),
+                include_str!("../../default-modes/shared/lib/web.lua"),
             ),
             (
                 "lib/subliminals.lua",
-                include_str!("../../../default-modes/shared/lib/subliminals.lua"),
+                include_str!("../../default-modes/shared/lib/subliminals.lua"),
             ),
             (
                 "lib/prompts.lua",
-                include_str!("../../../default-modes/shared/lib/prompts.lua"),
+                include_str!("../../default-modes/shared/lib/prompts.lua"),
             ),
             (
                 "lib/wallpaper.lua",
-                include_str!("../../../default-modes/shared/lib/wallpaper.lua"),
+                include_str!("../../default-modes/shared/lib/wallpaper.lua"),
             ),
             (
                 "lib/spawn.lua",
-                include_str!("../../../default-modes/shared/lib/spawn.lua"),
+                include_str!("../../default-modes/shared/lib/spawn.lua"),
             ),
         ]
     }
@@ -2679,43 +2661,43 @@ mod tests {
         vec![
             (
                 "main.lua",
-                include_str!("../../../default-modes/experience/src/main.lua"),
+                include_str!("../../default-modes/experience/src/main.lua"),
             ),
             (
                 "timeline.lua",
-                include_str!("../../../default-modes/experience/src/timeline.lua"),
+                include_str!("../../default-modes/experience/src/timeline.lua"),
             ),
             (
                 "lib/media.lua",
-                include_str!("../../../default-modes/shared/lib/media.lua"),
+                include_str!("../../default-modes/shared/lib/media.lua"),
             ),
             (
                 "lib/content.lua",
-                include_str!("../../../default-modes/shared/lib/content.lua"),
+                include_str!("../../default-modes/shared/lib/content.lua"),
             ),
             (
                 "lib/notifications.lua",
-                include_str!("../../../default-modes/shared/lib/notifications.lua"),
+                include_str!("../../default-modes/shared/lib/notifications.lua"),
             ),
             (
                 "lib/web.lua",
-                include_str!("../../../default-modes/shared/lib/web.lua"),
+                include_str!("../../default-modes/shared/lib/web.lua"),
             ),
             (
                 "lib/subliminals.lua",
-                include_str!("../../../default-modes/shared/lib/subliminals.lua"),
+                include_str!("../../default-modes/shared/lib/subliminals.lua"),
             ),
             (
                 "lib/prompts.lua",
-                include_str!("../../../default-modes/shared/lib/prompts.lua"),
+                include_str!("../../default-modes/shared/lib/prompts.lua"),
             ),
             (
                 "lib/wallpaper.lua",
-                include_str!("../../../default-modes/shared/lib/wallpaper.lua"),
+                include_str!("../../default-modes/shared/lib/wallpaper.lua"),
             ),
             (
                 "lib/spawn.lua",
-                include_str!("../../../default-modes/shared/lib/spawn.lua"),
+                include_str!("../../default-modes/shared/lib/spawn.lua"),
             ),
         ]
     }
@@ -2818,29 +2800,139 @@ mod tests {
         config
     }
 
+    /// Test-only, cumulative-timeline-friendly shape: far terser to hand-write than a
+    /// `Stage`/`Transition` graph directly, since a level is a flat, self-contained snapshot
+    /// rather than needing its trigger expressed as the *previous* level's own `end` condition.
+    /// `levels_to_experience` below converts a `Vec<Level>` into the real thing.
+    #[derive(Default)]
+    struct Level {
+        at_seconds: f64,
+        at_popups: Option<u32>,
+        anchors: FrequencyAnchors,
+        design: DesignValues,
+        tags: Option<Vec<String>>,
+        wallpaper_tags: Option<Vec<String>>,
+    }
+
+    #[derive(Default)]
+    struct FrequencyAnchors {
+        popup: Option<f64>,
+        web: Option<f64>,
+        notification: Option<f64>,
+        prompt: Option<f64>,
+        subliminal: Option<f64>,
+    }
+
+    #[derive(Default)]
+    struct DesignValues {
+        movement_speed_min: Option<f64>,
+        movement_speed_max: Option<f64>,
+        mitosis_chance: Option<f64>,
+        mitosis_count: Option<u32>,
+    }
+
+    fn schedule(seconds: Option<f64>) -> Option<shared::behaviour::EventSchedule> {
+        seconds.map(|seconds| shared::behaviour::EventSchedule {
+            interval: shared::behaviour::Interval::Fixed { seconds },
+            initial_delay_seconds: None,
+            max_concurrent: None,
+        })
+    }
+
+    fn movement(design: &DesignValues) -> Option<shared::behaviour::Movement> {
+        match (design.movement_speed_min, design.movement_speed_max) {
+            (None, None) => None,
+            (minimum_speed, maximum_speed) => Some(shared::behaviour::Movement {
+                minimum_speed,
+                maximum_speed,
+            }),
+        }
+    }
+
+    fn mitosis(design: &DesignValues) -> Option<shared::behaviour::Mitosis> {
+        match (design.mitosis_chance, design.mitosis_count) {
+            (None, None) => None,
+            (chance, count) => Some(shared::behaviour::Mitosis { chance, count }),
+        }
+    }
+
+    /// Converts a cumulative `Vec<Level>` into a real `Experience`: each level becomes a
+    /// `Stage`, and a level's `at_seconds`/`at_popups` (the trigger for *reaching* it) becomes
+    /// the *previous* stage's `StageEnd` (the condition for *leaving* it) -- the last level never
+    /// gets an `end`. One zero-duration, linear, unaffected `Transition` is synthesized per
+    /// adjacent stage pair, since a cumulative level's values always apply instantly.
+    fn levels_to_experience(levels: Vec<Level>) -> Experience {
+        use shared::behaviour::{
+            ContentSelection, CountScope, Easing, EndStrategy, EventCountCondition, EventKind,
+            Events, Stage, StageEnd, Timeline, Transition,
+        };
+
+        let stages = levels
+            .iter()
+            .enumerate()
+            .map(|(index, level)| {
+                let next = levels.get(index + 1);
+                let end = next.map(|next| StageEnd {
+                    duration_seconds: Some((next.at_seconds - level.at_seconds).max(0.0)),
+                    event_count: next.at_popups.map(|count| EventCountCondition {
+                        event: EventKind::Popup,
+                        count,
+                        scope: CountScope::Session,
+                    }),
+                    strategy: EndStrategy::Any,
+                });
+                Stage {
+                    id: format!("stage-{}", index + 1),
+                    label: format!("Stage {}", index + 1),
+                    end,
+                    content: ContentSelection {
+                        tags: level.tags.clone(),
+                        wallpaper_tags: level.wallpaper_tags.clone(),
+                    },
+                    events: Events {
+                        popup: schedule(level.anchors.popup),
+                        web: schedule(level.anchors.web),
+                        notification: schedule(level.anchors.notification),
+                        prompt: schedule(level.anchors.prompt),
+                        subliminal: schedule(level.anchors.subliminal),
+                    },
+                    movement: movement(&level.design),
+                    mitosis: mitosis(&level.design),
+                }
+            })
+            .collect::<Vec<_>>();
+        let transitions = stages
+            .windows(2)
+            .enumerate()
+            .map(|(index, pair)| Transition {
+                id: format!("transition-{}", index + 1),
+                from_stage: pair[0].id.clone(),
+                to_stage: pair[1].id.clone(),
+                duration_seconds: 0.0,
+                easing: Easing::Linear,
+                affected: vec![],
+            })
+            .collect();
+        Experience {
+            timeline: Timeline {
+                stages,
+                transitions,
+            },
+        }
+    }
+
     /// Builds a single-level `Experience` (just the baseline, no escalation at all) from a
     /// baseline `FrequencyAnchors`/`DesignValues` pair -- the common case for tests exercising
     /// anchor/design arithmetic in isolation from the timeline's own trigger mechanics.
     fn experience_with_baseline(anchors: FrequencyAnchors, design: DesignValues) -> Experience {
-        legacy_experience(LegacyTimeline {
-            levels: vec![Level {
-                at_seconds: 0.0,
-                at_popups: None,
-                anchors,
-                design,
-                tags: None,
-                wallpaper_tags: None,
-            }],
-        })
-    }
-
-    fn legacy_experience(timeline: LegacyTimeline) -> Experience {
-        let old = shared::behaviour::Behaviour {
-            version: shared::behaviour::CURRENT_VERSION,
-            content: Content::default(),
-            experience: Some(shared::behaviour::Experience { timeline }),
-        };
-        Behaviour::from(old).experience.unwrap()
+        levels_to_experience(vec![Level {
+            at_seconds: 0.0,
+            at_popups: None,
+            anchors,
+            design,
+            tags: None,
+            wallpaper_tags: None,
+        }])
     }
 
     fn as_str_sources(owned: &[(String, String)]) -> Vec<(&str, &str)> {
@@ -4201,7 +4293,7 @@ mod tests {
                     ),
                     (
                         "lib/media.lua",
-                        include_str!("../../../default-modes/shared/lib/media.lua"),
+                        include_str!("../../default-modes/shared/lib/media.lua"),
                     ),
                 ];
 
@@ -4398,7 +4490,7 @@ mod tests {
             ("main.lua", "require('timeline')"),
             (
                 "timeline.lua",
-                include_str!("../../../default-modes/experience/src/timeline.lua"),
+                include_str!("../../default-modes/experience/src/timeline.lua"),
             ),
         ]
     }
@@ -4411,7 +4503,7 @@ mod tests {
             ("main.lua", "require('timeline').init()"),
             (
                 "timeline.lua",
-                include_str!("../../../default-modes/experience/src/timeline.lua"),
+                include_str!("../../default-modes/experience/src/timeline.lua"),
             ),
         ]
     }
@@ -4467,26 +4559,24 @@ mod tests {
     async fn experience_timeline_advances_on_active_time_and_applies_level_values() {
         LocalSet::new()
             .run_until(async {
-                let experience = legacy_experience(LegacyTimeline {
-                    levels: vec![
-                        Level {
-                            anchors: FrequencyAnchors {
-                                popup: Some(1.0),
-                                ..Default::default()
-                            },
+                let experience = levels_to_experience(vec![
+                    Level {
+                        anchors: FrequencyAnchors {
+                            popup: Some(1.0),
                             ..Default::default()
                         },
-                        Level {
-                            at_seconds: 5.0,
-                            anchors: FrequencyAnchors {
-                                popup: Some(4.0),
-                                ..Default::default()
-                            },
-                            tags: Some(vec!["kinky".to_string()]),
+                        ..Default::default()
+                    },
+                    Level {
+                        at_seconds: 5.0,
+                        anchors: FrequencyAnchors {
+                            popup: Some(4.0),
                             ..Default::default()
                         },
-                    ],
-                });
+                        tags: Some(vec!["kinky".to_string()]),
+                        ..Default::default()
+                    },
+                ]);
                 let mut harness =
                     timeline_harness(&timeline_only_sources_initialized(), experience);
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4513,7 +4603,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn experience_v3_holds_stage_then_interpolates_selected_transition_values() {
-        use shared::behaviour::v3::{
+        use shared::behaviour::{
             ContentSelection, Easing, EndStrategy, EventSchedule, Events, Interval, Stage,
             StageEnd, Timeline, Transition, TransitionCategory,
         };
@@ -4605,26 +4695,24 @@ mod tests {
     async fn experience_timeline_popup_count_trigger_advances_before_time_elapses() {
         LocalSet::new()
             .run_until(async {
-                let experience = legacy_experience(LegacyTimeline {
-                    levels: vec![
-                        Level {
-                            anchors: FrequencyAnchors {
-                                popup: Some(1.0),
-                                ..Default::default()
-                            },
+                let experience = levels_to_experience(vec![
+                    Level {
+                        anchors: FrequencyAnchors {
+                            popup: Some(1.0),
                             ..Default::default()
                         },
-                        Level {
-                            at_seconds: 1_000.0, // never reached within this test
-                            at_popups: Some(3),
-                            anchors: FrequencyAnchors {
-                                popup: Some(2.0),
-                                ..Default::default()
-                            },
+                        ..Default::default()
+                    },
+                    Level {
+                        at_seconds: 1_000.0, // never reached within this test
+                        at_popups: Some(3),
+                        anchors: FrequencyAnchors {
+                            popup: Some(2.0),
                             ..Default::default()
                         },
-                    ],
-                });
+                        ..Default::default()
+                    },
+                ]);
                 // No `.init()` -- this test isolates popup-count-driven advancement from any
                 // `at_seconds` timer.
                 let mut harness = timeline_harness(&timeline_only_sources(), experience);
@@ -4665,20 +4753,18 @@ mod tests {
     async fn experience_timeline_rule6_time_fallback_when_popups_never_spawn() {
         LocalSet::new()
             .run_until(async {
-                let experience = legacy_experience(LegacyTimeline {
-                    levels: vec![
-                        Level::default(),
-                        Level {
-                            at_seconds: 2.0,
-                            at_popups: Some(1_000_000), // never reached -- popups never spawn
-                            anchors: FrequencyAnchors {
-                                popup: Some(9.0),
-                                ..Default::default()
-                            },
+                let experience = levels_to_experience(vec![
+                    Level::default(),
+                    Level {
+                        at_seconds: 2.0,
+                        at_popups: Some(1_000_000), // never reached -- popups never spawn
+                        anchors: FrequencyAnchors {
+                            popup: Some(9.0),
                             ..Default::default()
                         },
-                    ],
-                });
+                        ..Default::default()
+                    },
+                ]);
                 let mut harness =
                     timeline_harness(&timeline_only_sources_initialized(), experience);
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4700,31 +4786,29 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 fn two_level_experience() -> Experience {
-                    legacy_experience(LegacyTimeline {
-                            levels: vec![
-                                Level::default(), // baseline
-                                Level {
-                                    at_seconds: 1_000.0,
-                                    at_popups: Some(2),
-                                    anchors: FrequencyAnchors {
-                                        popup: Some(2.0),
-                                        ..Default::default()
-                                    },
-                                    tags: Some(vec!["a".to_string()]),
-                                    ..Default::default()
-                                },
-                                Level {
-                                    at_seconds: 1_000.0,
-                                    at_popups: Some(5),
-                                    anchors: FrequencyAnchors {
-                                        popup: Some(5.0),
-                                        ..Default::default()
-                                    },
-                                    tags: Some(vec!["b".to_string()]),
-                                    ..Default::default()
-                                },
-                            ],
-                        })
+                    levels_to_experience(vec![
+                        Level::default(), // baseline
+                        Level {
+                            at_seconds: 1_000.0,
+                            at_popups: Some(2),
+                            anchors: FrequencyAnchors {
+                                popup: Some(2.0),
+                                ..Default::default()
+                            },
+                            tags: Some(vec!["a".to_string()]),
+                            ..Default::default()
+                        },
+                        Level {
+                            at_seconds: 1_000.0,
+                            at_popups: Some(5),
+                            anchors: FrequencyAnchors {
+                                popup: Some(5.0),
+                                ..Default::default()
+                            },
+                            tags: Some(vec!["b".to_string()]),
+                            ..Default::default()
+                        },
+                    ])
                 }
 
                 let probe = "(function() \
@@ -4782,15 +4866,13 @@ mod tests {
                     }
                 }
 
-                let experience = legacy_experience(LegacyTimeline {
-                        levels: vec![
+                let experience = levels_to_experience(vec![
                             Level::default(), // baseline: no wallpaper override
                             level_at(1.0, Some(vec!["special".to_string()])), // baseline -> special: applies
                             level_at(2.0, None), // special -> baseline (empty): no-ops internally
                             level_at(3.0, Some(vec!["special".to_string()])), // baseline -> special again: applies
                             level_at(4.0, Some(vec!["special".to_string()])), // unchanged: must not reapply
-                        ],
-                    });
+                        ]);
 
                 let owned = wrapped_experience_mode_sources(WALLPAPER_CAPTURE_WRAP);
                 let sources = as_str_sources(&owned);
@@ -4828,25 +4910,23 @@ mod tests {
     async fn experience_timeline_max_popups_still_clamps_when_level_raises_rate() {
         LocalSet::new()
             .run_until(async {
-                let experience = legacy_experience(LegacyTimeline {
-                    levels: vec![
-                        Level {
-                            anchors: FrequencyAnchors {
-                                popup: Some(0.1),
-                                ..Default::default()
-                            },
+                let experience = levels_to_experience(vec![
+                    Level {
+                        anchors: FrequencyAnchors {
+                            popup: Some(0.1),
                             ..Default::default()
                         },
-                        Level {
-                            at_seconds: 0.05,
-                            anchors: FrequencyAnchors {
-                                popup: Some(0.001),
-                                ..Default::default()
-                            },
+                        ..Default::default()
+                    },
+                    Level {
+                        at_seconds: 0.05,
+                        anchors: FrequencyAnchors {
+                            popup: Some(0.001),
                             ..Default::default()
                         },
-                    ],
-                });
+                        ..Default::default()
+                    },
+                ]);
 
                 let mut config = base_experience_mode_config();
                 config.insert("max_popups".to_string(), OptionValue::Integer(2));
@@ -4907,26 +4987,24 @@ mod tests {
                 const MEDIA: &[(&str, &[&str])] =
                     &[("kinky.avif", &["kinky"]), ("vanilla.avif", &["vanilla"])];
 
-                let experience = legacy_experience(LegacyTimeline {
-                    levels: vec![
-                        Level {
-                            anchors: FrequencyAnchors {
-                                popup: Some(0.05),
-                                ..Default::default()
-                            },
+                let experience = levels_to_experience(vec![
+                    Level {
+                        anchors: FrequencyAnchors {
+                            popup: Some(0.05),
                             ..Default::default()
                         },
-                        Level {
-                            at_seconds: 0.5,
-                            anchors: FrequencyAnchors {
-                                popup: Some(0.05),
-                                ..Default::default()
-                            },
-                            tags: Some(vec!["kinky".to_string()]),
+                        ..Default::default()
+                    },
+                    Level {
+                        at_seconds: 0.5,
+                        anchors: FrequencyAnchors {
+                            popup: Some(0.05),
                             ..Default::default()
                         },
-                    ],
-                });
+                        tags: Some(vec!["kinky".to_string()]),
+                        ..Default::default()
+                    },
+                ]);
 
                 let mut config = base_experience_mode_config();
                 config.insert("max_popups".to_string(), OptionValue::Integer(1_000));

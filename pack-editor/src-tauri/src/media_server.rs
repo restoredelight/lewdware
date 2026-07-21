@@ -1,16 +1,16 @@
 use axum::{
+    Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
 use serde::Deserialize;
 use tokio::net::TcpListener;
 
 use crate::{
-    pack::{InvalidRange, Range},
     PackState,
+    pack::{InvalidRange, Range},
 };
 
 #[derive(Clone)]
@@ -64,7 +64,7 @@ async fn thumbnail_handler(
             Some(pack) => match pack.get_view() {
                 Ok(v) => v,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
                 }
             },
             None => return (StatusCode::NOT_FOUND, "No pack open").into_response(),
@@ -94,7 +94,7 @@ async fn preview_handler(
             Some(pack) => match pack.get_view() {
                 Ok(v) => v,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
                 }
             },
             None => return (StatusCode::NOT_FOUND, "No pack open").into_response(),
@@ -124,7 +124,7 @@ async fn display_handler(
             Some(pack) => match pack.get_view() {
                 Ok(v) => v,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
                 }
             },
             None => return (StatusCode::NOT_FOUND, "No pack open").into_response(),
@@ -155,7 +155,7 @@ async fn file_handler(
             Some(pack) => match pack.get_view() {
                 Ok(v) => v,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
                 }
             },
             None => return (StatusCode::NOT_FOUND, "No pack open").into_response(),
@@ -253,7 +253,7 @@ mod tests {
 
     use tokio::sync::Mutex;
 
-    use super::{authenticate, parse_range, Authentication, MediaServerState};
+    use super::{Authentication, MediaServerState, authenticate, parse_range};
 
     #[test]
     fn requires_the_startup_media_token() {
@@ -261,13 +261,15 @@ mod tests {
             pack: Arc::new(Mutex::new(None)),
             token: "secret".into(),
         };
-        assert!(authenticate(
-            &state,
-            &Authentication {
-                token: Some("secret".into())
-            }
-        )
-        .is_ok());
+        assert!(
+            authenticate(
+                &state,
+                &Authentication {
+                    token: Some("secret".into())
+                }
+            )
+            .is_ok()
+        );
         let response = authenticate(&state, &Authentication { token: None }).unwrap_err();
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
     }

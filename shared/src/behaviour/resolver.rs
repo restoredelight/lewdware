@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 
 use crate::mode::{Metadata, ModeEntry, ModeGroup, ModeOption, OptionType, OptionValue};
 
-use super::{schema::Content, v3::Behaviour};
+use super::schema::{Behaviour, Content};
 
 /// Prefix for synthesized content-group toggle option keys (see `effective_options`). Lets a
 /// caller recognize which resolved keys are pack-derived (and so need per-pack storage scoping,

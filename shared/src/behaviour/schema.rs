@@ -1,56 +1,6 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
-
-/// The current behaviour.json schema version. Bump when making a breaking change to this
-/// document's shape; consumers should warn (not fail) when reading a document whose `version`
-/// is newer than this (see `behaviour-design/behaviour-tab.md`: "Consumers ignore unknown
-/// fields; dev mode warns on major mismatch").
-pub const CURRENT_VERSION: u32 = 2;
-
-/// A pack's behaviour.json document: the private data contract consumed by the engine's
-/// built-in default modes (Sandbox & Experience). Stored as a `pack_data` row named
-/// `"behaviour"`, serialized as pretty-printed JSON (not the `ciborium` binary format used for
-/// `.lwmode`/`.lwpack` framing) so it stays diffable in golden-file tests and hand-inspectable
-/// while debugging — see `behaviour-design/behaviour-tab.md`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Behaviour {
-    pub version: u32,
-    #[serde(default)]
-    pub content: Content,
-    /// Present iff the pack has an `experience` section — this is exactly what
-    /// `pack_has_experience` and `RecommendedMode`'s Sandbox/Experience default key off, so
-    /// presence must stay structurally distinguishable from "an empty section".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub experience: Option<Experience>,
-}
-
-impl Behaviour {
-    pub fn new() -> Self {
-        Self {
-            version: CURRENT_VERSION,
-            content: Content::default(),
-            experience: None,
-        }
-    }
-
-    /// Whether this document declares a schema version newer than the engine understands.
-    pub fn is_from_newer_engine(&self) -> bool {
-        self.version > CURRENT_VERSION
-    }
-
-    pub fn to_json_bytes(&self) -> serde_json::Result<Vec<u8>> {
-        serde_json::to_vec_pretty(self)
-    }
-
-    pub fn from_json_bytes(bytes: &[u8]) -> serde_json::Result<Self> {
-        serde_json::from_slice(bytes)
-    }
-}
-
-impl Default for Behaviour {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 /// Data read by both default modes: captions, prompts, notifications, subliminals, web links,
 /// wallpaper/splash tags, and the content groups a user can toggle. See
@@ -139,116 +89,375 @@ fn default_true() -> bool {
     true
 }
 
-/// The `experience` section: Experience-mode-only data. Entirely expressed as a sequence of
-/// timeline levels -- there is no separate "baseline" construct: `timeline.levels[0]` *is* the
-/// baseline (always active from session start, no trigger of its own). A statically-designed pack
-/// (no escalation at all) is simply a `Timeline` with exactly one level.
+pub const VERSION: u32 = 3;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Behaviour {
+    pub version: u32,
+    #[serde(default)]
+    pub content: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experience: Option<Experience>,
+}
+
+impl Behaviour {
+    pub fn new() -> Self {
+        Self {
+            version: VERSION,
+            content: Content::default(),
+            experience: None,
+        }
+    }
+
+    pub fn from_json_bytes(bytes: &[u8]) -> serde_json::Result<Self> {
+        serde_json::from_slice(bytes)
+    }
+
+    pub fn to_json_bytes(&self) -> serde_json::Result<Vec<u8>> {
+        serde_json::to_vec_pretty(self)
+    }
+
+    pub fn is_from_newer_engine(&self) -> bool {
+        self.version > VERSION
+    }
+
+    pub fn validate(&self) -> Vec<ValidationIssue> {
+        let Some(experience) = &self.experience else {
+            return vec![];
+        };
+        experience.timeline.validate()
+    }
+
+    /// Rewrites every reference to a media tag in this behaviour document.
+    ///
+    /// `replacement = None` removes the tag. Duplicate references are removed while preserving
+    /// their original order, which is important when merging one tag into another.
+    pub fn rewrite_tag(&mut self, from: &str, replacement: Option<&str>) {
+        fn rewrite(tags: &mut Vec<String>, from: &str, replacement: Option<&str>) {
+            let mut seen = HashSet::new();
+            tags.retain_mut(|tag| {
+                if tag == from {
+                    let Some(replacement) = replacement else {
+                        return false;
+                    };
+                    replacement.clone_into(tag);
+                }
+                seen.insert(tag.clone())
+            });
+        }
+
+        let content = &mut self.content;
+        for group in &mut content.content_groups {
+            rewrite(&mut group.tags, from, replacement);
+        }
+        for item in &mut content.captions {
+            rewrite(&mut item.tags, from, replacement);
+        }
+        for item in &mut content.prompts {
+            rewrite(&mut item.tags, from, replacement);
+        }
+        for item in &mut content.notifications {
+            rewrite(&mut item.tags, from, replacement);
+        }
+        for item in &mut content.subliminals {
+            rewrite(&mut item.tags, from, replacement);
+        }
+        for item in &mut content.web_links {
+            rewrite(&mut item.tags, from, replacement);
+        }
+        rewrite(&mut content.wallpaper_tags, from, replacement);
+        rewrite(&mut content.splash_tags, from, replacement);
+
+        if let Some(experience) = &mut self.experience {
+            for stage in &mut experience.timeline.stages {
+                if let Some(tags) = &mut stage.content.tags {
+                    rewrite(tags, from, replacement);
+                }
+                if let Some(tags) = &mut stage.content.wallpaper_tags {
+                    rewrite(tags, from, replacement);
+                }
+            }
+        }
+    }
+}
+
+impl Default for Behaviour {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The `experience` section: Experience-mode-only data. Entirely expressed as a timeline of
+/// stages connected by transitions -- see `behaviour-design/default-mode.md`, "Transitions v1".
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Experience {
     #[serde(default)]
     pub timeline: Timeline,
 }
 
-/// Author-set events-per-time baselines for Experience's rate-based features, expressed as
-/// seconds-between-events (matching Sandbox's `*_frequency` option convention -- see
-/// `behaviour-design/behaviour-tab.md`). `None` means the pack doesn't drive that feature in
-/// Experience at all: the process never starts, regardless of the user's pacing scalar --
-/// distinct from "runs at some default rate", matching behaviour.json's "no defaults injection"
-/// rule (`behaviour-design/behaviour-tab.md`'s resolver section) and rule 5's "empty means skip"
-/// spirit generalized to "absent means this feature doesn't exist here".
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct FrequencyAnchors {
-    #[serde(default)]
-    pub popup: Option<f64>,
-    #[serde(default)]
-    pub web: Option<f64>,
-    #[serde(default)]
-    pub notification: Option<f64>,
-    #[serde(default)]
-    pub prompt: Option<f64>,
-    #[serde(default)]
-    pub subliminal: Option<f64>,
-}
-
-/// Author-set non-rate baselines -- values a pacing scalar has no meaning for (movement speed,
-/// mitosis chance/count), consumed by Experience's processes exactly as Sandbox's user-set
-/// equivalents are. `None` means the pack doesn't drive that feature in Experience -- same
-/// absent-means-off convention as `FrequencyAnchors`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct DesignValues {
-    #[serde(default)]
-    pub movement_speed_min: Option<f64>,
-    #[serde(default)]
-    pub movement_speed_max: Option<f64>,
-    #[serde(default)]
-    pub mitosis_chance: Option<f64>,
-    #[serde(default)]
-    pub mitosis_count: Option<u32>,
-}
-
-/// The transition arc: an ordered sequence of levels the Experience timeline advances through
-/// over a session. Progress is session-scoped (no storage dependency) -- a fresh session always
-/// starts at `levels[0]`, matching Edgeware's corruption semantics. See
-/// `behaviour-design/default-mode.md`, "Transitions v1".
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Timeline {
-    /// Non-empty by convention: `levels[0]` is the baseline (always active from session start,
-    /// no trigger of its own -- its `at_seconds`/`at_popups` are ignored by every consumer, and
-    /// the pack editor never renders them for this level). Not structurally enforced (this
-    /// schema's existing style leans lenient rather than validating -- see e.g. `Content`'s
-    /// `Vec` fields); an empty `levels` degrades gracefully to "nothing runs", matching rule 5's
-    /// empty-pool precedent, rather than being treated as an error.
     #[serde(default)]
-    pub levels: Vec<Level>,
+    pub stages: Vec<Stage>,
+    #[serde(default)]
+    pub transitions: Vec<Transition>,
 }
 
-/// One level of the timeline: a trigger (ignored for `levels[0]`) plus this level's own complete,
-/// independent set of frequency anchors, design values, tags and wallpaper. Levels do not inherit
-/// from each other or from `levels[0]` -- each is a fully self-contained snapshot, so a level left
-/// blank in some field means that feature/restriction simply does not apply while this level is
-/// active, exactly like `FrequencyAnchors`'/`DesignValues`' own "absent means doesn't exist here"
-/// convention, just evaluated per level instead of once per pack. This is deliberately simpler
-/// than an inherit-from-baseline model: it lets an author turn a previously-on feature off at a
-/// later level, which an inheriting design cannot express. "Start a new level from the previous
-/// one's values" is a pack-editor authoring convenience (copies values in at creation time), not a
-/// schema rule -- nothing here encodes it. Order-independent: jumping straight to a later level
-/// produces identical effective params to passing through every level in between, since a level
-/// never depends on transition history.
+impl Timeline {
+    pub fn validate(&self) -> Vec<ValidationIssue> {
+        let mut issues = vec![];
+        let mut ids = HashSet::new();
+        for (index, stage) in self.stages.iter().enumerate() {
+            if !ids.insert(stage.id.as_str()) {
+                issues.push(ValidationIssue::error(
+                    format!("experience.timeline.stages[{index}].id"),
+                    "Stage IDs must be unique",
+                ));
+            }
+            let final_stage = index + 1 == self.stages.len();
+            if final_stage && stage.end.is_some() {
+                issues.push(ValidationIssue::error(
+                    format!("experience.timeline.stages[{index}].end"),
+                    "The final stage must run until the session ends",
+                ));
+            } else if !final_stage && stage.end.is_none() {
+                issues.push(ValidationIssue::error(
+                    format!("experience.timeline.stages[{index}].end"),
+                    "Every non-final stage needs an ending condition",
+                ));
+            }
+            if let Some(end) = &stage.end
+                && end.duration_seconds.is_none()
+                && end.event_count.is_none()
+            {
+                issues.push(ValidationIssue::error(
+                    format!("experience.timeline.stages[{index}].end"),
+                    "An ending condition needs a duration or event count",
+                ));
+            }
+        }
+        for (index, pair) in self.stages.windows(2).enumerate() {
+            let matches = self
+                .transitions
+                .iter()
+                .filter(|transition| {
+                    transition.from_stage == pair[0].id && transition.to_stage == pair[1].id
+                })
+                .count();
+            if matches != 1 {
+                issues.push(ValidationIssue::error(
+                    format!("experience.timeline.transitions[{index}]"),
+                    "Each adjacent pair of stages needs exactly one transition",
+                ));
+            }
+        }
+        issues
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Stage {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<StageEnd>,
+    #[serde(default)]
+    pub content: ContentSelection,
+    #[serde(default)]
+    pub events: Events,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub movement: Option<Movement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mitosis: Option<Mitosis>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct Level {
-    /// Cumulative active-time seconds since session start at which this level is reached at the
-    /// latest. Ignored for `levels[0]` (always active from t=0). Required (not `Option`) for
-    /// uniformity across levels; structurally guarantees interaction rule 6's "every trigger needs
-    /// a time-based fallback" for every level that does use it.
-    #[serde(default)]
-    pub at_seconds: f64,
-    /// Optional early-advance trigger: reached once this many cumulative popups have spawned
-    /// (since session start), if that happens before `at_seconds`. Ignored for `levels[0]`.
-    /// `None` means time is the only trigger for this level.
-    #[serde(default)]
-    pub at_popups: Option<u32>,
-    #[serde(default)]
-    pub anchors: FrequencyAnchors,
-    #[serde(default)]
-    pub design: DesignValues,
-    /// This level's active tag set (mode parameter): an `any`-style eligibility restriction on
-    /// media/content queries, the same mechanism `Content::wallpaper_tags` already uses. `None` =>
-    /// unrestricted (the pack's full tag vocabulary).
-    #[serde(default)]
+pub struct ContentSelection {
+    /// `None` uses all content; `Some([])` deliberately selects none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
-    /// This level's wallpaper-tag override (mode parameter). `None` => no override --
-    /// `Content::wallpaper_tags` stays in effect.
-    #[serde(default)]
+    /// `None` retains the pack-level wallpaper selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallpaper_tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Events {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub popup: Option<EventSchedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<EventSchedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification: Option<EventSchedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<EventSchedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subliminal: Option<EventSchedule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EventSchedule {
+    pub interval: Interval,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_delay_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Interval {
+    Fixed {
+        seconds: f64,
+    },
+    Random {
+        minimum_seconds: f64,
+        maximum_seconds: f64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Movement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_speed: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_speed: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Mitosis {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StageEnd {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_count: Option<EventCountCondition>,
+    #[serde(default)]
+    pub strategy: EndStrategy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EventCountCondition {
+    pub event: EventKind,
+    pub count: u32,
+    #[serde(default)]
+    pub scope: CountScope,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EndStrategy {
+    #[default]
+    Any,
+    All,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CountScope {
+    #[default]
+    Stage,
+    Session,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    Popup,
+    Web,
+    Notification,
+    Prompt,
+    Subliminal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Transition {
+    pub id: String,
+    pub from_stage: String,
+    pub to_stage: String,
+    #[serde(default)]
+    pub duration_seconds: f64,
+    #[serde(default)]
+    pub easing: Easing,
+    #[serde(default)]
+    pub affected: Vec<TransitionCategory>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Easing {
+    #[default]
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionCategory {
+    // Kept for documents written by early v3 editor builds. New editor versions
+    // use the field-level variants below.
+    Events,
+    Movement,
+    Mitosis,
+    PopupInterval,
+    WebInterval,
+    NotificationInterval,
+    PromptInterval,
+    SubliminalInterval,
+    MovementMinimumSpeed,
+    MovementMaximumSpeed,
+    MitosisChance,
+    MitosisCount,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ValidationIssue {
+    pub path: String,
+    pub severity: ValidationSeverity,
+    pub message: String,
+}
+
+impl ValidationIssue {
+    fn error(path: String, message: impl Into<String>) -> Self {
+        Self {
+            path,
+            severity: ValidationSeverity::Error,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationSeverity {
+    Error,
+    Warning,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn wallpaper_and_splash_tags_are_opt_in_with_no_mechanical_default() {
+        // No mechanical fallback: an author who never declares wallpaper_tags/splash_tags gets an
+        // empty list, not an assumed "wallpaper"/"splash" tag -- see `Content`'s doc comment.
+        let content = Content::default();
+        assert_eq!(content.wallpaper_tags, Vec::<String>::new());
+        assert_eq!(content.splash_tags, Vec::<String>::new());
+    }
+
     fn sample_behaviour() -> Behaviour {
         Behaviour {
-            version: CURRENT_VERSION,
+            version: VERSION,
             content: Content {
                 content_groups: vec![ContentGroup {
                     id: "kinky".to_string(),
@@ -257,95 +466,68 @@ mod tests {
                     tags: vec!["kinky".to_string()],
                     enabled_by_default: true,
                 }],
-                captions: vec![
-                    TextItem {
-                        text: "Obey.".to_string(),
-                        tags: vec!["kinky".to_string()],
-                    },
-                    TextItem {
-                        text: "Untagged caption".to_string(),
-                        tags: vec![],
-                    },
-                ],
-                prompts: vec![TextItem {
-                    text: "Type below".to_string(),
-                    tags: vec![],
-                }],
-                prompt_settings: PromptSettings {
-                    submit_label: Some("Submit".to_string()),
-                },
-                notifications: vec![TextItem {
-                    text: "A notification".to_string(),
-                    tags: vec![],
-                }],
-                subliminals: vec![TextItem {
-                    text: "Obey".to_string(),
-                    tags: vec!["hypno".to_string()],
+                captions: vec![TextItem {
+                    text: "Obey.".to_string(),
+                    tags: vec!["kinky".to_string()],
                 }],
                 web_links: vec![WebLink {
                     url: "https://duckduckgo.com/?q=".to_string(),
-                    args: vec!["edgeware packs".to_string(), "rule 34".to_string()],
+                    args: vec!["edgeware packs".to_string()],
                     tags: vec![],
                 }],
                 wallpaper_tags: vec!["bg".to_string()],
-                splash_tags: vec![],
+                ..Content::default()
             },
             experience: Some(Experience {
                 timeline: Timeline {
-                    levels: vec![
-                        Level {
-                            at_seconds: 0.0,
-                            at_popups: None,
-                            anchors: FrequencyAnchors {
-                                popup: Some(5.0),
-                                web: Some(300.0),
-                                notification: None,
-                                prompt: Some(90.0),
-                                subliminal: None,
+                    stages: vec![
+                        Stage {
+                            id: "stage-1".to_string(),
+                            label: "Stage 1".to_string(),
+                            end: Some(StageEnd {
+                                duration_seconds: Some(300.0),
+                                event_count: None,
+                                strategy: EndStrategy::Any,
+                            }),
+                            content: ContentSelection::default(),
+                            events: Events {
+                                popup: Some(EventSchedule {
+                                    interval: Interval::Fixed { seconds: 5.0 },
+                                    initial_delay_seconds: None,
+                                    max_concurrent: None,
+                                }),
+                                ..Events::default()
                             },
-                            design: DesignValues {
-                                movement_speed_min: Some(50.0),
-                                movement_speed_max: Some(150.0),
-                                mitosis_chance: Some(0.5),
-                                mitosis_count: Some(2),
-                            },
-                            tags: None,
-                            wallpaper_tags: None,
+                            movement: None,
+                            mitosis: None,
                         },
-                        Level {
-                            at_seconds: 300.0,
-                            at_popups: Some(20),
-                            anchors: FrequencyAnchors {
-                                popup: Some(1.5),
-                                web: Some(300.0),
-                                notification: None,
-                                prompt: Some(90.0),
-                                subliminal: None,
+                        Stage {
+                            id: "stage-2".to_string(),
+                            label: "Stage 2".to_string(),
+                            end: None,
+                            content: ContentSelection {
+                                tags: Some(vec!["kinky".to_string()]),
+                                wallpaper_tags: None,
                             },
-                            design: DesignValues {
-                                movement_speed_min: Some(50.0),
-                                movement_speed_max: Some(150.0),
-                                mitosis_chance: Some(0.5),
-                                mitosis_count: Some(2),
-                            },
-                            tags: Some(vec!["kinky".to_string()]),
-                            wallpaper_tags: None,
-                        },
-                        Level {
-                            at_seconds: 900.0,
-                            at_popups: None,
-                            anchors: FrequencyAnchors {
-                                popup: Some(3.0),
-                                web: None,
-                                notification: None,
-                                prompt: None,
-                                subliminal: None,
-                            },
-                            design: DesignValues::default(),
-                            tags: Some(vec!["kinky".to_string(), "hypno".to_string()]),
-                            wallpaper_tags: Some(vec!["corrupted-bg".to_string()]),
+                            events: Events::default(),
+                            movement: Some(Movement {
+                                minimum_speed: Some(50.0),
+                                maximum_speed: Some(150.0),
+                            }),
+                            mitosis: Some(Mitosis {
+                                chance: Some(0.5),
+                                count: Some(2),
+                            }),
                         },
                     ],
+                    transitions: vec![Transition {
+                        id: "transition-1".to_string(),
+                        from_stage: "stage-1".to_string(),
+                        to_stage: "stage-2".to_string(),
+                        duration_seconds: 0.0,
+                        easing: Easing::Linear,
+                        affected: vec![],
+                    }],
                 },
             }),
         }
@@ -360,123 +542,11 @@ mod tests {
     }
 
     #[test]
-    fn wallpaper_and_splash_tags_are_opt_in_with_no_mechanical_default() {
-        // No mechanical fallback: an author who never declares wallpaper_tags/splash_tags gets an
-        // empty list, not an assumed "wallpaper"/"splash" tag -- see `Content`'s doc comment.
-        let content = Content::default();
-        assert_eq!(content.wallpaper_tags, Vec::<String>::new());
-        assert_eq!(content.splash_tags, Vec::<String>::new());
-    }
-
-    #[test]
-    fn minimal_document_roundtrips_to_defaults() {
-        let decoded = Behaviour::from_json_bytes(br#"{"version":1}"#).unwrap();
-        assert_eq!(decoded.version, 1);
+    fn minimal_document_parses_with_defaults() {
+        let decoded = Behaviour::from_json_bytes(br#"{"version":3}"#).unwrap();
+        assert_eq!(decoded.version, 3);
         assert_eq!(decoded.content, Content::default());
         assert_eq!(decoded.experience, None);
-    }
-
-    #[test]
-    fn level_anchors_and_design_values_roundtrip() {
-        let original = sample_behaviour().experience.unwrap();
-        let bytes = serde_json::to_vec(&original).unwrap();
-        let decoded: Experience = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(original, decoded);
-        assert_eq!(decoded.timeline.levels[0].anchors.popup, Some(5.0));
-        assert_eq!(decoded.timeline.levels[0].anchors.notification, None);
-        assert_eq!(decoded.timeline.levels[0].design.mitosis_count, Some(2));
-    }
-
-    #[test]
-    fn experience_section_with_no_levels_still_present() {
-        // A `experience: {}` document (just enough to be recommended Experience) is a valid,
-        // if inert, statically-designed pack: an empty `levels` means nothing in Experience runs
-        // at all -- not an error (rule 5's empty-pool precedent, generalized to the timeline).
-        let decoded = Behaviour::from_json_bytes(br#"{"version":2,"experience":{}}"#).unwrap();
-        let experience = decoded
-            .experience
-            .expect("experience section should be present");
-        assert_eq!(experience.timeline, Timeline::default());
-        assert!(experience.timeline.levels.is_empty());
-    }
-
-    #[test]
-    fn timeline_roundtrips_with_levels() {
-        let original = sample_behaviour().experience.unwrap().timeline;
-        let bytes = serde_json::to_vec(&original).unwrap();
-        let decoded: Timeline = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(original, decoded);
-        assert_eq!(decoded.levels.len(), 3);
-        assert_eq!(decoded.levels[0].at_seconds, 0.0);
-        assert_eq!(decoded.levels[1].at_seconds, 300.0);
-        assert_eq!(decoded.levels[1].at_popups, Some(20));
-        assert_eq!(decoded.levels[2].at_popups, None);
-        assert_eq!(decoded.levels[2].anchors.popup, Some(3.0));
-    }
-
-    #[test]
-    fn timeline_defaults_to_no_levels_and_survives_roundtrip() {
-        // An experience section with no timeline at all (the common case pre-Transitions
-        // authoring, or a purely statically-designed pack with just one baseline level) must keep
-        // an empty `levels`, not synthesize a level out of nowhere -- same discipline as
-        // `Behaviour::experience` itself (see `experience_presence_is_distinguishable_from_absence`).
-        let mut experience = sample_behaviour().experience.unwrap();
-        experience.timeline = Timeline::default();
-        let bytes = serde_json::to_vec(&experience).unwrap();
-        let decoded: Experience = serde_json::from_slice(&bytes).unwrap();
-        assert!(decoded.timeline.levels.is_empty());
-    }
-
-    #[test]
-    fn level_fields_default_to_absent_when_unset() {
-        // Every field is independent per level -- no inheritance from another level -- so a level
-        // that sets nothing simply has every feature/restriction absent at that level (see
-        // `Level`'s doc comment on order-independence and "no inheritance").
-        let level: Level = serde_json::from_str(r#"{"at_seconds": 60.0}"#).unwrap();
-        assert_eq!(level.at_popups, None);
-        assert_eq!(level.anchors, FrequencyAnchors::default());
-        assert_eq!(level.design, DesignValues::default());
-        assert_eq!(level.tags, None);
-        assert_eq!(level.wallpaper_tags, None);
-    }
-
-    #[test]
-    fn unknown_fields_are_ignored() {
-        let bytes = br#"{
-            "version": 1,
-            "totallyUnknownTopLevelField": 123,
-            "content": {
-                "captions": [{"text": "hi", "tags": [], "unknownItemField": true}],
-                "unknownContentField": "whatever"
-            }
-        }"#;
-        let decoded = Behaviour::from_json_bytes(bytes).unwrap();
-        assert_eq!(decoded.content.captions.len(), 1);
-        assert_eq!(decoded.content.captions[0].text, "hi");
-    }
-
-    #[test]
-    fn empty_tags_roundtrip_distinctly_from_tagged() {
-        let original = Behaviour {
-            version: CURRENT_VERSION,
-            content: Content {
-                captions: vec![
-                    TextItem {
-                        text: "applies to everything".to_string(),
-                        tags: vec![],
-                    },
-                    TextItem {
-                        text: "only kinky".to_string(),
-                        tags: vec!["kinky".to_string()],
-                    },
-                ],
-                ..Default::default()
-            },
-            experience: None,
-        };
-        let decoded = Behaviour::from_json_bytes(&original.to_json_bytes().unwrap()).unwrap();
-        assert!(decoded.content.captions[0].tags.is_empty());
-        assert_eq!(decoded.content.captions[1].tags, vec!["kinky".to_string()]);
     }
 
     #[test]
@@ -500,7 +570,99 @@ mod tests {
     fn is_from_newer_engine() {
         let mut behaviour = Behaviour::new();
         assert!(!behaviour.is_from_newer_engine());
-        behaviour.version = CURRENT_VERSION + 1;
+        behaviour.version = VERSION + 1;
         assert!(behaviour.is_from_newer_engine());
+    }
+
+    #[test]
+    fn unknown_fields_are_ignored() {
+        let bytes = br#"{
+            "version": 3,
+            "totallyUnknownTopLevelField": 123,
+            "content": {
+                "captions": [{"text": "hi", "tags": [], "unknownItemField": true}],
+                "unknownContentField": "whatever"
+            }
+        }"#;
+        let decoded = Behaviour::from_json_bytes(bytes).unwrap();
+        assert_eq!(decoded.content.captions.len(), 1);
+        assert_eq!(decoded.content.captions[0].text, "hi");
+    }
+
+    #[test]
+    fn rewriting_a_tag_updates_every_behaviour_reference_and_deduplicates_merges() {
+        let mut behaviour = Behaviour::from_json_bytes(br#"{
+          "version": 3,
+          "content": {
+            "content_groups": [{"id":"group","label":"Group","tags":["old","new"],"enabled_by_default":true}],
+            "captions": [{"text":"Caption","tags":["old"]}],
+            "prompts": [{"text":"Prompt","tags":["old"]}],
+            "notifications": [{"text":"Notification","tags":["old"]}],
+            "subliminals": [{"text":"Subliminal","tags":["old"]}],
+            "web_links": [{"url":"https://example.com","tags":["old"]}],
+            "wallpaper_tags": ["old"],
+            "splash_tags": ["old"]
+          },
+          "experience": {"timeline":{"stages":[{
+            "id":"stage","label":"Stage","content":{"tags":["old"],"wallpaper_tags":["old"]}
+          }],"transitions":[]}}
+        }"#).unwrap();
+
+        behaviour.rewrite_tag("old", Some("new"));
+        assert_eq!(behaviour.content.content_groups[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.captions[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.prompts[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.notifications[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.subliminals[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.web_links[0].tags, vec!["new"]);
+        assert_eq!(behaviour.content.wallpaper_tags, vec!["new"]);
+        assert_eq!(behaviour.content.splash_tags, vec!["new"]);
+        let stage = &behaviour.experience.as_ref().unwrap().timeline.stages[0];
+        assert_eq!(
+            stage.content.tags.as_deref(),
+            Some(["new".into()].as_slice())
+        );
+        assert_eq!(
+            stage.content.wallpaper_tags.as_deref(),
+            Some(["new".into()].as_slice())
+        );
+
+        behaviour.rewrite_tag("new", None);
+        assert!(behaviour.content.content_groups[0].tags.is_empty());
+        assert!(
+            behaviour.experience.as_ref().unwrap().timeline.stages[0]
+                .content
+                .tags
+                .as_ref()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn validation_reports_final_stage_and_transition_structure() {
+        let mut behaviour = Behaviour::new();
+        behaviour.experience = Some(Experience {
+            timeline: Timeline {
+                stages: vec![Stage {
+                    id: "only".into(),
+                    label: "Only".into(),
+                    end: Some(StageEnd {
+                        duration_seconds: Some(10.0),
+                        event_count: None,
+                        strategy: EndStrategy::Any,
+                    }),
+                    content: Default::default(),
+                    events: Default::default(),
+                    movement: None,
+                    mitosis: None,
+                }],
+                transitions: vec![],
+            },
+        });
+        assert_eq!(
+            behaviour.validate()[0].path,
+            "experience.timeline.stages[0].end"
+        );
     }
 }

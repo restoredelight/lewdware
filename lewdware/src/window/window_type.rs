@@ -462,26 +462,6 @@ fn send_dialog_interaction(
     }
 }
 
-/// Fires `Window:on_click()` for a pending content click iff this frame's `paint_dialog` didn't
-/// already resolve it into a button/input interaction (see `DialogWindow::pending_content_click`
-/// and `mark_pending_content_click`). Always clears the pending flag, since a render pass with no
-/// interaction still means "nothing consumed it" -- there's no later frame this could roll over
-/// to. A free function (rather than a `&mut self` method) so it can be called while another field
-/// of `DialogWindow` is separately borrowed.
-fn resolve_pending_content_click(
-    pending_content_click: &mut bool,
-    lua_event_tx: &UnboundedSender<lua::Event>,
-    id: ItemId,
-    consumed_by_element: bool,
-) {
-    if std::mem::take(pending_content_click) && !consumed_by_element {
-        let event = lua::Event::WindowClicked { id };
-        if lua_event_tx.send(event).is_err() {
-            tracing::debug!("Couldn't send WindowClicked event: Lua thread has shut down");
-        }
-    }
-}
-
 /// Paint the dialog's elements as a vertical stack, in order. Returns the button click / input
 /// submit that occurred this frame, if any (at most one is handled per frame — egui only reports
 /// one click/submit per widget per frame anyway).
@@ -626,12 +606,6 @@ pub struct DialogWindow {
     egui_cpu: Option<EguiCPUWindow>,
     egui_gpu: Option<EguiGpuRenderer>,
     decoration_overlay: Option<DecorationOverlay>,
-    // Set by `mark_pending_content_click` when a content-area release happens, and resolved on
-    // the next `render()` pass: fires `Window:on_click()` iff that frame's `paint_dialog` produced
-    // no `interaction` (i.e. the click wasn't consumed by a button/input). Deferred rather than
-    // decided immediately because egui only learns whether a widget consumed the click during
-    // painting, not from the raw winit event.
-    pending_content_click: bool,
     // Declared last so it drops last: egui's Arc<Window> clone is released first.
     pub inner_window: InnerWindow,
 }
@@ -700,16 +674,8 @@ impl DialogWindow {
             egui_cpu,
             egui_gpu,
             decoration_overlay,
-            pending_content_click: false,
             inner_window,
         })
-    }
-
-    /// Records a content-area click for resolution on the next `render()` pass -- see the doc
-    /// comment on `pending_content_click`.
-    pub fn mark_pending_content_click(&mut self) {
-        self.pending_content_click = true;
-        self.inner_window.request_redraw();
     }
 
     /// Turn a resolved element spec into render-ready state, uploading an `image` element's
@@ -787,16 +753,9 @@ impl DialogWindow {
                 interaction = paint_dialog(ui, elements, default_button_id.as_deref());
             })?;
 
-            let consumed_by_element = interaction.is_some();
             if let Some(interaction) = interaction {
                 send_dialog_interaction(&lua_event_tx, id, interaction, &self.elements);
             }
-            resolve_pending_content_click(
-                &mut self.pending_content_click,
-                &lua_event_tx,
-                id,
-                consumed_by_element,
-            );
 
             let decoration_overlay = &mut self.decoration_overlay;
             self.inner_window.with_header_pixmap(|pixmap| {
@@ -853,16 +812,9 @@ impl DialogWindow {
                 buffer.copy_from_u32_buf(&egui_buffer, inner_size.width, ox, oy);
             })?;
 
-            let consumed_by_element = interaction.is_some();
             if let Some(interaction) = interaction {
                 send_dialog_interaction(&lua_event_tx, id, interaction, &self.elements);
             }
-            resolve_pending_content_click(
-                &mut self.pending_content_click,
-                &lua_event_tx,
-                id,
-                consumed_by_element,
-            );
         }
 
         Ok(())

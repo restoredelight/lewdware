@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tempfile::NamedTempFile;
 use tokio::process::Command;
 

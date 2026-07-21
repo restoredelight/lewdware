@@ -26,7 +26,7 @@ impl Timer {
 
                 stopped.set(true);
                 if let Err(err) = function.call::<()>(()) {
-                    tracing::error!("{err}");
+                    tracing::error!("Error in Timer handler:\n{err}");
                 }
             }
         });
@@ -94,7 +94,7 @@ impl Interval {
                             last_tick = tick;
 
                             if let Err(err) = function.call::<()>(()) {
-                                tracing::error!("{err}");
+                                tracing::error!("Error in Interval handler:\n{err}");
                             }
                         },
                         result = interval_rx.changed() => {
@@ -105,7 +105,6 @@ impl Interval {
                                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                             } else {
                                 interval_rx_opt = None;
-                                tracing::warn!("interval watch channel closed");
                             }
                         }
                     }
@@ -113,7 +112,7 @@ impl Interval {
                     interval.tick().await;
 
                     if let Err(err) = function.call::<()>(()) {
-                        tracing::error!("{err}");
+                        tracing::error!("Error in Interval handler:\n{err}");
                     }
                 }
             }

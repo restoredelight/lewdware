@@ -16,16 +16,16 @@
 
 use std::{io, path::Path, sync::Arc, thread::available_parallelism};
 
-use anyhow::{anyhow, Context};
-use converter::{convert, ConversionOutput, ConvertedMedia, DirSource, PackSource, ZipSource};
-use futures::{stream, StreamExt};
-use shared::encode::{encode_file, hash_file, HardwareEncoder};
+use anyhow::{Context, anyhow};
+use converter::{ConversionOutput, ConvertedMedia, DirSource, PackSource, ZipSource, convert};
+use futures::{StreamExt, stream};
+use shared::encode::{HardwareEncoder, encode_file, hash_file};
 use tauri::Emitter;
 use tempfile::TempDir;
-use tokio::sync::{oneshot, watch, RwLock};
+use tokio::sync::{RwLock, oneshot, watch};
 use uuid::Uuid;
 
-use crate::encode::{wait_cancelled, DiscardOnDrop, UploadErrorPayload};
+use crate::encode::{DiscardOnDrop, UploadErrorPayload, wait_cancelled};
 use crate::pack::MediaFile;
 
 #[derive(Debug)]

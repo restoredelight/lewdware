@@ -9,7 +9,7 @@ metadata:
   version: "1.0"
   recommended_mode: Sandbox
 behaviour:
-  version: 2
+  version: 3
   content:
     content_groups:
       - id: vanilla
@@ -78,22 +78,32 @@ behaviour:
       - splash
   experience:
     timeline:
-      levels:
-        - at_seconds: 0
-          at_popups: ~
-          anchors:
-            popup: 4.545454545454546
-            web: 300
-            notification: 300
-            prompt: 90
-            subliminal: 60
-          design:
-            movement_speed_min: ~
-            movement_speed_max: ~
-            mitosis_chance: ~
-            mitosis_count: ~
-          tags: ~
-          wallpaper_tags: ~
+      stages:
+        - id: stage-1
+          label: Stage 1
+          content: {}
+          events:
+            popup:
+              interval:
+                kind: fixed
+                seconds: 4.545454545454546
+            web:
+              interval:
+                kind: fixed
+                seconds: 300
+            notification:
+              interval:
+                kind: fixed
+                seconds: 300
+            prompt:
+              interval:
+                kind: fixed
+                seconds: 90
+            subliminal:
+              interval:
+                kind: fixed
+                seconds: 60
+      transitions: []
 media:
   - source_path: img/kinky_a.jpg
     suggested_name: kinky_a.jpg

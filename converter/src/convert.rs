@@ -3,10 +3,130 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use shared::behaviour::{
-    Behaviour, Content, ContentGroup, DesignValues, Experience, FrequencyAnchors, Level,
-    PromptSettings, TextItem, Timeline, WebLink,
+    Behaviour, ContentSelection, CountScope, Easing, EndStrategy, EventCountCondition, EventKind,
+    EventSchedule, Events, Experience, Interval, Mitosis, Movement, Stage, StageEnd, Timeline,
+    Transition,
 };
+use shared::behaviour::{Content, ContentGroup, PromptSettings, TextItem, WebLink};
 use shared::read_pack::{Metadata, RecommendedMode};
+
+/// An intermediate, cumulative-timeline-friendly shape the converter builds internally --
+/// mirrors the pre-Transitions "one flat, self-contained snapshot per level" schema, which is a
+/// far simpler target for `build_timeline`'s cumulative tag/anchor folding than the stage graph
+/// (transitions between stages, `end` conditions referencing the *next* stage) is. Converted to
+/// real `Stage`/`Transition`s by `levels_to_experience` once every level is resolved.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Level {
+    at_seconds: f64,
+    at_popups: Option<u32>,
+    anchors: FrequencyAnchors,
+    design: DesignValues,
+    tags: Option<Vec<String>>,
+    wallpaper_tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct FrequencyAnchors {
+    popup: Option<f64>,
+    web: Option<f64>,
+    notification: Option<f64>,
+    prompt: Option<f64>,
+    subliminal: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct DesignValues {
+    movement_speed_min: Option<f64>,
+    movement_speed_max: Option<f64>,
+    mitosis_chance: Option<f64>,
+    mitosis_count: Option<u32>,
+}
+
+fn schedule(seconds: Option<f64>) -> Option<EventSchedule> {
+    seconds.map(|seconds| EventSchedule {
+        interval: Interval::Fixed { seconds },
+        initial_delay_seconds: None,
+        max_concurrent: None,
+    })
+}
+
+fn movement(design: &DesignValues) -> Option<Movement> {
+    match (design.movement_speed_min, design.movement_speed_max) {
+        (None, None) => None,
+        (minimum_speed, maximum_speed) => Some(Movement {
+            minimum_speed,
+            maximum_speed,
+        }),
+    }
+}
+
+fn mitosis(design: &DesignValues) -> Option<Mitosis> {
+    match (design.mitosis_chance, design.mitosis_count) {
+        (None, None) => None,
+        (chance, count) => Some(Mitosis { chance, count }),
+    }
+}
+
+/// Converts a cumulative `Vec<Level>` (see `Level`'s doc comment) into a real `Experience`:
+/// each level becomes a `Stage`, and a level's `at_seconds`/`at_popups` (the trigger for
+/// *reaching* it) becomes the *previous* stage's `StageEnd` (the condition for *leaving* it) --
+/// the last level never gets an `end`, since there's nothing after it to transition to. One
+/// zero-duration, linear, unaffected `Transition` is synthesized per adjacent stage pair, since
+/// a cumulative level's values always apply instantly, never interpolated.
+fn levels_to_experience(levels: Vec<Level>) -> Experience {
+    let stages = levels
+        .iter()
+        .enumerate()
+        .map(|(index, level)| {
+            let next = levels.get(index + 1);
+            let end = next.map(|next| StageEnd {
+                duration_seconds: Some((next.at_seconds - level.at_seconds).max(0.0)),
+                event_count: next.at_popups.map(|count| EventCountCondition {
+                    event: EventKind::Popup,
+                    count,
+                    scope: CountScope::Session,
+                }),
+                strategy: EndStrategy::Any,
+            });
+            Stage {
+                id: format!("stage-{}", index + 1),
+                label: format!("Stage {}", index + 1),
+                end,
+                content: ContentSelection {
+                    tags: level.tags.clone(),
+                    wallpaper_tags: level.wallpaper_tags.clone(),
+                },
+                events: Events {
+                    popup: schedule(level.anchors.popup),
+                    web: schedule(level.anchors.web),
+                    notification: schedule(level.anchors.notification),
+                    prompt: schedule(level.anchors.prompt),
+                    subliminal: schedule(level.anchors.subliminal),
+                },
+                movement: movement(&level.design),
+                mitosis: mitosis(&level.design),
+            }
+        })
+        .collect::<Vec<_>>();
+    let transitions = stages
+        .windows(2)
+        .enumerate()
+        .map(|(index, pair)| Transition {
+            id: format!("transition-{}", index + 1),
+            from_stage: pair[0].id.clone(),
+            to_stage: pair[1].id.clone(),
+            duration_seconds: 0.0,
+            easing: Easing::Linear,
+            affected: vec![],
+        })
+        .collect();
+    Experience {
+        timeline: Timeline {
+            stages,
+            transitions,
+        },
+    }
+}
 
 use crate::model::{CorruptionLevel, EdgewareIndex, EdgewareMood, Warning, WarningKind};
 use crate::parse::{self, InfoJson};
@@ -78,7 +198,7 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
     // just a static config.json-derived pace -- see `build_experience`.
     let has_timeline = experience
         .as_ref()
-        .is_some_and(|e| e.timeline.levels.len() > 1);
+        .is_some_and(|e| e.timeline.stages.len() > 1);
 
     check_unsupported_files(source, &mut warnings);
     warn_unmapped_config_keys(&config, &mut warnings);
@@ -801,9 +921,7 @@ fn build_experience(
         build_timeline(corruption_levels, &anchors, config, source, media, warnings)
     };
 
-    Some(Experience {
-        timeline: Timeline { levels },
-    })
+    Some(levels_to_experience(levels))
 }
 
 #[cfg(test)]
@@ -811,6 +929,16 @@ mod tests {
     use crate::source::DirSource;
 
     use super::*;
+
+    /// Every anchor `EventSchedule` the converter produces is a `Interval::Fixed` (see
+    /// `schedule`) -- unwraps straight to the seconds value, mirroring the old schema's plain
+    /// `Option<f64>` anchor fields for test readability.
+    fn anchor_seconds(schedule: &Option<EventSchedule>) -> Option<f64> {
+        schedule.as_ref().map(|s| match s.interval {
+            Interval::Fixed { seconds } => seconds,
+            Interval::Random { .. } => panic!("expected a fixed interval"),
+        })
+    }
 
     fn source_with(files: &[(&str, &str)]) -> (tempfile::TempDir, DirSource) {
         let dir = tempfile::tempdir().unwrap();
@@ -1008,13 +1136,16 @@ mod tests {
         let output = convert(&source);
         let experience = output.behaviour.experience.as_ref().unwrap();
         // 100% chance every 5000ms tick -> one event every 5 seconds.
-        assert_eq!(experience.timeline.levels[0].anchors.popup, Some(5.0));
+        assert_eq!(
+            anchor_seconds(&experience.timeline.stages[0].events.popup),
+            Some(5.0)
+        );
         assert_eq!(
             output.metadata.recommended_mode,
             Some(RecommendedMode::Sandbox)
         );
-        // No corruption.json -> just the one baseline level, no escalation.
-        assert_eq!(experience.timeline.levels.len(), 1);
+        // No corruption.json -> just the one baseline stage, no escalation.
+        assert_eq!(experience.timeline.stages.len(), 1);
     }
 
     #[test]
@@ -1026,15 +1157,17 @@ mod tests {
         let output = convert(&source);
         // 100% combined chance every 1000ms -> one event/sec.
         assert_eq!(
-            output
-                .behaviour
-                .experience
-                .as_ref()
-                .unwrap()
-                .timeline
-                .levels[0]
-                .anchors
-                .popup,
+            anchor_seconds(
+                &output
+                    .behaviour
+                    .experience
+                    .as_ref()
+                    .unwrap()
+                    .timeline
+                    .stages[0]
+                    .events
+                    .popup
+            ),
             Some(1.0)
         );
     }
@@ -1059,9 +1192,11 @@ mod tests {
         let output = convert(&source);
         assert!(!output.behaviour.content.web_links.is_empty());
         assert_eq!(
-            output.behaviour.experience.unwrap().timeline.levels[0]
-                .anchors
-                .web,
+            anchor_seconds(
+                &output.behaviour.experience.unwrap().timeline.stages[0]
+                    .events
+                    .web
+            ),
             Some(DEFAULT_WEB_PERIOD_SECONDS)
         );
     }
@@ -1082,15 +1217,17 @@ mod tests {
         let output = convert(&source);
         // 100% chance every (default) 5000ms -> one event every 5 seconds.
         assert_eq!(
-            output
-                .behaviour
-                .experience
-                .as_ref()
-                .unwrap()
-                .timeline
-                .levels[0]
-                .anchors
-                .prompt,
+            anchor_seconds(
+                &output
+                    .behaviour
+                    .experience
+                    .as_ref()
+                    .unwrap()
+                    .timeline
+                    .stages[0]
+                    .events
+                    .prompt
+            ),
             Some(5.0)
         );
     }
@@ -1114,20 +1251,24 @@ mod tests {
             Some(RecommendedMode::Experience)
         );
         let timeline = &output.behaviour.experience.as_ref().unwrap().timeline;
-        assert_eq!(timeline.levels.len(), 2);
-        // Level 1 is applied immediately (Edgeware applies it at session start, not after one
+        assert_eq!(timeline.stages.len(), 2);
+        // Stage 1 is applied immediately (Edgeware applies it at session start, not after one
         // corruption_time interval) -- see `build_timeline`. It also doubles as the new schema's
-        // baseline level.
-        assert_eq!(timeline.levels[0].at_seconds, 0.0);
+        // baseline stage, so it has no trigger of its own; its own `end` instead encodes when
+        // stage 2 is reached (default corruption_time, config.json absent -> Edgeware's own 60s
+        // default).
         assert_eq!(
-            timeline.levels[0].tags,
+            timeline.stages[0].end.as_ref().unwrap().duration_seconds,
+            Some(60.0)
+        );
+        assert_eq!(
+            timeline.stages[0].content.tags,
             Some(vec!["angel".to_string(), "apple".to_string()])
         );
-        // Default corruption_time (config.json absent) is Edgeware's own 60s default.
-        assert_eq!(timeline.levels[1].at_seconds, 60.0);
+        assert!(timeline.stages[1].end.is_none());
         // "apple" removed, "globe" added -- cumulative, not a replacement.
         assert_eq!(
-            timeline.levels[1].tags,
+            timeline.stages[1].content.tags,
             Some(vec!["angel".to_string(), "globe".to_string()])
         );
     }
@@ -1146,8 +1287,17 @@ mod tests {
         ]);
         let output = convert(&source);
         let timeline = output.behaviour.experience.unwrap().timeline;
-        assert_eq!(timeline.levels[0].at_popups, None);
-        assert_eq!(timeline.levels[1].at_popups, Some(10));
+        // The popup-count trigger for reaching stage 1 (from the baseline stage 0) is encoded
+        // as stage 0's own `end` condition -- there's nothing before stage 0 to derive a trigger
+        // for, matching the old schema's "ignored for the baseline level" rule.
+        assert_eq!(
+            timeline.stages[0].end.as_ref().unwrap().event_count,
+            Some(EventCountCondition {
+                event: EventKind::Popup,
+                count: 10,
+                scope: CountScope::Session,
+            })
+        );
     }
 
     #[test]
@@ -1158,7 +1308,12 @@ mod tests {
         )]);
         let output = convert(&source);
         let timeline = output.behaviour.experience.unwrap().timeline;
-        assert!(timeline.levels.iter().all(|l| l.at_popups.is_none()));
+        assert!(
+            timeline
+                .stages
+                .iter()
+                .all(|s| s.end.as_ref().is_none_or(|end| end.event_count.is_none()))
+        );
     }
 
     #[test]
@@ -1183,7 +1338,7 @@ mod tests {
                 .experience
                 .unwrap()
                 .timeline
-                .levels
+                .stages
                 .is_empty()
         );
     }
@@ -1241,22 +1396,25 @@ mod tests {
         )]);
         let output = convert(&source);
         let timeline = &output.behaviour.experience.unwrap().timeline;
-        assert_eq!(timeline.levels.len(), 4);
+        assert_eq!(timeline.stages.len(), 4);
         assert_eq!(
-            timeline.levels[0].anchors.prompt, None,
+            anchor_seconds(&timeline.stages[0].events.prompt),
+            None,
             "off at the baseline"
         );
         assert_eq!(
-            timeline.levels[1].anchors.prompt, None,
+            anchor_seconds(&timeline.stages[1].events.prompt),
+            None,
             "still off (carried forward)"
         );
         assert_eq!(
-            timeline.levels[2].anchors.prompt, None,
+            anchor_seconds(&timeline.stages[2].events.prompt),
+            None,
             "still off (carried forward)"
         );
         assert!(
-            timeline.levels[3].anchors.prompt.is_some(),
-            "on from level 4 (index 3) onward"
+            timeline.stages[3].events.prompt.is_some(),
+            "on from stage 4 (index 3) onward"
         );
     }
 
@@ -1272,7 +1430,7 @@ mod tests {
         let output = convert(&source);
         let timeline = output.behaviour.experience.unwrap().timeline;
         assert_eq!(
-            timeline.levels[0].wallpaper_tags,
+            timeline.stages[0].content.wallpaper_tags,
             Some(vec!["wallpaper".to_string()])
         );
         assert_eq!(
@@ -1296,7 +1454,7 @@ mod tests {
         ]);
         let output = convert(&source);
         let timeline = output.behaviour.experience.unwrap().timeline;
-        let tags = timeline.levels[0].wallpaper_tags.clone().unwrap();
+        let tags = timeline.stages[0].content.wallpaper_tags.clone().unwrap();
         assert_eq!(tags.len(), 1);
         assert_ne!(tags[0], "wallpaper");
         let entry = output
@@ -1321,7 +1479,7 @@ mod tests {
                 .any(|w| w.kind == WarningKind::UnreadableMediaFile)
         );
         let timeline = output.behaviour.experience.unwrap().timeline;
-        assert_eq!(timeline.levels[0].wallpaper_tags, None);
+        assert_eq!(timeline.stages[0].content.wallpaper_tags, None);
     }
 
     #[test]
@@ -1343,19 +1501,21 @@ mod tests {
         assert_eq!(untagged.tags, vec![MOODLESS_TAG.to_string()]);
 
         let timeline = output.behaviour.experience.unwrap().timeline;
-        for level in &timeline.levels {
+        for stage in &timeline.stages {
             assert!(
-                level
+                stage
+                    .content
                     .tags
                     .as_ref()
                     .unwrap()
                     .contains(&MOODLESS_TAG.to_string()),
-                "expected every level to keep mood-less media eligible: {level:?}"
+                "expected every stage to keep mood-less media eligible: {stage:?}"
             );
         }
         // Never removed by an unrelated mood change.
         assert!(
-            timeline.levels[1]
+            timeline.stages[1]
+                .content
                 .tags
                 .as_ref()
                 .unwrap()
@@ -1386,7 +1546,8 @@ mod tests {
         );
         let timeline = output.behaviour.experience.unwrap().timeline;
         assert!(
-            !timeline.levels[0]
+            !timeline.stages[0]
+                .content
                 .tags
                 .as_ref()
                 .unwrap()

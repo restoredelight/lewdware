@@ -43,7 +43,7 @@ async fn check_for_update() -> Result<Option<String>, String> {
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 use shared::{
-    behaviour::{effective_options, v3::Behaviour},
+    behaviour::{Behaviour, effective_options},
     db::migrate,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, ShowWhen},
     read_pack::{read_pack_metadata, RecommendedMode},

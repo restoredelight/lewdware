@@ -340,8 +340,7 @@ async fn handle_request<T: EventPoster>(
                             source,
                             Arc::new(AtomicBool::new(loop_audio)),
                             volume,
-                            Some(item_id),
-                            Some(event_poster.clone()),
+                            Some((item_id, event_poster.clone())),
                         )
                         .map_err(MediaError::AudioError)
                     })

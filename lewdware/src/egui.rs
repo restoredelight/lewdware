@@ -243,8 +243,9 @@ impl EguiGpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // SAFETY: encoder is not used again until after rpass is dropped below.
+
             let mut rpass = rpass.forget_lifetime();
+
             self.renderer
                 .render(&mut rpass, &paint_jobs, &screen_descriptor);
         }

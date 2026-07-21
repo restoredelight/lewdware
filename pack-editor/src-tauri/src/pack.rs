@@ -4,35 +4,35 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock as StdRwLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread::{available_parallelism, sleep},
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
 use rusqlite::{
+    OpenFlags, OptionalExtension, TransactionBehavior,
     backup::{Backup, StepResult},
     named_params, params,
     types::Value,
     vtab::array::{self, Array},
-    OpenFlags, OptionalExtension, TransactionBehavior,
 };
 use serde::{Deserialize, Serialize};
 use shared::{
-    behaviour::v3::Behaviour,
+    behaviour::Behaviour,
     encode::{FileInfo, FileInfoParts, FileType},
-    read_pack::{Header, Metadata, HEADER_SIZE},
+    read_pack::{HEADER_SIZE, Header, Metadata},
 };
 use tokio::{
-    fs::{remove_file, File, OpenOptions},
+    fs::{File, OpenOptions, remove_file},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    sync::{mpsc, oneshot, Mutex as AsyncMutex, RwLock},
-    task::{spawn_blocking, JoinHandle},
+    sync::{Mutex as AsyncMutex, RwLock, mpsc, oneshot},
+    task::{JoinHandle, spawn_blocking},
 };
 use uuid::Uuid;
 
@@ -3440,8 +3440,8 @@ mod tests {
     use rusqlite::params;
     use shared::{
         behaviour::{
-            Behaviour, ContentGroup, DesignValues, Experience, FrequencyAnchors, Level, TextItem,
-            Timeline, WebLink,
+            Behaviour, ContentGroup, ContentSelection, EndStrategy, EventSchedule, Events,
+            Experience, Interval, Stage, StageEnd, TextItem, Timeline, Transition, WebLink,
         },
         read_pack::Metadata,
     };
@@ -3451,38 +3451,46 @@ mod tests {
 
     #[test]
     fn range_resolution_rejects_invalid_bounds_and_clamps_valid_ones() {
-        assert!(resolve_range(
-            Range {
-                start: Some(500),
-                end: Some(100),
-            },
-            1_000,
-        )
-        .is_err());
-        assert!(resolve_range(
-            Range {
-                start: Some(5_000),
-                end: None,
-            },
-            1_000,
-        )
-        .is_err());
-        assert!(resolve_range(
-            Range {
-                start: Some(0),
-                end: Some(u64::MAX),
-            },
-            1_000,
-        )
-        .is_ok_and(|range| range == (0, 1_000)));
-        assert!(resolve_range(
-            Range {
-                start: Some(0),
-                end: None,
-            },
-            0,
-        )
-        .is_err());
+        assert!(
+            resolve_range(
+                Range {
+                    start: Some(500),
+                    end: Some(100),
+                },
+                1_000,
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_range(
+                Range {
+                    start: Some(5_000),
+                    end: None,
+                },
+                1_000,
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_range(
+                Range {
+                    start: Some(0),
+                    end: Some(u64::MAX),
+                },
+                1_000,
+            )
+            .is_ok_and(|range| range == (0, 1_000))
+        );
+        assert!(
+            resolve_range(
+                Range {
+                    start: Some(0),
+                    end: None,
+                },
+                0,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -4642,36 +4650,55 @@ mod tests {
         behaviour.content.wallpaper_tags = vec!["bg".to_string()];
         behaviour.experience = Some(Experience {
             timeline: Timeline {
-                levels: vec![
-                    Level {
-                        at_seconds: 0.0,
-                        at_popups: None,
-                        anchors: FrequencyAnchors {
-                            popup: Some(30.0),
-                            web: None,
-                            notification: None,
-                            prompt: None,
-                            subliminal: None,
+                stages: vec![
+                    Stage {
+                        id: "stage-1".to_string(),
+                        label: "Stage 1".to_string(),
+                        end: Some(StageEnd {
+                            duration_seconds: Some(300.0),
+                            event_count: None,
+                            strategy: EndStrategy::Any,
+                        }),
+                        content: ContentSelection::default(),
+                        events: Events {
+                            popup: Some(EventSchedule {
+                                interval: Interval::Fixed { seconds: 30.0 },
+                                initial_delay_seconds: None,
+                                max_concurrent: None,
+                            }),
+                            ..Events::default()
                         },
-                        design: DesignValues::default(),
-                        tags: None,
-                        wallpaper_tags: None,
+                        movement: None,
+                        mitosis: None,
                     },
-                    Level {
-                        at_seconds: 300.0,
-                        at_popups: None,
-                        anchors: FrequencyAnchors {
-                            popup: Some(45.0),
-                            web: None,
-                            notification: None,
-                            prompt: None,
-                            subliminal: None,
+                    Stage {
+                        id: "stage-2".to_string(),
+                        label: "Stage 2".to_string(),
+                        end: None,
+                        content: ContentSelection {
+                            tags: Some(vec!["kinky".to_string()]),
+                            wallpaper_tags: None,
                         },
-                        design: DesignValues::default(),
-                        tags: Some(vec!["kinky".to_string()]),
-                        wallpaper_tags: None,
+                        events: Events {
+                            popup: Some(EventSchedule {
+                                interval: Interval::Fixed { seconds: 45.0 },
+                                initial_delay_seconds: None,
+                                max_concurrent: None,
+                            }),
+                            ..Events::default()
+                        },
+                        movement: None,
+                        mitosis: None,
                     },
                 ],
+                transitions: vec![Transition {
+                    id: "transition-1".to_string(),
+                    from_stage: "stage-1".to_string(),
+                    to_stage: "stage-2".to_string(),
+                    duration_seconds: 0.0,
+                    easing: Default::default(),
+                    affected: vec![],
+                }],
             },
         });
 

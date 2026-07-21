@@ -15,11 +15,7 @@ pub struct Mode {
     file: RefCell<Box<dyn ReadSeek>>,
     files: HashMap<String, SourceFile>,
     cache: RefCell<HashMap<String, mlua::Value>>,
-    /// Modules currently being evaluated, so a circular `require` chain fails fast with a clear
-    /// error instead of recursing until the stack overflows. Since Lua execution is fully
-    /// synchronous — only one `require` call is ever in flight on this thread at a time — this
-    /// can only be hit by genuine recursion (A requires B requires A), never by two unrelated
-    /// callbacks racing to load the same module.
+    /// Checks for circular requires
     loading: RefCell<HashSet<String>>,
 }
 

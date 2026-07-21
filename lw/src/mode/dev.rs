@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{IsTerminal, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -126,6 +126,7 @@ fn spawn_log_tail() {
     thread::spawn(move || {
         let mut current: Option<PathBuf> = None;
         let mut offset = 0u64;
+        let use_ansi = std::io::stdout().is_terminal();
 
         loop {
             thread::sleep(Duration::from_millis(150));
@@ -159,11 +160,46 @@ fn spawn_log_tail() {
 
             let mut buf = String::new();
             if log_file.read_to_string(&mut buf).is_ok() {
-                print!("{buf}");
+                for line in buf.lines() {
+                    println!("{}", format_dev_log_line(line, use_ansi));
+                }
                 offset = len;
             }
         }
     });
+}
+
+/// Turns tracing's full file format into the concise format useful while developing a mode.
+/// The rolling log remains detailed and ANSI-free; only the copy shown by `lw mode dev` is
+/// reformatted and colourized.
+fn format_dev_log_line(line: &str, use_ansi: bool) -> String {
+    const LEVELS: [(&str, &str); 5] = [
+        ("ERROR", "\x1b[31m"),
+        ("WARN", "\x1b[33m"),
+        ("INFO", "\x1b[32m"),
+        ("DEBUG", "\x1b[34m"),
+        ("TRACE", "\x1b[35m"),
+    ];
+
+    let Some((level, colour, rest)) = LEVELS.iter().find_map(|(level, colour)| {
+        line.split_once(&format!(" {level} "))
+            .map(|(_, rest)| (*level, *colour, rest))
+    }) else {
+        // Continuation lines and output not produced by tracing have no metadata to remove.
+        return line.to_owned();
+    };
+
+    // The file formatter emits `<target>: <file>:<line>: <message>` after the level.
+    let message = rest
+        .split_once(": ")
+        .and_then(|(_, source_and_message)| source_and_message.split_once(": "))
+        .map_or(rest, |(_, message)| message);
+
+    if use_ansi {
+        format!("{colour}{level}\x1b[0m {message}")
+    } else {
+        format!("{level} {message}")
+    }
 }
 
 fn latest_log_file(dir: &Path) -> Option<PathBuf> {
@@ -234,5 +270,30 @@ impl Drop for BuildFile {
         if let Err(err) = fs::remove_file(&self.path) {
             eprintln!("{err}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_dev_log_line;
+
+    #[test]
+    fn dev_log_lines_only_show_level_and_message() {
+        let line = "2026-07-21T12:53:48.411427Z ERROR lewdware_engine::app: lewdware/src/app.rs:90: something broke";
+        assert_eq!(format_dev_log_line(line, false), "ERROR something broke");
+    }
+
+    #[test]
+    fn dev_log_levels_are_colourized_for_terminals() {
+        let line = "2026-07-21T12:53:48.411427Z WARN lewdware_engine::app: lewdware/src/app.rs:90: be careful";
+        assert_eq!(
+            format_dev_log_line(line, true),
+            "\x1b[33mWARN\x1b[0m be careful"
+        );
+    }
+
+    #[test]
+    fn unstructured_and_continuation_lines_are_preserved() {
+        assert_eq!(format_dev_log_line("extra context", true), "extra context");
     }
 }

@@ -106,7 +106,7 @@ unsafe fn try_hw_setup(
 ///   catches up.
 /// * If the video is behind the audio, frames will be skipped until the video is back in sync.
 pub struct VideoDecoder {
-    receiver: Receiver<Option<VideoFrame>>,
+    rx: Receiver<Option<VideoFrame>>,
     audio_player: Option<AudioPlayer>,
     tolerance: Duration,
     last_frame_time: Instant,
@@ -118,10 +118,7 @@ pub struct VideoDecoder {
     pixel_format: VideoPixelFormat,
     packed_alpha: bool,
     paused: bool,
-    pub lag_count: u32,
-    // Shared with the decode thread (and, via a further clone, the embedded `AudioPlayer`) so
-    // `set_loop()` takes effect immediately, whether or not this decoder has finished probing the
-    // video yet -- see `VideoWindow::set_loop`'s doc comment for the pending-window case.
+    lag_count: u32,
     loop_video: Arc<AtomicBool>,
 }
 
@@ -152,7 +149,13 @@ impl VideoDecoder {
         packed_alpha: bool,
         wgpu_device: Option<Arc<wgpu::Device>>,
     ) -> Result<Self> {
-        let (receiver, native_width, native_height, full_range, pixel_format) = spawn_video_stream(
+        let VideoStream {
+            rx,
+            native_width,
+            native_height,
+            full_range,
+            pixel_format,
+        } = spawn_video_stream(
             source.clone(),
             loop_video.clone(),
             packed_alpha,
@@ -164,7 +167,6 @@ impl VideoDecoder {
                 source,
                 loop_video.clone(),
                 volume,
-                None,
                 None,
             ) {
                 Ok(audio_player) => Some(audio_player),
@@ -178,7 +180,7 @@ impl VideoDecoder {
         };
 
         Ok(Self {
-            receiver,
+            rx,
             native_width,
             native_height,
             full_range,
@@ -230,21 +232,18 @@ impl VideoDecoder {
         }
 
         let frame = loop {
-            match self.receiver.try_recv() {
+            match self.rx.try_recv() {
                 Ok(Some(frame)) => {
-                    // We got a frame, so if we were waiting for it, resume the audio.
                     if let Some(audio_player) = &self.audio_player {
                         audio_player.play();
                     }
 
-                    // If there's no audio, we just display the frame since needs_next_frame said so.
                     if self.audio_player.is_none() {
                         break frame;
                     }
 
-                    // With audio, we might need to drop frames if we are too far behind.
+                    // Drop frames if we are too far behind
                     if let Some(audio_player) = &self.audio_player {
-                        // Compare directly with total audio position
                         if frame.pts < audio_player.position().saturating_sub(self.tolerance) {
                             continue;
                         }
@@ -252,7 +251,6 @@ impl VideoDecoder {
                     break frame;
                 }
                 Ok(None) => {
-                    // End of stream from decoder. If looping, it will start again.
                     return NextFrame::None;
                 }
                 Err(TryRecvError::Empty) => {
@@ -272,8 +270,6 @@ impl VideoDecoder {
         if self.audio_player.is_none() && self.video_clock > Duration::ZERO {
             self.frame_duration = next_pts.saturating_sub(self.video_clock);
         }
-        // For the very first frame, frame_duration will be zero, but last_frame_time was
-        // set at creation, so needs_next_frame will return true immediately.
 
         self.video_clock = next_pts;
         self.last_frame_time = Instant::now();
@@ -311,10 +307,6 @@ impl VideoDecoder {
         }
     }
 
-    /// Takes effect the next time playback would loop (checked once per full playthrough by the
-    /// decode thread, and separately by the embedded `AudioPlayer` if there is one) -- not
-    /// instantaneous, but there's no meaningful "instant" version of this for media already mid
-    /// playthrough.
     pub fn set_loop(&self, loop_video: bool) {
         self.loop_video.store(loop_video, Ordering::Relaxed);
     }
@@ -333,15 +325,13 @@ struct VideoMetadata {
     pixel_format: VideoPixelFormat,
 }
 
-/// The receiver for decoded frames, plus the video's native dimensions, full-range flag, and
-/// pixel format.
-type VideoStream = (
-    Receiver<Option<VideoFrame>>,
-    u32,
-    u32,
-    bool,
-    VideoPixelFormat,
-);
+struct VideoStream {
+    rx: Receiver<Option<VideoFrame>>,
+    native_width: u32,
+    native_height: u32,
+    full_range: bool,
+    pixel_format: VideoPixelFormat,
+}
 
 /// Spawn a thread to decode frames from a video.
 fn spawn_video_stream(
@@ -373,18 +363,15 @@ fn spawn_video_stream(
         .recv()
         .context("Failed to receive video metadata from spawn thread")?;
 
-    Ok((
+    Ok(VideoStream {
         rx,
-        meta.native_width,
-        meta.native_height,
-        meta.full_range,
-        meta.pixel_format,
-    ))
+        native_width: meta.native_width,
+        native_height: meta.native_height,
+        full_range: meta.full_range,
+        pixel_format: meta.pixel_format,
+    })
 }
 
-/// Converts a hardware-decoded frame to a `VideoFrame`.
-/// On Linux, tries DRM PRIME zero-copy first; falls back to `av_hwframe_transfer_data`.
-/// Returns `Err(())` if the frame should be skipped (transfer error).
 fn hw_frame_to_video_frame(
     decoded: &mut Video,
     recycle_tx: &SyncSender<Video>,
@@ -470,12 +457,14 @@ fn decode_video(
     });
 
     let native_width = decoder.width();
+
     // For packed-alpha videos the decoded frame is twice the display height.
     let native_height = if packed_alpha {
         decoder.height() / 2
     } else {
         decoder.height()
     };
+
     let full_range = decoder.color_range() == ffmpeg::color::Range::JPEG;
     let pixel_format = if hw_pix_fmt.is_some() {
         VideoPixelFormat::Nv12

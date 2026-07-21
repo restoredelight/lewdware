@@ -81,21 +81,13 @@ use crate::{
     window::HEADER_HEIGHT,
 };
 
-/// Data available once, at mode startup, as opposed to `create_api`'s other parameters, which are
-/// live handles used throughout the mode's lifetime.
 pub struct ApiOptions {
     pub pack_info: Option<crate::lua::PackInfo>,
     pub config: HashMap<String, OptionValue>,
-    /// The pack's behaviour.json `content` section (empty for custom modes, or when the pack
-    /// has none) -- handed to Lua as the `__lewdware_content` global, not the public `lewdware`
-    /// table (see `create_api`). Used today by the default-modes library's shared query layer to
-    /// honor disabled content groups; additive fields (captions, prompts, ...) are for the
-    /// "Sandbox mode, full feature set" milestone to consume the same way.
+    /// Content options for `Mode::Sandbox` and `Mode::Experience`
     pub content: shared::behaviour::Content,
-    /// The pack's behaviour.json `experience` section (empty for custom modes, Sandbox, or a
-    /// pack with none) -- handed to Lua as `__lewdware_experience`, mirroring `content`. Only
-    /// `Mode::Experience`'s library code (`default-modes/experience/src/main.lua`) reads this.
-    pub experience: shared::behaviour::v3::Experience,
+    /// Options for `Mode::Experience`.
+    pub experience: shared::behaviour::Experience,
     pub gpu_available: bool,
     pub dev_mode: bool,
 }
@@ -1441,12 +1433,15 @@ pub enum DialogElement<I = Media> {
 }
 
 impl<I> DialogElement<I> {
-    pub fn map_image<O>(self, map: impl FnOnce(I) -> O) -> DialogElement<O> {
-        match self {
+    pub fn try_map_image<O, E>(
+        self,
+        map: impl FnOnce(I) -> Result<O, E>,
+    ) -> Result<DialogElement<O>, E> {
+        Ok(match self {
             Self::Text { id, text, style } => DialogElement::Text { id, text, style },
             Self::Image { id, image } => DialogElement::Image {
                 id,
-                image: map(image),
+                image: map(image)?,
             },
             Self::Input {
                 id,
@@ -1458,7 +1453,7 @@ impl<I> DialogElement<I> {
                 initial_value,
             },
             Self::Buttons { id, options } => DialogElement::Buttons { id, options },
-        }
+        })
     }
 }
 

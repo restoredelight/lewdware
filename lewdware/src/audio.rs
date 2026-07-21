@@ -33,14 +33,13 @@ impl AudioPlayer {
         source: MediaSource,
         loop_audio: Arc<AtomicBool>,
         volume: f32,
-        id: Option<ItemId>,
-        event_poster: Option<T>,
+        event_poster: Option<(ItemId, T)>,
     ) -> Result<Self> {
         let (stream, sink) = setup_decoder(source, loop_audio)?;
         let sink = Arc::new(sink);
         sink.set_volume(volume);
 
-        if let (Some(id), Some(event_poster)) = (id, event_poster) {
+        if let Some((id, event_poster)) = event_poster {
             let sink_clone = sink.clone();
             thread::spawn(move || {
                 sink_clone.sleep_until_end();
@@ -66,16 +65,12 @@ impl AudioPlayer {
         self.sink.set_volume(volume);
     }
 
-    /// Permanently ends playback. Unlike `pause()`, there's no way back from this. The app owns
-    /// completion notification and emits it when the corresponding item is removed.
     pub fn stop(&self) {
         self.sink.stop();
     }
 
     pub fn position(&self) -> Duration {
-        // Blocking!
         let pos = self.sink.get_pos();
-        // tracing::info!("{}", pos.as_millis());
         pos
     }
 }

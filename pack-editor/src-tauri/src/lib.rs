@@ -14,7 +14,7 @@ use std::{
 
 use pack::{ArtistSummary, MediaFile, MediaPack, TagSummary};
 use serde::{Deserialize, Serialize};
-use shared::behaviour::v3::Behaviour;
+use shared::behaviour::Behaviour;
 use shared::mode;
 
 // ─── Update check ─────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ async fn check_for_update() -> Result<Option<String>, String> {
 }
 use shared::read_pack::{Metadata, RecommendedMode};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::{watch, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, watch};
 
 use shared::encode::HardwareEncoder;
 
@@ -474,9 +474,7 @@ async fn import_edgeware_pack_dialog(
     // (potentially large) media pipeline finishes streaming in.
     pack.set_pack_data(
         "behaviour",
-        shared::behaviour::v3::Behaviour::from(behaviour)
-            .to_json_bytes()
-            .map_err(|e| e.to_string())?,
+        behaviour.to_json_bytes().map_err(|e| e.to_string())?,
     )
     .await
     .map_err(|e| e.to_string())?;
