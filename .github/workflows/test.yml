@@ -44,6 +44,40 @@ jobs:
       - name: Clippy
         run: cargo clippy -p shared -p lw --all-targets -- -D warnings
 
+  # The media-classification unit tests are hermetic (frozen ffprobe JSON, no binaries), so they
+  # run in `rust` above. This job covers what those can't: the sidecars are built from FFmpeg
+  # *master*, so ffprobe's actual output shifts under us between releases -- animated WebP became
+  # decodable mid-2026 and silently changed how those files classify. These `#[ignore]`d tests
+  # probe real generated media, so that drift fails here instead of in a user's pack.
+  #
+  # Split from `rust` on purpose: it pulls ~150MB from a third-party release, so keeping it in
+  # its own job means a fetch outage points at itself instead of looking like a test failure.
+  media-sidecar:
+    name: Media classification (real ffprobe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Lua 5.4 headers
+        run: sudo apt-get install -y liblua5.4-dev
+
+      # Stages lewdware-ffmpeg/lewdware-ffprobe under pack-editor/src-tauri/binaries, which is
+      # where the tests look by default. Must run from the repo root.
+      - name: Download FFmpeg sidecars
+        run: ./deploy/linux/download_ffmpeg_sidecars.sh
+
+      - name: Record sidecar version
+        run: ./pack-editor/src-tauri/binaries/lewdware-ffprobe -version | head -1
+
+      - name: Run classification tests against the real sidecar
+        run: cargo test -p shared --lib sidecar -- --ignored --nocapture
+
   rust-pack-editor:
     name: pack-editor Rust tests
     runs-on: ubuntu-latest
