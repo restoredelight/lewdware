@@ -37,7 +37,7 @@ fn find_installed_path(bin_name: &str) -> Option<PathBuf> {
         .find(|path| path.exists())
 }
 
-fn find_binary(bin_name: &str, cargo_package: &str) -> Option<Command> {
+fn find_binary(bin_name: &str, #[allow(unused)] cargo_package: &str) -> Option<Command> {
     if let Some(path) = find_installed_path(bin_name) {
         let mut cmd = Command::new(path);
         sanitize_child_env(&mut cmd);
