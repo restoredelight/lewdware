@@ -2,16 +2,16 @@ CREATE TABLE IF NOT EXISTS media (
     id INTEGER PRIMARY KEY,
     file_name TEXT NOT NULL UNIQUE,
     file_type TEXT CHECK (file_type IN ('image', 'video', 'audio')) NOT NULL,
-    "offset" INTEGER,
-    length INTEGER,
-    path TEXT,
+    "offset" INTEGER NOT NULL,
+    length INTEGER NOT NULL,
     width INTEGER,
     height INTEGER,
     transparent INTEGER,
     duration REAL,
     audio INTEGER,
     hash BLOB NOT NULL UNIQUE,
-    thumbnail BLOB
+    thumbnail BLOB,
+    source_url TEXT
 ) STRICT;
 
 CREATE INDEX media_hash_index ON media (hash);
@@ -27,6 +27,19 @@ CREATE TABLE IF NOT EXISTS media_tags (
     PRIMARY KEY (media_id, tag_id),
     FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE,
     FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS artists (
+    id INTEGER PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS media_artists (
+    media_id INTEGER NOT NULL,
+    artist_id INTEGER NOT NULL,
+    PRIMARY KEY (media_id, artist_id),
+    FOREIGN KEY (media_id) REFERENCES media (id) ON DELETE CASCADE,
+    FOREIGN KEY (artist_id) REFERENCES artists (id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS modes (

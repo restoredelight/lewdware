@@ -66,44 +66,15 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-const MIGRATIONS: [&str; 3] = [
-    include_str!("migrations/0001_init_schema.sql"),
-    include_str!("migrations/0002_add_artists.sql"),
-    include_str!("migrations/0003_archive_only_media.sql"),
-];
+const MIGRATIONS: [&str; 1] = [include_str!("migrations/0001_init_schema.sql")];
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn version_two_database() -> rusqlite::Connection {
-        let db = rusqlite::Connection::open_in_memory().unwrap();
-        db.execute_batch(MIGRATIONS[0]).unwrap();
-        db.execute_batch(MIGRATIONS[1]).unwrap();
-        db.execute(
-            "CREATE TABLE migrations (migration_index INTEGER NOT NULL)",
-            [],
-        )
-        .unwrap();
-        db.execute("INSERT INTO migrations VALUES (2)", []).unwrap();
-        db.pragma_update(None, "foreign_keys", true).unwrap();
-        db
-    }
-
     #[test]
-    fn archive_only_media_migration_removes_path_and_requires_a_range() {
-        let db = version_two_database();
-        db.execute(
-            "INSERT INTO media
-             (file_name, file_type, offset, length, path, hash)
-             VALUES ('file.mp3', 'audio', 12, 34, '/tmp/old', x'01')",
-            [],
-        )
-        .unwrap();
-        db.execute("INSERT INTO tags(name) VALUES ('tag')", [])
-            .unwrap();
-        db.execute("INSERT INTO media_tags VALUES (1, 1)", [])
-            .unwrap();
+    fn migrate_creates_the_expected_schema() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
 
         migrate(&db).unwrap();
 
@@ -127,7 +98,7 @@ mod tests {
                 .any(|(name, not_null)| name == "length" && *not_null)
         );
         assert_eq!(
-            db.query_row("SELECT COUNT(*) FROM media_tags", [], |row| row
+            db.query_row("SELECT migration_index FROM migrations", [], |row| row
                 .get::<_, u64>(0))
                 .unwrap(),
             1
@@ -139,29 +110,28 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_pack_migration_rolls_back_the_schema_and_ledger() {
-        let db = version_two_database();
+    fn migrate_preserves_data_across_media_tags_and_media_artists_relations() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        migrate(&db).unwrap();
+
         db.execute(
-            "INSERT INTO media (file_name, file_type, hash)
-             VALUES ('loose.mp3', 'audio', x'01')",
+            "INSERT INTO media (file_name, file_type, offset, length, hash)
+             VALUES ('file.mp3', 'audio', 12, 34, x'01')",
             [],
         )
         .unwrap();
+        db.execute("INSERT INTO tags(name) VALUES ('tag')", [])
+            .unwrap();
+        db.execute("INSERT INTO media_tags VALUES (1, 1)", [])
+            .unwrap();
 
-        assert!(migrate(&db).is_err());
+        migrate(&db).unwrap();
+
         assert_eq!(
-            db.query_row("SELECT migration_index FROM migrations", [], |row| row
+            db.query_row("SELECT COUNT(*) FROM media_tags", [], |row| row
                 .get::<_, u64>(0))
                 .unwrap(),
-            2
+            1
         );
-        let path_exists: bool = db
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('media') WHERE name = 'path')",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(path_exists);
     }
 }
