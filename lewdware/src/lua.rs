@@ -486,35 +486,57 @@ impl<T: EventPoster> LuaRuntime<T> {
         self.storage.flush_now()
     }
 
+    /// Look up a window, dropping the borrow before returning. Callbacks dispatched to the
+    /// result re-enter `windows` (a callback that spawns a popup, say), so the borrow must not
+    /// still be live -- note that a `try_borrow()` guard written inline in an `if let` scrutinee
+    /// lives until the end of the *body*, which is exactly the trap this exists to avoid.
+    fn get_window(&self, id: ItemId) -> anyhow::Result<Option<Window<T>>> {
+        let window = self.windows.try_borrow()?.get(&id).cloned();
+        Ok(window)
+    }
+
+    /// `get_window`, but removing -- same borrow discipline.
+    fn remove_window(&self, id: ItemId) -> anyhow::Result<Option<Window<T>>> {
+        let window = self.windows.try_borrow_mut()?.remove(&id);
+        Ok(window)
+    }
+
+    /// `get_window`'s counterpart for audio -- an `on_finish` callback calling
+    /// `lewdware.play_audio` re-enters `audio_handles` mutably.
+    fn get_audio_handle(&self, id: ItemId) -> anyhow::Result<Option<Rc<AudioHandle<T>>>> {
+        let audio = self.audio_handles.try_borrow()?.get(&id).cloned();
+        Ok(audio)
+    }
+
     fn handle_event(&self, event: Event) -> anyhow::Result<()> {
         match event {
             Event::WindowClosed { id } => {
-                if let Some(window) = self.windows.try_borrow_mut()?.remove(&id) {
+                if let Some(window) = self.remove_window(id)? {
                     window.inner_window().on_close()?;
                 }
             }
             Event::WindowSpawned { id } => {
-                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
+                if let Some(window) = self.get_window(id)? {
                     window.inner_window().on_spawn()?;
                 }
             }
             Event::MoveFinish { id, move_id, x, y } => {
-                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
+                if let Some(window) = self.get_window(id)? {
                     window.inner_window().on_move_finished(move_id, x, y)?;
                 }
             }
             Event::FadeFinish { id, fade_id } => {
-                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
+                if let Some(window) = self.get_window(id)? {
                     window.inner_window().on_fade_finished(fade_id)?;
                 }
             }
             Event::AudioFinish { id } => {
-                if let Some(audio) = self.audio_handles.try_borrow()?.get(&id).cloned() {
+                if let Some(audio) = self.get_audio_handle(id)? {
                     audio.on_finish()?;
                 }
             }
             Event::WindowClicked { id } => {
-                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
+                if let Some(window) = self.get_window(id)? {
                     window.inner_window().on_click()?;
                 }
             }
@@ -523,7 +545,7 @@ impl<T: EventPoster> LuaRuntime<T> {
                 button_id,
                 values,
             } => {
-                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
+                if let Some(window) = self.get_window(id)? {
                     match window {
                         Window::Dialog(dialog) => {
                             dialog.on_select(button_id, values)?;
@@ -537,7 +559,7 @@ impl<T: EventPoster> LuaRuntime<T> {
                 element_id,
                 values,
             } => {
-                if let Some(window) = self.windows.try_borrow()?.get(&id).cloned() {
+                if let Some(window) = self.get_window(id)? {
                     match window {
                         Window::Dialog(dialog) => {
                             dialog.on_submit(element_id, values)?;
@@ -1889,6 +1911,63 @@ mod tests {
                 harness.run_entrypoint("main.lua").unwrap();
                 harness.pump_events();
                 harness.run_entrypoint("after_stop.lua").unwrap();
+            })
+            .await;
+    }
+
+    /// A callback dispatched from `handle_event` may itself call back into the API and touch the
+    /// very collection the dispatch looked the handle up in -- chaining a new track from
+    /// `on_finish` (what `default-modes/sandbox` does) re-enters `audio_handles` mutably, and
+    /// spawning a popup from `on_close` re-enters `windows` mutably. Both used to hit a
+    /// `RefCell already borrowed` error, because the lookup's borrow guard, written inline in an
+    /// `if let` scrutinee, stayed live for the whole body. Callback errors are logged rather than
+    /// propagated, so this asserts on the observable result instead.
+    #[tokio::test(start_paused = true)]
+    async fn callbacks_can_re_enter_the_collection_they_were_dispatched_from() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[
+                        (
+                            "main.lua",
+                            r#"
+                                CHAINED = nil
+                                REOPENED = nil
+
+                                local audio = lewdware.play_audio(
+                                    { id = 0, name = "test", type = "audio", duration = 1.0 }
+                                )
+                                audio:on_finish(function()
+                                    CHAINED = lewdware.play_audio(
+                                        { id = 0, name = "test", type = "audio", duration = 1.0 }
+                                    )
+                                end)
+
+                                local image = lewdware.media.get_image("pic.avif")
+                                local window = lewdware.popup.image(image)
+                                window:on_close(function()
+                                    REOPENED = lewdware.popup.image(image)
+                                end)
+                                window:close()
+                            "#,
+                        ),
+                        (
+                            "after.lua",
+                            r#"
+                                assert(CHAINED ~= nil, "on_finish should be able to play_audio")
+                                assert(REOPENED ~= nil, "on_close should be able to spawn a popup")
+                            "#,
+                        ),
+                    ],
+                    true,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+
+                harness.send_event(Event::AudioFinish { id: ItemId(0) });
+                harness.pump_events();
+
+                harness.run_entrypoint("after.lua").unwrap();
             })
             .await;
     }

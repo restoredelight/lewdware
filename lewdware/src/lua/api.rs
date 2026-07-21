@@ -1672,7 +1672,6 @@ fn play_audio<T: EventPoster>(
         id,
         audio,
         request_sender.audio_sender(id),
-        audio_handles.clone(),
         dev_mode,
     ));
 

@@ -4,25 +4,18 @@ use mlua::{ExternalResult, Lua, UserData, UserDataFields, UserDataMethods};
 
 use crate::{
     app::EventPoster,
-    lua::{AudioHandles, ItemId, Media, dev_log::log_noop, request::AudioRequestSender},
+    lua::{ItemId, Media, dev_log::log_noop, request::AudioRequestSender},
 };
 
 pub struct AudioHandle<T: EventPoster> {
     id: ItemId,
     audio: Media,
     request_sender: AudioRequestSender<T>,
-    audio_handles: AudioHandles<T>,
     state: RefCell<AudioState>,
     dev_mode: bool,
 }
 
 struct AudioState {
-    /// True once playback has ended -- because the (non-looping) track finished, decoding turned
-    /// out to be impossible (e.g. no audio device), or `stop()` was called. Never becomes false
-    /// again; every method below becomes a no-op returning `false` once this is set, rather than
-    /// erroring the way most `Window` methods still do on a dead object (see `AudioRequestSender`/
-    /// `WindowRequestSender` request-layer plumbing for that older convention) -- this is meant to
-    /// be the model those eventually move to as well.
     finished: bool,
     finish_callbacks: Vec<mlua::Function>,
 }
@@ -89,7 +82,6 @@ impl<T: EventPoster> AudioHandle<T> {
         id: ItemId,
         audio: Media,
         request_sender: AudioRequestSender<T>,
-        audio_handles: AudioHandles<T>,
         dev_mode: bool,
     ) -> Self {
         Self {
@@ -97,7 +89,6 @@ impl<T: EventPoster> AudioHandle<T> {
             audio,
             request_sender,
             state: RefCell::new(AudioState::new()),
-            audio_handles,
             dev_mode,
         }
     }
@@ -137,18 +128,5 @@ impl<T: EventPoster> AudioHandle<T> {
         }
 
         Ok(())
-    }
-}
-
-impl<T: EventPoster> Drop for AudioHandle<T> {
-    fn drop(&mut self) {
-        match self.audio_handles.try_borrow_mut() {
-            Ok(mut handles) => {
-                handles.remove(&self.id);
-            }
-            Err(err) => {
-                tracing::error!("Couldn't borrow audio_handles: {err}");
-            }
-        }
     }
 }
