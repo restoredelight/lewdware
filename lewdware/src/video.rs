@@ -169,7 +169,8 @@ impl VideoDecoder {
                 volume,
                 None,
             ) {
-                Ok(audio_player) => Some(audio_player),
+                Ok(Some(audio_player)) => Some(audio_player),
+                Ok(None) => None,
                 Err(err) => {
                     tracing::error!("{err}");
                     None

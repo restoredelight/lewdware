@@ -8,7 +8,7 @@ use winit::{
     event::{Touch, WindowEvent},
 };
 
-use crate::egui::{EguiCPUWindow, EguiGpuRenderer};
+use crate::window::layer::egui_renderer::{EguiCPUWindow, EguiGpuRenderer};
 use crate::lua::{self, DialogButton, DialogElement, DialogElementUpdate, ItemId, TextStyle};
 use crate::media::ImageData;
 use crate::text_font;

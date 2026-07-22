@@ -342,6 +342,7 @@ async fn handle_request<T: EventPoster>(
                             volume,
                             Some((item_id, event_poster.clone())),
                         )
+                        .and_then(|x| x.ok_or(anyhow::anyhow!("No audio stream available")))
                         .map_err(MediaError::AudioError)
                     })
                     .map(ResolvedMedia::Audio),

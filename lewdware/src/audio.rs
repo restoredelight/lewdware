@@ -34,8 +34,11 @@ impl AudioPlayer {
         loop_audio: Arc<AtomicBool>,
         volume: f32,
         event_poster: Option<(ItemId, T)>,
-    ) -> Result<Self> {
-        let (stream, sink) = setup_decoder(source, loop_audio)?;
+    ) -> Result<Option<Self>> {
+        let (stream, sink) = match setup_decoder(source, loop_audio)? {
+            Some(x) => x,
+            None => return Ok(None),
+        };
         let sink = Arc::new(sink);
         sink.set_volume(volume);
 
@@ -47,10 +50,10 @@ impl AudioPlayer {
             });
         }
 
-        Ok(Self {
+        Ok(Some(Self {
             _stream: stream,
             sink,
-        })
+        }))
     }
 
     pub fn pause(&self) {
@@ -78,12 +81,12 @@ impl AudioPlayer {
 pub fn setup_decoder(
     source: MediaSource,
     loop_audio: Arc<AtomicBool>,
-) -> Result<(MixerDeviceSink, Player)> {
+) -> Result<Option<(MixerDeviceSink, Player)>> {
     ffmpeg::init()?;
     let mut ictx = source.open()?;
     let audio_stream_index = match ictx.streams().best(ffmpeg::media::Type::Audio) {
         Some(stream) => stream.index(),
-        None => bail!("No audio stream available"),
+        None => return Ok(None),
     };
 
     let media = ictx
@@ -173,7 +176,7 @@ pub fn setup_decoder(
 
     sink.append(source);
 
-    Ok((stream, sink))
+    Ok(Some((stream, sink)))
 }
 
 fn convert_audio_frame(frame: &frame::Audio) -> Result<Vec<f32>> {

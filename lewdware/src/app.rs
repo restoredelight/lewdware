@@ -1099,12 +1099,15 @@ impl LewdwareApp {
                     pending_move,
                     pending_fade,
                 );
+
                 let outcome = popup.render().unwrap_or_else(|err| {
                     tracing::warn!("image pre-draw failed: {err}");
                     RenderOutcome::default()
                 });
+
                 popup.target.gpu_sync(outcome.submission);
                 popup.state.show();
+
                 self.items.insert(id, ItemSlot::Window(popup));
             }
             PendingItemOpts::Video {
@@ -1224,31 +1227,20 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                 return;
             };
 
-            // A compositor/OS-driven redraw can still arrive independently of our requests. If
-            // it satisfies a dirty window here, don't render that window a second time when this
-            // batch reaches `about_to_wait`.
             if event == WindowEvent::RedrawRequested {
                 popup.state.take_redraw_requested();
             }
 
-            let mut content_finished = false;
-
             if event == WindowEvent::RedrawRequested {
-                // Video is driven from `about_to_wait` on Windows instead; see the comment there.
-                if !(cfg!(target_os = "windows") && popup.is_video()) {
-                    match popup.render() {
-                        Ok(outcome) => content_finished = outcome.finished,
-                        Err(err) => tracing::error!("Error rendering window: {err}"),
-                    }
+                match popup.render() {
+                    Ok(outcome) => if outcome.finished {
+                        self.remove_item(popup_id);
+                        return;
+                    },
+                    Err(err) => tracing::error!("Error rendering window: {err}"),
                 }
             } else {
                 popup.handle_event(&event);
-            }
-
-            if content_finished {
-                self.remove_item(popup_id);
-
-                return;
             }
 
             // Global event handling
@@ -1324,8 +1316,6 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                 self.process_lua_requests(event_loop);
             }
             UserEvent::RedrawRequested => {
-                // Allow requests made while the ensuing batch is being rendered to queue the
-                // next wake-up. The per-window flags themselves are drained in `about_to_wait`.
                 self.redraw_wakeup_pending.store(false, Ordering::Release);
             }
             UserEvent::AudioFinish { id } => {
