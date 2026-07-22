@@ -48,7 +48,7 @@ pub struct LewdwareApp {
     window_ids: HashMap<WindowId, ItemId>,
     requirement_owners: HashMap<RequirementId, ItemId>,
     next_requirement_id: u64,
-    default_wallpaper: Option<String>,
+    default_wallpaper: shared::wallpaper::Snapshot,
     lua_request_rx: std::sync::mpsc::Receiver<lua::LuaRequest>,
     lua_event_tx: tokio::sync::mpsc::UnboundedSender<lua::Event>,
     _lua_thread_handle: LuaThreadHandle,
@@ -101,13 +101,11 @@ impl LewdwareApp {
     ) -> anyhow::Result<Self> {
         let config = Arc::new(config);
 
-        let wallpaper = match wallpaper::get() {
-            Ok(wallpaper) => Some(wallpaper),
-            Err(err) => {
-                tracing::warn!("Error getting wallpaper: {}", err);
-                None
-            }
-        };
+        // Captured up front so `lewdware.wallpaper.reset()` and the end-of-episode reset have
+        // something to go back to. If this desktop can't report its wallpaper, the user's chosen
+        // restore image stands in; without one the snapshot is `Unsupported` and `set_wallpaper`
+        // declines rather than making a change we can't undo.
+        let wallpaper = shared::wallpaper::snapshot(config.wallpaper.fallback_image());
 
         tracing::debug!("{:?}", config);
 
@@ -514,39 +512,35 @@ impl LewdwareApp {
             return Ok(false);
         }
 
-        let path = file.path().to_str().ok_or(LewdwareError::Internal(
-            "Tempfile does not have valid UTF-8 path",
-        ))?;
-
-        if wallpaper::set_from_path(path).is_err() {
+        // Refuse rather than strand the user: on a desktop we can't read the wallpaper back from,
+        // setting one would leave the pack's image up permanently.
+        if !self.default_wallpaper.is_restorable() {
+            tracing::warn!(
+                "Cannot read the current wallpaper on this desktop, so refusing to change it"
+            );
             return Ok(false);
         }
 
-        if let Some(mode) = mode {
-            let mode = match mode {
-                WallpaperMode::Center => wallpaper::Mode::Center,
-                WallpaperMode::Crop => wallpaper::Mode::Crop,
-                WallpaperMode::Fit => wallpaper::Mode::Fit,
-                WallpaperMode::Span => wallpaper::Mode::Span,
-                WallpaperMode::Stretch => wallpaper::Mode::Stretch,
-                WallpaperMode::Tile => wallpaper::Mode::Tile,
-            };
+        let mode = mode.map(|mode| match mode {
+            WallpaperMode::Center => shared::wallpaper::Mode::Center,
+            WallpaperMode::Crop => shared::wallpaper::Mode::Crop,
+            WallpaperMode::Fit => shared::wallpaper::Mode::Fit,
+            WallpaperMode::Span => shared::wallpaper::Mode::Span,
+            WallpaperMode::Stretch => shared::wallpaper::Mode::Stretch,
+            WallpaperMode::Tile => shared::wallpaper::Mode::Tile,
+        });
 
-            if wallpaper::set_mode(mode).is_err() {
-                return Ok(false);
-            }
+        if let Err(err) = shared::wallpaper::set(file.path(), mode) {
+            tracing::warn!("Error setting wallpaper: {err}");
+            return Ok(false);
         }
 
         Ok(true)
     }
 
     fn reset_wallpaper(&self) {
-        if let Some(wallpaper) = &self.default_wallpaper {
-            if let Err(err) = wallpaper::set_from_path(wallpaper) {
-                tracing::error!("Error setting wallpaper back to default: {}", err);
-            }
-        } else {
-            tracing::error!("No default wallpaper found; leaving wallpaper as is");
+        if let Err(err) = shared::wallpaper::restore(&self.default_wallpaper) {
+            tracing::error!("Error setting wallpaper back to default: {err}");
         }
     }
 
@@ -1233,10 +1227,12 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
 
             if event == WindowEvent::RedrawRequested {
                 match popup.render() {
-                    Ok(outcome) => if outcome.finished {
-                        self.remove_item(popup_id);
-                        return;
-                    },
+                    Ok(outcome) => {
+                        if outcome.finished {
+                            self.remove_item(popup_id);
+                            return;
+                        }
+                    }
                     Err(err) => tracing::error!("Error rendering window: {err}"),
                 }
             } else {

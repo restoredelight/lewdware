@@ -23,6 +23,7 @@ export interface ConfigDto {
   panic_button: Key;
   disabled_monitors: string[];
   capabilities: Capabilities;
+  wallpaper: WallpaperConfig;
   volume: Volume;
   schedule: ScheduleDto;
 }
@@ -65,6 +66,23 @@ export interface Capabilities {
   wallpaper: boolean;
   open_link: boolean;
   notify: boolean;
+}
+
+/** What the wallpaper is put back to once a pack is done with it. `original` is only possible on
+ * desktops that can report their own wallpaper; elsewhere an `image` is what makes wallpaper
+ * changes possible at all, since the engine refuses a change it could never undo. */
+export type WallpaperRestore =
+  | { kind: "original" }
+  | { kind: "image"; path: string };
+
+export interface WallpaperConfig {
+  restore: WallpaperRestore;
+}
+
+export interface WallpaperSupportDto {
+  /** `false` means the desktop can't report its current wallpaper, so there is nothing to put
+   * back -- the user has to nominate an image instead, or wallpaper changes stay off. */
+  can_restore_original: boolean;
 }
 
 export interface Volume {

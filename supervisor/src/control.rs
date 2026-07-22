@@ -93,7 +93,7 @@ struct Episode {
     pid: Option<u32>,
     phase: Phase,
     attempts: u32,
-    wallpaper_snapshot: Option<String>,
+    wallpaper_snapshot: shared::wallpaper::Snapshot,
     to_session: mpsc::Sender<SessionCommand>,
     warning: Option<String>,
     last_runtime_error: Option<String>,

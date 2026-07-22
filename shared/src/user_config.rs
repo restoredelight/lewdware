@@ -27,6 +27,10 @@ pub struct AppConfig {
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,
+    /// Sub-settings for the `capabilities.wallpaper` permission. `#[serde(default)]` is required:
+    /// every pre-existing `config.json` has no `"wallpaper"` key.
+    #[serde(default)]
+    pub wallpaper: WallpaperConfig,
     pub volume: Volume,
     /// `design/scheduling.md`'s schedule vocabulary (windows/jitter/quiet hours) plus the
     /// grace-notification toggle. `enabled` also drives OS autostart-at-login registration
@@ -54,6 +58,45 @@ impl Default for Capabilities {
             wallpaper: true,
             open_link: true,
             notify: true,
+        }
+    }
+}
+
+/// What to put the wallpaper back to once a pack is done with it.
+///
+/// Deliberately *not* platform-aware: `capabilities` has no `#[serde(default)]`, so whatever
+/// `Default` returns is written to `config.json` on first save and is sticky forever after. A
+/// default that depended on the desktop would be frozen from whichever machine happened to run
+/// first, and would be wrong after a switch from Plasma to sway or on a synced home directory.
+/// Whether the original can actually be restored is re-checked at run time instead, by
+/// `shared::wallpaper::Snapshot::is_restorable`.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WallpaperRestore {
+    /// Whatever it was before. Only possible on desktops that can report their own wallpaper.
+    #[default]
+    Original,
+    /// A fixed image, for desktops that cannot. This is what makes wallpaper changes possible at
+    /// all on bare compositors -- without it the engine refuses, rather than making a change it
+    /// could never undo.
+    Image { path: PathBuf },
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, Default)]
+pub struct WallpaperConfig {
+    #[serde(default)]
+    pub restore: WallpaperRestore,
+}
+
+impl WallpaperConfig {
+    /// The image to fall back to when the desktop cannot report its current wallpaper.
+    ///
+    /// `None` means "restore the original", which on such a desktop means wallpaper changes are
+    /// declined outright.
+    pub fn fallback_image(&self) -> Option<&std::path::Path> {
+        match &self.restore {
+            WallpaperRestore::Original => None,
+            WallpaperRestore::Image { path } => Some(path),
         }
     }
 }
@@ -159,6 +202,7 @@ impl Default for AppConfig {
             },
             disabled_monitors: Vec::new(),
             capabilities: Capabilities::default(),
+            wallpaper: WallpaperConfig::default(),
             volume: Volume::default(),
             schedule: ScheduleConfig::default(),
         }
@@ -318,5 +362,54 @@ mod tests {
         let config: AppConfig =
             serde_json::from_value(json).expect("should decode without a schedule key");
         assert_eq!(config.schedule, ScheduleConfig::default());
+    }
+}
+
+#[cfg(test)]
+mod wallpaper_config_tests {
+    use super::*;
+
+    /// Every pre-existing `config.json` predates this field, so a config without it must still
+    /// load -- and must load as "restore the original", not as some half-set image.
+    #[test]
+    fn config_without_a_wallpaper_key_still_loads() {
+        let json = r#"{
+            "pack_path": null, "uploaded_modes": [], "mode": "Sandbox",
+            "mode_options": [], "panic_button": {"name":"Escape","code":"Escape",
+            "modifiers":{"alt":false,"ctrl":false,"shift":false,"meta":false}},
+            "disabled_monitors": [],
+            "capabilities": {"wallpaper": true, "open_link": true, "notify": true},
+            "volume": {"video": 1.0, "audio": 1.0}
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.wallpaper.restore, WallpaperRestore::Original);
+        assert_eq!(config.wallpaper.fallback_image(), None);
+    }
+
+    /// The shape the Svelte `WallpaperRestore` union has to match.
+    #[test]
+    fn restore_target_serialises_as_a_tagged_union() {
+        let original = serde_json::to_string(&WallpaperRestore::Original).unwrap();
+        assert_eq!(original, r#"{"kind":"original"}"#);
+
+        let image = serde_json::to_string(&WallpaperRestore::Image {
+            path: PathBuf::from("/a/b.png"),
+        })
+        .unwrap();
+        assert_eq!(image, r#"{"kind":"image","path":"/a/b.png"}"#);
+    }
+
+    #[test]
+    fn a_chosen_image_is_offered_as_the_fallback() {
+        let config = WallpaperConfig {
+            restore: WallpaperRestore::Image {
+                path: PathBuf::from("/a/b.png"),
+            },
+        };
+        assert_eq!(
+            config.fallback_image(),
+            Some(std::path::Path::new("/a/b.png"))
+        );
     }
 }

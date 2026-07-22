@@ -7,9 +7,9 @@ use crate::window::surface::Buffer;
 use crate::window::target::RenderTarget;
 
 mod egui;
+mod egui_renderer;
 mod image;
 mod video;
-mod egui_renderer;
 
 pub use egui::EguiLayer;
 pub use image::ImageLayer;

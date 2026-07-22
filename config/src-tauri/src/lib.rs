@@ -48,7 +48,7 @@ use shared::{
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, ShowWhen},
     read_pack::{read_pack_metadata, RecommendedMode},
     schedule::{QuietHours, ScheduleConfig, Window},
-    user_config::{self, AppConfig, Capabilities, Key, Mode, Volume},
+    user_config::{self, AppConfig, Capabilities, Key, Mode, Volume, WallpaperConfig},
 };
 use tauri::{AppHandle, Manager};
 use tempfile::NamedTempFile;
@@ -215,6 +215,11 @@ pub struct ConfigDto {
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,
+    /// Carried here for the same reason `schedule` is: `save_config` rebuilds a whole fresh
+    /// `AppConfig` from this DTO, so a field that isn't round-tripped is silently reset. Leaving it
+    /// out would wipe the user's chosen restore image on any unrelated save.
+    #[serde(default)]
+    pub wallpaper: WallpaperConfig,
     pub volume: Volume,
     /// A normal `ConfigDto` field, round-tripping through `get_config`/`save_config` like every
     /// other setting here -- deliberately, not an oversight: `save_config` reconstructs a whole
@@ -255,6 +260,7 @@ impl From<AppConfig> for ConfigDto {
             panic_button: c.panic_button,
             disabled_monitors: c.disabled_monitors,
             capabilities: c.capabilities,
+            wallpaper: c.wallpaper,
             volume: c.volume,
             schedule: c.schedule.into(),
         }
@@ -284,6 +290,7 @@ impl From<ConfigDto> for AppConfig {
             panic_button: dto.panic_button,
             disabled_monitors: dto.disabled_monitors,
             capabilities: dto.capabilities,
+            wallpaper: dto.wallpaper,
             volume: dto.volume,
             schedule: dto.schedule.into(),
         }
@@ -672,32 +679,56 @@ fn save_config(state: State<'_>, config: ConfigDto) -> Result<(), String> {
     Ok(())
 }
 
+/// Lists monitors by asking the engine, rather than reading them from this process.
+///
+/// This app is a native Wayland Tauri app; the engine forces winit onto XWayland because Wayland
+/// can't position windows. The two disagree about both monitor names and geometry (see
+/// `shared::monitor`), so anything measured here would be written into `disabled_monitors` and
+/// then never match what the engine compares it against -- which is exactly the bug this replaces.
+///
+/// Deliberately no fallback to `app_handle.available_monitors()`: silently wrong identities are
+/// what made disabling a monitor a no-op, and an error the user can see beats a control that
+/// quietly does nothing.
 #[tauri::command]
-async fn get_monitors(app_handle: AppHandle, state: State<'_>) -> Result<Vec<MonitorDto>, String> {
-    let primary_name = app_handle
-        .primary_monitor()
-        .map_err(|e| e.to_string())?
-        .and_then(|m| m.name().cloned());
-
+async fn get_monitors(state: State<'_>) -> Result<Vec<MonitorDto>, String> {
     let disabled = state.config.lock().unwrap().disabled_monitors.clone();
 
-    let mut monitors: Vec<_> = app_handle
-        .available_monitors()
-        .map_err(|e| e.to_string())?
-        .iter()
-        .filter_map(|m| {
-            let id = m.name()?.to_string();
-            let primary = Some(&id) == primary_name.as_ref();
-            let size = m.size();
-            let is_disabled = disabled.contains(&id);
-            Some(MonitorDto {
-                name: id.clone(),
-                id,
-                width: size.width,
-                height: size.height,
-                primary,
-                disabled: is_disabled,
-            })
+    let mut command = tokio::process::Command::from(
+        shared::child::find_engine_binary()
+            .ok_or_else(|| "could not find the lewdware-engine binary".to_string())?,
+    );
+    command
+        .arg(shared::monitor::LIST_MONITORS_FLAG)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    // The probe opens an event loop, so cap it rather than letting a wedged display server hang
+    // the settings window.
+    let output = tokio::time::timeout(std::time::Duration::from_secs(15), command.output())
+        .await
+        .map_err(|_| "timed out asking the engine for the monitor list".to_string())?
+        .map_err(|e| format!("could not run the engine to list monitors: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "the engine could not list monitors: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let listed: Vec<shared::monitor::MonitorInfo> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("could not read the engine's monitor list: {e}"))?;
+
+    let mut monitors: Vec<_> = listed
+        .into_iter()
+        .map(|monitor| MonitorDto {
+            disabled: disabled.contains(&monitor.id),
+            id: monitor.id,
+            name: monitor.name,
+            width: monitor.width,
+            height: monitor.height,
+            primary: monitor.primary,
         })
         .collect();
 
@@ -859,6 +890,127 @@ fn remove_pack(state: State<'_>) -> Result<(), String> {
     }
     let uploaded = state.uploaded.lock().unwrap();
     save_to_disk(&config, &uploaded).map_err(|e| e.to_string())
+}
+
+/// Whether this desktop can have its wallpaper put back after a pack changes it.
+///
+/// Read once when the Permissions page mounts. It runs a real snapshot (a `dbus-send` on KDE, a
+/// `gsettings` read on GNOME), which is why it isn't polled -- the answer only changes if the user
+/// switches desktop session, at which point the page is being re-opened anyway.
+#[tauri::command]
+async fn wallpaper_support() -> Result<WallpaperSupportDto, String> {
+    let snapshot = tokio::task::spawn_blocking(|| shared::wallpaper::snapshot(None))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(WallpaperSupportDto {
+        can_restore_original: snapshot.is_restorable(),
+    })
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WallpaperSupportDto {
+    /// `false` means the user has to nominate an image to restore to, or wallpaper changes stay
+    /// off. See `shared::wallpaper::Snapshot::is_restorable`.
+    pub can_restore_original: bool,
+}
+
+/// The restore image, as a `data:` URL for `<img src>`.
+///
+/// Inlined rather than served over Tauri's asset protocol so there is no protocol scope or CSP to
+/// configure -- this is one small image on one settings page, shown once.
+#[tauri::command]
+async fn wallpaper_restore_preview(path: String) -> Result<Option<String>, String> {
+    let preview = tokio::task::spawn_blocking(move || -> Option<String> {
+        use base64::Engine;
+
+        let bytes = std::fs::read(&path).ok()?;
+        // The file is whatever the user picked, so guess the type from its extension rather than
+        // assuming PNG.
+        let mime = match std::path::Path::new(&path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("jpg" | "jpeg") => "image/jpeg",
+            Some("webp") => "image/webp",
+            Some("gif") => "image/gif",
+            Some("bmp") => "image/bmp",
+            _ => "image/png",
+        };
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        Some(format!("data:{mime};base64,{encoded}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(preview)
+}
+
+/// Prompts for an image and adopts it as the restore target.
+///
+/// The file is copied into app data rather than referenced where it sits: a restore image that the
+/// user later deletes or moves would fail exactly when it is needed, stranding the wallpaper the
+/// setting exists to protect.
+#[tauri::command]
+async fn pick_restore_image(app_handle: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picked = app_handle
+        .dialog()
+        .file()
+        .add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp", "gif"])
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok());
+
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+
+    let adopted = tokio::task::spawn_blocking(move || -> anyhow::Result<PathBuf> {
+        let dir = dirs::data_local_dir()
+            .ok_or_else(|| anyhow::anyhow!("could not locate the local data directory"))?
+            .join("lewdware");
+        std::fs::create_dir_all(&dir)?;
+
+        let extension = picked
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png")
+            .to_ascii_lowercase();
+        let destination = dir.join(format!("restore-wallpaper.{extension}"));
+
+        // Copying onto the previous choice would leave a stale file behind whenever the extension
+        // changes, and the config would still point at the old one.
+        for stale in ["png", "jpg", "jpeg", "webp", "bmp", "gif"] {
+            let stale = dir.join(format!("restore-wallpaper.{stale}"));
+            if stale != destination {
+                let _ = std::fs::remove_file(stale);
+            }
+        }
+
+        std::fs::copy(&picked, &destination)?;
+        Ok(destination)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    Ok(Some(adopted.to_string_lossy().into_owned()))
+}
+
+/// The bundled near-black placeholder, materialised on disk.
+///
+/// Offered as the starting point so the restore image is never left unset once the user opts in.
+#[tauri::command]
+async fn default_restore_image() -> Result<String, String> {
+    tokio::task::spawn_blocking(shared::wallpaper::default_restore_image)
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1315,6 +1467,10 @@ pub fn run() {
             input_monitoring_granted,
             request_input_monitoring,
             open_input_monitoring_settings,
+            wallpaper_support,
+            wallpaper_restore_preview,
+            pick_restore_image,
+            default_restore_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

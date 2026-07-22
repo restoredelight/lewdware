@@ -13,6 +13,7 @@ import type {
   ScheduleStatusDto,
   SupervisorStatusDto,
   Volume,
+  WallpaperRestore,
   WindowDto,
 } from "./types";
 import { taskFeedback } from "./taskFeedback.svelte";
@@ -159,6 +160,15 @@ class AppStore {
       ...this.config,
       capabilities: { ...this.config.capabilities, [key]: enabled },
     };
+    this.saveConfig();
+  }
+
+  // What the wallpaper is put back to when a pack finishes. On a desktop that can't report its
+  // own wallpaper this is what makes the "Change wallpaper" permission usable at all -- until an
+  // image is chosen the engine declines, rather than making a change it could never undo.
+  setWallpaperRestore(restore: WallpaperRestore) {
+    if (!this.config) return;
+    this.config = { ...this.config, wallpaper: { ...this.config.wallpaper, restore } };
     this.saveConfig();
   }
 

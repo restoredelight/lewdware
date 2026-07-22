@@ -8,11 +8,11 @@ use winit::{
     event::{Touch, WindowEvent},
 };
 
-use crate::window::layer::egui_renderer::{EguiCPUWindow, EguiGpuRenderer};
 use crate::lua::{self, DialogButton, DialogElement, DialogElementUpdate, ItemId, TextStyle};
 use crate::media::ImageData;
 use crate::text_font;
 use crate::window::header::HEADER_HEIGHT;
+use crate::window::layer::egui_renderer::{EguiCPUWindow, EguiGpuRenderer};
 use crate::window::layer::{CpuFrame, GpuFrame, LayerStatus};
 use crate::window::state::WindowState;
 use crate::window::surface::Buffer;

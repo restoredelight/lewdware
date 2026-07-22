@@ -18,6 +18,9 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
+    // If a previous run died mid-episode it may have left a pack's wallpaper on the desktop.
+    crate::wallpaper::recover_stranded();
+
     // Loaded once, synchronously, before the tokio runtime exists -- both the panic key
     // (unchanged) and the schedule engine (new) need their initial values before anything else
     // spins up.

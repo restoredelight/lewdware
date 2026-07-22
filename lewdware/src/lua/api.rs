@@ -1,6 +1,8 @@
 use std::{collections::HashMap, rc::Rc, time::Duration};
 
-use mlua::{ExternalError, ExternalResult, FromLua, IntoLua, Lua, LuaSerdeExt, serde::SerializeOptions};
+use mlua::{
+    ExternalError, ExternalResult, FromLua, IntoLua, Lua, LuaSerdeExt, serde::SerializeOptions,
+};
 use serde::{Deserialize, Serialize};
 use shared::mode::OptionValue;
 

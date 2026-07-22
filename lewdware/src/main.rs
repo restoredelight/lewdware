@@ -24,6 +24,13 @@ mod window;
 mod zero_copy;
 
 fn main() -> Result<()> {
+    // Handled before anything else: this is a short-lived probe run by the config app, not a
+    // session. It must not touch the log file, the temp dir or the fd limit of a real engine that
+    // may be running at the same time.
+    if args_os().any(|arg| arg == shared::monitor::LIST_MONITORS_FLAG) {
+        return monitor::list_monitors();
+    }
+
     let _log_guard = shared::logging::init("lewdware");
 
     // TODO: Move this to supervisor

@@ -31,6 +31,85 @@ impl IntoLua for Monitor {
 
 type Result<T, E = MonitorError> = std::result::Result<T, E>;
 
+/// The identity `AppConfig::disabled_monitors` is keyed on.
+///
+/// Used by both `Monitors::refresh` and `list_monitors`, so what the config app stores is exactly
+/// what gets compared here. Keeping these in one place is the point: they were previously derived
+/// in two processes on two different display backends, and never matched.
+///
+/// Wayland sessions can report no name at all. Falling back to geometry keeps such a monitor
+/// addressable -- matching on `name()` alone meant an unnamed monitor could never be disabled.
+fn monitor_id(monitor: &MonitorHandle) -> String {
+    monitor.name().unwrap_or_else(|| {
+        let size = monitor.size();
+        let position = monitor.position();
+        shared::monitor::geometry_id(size.width, size.height, position.x, position.y)
+    })
+}
+
+/// Prints this process's view of the monitors as JSON, then exits. Driven by
+/// `shared::monitor::LIST_MONITORS_FLAG`.
+///
+/// The config app can't work these out for itself: it's a native Wayland app, while the engine
+/// forces winit onto XWayland, and the two disagree about both names and geometry (see
+/// `shared::monitor`). So it asks us, and stores whatever we say -- both sides go through
+/// `monitor_id`, so `disabled_monitors` compares equal in `refresh` by construction.
+///
+/// This deliberately builds the same event loop as `main`, forced X11 and all: a probe on a
+/// different backend would report different identities and reintroduce the bug it exists to fix.
+pub fn list_monitors() -> anyhow::Result<()> {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::EventLoop;
+    use winit::window::WindowId;
+
+    struct Probe;
+
+    impl ApplicationHandler for Probe {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            let primary = event_loop.primary_monitor();
+
+            let monitors: Vec<shared::monitor::MonitorInfo> = event_loop
+                .available_monitors()
+                .map(|monitor| {
+                    let size = monitor.size();
+                    let id = monitor_id(&monitor);
+
+                    shared::monitor::MonitorInfo {
+                        name: id.clone(),
+                        id,
+                        width: size.width,
+                        height: size.height,
+                        primary: primary.as_ref().is_some_and(|p| *p == monitor),
+                    }
+                })
+                .collect();
+
+            match serde_json::to_string(&monitors) {
+                Ok(json) => println!("{json}"),
+                Err(err) => eprintln!("could not serialise monitors: {err}"),
+            }
+
+            event_loop.exit();
+        }
+
+        fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+
+    let mut builder = EventLoop::with_user_event();
+
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+
+        builder.with_x11();
+    }
+
+    builder.build()?.run_app(&mut Probe)?;
+
+    Ok(())
+}
+
 // #[derive(PartialEq, Eq, Hash, Clone)]
 // enum MonitorId {
 //     Number(u32),
@@ -76,20 +155,15 @@ impl Monitors {
     fn refresh(&mut self, event_loop: &ActiveEventLoop) {
         let monitors: Vec<_> = event_loop.available_monitors().collect();
 
-        let primary_monitor = event_loop.primary_monitor().filter(|monitor| {
-            monitor
-                .name()
-                .is_some_and(|name| !self.disabled.contains(&name))
-        });
+        let primary_monitor = event_loop
+            .primary_monitor()
+            .filter(|monitor| !self.disabled.contains(&monitor_id(monitor)));
 
         let mut by_platform = HashMap::new();
         let mut by_id = HashMap::new();
 
         for monitor in monitors {
-            if monitor
-                .name()
-                .is_some_and(|name| self.disabled.contains(&name))
-            {
+            if self.disabled.contains(&monitor_id(&monitor)) {
                 continue;
             }
 

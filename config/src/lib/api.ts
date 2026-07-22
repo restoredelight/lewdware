@@ -11,6 +11,7 @@ import type {
   PickPackResult,
   ScheduleStatusDto,
   UploadModeResult,
+  WallpaperSupportDto,
 } from "./types";
 
 export const api = {
@@ -55,4 +56,13 @@ export const api = {
   requestInputMonitoring: () => invoke<boolean>("request_input_monitoring"),
 
   openInputMonitoringSettings: () => invoke<void>("open_input_monitoring_settings"),
+
+  wallpaperSupport: () => invoke<WallpaperSupportDto>("wallpaper_support"),
+
+  wallpaperRestorePreview: (path: string) =>
+    invoke<string | null>("wallpaper_restore_preview", { path }),
+
+  pickRestoreImage: () => invoke<string | null>("pick_restore_image"),
+
+  defaultRestoreImage: () => invoke<string>("default_restore_image"),
 };
