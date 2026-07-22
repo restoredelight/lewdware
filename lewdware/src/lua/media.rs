@@ -1,4 +1,4 @@
-use mlua::{FromLua, IntoLua, LuaSerdeExt, SerializeOptions};
+use mlua::{FromLua, IntoLua, LuaSerdeExt, serde::SerializeOptions};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

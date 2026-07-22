@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mlua::{IntoLua, LuaSerdeExt, SerializeOptions};
+use mlua::{IntoLua, LuaSerdeExt, serde::SerializeOptions};
 use serde::{Deserialize, Serialize};
 use winit::{event_loop::ActiveEventLoop, monitor::MonitorHandle};
 

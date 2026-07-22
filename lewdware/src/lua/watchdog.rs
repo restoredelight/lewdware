@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use mlua::{DebugEvent, HookTriggers, Lua, VmState};
+use mlua::{HookTriggers, Lua, VmState, debug::DebugEvent};
 
 /// How often (in Lua VM instructions) the hook checks elapsed time. Doesn't need to be small:
 /// this is a coarse dev-mode diagnostic, not a precise timer, and checking `Instant::now()` on

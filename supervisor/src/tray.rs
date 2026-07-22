@@ -42,7 +42,7 @@ pub fn create_tray_icon(control_tx: mpsc::Sender<ControlMessage>) -> Result<()> 
 
 #[cfg(target_os = "linux")]
 pub fn create_tray_icon(control_tx: mpsc::Sender<ControlMessage>) -> Result<()> {
-    use ksni::{Tray, TrayService, menu::StandardItem};
+    use ksni::{Tray, TrayMethods, menu::StandardItem};
 
     struct LewdwareTray {
         control_tx: mpsc::Sender<ControlMessage>,
@@ -73,13 +73,18 @@ pub fn create_tray_icon(control_tx: mpsc::Sender<ControlMessage>) -> Result<()> 
                 .into(),
             ]
         }
+
+        fn id(&self) -> String {
+            "lewdware".into()
+        }
     }
 
-    TrayService::new(LewdwareTray {
+    pollster::block_on(LewdwareTray {
         control_tx,
         icon_theme_path: install_symbolic_icon().unwrap_or_default(),
-    })
-    .spawn();
+    }
+    .spawn())?;
+
     Ok(())
 }
 

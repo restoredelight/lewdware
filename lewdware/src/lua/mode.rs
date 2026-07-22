@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::bail;
+use mlua::chunk::{Chunk, ChunkMode};
 use shared::mode::{Metadata, SourceFile, read_mode_metadata, read_source_file};
 
 pub trait ReadSeek: Read + Seek {}
@@ -53,7 +54,7 @@ impl Mode {
 
                     let result: mlua::Value = lua
                         .load(file)
-                        .set_mode(mlua::ChunkMode::Text)
+                        .set_mode(ChunkMode::Text)
                         .set_name(format!("@{path}"))
                         .eval()?;
 
@@ -78,13 +79,13 @@ impl Mode {
         bail!("module '{module}' not found");
     }
 
-    pub fn load(&self, lua: &mlua::Lua, path: String) -> anyhow::Result<mlua::Chunk<'static>> {
+    pub fn load(&self, lua: &mlua::Lua, path: String) -> anyhow::Result<Chunk<'static>> {
         if let Some(source_file) = self.files.get(&path) {
             let file: String = read_source_file(&mut *self.file.try_borrow_mut()?, source_file)?;
 
             Ok(lua
                 .load(file)
-                .set_mode(mlua::ChunkMode::Text)
+                .set_mode(ChunkMode::Text)
                 .set_name(format!("@{path}")))
         } else {
             bail!("File {path} not found");

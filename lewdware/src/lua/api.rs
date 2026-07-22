@@ -1,6 +1,6 @@
 use std::{collections::HashMap, rc::Rc, time::Duration};
 
-use mlua::{ExternalError, ExternalResult, FromLua, IntoLua, Lua, LuaSerdeExt};
+use mlua::{ExternalError, ExternalResult, FromLua, IntoLua, Lua, LuaSerdeExt, serde::SerializeOptions};
 use serde::{Deserialize, Serialize};
 use shared::mode::OptionValue;
 
@@ -124,7 +124,7 @@ pub fn create_api<T: EventPoster>(
     // engine-to-Lua channel, not a JSON API needing that distinction, so plain `nil` is correct.
     let content_value = lua.to_value_with(
         &content,
-        mlua::SerializeOptions::new().serialize_none_to_null(false),
+        SerializeOptions::new().serialize_none_to_null(false),
     )?;
     lua.globals().set("__lewdware_content", content_value)?;
 
@@ -132,7 +132,7 @@ pub fn create_api<T: EventPoster>(
     // `default-modes/experience/src/main.lua` reads this (empty for Sandbox/custom modes).
     let experience_value = lua.to_value_with(
         &experience,
-        mlua::SerializeOptions::new().serialize_none_to_null(false),
+        SerializeOptions::new().serialize_none_to_null(false),
     )?;
     lua.globals()
         .set("__lewdware_experience", experience_value)?;
