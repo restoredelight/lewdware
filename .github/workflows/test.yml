@@ -188,6 +188,22 @@ jobs:
       - name: Run tests
         run: cargo test -p lewdware
 
+      # `video.rs`'s pacing tests are hermetic (hand-fed frame channel, no ffmpeg) and run above.
+      # Its `sidecar` tests are the decode-level counterpart: they need a real clip with real
+      # B-frames, because the thing they pin -- that the decoder is drained rather than flushed at
+      # the end of each pass, so the frames it holds back are shown instead of discarded -- cannot
+      # be reproduced without a decoder that actually holds frames back.
+      #
+      # Unlike `media-sidecar`, this shares a job with the tests above rather than standing alone:
+      # building the engine pulls the whole ffmpeg/GTK/X11 dependency set installed above, so a
+      # separate job would pay for all of it again to run two tests that take under a second. The
+      # download is its own step, so a fetch outage still fails under its own name.
+      - name: Download FFmpeg sidecars
+        run: ./deploy/linux/download_ffmpeg_sidecars.sh
+
+      - name: Run decode tests against the real sidecar
+        run: cargo test -p lewdware --bin lewdware-engine sidecar -- --ignored --nocapture
+
       - name: Clippy
         run: cargo clippy -p lewdware --all-targets -- -D warnings
 

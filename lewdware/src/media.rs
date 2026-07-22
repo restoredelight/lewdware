@@ -1,4 +1,4 @@
-mod bounded_input;
+pub(crate) mod bounded_input;
 mod dev_pack;
 mod dir;
 mod manager;

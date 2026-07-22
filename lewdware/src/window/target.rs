@@ -90,7 +90,7 @@ impl RenderTarget {
                     present_mode: wgpu::PresentMode::AutoNoVsync,
                     alpha_mode,
                     view_formats: vec![],
-                    desired_maximum_frame_latency: 1,
+                    desired_maximum_frame_latency: 2,
                 };
                 surface.configure(&wgpu.device, &surface_config);
                 Surface::Wgpu {
