@@ -5,8 +5,8 @@ import type {
   Key,
   ModeGroupDto,
   ModeId,
+  ModeOptionsDto,
   MonitorDto,
-  OptionEntryDto,
   OptionValue,
   PickPackResult,
   ScheduleStatusDto,
@@ -23,7 +23,7 @@ export const api = {
 
   getModeGroups: () => invoke<ModeGroupDto[]>("get_mode_groups"),
 
-  getModeOptions: () => invoke<OptionEntryDto[]>("get_mode_options"),
+  getModeOptions: () => invoke<ModeOptionsDto>("get_mode_options"),
 
   setModeOption: (key: string, value: OptionValue) =>
     invoke<void>("set_mode_option", { key, value }),

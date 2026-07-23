@@ -90,7 +90,8 @@
         "notifications_enabled": {
           "label": "Show notifications",
           "type": "boolean",
-          "default": true
+          "default": true,
+          "needs_permissions": ["send_notifications"]
         }
       }
     },
@@ -102,7 +103,8 @@
         "web_opening_enabled": {
           "label": "Open web links",
           "type": "boolean",
-          "default": true
+          "default": true,
+          "needs_permissions": ["open_links"]
         }
       }
     },
@@ -148,6 +150,7 @@
           "label": "Change wallpaper",
           "type": "boolean",
           "default": true,
+          "needs_permissions": ["set_wallpaper"],
           "show_when": { "pack_has_wallpaper": true }
         },
         "splash_enabled": {

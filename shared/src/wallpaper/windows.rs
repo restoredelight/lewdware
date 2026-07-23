@@ -17,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 
-use super::{Mode, Snapshot};
+use super::Snapshot;
 
 const DESKTOP_KEY: &str = r"Control Panel\Desktop";
 
@@ -40,14 +40,9 @@ pub fn can_set() -> bool {
     true
 }
 
-pub fn set(path: &Path, mode: Option<Mode>) -> Result<()> {
-    if let Some(mode) = mode {
-        let (style, tile) = style_values(mode);
-        write_style(Some(style), Some(tile))?;
-    }
-
-    // The style keys only take effect when the wallpaper itself is (re)applied, so this must come
-    // after the registry writes.
+/// Leaves `WallpaperStyle`/`TileWallpaper` as the user set them; `restore` still puts back
+/// whatever the snapshot recorded.
+pub fn set(path: &Path) -> Result<()> {
     apply(path)
 }
 
@@ -118,16 +113,4 @@ fn write_style(style: Option<&str>, tile: Option<&str>) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// `(WallpaperStyle, TileWallpaper)`. Both are stored as strings, not integers.
-fn style_values(mode: Mode) -> (&'static str, &'static str) {
-    match mode {
-        Mode::Center => ("0", "0"),
-        Mode::Tile => ("0", "1"),
-        Mode::Stretch => ("2", "0"),
-        Mode::Fit => ("6", "0"),
-        Mode::Crop => ("10", "0"),
-        Mode::Span => ("22", "0"),
-    }
 }

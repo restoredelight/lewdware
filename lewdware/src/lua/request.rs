@@ -11,10 +11,7 @@ use crate::{
     error::{LewdwareError, Result},
     lua::{
         ItemId, WindowProps,
-        api::{
-            DialogElement, DialogElementUpdate, Notification, PopupSpawnOpts, TextStyle,
-            WallpaperMode,
-        },
+        api::{DialogElement, DialogElementUpdate, Notification, PopupSpawnOpts, TextStyle},
         window::{FadeOpts, MoveOpts},
     },
     media::FileOrPath,
@@ -143,8 +140,8 @@ impl<T: EventPoster> RequestSender<T> {
         })?
     }
 
-    pub fn set_wallpaper(&self, file: FileOrPath, mode: Option<WallpaperMode>) -> Result<bool> {
-        self.send(|tx| LuaRequest::SetWallpaper { file, mode, tx })?
+    pub fn set_wallpaper(&self, file: FileOrPath) -> Result<bool> {
+        self.send(|tx| LuaRequest::SetWallpaper { file, tx })?
     }
 
     pub fn reset_wallpaper(&self) -> Result<()> {
@@ -388,7 +385,6 @@ pub enum LuaRequest {
     },
     SetWallpaper {
         file: FileOrPath,
-        mode: Option<WallpaperMode>,
         tx: mpsc::Sender<Result<bool>>,
     },
     ResetWallpaper {

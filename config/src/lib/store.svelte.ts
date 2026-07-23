@@ -1,12 +1,15 @@
 import { api } from "./api";
 import type {
   Capabilities,
+  ConditionValue,
   ConfigDto,
   EngineStatusDto,
   Key,
   ModeGroupDto,
   ModeId,
+  ModeOptionsDto,
   OptionEntryDto,
+  Permission,
   OptionValue,
   MonitorDto,
   QuietHoursDto,
@@ -54,6 +57,12 @@ class AppStore {
   monitors = $state<MonitorDto[]>([]);
   modeGroups = $state<ModeGroupDto[]>([]);
   modeOptions = $state<OptionEntryDto[]>([]);
+  /** Permissions the selected mode uses regardless of how it is configured -- they hang off no
+   * single option, so they are surfaced once above the option list rather than on a row. */
+  modeNeedsPermissions = $state<Permission[]>([]);
+  /** Pack-derived `pack_has_*` facts for the selected mode, seeded into `show_when` evaluation
+   * alongside the live option values (see `PackMode.svelte`). */
+  packHas = $state<Record<string, ConditionValue>>({});
   activeTab = $state<"general" | "pack_mode" | "permissions" | "scheduling">("general");
   loading = $state(false);
   loadError = $state<string | null>(null);
@@ -67,6 +76,14 @@ class AppStore {
 
   get ready() {
     return this.config !== null;
+  }
+
+  /** Single place the two halves of `get_mode_options` land, so a mode's declared permissions can
+   * never drift out of step with the options they belong to. */
+  private applyModeOptions(dto: ModeOptionsDto) {
+    this.modeOptions = dto.entries;
+    this.modeNeedsPermissions = dto.needs_permissions;
+    this.packHas = dto.pack_has;
   }
 
   applySupervisorStatus(status: SupervisorStatusDto) {
@@ -94,7 +111,7 @@ class AppStore {
       this.config = config;
       this.monitors = monitors;
       this.modeGroups = modeGroups;
-      this.modeOptions = modeOptions;
+      this.applyModeOptions(modeOptions);
       taskFeedback.dismiss("load");
     } catch (err) {
       this.loadError = String(err);
@@ -291,7 +308,9 @@ class AppStore {
       await api.removePack();
       if (!this.config) return;
       this.config = { ...this.config, pack_path: null };
-      [this.modeGroups, this.modeOptions] = await Promise.all([api.getModeGroups(), api.getModeOptions()]);
+      const [groups, options] = await Promise.all([api.getModeGroups(), api.getModeOptions()]);
+      this.modeGroups = groups;
+      this.applyModeOptions(options);
       taskFeedback.success("pack", "Pack removed");
     } catch (err) {
       taskFeedback.error("pack", `Couldn’t remove pack: ${String(err)}`);
@@ -316,7 +335,7 @@ class AppStore {
       }
       modeSaved = true;
       this.modeOptions = [];
-      this.modeOptions = await api.getModeOptions();
+      this.applyModeOptions(await api.getModeOptions());
       taskFeedback.success("mode", "Mode changed");
     } catch (err) {
       taskFeedback.error(
@@ -350,7 +369,7 @@ class AppStore {
         const first = groups.find((g) => g.source === "builtin")?.entries[0];
         if (first) {
           this.config = { ...this.config, mode: first.id };
-          this.modeOptions = await api.getModeOptions();
+          this.applyModeOptions(await api.getModeOptions());
           await this.saveConfig();
         }
       }

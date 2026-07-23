@@ -40,7 +40,7 @@ use crate::{
 
 pub use api::{
     Color, Coord, DialogButton, DialogElement, DialogElementUpdate, Notification, PopupSpawnOpts,
-    TextAlign, TextFont, TextStyle, WallpaperMode,
+    TextAlign, TextFont, TextStyle,
 };
 pub use media::{Media, MediaData, MediaType};
 pub use request::{AudioAction, ItemAction, LuaRequest, WindowAction};
@@ -659,6 +659,39 @@ fn create_sandboxed_lua() -> mlua::Result<Lua> {
 /// `app.rs`, which is what makes this possible without a real event loop.
 #[cfg(test)]
 mod tests {
+    /// Makes sure `utils::temp_dir()` exists, which anything extracting media from a pack
+    /// (`MediaPack::extract`) writes into without creating it first.
+    ///
+    /// In the real engine that directory is made once at startup by `utils::prepare_temp_dir`
+    /// (see `main.rs`); no test goes through `main`, so without this a test only passes when
+    /// some *earlier* run of the actual app happened to leave the directory behind. That made
+    /// the media tests pass against a developer's `/tmp` and fail on any clean one -- a fresh CI
+    /// runner, or a `TMPDIR` pointed somewhere new.
+    ///
+    /// Deliberately `create_dir_all` rather than `prepare_temp_dir`: the latter clears the
+    /// directory first, and is documented as safe only while holding the single-instance lock.
+    /// Cargo runs these tests in parallel threads, so a sweep here would delete media out from
+    /// under a test running concurrently. Creating is idempotent and safe to race.
+    fn ensure_temp_dir() {
+        // Ignoring the error is deliberate: if the directory can't be created, the test that
+        // needs it fails on its own with a clearer message than a panic here would give.
+        let _ = std::fs::create_dir_all(crate::utils::temp_dir());
+    }
+
+    /// Every capability allowed.
+    ///
+    /// Deliberately not `Capabilities::default()`: `open_link` now ships *denied* (see
+    /// `Capabilities::default`), and a test about what a mode does with a link would otherwise
+    /// quietly turn into a test of a denied permission. Tests that care about denial say so
+    /// through `Harness::with_capabilities`.
+    fn all_capabilities() -> Capabilities {
+        Capabilities {
+            set_wallpaper: true,
+            open_links: true,
+            send_notifications: true,
+        }
+    }
+
     use std::{
         collections::HashSet,
         io::{Cursor, Write as _},
@@ -1026,7 +1059,7 @@ mod tests {
                     let _ = tx.send(Ok(id));
                 }
                 LuaRequest::SetWallpaper { tx, .. } => {
-                    let _ = tx.send(Ok(capabilities.wallpaper));
+                    let _ = tx.send(Ok(capabilities.set_wallpaper));
                 }
                 LuaRequest::ResetWallpaper { tx } => {
                     let _ = tx.send(());
@@ -1034,13 +1067,13 @@ mod tests {
                 LuaRequest::OpenLink { url, tx } => {
                     // Mirrors `LewdwareApp::open_link`: a disabled capability is checked before
                     // anything else happens, so a denied request leaves no trace to record.
-                    if capabilities.open_link {
+                    if capabilities.open_links {
                         recorded.lock().unwrap().push(Recorded::OpenLink { url });
                     }
-                    let _ = tx.send(Ok(capabilities.open_link));
+                    let _ = tx.send(Ok(capabilities.open_links));
                 }
                 LuaRequest::ShowNotification { tx, .. } => {
-                    let _ = tx.send(Ok(capabilities.notify));
+                    let _ = tx.send(Ok(capabilities.send_notifications));
                 }
                 LuaRequest::ListMonitors { tx } => {
                     // Non-empty: popup spawns that don't specify a monitor now pick a random one
@@ -1183,6 +1216,8 @@ mod tests {
             capabilities: Capabilities,
             volume: Volume,
         ) -> Self {
+            ensure_temp_dir();
+
             let event_poster = EmptyPoster();
 
             let (media_manager, _metadata, _pack_id) =
@@ -1278,7 +1313,7 @@ mod tests {
             Self::with_config(
                 sources,
                 with_image,
-                Capabilities::default(),
+                all_capabilities(),
                 Volume::default(),
             )
         }
@@ -1298,7 +1333,7 @@ mod tests {
         /// volume by `volume` exactly like `LewdwareApp` does -- lets a test check master volume
         /// is applied at spawn time.
         fn with_volume(sources: &[(&str, &str)], with_image: bool, volume: Volume) -> Self {
-            Self::with_config(sources, with_image, Capabilities::default(), volume)
+            Self::with_config(sources, with_image, all_capabilities(), volume)
         }
 
         /// Simulate an `Event` the fake handler doesn't produce itself — see the field doc on
@@ -2391,9 +2426,9 @@ mod tests {
                     )],
                     true,
                     Capabilities {
-                        wallpaper: false,
-                        open_link: false,
-                        notify: false,
+                        set_wallpaper: false,
+                        open_links: false,
+                        send_notifications: false,
                     },
                 );
 
@@ -2435,6 +2470,7 @@ mod tests {
             entrypoint: "main.lua".to_string(),
             entries: Default::default(),
             files: HashMap::new(),
+            needs_permissions: Vec::new(),
         }
     }
 
@@ -2628,7 +2664,7 @@ mod tests {
                     pack_fixture_with_data(MEDIA, None),
                     content.clone(),
                     enabled_config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -2641,7 +2677,7 @@ mod tests {
                     pack_fixture_with_data(MEDIA, None),
                     content,
                     disabled_config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3060,7 +3096,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3093,7 +3129,7 @@ mod tests {
                     pack_fixture(false),
                     Content::default(),
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3134,7 +3170,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3186,7 +3222,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3222,7 +3258,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3266,7 +3302,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3298,7 +3334,7 @@ mod tests {
                     pack_fixture(false),
                     Content::default(),
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3342,7 +3378,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3387,7 +3423,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3432,7 +3468,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3460,7 +3496,7 @@ mod tests {
                     pack_fixture(false),
                     Content::default(),
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3505,7 +3541,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3556,7 +3592,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3593,7 +3629,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3624,7 +3660,7 @@ mod tests {
                 pack_fixture(false),
                 content,
                 config,
-                Capabilities::default(),
+                all_capabilities(),
                 Volume::default(),
             );
             harness.run_entrypoint("main.lua").unwrap();
@@ -3681,7 +3717,7 @@ mod tests {
                     pack_fixture(false),
                     Content::default(),
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3722,7 +3758,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3738,10 +3774,10 @@ mod tests {
         RESET_COUNT = 0
         SET_IMAGE_NAME = nil
         local real_set = lewdware.wallpaper.set
-        lewdware.wallpaper.set = function(image, opts)
+        lewdware.wallpaper.set = function(image)
             SET_COUNT = SET_COUNT + 1
             SET_IMAGE_NAME = image.name
-            return real_set(image, opts)
+            return real_set(image)
         end
         local real_reset = lewdware.wallpaper.reset
         lewdware.wallpaper.reset = function()
@@ -3770,7 +3806,7 @@ mod tests {
                     pack_fixture_with_tagged_image(&["wallpaper"]),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3801,7 +3837,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3829,7 +3865,7 @@ mod tests {
                     pack_fixture(true),
                     Content::default(),
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3859,7 +3895,7 @@ mod tests {
                     pack_fixture_with_tagged_image(&["bg"]),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3899,7 +3935,7 @@ mod tests {
                     pack_fixture_with_tagged_image(&["wallpaper"]),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3936,7 +3972,7 @@ mod tests {
                     pack_fixture_with_tagged_image(&["splash"]),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -3988,7 +4024,7 @@ mod tests {
                     pack_fixture_with_tagged_image(&["splash"]),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4015,7 +4051,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4042,7 +4078,7 @@ mod tests {
                     pack_fixture(true),
                     content,
                     base_default_mode_config(),
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4084,7 +4120,7 @@ mod tests {
                         pack_fixture(true),
                         content,
                         base_default_mode_config(),
-                        Capabilities::default(),
+                        all_capabilities(),
                         Volume::default(),
                     );
                     harness.run_entrypoint("main.lua").unwrap();
@@ -4120,7 +4156,7 @@ mod tests {
                     pack_fixture(true),
                     content,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4168,7 +4204,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     HashMap::new(),
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4209,7 +4245,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     HashMap::new(),
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4237,7 +4273,7 @@ mod tests {
                     pack_fixture(false),
                     Content::default(),
                     HashMap::new(),
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4292,7 +4328,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     mode_config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4328,7 +4364,7 @@ mod tests {
                     pack_fixture(false),
                     content,
                     HashMap::new(),
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4387,7 +4423,7 @@ mod tests {
                     pack_fixture_with_data(MEDIA, None),
                     content,
                     mode_config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4422,7 +4458,7 @@ mod tests {
                     Content::default(),
                     experience,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4455,7 +4491,7 @@ mod tests {
                     Content::default(),
                     experience,
                     harness_config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4500,7 +4536,7 @@ mod tests {
                     content,
                     experience,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4548,7 +4584,7 @@ mod tests {
                     content,
                     experience,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -4594,7 +4630,7 @@ mod tests {
             Content::default(),
             experience,
             HashMap::new(),
-            Capabilities::default(),
+            all_capabilities(),
             Volume::default(),
         )
     }
@@ -4965,7 +5001,7 @@ mod tests {
                     Content::default(),
                     experience,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -5016,7 +5052,7 @@ mod tests {
                     Content::default(),
                     experience,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -5098,7 +5134,7 @@ mod tests {
                     Content::default(),
                     experience,
                     config,
-                    Capabilities::default(),
+                    all_capabilities(),
                     Volume::default(),
                 );
                 harness.run_entrypoint("main.lua").unwrap();
@@ -5147,6 +5183,7 @@ mod tests {
                 optional: false,
                 enabled_by_default: false,
                 show_when: None,
+                needs_permissions: Vec::new(),
             }),
         );
         let metadata = Metadata {
@@ -5156,6 +5193,7 @@ mod tests {
             entrypoint: "main.lua".to_string(),
             entries,
             files: HashMap::new(),
+            needs_permissions: Vec::new(),
         };
 
         let mut this_pack_options = HashMap::new();

@@ -73,17 +73,17 @@
 
   const toggles: { key: keyof Capabilities; label: string; description: string }[] = [
     {
-      key: "wallpaper",
+      key: "set_wallpaper",
       label: "Change wallpaper",
       description: "Allow the pack/mode to set your desktop wallpaper.",
     },
     {
-      key: "open_link",
+      key: "open_links",
       label: "Open links",
       description: "Allow the pack/mode to open links in your browser.",
     },
     {
-      key: "notify",
+      key: "send_notifications",
       label: "Show notifications",
       description: "Allow the pack/mode to show desktop notifications.",
     },
@@ -122,14 +122,14 @@
     <Card class="divide-y divide-border">
       {#each toggles as toggle (toggle.key)}
         {@const allowed = store.config?.capabilities[toggle.key] ?? false}
-        {@const usable = toggle.key !== "wallpaper" || wallpaperUsable}
+        {@const usable = toggle.key !== "set_wallpaper" || wallpaperUsable}
         <div class="flex items-center gap-4 px-4 py-3">
           <div class="min-w-0 flex-1"><h3 class="m-0 text-sm font-medium text-text">{toggle.label}</h3><p class="m-0 mt-1 text-xs text-muted">{toggle.description}</p></div>
           <span class="text-xs font-medium {allowed && usable ? 'text-text' : 'text-muted'}">{!allowed ? "Denied" : usable ? "Allowed" : "Unavailable"}</span>
           <Toggle checked={allowed} ariaLabel={`Allow ${toggle.label.toLowerCase()}`} onchange={(checked) => store.setCapability(toggle.key, checked)} />
         </div>
 
-        {#if toggle.key === "wallpaper" && allowed}
+        {#if toggle.key === "set_wallpaper" && allowed}
           <div class="flex flex-col gap-3 bg-bg px-4 py-3">
             <div>
               <h4 class="m-0 text-xs font-medium text-text">When Lewdware stops, put my wallpaper back to</h4>

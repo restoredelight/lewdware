@@ -6,6 +6,24 @@ use serde::{Deserialize, Serialize};
 
 pub type ShowWhen = IndexMap<String, ConditionValue>;
 
+/// A user-owned permission (`shared::user_config::Capabilities`) that a mode's entry says it
+/// makes use of.
+///
+/// This is a *declaration*, not a request: nothing a mode says here can grant it anything, and a
+/// denied permission still just makes the corresponding call no-op (see `LewdwareApp::open_link`
+/// and friends). Its only job is to let `config/` say "this option won't do anything until you
+/// allow X" in the place where the user is configuring that option, instead of leaving them to
+/// discover the silence for themselves. There is deliberately no hard/soft distinction -- a mode
+/// that could declare a permission mandatory would have leverage to pressure the user into
+/// granting it, and every capability already degrades gracefully.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Permission {
+    SetWallpaper,
+    OpenLinks,
+    SendNotifications,
+}
+
 /// A single mode's metadata -- one `.lwmode` file is exactly one mode (see `Header::id`'s doc
 /// comment for why: a stable per-mode identity, used for `lewdware.storage`, wouldn't have a
 /// clean meaning if one file could contain several).
@@ -17,6 +35,11 @@ pub struct Metadata {
     pub entrypoint: String,
     pub entries: IndexMap<String, ModeEntry>,
     pub files: HashMap<String, SourceFile>,
+    /// Permissions the mode uses regardless of how it is configured. `#[serde(default)]` is
+    /// load-bearing, not polish: every `.lwmode` built before this field existed has no key for
+    /// it, and must keep decoding.
+    #[serde(default)]
+    pub needs_permissions: Vec<Permission>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -37,6 +60,9 @@ pub struct ModeGroup {
     pub label: String,
     pub description: Option<String>,
     pub show_when: Option<ShowWhen>,
+    /// Permissions every option in this group depends on. See `Metadata::needs_permissions`.
+    #[serde(default)]
+    pub needs_permissions: Vec<Permission>,
     pub entries: IndexMap<String, ModeEntry>,
 }
 
@@ -50,6 +76,9 @@ pub struct ModeOption {
     #[serde(default)]
     pub enabled_by_default: bool,
     pub show_when: Option<ShowWhen>,
+    /// Permissions this option depends on. See `Metadata::needs_permissions`.
+    #[serde(default)]
+    pub needs_permissions: Vec<Permission>,
 }
 
 /// A value used in a `show_when` condition.
@@ -252,6 +281,7 @@ mod tests {
             optional: false,
             enabled_by_default: false,
             show_when: None,
+            needs_permissions: Vec::new(),
         }
     }
 
@@ -274,6 +304,7 @@ mod tests {
                 optional: false,
                 enabled_by_default: false,
                 show_when: None,
+                needs_permissions: Vec::new(),
             }),
         );
         entries.insert(
@@ -292,6 +323,7 @@ mod tests {
                 optional: false,
                 enabled_by_default: false,
                 show_when: None,
+                needs_permissions: Vec::new(),
             }),
         );
         entries.insert(
@@ -305,6 +337,7 @@ mod tests {
                 optional: false,
                 enabled_by_default: false,
                 show_when: None,
+                needs_permissions: Vec::new(),
             }),
         );
         entries.insert(
@@ -316,6 +349,7 @@ mod tests {
                 optional: false,
                 enabled_by_default: false,
                 show_when: None,
+                needs_permissions: Vec::new(),
             }),
         );
 
@@ -335,6 +369,7 @@ mod tests {
                 optional: false,
                 enabled_by_default: false,
                 show_when: None,
+                needs_permissions: Vec::new(),
             }),
         );
         entries.insert(
@@ -343,6 +378,7 @@ mod tests {
                 label: "Advanced".to_string(),
                 description: None,
                 show_when: None,
+                needs_permissions: Vec::new(),
                 entries: group_entries,
             }),
         );
@@ -363,6 +399,7 @@ mod tests {
             entrypoint: "main.lua".to_string(),
             entries,
             files,
+            needs_permissions: Vec::new(),
         }
     }
 
@@ -383,9 +420,88 @@ mod tests {
             entrypoint: "main.lua".to_string(),
             entries: IndexMap::new(),
             files: HashMap::new(),
+            needs_permissions: Vec::new(),
         };
         let buf = original.to_buf().unwrap();
         let decoded = Metadata::from_buf(&buf).unwrap();
+        assert_eq!(original, decoded);
+    }
+
+    /// The real risk in adding `requires`: every `.lwmode` built before it existed has no key for
+    /// it anywhere in its CBOR, and must keep decoding. `#[serde(default)]` is what makes that
+    /// true, so it needs a test that fails if the attribute is ever dropped.
+    #[test]
+    fn metadata_without_needs_permissions_still_decodes() {
+        #[derive(Serialize)]
+        struct OldOption {
+            label: String,
+            description: Option<String>,
+            option_type: OptionType,
+            optional: bool,
+            enabled_by_default: bool,
+            show_when: Option<ShowWhen>,
+        }
+
+        #[derive(Serialize)]
+        #[serde(tag = "kind")]
+        enum OldEntry {
+            Option(OldOption),
+        }
+
+        #[derive(Serialize)]
+        struct OldMetadata {
+            name: String,
+            version: Option<String>,
+            author: Option<String>,
+            entrypoint: String,
+            entries: IndexMap<String, OldEntry>,
+            files: HashMap<String, SourceFile>,
+        }
+
+        let mut entries = IndexMap::new();
+        entries.insert(
+            "enabled".to_string(),
+            OldEntry::Option(OldOption {
+                label: "Enabled".to_string(),
+                description: None,
+                option_type: OptionType::Boolean { default: true },
+                optional: false,
+                enabled_by_default: false,
+                show_when: None,
+            }),
+        );
+
+        let mut buf = Vec::new();
+        into_writer(
+            &OldMetadata {
+                name: "old".to_string(),
+                version: None,
+                author: None,
+                entrypoint: "main.lua".to_string(),
+                entries,
+                files: HashMap::new(),
+            },
+            &mut buf,
+        )
+        .unwrap();
+
+        let decoded = Metadata::from_buf(&buf).expect("a pre-`needs_permissions` mode must still decode");
+        assert!(decoded.needs_permissions.is_empty());
+        assert!(decoded.get_option("enabled").unwrap().needs_permissions.is_empty());
+    }
+
+    #[test]
+    fn needs_permissions_survives_a_roundtrip() {
+        let mut original = sample_metadata();
+        original.needs_permissions = vec![Permission::SendNotifications];
+        if let Some(ModeEntry::Option(opt)) = original.entries.get_mut("enabled") {
+            opt.needs_permissions = vec![Permission::SetWallpaper, Permission::OpenLinks];
+        }
+        if let Some(ModeEntry::Group(group)) = original.entries.get_mut("advanced") {
+            group.needs_permissions = vec![Permission::OpenLinks];
+        }
+
+        let decoded = Metadata::from_buf(&original.to_buf().unwrap()).unwrap();
         assert_eq!(original, decoded);
     }
 

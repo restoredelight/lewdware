@@ -20,8 +20,8 @@ use crate::audio::AudioPlayer;
 use crate::error::{LewdwareError, MonitorError, Result};
 use crate::lua::{
     self, AudioAction, DialogElement, FadeOpts, ItemAction, ItemId, LuaRequest, LuaThreadHandle,
-    MediaData, MoveOpts, Notification, PackInfo, PopupSpawnOpts, TextStyle, WallpaperMode,
-    WindowAction, WindowProps, start_lua_thread,
+    MediaData, MoveOpts, Notification, PackInfo, PopupSpawnOpts, TextStyle, WindowAction,
+    WindowProps, start_lua_thread,
 };
 use crate::media::{
     FileOrPath, MediaError, MediaManager, MediaRequirement, RequirementId, ResolvedMedia,
@@ -507,8 +507,8 @@ impl LewdwareApp {
         Ok(id)
     }
 
-    fn set_wallpaper(&mut self, file: FileOrPath, mode: Option<WallpaperMode>) -> Result<bool> {
-        if !self.config.capabilities.wallpaper {
+    fn set_wallpaper(&mut self, file: FileOrPath) -> Result<bool> {
+        if !self.config.capabilities.set_wallpaper {
             return Ok(false);
         }
 
@@ -521,16 +521,7 @@ impl LewdwareApp {
             return Ok(false);
         }
 
-        let mode = mode.map(|mode| match mode {
-            WallpaperMode::Center => shared::wallpaper::Mode::Center,
-            WallpaperMode::Crop => shared::wallpaper::Mode::Crop,
-            WallpaperMode::Fit => shared::wallpaper::Mode::Fit,
-            WallpaperMode::Span => shared::wallpaper::Mode::Span,
-            WallpaperMode::Stretch => shared::wallpaper::Mode::Stretch,
-            WallpaperMode::Tile => shared::wallpaper::Mode::Tile,
-        });
-
-        if let Err(err) = shared::wallpaper::set(file.path(), mode) {
+        if let Err(err) = shared::wallpaper::set(file.path()) {
             tracing::warn!("Error setting wallpaper: {err}");
             return Ok(false);
         }
@@ -545,7 +536,7 @@ impl LewdwareApp {
     }
 
     fn open_link(&self, url: String) -> Result<bool> {
-        if !self.config.capabilities.open_link {
+        if !self.config.capabilities.open_links {
             return Ok(false);
         }
 
@@ -573,7 +564,7 @@ impl LewdwareApp {
     }
 
     fn show_notification(&self, notification: Notification) -> Result<bool> {
-        if !self.config.capabilities.notify {
+        if !self.config.capabilities.send_notifications {
             return Ok(false);
         }
 
@@ -643,9 +634,7 @@ impl LewdwareApp {
             } => tx
                 .send(self.spawn_audio(id, media_id, loop_audio, volume, event_loop))
                 .is_ok(),
-            LuaRequest::SetWallpaper { file, mode, tx } => {
-                tx.send(self.set_wallpaper(file, mode)).is_ok()
-            }
+            LuaRequest::SetWallpaper { file, tx } => tx.send(self.set_wallpaper(file)).is_ok(),
             LuaRequest::ResetWallpaper { tx } => {
                 self.reset_wallpaper();
                 tx.send(())

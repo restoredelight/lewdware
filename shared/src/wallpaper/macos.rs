@@ -19,7 +19,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::{Mode, Snapshot, stdout_of};
+use super::{Snapshot, stdout_of};
 
 /// Reads the wallpaper of every screen.
 ///
@@ -53,17 +53,15 @@ JSON.stringify(out);
     Ok(Snapshot::MacOs { screens })
 }
 
-/// Sets the same image on every screen.
-///
-/// `mode` is ignored. Scaling is an `NSWorkspaceDesktopImageOptionKey` in the options dictionary,
-/// and building that correctly is more untestable surface than a fill mode is worth -- passing an
-/// empty dictionary leaves the user's existing scaling alone.
 /// macOS always has a settable desktop picture.
 pub fn can_set() -> bool {
     true
 }
 
-pub fn set(path: &Path, _mode: Option<Mode>) -> Result<()> {
+/// Sets the same image on every screen.
+///
+/// The options dictionary is left empty, so whatever scaling the user already had applies.
+pub fn set(path: &Path) -> Result<()> {
     let path = path.to_str().context("wallpaper path is not valid UTF-8")?;
 
     apply(&vec![Some(path.to_owned())])

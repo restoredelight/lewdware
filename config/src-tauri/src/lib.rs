@@ -45,7 +45,7 @@ use serde_json::Value as JsonValue;
 use shared::{
     behaviour::{Behaviour, effective_options},
     db::migrate,
-    mode::{self, Metadata, ModeEntry, OptionType, OptionValue, ShowWhen},
+    mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, ShowWhen},
     read_pack::{read_pack_metadata, RecommendedMode},
     schedule::{QuietHours, ScheduleConfig, Window},
     user_config::{self, AppConfig, Capabilities, Key, Mode, Volume, WallpaperConfig},
@@ -329,6 +329,10 @@ pub struct ModeOptionDto {
     pub value: OptionValue,
     pub optional: bool,
     pub show_when: Option<ShowWhen>,
+    /// Permissions this option says it uses. Whether the requirement is *live* -- the option
+    /// visible under `show_when` and, for a boolean/optional, switched on -- is decided in
+    /// `PackMode.svelte`, which is where current values and `show_when` are already evaluated.
+    pub needs_permissions: Vec<Permission>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -337,6 +341,9 @@ pub struct OptionGroupDto {
     pub label: String,
     pub description: Option<String>,
     pub show_when: Option<ShowWhen>,
+    /// See `ModeOptionDto::needs_permissions`. A group's requirement is live when the group is visible and
+    /// at least one option inside it is.
+    pub needs_permissions: Vec<Permission>,
     pub entries: Vec<OptionEntryDto>,
 }
 
@@ -345,6 +352,21 @@ pub struct OptionGroupDto {
 pub enum OptionEntryDto {
     Option(ModeOptionDto),
     Group(OptionGroupDto),
+}
+
+/// What `get_mode_options` returns: the selected mode's option tree, plus the permissions the
+/// mode uses unconditionally (`Metadata::needs_permissions`), which belong to no single option and so have
+/// nowhere in the tree to hang off.
+#[derive(Serialize, Clone, Debug)]
+pub struct ModeOptionsDto {
+    pub needs_permissions: Vec<Permission>,
+    pub entries: Vec<OptionEntryDto>,
+    /// Pack-derived facts (`pack_has_web_links`, etc.) a mode option's `show_when` can reference.
+    /// They are not options -- no value is stored for them -- but the UI needs them alongside the
+    /// live option values to evaluate visibility. A default mode reports every fact (all false when
+    /// no pack is loaded); custom modes, which never consult behaviour data, get an empty map. See
+    /// `shared::behaviour::EffectiveSchema::pack_has`.
+    pub pack_has: IndexMap<String, OptionValue>,
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -537,10 +559,19 @@ fn builtin_mode_label(name: &str, recommended: bool) -> String {
 /// (custom modes, or a default mode with no pack loaded) gets the schema's own entries
 /// unchanged -- custom modes never see behaviour-derived toggles. Shared by
 /// `get_mode_options_for` and `get_option_type_for_key` so both agree on what a key resolves to.
+///
+/// Returns the mode's unconditional `needs_permissions` alongside them: it comes off the same `Metadata`,
+/// and every caller that wants one generally wants the other. Also returns the pack-derived
+/// `pack_has_*` facts that drive `show_when` visibility -- a default mode reports every fact (all
+/// false with no pack loaded), custom modes get an empty map.
 fn effective_entries_for_mode(
     mode: &Mode,
     state: &AppState,
-) -> Option<IndexMap<String, ModeEntry>> {
+) -> Option<(
+    IndexMap<String, ModeEntry>,
+    Vec<Permission>,
+    IndexMap<String, OptionValue>,
+)> {
     let mode_meta = match mode {
         Mode::Sandbox => Some(state.sandbox_mode.clone()),
         Mode::Experience => Some(state.experience_mode.clone()),
@@ -559,6 +590,8 @@ fn effective_entries_for_mode(
         }
     }?;
 
+    let needs_permissions = mode_meta.needs_permissions.clone();
+
     if matches!(mode, Mode::Sandbox | Mode::Experience) {
         let behaviour = state
             .pack
@@ -567,9 +600,10 @@ fn effective_entries_for_mode(
             .as_ref()
             .map(|p| p.behaviour.clone())
             .unwrap_or_default();
-        Some(effective_options(&mode_meta, &behaviour).entries)
+        let schema = effective_options(&mode_meta, &behaviour);
+        Some((schema.entries, needs_permissions, schema.pack_has))
     } else {
-        Some(mode_meta.entries)
+        Some((mode_meta.entries, needs_permissions, IndexMap::new()))
     }
 }
 
@@ -608,9 +642,14 @@ fn stored_options_for(
     }
 }
 
-fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<OptionEntryDto> {
-    let Some(entries) = effective_entries_for_mode(&config.mode, state) else {
-        return Vec::new();
+fn get_mode_options_for(config: &AppConfig, state: &AppState) -> ModeOptionsDto {
+    let Some((entries, needs_permissions, pack_has)) = effective_entries_for_mode(&config.mode, state)
+    else {
+        return ModeOptionsDto {
+            needs_permissions: Vec::new(),
+            entries: Vec::new(),
+            pack_has: IndexMap::new(),
+        };
     };
 
     let stored = stored_options_for(&config.mode, config, state);
@@ -636,6 +675,7 @@ fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<OptionEntry
                         value,
                         optional: opt.optional,
                         show_when: opt.show_when.clone(),
+                        needs_permissions: opt.needs_permissions.clone(),
                     })
                 }
                 ModeEntry::Group(group) => OptionEntryDto::Group(OptionGroupDto {
@@ -643,13 +683,18 @@ fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Vec<OptionEntry
                     label: group.label.clone(),
                     description: group.description.clone(),
                     show_when: group.show_when.clone(),
+                    needs_permissions: group.needs_permissions.clone(),
                     entries: build_entries(&group.entries, stored),
                 }),
             })
             .collect()
     }
 
-    build_entries(&entries, &stored)
+    ModeOptionsDto {
+        needs_permissions,
+        entries: build_entries(&entries, &stored),
+        pack_has,
+    }
 }
 
 fn save_to_disk(config: &AppConfig, uploaded: &[UploadedModeEntry]) -> anyhow::Result<()> {
@@ -745,7 +790,7 @@ fn get_mode_groups(state: State<'_>) -> Vec<ModeGroupDto> {
 }
 
 #[tauri::command]
-fn get_mode_options(state: State<'_>) -> Vec<OptionEntryDto> {
+fn get_mode_options(state: State<'_>) -> ModeOptionsDto {
     let config = state.config.lock().unwrap();
     get_mode_options_for(&config, &state)
 }
@@ -791,7 +836,7 @@ fn get_option_type_for_key(
     key: &str,
     state: &AppState,
 ) -> Option<OptionType> {
-    let entries = effective_entries_for_mode(mode, state)?;
+    let (entries, _, _) = effective_entries_for_mode(mode, state)?;
     find_option_type(&entries, key)
 }
 
@@ -1489,6 +1534,7 @@ mod tests {
             entrypoint: "main.lua".to_string(),
             entries: Default::default(),
             files: HashMap::new(),
+            needs_permissions: Vec::new(),
         }
     }
 
@@ -1545,6 +1591,114 @@ mod tests {
         None
     }
 
+    /// `needs_permissions` is only useful if it survives the trip from the mode's schema to the DTO the UI
+    /// reads -- both the per-entry declarations and the mode-wide one, which hangs off no option
+    /// and so travels beside the tree rather than in it.
+    #[test]
+    fn declared_permissions_reach_the_dto() {
+        let mut sandbox = empty_metadata("Sandbox");
+        sandbox.needs_permissions = vec![Permission::SendNotifications];
+        sandbox.entries.insert(
+            "links".to_string(),
+            ModeEntry::Group(mode::ModeGroup {
+                label: "Web links".to_string(),
+                description: None,
+                show_when: None,
+                needs_permissions: vec![Permission::OpenLinks],
+                entries: IndexMap::from([(
+                    "wallpaper_enabled".to_string(),
+                    ModeEntry::Option(mode::ModeOption {
+                        label: "Change wallpaper".to_string(),
+                        description: None,
+                        option_type: OptionType::Boolean { default: true },
+                        optional: false,
+                        enabled_by_default: false,
+                        show_when: None,
+                        needs_permissions: vec![Permission::SetWallpaper],
+                    }),
+                )]),
+            }),
+        );
+
+        let mut state = test_state(None);
+        state.sandbox_mode = sandbox;
+
+        let config = AppConfig {
+            mode: Mode::Sandbox,
+            ..Default::default()
+        };
+        let dto = get_mode_options_for(&config, &state);
+
+        assert_eq!(dto.needs_permissions, vec![Permission::SendNotifications]);
+
+        let OptionEntryDto::Group(group) = find_entry(&dto.entries, "links").unwrap() else {
+            panic!("expected a group entry");
+        };
+        assert_eq!(group.needs_permissions, vec![Permission::OpenLinks]);
+
+        let OptionEntryDto::Option(opt) = find_entry(&dto.entries, "wallpaper_enabled").unwrap()
+        else {
+            panic!("expected an option entry");
+        };
+        assert_eq!(opt.needs_permissions, vec![Permission::SetWallpaper]);
+    }
+
+    /// A mode option's `show_when` can key off pack-derived facts (`pack_has_web_links`, etc.), so
+    /// those facts have to survive the trip to the DTO -- the UI evaluates visibility against them
+    /// alongside the live option values. Without them, any option gated on a `pack_has_*` fact
+    /// silently never renders.
+    #[test]
+    fn pack_has_facts_reach_the_dto_for_default_mode() {
+        use shared::behaviour::WebLink;
+
+        let behaviour = Behaviour {
+            content: shared::behaviour::Content {
+                web_links: vec![WebLink {
+                    url: "https://example.com".to_string(),
+                    args: Vec::new(),
+                    tags: Vec::new(),
+                }],
+                ..Default::default()
+            },
+            ..Behaviour::new()
+        };
+        let state = test_state(Some(loaded_pack(behaviour, vec![])));
+        let config = AppConfig {
+            mode: Mode::Sandbox,
+            ..Default::default()
+        };
+
+        let dto = get_mode_options_for(&config, &state);
+
+        assert_eq!(
+            dto.pack_has.get("pack_has_web_links"),
+            Some(&OptionValue::Boolean(true)),
+        );
+        assert_eq!(
+            dto.pack_has.get("pack_has_prompts"),
+            Some(&OptionValue::Boolean(false)),
+        );
+    }
+
+    /// A default mode with no pack loaded still reports every fact (as false) rather than an empty
+    /// map, so an option gated on `pack_has_web_links: true` correctly resolves to hidden. Custom
+    /// modes, which never consult behaviour data, get the empty map instead.
+    #[test]
+    fn pack_has_facts_all_false_for_default_mode_without_a_pack() {
+        let state = test_state(None);
+        let config = AppConfig {
+            mode: Mode::Sandbox,
+            ..Default::default()
+        };
+
+        let dto = get_mode_options_for(&config, &state);
+
+        assert_eq!(
+            dto.pack_has.get("pack_has_web_links"),
+            Some(&OptionValue::Boolean(false)),
+        );
+    }
+
     #[test]
     fn default_mode_with_pack_content_group_renders_content_checklist() {
         let state = test_state(Some(loaded_pack(
@@ -1556,7 +1710,7 @@ mod tests {
             ..Default::default()
         };
 
-        let entries = get_mode_options_for(&config, &state);
+        let entries = get_mode_options_for(&config, &state).entries;
 
         let content_group_entry = find_entry(&entries, "content_groups")
             .expect("synthesized \"content_groups\" group should be present");
@@ -1586,7 +1740,7 @@ mod tests {
             ..Default::default()
         };
 
-        let entries = get_mode_options_for(&config, &state);
+        let entries = get_mode_options_for(&config, &state).entries;
 
         assert!(find_entry(&entries, "content_groups").is_none());
     }
@@ -1622,7 +1776,7 @@ mod tests {
             ..Default::default()
         };
 
-        let entries = get_mode_options_for(&config, &state);
+        let entries = get_mode_options_for(&config, &state).entries;
 
         assert!(find_entry(&entries, "content_groups").is_none());
     }

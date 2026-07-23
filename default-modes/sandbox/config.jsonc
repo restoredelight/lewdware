@@ -223,7 +223,8 @@
         "notifications_enabled": {
           "label": "Show notifications",
           "type": "boolean",
-          "default": true
+          "default": true,
+          "needs_permissions": ["send_notifications"]
         },
         "notification_frequency": {
           "label": "Notification frequency (seconds)",
@@ -240,11 +241,13 @@
       "type": "group",
       "label": "Web opening",
       "show_when": { "pack_has_web_links": true },
+      "needs_permissions": ["open_links"],
       "options": {
         "web_opening_enabled": {
           "label": "Open web links",
           "type": "boolean",
-          "default": true
+          "default": true,
+          "needs_permissions": ["open_links"]
         },
         "web_frequency": {
           "label": "Web link frequency (seconds)",
@@ -315,6 +318,7 @@
           "label": "Change wallpaper",
           "type": "boolean",
           "default": true,
+          "needs_permissions": ["set_wallpaper"],
           "show_when": { "pack_has_wallpaper": true }
         },
         "splash_enabled": {

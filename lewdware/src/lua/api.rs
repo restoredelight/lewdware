@@ -1578,48 +1578,19 @@ fn spawn_dialog<T: EventPoster>(
     Ok(window)
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub enum WallpaperMode {
-    #[serde(rename = "center")]
-    Center,
-    #[serde(rename = "crop")]
-    Crop,
-    #[serde(rename = "fit")]
-    Fit,
-    #[serde(rename = "span")]
-    Span,
-    #[serde(rename = "stretch")]
-    Stretch,
-    #[serde(rename = "tile")]
-    Tile,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-struct SetWallpaperOpts {
-    mode: Option<WallpaperMode>,
-}
-
-impl FromLua for SetWallpaperOpts {
-    fn from_lua(value: mlua::Value, lua: &Lua) -> mlua::Result<Self> {
-        lua.from_value(value)
-    }
-}
-
 fn set_wallpaper<T: EventPoster>(
     _: &Lua,
-    (image, opts): (Media, Option<SetWallpaperOpts>),
+    image: Media,
     media_manager: MediaManager,
     request_sender: RequestSender<T>,
 ) -> mlua::Result<bool> {
-    let opts = opts.unwrap_or_default();
-
     if !matches!(image.media_data, MediaData::Image { .. }) {
         return Err("`image` is not an image".into_lua_err());
     }
 
     let file = media_manager.get_image_file(image.id).into_lua_err()?;
 
-    request_sender.set_wallpaper(file, opts.mode).into_lua_err()
+    request_sender.set_wallpaper(file).into_lua_err()
 }
 
 fn reset_wallpaper<T: EventPoster>(

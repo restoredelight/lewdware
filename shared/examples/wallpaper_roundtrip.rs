@@ -28,10 +28,7 @@ fn main() {
     }
 
     println!("\nsetting to {}...", image.display());
-    println!(
-        "set -> {:?}",
-        shared::wallpaper::set(&image, Some(shared::wallpaper::Mode::Crop))
-    );
+    println!("set -> {:?}", shared::wallpaper::set(&image));
     sleep(Duration::from_secs(3));
 
     println!(

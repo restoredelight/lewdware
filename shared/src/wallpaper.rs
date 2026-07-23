@@ -39,18 +39,6 @@ use macos as platform;
 #[cfg(windows)]
 use windows as platform;
 
-/// How an image should be fitted to the screen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    Center,
-    Crop,
-    Fit,
-    Span,
-    Stretch,
-    Tile,
-}
-
 /// The wallpaper state of a single KDE containment (roughly, one desktop/screen).
 ///
 /// Empty strings are "unset", which is distinct from any real value and must be preserved.
@@ -186,8 +174,13 @@ pub fn snapshot(fallback: Option<&Path>) -> Snapshot {
 }
 
 /// Sets the wallpaper to an image on disk.
-pub fn set(path: &Path, mode: Option<Mode>) -> Result<()> {
-    platform::set(path, mode)
+///
+/// Always fills the screen, cropping the overflow. There is deliberately no fill-mode option: it
+/// was cosmetic, no caller ever passed one, and honouring it meant a six-way mapping per backend
+/// that several platforms could only approximate -- while a wrong flag made the tool reject the
+/// whole command, so a cosmetic setting could stop the wallpaper changing at all.
+pub fn set(path: &Path) -> Result<()> {
+    platform::set(path)
 }
 
 /// Puts the wallpaper back to a previously captured state.
@@ -196,7 +189,7 @@ pub fn restore(snapshot: &Snapshot) -> Result<()> {
         Snapshot::Unsupported => Ok(()),
         // Not a captured state but a chosen destination, so it is applied rather than restored.
         // Handled here so no platform backend has to know the setting exists.
-        Snapshot::FixedImage { path } => platform::set(Path::new(path), None),
+        Snapshot::FixedImage { path } => platform::set(Path::new(path)),
         _ => platform::restore(snapshot),
     }
 }

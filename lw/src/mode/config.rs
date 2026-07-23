@@ -21,6 +21,11 @@ pub struct Config {
     pub entrypoint: String,
     #[serde(default)]
     pub options: IndexMap<String, JsonValue>,
+    /// Permissions the mode uses no matter how the user configures it. Per-option/per-group
+    /// `requires` is almost always the better place -- this is for modes whose entrypoint uses a
+    /// capability unconditionally, with no option governing it.
+    #[serde(default)]
+    pub needs_permissions: Vec<mode::Permission>,
 }
 
 /// A flat option entry as parsed from JSONC.
@@ -34,6 +39,8 @@ pub struct ModeOption {
     pub enabled_by_default: bool,
     #[serde(default)]
     pub show_when: Option<IndexMap<String, JsonValue>>,
+    #[serde(default)]
+    pub needs_permissions: Vec<mode::Permission>,
     #[serde(flatten)]
     pub option_type: OptionType,
 }
@@ -45,6 +52,8 @@ pub struct GroupConfig {
     pub description: Option<String>,
     #[serde(default)]
     pub show_when: Option<IndexMap<String, JsonValue>>,
+    #[serde(default)]
+    pub needs_permissions: Vec<mode::Permission>,
     pub options: IndexMap<String, JsonValue>,
 }
 
@@ -127,6 +136,7 @@ fn parse_entry(key: &str, value: JsonValue) -> Result<mode::ModeEntry> {
             label: group.label,
             description: group.description,
             show_when,
+            needs_permissions: group.needs_permissions,
             entries,
         }))
     } else {
@@ -136,6 +146,7 @@ fn parse_entry(key: &str, value: JsonValue) -> Result<mode::ModeEntry> {
             optional,
             enabled_by_default,
             show_when: raw_show_when,
+            needs_permissions,
             option_type,
         } = serde_json::from_value(value)
             .with_context(|| format!("Error parsing option `{key}`"))?;
@@ -148,6 +159,7 @@ fn parse_entry(key: &str, value: JsonValue) -> Result<mode::ModeEntry> {
             enabled_by_default,
             option_type,
             show_when,
+            needs_permissions,
         )?;
         Ok(mode::ModeEntry::Option(meta_opt))
     }
@@ -161,6 +173,7 @@ fn convert_option(
     enabled_by_default: bool,
     option_type: OptionType,
     show_when: Option<mode::ShowWhen>,
+    needs_permissions: Vec<mode::Permission>,
 ) -> Result<mode::ModeOption> {
     let has_default = match &option_type {
         OptionType::Integer { default, .. } => default.is_some(),
@@ -184,6 +197,7 @@ fn convert_option(
         optional,
         enabled_by_default,
         show_when,
+        needs_permissions,
     })
 }
 
@@ -399,6 +413,76 @@ mod tests {
                 "options": {
                     "count": { "label": "Count again", "type": "integer", "default": 2 }
                 }
+            }
+        });
+        let map: IndexMap<String, JsonValue> = serde_json::from_value(raw).unwrap();
+        assert!(parse_entries(map).is_err());
+    }
+
+    #[test]
+    fn needs_permissions_parses_on_options_and_groups() {
+        let raw = serde_json::json!({
+            "web_links": {
+                "label": "Web links",
+                "type": "group",
+                "needs_permissions": ["open_links"],
+                "options": {
+                    "wallpaper_enabled": {
+                        "label": "Change wallpaper",
+                        "type": "boolean",
+                        "default": true,
+                        "needs_permissions": ["set_wallpaper", "send_notifications"]
+                    }
+                }
+            }
+        });
+        let map: IndexMap<String, JsonValue> = serde_json::from_value(raw).unwrap();
+        let entries = parse_entries(map).unwrap();
+
+        let mode::ModeEntry::Group(group) = &entries["web_links"] else {
+            panic!("expected a group");
+        };
+        assert_eq!(group.needs_permissions, vec![mode::Permission::OpenLinks]);
+
+        let mode::ModeEntry::Option(opt) = &group.entries["wallpaper_enabled"] else {
+            panic!("expected an option");
+        };
+        assert_eq!(
+            opt.needs_permissions,
+            vec![mode::Permission::SetWallpaper, mode::Permission::SendNotifications]
+        );
+    }
+
+    /// Every mode written before `needs_permissions` existed omits the key entirely, and must still parse
+    /// -- as "uses nothing", not as an error.
+    #[test]
+    fn needs_permissions_defaults_to_empty() {
+        let raw = serde_json::json!({
+            "count": { "label": "Count", "type": "integer", "default": 1 },
+            "grp": { "label": "Group", "type": "group", "options": {} }
+        });
+        let map: IndexMap<String, JsonValue> = serde_json::from_value(raw).unwrap();
+        let entries = parse_entries(map).unwrap();
+
+        let mode::ModeEntry::Option(opt) = &entries["count"] else {
+            panic!("expected an option");
+        };
+        assert!(opt.needs_permissions.is_empty());
+
+        let mode::ModeEntry::Group(group) = &entries["grp"] else {
+            panic!("expected a group");
+        };
+        assert!(group.needs_permissions.is_empty());
+    }
+
+    /// A typo'd permission is a mode-author mistake worth failing the build over: silently
+    /// dropping it would leave the option with no notice and no clue why.
+    #[test]
+    fn unknown_permission_is_rejected() {
+        let raw = serde_json::json!({
+            "count": {
+                "label": "Count", "type": "integer", "default": 1,
+                "needs_permissions": ["read_email"]
             }
         });
         let map: IndexMap<String, JsonValue> = serde_json::from_value(raw).unwrap();

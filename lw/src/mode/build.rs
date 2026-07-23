@@ -132,6 +132,7 @@ fn create_metadata(
         author,
         entrypoint,
         options,
+        needs_permissions,
     }: Config,
     source_files: HashMap<String, SourceFile>,
 ) -> Result<mode::Metadata> {
@@ -165,6 +166,7 @@ fn create_metadata(
         entrypoint,
         entries,
         files: source_files,
+        needs_permissions,
     })
 }
 

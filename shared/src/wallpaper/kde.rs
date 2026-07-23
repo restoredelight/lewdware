@@ -10,7 +10,7 @@
 //! and write an empty string back, which returns the containment to the plugin's default rather
 //! than pinning it to whatever path we happened to observe.
 
-use super::{KdeDesktop, Mode, Snapshot, stdout_of};
+use super::{KdeDesktop, Snapshot, stdout_of};
 use anyhow::{Context, Result, anyhow, bail};
 
 pub fn snapshot() -> Result<Snapshot> {
@@ -43,16 +43,11 @@ print(JSON.stringify(out));
     Ok(Snapshot::Kde { desktops })
 }
 
-pub fn set(path: &str, mode: Option<Mode>) -> Result<()> {
+pub fn set(path: &str) -> Result<()> {
     // `org.kde.image` is the only plugin that takes a plain image path. If the user is running a
     // slideshow or a colour, we have to switch the plugin over -- the snapshot records the old one
     // so `restore` can switch it back.
     let uri = json_string(&format!("file://{path}"));
-
-    let fill = match mode {
-        Some(mode) => format!(r#"d.writeConfig("FillMode", {});"#, fill_mode(mode)),
-        None => String::new(),
-    };
 
     evaluate(&format!(
         r#"
@@ -62,7 +57,7 @@ for (var i = 0; i < ds.length; i++) {{
     d.wallpaperPlugin = "org.kde.image";
     d.currentConfigGroup = ["Wallpaper", "org.kde.image", "General"];
     d.writeConfig("Image", {uri});
-    {fill}
+    // FillMode is left alone: whatever the user had stays, and the snapshot restores it anyway.
 }}
 "#
     ))
@@ -98,17 +93,6 @@ for (var i = 0; i < ds.length; i++) {{
 "#
     ))
     .map(|_| ())
-}
-
-fn fill_mode(mode: Mode) -> u8 {
-    match mode {
-        Mode::Stretch => 0,
-        Mode::Fit => 1,
-        // Plasma has no distinct "span" mode; cropping to fill is the closest behaviour.
-        Mode::Crop | Mode::Span => 2,
-        Mode::Tile => 3,
-        Mode::Center => 6,
-    }
 }
 
 /// Runs a script inside plasmashell and returns whatever it `print`ed.

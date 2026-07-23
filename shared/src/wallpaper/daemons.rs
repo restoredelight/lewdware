@@ -6,16 +6,19 @@
 //! Detection here probes for running processes and on-disk state rather than reading environment
 //! variables.
 //!
-//! Only tools that can be put back are used. Each backend below reuses the tool's own canonical
-//! restore mechanism -- `awww img`, `~/.fehbg`, `nitrogen --restore` -- so we are doing what the
-//! user's own startup scripts already do. Tools with no state anywhere (`hsetroot`, `setroot`,
-//! `xsetroot`) are deliberately absent: setting a wallpaper with them could never be undone.
+//! Tools split into two tiers. The ones that can report what they are showing get a real snapshot
+//! and are restored through their own canonical mechanism -- `awww img`, `~/.fehbg`,
+//! `nitrogen --restore` -- so we do what the user's own startup scripts already do.
+//!
+//! The rest (`SETTERS`) can only set. They are usable at all because a user-nominated restore
+//! image gives us something to put back afterwards; where the user has not chosen one, `snapshot`
+//! reports the desktop as unsupported and the caller declines to touch the wallpaper.
 
 use std::{env, fs, path::PathBuf, process::Command};
 
 use anyhow::{Context, Result, bail};
 
-use super::{AwwwContent, AwwwOutput, Mode, Snapshot, run, stdout_of};
+use super::{AwwwContent, AwwwOutput, Snapshot, run, stdout_of};
 use crate::utils::sanitize_child_env;
 
 /// The daemon-backed strategies, in the order they are probed.
@@ -26,6 +29,57 @@ enum Daemon {
     Swaybg,
     Feh,
     Nitrogen,
+    /// A tool that can set a wallpaper but never report one back, identified by its binary.
+    SetOnly(&'static str),
+}
+
+/// Wallpaper setters that keep no readable state, probed in order.
+///
+/// These are only usable because a user-nominated restore image ([`Snapshot::FixedImage`]) gives
+/// us something to put back; without one, `snapshot` reports the desktop as unsupported and the
+/// engine declines rather than making a change it could never undo.
+///
+/// Probing for the binary rather than matching a desktop name (as Edgeware++ does) covers window
+/// managers we have never heard of, so long as the user has one of these installed -- and it means
+/// feh and nitrogen still work on a fresh install, before they have written the state files the
+/// restorable paths above look for.
+const SETTERS: &[&str] = &[
+    // The two an i3/bspwm/dwm user is most likely to already have.
+    "feh",
+    "nitrogen",
+    // Modern general-purpose X11 setters.
+    "xwallpaper",
+    "hsetroot",
+    // Window-manager specific, in rough order of surviving user base.
+    "fbsetbg",  // fluxbox, openbox, jwm, afterstep
+    "wmsetbg",  // window maker
+    "icewmbg",  // icewm
+    "bsetbg",   // blackbox
+    "Esetroot", // enlightenment
+];
+
+/// The arguments that set `path`, per setter.
+///
+/// One fill-the-screen invocation each -- see `wallpaper::set` for why there is no mode to map.
+fn setter_args(binary: &str, path: &str) -> Vec<String> {
+    let mut args: Vec<String> = match binary {
+        "feh" => vec!["--bg-fill"],
+        "nitrogen" => vec!["--set-zoom-fill", "--save"],
+        "xwallpaper" => vec!["--zoom"],
+        "hsetroot" => vec!["-fill"],
+        "fbsetbg" => vec!["-f"],
+        "wmsetbg" => vec!["-s", "-u"],
+        "bsetbg" => vec!["-full"],
+        "Esetroot" => vec!["-scale"],
+        // icewmbg and anything else we add later: path only.
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+
+    args.push(path.to_owned());
+    args
 }
 
 /// `swww` was renamed to `awww` in 0.12; the old name lingers as a deprecation shim that prints a
@@ -65,7 +119,12 @@ fn detect() -> Option<Daemon> {
         return Some(Daemon::Nitrogen);
     }
 
-    None
+    // Last resort: anything that can set but not read. Only reachable with a configured restore
+    // image, since `snapshot` below refuses to invent one.
+    SETTERS
+        .iter()
+        .find(|binary| which::which(binary).is_ok())
+        .map(|binary| Daemon::SetOnly(binary))
 }
 
 /// Whether any wallpaper tool we can drive is present.
@@ -110,19 +169,19 @@ pub fn snapshot() -> Result<Snapshot> {
                     .with_context(|| format!("could not read {}", path.display()))?,
             })
         }
+        // Deliberately unreadable. Failing here is what routes the caller to the user's chosen
+        // restore image, or to declining the change if they haven't chosen one.
+        Daemon::SetOnly(binary) => {
+            bail!("`{binary}` can set a wallpaper but cannot report the current one")
+        }
     }
 }
 
-pub fn set(path: &str, mode: Option<Mode>) -> Result<()> {
+pub fn set(path: &str) -> Result<()> {
     match detect().context("no usable wallpaper tool found for this compositor")? {
         Daemon::Awww => {
             let binary = awww_binary().context("awww disappeared between probe and set")?;
-            let mut args = vec!["img", path];
-            if let Some(mode) = mode {
-                args.push("--resize");
-                args.push(awww_resize(mode));
-            }
-            run(binary, &args)
+            run(binary, &["img", "--resize", "crop", path])
         }
         Daemon::Hyprpaper => {
             run("hyprctl", &["hyprpaper", "preload", path])?;
@@ -133,13 +192,15 @@ pub fn set(path: &str, mode: Option<Mode>) -> Result<()> {
             "-i".to_owned(),
             path.to_owned(),
             "-m".to_owned(),
-            swaybg_mode(mode.unwrap_or(Mode::Crop)).to_owned(),
+            "fill".to_owned(),
         ]),
-        Daemon::Feh => run("feh", &[feh_mode(mode.unwrap_or(Mode::Crop)), path]),
-        Daemon::Nitrogen => run(
-            "nitrogen",
-            &[nitrogen_mode(mode.unwrap_or(Mode::Crop)), "--save", path],
-        ),
+        Daemon::Feh => run("feh", &["--bg-fill", path]),
+        Daemon::Nitrogen => run("nitrogen", &["--set-zoom-fill", "--save", path]),
+        Daemon::SetOnly(binary) => {
+            let args = setter_args(binary, path);
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            run(binary, &args)
+        }
     }
 }
 
@@ -310,46 +371,6 @@ fn nitrogen_config() -> Option<PathBuf> {
     dirs::config_dir().map(|config| config.join("nitrogen/bg-saved.cfg"))
 }
 
-fn awww_resize(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Crop | Mode::Span => "crop",
-        Mode::Fit => "fit",
-        Mode::Stretch => "stretch",
-        // awww has no centre or tile mode; leaving the image unresized is the closest thing.
-        Mode::Center | Mode::Tile => "no",
-    }
-}
-
-fn swaybg_mode(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Center => "center",
-        Mode::Crop | Mode::Span => "fill",
-        Mode::Fit => "fit",
-        Mode::Stretch => "stretch",
-        Mode::Tile => "tile",
-    }
-}
-
-fn feh_mode(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Center => "--bg-center",
-        Mode::Crop | Mode::Span => "--bg-fill",
-        Mode::Fit => "--bg-max",
-        Mode::Stretch => "--bg-scale",
-        Mode::Tile => "--bg-tile",
-    }
-}
-
-fn nitrogen_mode(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Center => "--set-centered",
-        Mode::Crop | Mode::Span => "--set-zoom-fill",
-        Mode::Fit => "--set-zoom",
-        Mode::Stretch => "--set-scaled",
-        Mode::Tile => "--set-tiled",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,6 +410,32 @@ mod tests {
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].name, "DP-1");
         assert_eq!(outputs[1].name, "DP-2");
+    }
+
+    /// Every setter must receive the image path last, and never an empty argument. These tools
+    /// aren't installed on the dev machine, so this table is the only thing standing between a
+    /// typo and a wallpaper that silently never appears.
+    #[test]
+    fn every_setter_is_passed_the_image_path_last() {
+        for binary in SETTERS {
+            let args = setter_args(binary, "/tmp/a b.png");
+            assert_eq!(
+                args.last().map(String::as_str),
+                Some("/tmp/a b.png"),
+                "{binary} did not end with the image path"
+            );
+            assert!(
+                args.iter().all(|arg| !arg.is_empty()),
+                "{binary} produced an empty argument"
+            );
+        }
+    }
+
+    /// icewmbg takes no fill flag; it must get the path and nothing else rather than being handed
+    /// one it will reject.
+    #[test]
+    fn setters_without_fill_flags_get_only_the_path() {
+        assert_eq!(setter_args("icewmbg", "/a.png"), vec!["/a.png"]);
     }
 
     #[test]

@@ -47,6 +47,7 @@ pub fn effective_options(mode_schema: &Metadata, behaviour: &Behaviour) -> Effec
                     optional: false,
                     enabled_by_default: false,
                     show_when: None,
+                    needs_permissions: Vec::new(),
                 }),
             );
         }
@@ -56,6 +57,7 @@ pub fn effective_options(mode_schema: &Metadata, behaviour: &Behaviour) -> Effec
                 label: CONTENT_GROUPS_ENTRY_LABEL.to_string(),
                 description: None,
                 show_when: None,
+                needs_permissions: Vec::new(),
                 entries: group_entries,
             }),
         );
@@ -131,6 +133,7 @@ mod tests {
             entrypoint: "main.lua".to_string(),
             entries: IndexMap::new(),
             files: HashMap::new(),
+            needs_permissions: Vec::new(),
         }
     }
 
@@ -152,6 +155,7 @@ mod tests {
                 optional: false,
                 enabled_by_default: false,
                 show_when: None,
+                needs_permissions: Vec::new(),
             }),
         );
         Metadata {
@@ -161,6 +165,7 @@ mod tests {
             entrypoint: "main.lua".to_string(),
             entries,
             files: HashMap::new(),
+            needs_permissions: Vec::new(),
         }
     }
 

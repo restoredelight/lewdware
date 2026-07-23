@@ -30,6 +30,9 @@
       "type": "string",
       "description": "The path to the main lua file for the mode"
     },
+    "needs_permissions": {
+      "$ref": "#/$defs/needs_permissions"
+    },
     "options": {
       "type": "object",
       "additionalProperties": {
@@ -57,6 +60,15 @@
       }
     },
 
+    "needs_permissions": {
+      "type": "array",
+      "description": "Permissions this entry uses. Declaring one grants nothing -- the user owns these, and a denied permission simply makes the corresponding call do nothing. It lets the Lewdware config app say \"this won't do anything until you allow X\" next to the option itself, and offer to turn it on there.",
+      "items": {
+        "enum": ["set_wallpaper", "open_links", "send_notifications"]
+      },
+      "uniqueItems": true
+    },
+
     "entry": {
       "oneOf": [
         { "$ref": "#/$defs/option" },
@@ -78,6 +90,9 @@
         },
         "show_when": {
           "$ref": "#/$defs/show_when"
+        },
+        "needs_permissions": {
+          "$ref": "#/$defs/needs_permissions"
         },
         "options": {
           "type": "object",
@@ -112,6 +127,9 @@
         },
         "show_when": {
           "$ref": "#/$defs/show_when"
+        },
+        "needs_permissions": {
+          "$ref": "#/$defs/needs_permissions"
         },
         "type": {
           "enum": ["integer", "number", "string", "boolean", "enum"]

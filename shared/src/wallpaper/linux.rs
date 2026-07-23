@@ -9,7 +9,7 @@ use std::{env, path::Path};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::{Mode, Snapshot, daemons, kde, run, stdout_of};
+use super::{Snapshot, daemons, kde, run, stdout_of};
 
 const GNOME_SCHEMA: &str = "org.gnome.desktop.background";
 
@@ -17,6 +17,11 @@ const GNOME_SCHEMA: &str = "org.gnome.desktop.background";
 /// and is the key the `wallpaper` crate forgets to read back -- it writes both on set but restores
 /// only the light one, so restoring while in dark mode leaves the wrong image behind.
 const GNOME_KEYS: &[&str] = &["picture-uri", "picture-uri-dark", "picture-options"];
+
+/// Fill the screen, cropping the overflow -- the one behaviour `set` offers, per backend.
+const GNOME_FILL: &str = "zoom";
+const XFCE_FILL: &str = "5";
+const LXDE_FILL: &str = "crop";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Desktop {
@@ -179,7 +184,7 @@ pub fn can_set() -> bool {
     !matches!(detect(), Desktop::Other) || daemons::available()
 }
 
-pub fn set(path: &Path, mode: Option<Mode>) -> Result<()> {
+pub fn set(path: &Path) -> Result<()> {
     let path = path.to_str().context("wallpaper path is not valid UTF-8")?;
     let uri = format!("file://{path}");
     let desktop = detect();
@@ -192,34 +197,30 @@ pub fn set(path: &Path, mode: Option<Mode>) -> Result<()> {
             &uri
         };
         dconf_write(picture_key, &gvariant_string(value))?;
-        if let Some(mode) = mode {
-            dconf_write(options_key, &gvariant_string(gnome_mode(mode)))?;
-        }
+        dconf_write(options_key, &gvariant_string(GNOME_FILL))?;
         return Ok(());
     }
 
     match desktop {
-        Desktop::Kde => kde::set(path, mode),
+        Desktop::Kde => kde::set(path),
         Desktop::Gnome => {
             let value = gvariant_string(&uri);
             gsettings_set(GNOME_SCHEMA, "picture-uri", &value)?;
             // Absent before GNOME 42, so a failure here is not fatal.
             let _ = gsettings_set(GNOME_SCHEMA, "picture-uri-dark", &value);
-            if let Some(mode) = mode {
-                gsettings_set(
-                    GNOME_SCHEMA,
-                    "picture-options",
-                    &gvariant_string(gnome_mode(mode)),
-                )?;
-            }
+            gsettings_set(
+                GNOME_SCHEMA,
+                "picture-options",
+                &gvariant_string(GNOME_FILL),
+            )?;
             Ok(())
         }
         Desktop::Xfce => {
             for property in xfce_properties()? {
                 if property.ends_with("last-image") {
                     xfconf_set(&property, path)?;
-                } else if let Some(mode) = mode {
-                    xfconf_set(&property, &xfce_mode(mode).to_string())?;
+                } else {
+                    xfconf_set(&property, XFCE_FILL)?;
                 }
             }
             Ok(())
@@ -232,12 +233,10 @@ pub fn set(path: &Path, mode: Option<Mode>) -> Result<()> {
                 "pcmanfm"
             };
             run(pcmanfm, &["--set-wallpaper", path])?;
-            if let Some(mode) = mode {
-                run(pcmanfm, &["--wallpaper-mode", lxde_mode(mode)])?;
-            }
+            run(pcmanfm, &["--wallpaper-mode", LXDE_FILL])?;
             Ok(())
         }
-        Desktop::Other => daemons::set(path, mode),
+        Desktop::Other => daemons::set(path),
         Desktop::Cinnamon | Desktop::Mate | Desktop::Deepin => unreachable!("handled above"),
     }
 }
@@ -338,38 +337,6 @@ fn xfconf_set(property: &str, value: &str) -> Result<()> {
 /// back and accept.
 fn gvariant_string(value: &str) -> String {
     format!("'{}'", value.replace('\\', r"\\").replace('\'', r"\'"))
-}
-
-fn gnome_mode(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Center => "centered",
-        Mode::Crop => "zoom",
-        Mode::Fit => "scaled",
-        Mode::Span => "spanned",
-        Mode::Stretch => "stretched",
-        Mode::Tile => "wallpaper",
-    }
-}
-
-fn xfce_mode(mode: Mode) -> u8 {
-    match mode {
-        Mode::Center => 1,
-        Mode::Tile => 2,
-        Mode::Stretch => 3,
-        Mode::Fit => 4,
-        Mode::Crop | Mode::Span => 5,
-    }
-}
-
-fn lxde_mode(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Center => "center",
-        Mode::Crop => "crop",
-        Mode::Fit => "fit",
-        Mode::Span => "screen",
-        Mode::Stretch => "stretch",
-        Mode::Tile => "tile",
-    }
 }
 
 #[cfg(test)]

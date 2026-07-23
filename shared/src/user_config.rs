@@ -27,7 +27,7 @@ pub struct AppConfig {
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,
-    /// Sub-settings for the `capabilities.wallpaper` permission. `#[serde(default)]` is required:
+    /// Sub-settings for the `capabilities.set_wallpaper` permission. `#[serde(default)]` is required:
     /// every pre-existing `config.json` has no `"wallpaper"` key.
     #[serde(default)]
     pub wallpaper: WallpaperConfig,
@@ -47,17 +47,34 @@ pub struct AppConfig {
 /// than erroring, exactly like any other "could not do it" outcome (e.g. no browser installed).
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct Capabilities {
-    pub wallpaper: bool,
-    pub open_link: bool,
-    pub notify: bool,
+    pub set_wallpaper: bool,
+    pub open_links: bool,
+    pub send_notifications: bool,
+}
+
+impl Capabilities {
+    /// Whether a permission a mode declares in its schema (`shared::mode::Permission`) is
+    /// currently granted. The bridge between what a mode says it uses and what the user allows.
+    pub fn allows(&self, permission: crate::mode::Permission) -> bool {
+        match permission {
+            crate::mode::Permission::SetWallpaper => self.set_wallpaper,
+            crate::mode::Permission::OpenLinks => self.open_links,
+            crate::mode::Permission::SendNotifications => self.send_notifications,
+        }
+    }
 }
 
 impl Default for Capabilities {
     fn default() -> Self {
         Self {
-            wallpaper: true,
-            open_link: true,
-            notify: true,
+            set_wallpaper: true,
+            // Off by default, unlike the other two. Opening a browser tab is the one capability
+            // whose effect escapes the desktop session entirely -- it can land on a screen the
+            // user did not expect and does not control, and it is not undone by quitting. Modes
+            // declare `needs_permissions: ["open_links"]` on the options that need it, so `config/` can
+            // offer the grant in context rather than leaving the user with a dead toggle.
+            open_links: false,
+            send_notifications: true,
         }
     }
 }
@@ -314,12 +331,49 @@ mod tests {
         assert_eq!(config.volume.audio, 1.0);
     }
 
+    /// Opening a browser is the one capability whose effect leaves the desktop session, so it
+    /// starts denied. Only new installs are affected: `capabilities` has no `#[serde(default)]`,
+    /// so an existing `config.json` always carries the user's own answer.
     #[test]
-    fn default_capabilities_allow_everything() {
+    fn open_link_is_the_only_capability_denied_by_default() {
         let config = AppConfig::default();
-        assert!(config.capabilities.wallpaper);
-        assert!(config.capabilities.open_link);
-        assert!(config.capabilities.notify);
+        assert!(config.capabilities.set_wallpaper);
+        assert!(!config.capabilities.open_links);
+        assert!(config.capabilities.send_notifications);
+    }
+
+    #[test]
+    fn allows_maps_each_declared_permission_to_its_toggle() {
+        use crate::mode::Permission;
+
+        let capabilities = Capabilities {
+            set_wallpaper: true,
+            open_links: false,
+            send_notifications: true,
+        };
+        assert!(capabilities.allows(Permission::SetWallpaper));
+        assert!(!capabilities.allows(Permission::OpenLinks));
+        assert!(capabilities.allows(Permission::SendNotifications));
+    }
+
+    /// An existing user who allowed link opening keeps that answer -- the new default must not
+    /// reach back into configs already on disk.
+    #[test]
+    fn an_existing_config_keeps_its_own_open_link_answer() {
+        let json = serde_json::json!({
+            "pack_path": null, "uploaded_modes": [], "mode": "Sandbox",
+            "mode_options": [], "experience_options": [],
+            "panic_button": {
+                "name": "Escape", "code": "Escape",
+                "modifiers": { "alt": false, "ctrl": false, "shift": true, "meta": false }
+            },
+            "disabled_monitors": [],
+            "capabilities": { "set_wallpaper": true, "open_links": true, "send_notifications": true },
+            "volume": { "video": 1.0, "audio": 1.0 }
+        });
+
+        let config: AppConfig = serde_json::from_value(json).unwrap();
+        assert!(config.capabilities.open_links);
     }
 
     #[test]
@@ -355,7 +409,7 @@ mod tests {
                 "modifiers": { "alt": false, "ctrl": false, "shift": true, "meta": false }
             },
             "disabled_monitors": [],
-            "capabilities": { "wallpaper": true, "open_link": true, "notify": true },
+            "capabilities": { "set_wallpaper": true, "open_links": true, "send_notifications": true },
             "volume": { "video": 1.0, "audio": 1.0 }
         });
 
@@ -378,7 +432,7 @@ mod wallpaper_config_tests {
             "mode_options": [], "panic_button": {"name":"Escape","code":"Escape",
             "modifiers":{"alt":false,"ctrl":false,"shift":false,"meta":false}},
             "disabled_monitors": [],
-            "capabilities": {"wallpaper": true, "open_link": true, "notify": true},
+            "capabilities": {"set_wallpaper": true, "open_links": true, "send_notifications": true},
             "volume": {"video": 1.0, "audio": 1.0}
         }"#;
 

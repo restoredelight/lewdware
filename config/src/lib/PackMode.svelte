@@ -5,6 +5,7 @@
     OptionEntryDto,
     OptionGroupEntryDto,
     OptionType,
+    Permission,
     ShowWhen,
   } from "./types";
   import { ArrowUpTray, Check, ChevronRight, FolderOpen, Icon, XMark } from "svelte-hero-icons";
@@ -144,9 +145,11 @@
     }
   }
 
-  // Flat map of option key → current value, used to evaluate show_when conditions.
+  // Flat map of option key → current value, used to evaluate show_when conditions. Seeded with the
+  // pack-derived `pack_has_*` facts, which a `show_when` can reference but which are not options
+  // and so never appear in the entry tree.
   const valueMap = $derived.by(() => {
-    const map = new Map<string, unknown>();
+    const map = new Map<string, unknown>(Object.entries(store.packHas));
     function collect(entries: OptionEntryDto[]) {
       for (const entry of entries) {
         if (entry.kind === "Option") {
@@ -159,6 +162,41 @@
     collect(store.modeOptions);
     return map;
   });
+
+  // ─── Declared permissions ──────────────────────────────────────────────────
+  // A mode's schema can say which of the user's permissions an option or group actually uses
+  // (`needs_permissions` in config.jsonc). It grants nothing -- a denied permission still makes the
+  // call no-op engine-side. Rather than let the user set an option that can't take effect, we
+  // grey it out and say, quietly, which permission it's waiting on, with a link to go grant it.
+
+  const permissionLabels: Record<Permission, string> = {
+    set_wallpaper: "Change wallpaper",
+    open_links: "Open links",
+    send_notifications: "Show notifications",
+  };
+
+  function isGranted(permission: Permission): boolean {
+    return store.config?.capabilities[permission] ?? false;
+  }
+
+  // Callers only ever render visible entries, so `show_when` visibility is already accounted for.
+  // Unlike the value-gated version this replaced, an off toggle still reports its requirement --
+  // being unable to turn a feature *on* because its permission is denied is the whole point.
+  function unmetForOption(opt: ModeOptionDto): Permission[] {
+    return opt.needs_permissions.filter((p) => !isGranted(p));
+  }
+
+  function unmetForGroup(group: OptionGroupEntryDto): Permission[] {
+    return group.needs_permissions.filter((p) => !isGranted(p));
+  }
+
+  const unmetForMode = $derived(store.modeNeedsPermissions.filter((p) => !isGranted(p)));
+
+  function permissionSentence(permissions: Permission[]): string {
+    const names = permissions.map((p) => `“${permissionLabels[p]}”`);
+    if (names.length === 1) return names[0];
+    return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  }
 
   function isVisible(showWhen: ShowWhen | null): boolean {
     if (!showWhen) return true;
@@ -207,18 +245,33 @@
   }
 </script>
 
-{#snippet optionControl(opt: ModeOptionDto)}
+{#snippet permissionHint(permissions: Permission[])}
+  <!-- Deliberately quiet: muted, small, no warning colour. It states a fact and offers a route,
+       it doesn't sound an alarm. "Permissions" jumps to that page (no router; just a tab swap). -->
+  <p class="m-0 text-[11px] leading-snug text-muted">
+    Requires the {permissionSentence(permissions)}
+    {permissions.length > 1 ? "permissions" : "permission"} ·
+    <button
+      type="button"
+      class="underline decoration-dotted underline-offset-2 hover:text-text transition-colors"
+      onclick={() => (store.activeTab = "permissions")}
+    >Permissions</button>
+  </p>
+{/snippet}
+
+{#snippet optionControl(opt: ModeOptionDto, disabled: boolean = false)}
   {@const typeKey = optionTypeKey(opt)}
 
   {#if typeKey === "Boolean"}
-    <Toggle ariaLabel={opt.label} checked={opt.value === true} onchange={(checked) => store.setModeOption(opt.key, checked)} />
+    <Toggle ariaLabel={opt.label} checked={opt.value === true} {disabled} onchange={(checked) => store.setModeOption(opt.key, checked)} />
 
   {:else if typeKey === "String"}
     <input
       type="text"
       value={opt.value as string}
+      {disabled}
       oninput={(e) => store.setModeOption(opt.key, e.currentTarget.value)}
-      class="w-56 rounded-sm border border-border bg-bg px-2.5 py-1.5 text-sm text-text transition-colors hover:border-[var(--ui-border-strong)]"
+      class="w-56 rounded-sm border border-border bg-bg px-2.5 py-1.5 text-sm text-text transition-colors hover:border-[var(--ui-border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
     />
 
   {:else if typeKey === "Enum"}
@@ -228,6 +281,7 @@
       hideLabel
       label={opt.label}
       value={opt.value as string}
+      {disabled}
       options={Object.entries(enumValues(opt)).map(([value, label]) => ({ value, label }))}
       onchange={(value) => store.setModeOption(opt.key, value)}
     />
@@ -241,6 +295,7 @@
         max={getMax(opt) ?? 100}
         step={getStep(opt) ?? 1}
         value={displayVal}
+        {disabled}
         oninput={(value) => handleNumberInput(opt, String(value))}
         class="w-40 sm:w-52"
       />
@@ -250,8 +305,9 @@
         min={getMin(opt)}
         max={getMax(opt)}
         step={getStep(opt)}
+        {disabled}
         oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
-        class="w-20 rounded-sm border border-border bg-bg px-2.5 py-1.5 text-sm text-text transition-colors hover:border-[var(--ui-border-strong)]"
+        class="w-20 rounded-sm border border-border bg-bg px-2.5 py-1.5 text-sm text-text transition-colors hover:border-[var(--ui-border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
       />
     {:else}
       <input
@@ -260,8 +316,9 @@
         min={getMin(opt)}
         max={getMax(opt)}
         step={getStep(opt)}
+        {disabled}
         oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
-        class="w-24 rounded-sm border border-border bg-bg px-2.5 py-1.5 text-sm text-text transition-colors hover:border-[var(--ui-border-strong)]"
+        class="w-24 rounded-sm border border-border bg-bg px-2.5 py-1.5 text-sm text-text transition-colors hover:border-[var(--ui-border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
       />
     {/if}
   {/if}
@@ -368,6 +425,12 @@
         <p class="mt-1 mb-0 text-xs text-muted">Customize the selected mode. Changes are applied automatically.</p>
       </div>
 
+      <!-- Permissions this mode uses no matter how it's configured; they belong to no one option,
+           so there's no single control to disable -- just the note. -->
+      {#if unmetForMode.length > 0}
+        {@render permissionHint(unmetForMode)}
+      {/if}
+
       <div class="flex flex-col gap-3">
         {@render optionEntries(store.modeOptions)}
       </div>
@@ -390,30 +453,39 @@
   />
 {/if}
 
-{#snippet optionRow(opt: ModeOptionDto)}
+{#snippet optionRow(opt: ModeOptionDto, inheritedDisabled: boolean = false)}
   {@const typeKey = optionTypeKey(opt)}
-  {@const isDisabled = opt.optional && opt.value === null}
-  <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3">
-    <div class="min-w-0 flex-1 basis-52">
-      <h3 class="m-0 text-sm font-medium text-text">{opt.label}</h3>
-      {#if opt.description}<p class="m-0 mt-0.5 text-xs text-muted">{opt.description}</p>{/if}
-    </div>
-    {#if typeKey === "Boolean" && !opt.optional}
-      {@render optionControl(opt)}
-    {:else}
-      <div class="flex shrink-0 items-center gap-3">
-        <!-- A disabled optional renders no control at all — the toggle alone says "off". -->
-        {#if !isDisabled}{@render optionControl(opt)}{/if}
-        {#if opt.optional}
-          <Toggle ariaLabel={`Enable ${opt.label}`} checked={!isDisabled} onchange={(checked) => handleOptionalToggle(opt, checked)} />
-        {/if}
+  {@const optionalOff = opt.optional && opt.value === null}
+  {@const own = unmetForOption(opt)}
+  {@const permDisabled = inheritedDisabled || own.length > 0}
+  <div class="flex flex-col gap-1.5 px-4 py-3">
+    <!-- Hint above the row, and only for the option's *own* requirement -- when a group is what's
+         unmet, the group shows one hint rather than repeating it on every child. -->
+    {#if own.length > 0}{@render permissionHint(own)}{/if}
+    <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 {permDisabled ? 'opacity-50' : ''}">
+      <div class="min-w-0 flex-1 basis-52">
+        <h3 class="m-0 text-sm font-medium text-text">{opt.label}</h3>
+        {#if opt.description}<p class="m-0 mt-0.5 text-xs text-muted">{opt.description}</p>{/if}
       </div>
-    {/if}
+      {#if typeKey === "Boolean" && !opt.optional}
+        {@render optionControl(opt, permDisabled)}
+      {:else}
+        <div class="flex shrink-0 items-center gap-3">
+          <!-- A disabled optional renders no control at all — the toggle alone says "off". -->
+          {#if !optionalOff}{@render optionControl(opt, permDisabled)}{/if}
+          {#if opt.optional}
+            <Toggle ariaLabel={`Enable ${opt.label}`} checked={!optionalOff} disabled={permDisabled} onchange={(checked) => handleOptionalToggle(opt, checked)} />
+          {/if}
+        </div>
+      {/if}
+    </div>
   </div>
 {/snippet}
 
-{#snippet optionGroup(group: OptionGroupEntryDto)}
+{#snippet optionGroup(group: OptionGroupEntryDto, inheritedDisabled: boolean = false)}
   {@const collapsed = isCollapsed(group.key)}
+  {@const unmet = unmetForGroup(group)}
+  {@const childrenDisabled = inheritedDisabled || unmet.length > 0}
   <Card class="flex flex-col gap-0">
     <button
       onclick={() => toggleGroup(group.key)}
@@ -430,29 +502,36 @@
       </span>
     </button>
 
+    <!-- One hint at the top of the group; every control inside is greyed out and disabled. Shown
+         even while collapsed, so the state is legible without expanding. The header stays live so
+         the group can still be collapsed. -->
+    {#if unmet.length > 0}
+      <div class="px-4 pb-2">{@render permissionHint(unmet)}</div>
+    {/if}
+
     {#if !collapsed}
       <div class="border-t border-border">
-        {@render optionEntries(group.entries, true)}
+        {@render optionEntries(group.entries, true, childrenDisabled)}
       </div>
     {/if}
   </Card>
 {/snippet}
 
-{#snippet optionEntries(entries: OptionEntryDto[], bare: boolean = false)}
+{#snippet optionEntries(entries: OptionEntryDto[], bare: boolean = false, inheritedDisabled: boolean = false)}
   {@const chunks = chunkEntries(entries.filter((entry) => isVisible(entry.show_when)))}
   {#each chunks as chunk, index (chunk.kind === "group" ? `group:${chunk.group.key}` : `options:${chunk.items[0].key}`)}
     {#if chunk.kind === "options"}
       <div class="divide-y divide-border {bare ? '' : 'rounded-md border border-border bg-surface'}">
         {#each chunk.items as opt (opt.key)}
-          {@render optionRow(opt)}
+          {@render optionRow(opt, inheritedDisabled)}
         {/each}
       </div>
     {:else if bare}
       <div class="border-t border-border p-3 {index === 0 ? 'border-t-0' : ''}">
-        {@render optionGroup(chunk.group)}
+        {@render optionGroup(chunk.group, inheritedDisabled)}
       </div>
     {:else}
-      {@render optionGroup(chunk.group)}
+      {@render optionGroup(chunk.group, inheritedDisabled)}
     {/if}
   {/each}
 {/snippet}

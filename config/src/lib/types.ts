@@ -62,10 +62,14 @@ export interface ScheduleStatusDto {
   next_session: string | null;
 }
 
+/** A permission a mode's schema declares it uses. Matches `shared::mode::Permission`, and its
+ * values are exactly the keys of `Capabilities`. */
+export type Permission = keyof Capabilities;
+
 export interface Capabilities {
-  wallpaper: boolean;
-  open_link: boolean;
-  notify: boolean;
+  set_wallpaper: boolean;
+  open_links: boolean;
+  send_notifications: boolean;
 }
 
 /** What the wallpaper is put back to once a pack is done with it. `original` is only possible on
@@ -161,6 +165,10 @@ export interface ModeOptionDto {
   value: OptionValue;
   optional: boolean;
   show_when: ShowWhen | null;
+  /** Permissions this option says it uses. Whether the requirement is actually *live* -- the
+   * option visible and, for a boolean/optional, switched on -- is decided here in the UI, since
+   * this is where current values and `show_when` are already evaluated. */
+  needs_permissions: Permission[];
 }
 
 export interface OptionGroupEntryDto {
@@ -168,7 +176,21 @@ export interface OptionGroupEntryDto {
   label: string;
   description: string | null;
   show_when: ShowWhen | null;
+  /** See `ModeOptionDto.needs_permissions`. Live when the group is visible and holds a visible option. */
+  needs_permissions: Permission[];
   entries: OptionEntryDto[];
+}
+
+/** What `get_mode_options` returns: the option tree, plus permissions the mode uses no matter how
+ * it is configured (so they hang off no single option). */
+export interface ModeOptionsDto {
+  needs_permissions: Permission[];
+  entries: OptionEntryDto[];
+  /** Pack-derived facts (`pack_has_web_links`, etc.) that an option's `show_when` can reference.
+   * Not options -- no value is stored for them -- but visibility evaluation needs them alongside
+   * the live option values. A default mode reports every fact (all false with no pack loaded);
+   * custom modes get an empty map. */
+  pack_has: Record<string, ConditionValue>;
 }
 
 export type OptionEntryDto =

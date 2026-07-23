@@ -6,7 +6,7 @@
 //! fallback and confirm the fallback is what ends up on screen.
 use std::{path::PathBuf, thread::sleep, time::Duration};
 
-use shared::wallpaper::{Mode, Snapshot};
+use shared::wallpaper::Snapshot;
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -21,7 +21,7 @@ fn main() {
     println!("real snapshot (put back at the end) = {real:?}\n");
 
     println!("setting to {}...", image.display());
-    shared::wallpaper::set(&image, Some(Mode::Crop)).unwrap();
+    shared::wallpaper::set(&image).unwrap();
     sleep(Duration::from_secs(2));
     println!("now showing = {:?}\n", shared::wallpaper::snapshot(None));
 

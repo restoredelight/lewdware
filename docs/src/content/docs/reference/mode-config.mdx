@@ -44,6 +44,7 @@ comments and trailing commas are allowed).
 | `author` | `string` | No | Author name. |
 | `include` | `string[]` | No | Paths of directories or files of Lua code to bundle (e.g. `["src"]`). |
 | `entrypoint` | `string` | Yes | Path to the main Lua file, relative to the config file. |
+| `needs_permissions` | `string[]` | No | [Permissions](#permissions) the mode uses no matter how it is configured. |
 | `options` | `object` | No | Map of option keys to [option definitions](#options). |
 
 ## Options
@@ -59,6 +60,7 @@ All option types share these base fields:
 | `label` | `string` | Yes | Label shown to the user in the config app. |
 | `description` | `string` | No | Optional explanation shown below the label. |
 | `type` | `string` | Yes | One of `"integer"`, `"number"`, `"string"`, `"boolean"`, `"enum"`. |
+| `needs_permissions` | `string[]` | No | [Permissions](#permissions) this option uses. |
 
 The remaining fields depend on `type`:
 
@@ -117,3 +119,33 @@ The remaining fields depend on `type`:
     The runtime value of `lewdware.config["theme"]` will be the selected key (e.g. `"auto"`).
   </TabItem>
 </Tabs>
+
+## Permissions
+
+Three things a mode can do reach outside its own windows, and each is behind a permission the user
+owns and can switch off at any time: `set_wallpaper` (set the desktop wallpaper), `open_links` (open a
+link in the browser) and `send_notifications` (show a desktop notification). `open_links` starts switched
+**off**.
+
+A mode can't ask for these, and declaring `needs_permissions` grants nothing — when a permission is denied
+the corresponding call simply does nothing, and Lua gets `false` back, exactly as if the action
+had failed for any other reason. What `needs_permissions` does is let the config app explain *why* nothing
+will happen, next to the option responsible, and offer to turn the permission on right there.
+
+```jsonc
+"web_opening_enabled": {
+  "label": "Open web links",
+  "type": "boolean",
+  "default": true,
+  "needs_permissions": ["open_links"]
+}
+```
+
+Put `needs_permissions` on the narrowest thing that needs it:
+
+- **On an option** — the usual case. Best of all on the boolean that switches the feature on,
+  since a requirement is only reported while the option is actually in use: a boolean set to
+  `false`, a disabled `optional`, or anything hidden by `show_when` raises no notice.
+- **On a group** — when everything inside it depends on the same permission.
+- **At the top level** — only when the mode uses a permission no matter how it is configured, so
+  there is no option to attach it to.
