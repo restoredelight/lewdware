@@ -3,7 +3,7 @@
   // "$schema": "https://lewdware.github.com/mode.schema.json",
   "include": ["../shared", "src"],
   "id": "db090a6a-51af-42cb-9af9-639f554f48a2",
-  "name": "Experience",
+  "name": "Sequence",
   "version": "0.1.0",
   "author": "restoredelight",
   "entrypoint": "src/main.lua",

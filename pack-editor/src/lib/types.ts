@@ -130,6 +130,9 @@ export interface Timeline { stages: Stage[]; transitions: Transition[]; }
 
 export interface Experience {
   timeline: Timeline;
+  /** Optional name shown for the built-in timeline mode when this pack is loaded; falls back to
+   * the mode's own name ("Sequence") when unset. */
+  label?: string | null;
 }
 
 export interface Behaviour {

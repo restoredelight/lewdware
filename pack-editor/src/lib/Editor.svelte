@@ -4,7 +4,7 @@
   import IconButton from "$ui/IconButton.svelte";
   import Popover from "$ui/Popover.svelte";
   import Dialog from "$ui/Dialog.svelte";
-  import { ArrowUturnLeft, ArrowUturnRight, ChevronLeft, ChevronRight, CodeBracketSquare, Cog6Tooth, DocumentText, EllipsisVertical, Icon, PaintBrush, Sparkles, Squares2x2, Tag } from "svelte-hero-icons";
+  import { ArrowUturnLeft, ArrowUturnRight, ChevronLeft, ChevronRight, Clock, CodeBracketSquare, Cog6Tooth, DocumentText, EllipsisVertical, Icon, PaintBrush, Squares2x2, Tag } from "svelte-hero-icons";
   import { onMount, tick } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { api } from "./api.js";
@@ -44,7 +44,7 @@
     { id: "tags", label: "Tags", icon: Tag },
     { id: "artists", label: "Artists", icon: PaintBrush },
     { id: "content", label: "Content", icon: DocumentText },
-    { id: "experience", label: "Experience", icon: Sparkles },
+    { id: "experience", label: "Timeline", icon: Clock },
     { id: "modes", label: "Modes", icon: CodeBracketSquare },
     { id: "options", label: "Pack Metadata", icon: Cog6Tooth },
   ];

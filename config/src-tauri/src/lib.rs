@@ -513,12 +513,22 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
     // The pack author's recommendation nudges (not restricts) the choice -- see `pick_pack`'s
     // preselection and `behaviour-design/default-mode.md`'s "explicit choice, but nudged" UX.
     // Absent a pack, or an override to a custom mode, neither builtin entry is marked.
-    let recommended = state
-        .pack
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|pack| pack.recommended_mode.clone());
+    //
+    // A pack that ships a timeline may also relabel the timeline mode (e.g. the Edgeware
+    // converter emits "Corruption"); that label stands in for the mode's own name below. We
+    // ignore a label on an empty timeline -- there'd be no progression to name.
+    let (recommended, experience_label) = {
+        let pack = state.pack.lock().unwrap();
+        let recommended = pack.as_ref().and_then(|p| p.recommended_mode.clone());
+        let experience_label = pack.as_ref().and_then(|p| {
+            p.behaviour.experience.as_ref().and_then(|e| {
+                e.label
+                    .clone()
+                    .filter(|_| !e.timeline.stages.is_empty())
+            })
+        });
+        (recommended, experience_label)
+    };
 
     groups.push(ModeGroupDto {
         label: "Default Modes".into(),
@@ -534,7 +544,7 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
             ModeEntryDto {
                 id: ModeIdDto::Experience,
                 name: builtin_mode_label(
-                    &state.experience_mode.name,
+                    experience_label.as_deref().unwrap_or(&state.experience_mode.name),
                     matches!(recommended, Some(RecommendedMode::Experience)),
                 ),
             },
@@ -1447,7 +1457,7 @@ pub fn run() {
         .1;
 
     let experience_mode_bytes =
-        include_bytes!("../../../default-modes/experience/build/Experience.lwmode");
+        include_bytes!("../../../default-modes/experience/build/Sequence.lwmode");
     let experience_mode = mode::read_mode_metadata(&mut Cursor::new(experience_mode_bytes))
         .expect("failed to load embedded Experience mode")
         .1;
@@ -1570,7 +1580,7 @@ mod tests {
             pack: Mutex::new(pack),
             uploaded: Mutex::new(Vec::new()),
             sandbox_mode: empty_metadata("Sandbox"),
-            experience_mode: empty_metadata("Experience"),
+            experience_mode: empty_metadata("Sequence"),
         }
     }
 

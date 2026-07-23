@@ -102,7 +102,7 @@ behaviour:
               - corruption-moodless
               - kinky
             wallpaper_tags:
-              - corruption-wallpaper-wallpaper2-png
+              - wallpaper-1
           events:
             popup:
               interval:
@@ -125,6 +125,7 @@ behaviour:
           duration_seconds: 0
           easing: linear
           affected: []
+    label: Corruption
 media:
   - source_path: img/kinky_a.png
     suggested_name: kinky_a.png
@@ -145,7 +146,7 @@ media:
   - source_path: wallpaper2.png
     suggested_name: wallpaper2.png
     tags:
-      - corruption-wallpaper-wallpaper2-png
+      - wallpaper-1
 icon: ~
 warnings:
   - kind: ConfigNotConverted

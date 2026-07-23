@@ -252,7 +252,7 @@ pub fn start_lua_thread<T: EventPoster>(
             }
             shared::user_config::Mode::Experience => {
                 let mode_data =
-                    include_bytes!("../../default-modes/experience/build/Experience.lwmode");
+                    include_bytes!("../../default-modes/experience/build/Sequence.lwmode");
 
                 Box::new(Cursor::new(mode_data))
             }
@@ -3033,6 +3033,7 @@ mod tests {
                 stages,
                 transitions,
             },
+            label: None,
         }
     }
 
@@ -4770,6 +4771,7 @@ mod tests {
                             affected: vec![TransitionCategory::PopupInterval],
                         }],
                     },
+                    label: None,
                 };
                 let mut harness =
                     timeline_harness(&timeline_only_sources_initialized(), experience);

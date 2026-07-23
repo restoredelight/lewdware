@@ -120,11 +120,16 @@ fn levels_to_experience(levels: Vec<Level>) -> Experience {
             affected: vec![],
         })
         .collect();
+    // Edgeware's own name for a multi-level progression is "corruption"; presenting the timeline
+    // mode under that label keeps converted packs legible to the users they came from. A
+    // single-stage timeline has no progression, so it keeps the mode's own name.
+    let label = (stages.len() > 1).then(|| "Corruption".to_string());
     Experience {
         timeline: Timeline {
             stages,
             transitions,
         },
+        label,
     }
 }
 
@@ -678,10 +683,20 @@ fn build_timeline(
     config: &Map<String, Value>,
     source: &dyn PackSource,
     media: &mut Vec<ConvertedMedia>,
+    reserved: &HashSet<String>,
     warnings: &mut Vec<Warning>,
 ) -> Vec<Level> {
     if levels.is_empty() {
         return Vec::new();
+    }
+
+    // Corruption moods only ever named in `corruption.json`'s add/remove lists (a mood with no
+    // media or text of its own, so absent from `collect_reserved_tags`' content/media scan) are
+    // still part of the tag namespace the synthetic tags must dodge -- fold them in here.
+    let mut reserved = reserved.clone();
+    for level in levels {
+        reserved.extend(level.added_moods.iter().cloned());
+        reserved.extend(level.removed_moods.iter().cloned());
     }
 
     let corruption_time_seconds =
@@ -714,18 +729,19 @@ fn build_timeline(
     // matches every level's `any` filter, same as it always matched Edgeware's absence of
     // exclusion. Only seeded when needed, and only into levels (baseline -- `tags: None` -- is
     // already unrestricted and needs no help). Collision with a real mood of this exact name is
-    // the same accepted, vanishingly small risk as `resolve_wallpaper_tag`'s `corruption-wallpaper-*`
+    // the same accepted, vanishingly small risk as `resolve_wallpaper_tag`'s `wallpaper-<n>`
     // tags.
     if media.iter().any(|m| m.tags.is_empty()) {
+        let moodless_tag = free_tag(MOODLESS_TAG, &reserved);
         for item in media.iter_mut() {
             if item.tags.is_empty() {
-                item.tags.push(MOODLESS_TAG.to_string());
+                item.tags.push(moodless_tag.clone());
             }
         }
-        active.insert(MOODLESS_TAG.to_string());
+        active.insert(moodless_tag);
     }
 
-    let mut wallpaper_tag_ids: HashSet<String> = HashSet::new();
+    let mut next_wallpaper_index: u32 = 1;
     let mut wallpaper_tags_by_file: HashMap<String, String> = HashMap::new();
 
     levels
@@ -763,7 +779,8 @@ fn build_timeline(
                     file,
                     source,
                     media,
-                    &mut wallpaper_tag_ids,
+                    &mut next_wallpaper_index,
+                    &reserved,
                     &mut wallpaper_tags_by_file,
                     warnings,
                 )
@@ -800,14 +817,17 @@ fn build_timeline(
 /// Resolves one corruption level's wallpaper filename to a tag, adding a `ConvertedMedia` entry
 /// the first time a given filename is seen. `"wallpaper.png"` reuses the tag `discover_media`
 /// already assigned the pack's primary wallpaper (no duplicate media entry); any other filename
-/// mints a fresh `corruption-wallpaper-<slug>` tag. Returns `None` (no override -- the previous
-/// level's wallpaper, or `Content::wallpaper_tags`, stays in effect) if the referenced file
-/// doesn't actually exist, after warning.
+/// mints a fresh `wallpaper-<n>` tag, numbering distinct override wallpapers `1`, `2`, ... in the
+/// order they're first referenced (skipping any index already taken by a real tag in `reserved`,
+/// so the synthetic tag never aliases a mood the pack itself named `wallpaper-<n>`). Returns `None`
+/// (no override -- the previous level's wallpaper, or `Content::wallpaper_tags`, stays in effect)
+/// if the referenced file doesn't actually exist, after warning.
 fn resolve_wallpaper_tag(
     file: &str,
     source: &dyn PackSource,
     media: &mut Vec<ConvertedMedia>,
-    used_ids: &mut HashSet<String>,
+    next_index: &mut u32,
+    reserved: &HashSet<String>,
     known: &mut HashMap<String, String>,
     warnings: &mut Vec<Warning>,
 ) -> Option<Vec<String>> {
@@ -828,7 +848,13 @@ fn resolve_wallpaper_tag(
         return None;
     }
 
-    let tag = format!("corruption-wallpaper-{}", unique_slug(file, used_ids));
+    let tag = loop {
+        let candidate = format!("wallpaper-{next_index}");
+        *next_index += 1;
+        if !reserved.contains(&candidate) {
+            break candidate;
+        }
+    };
     media.push(ConvertedMedia {
         source_path: file.to_string(),
         suggested_name: file.to_string(),
@@ -918,10 +944,56 @@ fn build_experience(
             wallpaper_tags: None,
         }]
     } else {
-        build_timeline(corruption_levels, &anchors, config, source, media, warnings)
+        let reserved = collect_reserved_tags(content, media);
+        build_timeline(
+            corruption_levels,
+            &anchors,
+            config,
+            source,
+            media,
+            &reserved,
+            warnings,
+        )
     };
 
     Some(levels_to_experience(levels))
+}
+
+/// Every tag already live in the converted pack's flat tag namespace: the raw Edgeware mood names
+/// (carried verbatim as media tags and content-group filter tags -- the slugified `ContentGroup.id`
+/// is only a key, never a filter) plus the built-in `wallpaper`/`splash`/`hypno` tags
+/// `discover_media` assigns. `build_timeline` mints its synthetic `corruption-moodless` and
+/// `wallpaper-<n>` tags into this same namespace, so it consults this set to guarantee they never
+/// alias a tag the pack itself uses -- otherwise a mood literally named `wallpaper-1` would pull
+/// its own media into a level's wallpaper slot, and one named `corruption-moodless` would let an
+/// unrelated mood change drop the mood-less media the tag exists to protect.
+fn collect_reserved_tags(content: &Content, media: &[ConvertedMedia]) -> HashSet<String> {
+    let mut reserved = HashSet::new();
+    for item in media {
+        reserved.extend(item.tags.iter().cloned());
+    }
+    for group in &content.content_groups {
+        reserved.extend(group.tags.iter().cloned());
+    }
+    reserved
+}
+
+/// Returns `base` if it's free in `reserved`, otherwise the first of `base-2`, `base-3`, ... that
+/// is -- keeping a synthetic tag from ever aliasing a real one. Mirrors `unique_slug`'s collision
+/// suffixing, but tests against a fixed set rather than mutating one (the synthetic tags are minted
+/// at most once each, so nothing needs marking as taken afterwards).
+fn free_tag(base: &str, reserved: &HashSet<String>) -> String {
+    if !reserved.contains(base) {
+        return base.to_string();
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base}-{n}");
+        if !reserved.contains(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 #[cfg(test)]
@@ -1553,5 +1625,101 @@ mod tests {
                 .unwrap()
                 .contains(&MOODLESS_TAG.to_string())
         );
+    }
+
+    #[test]
+    fn free_tag_returns_base_when_unused_and_suffixes_on_collision() {
+        let mut reserved = HashSet::new();
+        assert_eq!(free_tag("wallpaper-1", &reserved), "wallpaper-1");
+
+        reserved.insert("wallpaper-1".to_string());
+        assert_eq!(free_tag("wallpaper-1", &reserved), "wallpaper-1-2");
+
+        reserved.insert("wallpaper-1-2".to_string());
+        assert_eq!(free_tag("wallpaper-1", &reserved), "wallpaper-1-3");
+    }
+
+    #[test]
+    fn level_wallpaper_tag_dodges_a_real_mood_of_the_same_name() {
+        // A pack whose own mood is literally named `wallpaper-1` (its media carries that tag). The
+        // minted override-wallpaper tag must not reuse it, or the level's wallpaper slot would pull
+        // from that mood's media.
+        let (_dir, source) = source_with(&[
+            (
+                "index.json",
+                r#"{"moods": [{"mood": "wallpaper-1", "media": ["a.png"]}]}"#,
+            ),
+            ("img/a.png", "a"),
+            ("wallpaper2.png", "w2"),
+            (
+                "corruption.json",
+                r#"{"moods": {}, "wallpapers": {"1": "wallpaper2.png"}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+
+        let timeline = output.behaviour.experience.clone().unwrap().timeline;
+        assert_eq!(
+            timeline.stages[0].content.wallpaper_tags,
+            Some(vec!["wallpaper-2".to_string()]),
+            "the override wallpaper must skip the taken `wallpaper-1` and take `wallpaper-2`"
+        );
+        let entry = output
+            .media
+            .iter()
+            .find(|m| m.source_path == "wallpaper2.png")
+            .unwrap();
+        assert_eq!(entry.tags, vec!["wallpaper-2".to_string()]);
+        // The real mood's media keeps `wallpaper-1`, unshared with the wallpaper slot.
+        let a = output
+            .media
+            .iter()
+            .find(|m| m.suggested_name == "a.png")
+            .unwrap();
+        assert_eq!(a.tags, vec!["wallpaper-1".to_string()]);
+    }
+
+    #[test]
+    fn moodless_tag_dodges_a_real_mood_of_the_same_name() {
+        // A pack with a real mood literally named `corruption-moodless`, added then removed across
+        // the timeline. The synthetic mood-less tag must stay distinct, so removing the real mood
+        // doesn't drop the untagged media the synthetic tag exists to protect.
+        let (_dir, source) = source_with(&[
+            (
+                "index.json",
+                r#"{"moods": [{"mood": "corruption-moodless", "media": ["a.png"]}]}"#,
+            ),
+            ("img/a.png", "a"),
+            ("img/untagged.png", "u"),
+            (
+                "corruption.json",
+                r#"{"moods": {"1": {"add": ["corruption-moodless"], "remove": []}, "2": {"add": [], "remove": ["corruption-moodless"]}}, "wallpapers": {}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+
+        // Untagged media gets the suffixed synthetic tag; the real mood's media keeps the base name.
+        let untagged = output
+            .media
+            .iter()
+            .find(|m| m.suggested_name == "untagged.png")
+            .unwrap();
+        assert_eq!(untagged.tags, vec!["corruption-moodless-2".to_string()]);
+        let a = output
+            .media
+            .iter()
+            .find(|m| m.suggested_name == "a.png")
+            .unwrap();
+        assert_eq!(a.tags, vec!["corruption-moodless".to_string()]);
+
+        let timeline = output.behaviour.experience.unwrap().timeline;
+        let stage_tags = |i: usize| timeline.stages[i].content.tags.clone().unwrap();
+        // Stage 1 (index 0) adds the real mood; both tags are present and independent.
+        assert!(stage_tags(0).contains(&"corruption-moodless".to_string()));
+        assert!(stage_tags(0).contains(&"corruption-moodless-2".to_string()));
+        // Stage 2 (index 1) removes the real mood -- but the synthetic tag survives, so the
+        // mood-less media stays eligible (the exact failure the guard prevents).
+        assert!(!stage_tags(1).contains(&"corruption-moodless".to_string()));
+        assert!(stage_tags(1).contains(&"corruption-moodless-2".to_string()));
     }
 }

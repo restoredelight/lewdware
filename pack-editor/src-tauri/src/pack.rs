@@ -4700,6 +4700,7 @@ mod tests {
                     affected: vec![],
                 }],
             },
+            label: None,
         });
 
         let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;

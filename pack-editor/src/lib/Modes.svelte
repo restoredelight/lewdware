@@ -24,10 +24,13 @@
     if (value === "Experience") return "experience";
     return `pack:${value.Pack.id}`;
   });
+  // The timeline mode ("Sequence") shows under this pack's label when one is set, matching what
+  // the player will see in the config app.
+  const timelineName = $derived(store.behaviour?.experience?.label ?? "Sequence");
   const recommendationOptions = $derived([
-    { value: "auto", label: `Automatic (${store.behaviour?.experience ? "Experience" : "Sandbox"})` },
+    { value: "auto", label: `Automatic (${store.behaviour?.experience ? timelineName : "Sandbox"})` },
     { value: "sandbox", label: "Sandbox" },
-    { value: "experience", label: "Experience" },
+    { value: "experience", label: timelineName },
     ...modes.map((mode) => ({ value: `pack:${mode.id}`, label: mode.name })),
   ]);
 

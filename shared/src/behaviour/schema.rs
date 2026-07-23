@@ -193,6 +193,13 @@ impl Default for Behaviour {
 pub struct Experience {
     #[serde(default)]
     pub timeline: Timeline,
+    /// Optional per-pack display name for the built-in timeline mode. When a pack ships a
+    /// timeline it can label how that mode is presented (`config`'s `build_mode_groups` shows
+    /// this in place of the mode's own name) -- e.g. the Edgeware converter emits "Corruption",
+    /// matching the term those packs' users already know. `None` falls back to the mode's own
+    /// name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -529,6 +536,7 @@ mod tests {
                         affected: vec![],
                     }],
                 },
+                label: None,
             }),
         }
     }
@@ -659,6 +667,7 @@ mod tests {
                 }],
                 transitions: vec![],
             },
+            label: None,
         });
         assert_eq!(
             behaviour.validate()[0].path,
