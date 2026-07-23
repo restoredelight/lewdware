@@ -31,30 +31,23 @@ mkdir -p dist
 
 VERSION=$(grep '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
 
-copied_count=0
+# The bundle file names come straight from tauri.conf.json's productName ("Lewdware Pack
+# Editor"), which the bundler only sanitises for *package* names, not file names - so match
+# case-insensitively and tolerate spaces/hyphens between the words.
+stage() {
+  local ext="$1"
+  local src
+  src=$(find target/release/bundle/ -type f -iname "lewdware?pack?editor*.$ext" 2>/dev/null | head -1)
+  if [ -z "$src" ]; then
+    echo "Error: no .$ext package found under target/release/bundle/!" >&2
+    return 1
+  fi
+  cp "$src" "dist/lewdware-pack-editor_${VERSION}_${ARCH}.$ext"
+  echo "SUCCESS: Staged lewdware-pack-editor_${VERSION}_${ARCH}.$ext in dist/"
+}
 
-DEB_PATH=$(find target/release/bundle/ -type f -name "lewdware-pack-editor*.deb" 2>/dev/null | head -1)
-if [ -n "$DEB_PATH" ]; then
-  cp "$DEB_PATH" "dist/lewdware-pack-editor_${VERSION}_${ARCH}.deb"
-  echo "SUCCESS: Staged lewdware-pack-editor_${VERSION}_${ARCH}.deb in dist/"
-  copied_count=$((copied_count + 1))
-fi
-
-RPM_PATH=$(find target/release/bundle/ -type f -name "lewdware-pack-editor*.rpm" 2>/dev/null | head -1)
-if [ -n "$RPM_PATH" ]; then
-  cp "$RPM_PATH" "dist/lewdware-pack-editor_${VERSION}_${ARCH}.rpm"
-  echo "SUCCESS: Staged lewdware-pack-editor_${VERSION}_${ARCH}.rpm in dist/"
-  copied_count=$((copied_count + 1))
-fi
-
-APPIMAGE_PATH=$(find target/release/bundle/ -type f -name "lewdware-pack-editor*.AppImage" 2>/dev/null | head -1)
-if [ -n "$APPIMAGE_PATH" ]; then
-  cp "$APPIMAGE_PATH" "dist/lewdware-pack-editor_${VERSION}_${ARCH}.AppImage"
-  echo "SUCCESS: Staged lewdware-pack-editor_${VERSION}_${ARCH}.AppImage in dist/"
-  copied_count=$((copied_count + 1))
-fi
-
-if [ "$copied_count" -eq 0 ]; then
-  echo "Error: No generated packages (.deb, .rpm, .AppImage) found under target/release/bundle/!" >&2
-  exit 1
-fi
+# All three are advertised in docs/src/data/pack-editor-latest.json, so a missing one means a
+# dead download link on the website - fail the build rather than publish a partial release.
+stage deb
+stage rpm
+stage AppImage

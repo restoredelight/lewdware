@@ -115,10 +115,21 @@ bundle_lib "target/release/lewdware-supervisor"
 bundle_lib "target/release/lw"
 bundle_lib "target/release/lewdware"
 
+# Everything under usr/lib/lewdware/ (the bundled .so files, plus the engine and supervisor
+# binaries staged there) resolves its siblings via $ORIGIN.
 echo "Patching bundled library rpaths..."
 for lib in "$STAGE_DIR/usr/lib/lewdware/"*; do
   [ -f "$lib" ] || continue
   patchelf --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
+done
+
+# usr/bin/{lewdware,lw} live a directory up, so they need an rpath pointing into the bundle -
+# without this, any non-system dependency of theirs that bundle_lib staged above is invisible
+# at runtime and the dynamic loader falls back to whatever the host happens to have.
+echo "Patching /usr/bin rpaths..."
+for bin in "$STAGE_DIR/usr/bin/"*; do
+  [ -f "$bin" ] || continue
+  patchelf --set-rpath '$ORIGIN/../lib/lewdware' "$bin" 2>/dev/null || true
 done
 
 # 4. Create Desktop File and Icon
@@ -147,10 +158,45 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${DEB_ARCH}
-Depends: libasound2, libdbus-1-3, libx11-6, libxi6, libxtst6, libxrandr2, libxcursor1
+Depends: libasound2, libdbus-1-3, libx11-6, libxi6, libxtst6, libxrandr2, libxcursor1, libgtk-3-0, libwebkit2gtk-4.1-0
 Maintainer: restoredelight <restoreddelight@proton.me>
+Homepage: https://lewdware.net
 Description: Lewdware (Config GUI, Supervisor, Engine, and lw CLI tool)
 EOF
+
+# 5b. Maintainer scripts that stop a running install before its files are touched.
+#
+# Unlike Windows, a running binary here doesn't block the upgrade (dpkg/rpm swap the inode and
+# the old process keeps the old one), so this is about not leaving a stale supervisor running
+# old code against a new install - and about ending any live session cleanly on the way.
+#
+# Shared by preinst (runs before unpack, on both install and upgrade) and prerm (runs before
+# removal).
+cat <<'EOF' > "$STAGE_DIR/DEBIAN/preinst"
+#!/bin/sh
+SUPERVISOR=/usr/lib/lewdware/lewdware-supervisor
+
+# On Linux the control socket lives in the abstract namespace (shared/src/ipc.rs), which is
+# per-netns rather than per-user, so root can reach a session started by any user.
+if [ -x "$SUPERVISOR" ]; then
+  # Ends any live session cleanly - the engine restores the desktop wallpaper on its way out.
+  "$SUPERVISOR" stop >/dev/null 2>&1 || true
+  sleep 2
+fi
+
+# There is no IPC request that shuts the daemon itself down (only StopSession), so the
+# supervisor has to be killed outright. If pkill isn't installed this degrades to leaving it
+# running until the next reboot, which is why it isn't a hard failure.
+for image in lewdware-engine lewdware-supervisor lewdware; do
+  pkill -x "$image" >/dev/null 2>&1 || true
+done
+
+# Never fail the package operation over this.
+exit 0
+EOF
+
+cp "$STAGE_DIR/DEBIAN/preinst" "$STAGE_DIR/DEBIAN/prerm"
+chmod 755 "$STAGE_DIR/DEBIAN/preinst" "$STAGE_DIR/DEBIAN/prerm"
 
 # 6. Build the Debian Package
 echo "Building Debian package..."
@@ -179,7 +225,8 @@ Version:        ${VERSION}
 Release:        1
 Summary:        Lewdware (Config GUI, Supervisor, Engine, and lw CLI tool)
 License:        MIT
-Requires:       alsa-lib, dbus-libs, libX11, libXi, libXtst, libXrandr, libXcursor
+URL:            https://lewdware.net
+Requires:       alsa-lib, dbus-libs, libX11, libXi, libXtst, libXrandr, libXcursor, gtk3, webkit2gtk4.1
 
 %description
 Lewdware, containing the config GUI, supervisor, engine, and lw CLI tool.
@@ -196,6 +243,31 @@ cp -pr %{staged_dir}/usr/lib/lewdware/* %{buildroot}/usr/lib/lewdware/
 cp -p %{staged_dir}/usr/share/applications/* %{buildroot}/usr/share/applications/
 cp -p %{staged_dir}/usr/share/icons/hicolor/128x128/apps/* %{buildroot}/usr/share/icons/hicolor/128x128/apps/
 cp -p %{staged_dir}/usr/share/doc/lewdware/copyright %{buildroot}/usr/share/licenses/lewdware/LICENSE
+
+# The rpm counterpart of the deb preinst/prerm above: stop a running install before its files
+# are touched, so no stale supervisor is left running old code. Note the escaped \$ - this spec
+# is written through an unquoted heredoc, so unescaped variables would expand at build time.
+%pre
+SUPERVISOR=/usr/lib/lewdware/lewdware-supervisor
+if [ -x "\$SUPERVISOR" ]; then
+  "\$SUPERVISOR" stop >/dev/null 2>&1 || true
+  sleep 2
+fi
+for image in lewdware-engine lewdware-supervisor lewdware; do
+  pkill -x "\$image" >/dev/null 2>&1 || true
+done
+exit 0
+
+%preun
+SUPERVISOR=/usr/lib/lewdware/lewdware-supervisor
+if [ -x "\$SUPERVISOR" ]; then
+  "\$SUPERVISOR" stop >/dev/null 2>&1 || true
+  sleep 2
+fi
+for image in lewdware-engine lewdware-supervisor lewdware; do
+  pkill -x "\$image" >/dev/null 2>&1 || true
+done
+exit 0
 
 %files
 /usr/bin/lewdware
@@ -229,14 +301,17 @@ mkdir -p "$TAR_ROOT/lib/lewdware"
 # Copy lw CLI
 cp "$STAGE_DIR/usr/bin/lw" "$TAR_ROOT/bin/"
 
-# Copy config AppImage as the user-facing lewdware binary
-APPIMAGE_PATH=$(find "target/release/bundle/appimage/" -name "lewdware_${VERSION}_*.AppImage" 2>/dev/null | head -1)
-if [ -f "$APPIMAGE_PATH" ]; then
-  cp "$APPIMAGE_PATH" "$TAR_ROOT/bin/lewdware"
-  chmod +x "$TAR_ROOT/bin/lewdware"
-else
-  echo "Warning: config AppImage not found! Skipping config GUI in tar.gz."
+# Copy config AppImage as the user-facing lewdware binary. The file is named after productName
+# in config/src-tauri/tauri.conf.json ("Lewdware"), which the bundler does not lowercase - hence
+# -iname. The tar.gz is advertised in docs/src/data/latest.json as the portable Linux download,
+# so shipping one without the GUI in it would be worse than failing the build.
+APPIMAGE_PATH=$(find "target/release/bundle/appimage/" -iname "lewdware_${VERSION}_*.AppImage" 2>/dev/null | head -1)
+if [ ! -f "$APPIMAGE_PATH" ]; then
+  echo "Error: config AppImage not found under target/release/bundle/appimage/!" >&2
+  exit 1
 fi
+cp "$APPIMAGE_PATH" "$TAR_ROOT/bin/lewdware"
+chmod +x "$TAR_ROOT/bin/lewdware"
 
 # Copy dynamic libraries, the supervisor, and the engine (internal processes)
 cp "$STAGE_DIR/usr/lib/lewdware/"* "$TAR_ROOT/lib/lewdware/"

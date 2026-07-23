@@ -56,12 +56,13 @@ Check-LastExitCode
 cargo build -p lewdware-supervisor --release
 Check-LastExitCode
 
-# Compile Tauri GUI
+# Compile Tauri GUI. Only the raw target\release\lewdware.exe is used here - installer_a.iss
+# packages it directly - so --no-bundle skips producing MSI/NSIS installers nobody consumes.
 Write-Host "Building config GUI..."
 Push-Location config
 pnpm install
 Check-LastExitCode
-pnpm tauri build
+pnpm tauri build --no-bundle
 Check-LastExitCode
 Pop-Location
 

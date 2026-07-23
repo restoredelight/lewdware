@@ -20,7 +20,7 @@
 	<div
 		class="border-accent/30 bg-accent/10 text-text flex items-center gap-3 border-b px-4 py-2 text-sm"
 	>
-		<span class="flex-1">A new version of Pack Editor is available.</span>
+		<span class="flex-1">A new version of Lewdware Pack Editor is available.</span>
 		<button
 			class="hover:text-accent-foreground font-medium underline"
 			onclick={() => openUrl(downloadUrl!)}

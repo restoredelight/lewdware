@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use crate::mode::{Metadata, ModeEntry, ModeGroup, ModeOption, OptionType, OptionValue};
+use crate::mode::{
+    Metadata, ModeEntry, ModeGroup, ModeOption, OptionType, OptionValue, StoredValue,
+};
 
 use super::schema::{Behaviour, Content};
 
@@ -115,7 +117,7 @@ fn pack_has_constants(content: &Content, has_experience: bool) -> IndexMap<Strin
 /// what's already baked into the synthesized schema (`effective_options`).
 pub fn effective_config(
     schema: &EffectiveSchema,
-    stored: &HashMap<String, OptionValue>,
+    stored: &HashMap<String, StoredValue>,
 ) -> HashMap<String, OptionValue> {
     crate::mode::resolve_options(&schema.entries, stored)
 }
@@ -334,7 +336,7 @@ mod tests {
     fn effective_config_prefers_stored_value_for_real_option() {
         let schema = effective_options(&mode_schema_with_option(), &Behaviour::new());
         let mut stored = HashMap::new();
-        stored.insert("popup_frequency".to_string(), OptionValue::Number(5.0));
+        stored.insert("popup_frequency".to_string(), StoredValue::Float(5.0));
 
         let resolved = effective_config(&schema, &stored);
 
@@ -350,7 +352,7 @@ mod tests {
         let mut stored = HashMap::new();
         stored.insert(
             "popup_frequency".to_string(),
-            OptionValue::String("not a number".to_string()),
+            StoredValue::Str("not a number".to_string()),
         );
 
         let resolved = effective_config(&schema, &stored);
@@ -382,7 +384,7 @@ mod tests {
 
         // User explicitly disabled it -> stored value wins.
         let mut stored = HashMap::new();
-        stored.insert(key.clone(), OptionValue::Boolean(false));
+        stored.insert(key.clone(), StoredValue::Bool(false));
         let resolved_stored = effective_config(&schema, &stored);
         assert_eq!(
             resolved_stored.get(&key),

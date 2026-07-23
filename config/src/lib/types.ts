@@ -6,13 +6,13 @@ export type ModeId =
 
 export interface ModeOptionsEntry {
 	mode: ModeId;
-	options: Record<string, OptionValue>;
+	options: Record<string, StoredValue>;
 }
 
 /** A `Mode::Experience` options entry, keyed by pack UUID (string). */
 export interface ExperienceOptionsEntry {
 	pack_id: string;
-	options: Record<string, OptionValue>;
+	options: Record<string, StoredValue>;
 }
 
 export interface ConfigDto {
@@ -139,11 +139,23 @@ export interface ModeGroupDto {
 	entries: ModeEntryDto[];
 }
 
-export type OptionValue =
-	| number // Integer, Number, Enum all come through as these in untagged serde
-	| string
-	| boolean
-	| null;
+/**
+ * An option value as stored in the user's config (Rust: `shared::mode::StoredValue`) --
+ * whatever we sent for it last, in JSON's terms.
+ *
+ * Which `OptionType` a value belongs to is not recorded here and cannot be: JavaScript has
+ * one number type, so we could not tell an `Integer` from a `Number` even if we wanted to.
+ * The backend resolves these against the mode's schema on the way back out, which is why
+ * `ModeOptionDto.value` below is the type it resolved to, not the type we sent.
+ */
+export type StoredValue = number | string | boolean | null;
+
+/**
+ * A value that has been resolved against the mode's schema (Rust: `shared::mode::OptionValue`).
+ * Structurally identical to `StoredValue` -- serde sends it untagged -- but it is what the
+ * mode would actually run with, so it is what the option controls should render.
+ */
+export type OptionValue = number | string | boolean | null;
 
 export type OptionType =
 	| {

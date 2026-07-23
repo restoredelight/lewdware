@@ -142,27 +142,25 @@ impl Metadata {
     }
 }
 
-/// Resolves stored option values against a schema, filling in a default for anything
-/// missing or no longer matching its option's type. Walks groups depth-first, same as
-/// `Metadata::all_options`.
+/// Resolves stored option values against a schema: every option in the tree gets a value,
+/// the user's where it fits the option's type and the schema default otherwise. Walks
+/// groups depth-first, same as `Metadata::all_options`.
+///
+/// This is the only way to obtain an `OptionValue` from something a user wrote, and it is
+/// deliberately the only one -- see `StoredValue`.
 pub fn resolve_options(
     entries: &IndexMap<String, ModeEntry>,
-    stored: &HashMap<String, OptionValue>,
+    stored: &HashMap<String, StoredValue>,
 ) -> HashMap<String, OptionValue> {
     fn walk(
         entries: &IndexMap<String, ModeEntry>,
-        stored: &HashMap<String, OptionValue>,
+        stored: &HashMap<String, StoredValue>,
         out: &mut HashMap<String, OptionValue>,
     ) {
         for (key, entry) in entries {
             match entry {
                 ModeEntry::Option(opt) => {
-                    let value = stored
-                        .get(key)
-                        .filter(|v| opt.matches_value(v))
-                        .cloned()
-                        .unwrap_or_else(|| opt.default_value());
-                    out.insert(key.clone(), value);
+                    out.insert(key.clone(), opt.resolve(stored.get(key)));
                 }
                 ModeEntry::Group(group) => walk(&group.entries, stored, out),
             }
@@ -204,7 +202,43 @@ pub enum OptionType {
     },
 }
 
+/// An option value as it sits in the user's `config.json` (or arrives from `config/`'s
+/// frontend): one of the shapes JSON has, and nothing more.
+///
+/// Deliberately *not* `OptionValue`. Which `OptionType` a value belongs to is a fact about
+/// the schema, not about the value, and it cannot survive a trip through JSON: `5` is the
+/// only way to write a whole `Number`, and an `Enum` member is indistinguishable from any
+/// other string. (The frontend is more emphatic still -- `config/src/lib/types.ts` types an
+/// option value as `number | string | boolean | null`, because JavaScript cannot tell an
+/// integer from a float at all.) A type that claimed otherwise would be lying, and the lie
+/// would be read back as fact.
+///
+/// So stored values keep their own type, and `ModeOption::resolve` -- the only thing that
+/// turns one into an `OptionValue` -- lets the schema decide what it means.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum StoredValue {
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bool(bool),
+    Null,
+}
+
+/// An option value that has been resolved against a schema, and so is known to be one the
+/// option can actually hold. This is what reaches a mode's `lewdware.config` table and what
+/// `ShowWhen` conditions are evaluated against.
+///
+/// Only `ModeOption::resolve` and `ModeOption::default_value` produce these, which is what
+/// makes the guarantee worth anything: there is no path from a user-written value to a mode
+/// that skips the schema. Values the engine synthesises itself (the `pack_has_*` constants
+/// in `behaviour::resolver`) are the exception, and are constants, not user input.
+///
+/// `Serialize` but deliberately not `Deserialize`: serialising is how a resolved value
+/// reaches `config/`'s frontend for display (untagged, so JS sees a plain value), but
+/// deserialising one would be claiming to know an option's type without having consulted
+/// the schema -- exactly the thing this type exists to rule out. Read a `StoredValue`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum OptionValue {
     Integer(i64),
@@ -243,17 +277,58 @@ impl ModeOption {
         }
     }
 
-    pub fn matches_value(&self, value: &OptionValue) -> bool {
-        if self.optional && matches!(value, OptionValue::Null) {
-            return true;
+    /// Resolves what this option is actually set to: the stored value read as the type this
+    /// option declares, or the schema default if there is nothing stored or what is stored
+    /// isn't a value this option can hold.
+    ///
+    /// Total by construction -- an option always has a value -- and the only route from a
+    /// `StoredValue` to an `OptionValue`.
+    pub fn resolve(&self, stored: Option<&StoredValue>) -> OptionValue {
+        stored
+            .and_then(|value| self.read(value))
+            .unwrap_or_else(|| self.default_value())
+    }
+
+    /// Reads a stored value as this option's type, or `None` if it isn't one this option can
+    /// hold. The schema decides what the value *is*: JSON's shapes don't line up with
+    /// `OptionType` (see `StoredValue`), so `Int` serves both numeric types and `Str` serves
+    /// both string-shaped ones.
+    fn read(&self, value: &StoredValue) -> Option<OptionValue> {
+        if matches!(value, StoredValue::Null) {
+            // Null is a value only for an option that can be switched off; for anything else
+            // it means "no setting", and the default applies.
+            return self.optional.then_some(OptionValue::Null);
         }
-        match &self.option_type {
-            OptionType::Integer { .. } => matches!(value, OptionValue::Integer(_)),
-            OptionType::Number { .. } => matches!(value, OptionValue::Number(_)),
-            OptionType::String { .. } => matches!(value, OptionValue::String(_)),
-            OptionType::Boolean { .. } => matches!(value, OptionValue::Boolean(_)),
-            OptionType::Enum { .. } => matches!(value, OptionValue::Enum(_)),
+        match (&self.option_type, value) {
+            (OptionType::Integer { .. }, StoredValue::Int(i)) => Some(OptionValue::Integer(*i)),
+            // A whole-numbered float is the same setting; anything with a fractional part (or
+            // beyond i64, or NaN) is not an integer, and falls back to the default.
+            (OptionType::Integer { .. }, StoredValue::Float(f)) => {
+                let truncated = f.trunc();
+                (*f == truncated && truncated >= i64::MIN as f64 && truncated <= i64::MAX as f64)
+                    .then_some(OptionValue::Integer(truncated as i64))
+            }
+            (OptionType::Number { .. }, StoredValue::Float(f)) => Some(OptionValue::Number(*f)),
+            (OptionType::Number { .. }, StoredValue::Int(i)) => {
+                Some(OptionValue::Number(*i as f64))
+            }
+            (OptionType::String { .. }, StoredValue::Str(s)) => {
+                Some(OptionValue::String(s.clone()))
+            }
+            (OptionType::Boolean { .. }, StoredValue::Bool(b)) => Some(OptionValue::Boolean(*b)),
+            // Enum members are the only values an enum can hold, so a string left over from an
+            // older schema has to be rejected here -- otherwise it would reach the mode as a
+            // variant the mode never declared and cannot have written a branch for.
+            (OptionType::Enum { values, .. }, StoredValue::Str(s)) => {
+                values.contains_key(s).then(|| OptionValue::Enum(s.clone()))
+            }
+            _ => None,
         }
+    }
+
+    /// Whether this option would keep `value` rather than fall back to its default.
+    pub fn accepts(&self, value: &StoredValue) -> bool {
+        self.read(value).is_some()
     }
 }
 
@@ -527,7 +602,7 @@ mod tests {
     fn resolve_options_prefers_matching_stored_value() {
         let meta = sample_metadata();
         let mut stored = HashMap::new();
-        stored.insert("count".to_string(), OptionValue::Integer(42));
+        stored.insert("count".to_string(), StoredValue::Int(42));
 
         let resolved = resolve_options(&meta.entries, &stored);
 
@@ -538,8 +613,8 @@ mod tests {
     fn resolve_options_falls_back_to_default_when_missing_or_mismatched() {
         let meta = sample_metadata();
         let mut stored = HashMap::new();
-        // "label" is a String option; a Boolean stored value shouldn't match it.
-        stored.insert("label".to_string(), OptionValue::Boolean(true));
+        // "label" is a String option; a boolean stored value shouldn't match it.
+        stored.insert("label".to_string(), StoredValue::Bool(true));
 
         let resolved = resolve_options(&meta.entries, &stored);
 
@@ -615,8 +690,12 @@ mod tests {
     }
 
     #[test]
-    fn matches_value_correct_types() {
-        let pairs: &[(OptionType, OptionValue)] = &[
+    fn each_option_type_accepts_its_own_stored_shape() {
+        let mut enum_values = IndexMap::new();
+        enum_values.insert("a".to_string(), "A".to_string());
+        enum_values.insert("b".to_string(), "B".to_string());
+
+        let pairs: &[(OptionType, StoredValue, OptionValue)] = &[
             (
                 OptionType::Integer {
                     default: 0,
@@ -626,6 +705,7 @@ mod tests {
                     clamp: false,
                     slider: false,
                 },
+                StoredValue::Int(42),
                 OptionValue::Integer(42),
             ),
             (
@@ -637,43 +717,163 @@ mod tests {
                     clamp: false,
                     slider: false,
                 },
-                OptionValue::Number(1.0),
+                StoredValue::Float(1.5),
+                OptionValue::Number(1.5),
             ),
             (
                 OptionType::String {
                     default: String::new(),
                 },
+                StoredValue::Str("s".to_string()),
                 OptionValue::String("s".to_string()),
             ),
             (
                 OptionType::Boolean { default: true },
+                StoredValue::Bool(false),
                 OptionValue::Boolean(false),
             ),
             (
                 OptionType::Enum {
                     default: "a".to_string(),
-                    values: IndexMap::new(),
+                    values: enum_values,
                 },
+                StoredValue::Str("b".to_string()),
                 OptionValue::Enum("b".to_string()),
             ),
         ];
 
-        for (option_type, value) in pairs {
-            assert!(make_option(option_type.clone()).matches_value(value));
+        for (option_type, stored, expected) in pairs {
+            let opt = make_option(option_type.clone());
+            assert!(opt.accepts(stored));
+            assert_eq!(opt.resolve(Some(stored)), *expected);
         }
     }
 
     #[test]
-    fn matches_value_wrong_type() {
-        let opt = make_option(OptionType::Integer {
-            default: 0,
+    fn an_option_falls_back_to_its_default_for_a_shape_it_cannot_hold() {
+        let opt = integer_option(7);
+
+        assert!(!opt.accepts(&StoredValue::Str("oops".to_string())));
+        assert_eq!(
+            opt.resolve(Some(&StoredValue::Str("oops".to_string()))),
+            OptionValue::Integer(7)
+        );
+        // Nothing stored at all is the same story.
+        assert_eq!(opt.resolve(None), OptionValue::Integer(7));
+    }
+
+    fn number_option(default: f64) -> ModeOption {
+        make_option(OptionType::Number {
+            default,
             min: None,
             max: None,
             step: None,
             clamp: false,
             slider: false,
-        });
-        assert!(!opt.matches_value(&OptionValue::String("oops".to_string())));
+        })
+    }
+
+    fn integer_option(default: i64) -> ModeOption {
+        make_option(OptionType::Integer {
+            default,
+            min: None,
+            max: None,
+            step: None,
+            clamp: false,
+            slider: false,
+        })
+    }
+
+    fn enum_option() -> ModeOption {
+        let mut values = IndexMap::new();
+        values.insert("constant".to_string(), "Constant".to_string());
+        values.insert("accelerating".to_string(), "Accelerating".to_string());
+        make_option(OptionType::Enum {
+            default: "constant".to_string(),
+            values,
+        })
+    }
+
+    /// The schema, not the stored shape, decides what a value is: JSON has one number type
+    /// for both `Integer` and `Number` options, and no way at all to mark a string as an enum
+    /// member. If those shapes didn't resolve, the user's setting would be silently traded
+    /// for the default on the next load.
+    #[test]
+    fn the_schema_decides_which_type_a_stored_shape_reads_as() {
+        assert_eq!(
+            number_option(1.0).resolve(Some(&StoredValue::Int(5))),
+            OptionValue::Number(5.0)
+        );
+        assert_eq!(
+            enum_option().resolve(Some(&StoredValue::Str("accelerating".to_string()))),
+            OptionValue::Enum("accelerating".to_string())
+        );
+        // A whole-numbered float is still the same integer setting.
+        assert_eq!(
+            integer_option(0).resolve(Some(&StoredValue::Float(5.0))),
+            OptionValue::Integer(5)
+        );
+    }
+
+    #[test]
+    fn stored_shapes_the_type_cannot_hold_are_rejected() {
+        // Fractional, non-finite and out-of-range floats are not integers.
+        for f in [5.5, f64::INFINITY, f64::NAN, 1e30] {
+            assert!(
+                !integer_option(0).accepts(&StoredValue::Float(f)),
+                "{f} should not read as an integer"
+            );
+        }
+        // A string that isn't one of the declared members is not a value of this enum.
+        assert!(!enum_option().accepts(&StoredValue::Str("nonsense".to_string())));
+        // Nothing is read across the number/string/bool divides.
+        assert!(!number_option(1.0).accepts(&StoredValue::Str("5".to_string())));
+        assert!(!number_option(1.0).accepts(&StoredValue::Bool(true)));
+        assert!(!integer_option(0).accepts(&StoredValue::Str("oops".to_string())));
+    }
+
+    #[test]
+    fn null_is_a_value_only_for_an_optional_option() {
+        let mut opt = integer_option(5);
+        // Not switchable off -> null is not a setting, so the default applies.
+        assert_eq!(
+            opt.resolve(Some(&StoredValue::Null)),
+            OptionValue::Integer(5)
+        );
+
+        opt.optional = true;
+        assert_eq!(opt.resolve(Some(&StoredValue::Null)), OptionValue::Null);
+    }
+
+    /// The end-to-end shape of the bug this type split exists to prevent: options read back
+    /// out of a config file on disk must resolve to the values the user chose, not to the
+    /// schema defaults.
+    ///
+    /// `5` is exactly what lands in `config.json` for a `Number` option the user set to a
+    /// whole number -- the config UI round-trips `mode_options` through the frontend, and
+    /// JavaScript has no integer/float distinction to preserve `5.0` with. Enums lose their
+    /// variant on any write at all, JS or not.
+    #[test]
+    fn resolve_options_survives_a_json_round_trip() {
+        let meta = sample_metadata();
+        let stored: HashMap<String, StoredValue> =
+            serde_json::from_str(r#"{"speed": 5, "variant": "b", "count": 42}"#).unwrap();
+
+        // Precondition: what JSON hands back is not what was written.
+        assert_eq!(stored.get("speed"), Some(&StoredValue::Int(5)));
+        assert_eq!(
+            stored.get("variant"),
+            Some(&StoredValue::Str("b".to_string()))
+        );
+
+        let resolved = resolve_options(&meta.entries, &stored);
+
+        assert_eq!(resolved.get("speed"), Some(&OptionValue::Number(5.0)));
+        assert_eq!(
+            resolved.get("variant"),
+            Some(&OptionValue::Enum("b".to_string()))
+        );
+        assert_eq!(resolved.get("count"), Some(&OptionValue::Integer(42)));
     }
 
     #[test]

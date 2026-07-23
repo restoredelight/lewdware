@@ -12,7 +12,9 @@ BUILD_DIR="build/stage"
 OUTPUT_DIR="dist"
 
 echo "🧹 Preparing clean staging area..."
-rm -rf "$BUILD_DIR" "$OUTPUT_DIR"
+# Only the staging dir is wiped - dist/ is shared with build_installer_b.sh, so clearing it
+# here would delete the pack editor's .dmg whenever the two scripts run in the other order.
+rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR/root/Applications"
 mkdir -p "$BUILD_DIR/scripts"
 mkdir -p "$OUTPUT_DIR"
@@ -42,13 +44,14 @@ cd ..
 
 # 2. Copy config.app package to our staging area
 echo "📦 Staging config.app bundle..."
-cp -R "target/release/bundle/macos/lewdware.app" "$BUILD_DIR/root/Applications/Lewdware.app"
-
-# Fix the bundle display name — productName in tauri.conf.json is still "config-tauri"
-/usr/libexec/PlistBuddy -c "Set :CFBundleName Lewdware" \
-  "$BUILD_DIR/root/Applications/Lewdware.app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Lewdware" \
-  "$BUILD_DIR/root/Applications/Lewdware.app/Contents/Info.plist"
+# The bundle is named after productName in config/src-tauri/tauri.conf.json ("Lewdware");
+# -iname keeps this working if that casing ever changes.
+CONFIG_APP=$(find "target/release/bundle/macos" -maxdepth 1 -iname "lewdware.app" | head -n 1)
+if [ -z "$CONFIG_APP" ]; then
+  echo "Error: config .app bundle not found under target/release/bundle/macos/" >&2
+  exit 1
+fi
+cp -R "$CONFIG_APP" "$BUILD_DIR/root/Applications/Lewdware.app"
 
 # Ship the MIT license inside the app bundle - MIT's own terms require the
 # copyright/permission notice to accompany copies of the software.
@@ -107,7 +110,44 @@ codesign --force --sign - "$MAC_BIN_DIR/lewdware-engine"
 codesign --force --sign - "$MAC_BIN_DIR/lewdware"
 codesign --force --sign - "$BUILD_DIR/root/Applications/Lewdware.app"
 
-# 4. Create the postinstall script for PATH integration
+# 4. Create the preinstall script, which shuts down a running install before it gets replaced
+echo "📝 Creating installer preinstall script..."
+cat << 'EOF' > "$BUILD_DIR/scripts/preinstall"
+#!/bin/bash
+# Stop a running Lewdware before the installer replaces its binaries underneath it.
+SUPERVISOR="/Applications/Lewdware.app/Contents/MacOS/lewdware-supervisor"
+
+# Installer scripts run as root, but on macOS the supervisor's control socket is a filesystem
+# socket under env::temp_dir() (shared/src/ipc.rs -- the abstract namespace it uses on Linux
+# isn't available here), which resolves to the *console user's* per-user $TMPDIR. Issuing the
+# stop as root with root's TMPDIR would quietly connect to nothing, so point it at the console
+# user's directory instead; root may open a socket it doesn't own.
+CONSOLE_USER=$(stat -f "%Su" /dev/console 2>/dev/null)
+
+if [ -x "$SUPERVISOR" ] && [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
+  USER_TMPDIR=$(sudo -u "$CONSOLE_USER" getconf DARWIN_USER_TEMP_DIR 2>/dev/null)
+  if [ -n "$USER_TMPDIR" ]; then
+    # Ends any live session cleanly: the engine tears its windows down and puts the desktop
+    # wallpaper back on the way out.
+    TMPDIR="$USER_TMPDIR" "$SUPERVISOR" stop >/dev/null 2>&1 || true
+    sleep 2
+  fi
+fi
+
+# Then make sure nothing is left holding the old bundle open. There is no IPC request that shuts
+# the daemon itself down (only StopSession), so the supervisor has to be killed outright. If the
+# graceful stop above didn't land, the wallpaper snapshot persisted in
+# supervisor/src/wallpaper.rs means the next start restores the desktop anyway.
+for image in lewdware-engine lewdware-supervisor lewdware; do
+  pkill -x "$image" >/dev/null 2>&1 || true
+done
+
+# Never fail the install over this.
+exit 0
+EOF
+chmod +x "$BUILD_DIR/scripts/preinstall"
+
+# 4b. Create the postinstall script for PATH integration
 echo "📝 Creating installer postinstall script..."
 cat << 'EOF' > "$BUILD_DIR/scripts/postinstall"
 #!/bin/bash
@@ -138,8 +178,29 @@ pkgbuild --root "$BUILD_DIR/root" \
          "$BUILD_DIR/LewdwareComponents.pkg"
 
 # 6. Build the Final Installer
+#
+# This goes through a distribution file rather than `productbuild --package` directly. The
+# distribution productbuild synthesizes for a bare --package has no <title>, and Installer.app
+# uses that title both for its window and for the "Do you want to move the ... Installer to the
+# Trash?" prompt shown after installing - with no title, that prompt names an empty string.
+echo "📝 Synthesizing installer distribution..."
+DIST_FILE="$BUILD_DIR/distribution.xml"
+productbuild --synthesize --package "$BUILD_DIR/LewdwareComponents.pkg" "$DIST_FILE"
+
+awk -v title="$APP_NAME" '
+  { print }
+  /<installer-gui-script/ && !done { print "    <title>" title "</title>"; done = 1 }
+' "$DIST_FILE" > "$DIST_FILE.tmp"
+mv "$DIST_FILE.tmp" "$DIST_FILE"
+
+grep -q "<title>$APP_NAME</title>" "$DIST_FILE" || {
+  echo "Error: failed to inject <title> into $DIST_FILE" >&2
+  exit 1
+}
+
 echo "📦 Wrapping into final installer..."
-productbuild --package "$BUILD_DIR/LewdwareComponents.pkg" \
+productbuild --distribution "$DIST_FILE" \
+             --package-path "$BUILD_DIR" \
              "$OUTPUT_DIR/lewdware_${VERSION}_${ARCH}.pkg"
 
 echo "SUCCESS: $OUTPUT_DIR/lewdware_${VERSION}_${ARCH}.pkg created!"

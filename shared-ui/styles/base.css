@@ -1,3 +1,11 @@
+/* Controls keep the focus colour on `outline-color` at all times, so utilities
+   that transition it (Tailwind's `transition-colors` covers `outline-color`)
+   can't animate the ring up from `currentColor` -- that read as a white flash
+   before the ring settled on red. */
+:where(button, input, select, textarea, [tabindex]) {
+	outline-color: var(--ui-focus);
+}
+
 :where(button, input, select, textarea, [tabindex]):focus-visible {
 	outline: 2px solid var(--ui-focus);
 	outline-offset: 2px;

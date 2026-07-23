@@ -134,8 +134,10 @@
 				ondelete={(item) => (removing = item)}
 			/>
 		</div>
-		<Button size="compact" class="w-full max-[700px]:w-auto max-[700px]:shrink-0" onclick={addStage}
-			><Icon src={Plus} mini /> Add stage</Button
+		<Button
+			size="compact"
+			class="px-auto w-full max-[700px]:w-auto max-[700px]:shrink-0"
+			onclick={addStage}><Icon src={Plus} mini width="auto" height="25px" />Add stage</Button
 		>
 	</aside>
 	{#if stage}<main bind:this={mainEl}>
@@ -148,31 +150,26 @@
 							bind:value={stage.label}
 							oninput={scheduleBehaviourSave}
 						/>
-						<p>
-							{activeIndex === 0
-								? 'Active when the session begins.'
-								: 'A complete set of behaviour for this part of the session.'}
-						</p>
 					</div>
 				</header>
 
 				<section class="card">
 					<div class="section-title">
 						<div>
-							<h3>Content selection</h3>
-							<p>Choose which tagged content and wallpaper are eligible during this stage.</p>
+							<h3>Content</h3>
+							<p>Choose which content and wallpaper are used during this stage.</p>
 						</div>
 					</div>
 					<div class="toggle-row">
 						<div>
-							<strong>Limit content by tag</strong>{#if previous}<small
+							<strong>Active tags</strong>{#if previous}<small
 									>Previous stage: {previous.content.tags
 										? `${previous.content.tags.length} selected`
 										: 'All content'}</small
 								>{/if}
 						</div>
 						<Toggle
-							ariaLabel="Limit content by tag"
+							ariaLabel="Active tags"
 							checked={!!stage.content.tags}
 							onchange={(on) => {
 								if (on) stage.content.tags = [];
@@ -188,14 +185,14 @@
 						/>{/if}
 					<div class="toggle-row">
 						<div>
-							<strong>Override wallpaper selection</strong>{#if previous}<small
+							<strong>Change wallpaper</strong>{#if previous}<small
 									>Previous stage: {previous.content.wallpaper_tags
 										? `${previous.content.wallpaper_tags.length} selected`
 										: 'Pack default'}</small
 								>{/if}
 						</div>
 						<Toggle
-							ariaLabel="Override wallpaper selection"
+							ariaLabel="Change wallpaper"
 							checked={!!stage.content.wallpaper_tags}
 							onchange={(on) => {
 								if (on) stage.content.wallpaper_tags = [];
@@ -230,11 +227,11 @@
 				<section class="card">
 					<div class="section-title">
 						<div>
-							<h3>Movement</h3>
-							<p>Control how quickly popup media moves.</p>
+							<h3>Moving windows</h3>
+							<p>Control whether windows move around the screen.</p>
 						</div>
 						<Toggle
-							ariaLabel="Enable movement"
+							ariaLabel="Enable window movement"
 							checked={!!stage.movement}
 							onchange={(on) => {
 								if (on) stage.movement = { minimum_speed: 50, maximum_speed: 150 };
@@ -264,7 +261,7 @@
 					<div class="section-title">
 						<div>
 							<h3>Mitosis</h3>
-							<p>Allow popup media to create additional copies.</p>
+							<p>Closing windows will have a chance of spawning more.</p>
 						</div>
 						<Toggle
 							ariaLabel="Enable mitosis"
@@ -278,7 +275,7 @@
 					</div>
 					{#if stage.mitosis}<div class="fields">
 							<label
-								>Chance (0–1)<input
+								>Chance (0-1)<input
 									type="number"
 									min="0"
 									max="1"
@@ -305,7 +302,7 @@
 							<p>
 								{activeIndex === stages.length - 1
 									? 'The final stage continues until the session ends.'
-									: 'Choose how long these settings stay fully active.'}
+									: 'Choose how long these settings stay active.'}
 							</p>
 						</div>
 					</div>
@@ -452,7 +449,6 @@
 		border-color: var(--ui-focus);
 		background: var(--ui-bg);
 	}
-	header p,
 	.section-title p {
 		margin: 4px 0 0;
 		color: var(--ui-muted);

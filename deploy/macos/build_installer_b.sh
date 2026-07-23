@@ -25,7 +25,9 @@ mkdir -p dist
 
 VERSION=$(grep '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
 
-DMG_PATH=$(find target/release/bundle/dmg/ -name "lewdware-pack-editor*.dmg" 2>/dev/null | head -n 1)
+# The .dmg name comes from tauri.conf.json's productName ("Lewdware Pack Editor"), which the
+# bundler does not sanitise for file names - match case-insensitively and tolerate the spaces.
+DMG_PATH=$(find target/release/bundle/dmg/ -iname "lewdware?pack?editor*.dmg" 2>/dev/null | head -n 1)
 if [ -n "$DMG_PATH" ]; then
   cp "$DMG_PATH" "dist/lewdware-pack-editor_${VERSION}_${ARCH}.dmg"
   echo "SUCCESS: Staged lewdware-pack-editor_${VERSION}_${ARCH}.dmg in dist/"

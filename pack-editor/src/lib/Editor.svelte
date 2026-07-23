@@ -719,6 +719,7 @@
 		border-radius: var(--ui-radius-sm);
 		background: transparent;
 		outline: none;
+		margin-right: 0.25rem;
 	}
 	.pack-title:hover:not(:disabled) {
 		border-color: var(--ui-border);

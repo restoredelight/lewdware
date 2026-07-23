@@ -222,7 +222,7 @@
 					role="menuitem"
 					onclick={() => {
 						close();
-						api.addFolderDialog(true);
+						api.addFolderDialog();
 					}}
 					class="hover:bg-bg w-full px-3 py-2 text-left text-xs">Add folder…</button
 				>

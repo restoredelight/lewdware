@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from './api.js';
 	import { store } from './store.svelte.js';
+	import { Icon, ChevronDown, ChevronUp } from '$icons';
 
 	let showErrors = $state(false);
 	let stopping = $state(false);
@@ -212,7 +213,9 @@
 					onclick={() => (showErrors = !showErrors)}
 				>
 					{store.uploadErrors.length} error{store.uploadErrors.length === 1 ? '' : 's'}
-					<span aria-hidden="true">{showErrors ? '▴' : '▾'}</span>
+					<span aria-hidden="true">
+						<Icon src={showErrors ? ChevronUp : ChevronDown} height="10px" />
+					</span>
 				</button>
 				{#if showErrors}
 					<ul class="errors">

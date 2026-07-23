@@ -85,8 +85,11 @@
 		<label class="flex flex-col gap-[5px]">
 			<span class="text-text text-xs font-semibold">Description</span>
 			<textarea
-				bind:value={form.description}
-				oninput={scheduleSave}
+				value={form.description ?? ''}
+				oninput={(event) => {
+					form.description = event.currentTarget.value;
+					scheduleSave();
+				}}
 				rows={4}
 				class="border-border bg-surface text-text resize-none rounded-sm border px-2.5 py-2 text-sm transition-colors hover:border-[var(--ui-border-strong)]"
 				placeholder="Optional description"></textarea>

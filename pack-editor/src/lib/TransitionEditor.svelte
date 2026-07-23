@@ -132,8 +132,8 @@
 				</div>
 			</div>
 			{#each groups as group}
-				<fieldset>
-					<legend>{group.label}</legend>
+				<div class="group">
+					<div class="group-label">{group.label}</div>
 					<div class="value-grid">
 						{#each group.values as value}
 							<label class="value"
@@ -146,7 +146,7 @@
 							>
 						{/each}
 					</div>
-				</fieldset>
+				</div>
 			{/each}
 		</section>
 		<p class="end-note">
@@ -248,15 +248,12 @@
 		background: var(--ui-bg);
 		color: var(--ui-text);
 	}
-	fieldset {
+	.group {
 		min-width: 0;
-		margin: 0;
-		padding: 12px 0 0;
-		border: 0;
+		padding-top: 12px;
 		border-top: 1px solid var(--ui-border);
 	}
-	legend {
-		padding: 0;
+	.group-label {
 		color: var(--ui-text);
 		font-size: 12px;
 		font-weight: 650;

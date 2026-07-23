@@ -45,7 +45,7 @@ use serde_json::Value as JsonValue;
 use shared::{
     behaviour::{Behaviour, effective_options},
     db::migrate,
-    mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, ShowWhen},
+    mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, ShowWhen, StoredValue},
     read_pack::{read_pack_metadata, RecommendedMode},
     schedule::{QuietHours, ScheduleConfig, Window},
     user_config::{self, AppConfig, Capabilities, Key, Mode, Volume, WallpaperConfig},
@@ -94,7 +94,7 @@ impl From<ModeIdDto> for Mode {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ModeOptionsEntry {
     pub mode: ModeIdDto,
-    pub options: HashMap<String, OptionValue>,
+    pub options: HashMap<String, StoredValue>,
 }
 
 /// A `Mode::Experience` options entry, keyed by pack UUID (string form for JS-friendliness) --
@@ -102,7 +102,7 @@ pub struct ModeOptionsEntry {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ExperienceOptionsEntry {
     pub pack_id: String,
-    pub options: HashMap<String, OptionValue>,
+    pub options: HashMap<String, StoredValue>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -320,7 +320,10 @@ pub struct ModeGroupDto {
     pub entries: Vec<ModeEntryDto>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// Outbound only -- `Serialize`, like the `OptionGroupDto` it sits alongside. Its `value` is
+/// a resolved `OptionValue`, which deliberately cannot be deserialized: a value coming back
+/// *in* from the frontend is a `StoredValue` (see `set_mode_option`).
+#[derive(Serialize, Clone, Debug)]
 pub struct ModeOptionDto {
     pub key: String,
     pub label: String,
@@ -617,21 +620,6 @@ fn effective_entries_for_mode(
     }
 }
 
-fn find_option_type(entries: &IndexMap<String, ModeEntry>, key: &str) -> Option<OptionType> {
-    for (k, entry) in entries {
-        match entry {
-            ModeEntry::Option(opt) if k == key => return Some(opt.option_type.clone()),
-            ModeEntry::Group(group) => {
-                if let Some(t) = find_option_type(&group.entries, key) {
-                    return Some(t);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 /// Resolves the values a mode's stored options should read from: `Mode::Experience` is scoped
 /// per pack (`AppConfig::experience_options`), everything else globally
 /// (`AppConfig::mode_options`) -- see `behaviour-design/default-mode.md`, Ownership. No pack
@@ -641,7 +629,7 @@ fn stored_options_for(
     mode: &Mode,
     config: &AppConfig,
     state: &AppState,
-) -> HashMap<String, OptionValue> {
+) -> HashMap<String, StoredValue> {
     if matches!(mode, Mode::Experience) {
         let pack_id = state.pack.lock().unwrap().as_ref().map(|p| p.id);
         pack_id
@@ -666,17 +654,15 @@ fn get_mode_options_for(config: &AppConfig, state: &AppState) -> ModeOptionsDto 
 
     fn build_entries(
         entries: &IndexMap<String, ModeEntry>,
-        stored: &HashMap<String, OptionValue>,
+        stored: &HashMap<String, StoredValue>,
     ) -> Vec<OptionEntryDto> {
         entries
             .iter()
             .map(|(key, entry)| match entry {
                 ModeEntry::Option(opt) => {
-                    let value = stored
-                        .get(key)
-                        .filter(|v| opt.matches_value(v))
-                        .cloned()
-                        .unwrap_or_else(|| opt.default_value());
+                    // The frontend gets the *resolved* value, so what it renders is what the
+                    // mode would run with -- not whatever shape the value has on disk.
+                    let value = opt.resolve(stored.get(key));
                     OptionEntryDto::Option(ModeOptionDto {
                         key: key.clone(),
                         label: opt.label.clone(),
@@ -805,16 +791,17 @@ fn get_mode_options(state: State<'_>) -> ModeOptionsDto {
     get_mode_options_for(&config, &state)
 }
 
+/// Stores an option value as the frontend sent it. No schema lookup: `StoredValue` holds the
+/// JSON shapes as-is, and which `OptionType` the value belongs to is decided on the way back
+/// out, by `resolve_options` against the mode's schema. The frontend could not make that
+/// call correctly anyway -- JavaScript has one number type.
 #[tauri::command]
 fn set_mode_option(state: State<'_>, key: String, value: JsonValue) -> Result<(), String> {
     let mut config = state.config.lock().unwrap();
     let mode = config.mode.clone();
 
-    // Find the option type so we can coerce the value to the right variant
-    let opt_type = get_option_type_for_key(&config, &mode, &key, &state);
-
-    let typed_value = coerce_option_value(value, opt_type.as_ref())
-        .ok_or_else(|| "invalid option value".to_string())?;
+    let typed_value: StoredValue =
+        serde_json::from_value(value).map_err(|_| "invalid option value".to_string())?;
 
     if matches!(mode, Mode::Experience) {
         let pack_id = state
@@ -838,35 +825,6 @@ fn set_mode_option(state: State<'_>, key: String, value: JsonValue) -> Result<()
     }
     let uploaded = state.uploaded.lock().unwrap();
     save_to_disk(&config, &uploaded).map_err(|e| e.to_string())
-}
-
-fn get_option_type_for_key(
-    _config: &AppConfig,
-    mode: &Mode,
-    key: &str,
-    state: &AppState,
-) -> Option<OptionType> {
-    let (entries, _, _) = effective_entries_for_mode(mode, state)?;
-    find_option_type(&entries, key)
-}
-
-fn coerce_option_value(value: JsonValue, opt_type: Option<&OptionType>) -> Option<OptionValue> {
-    match (opt_type, &value) {
-        (_, JsonValue::Null) => Some(OptionValue::Null),
-        (Some(OptionType::Enum { .. }), JsonValue::String(s)) => Some(OptionValue::Enum(s.clone())),
-        (Some(OptionType::Integer { .. }), JsonValue::Number(n)) => {
-            Some(OptionValue::Integer(n.as_i64()?))
-        }
-        (Some(OptionType::Number { .. }), JsonValue::Number(n)) => {
-            Some(OptionValue::Number(n.as_f64()?))
-        }
-        (Some(OptionType::String { .. }), JsonValue::String(s)) => {
-            Some(OptionValue::String(s.clone()))
-        }
-        (Some(OptionType::Boolean { .. }), JsonValue::Bool(b)) => Some(OptionValue::Boolean(*b)),
-        // fallback: untagged deserialize
-        _ => serde_json::from_value(value).ok(),
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1755,25 +1713,33 @@ mod tests {
         assert!(find_entry(&entries, "content_groups").is_none());
     }
 
-    /// `get_option_type_for_key` previously only searched the mode's own raw schema, so it
-    /// couldn't resolve a synthesized `content_group.*` key's type (silently papered over by
-    /// `coerce_option_value`'s untagged-deserialize fallback for booleans specifically). Confirm
-    /// it now resolves correctly via `effective_entries_for_mode`.
+    /// A `content_group.*` key exists only in the *synthesized* schema
+    /// (`effective_options`), not in the mode's own -- so a stored value for one is only
+    /// honoured if the lookup goes through `effective_entries_for_mode`. Storing the
+    /// non-default and reading it back is what proves it does.
     #[test]
-    fn content_group_key_resolves_its_option_type_for_default_mode() {
+    fn content_group_key_resolves_against_the_synthesized_schema() {
         let state = test_state(Some(loaded_pack(
             behaviour_with_one_content_group(),
             vec![],
         )));
+        let mut config = AppConfig {
+            mode: Mode::Sandbox,
+            ..Default::default()
+        };
+        config
+            .mode_options
+            .entry(Mode::Sandbox)
+            .or_default()
+            .insert("content_group.kinky".to_string(), StoredValue::Bool(false));
 
-        let opt_type = get_option_type_for_key(
-            &AppConfig::default(),
-            &Mode::Sandbox,
-            "content_group.kinky",
-            &state,
-        );
+        let entries = get_mode_options_for(&config, &state).entries;
 
-        assert_eq!(opt_type, Some(OptionType::Boolean { default: true }));
+        let Some(OptionEntryDto::Option(opt)) = find_entry(&entries, "content_group.kinky") else {
+            panic!("no content_group.kinky option in {entries:?}");
+        };
+        assert_eq!(opt.option_type, OptionType::Boolean { default: true });
+        assert_eq!(opt.value, OptionValue::Boolean(false));
     }
 
     /// No pack loaded at all -- `Mode::Sandbox` shouldn't panic, and (with nothing to

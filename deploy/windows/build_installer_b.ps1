@@ -32,7 +32,11 @@ if (!(Test-Path "dist")) { New-Item -ItemType Directory -Path "dist" }
 
 $VERSION = (Select-String -Path "Cargo.toml" -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
 
-$INSTALLER = Get-ChildItem -Path "target\release\bundle" -Filter "lewdware-pack-editor*.msi" -Recurse | Select-Object -First 1
+# The .msi name comes from tauri.conf.json's productName ("Lewdware Pack Editor"), which the
+# bundler does not sanitise for file names - match on a pattern that tolerates the spaces.
+$INSTALLER = Get-ChildItem -Path "target\release\bundle" -Filter "*.msi" -Recurse |
+    Where-Object { $_.Name -match '(?i)lewdware.pack.editor' } |
+    Select-Object -First 1
 if ($INSTALLER) {
     $DEST = "dist\lewdware-pack-editor_${VERSION}_x86_64.msi"
     Copy-Item $INSTALLER.FullName -Destination $DEST -Force

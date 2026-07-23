@@ -1,7 +1,7 @@
 [package]
 name = "lewdware-pack-editor"
 version.workspace = true
-description = "Lewdware Pack Editor"
+description = "Create and edit Lewdware packs"
 authors = ["restoredelight <restoreddelight@proton.me>"]
 edition = "2021"
 

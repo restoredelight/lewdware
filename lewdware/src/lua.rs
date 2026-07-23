@@ -15,7 +15,9 @@ use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
     behaviour::{Behaviour, Content, Experience, effective_config, effective_options},
-    mode::{Metadata, OptionValue, VERSION_MAJOR, read_mode_metadata},
+    mode::{
+        Metadata, OptionValue, StoredValue, VERSION_MAJOR, read_mode_metadata, resolve_options,
+    },
     user_config::AppConfig,
 };
 use tokio::{
@@ -155,8 +157,8 @@ pub struct PackInfo {
 fn resolve_mode_config(
     metadata: &Metadata,
     mode: &shared::user_config::Mode,
-    mode_options: &HashMap<shared::user_config::Mode, HashMap<String, OptionValue>>,
-    experience_options: &HashMap<Uuid, HashMap<String, OptionValue>>,
+    mode_options: &HashMap<shared::user_config::Mode, HashMap<String, StoredValue>>,
+    experience_options: &HashMap<Uuid, HashMap<String, StoredValue>>,
     pack_id: Uuid,
     media_manager: &MediaManager,
     dev_mode: bool,
@@ -174,16 +176,7 @@ fn resolve_mode_config(
         mode,
         shared::user_config::Mode::Sandbox | shared::user_config::Mode::Experience
     ) {
-        let mut mode_config = stored;
-
-        for (key, option) in metadata.all_options() {
-            if mode_config
-                .get(key)
-                .is_none_or(|value| !option.matches_value(value))
-            {
-                mode_config.insert(key.to_string(), option.default_value());
-            }
-        }
+        let mode_config = resolve_options(&metadata.entries, &stored);
 
         return (mode_config, Content::default(), Experience::default());
     }
@@ -2523,7 +2516,7 @@ mod tests {
 
         // A stored override wins over the default.
         let mut stored = HashMap::new();
-        stored.insert(key.clone(), OptionValue::Boolean(false));
+        stored.insert(key.clone(), StoredValue::Bool(false));
         let mut mode_options = HashMap::new();
         mode_options.insert(shared::user_config::Mode::Sandbox, stored);
 
@@ -5199,9 +5192,9 @@ mod tests {
         };
 
         let mut this_pack_options = HashMap::new();
-        this_pack_options.insert("pace".to_string(), OptionValue::Number(2.0));
+        this_pack_options.insert("pace".to_string(), StoredValue::Float(2.0));
         let mut other_pack_options = HashMap::new();
-        other_pack_options.insert("pace".to_string(), OptionValue::Number(9.0));
+        other_pack_options.insert("pace".to_string(), StoredValue::Float(9.0));
 
         let mut experience_options = HashMap::new();
         experience_options.insert(pack_id, this_pack_options);

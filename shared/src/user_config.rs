@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use uuid::Uuid;
 
-use crate::mode::OptionValue;
+use crate::mode::StoredValue;
 use crate::schedule::ScheduleConfig;
 
 #[serde_as]
@@ -14,8 +14,12 @@ pub struct AppConfig {
     pub pack_path: Option<PathBuf>,
     pub uploaded_modes: Vec<PathBuf>,
     pub mode: Mode,
+    /// Values as the user left them, *not* values a mode can run on: `StoredValue`, not
+    /// `OptionValue`, because what is on disk has been through JSON (and, for anything saved
+    /// by `config/`, through JavaScript) and no longer knows which `OptionType` it belongs
+    /// to. Read these through `mode::resolve_options` against the mode's schema.
     #[serde_as(as = "Vec<(_, _)>")]
-    pub mode_options: HashMap<Mode, HashMap<String, OptionValue>>,
+    pub mode_options: HashMap<Mode, HashMap<String, StoredValue>>,
     /// `Mode::Experience`'s meta-control values, scoped per pack rather than globally like
     /// `mode_options` -- see `behaviour-design/default-mode.md`, Ownership: "a pacing scalar
     /// tuned for one experience is wrong for another". Keyed by the pack's own UUID (stable
@@ -23,7 +27,7 @@ pub struct AppConfig {
     /// falls back to its schema default for that pack.
     #[serde_as(as = "Vec<(_, _)>")]
     #[serde(default)]
-    pub experience_options: HashMap<Uuid, HashMap<String, OptionValue>>,
+    pub experience_options: HashMap<Uuid, HashMap<String, StoredValue>>,
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,

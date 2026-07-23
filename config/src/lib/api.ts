@@ -7,9 +7,9 @@ import type {
 	ModeId,
 	ModeOptionsDto,
 	MonitorDto,
-	OptionValue,
 	PickPackResult,
 	ScheduleStatusDto,
+	StoredValue,
 	UploadModeResult,
 	WallpaperSupportDto
 } from './types';
@@ -25,7 +25,9 @@ export const api = {
 
 	getModeOptions: () => invoke<ModeOptionsDto>('get_mode_options'),
 
-	setModeOption: (key: string, value: OptionValue) =>
+	// Sends the value as the control produced it; the backend reads it back against the
+	// mode's schema, so there is nothing to convert here.
+	setModeOption: (key: string, value: StoredValue) =>
 		invoke<void>('set_mode_option', { key, value }),
 
 	pickPack: () => invoke<PickPackResult | null>('pick_pack'),

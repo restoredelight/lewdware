@@ -296,19 +296,26 @@
 		vertical-align: 1px;
 	}
 	.start-screen {
-		display: grid;
-		min-height: 100vh;
+		display: flex;
+		height: 100vh;
 		padding: 32px;
-		place-items: center;
+		flex-direction: column;
 		overflow-y: auto;
 		background: var(--ui-bg);
 		color: var(--ui-text);
 	}
 	.welcome {
+		display: flex;
 		width: min(680px, 100%);
+		/* Centred while it fits; auto margins collapse to 0 once it doesn't, so
+		   .start-screen scrolls instead of clipping the top. */
+		max-height: 100%;
+		margin: auto;
+		flex-direction: column;
 	}
 	header {
 		display: flex;
+		flex: none;
 		align-items: center;
 		gap: 16px;
 		margin-bottom: 24px;
@@ -378,6 +385,7 @@
 	}
 	.primary-actions {
 		display: grid;
+		flex: none;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 12px;
 	}
@@ -419,6 +427,7 @@
 	}
 	.migration {
 		display: grid;
+		flex: none;
 		margin-top: 12px;
 		padding: 14px 16px;
 		grid-template-columns: 22px minmax(0, 1fr) auto;
@@ -429,9 +438,17 @@
 		background: color-mix(in srgb, var(--ui-surface) 65%, transparent);
 	}
 	.recent {
+		display: flex;
+		/* Shrinks (never grows) so it is the first thing to give up space when the
+		   window is short; the list inside scrolls once it runs out. The floor is
+		   the heading plus two rows -- below that the whole screen scrolls. */
+		min-height: 125px;
 		margin-top: 20px;
+		flex: 0 1 auto;
+		flex-direction: column;
 	}
 	.recent > h2 {
+		flex: none;
 		margin: 0 0 8px;
 		color: var(--ui-muted);
 		font-family: var(--ui-font-mono);
@@ -439,10 +456,14 @@
 		font-weight: 700;
 	}
 	.recent-list {
-		overflow: hidden;
+		min-height: 0;
+		flex: 1 1 auto;
+		overflow-x: hidden;
+		overflow-y: auto;
 		border: 1px solid var(--ui-border);
 		border-radius: var(--ui-radius-md);
 		background: var(--ui-surface);
+		overscroll-behavior: contain;
 	}
 	.recent-row {
 		display: flex;
@@ -452,6 +473,9 @@
 	}
 	.recent-row:last-child {
 		border-bottom: 0;
+	}
+	.recent-row:has(.recent-open:hover:not(:disabled)) {
+		background: var(--ui-surface-raised);
 	}
 	.recent-open {
 		display: flex;
@@ -467,9 +491,6 @@
 		font: inherit;
 		text-align: left;
 		cursor: pointer;
-	}
-	.recent-open:hover:not(:disabled) {
-		background: var(--ui-surface-raised);
 	}
 	.recent-open:disabled {
 		opacity: 0.5;
@@ -539,6 +560,7 @@
 	}
 	.error {
 		display: flex;
+		flex: none;
 		margin-top: 12px;
 		padding: 10px 12px;
 		align-items: center;
@@ -569,10 +591,42 @@
 		outline: 2px solid var(--ui-focus);
 		outline-offset: 2px;
 	}
+	/* Short windows: give the fixed chrome less room so the recents keep some. */
+	@media (max-height: 760px) {
+		.start-screen {
+			padding: 20px 32px;
+		}
+		header {
+			margin-bottom: 16px;
+		}
+		article {
+			min-height: 0;
+		}
+		.action-icon {
+			margin-bottom: 12px;
+		}
+		.action-copy p {
+			margin: 6px 0 14px;
+		}
+		.recent {
+			margin-top: 14px;
+		}
+	}
+	@media (max-height: 560px) {
+		.intro {
+			display: none;
+		}
+		.action-copy {
+			/* The hidden description was carrying the gap above the button. */
+			margin-bottom: 14px;
+		}
+		.action-copy p {
+			display: none;
+		}
+	}
 	@media (max-width: 600px) {
 		.start-screen {
 			padding: 24px 16px;
-			place-items: start center;
 		}
 		.primary-actions {
 			grid-template-columns: 1fr;
