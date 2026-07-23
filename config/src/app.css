@@ -1,38 +1,44 @@
-@import "tailwindcss";
-@import "../../shared-ui/styles/tokens.css";
-@import "../../shared-ui/styles/base.css";
+@import 'tailwindcss';
+@import '../../shared-ui/styles/tokens.css';
+@import '../../shared-ui/styles/base.css';
 
 @theme {
-  --color-bg: #0a0809;
-  --color-surface: #141113;
-  --color-surface-2: #1f191c;
-  --color-border: #2c2529;
-  --color-accent: #c70036;
-  --color-accent-hover: #e8003f;
-  --color-text: #f5f2f3;
-  --color-muted: #9e9398;
-  --color-accent-foreground: #ff668f;
-  --color-focus: #ff4d7d;
-  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
-  --radius-sm: 2px;
-  --radius-md: 3px;
-  --radius-lg: 4px;
+	--color-bg: #0a0809;
+	--color-surface: #141113;
+	--color-surface-2: #1f191c;
+	--color-border: #2c2529;
+	--color-accent: #c70036;
+	--color-accent-hover: #e8003f;
+	--color-text: #f5f2f3;
+	--color-muted: #9e9398;
+	--color-accent-foreground: #ff668f;
+	--color-focus: #ff4d7d;
+	--font-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+	--radius-sm: 2px;
+	--radius-md: 3px;
+	--radius-lg: 4px;
 }
 
-*, *::before, *::after {
-  box-sizing: border-box;
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
 }
 
 html {
-  color-scheme: dark;
+	color-scheme: dark;
 }
 
-html, body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  font-family: system-ui, -apple-system, sans-serif;
-  font-size: 14px;
-  background: var(--ui-bg);
-  color: var(--ui-text);
+html,
+body {
+	margin: 0;
+	padding: 0;
+	height: 100%;
+	font-family:
+		system-ui,
+		-apple-system,
+		sans-serif;
+	font-size: 14px;
+	background: var(--ui-bg);
+	color: var(--ui-text);
 }

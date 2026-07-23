@@ -1,55 +1,55 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
-  "productName": "lewdware-pack-editor",
-  "identifier": "com.lewdware.pack-editor",
-  "build": {
-    "beforeDevCommand": "pnpm dev",
-    "devUrl": "http://localhost:1421",
-    "beforeBuildCommand": "pnpm build",
-    "frontendDist": "../build"
-  },
-  "app": {
-    "windows": [
-      {
-        "title": "Pack Editor",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600
-      }
-    ],
-    "security": {
-      "csp": null
-    }
-  },
-  "bundle": {
-    "active": true,
-    "targets": "all",
-    "linux": {
-      "appimage": {
-        "bundleMediaFramework": true
-      },
-      "rpm": {
-        "compression": {
-          "type": "zstd",
-          "level": 3
-        }
-      }
-    },
-    "resources": {
-      "binaries/lewdware-ffmpeg*": "binaries/",
-      "binaries/lewdware-ffprobe*": "binaries/",
-      "binaries/lewdware-avifenc*": "binaries/",
-      "../../LICENSE": "LICENSE",
-      "../THIRD_PARTY_LICENSES.md": "THIRD_PARTY_LICENSES.md",
-      "../COPYING.GPLv3": "COPYING.GPLv3"
-    },
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ]
-  }
+	"$schema": "https://schema.tauri.app/config/2",
+	"productName": "lewdware-pack-editor",
+	"identifier": "com.lewdware.pack-editor",
+	"build": {
+		"beforeDevCommand": "pnpm dev",
+		"devUrl": "http://localhost:1421",
+		"beforeBuildCommand": "pnpm build",
+		"frontendDist": "../build"
+	},
+	"app": {
+		"windows": [
+			{
+				"title": "Pack Editor",
+				"width": 1280,
+				"height": 800,
+				"minWidth": 800,
+				"minHeight": 600
+			}
+		],
+		"security": {
+			"csp": null
+		}
+	},
+	"bundle": {
+		"active": true,
+		"targets": "all",
+		"linux": {
+			"appimage": {
+				"bundleMediaFramework": true
+			},
+			"rpm": {
+				"compression": {
+					"type": "zstd",
+					"level": 3
+				}
+			}
+		},
+		"resources": {
+			"binaries/lewdware-ffmpeg*": "binaries/",
+			"binaries/lewdware-ffprobe*": "binaries/",
+			"binaries/lewdware-avifenc*": "binaries/",
+			"../../LICENSE": "LICENSE",
+			"../THIRD_PARTY_LICENSES.md": "THIRD_PARTY_LICENSES.md",
+			"../COPYING.GPLv3": "COPYING.GPLv3"
+		},
+		"icon": [
+			"icons/32x32.png",
+			"icons/128x128.png",
+			"icons/128x128@2x.png",
+			"icons/icon.icns",
+			"icons/icon.ico"
+		]
+	}
 }

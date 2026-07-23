@@ -1,50 +1,50 @@
 @font-face {
-  font-family: "JetBrains Mono";
-  src: url("../fonts/JetBrainsMono-Regular.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
+	font-family: 'JetBrains Mono';
+	src: url('../fonts/JetBrainsMono-Regular.woff2') format('woff2');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
 }
 
 @font-face {
-  font-family: "JetBrains Mono";
-  src: url("../fonts/JetBrainsMono-Bold.woff2") format("woff2");
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
+	font-family: 'JetBrains Mono';
+	src: url('../fonts/JetBrainsMono-Bold.woff2') format('woff2');
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
 }
 
 :root {
-  --ui-bg: #0a0809;
-  --ui-surface: #141113;
-  --ui-surface-raised: #1f191c;
-  --ui-border: #2c2529;
-  --ui-border-strong: #463c41;
-  --ui-accent: #c70036;
-  --ui-accent-hover: #e8003f;
-  --ui-accent-foreground: #ff668f;
-  --ui-text: #f5f2f3;
-  --ui-muted: #9e9398;
-  --ui-focus: #ff4d7d;
+	--ui-bg: #0a0809;
+	--ui-surface: #141113;
+	--ui-surface-raised: #1f191c;
+	--ui-border: #2c2529;
+	--ui-border-strong: #463c41;
+	--ui-accent: #c70036;
+	--ui-accent-hover: #e8003f;
+	--ui-accent-foreground: #ff668f;
+	--ui-text: #f5f2f3;
+	--ui-muted: #9e9398;
+	--ui-focus: #ff4d7d;
 
-  /* No success color: successful outcomes are silent, confirmations render neutral. */
-  --ui-warning: #d6b271;
-  --ui-warning-bg: #292112;
-  --ui-warning-border: #5c4b24;
-  --ui-danger: #ff6b6b;
-  --ui-danger-bg: #321313;
-  --ui-danger-border: #7a2929;
-  /* "info" is intentionally neutral — blue is retired from the palette */
-  --ui-info: #9e9398;
-  --ui-info-bg: #1f191c;
-  --ui-info-border: #463c41;
+	/* No success color: successful outcomes are silent, confirmations render neutral. */
+	--ui-warning: #d6b271;
+	--ui-warning-bg: #292112;
+	--ui-warning-border: #5c4b24;
+	--ui-danger: #ff6b6b;
+	--ui-danger-bg: #321313;
+	--ui-danger-border: #7a2929;
+	/* "info" is intentionally neutral — blue is retired from the palette */
+	--ui-info: #9e9398;
+	--ui-info-bg: #1f191c;
+	--ui-info-border: #463c41;
 
-  --ui-control-compact: 32px;
-  --ui-control-normal: 36px;
-  --ui-radius-sm: 2px;
-  --ui-radius-md: 3px;
-  --ui-radius-lg: 4px;
+	--ui-control-compact: 32px;
+	--ui-control-normal: 36px;
+	--ui-radius-sm: 2px;
+	--ui-radius-md: 3px;
+	--ui-radius-lg: 4px;
 
-  --ui-font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
-  --ui-shadow-pop: 6px 6px 0 rgb(0 0 0 / 0.55);
+	--ui-font-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+	--ui-shadow-pop: 6px 6px 0 rgb(0 0 0 / 0.55);
 }

@@ -25,7 +25,7 @@ usability, while keeping the black / white / red identity. Four moves carry it:
 3. **Sharpen the chrome** into seamed panels: small radii (2–3px), visible borders,
    surfaces that tile rather than float.
 4. **Spend all the boldness in one place** — dialogs and overlays styled as
-   *spawned popup windows*, which is literally what Lewdware does. Everything else
+   _spawned popup windows_, which is literally what Lewdware does. Everything else
    stays quiet.
 
 Two hard rejections from the user, do not reintroduce them:
@@ -62,27 +62,27 @@ theme unless the user asks.
 
 ## Palette
 
-| Token (`--ui-…` / `--color-…`) | Hex | Role |
-| --- | --- | --- |
-| `bg` | `#0a0809` | Warm black — app background |
-| `surface` | `#141113` | Panel surface |
-| `surface-raised` / `surface-2` | `#1f191c` | Hover / selected surface |
-| `border` | `#2c2529` | Seams / borders |
-| `border-strong` | `#463c41` | Emphasized borders |
-| `text` | `#f5f2f3` | Bone — warm white text |
-| `muted` | `#9e9398` | Smoke — secondary text |
-| `accent` | `#c70036` | Carmine — the one primary action |
-| `accent-hover` | `#e8003f` | Carmine hover; also the selection edge |
-| `accent-foreground` | `#ff668f` | Blush — accent text, used *sparingly* |
-| `focus` | `#ff4d7d` | Hot pink — focus rings, media selection ring |
-| `danger` | `#ff6b6b` | Coral — destructive actions (never carmine) |
-| `danger-bg` / `danger-border` | `#321313` / `#7a2929` | Destructive backgrounds/outlines |
-| `warning` | `#d6b271` | Sand — genuine warnings only |
-| `warning-bg` / `warning-border` | `#292112` / `#5c4b24` | Warning backgrounds/outlines |
+| Token (`--ui-…` / `--color-…`)  | Hex                   | Role                                         |
+| ------------------------------- | --------------------- | -------------------------------------------- |
+| `bg`                            | `#0a0809`             | Warm black — app background                  |
+| `surface`                       | `#141113`             | Panel surface                                |
+| `surface-raised` / `surface-2`  | `#1f191c`             | Hover / selected surface                     |
+| `border`                        | `#2c2529`             | Seams / borders                              |
+| `border-strong`                 | `#463c41`             | Emphasized borders                           |
+| `text`                          | `#f5f2f3`             | Bone — warm white text                       |
+| `muted`                         | `#9e9398`             | Smoke — secondary text                       |
+| `accent`                        | `#c70036`             | Carmine — the one primary action             |
+| `accent-hover`                  | `#e8003f`             | Carmine hover; also the selection edge       |
+| `accent-foreground`             | `#ff668f`             | Blush — accent text, used _sparingly_        |
+| `focus`                         | `#ff4d7d`             | Hot pink — focus rings, media selection ring |
+| `danger`                        | `#ff6b6b`             | Coral — destructive actions (never carmine)  |
+| `danger-bg` / `danger-border`   | `#321313` / `#7a2929` | Destructive backgrounds/outlines             |
+| `warning`                       | `#d6b271`             | Sand — genuine warnings only                 |
+| `warning-bg` / `warning-border` | `#292112` / `#5c4b24` | Warning backgrounds/outlines                 |
 
 **Retired — do not bring these back:**
 
-- **Success green.** Successful outcomes are *silent* (see Feedback conventions).
+- **Success green.** Successful outcomes are _silent_ (see Feedback conventions).
   There is no `--ui-success*` token.
 - **Blue "info".** `--ui-info*` is deliberately mapped to neutral grey
   (`#9e9398` / `#1f191c` / `#463c41`). Neutral text does the "info" job.
@@ -99,9 +99,9 @@ The palette is strictly **black / white / red + coral (destructive) + sand
 Carmine is powerful only because it's rare. One red used to mean "primary,"
 "selected," "enabled," and sat next to red-means-danger. Keep them separate:
 
-1. **Carmine fill = go.** Reserved for the *single* primary action on a surface:
+1. **Carmine fill = go.** Reserved for the _single_ primary action on a surface:
    Save, Launch, Import. Nothing else gets the fill. (`Button` `variant="primary"`.)
-   *Exception:* the small state indicator inside a form control — the checkbox
+   _Exception:_ the small state indicator inside a form control — the checkbox
    box, radio dot, toggle track — fills with the accent when checked/on (see
    `Checkbox`, `Toggle`, `RadioGroup`).
 2. **Selection = edge, not fill.** Active nav items, stages, grid selection use the
@@ -122,7 +122,7 @@ distinct from carmine so keyboard focus never reads as "selected/primary."
 ## Typography
 
 - **Sans (`system-ui`)** for all normal prose, labels, body copy, headings.
-- **Mono (bundled JetBrains Mono, `--ui-font-mono`)** for the *readout* layer only —
+- **Mono (bundled JetBrains Mono, `--ui-font-mono`)** for the _readout_ layer only —
   the machine talking. Fonts are bundled in `shared-ui/fonts/` so they render
   identically everywhere; never rely on a system mono.
 
@@ -173,7 +173,7 @@ breaks the index-based targeting.
 - **Depth:** the only "pop" is `--ui-shadow-pop` (hard offset), and it belongs to the
   spawned-window motif. Ordinary surfaces get **borders/seams**, not drop shadows.
 - **Motion:** subtle. Standard transition is `120ms` on `color / background /
-  border-color`. Respect `prefers-reduced-motion`.
+border-color`. Respect `prefers-reduced-motion`.
 - **Control heights:** `--ui-control-compact` 32px, `--ui-control-normal` 36px.
 
 ---
@@ -182,7 +182,7 @@ breaks the index-based targeting.
 
 - **Success is silent.** `taskFeedback.success()` just dismisses the task's entry —
   no green, no toast. `taskFeedback.confirm()` shows a brief neutral badge and is
-  reserved for actions with *no other visible effect* (currently only clipboard
+  reserved for actions with _no other visible effect_ (currently only clipboard
   copy). The copy toast renders neutral grey.
 - **Don't flash.** Progress badges appear only after ~250ms (CSS `status-appear`
   delay) so fast operations never blink.

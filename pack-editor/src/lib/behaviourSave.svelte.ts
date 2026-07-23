@@ -1,8 +1,8 @@
-import { api } from "./api.js";
-import { store } from "./store.svelte.js";
-import { history } from "./history.svelte.js";
-import type { Behaviour } from "./types.js";
-import { taskFeedback } from "./taskFeedback.svelte.js";
+import { api } from './api.js';
+import { store } from './store.svelte.js';
+import { history } from './history.svelte.js';
+import type { Behaviour } from './types.js';
+import { taskFeedback } from './taskFeedback.svelte.js';
 
 // Shared across the Content and Experience tabs, which both edit different sections of the same
 // `store.behaviour` document: one debounce timer and one write-order-preserving promise chain, so
@@ -17,31 +17,34 @@ let baseline: Behaviour | null = null;
 const clone = (value: Behaviour): Behaviour => structuredClone($state.snapshot(value));
 
 export function initializeBehaviourHistory(value: Behaviour) {
-  baseline = clone(value);
+	baseline = clone(value);
 }
 
 function persist() {
-  // Chained rather than fired standalone: if `flushBehaviourSave` forces an early write while an
-  // earlier debounced write is still in flight, this guarantees they apply in the order they were
-  // issued, so the last edit made is always the last one that lands.
-  saveChain = saveChain.catch(() => {}).then(async () => {
-    if (!store.behaviour) return;
-    const after = clone(store.behaviour);
-    const before = baseline ? clone(baseline) : clone(after);
-    await api.setBehaviour(after);
-    if (JSON.stringify(before) !== JSON.stringify(after)) {
-      history.record({
-        label: "Edit pack behaviour",
-      });
-    }
-    baseline = clone(after);
-    store.markBackupComplete("behaviour");
-    taskFeedback.dismiss("behaviour-backup");
-  }).catch((error) => {
-    store.markBackupFailed("behaviour", error);
-    taskFeedback.error("behaviour-backup", `Could not back up pack behaviour: ${String(error)}`);
-    throw error;
-  });
+	// Chained rather than fired standalone: if `flushBehaviourSave` forces an early write while an
+	// earlier debounced write is still in flight, this guarantees they apply in the order they were
+	// issued, so the last edit made is always the last one that lands.
+	saveChain = saveChain
+		.catch(() => {})
+		.then(async () => {
+			if (!store.behaviour) return;
+			const after = clone(store.behaviour);
+			const before = baseline ? clone(baseline) : clone(after);
+			await api.setBehaviour(after);
+			if (JSON.stringify(before) !== JSON.stringify(after)) {
+				history.record({
+					label: 'Edit pack behaviour'
+				});
+			}
+			baseline = clone(after);
+			store.markBackupComplete('behaviour');
+			taskFeedback.dismiss('behaviour-backup');
+		})
+		.catch((error) => {
+			store.markBackupFailed('behaviour', error);
+			taskFeedback.error('behaviour-backup', `Could not back up pack behaviour: ${String(error)}`);
+			throw error;
+		});
 }
 
 /**
@@ -51,20 +54,20 @@ function persist() {
  * later and write the discarded edit right back.
  */
 export function cancelBehaviourSave() {
-  if (saveTimer !== null) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-  }
+	if (saveTimer !== null) {
+		clearTimeout(saveTimer);
+		saveTimer = null;
+	}
 }
 
 export function scheduleBehaviourSave() {
-  store.markBackupPending("behaviour");
-  if (saveTimer !== null) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    persist();
-    void saveChain.catch((error) => console.error("Could not back up pack behaviour", error));
-  }, DEBOUNCE_MS);
+	store.markBackupPending('behaviour');
+	if (saveTimer !== null) clearTimeout(saveTimer);
+	saveTimer = setTimeout(() => {
+		saveTimer = null;
+		persist();
+		void saveChain.catch((error) => console.error('Could not back up pack behaviour', error));
+	}, DEBOUNCE_MS);
 }
 
 /**
@@ -75,10 +78,10 @@ export function scheduleBehaviourSave() {
  * with no guaranteed ordering.
  */
 export function flushBehaviourSave(): Promise<void> {
-  if (saveTimer !== null) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-    persist();
-  }
-  return saveChain;
+	if (saveTimer !== null) {
+		clearTimeout(saveTimer);
+		saveTimer = null;
+		persist();
+	}
+	return saveChain;
 }
