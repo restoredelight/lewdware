@@ -107,6 +107,10 @@ cargo run -p lw -- <subcommand>
 - [`config/README.md`](config/README.md)
 - [`pack-editor/README.md`](pack-editor/README.md)
 - [`lw/README.md`](lw/README.md)
+- [`supervisor/README.md`](supervisor/README.md)
+- [`shared/README.md`](shared/README.md)
+- [`converter/README.md`](converter/README.md)
+- [`docs/README.md`](docs/README.md)
 
 ## License
 
