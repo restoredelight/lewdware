@@ -102,7 +102,7 @@
     {#if file}
       {#if file.file_info.type === "image"}
         <img
-          src={store.mediaUrl(`/display/${file.id}`)}
+          src={store.mediaUrl(`/display/${file.id}`, file.hash)}
           alt={file.file_name}
           draggable="false"
           class="max-w-full max-h-full object-contain pointer-events-auto"
@@ -118,7 +118,7 @@
              the top half visible — no wrapper/absolute positioning needed. -->
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
-          src={store.mediaUrl(`/file/${file.id}`)}
+          src={store.mediaUrl(`/file/${file.id}`, file.hash)}
           draggable="false"
           autoplay
           loop
@@ -130,7 +130,7 @@
       {:else if file.file_info.type === "video"}
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
-          src={store.mediaUrl(`/file/${file.id}`)}
+          src={store.mediaUrl(`/file/${file.id}`, file.hash)}
           draggable="false"
           controls
           class="max-w-full max-h-full pointer-events-auto"
@@ -138,7 +138,7 @@
         ></video>
       {:else if file.file_info.type === "audio"}
         <audio
-          src={store.mediaUrl(`/file/${file.id}`)}
+          src={store.mediaUrl(`/file/${file.id}`, file.hash)}
           controls
           class="pointer-events-auto w-80"
         ></audio>

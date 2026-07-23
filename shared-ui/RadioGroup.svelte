@@ -100,5 +100,5 @@
   .check { display: inline-flex; width: 10px; height: 10px; }
 
   .body { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
-  .description { color: var(--ui-muted); font-size: 12px; }
+  .description { color: var(--ui-muted); font-size: 0.75rem; }
 </style>

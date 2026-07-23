@@ -8,8 +8,14 @@ class AppStore {
   // Media server
   mediaPort = $state(0);
   mediaToken = $state("");
-  mediaUrl(path: string) {
-    return `http://127.0.0.1:${this.mediaPort}${path}?token=${encodeURIComponent(this.mediaToken)}`;
+  // `cacheKey` (typically a file's content hash) is appended so the browser
+  // refetches when the underlying media changes but the id/path stays the same.
+  mediaUrl(path: string, cacheKey?: string) {
+    let url = `http://127.0.0.1:${this.mediaPort}${path}?token=${encodeURIComponent(this.mediaToken)}`;
+    if (cacheKey) {
+      url += `&v=${encodeURIComponent(cacheKey)}`;
+    }
+    return url;
   }
 
   // Pack

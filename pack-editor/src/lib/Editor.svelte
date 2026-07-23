@@ -453,7 +453,7 @@
           <div class="flex-1 min-w-0 min-h-0">
             {#if store.filteredFiles.length === 0 && store.files.length === 0}
               <div class="flex items-center justify-center h-full p-8">
-                <div class="w-full max-w-lg"><EmptyState title="Add media to this pack" description="Import images, videos, or audio files. You can also drag files or folders anywhere onto this window." actionLabel="Import files…" onclick={() => api.addFilesDialog()} secondaryActionLabel="Import folder…" onsecondary={() => api.addFolderDialog(false)} /></div>
+                <div class="w-full max-w-lg"><EmptyState title="Add media to this pack" description="Import images, videos, or audio files. You can also drag files or folders anywhere onto this window." actionLabel="Import files…" onclick={() => api.addFilesDialog()} secondaryActionLabel="Import folder…" onsecondary={() => api.addFolderDialog()} /></div>
               </div>
             {:else if store.filteredFiles.length === 0}
               <div class="flex items-center justify-center h-full p-8">

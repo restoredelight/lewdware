@@ -37,7 +37,7 @@ fn repeat_vars(count: usize) -> String {
     s
 }
 
-/// A media pack, consisting of a header, some metadata and an SQLite database at the end, which
+/// A pack, consisting of a header, some metadata and an SQLite database at the end, which
 /// contains information about all the media in the file. The database stores the offset and length
 /// of each image/video/audio file, which can be used to read it from the pack file.
 pub struct MediaPack {

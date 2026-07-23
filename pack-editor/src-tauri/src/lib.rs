@@ -1284,11 +1284,7 @@ async fn add_files_dialog(state: State<'_, AppState>, app: AppHandle) -> Result<
 }
 
 #[tauri::command]
-async fn add_folder_dialog(
-    state: State<'_, AppState>,
-    app: AppHandle,
-    recursive: bool,
-) -> Result<(), String> {
+async fn add_folder_dialog(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     use tauri_plugin_dialog::DialogExt;
     let app_c = app.clone();
     let folder = tokio::task::spawn_blocking(move || {
@@ -1304,7 +1300,7 @@ async fn add_folder_dialog(
     let Some(folder) = folder else { return Ok(()) };
     let folder: PathBuf = folder.into_path().map_err(|e| e.to_string())?;
 
-    let paths = tokio::task::spawn_blocking(move || encode::explore_folder(&folder, recursive))
+    let paths = tokio::task::spawn_blocking(move || encode::explore_folder(&folder))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1342,7 +1338,7 @@ async fn add_paths(
         let mut result = Vec::new();
         for path in paths {
             if path.is_dir() {
-                result.extend(encode::explore_folder(&path, false));
+                result.extend(encode::explore_folder(&path));
             } else if !encode::is_junk_path(&path) && encode::is_media_path(&path).unwrap_or(false)
             {
                 result.push(path);

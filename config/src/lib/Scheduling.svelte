@@ -56,9 +56,9 @@
     const today = new Date();
     const tomorrow = new Date(today);
     tomorrow.setDate(today.getDate() + 1);
-    if (sameDay(date, today)) return `today · ${time}`;
-    if (sameDay(date, tomorrow)) return `tomorrow · ${time}`;
-    return `${date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} · ${time}`;
+    if (sameDay(date, today)) return `today - ${time}`;
+    if (sameDay(date, tomorrow)) return `tomorrow - ${time}`;
+    return `${date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} - ${time}`;
   }
 
   function toggleWindowDay(index: number, window: WindowDto, dayIndex: number) {
@@ -210,10 +210,13 @@
               >Start between</button>
             </div>
           </div>
+          {#if window.jitter_minutes > 0}
+            <p class="text-xs text-muted">{window.jitter_minutes === 1440 ? "Any time during the following 24 hours:" : "The session starts at a random time in this range."}</p>
+          {/if}
           <div class="grid gap-3 {window.jitter_minutes > 0 ? 'grid-cols-3' : 'grid-cols-2'}">
             <Field label={window.jitter_minutes > 0 ? "From" : "Start time"} type="time" size="compact" value={toTimeValue(window.start_hour, window.start_minute)} onchange={(value) => { const t = fromTimeValue(value); if (t) store.updateWindow(i, { start_hour: t.hour, start_minute: t.minute }); }} />
             {#if window.jitter_minutes > 0}
-              <Field label="Until" type="time" size="compact" value={windowEndValue(window)} description={window.jitter_minutes === 1440 ? "Any time during the following 24 hours" : "The session starts at a random time in this range"} onchange={(value) => updateWindowEnd(i, window, value)} />
+              <Field label="Until" type="time" size="compact" value={windowEndValue(window)} onchange={(value) => updateWindowEnd(i, window, value)} />
             {/if}
             <Field label="Duration (minutes)" type="number" size="compact" min={1} max={1440} value={window.duration_minutes} onchange={(value) => store.updateWindow(i, { duration_minutes: Math.max(1, Number(value) || 0) })} />
           </div>

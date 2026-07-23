@@ -101,8 +101,7 @@
     {#snippet children(close)}
       <div class="w-52 py-1">
         <button role="menuitem" onclick={() => { close(); api.addFilesDialog(); }} class="w-full text-left text-xs px-3 py-2 hover:bg-bg">Add files…</button>
-        <button role="menuitem" onclick={() => { close(); api.addFolderDialog(false); }} class="w-full text-left text-xs px-3 py-2 hover:bg-bg">Add folder…</button>
-        <button role="menuitem" onclick={() => { close(); api.addFolderDialog(true); }} class="w-full text-left text-xs px-3 py-2 hover:bg-bg">Add folder recursively…</button>
+        <button role="menuitem" onclick={() => { close(); api.addFolderDialog(true); }} class="w-full text-left text-xs px-3 py-2 hover:bg-bg">Add folder…</button>
       </div>
     {/snippet}
   </Popover>

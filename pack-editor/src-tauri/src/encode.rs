@@ -144,12 +144,8 @@ pub fn is_junk_path(path: &Path) -> bool {
     is_junk_name || path.components().any(|c| c.as_os_str() == "__MACOSX")
 }
 
-pub fn explore_folder(path: &Path, recursive: bool) -> Vec<PathBuf> {
-    let mut walkdir = WalkDir::new(path);
-    if !recursive {
-        walkdir = walkdir.max_depth(1);
-    }
-    walkdir
+pub fn explore_folder(path: &Path) -> Vec<PathBuf> {
+    WalkDir::new(path)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {

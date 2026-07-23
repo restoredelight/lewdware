@@ -329,15 +329,15 @@
   <header class="max-w-2xl">
     <h1 class="ui-page-title">Pack &amp; Mode</h1>
     <p class="mt-1.5 mb-0 text-sm text-muted">
-      Choose the media pack Lewdware uses, then select and configure how it behaves.
+      Choose the pack Lewdware uses, then select and configure how it behaves.
     </p>
   </header>
 
   <!-- Pack picker -->
   <section class="flex flex-col gap-3">
     <div>
-      <h2 class="ui-section-title">Media pack</h2>
-      <p class="mt-1 mb-0 text-xs text-muted">The pack supplies the media and any pack-specific modes.</p>
+      <h2 class="ui-section-title">Pack</h2>
+      <p class="mt-1 mb-0 text-xs text-muted">Contains media, captions, prompts, etc.</p>
     </div>
     {#if store.config?.pack_path}
       <Card class="p-4 flex items-center gap-4">
@@ -355,8 +355,8 @@
       </Card>
     {:else}
       <Card class="flex flex-col items-center p-7 text-center border-dashed !border-[var(--ui-border-strong)]">
-        <h3 class="m-0 text-sm font-semibold text-text">No media pack selected</h3>
-        <p class="max-w-md mt-1 mb-4 text-xs leading-relaxed text-muted">Choose a .lwpack file before launching Lewdware. You can change it at any time.</p>
+        <h3 class="m-0 text-sm font-semibold text-text">No pack selected</h3>
+        <p class="max-w-md mt-1 mb-4 text-xs leading-relaxed text-muted">Choose a .lwpack file before launching Lewdware.</p>
         <Button size="compact" variant="primary" loading={store.isBusy("pack")} onclick={() => store.pickPack()}>Choose pack…</Button>
       </Card>
     {/if}
@@ -367,10 +367,10 @@
     <div class="flex items-start justify-between gap-4">
       <div>
         <h2 class="ui-section-title">Mode</h2>
-        <p class="mt-1 mb-0 text-xs text-muted">Choose one behaviour for the current session. The badge shows where each mode comes from.</p>
+        <p class="mt-1 mb-0 text-xs text-muted">Changes the behaviour of Lewdware.</p>
       </div>
       <Button size="compact" variant="secondary" loading={store.isBusy("mode")} onclick={() => store.uploadMode()}>
-        <span class="w-4 h-4"><Icon src={ArrowUpTray} mini /></span> Upload mode…
+        <span class="w-4 h-4"><Icon src={ArrowUpTray} mini /></span> Upload mode
       </Button>
     </div>
 
@@ -422,7 +422,7 @@
     <section class="flex flex-col gap-3 border-t border-border pt-6">
       <div>
         <h2 class="ui-section-title">Mode options</h2>
-        <p class="mt-1 mb-0 text-xs text-muted">Customize the selected mode. Changes are applied automatically.</p>
+        <!-- <p class="mt-1 mb-0 text-xs text-muted">Customize the selected mode.</p> -->
       </div>
 
       <!-- Permissions this mode uses no matter how it's configured; they belong to no one option,
@@ -441,7 +441,7 @@
 
 {#if pendingRemoval}
   <Dialog
-    title={pendingRemoval.kind === "pack" ? "Remove media pack?" : `Remove “${pendingRemoval.name}”?`}
+    title={pendingRemoval.kind === "pack" ? "Remove pack?" : `Remove “${pendingRemoval.name}”?`}
     description={pendingRemoval.kind === "pack"
       ? "Lewdware cannot launch until another pack is selected. Your pack file will not be deleted."
       : "This removes the uploaded mode from Lewdware. If it is selected, Lewdware will switch to a built-in mode."}

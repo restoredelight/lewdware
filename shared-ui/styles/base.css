@@ -18,8 +18,8 @@
 .ui-section-title {
   margin: 0;
   color: var(--ui-text);
-  font-family: var(--ui-font-mono);
-  font-size: 12.5px;
+  /* font-family: var(--ui-font-mono); */
+  font-size: 14px;
   font-weight: 700;
   line-height: 1.3;
 }

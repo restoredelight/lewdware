@@ -64,7 +64,7 @@ export const api = {
   setBehaviour: (behaviour: Behaviour) => invoke<void>("set_behaviour", { behaviour }),
 
   addFilesDialog: () => invoke<void>("add_files_dialog"),
-  addFolderDialog: (recursive: boolean) => invoke<void>("add_folder_dialog", { recursive }),
+  addFolderDialog: () => invoke<void>("add_folder_dialog"),
   addPaths: (paths: string[]) => invoke<void>("add_paths", { paths }),
   cancelUpload: () => invoke<void>("cancel_upload"),
 

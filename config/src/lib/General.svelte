@@ -149,20 +149,20 @@
       <span class="w-2.5 h-2.5 shrink-0 rounded-full {running ? 'bg-accent' : 'bg-muted'} {engineAction ? 'animate-pulse' : ''}"></span>
       <div class="min-w-0 flex-1">
         <h3 class="m-0 text-sm font-semibold text-text">{running ? "Lewdware is running" : "Lewdware is stopped"}</h3>
-        <p class="m-0 mt-1 text-xs text-muted">{running ? "The current session is active on the selected monitors." : hasPack ? "Ready to launch with the selected pack and mode." : "Select a media pack before launching."}</p>
+        <p class="m-0 mt-1 text-xs text-muted">{running ? "The current session is active." : hasPack ? "Ready to launch." : "Select a pack before launching."}</p>
       </div>
       {#if running}
         <Button size="compact" variant="destructive" onclick={stop} loading={engineAction === "stop"}>Stop session</Button>
       {:else}
-        <Button size="compact" variant="primary" onclick={launch} disabled={!hasPack} loading={engineAction === "launch"}>Launch</Button>
+        <Button size="compact" variant="primary" onclick={launch} disabled={!hasPack} loading={engineAction === "launch"} title={hasPack ? undefined : "Select a pack"}>Launch</Button>
       {/if}
     </Card>
-    {#if !hasPack && !running}
-      <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[var(--ui-warning-bg)] border border-[var(--ui-warning-border)] text-sm text-[var(--ui-warning)]">
-        <span>No pack selected. Upload a pack to launch Lewdware.</span>
-        <Button size="compact" variant="secondary" class="ml-auto" onclick={() => (store.activeTab = "pack_mode")}>Choose pack</Button>
-      </div>
-    {/if}
+    <!-- {#if !hasPack && !running} -->
+    <!--   <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[var(--ui-warning-bg)] border border-[var(--ui-warning-border)] text-sm text-[var(--ui-warning)]"> -->
+    <!--     <span>No pack selected. Upload a pack to launch Lewdware.</span> -->
+    <!--     <Button size="compact" variant="secondary" class="ml-auto" onclick={() => (store.activeTab = "pack_mode")}>Choose pack</Button> -->
+    <!--   </div> -->
+    <!-- {/if} -->
     {#if !running && (launchError || engineStatus.error)}
       <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-[var(--ui-danger-bg)] border border-[var(--ui-danger-border)] text-sm text-[var(--ui-danger)]">
         <span>Lewdware failed to start: {launchError ?? engineStatus.error}</span>
@@ -222,7 +222,7 @@
   <section class="flex flex-col gap-2 border-t border-border pt-6">
     <h2 class="ui-section-title">Monitors</h2>
     <p class="text-xs text-muted">
-      Choose where popup media may appear. At least one monitor should remain enabled.
+      Choose where popup media may appear.
     </p>
     {#if store.monitors.length > 0}
       <Card class="divide-y divide-border">

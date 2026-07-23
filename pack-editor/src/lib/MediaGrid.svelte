@@ -272,7 +272,7 @@
                     <span class="w-10 h-10 text-muted"><Icon src={MusicalNote} /></span>
                   {:else}
                     <img
-                      src={store.mediaUrl(`/thumbnail/${file.id}`)}
+                      src={store.mediaUrl(`/thumbnail/${file.id}`, file.hash)}
                       alt={file.file_name}
                       loading="lazy"
                       draggable="false"

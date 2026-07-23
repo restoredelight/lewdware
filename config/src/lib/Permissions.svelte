@@ -116,8 +116,7 @@
   <section class="flex flex-col gap-2">
     <h2 class="ui-section-title">Permissions</h2>
     <p class="text-xs text-muted">
-      Control what the running pack or mode is allowed to do outside its own windows. A denied
-      action is silently skipped rather than shown as an error.
+      Control what the running pack or mode is allowed to do.
     </p>
     <Card class="divide-y divide-border">
       {#each toggles as toggle (toggle.key)}
@@ -132,14 +131,7 @@
         {#if toggle.key === "set_wallpaper" && allowed}
           <div class="flex flex-col gap-3 bg-bg px-4 py-3">
             <div>
-              <h4 class="m-0 text-xs font-medium text-text">When Lewdware stops, put my wallpaper back to</h4>
-              {#if !canRestoreOriginal}
-                <p class="m-0 mt-1 text-xs text-muted">
-                  This desktop can’t report its current wallpaper, so there’s nothing to put back.
-                  Choose an image to restore to instead — until you do, packs can’t change your
-                  wallpaper at all.
-                </p>
-              {/if}
+              <h4 class="m-0 text-xs font-medium text-text">When Lewdware stops, set my wallpaper to</h4>
             </div>
 
             <RadioGroup

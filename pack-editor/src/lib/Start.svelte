@@ -144,7 +144,7 @@
       <div>
         <p class="eyebrow">Lewdware</p>
         <h1 id="welcome-title">Pack Editor</h1>
-        <p class="intro">Create and organise media packs, their content, and the experience they provide.</p>
+        <p class="intro">Create and organise packs, their content, and the experience they provide.</p>
       </div>
     </header>
 
