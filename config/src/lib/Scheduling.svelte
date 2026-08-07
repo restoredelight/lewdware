@@ -293,7 +293,7 @@
 							<p class="text-muted m-0 mt-1 mb-4 text-xs">
 								Scheduling is enabled, but no sessions can start until you add a window.
 							</p>
-							<Button size="compact" variant="primary" onclick={() => store.addWindow()}
+							<Button size="compact" variant="secondary" onclick={() => store.addWindow()}
 								>Add window</Button
 							>
 						</Card>

@@ -1,15 +1,19 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { listen } from '@tauri-apps/api/event';
+	import { DocumentText, Icon } from 'svelte-hero-icons';
 	import type { SupervisorStatusDto } from '$lib/types';
 	import { store } from '$lib/store.svelte';
-	import General from '$lib/General.svelte';
+	import { api } from '$lib/api';
+	import Behaviour from '$lib/Behaviour.svelte';
 	import PackMode from '$lib/PackMode.svelte';
-	import Permissions from '$lib/Permissions.svelte';
 	import Scheduling from '$lib/Scheduling.svelte';
+	import SessionControl from '$lib/SessionControl.svelte';
 	import Tabs from '$ui/Tabs.svelte';
 	import Button from '$ui/Button.svelte';
+	import IconButton from '$ui/IconButton.svelte';
 	import TaskStatus from '$lib/TaskStatus.svelte';
+	import { taskFeedback } from '$lib/taskFeedback.svelte';
 
 	onMount(() => {
 		void store.load();
@@ -23,19 +27,33 @@
 	});
 
 	const tabs = [
-		{ id: 'general' as const, label: 'General' },
-		{ id: 'pack_mode' as const, label: 'Pack & Mode' },
-		{ id: 'permissions' as const, label: 'Permissions & Volume' },
+		{ id: 'pack_mode' as const, label: 'Pack & mode' },
+		{ id: 'behaviour' as const, label: 'Behaviour' },
 		{ id: 'scheduling' as const, label: 'Scheduling' }
 	];
+
+	async function openLogs() {
+		taskFeedback.progress('logs', 'Opening logs folder…');
+		try {
+			await api.openLogs();
+			taskFeedback.success('logs', 'Logs folder opened');
+		} catch (err) {
+			taskFeedback.error('logs', `Couldn’t open logs folder: ${String(err)}`);
+		}
+	}
 </script>
 
 <div class="bg-bg flex h-full min-h-0 font-sans">
 	<!-- Sidebar -->
 	<aside class="bg-surface border-border flex w-48 shrink-0 flex-col border-r">
-		<div class="border-border flex h-16 flex-col justify-center border-b px-4">
-			<span class="text-text text-sm font-semibold">Lewdware</span>
-			<span class="text-muted text-xs">Settings</span>
+		<div class="border-border flex h-16 items-center gap-1 border-b px-4">
+			<div class="min-w-0 flex-1">
+				<span class="text-text block text-sm font-semibold">Lewdware</span>
+				<span class="text-muted block text-xs">Settings</span>
+			</div>
+			<IconButton label="Open logs folder" onclick={openLogs}>
+				<span class="block h-4 w-4"><Icon src={DocumentText} /></span>
+			</IconButton>
 		</div>
 		<nav class="p-3" aria-label="Settings sections">
 			<Tabs
@@ -45,14 +63,8 @@
 				onselect={(id) => (store.activeTab = id as typeof store.activeTab)}
 			/>
 		</nav>
-		{#if store.engineStatus.running}
-			<div
-				class="border-border text-muted mt-auto flex items-center gap-2 border-t px-4 py-2.5 font-mono text-[11px]"
-				role="status"
-			>
-				<span class="bg-accent h-1.5 w-1.5 shrink-0 rounded-full"></span>
-				<span>running</span>
-			</div>
+		{#if store.ready}
+			<SessionControl />
 		{/if}
 	</aside>
 
@@ -70,12 +82,10 @@
 			<div class="flex flex-1 items-center justify-center">
 				<p class="text-muted text-sm" role="status">Loading settings…</p>
 			</div>
-		{:else if store.activeTab === 'general'}
-			<General />
 		{:else if store.activeTab === 'pack_mode'}
 			<PackMode />
-		{:else if store.activeTab === 'permissions'}
-			<Permissions />
+		{:else if store.activeTab === 'behaviour'}
+			<Behaviour />
 		{:else if store.activeTab === 'scheduling'}
 			<Scheduling />
 		{/if}

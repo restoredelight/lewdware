@@ -250,14 +250,14 @@
 
 {#snippet permissionHint(permissions: Permission[])}
 	<!-- Deliberately quiet: muted, small, no warning colour. It states a fact and offers a route,
-       it doesn't sound an alarm. "Permissions" jumps to that page (no router; just a tab swap). -->
+       it doesn't sound an alarm. "Behaviour" jumps to that page (no router; just a tab swap). -->
 	<p class="text-muted m-0 text-[11px] leading-snug">
 		Requires the {permissionSentence(permissions)}
 		{permissions.length > 1 ? 'permissions' : 'permission'} ·
 		<button
 			type="button"
 			class="hover:text-text underline decoration-dotted underline-offset-2 transition-colors"
-			onclick={() => (store.activeTab = 'permissions')}>Permissions</button
+			onclick={() => (store.activeTab = 'behaviour')}>Behaviour</button
 		>
 	</p>
 {/snippet}
@@ -332,7 +332,7 @@
 <div class="flex-1 overflow-y-auto">
 	<div class="mx-auto flex w-full max-w-4xl flex-col gap-6 p-8">
 		<header class="max-w-2xl">
-			<h1 class="ui-page-title">Pack &amp; Mode</h1>
+			<h1 class="ui-page-title">Pack &amp; mode</h1>
 			<p class="text-muted mt-1.5 mb-0 text-sm">
 				Choose the pack Lewdware uses, then select and configure how it behaves.
 			</p>
@@ -366,9 +366,11 @@
 							disabled={store.isBusy('pack')}
 							onclick={() => (pendingRemoval = { kind: 'pack' })}>Remove</Button
 						>
+						<!-- Not primary: Launch owns the carmine fill in the sidebar, and with a pack already
+						     selected it is the live next step, not this. -->
 						<Button
 							size="compact"
-							variant="primary"
+							variant="secondary"
 							loading={store.isBusy('pack')}
 							onclick={() => store.pickPack()}>Change pack…</Button
 						>

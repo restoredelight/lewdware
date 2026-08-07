@@ -21,7 +21,7 @@ usability, while keeping the black / white / red identity. Four moves carry it:
 1. **Warm the blacks** so the red belongs to the neutrals (warm near-blacks, not
    blue-grey).
 2. **Add a monospace utility layer** for everything the app "reads out" — statuses,
-   counts, file sizes, shortcuts, timestamps, section labels.
+   counts, file sizes, shortcuts, timestamps.
 3. **Sharpen the chrome** into seamed panels: small radii (2–3px), visible borders,
    surfaces that tile rather than float.
 4. **Spend all the boldness in one place** — dialogs and overlays styled as
@@ -104,6 +104,15 @@ Carmine is powerful only because it's rare. One red used to mean "primary,"
    _Exception:_ the small state indicator inside a form control — the checkbox
    box, radio dot, toggle track — fills with the accent when checked/on (see
    `Checkbox`, `Toggle`, `RadioGroup`).
+
+   In `config/`, Launch/Stop lives permanently in the sidebar footer
+   (`SessionControl.svelte`), so a page-level primary would compete with it on every
+   screen forever. The rule there: **the carmine fill follows the live next step.**
+   Launch holds it while it is enabled, and page actions are `secondary`. Where
+   Launch is _disabled_ or absent, the page's own call to action takes the fill —
+   "Choose pack…" in the no-pack empty state (Launch is disabled without a pack) and
+   "Try again" on the load-error screen (the footer isn't rendered at all).
+
 2. **Selection = edge, not fill.** Active nav items, stages, grid selection use the
    **raised surface + a 2px carmine edge**; text stays white — the edge carries the
    accent. See `Tabs.svelte` vertical active state
@@ -111,8 +120,9 @@ Carmine is powerful only because it's rare. One red used to mean "primary,"
 3. **Coral = careful.** Destructive actions are always **coral** (`#ff6b6b`), as
    text/outline, **never a carmine fill**. This is what lets a red fill never mean
    two things. (`Button` `variant="destructive"`: transparent bg, coral border/text.)
-4. **Mono = the machine talking.** Statuses, counts, sizes, shortcuts, timestamps,
-   section labels: monospace, small, sentence case, in smoke or a semantic color.
+4. **Mono = the machine talking.** Statuses, counts, sizes, shortcuts, timestamps:
+   monospace, small, sentence case, in smoke or a semantic color. Values the app
+   reports — not the headings above them.
 
 The hot-pink `--ui-focus` is for **focus rings** and the media-grid selection ring,
 distinct from carmine so keyboard focus never reads as "selected/primary."
@@ -129,8 +139,11 @@ distinct from carmine so keyboard focus never reads as "selected/primary."
 Shared type classes live in `base.css`:
 
 - `.ui-page-title` — 17px / weight 650, sans. The top-of-page heading.
-- `.ui-section-title` — **mono**, 12.5px / weight 700, sentence case. Section labels
-  read as machine eyebrows, not web headings.
+- `.ui-section-title` — **sans**, 14px / weight 700, sentence case. Section headings
+  were briefly mono ("machine eyebrows"); that was reverted in July 2026. At heading
+  size and weight the mono read as decoration rather than as the machine talking, and
+  it diluted the readout layer by spending it on something that isn't a readout. The
+  mono is for values the app reports, not for the labels above them.
 - `.ui-metadata` — mono, 11.5px, muted. Statuses, counts, file info.
 - `kbd` — mono, `0.92em`.
 
@@ -217,8 +230,8 @@ outline). Sizes: `compact` (32px), `normal` (36px).
 - [ ] Destructive action is **coral, outline/text, never filled**.
 - [ ] Selected/active state is **raised surface + carmine edge**, white text — not a
       fill.
-- [ ] Readout text (status/count/size/shortcut/label) is **mono, small, sentence
-      case**.
+- [ ] Readout text (status/count/size/shortcut/timestamp) is **mono, small, sentence
+      case**. Section headings are sans.
 - [ ] No all-caps, no letterspacing, no glow, no soft drop shadows on ordinary
       surfaces.
 - [ ] Radii stay 2–4px.

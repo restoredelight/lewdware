@@ -66,7 +66,11 @@ function modeIdEqual(a: ModeId, b: ModeId): boolean {
 
 class AppStore {
 	config = $state<ConfigDto | null>(null);
+	// Listing monitors means spawning the engine to probe them, which is far slower than the rest of
+	// the load -- so it gets its own state and only the Monitors section waits on it.
 	monitors = $state<MonitorDto[]>([]);
+	monitorsLoading = $state(false);
+	monitorsError = $state<string | null>(null);
 	modeGroups = $state<ModeGroupDto[]>([]);
 	modeOptions = $state<OptionEntryDto[]>([]);
 	/** Permissions the selected mode uses regardless of how it is configured -- they hang off no
@@ -75,7 +79,7 @@ class AppStore {
 	/** Pack-derived `pack_has_*` facts for the selected mode, seeded into `show_when` evaluation
 	 * alongside the live option values (see `PackMode.svelte`). */
 	packHas = $state<Record<string, ConditionValue>>({});
-	activeTab = $state<'general' | 'pack_mode' | 'permissions' | 'scheduling'>('general');
+	activeTab = $state<'pack_mode' | 'behaviour' | 'scheduling'>('pack_mode');
 	loading = $state(false);
 	loadError = $state<string | null>(null);
 	busyActions = $state<string[]>([]);
@@ -116,18 +120,31 @@ class AppStore {
 		}
 	}
 
+	async loadMonitors() {
+		this.monitorsLoading = true;
+		this.monitorsError = null;
+		try {
+			this.monitors = await api.getMonitors();
+		} catch (err) {
+			this.monitorsError = String(err);
+		} finally {
+			this.monitorsLoading = false;
+		}
+	}
+
 	async load() {
 		this.loading = true;
 		this.loadError = null;
+		// Deliberately not awaited: the rest of the settings shouldn't be held up by the monitor probe,
+		// and the Monitors section renders its own loading/error state.
+		void this.loadMonitors();
 		try {
-			const [config, monitors, modeGroups, modeOptions] = await Promise.all([
+			const [config, modeGroups, modeOptions] = await Promise.all([
 				api.getConfig(),
-				api.getMonitors(),
 				api.getModeGroups(),
 				api.getModeOptions()
 			]);
 			this.config = config;
-			this.monitors = monitors;
 			this.modeGroups = modeGroups;
 			this.applyModeOptions(modeOptions);
 			taskFeedback.dismiss('load');

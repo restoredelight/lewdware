@@ -113,11 +113,14 @@ local function next_delay_ms()
 	end
 end
 
+local num_windows = 0
 local function schedule_spawning()
 	if dormant then return end
 	lewdware.after(next_delay_ms(), function()
 		if not dormant then
 			open_popup()
+			num_windows = num_windows + 1
+			print(num_windows)
 		end
 		schedule_spawning()
 	end)

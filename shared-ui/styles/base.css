@@ -26,7 +26,7 @@
 .ui-section-title {
 	margin: 0;
 	color: var(--ui-text);
-	/* font-family: var(--ui-font-mono); */
+	/* Sans, deliberately: section headings are not readouts. See DESIGN.md → Typography. */
 	font-size: 14px;
 	font-weight: 700;
 	line-height: 1.3;
