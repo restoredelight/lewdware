@@ -2,8 +2,11 @@ local config = lewdware.config
 local media = require("lib.media")
 local wallpaper = require("lib.wallpaper")
 local spawn = require("lib.spawn")
+local theme = require("lib.theme")
 
 ---@cast config {
+---    theme: string,
+---    appearance: string,
 ---    popup_frequency: number,
 ---    max_popups: number,
 ---    images_enabled: boolean,
@@ -79,6 +82,10 @@ if config.videos_enabled then table.insert(popup_types, "video") end
 -- The actual spawn/caption/movement/mitosis mechanics are shared with Experience (see
 -- lib/spawn.lua); this mode supplies its own values (user options) plus dormancy's window-list
 -- bookkeeping via `on_spawn`, which the shared module has no opinion on.
+
+-- The user is the designer here, so their choice is the whole answer: a theme the pack declared
+-- is deliberately not consulted (see `lib/theme.lua`, and design/window-themes.md's Ownership).
+theme.init(config.theme, nil, config.appearance)
 
 local open_popup = spawn.make_spawner({
 	popup_types = popup_types,

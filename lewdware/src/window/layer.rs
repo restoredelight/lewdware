@@ -6,6 +6,7 @@ use crate::window::state::WindowState;
 use crate::window::surface::Buffer;
 use crate::window::target::RenderTarget;
 
+pub mod bevel;
 mod egui;
 mod egui_renderer;
 mod image;

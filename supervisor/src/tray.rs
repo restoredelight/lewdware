@@ -79,11 +79,13 @@ pub fn create_tray_icon(control_tx: mpsc::Sender<ControlMessage>) -> Result<()> 
         }
     }
 
-    pollster::block_on(LewdwareTray {
-        control_tx,
-        icon_theme_path: install_symbolic_icon().unwrap_or_default(),
-    }
-    .spawn())?;
+    pollster::block_on(
+        LewdwareTray {
+            control_tx,
+            icon_theme_path: install_symbolic_icon().unwrap_or_default(),
+        }
+        .spawn(),
+    )?;
 
     Ok(())
 }

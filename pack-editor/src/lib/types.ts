@@ -127,6 +127,9 @@ export interface Content {
 	web_links: WebLink[];
 	wallpaper_tags: string[];
 	splash_tags: string[];
+	/// The window look the pack was designed around, as one of the engine's theme names. `null`
+	/// means no preference, and lets the user's own choice stand. See `design/window-themes.md`.
+	theme: string | null;
 }
 
 export type Interval =

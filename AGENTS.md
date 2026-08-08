@@ -24,6 +24,7 @@ docs site.
 | `converter/` | Converts Edgeware/Edgeware++ packs into `.lwpack` pieces. Used by the pack editor. | [link](converter/README.md) |
 | `docs/` | The website (<https://lewdware.net>), Astro + Starlight. Hosts the Lua API reference and version manifests. | [link](docs/README.md) |
 | `default-modes/` | The modes bundled with Lewdware by default. | — |
+| `dev-modes/` | Modes used to exercise the engine during development; not shipped. | [link](dev-modes/README.md) |
 | `shared-ui/` | Shared Svelte components + design tokens for `config/` and `pack-editor/`. | see below |
 | `deploy/` | Bundling/distribution scripts (driven by `.github/workflows/build.yml`). | — |
 

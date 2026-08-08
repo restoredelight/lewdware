@@ -449,7 +449,10 @@ mod tests {
         };
         assert_eq!(
             opt.needs_permissions,
-            vec![mode::Permission::SetWallpaper, mode::Permission::SendNotifications]
+            vec![
+                mode::Permission::SetWallpaper,
+                mode::Permission::SendNotifications
+            ]
         );
     }
 

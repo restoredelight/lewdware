@@ -5,6 +5,7 @@ local config = lewdware.config
 local media = require("lib.media")
 local wallpaper = require("lib.wallpaper")
 local spawn = require("lib.spawn")
+local theme = require("lib.theme")
 local timeline = require("timeline")
 
 local function milliseconds(seconds) return math.max(1, math.floor(seconds * 1000)) end
@@ -21,6 +22,10 @@ local function popup_limit()
 	end
 	return config.max_popups
 end
+
+-- The pack author is the designer here, so "auto" (the default) takes the look they designed
+-- around, falling back to the user's own system when they declared none.
+theme.init(config.theme, require("lib.content").theme(), config.appearance)
 
 local open_popup = spawn.make_spawner({
 	popup_types = popup_types,

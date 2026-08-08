@@ -119,14 +119,15 @@ mod tests {
     use crate::window::layer::Rect;
     use crate::window::redraw::RedrawRequester;
     use crate::window::target::RenderTarget;
+    use crate::window::theme::{Appearance, Metrics, Theme};
 
     const IMG_W: u32 = 8;
     const IMG_H: u32 = 6;
-    const BORDER: u32 = 1;
+    const BORDER: u32 = Metrics::PLAIN.border_width;
     // Matches the decorated layout: border on every side, header above the content.
     const OUTER_W: u32 = IMG_W + BORDER * 2;
     const OUTER_H: u32 = IMG_H + HEADER_PX + BORDER * 2;
-    const HEADER_PX: u32 = crate::window::HEADER_HEIGHT;
+    const HEADER_PX: u32 = Metrics::PLAIN.header_height;
 
     const CONTENT: Rect = Rect {
         x: BORDER,
@@ -182,6 +183,8 @@ mod tests {
 
         let mut decorations = Decorations::new(
             true,
+            Theme::Plain.metrics(),
+            Theme::Plain.chrome(Appearance::Light),
             PhysicalSize::new(IMG_W, IMG_H),
             1.0,
             None,

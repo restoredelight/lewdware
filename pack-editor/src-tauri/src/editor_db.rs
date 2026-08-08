@@ -1,7 +1,7 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use std::{path::Path, time::Duration};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use shared::read_pack::Metadata;
 use uuid::Uuid;
 
@@ -414,11 +414,9 @@ mod tests {
             )
             .unwrap();
 
-        assert!(
-            initialize(&connection)
-                .unwrap_err()
-                .to_string()
-                .contains("newer")
-        );
+        assert!(initialize(&connection)
+            .unwrap_err()
+            .to_string()
+            .contains("newer"));
     }
 }

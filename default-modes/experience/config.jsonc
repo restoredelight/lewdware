@@ -8,6 +8,34 @@
   "author": "restoredelight",
   "entrypoint": "src/main.lua",
   "options": {
+    "theme": {
+      "label": "Window style",
+      "description": "How popup frames, buttons and text fields look. \"As designed by the pack\" uses the pack author's choice, falling back to your system's look if they didn't make one",
+      "type": "enum",
+      "default": "auto",
+      "values": {
+        "auto": "As designed by the pack, or match my system",
+        "native": "Match my system",
+        "native-retro": "Match my system (retro)",
+        "plain": "Plain",
+        "fluent": "Windows 11",
+        "redmond": "Windows 95",
+        "aqua": "macOS",
+        "adwaita": "GNOME",
+        "platinum": "Mac OS 9"
+      }
+    },
+    "appearance": {
+      "label": "Light or dark",
+      "description": "Which palette the window style is drawn in. Some styles have no dark version and stay light",
+      "type": "enum",
+      "default": "auto",
+      "values": {
+        "auto": "Match my system",
+        "light": "Light",
+        "dark": "Dark"
+      }
+    },
     "pace": {
       "label": "Pacing",
       "description": "Scales the pack author's designed spawn/notification/web/prompt/subliminal rates -- 1.0 is the design as authored, higher is faster",

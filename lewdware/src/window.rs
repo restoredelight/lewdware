@@ -1,3 +1,4 @@
+pub mod appearance;
 mod decorations;
 mod gpu_renderer;
 mod header;
@@ -9,11 +10,12 @@ mod redraw;
 mod state;
 mod surface;
 mod target;
+pub mod theme;
 
-pub use header::HEADER_HEIGHT;
 pub use opts::WindowOpts;
 pub use pool::WindowPool;
 pub use popup::{Popup, RenderOutcome};
 pub(crate) use redraw::RedrawRequester;
 pub use state::WindowState;
 pub use target::RenderTarget;
+pub use theme::{AppearanceChoice, Theme, ThemeChoice};

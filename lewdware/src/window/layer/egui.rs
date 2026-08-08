@@ -4,19 +4,20 @@ use anyhow::Result;
 use egui::TextEdit;
 use tokio::sync::mpsc::UnboundedSender;
 use winit::{
-    dpi::{LogicalPosition, PhysicalPosition},
+    dpi::PhysicalPosition,
     event::{Touch, WindowEvent},
 };
 
 use crate::lua::{self, DialogButton, DialogElement, DialogElementUpdate, ItemId, TextStyle};
 use crate::media::ImageData;
 use crate::text_font;
-use crate::window::header::HEADER_HEIGHT;
+use crate::window::layer::bevel;
 use crate::window::layer::egui_renderer::{EguiCPUWindow, EguiGpuRenderer};
 use crate::window::layer::{CpuFrame, GpuFrame, LayerStatus};
 use crate::window::state::WindowState;
 use crate::window::surface::Buffer;
 use crate::window::target::RenderTarget;
+use crate::window::theme::{self, Theme, WidgetEdge, to_color32};
 
 /// The render-time state of one dialog element. Image requirements have been uploaded to egui
 /// textures, and input values are mutated in place as the user types.
@@ -134,12 +135,17 @@ fn paint_dialog(
     ui: &mut egui::Ui,
     elements: &mut [DialogElementState],
     default_button_id: Option<&str>,
+    edge: &WidgetEdge,
 ) -> Option<DialogInteraction> {
     let mut interaction = None;
 
-    egui::Frame::central_panel(ui.style())
-        .inner_margin(10.0)
-        .show(ui, |ui| {
+    // A `CentralPanel` rather than a bare `Frame`, so the theme's panel fill covers the whole
+    // window rather than only the strip its content happens to occupy — matching `paint_text`.
+    // A frame on its own sizes to its contents, which left the rest of the window showing the
+    // surface's clear colour.
+    egui::CentralPanel::default()
+        .frame(egui::Frame::central_panel(ui.style()).inner_margin(10.0))
+        .show_inside(ui, |ui| {
             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                 for element in elements.iter_mut() {
                     match element {
@@ -158,7 +164,15 @@ fn paint_dialog(
                             placeholder,
                             value,
                         } => {
-                            let mut input = TextEdit::singleline(value);
+                            // egui sizes a `TextEdit` from its font, ignoring `interact_size`, so
+                            // without this a field stays ~21pt tall next to a theme's 32pt buttons.
+                            // Padded out to the theme's own control height instead.
+                            let row = ui.text_style_height(&egui::TextStyle::Body);
+                            let target = ui.spacing().interact_size.y;
+                            let vertical = ((target - row) / 2.0).round().max(2.0);
+
+                            let mut input = TextEdit::singleline(value)
+                                .margin(egui::vec2(ui.spacing().button_padding.x, vertical));
                             if let Some(placeholder) = placeholder {
                                 input = input.hint_text(placeholder.as_str());
                             }
@@ -175,18 +189,38 @@ fn paint_dialog(
                             }
                         }
                         DialogElementState::Buttons { options, .. } => {
-                            ui.with_layout(
-                                egui::Layout::left_to_right(egui::Align::Center)
-                                    .with_main_wrap(true)
-                                    .with_main_align(egui::Align::Center)
-                                    .with_main_justify(true),
+                            // Allocated at the row's natural width, so the enclosing
+                            // `top_down(Align::Center)` centres it under the centred text above.
+                            // Clamped to what is available, which is also what makes wrapping
+                            // kick in for a dialog with more buttons than fit on one line.
+                            let width = button_row_width(ui, options).min(ui.available_width());
+
+                            ui.allocate_ui_with_layout(
+                                // Full remaining height, not zero: the region has to be at least
+                                // as tall as the buttons that go in it, or egui (rightly) reports
+                                // the content as escaping its own region. `Align::Min` below keeps
+                                // the row at the top of it, and `allocate_ui_with_layout` advances
+                                // the cursor by what was *used*, so claiming the rest costs
+                                // nothing.
+                                egui::vec2(width, ui.available_height()),
+                                // `Align::Min` is the *cross* axis here: without it the row is
+                                // centred vertically in all the height left in the dialog, which
+                                // strands it far below the element above.
+                                //
+                                // And no `with_main_justify`: a wrapping layout reports an
+                                // infinite main extent, so "fill the main axis" made each button
+                                // infinitely wide — which drew its label at x = infinity, off
+                                // screen, and swallowed every button after the first.
+                                egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
                                 |ui| {
+                                    // No explicit spacing: egui already puts `item_spacing.x`
+                                    // between widgets in a horizontal layout, and adding more on
+                                    // top is what made `button_row_width` under-measure.
                                     for option in options.iter() {
-                                        if ui.button(&option.label).clicked() {
+                                        if bevel::button(ui, &option.label, edge).clicked() {
                                             interaction =
                                                 Some(DialogInteraction::Select(option.id.clone()));
                                         }
-                                        ui.add_space(5.0);
                                     }
                                 },
                             );
@@ -200,12 +234,48 @@ fn paint_dialog(
     interaction
 }
 
+/// The width a row of buttons wants, laid out on one line.
+///
+/// Measured rather than asked for, because egui sizes a button from its label and there is no way
+/// to query that without building one. Used only to decide how wide a region to allocate; the
+/// buttons still size themselves.
+fn button_row_width(ui: &egui::Ui, options: &[DialogButton]) -> f32 {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let padding = ui.spacing().button_padding.x * 2.0;
+    let minimum = ui.spacing().interact_size.x;
+    // What egui itself puts between widgets in a horizontal layout.
+    let gap = ui.spacing().item_spacing.x;
+
+    let buttons: f32 = options
+        .iter()
+        .map(|option| {
+            let galley = ui.ctx().fonts_mut(|fonts| {
+                fonts.layout_no_wrap(
+                    option.label.clone(),
+                    font_id.clone(),
+                    egui::Color32::PLACEHOLDER,
+                )
+            });
+            // Rounded *up*, per button: a total measured even a fraction of a pixel short of what
+            // egui goes on to use makes the last button wrap onto a line of its own.
+            (galley.size().x + padding).max(minimum).ceil()
+        })
+        .sum();
+
+    (buttons + gap * options.len().saturating_sub(1) as f32).ceil()
+}
+
 /// Paint one `text` element inline within the dialog's vertical stack (unlike `paint_text`,
 /// which centers within the whole window for a standalone text popup).
 fn paint_dialog_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
     let font_size = style.font_size.to_pixels(0);
     let font_id = egui::FontId::new(font_size, text_font::font_family(style.font));
-    let color = to_color32(style.color);
+    // Unset follows the theme, so a dialog's own text is readable in a dark palette rather than
+    // black on near-black. The dialog owns its background, so it knows what suits it.
+    let color = style
+        .color
+        .map(to_color32)
+        .unwrap_or_else(|| ui.visuals().text_color());
 
     let outline_width = if style.outline_color.is_some() {
         style.outline_width
@@ -273,6 +343,9 @@ pub struct EguiLayer {
     backend: EguiBackend,
     /// Kept so the backend can be rebuilt after a render-target fallback.
     background_color: Option<lua::Color>,
+    /// Resolved once, at construction: `draw_cpu` paints without access to the `WindowState` the
+    /// theme lives on.
+    edge: WidgetEdge,
     /// Set while painting, sent by [`EguiLayer::flush_events`] once the frame is done — building
     /// the values snapshot needs a fresh immutable borrow of `elements`, which the paint closure
     /// held mutably.
@@ -304,12 +377,12 @@ enum EguiPaint {
 impl EguiPaint {
     /// Paint one frame. Returns the button click / input submit that occurred, if any — always
     /// `None` for text content.
-    fn run(&mut self, ui: &mut egui::Ui) -> Option<DialogInteraction> {
+    fn run(&mut self, ui: &mut egui::Ui, edge: &WidgetEdge) -> Option<DialogInteraction> {
         match self {
             Self::Dialog {
                 elements,
                 default_button_id,
-            } => paint_dialog(ui, elements, default_button_id.as_deref()),
+            } => paint_dialog(ui, elements, default_button_id.as_deref(), edge),
             Self::Text { text, style } => {
                 paint_text(ui, text, style);
                 None
@@ -317,11 +390,11 @@ impl EguiPaint {
         }
     }
 
-    /// The font set this content needs. Text popups pick a font per popup; dialogs style each
-    /// text element individually and use egui's defaults.
-    fn font_definitions(&self) -> Option<egui::FontDefinitions> {
+    /// The font set this content needs. A text popup picks its own font per popup; a dialog's
+    /// widgets take the theme's, while its `text` elements still style themselves individually.
+    fn font_definitions(&self, theme: Theme) -> Option<egui::FontDefinitions> {
         match self {
-            Self::Dialog { .. } => None,
+            Self::Dialog { .. } => theme.widget_font_definitions(),
             Self::Text { style, .. } => text_font::build_font_definitions(style.font),
         }
     }
@@ -333,7 +406,9 @@ fn build_backend(
     target: &RenderTarget,
     background_color: Option<lua::Color>,
 ) -> Result<EguiBackend> {
-    let font_definitions = paint.font_definitions();
+    let theme = state.theme();
+    let font_definitions = paint.font_definitions(theme);
+    let style = theme::window_style(theme, state.appearance(), background_color);
 
     if target.is_gpu() {
         Ok(EguiBackend::Gpu(Box::new(EguiGpuRenderer::new(
@@ -343,14 +418,14 @@ fn build_backend(
             state.opacity,
             target.premultiplied_alpha(),
             target.force_opaque(),
-            background_color,
+            style,
             font_definitions,
             state.redraw_requester(),
         )?)))
     } else {
         Ok(EguiBackend::Cpu(Box::new(EguiCPUWindow::new(
             state.window().clone(),
-            background_color,
+            style,
             font_definitions,
             state.redraw_requester(),
         )?)))
@@ -395,6 +470,7 @@ impl EguiLayer {
             paint,
             backend,
             background_color,
+            edge: state.theme().widget_edge(state.appearance()),
             pending: None,
         })
     }
@@ -421,6 +497,7 @@ impl EguiLayer {
             paint,
             backend,
             background_color,
+            edge: state.theme().widget_edge(state.appearance()),
             pending: None,
         })
     }
@@ -447,7 +524,7 @@ impl EguiLayer {
         let translated = if state.decorations().enabled() {
             Some(translate_event_position(
                 event.clone(),
-                state.window().scale_factor(),
+                state.inner_offset(),
             ))
         } else {
             None
@@ -475,10 +552,11 @@ impl EguiLayer {
         let window = state.window().clone();
         let inner_size = state.inner_size();
         let paint = &mut self.paint;
+        let edge = self.edge;
 
         let mut interaction = None;
         gpu.render_to_texture(frame.wgpu, &window, inner_size, |ui| {
-            interaction = paint.run(ui);
+            interaction = paint.run(ui, &edge);
         })?;
         gpu.set_opacity(&frame.wgpu.queue, frame.opacity);
 
@@ -517,9 +595,10 @@ impl EguiLayer {
         );
 
         let paint = &mut self.paint;
+        let edge = self.edge;
         let mut interaction = None;
         let _ = cpu.redraw(&mut buffer_ref, |ui| {
-            interaction = paint.run(ui);
+            interaction = paint.run(ui, &edge);
         });
 
         buffer.copy_from_u32_buf(&pixels, content.width, content.x, content.y);
@@ -585,7 +664,7 @@ impl EguiLayer {
                     style.font_size = font_size;
                 }
                 if let Some(color) = props.color {
-                    style.color = color;
+                    style.color = Some(color);
                 }
                 if let Some(bold) = props.bold {
                     style.bold = bold;
@@ -734,7 +813,15 @@ fn paint_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
             // argument here is unused.
             let font_size = style.font_size.to_pixels(0);
             let font_id = egui::FontId::new(font_size, text_font::font_family(style.font));
-            let color = to_color32(style.color);
+            // Unset stays black here, unlike a dialog: a text popup floats over the desktop with a
+            // transparent background by default, so there is no surface to take a cue from — which
+            // is what `outline_color` is for.
+            let color = to_color32(style.color.unwrap_or(lua::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            }));
 
             // The window was sized (see `calculate_text_popup_size`) with `2 * outline_width` of
             // extra room baked in so the outline stroke (drawn offset from the text on every
@@ -801,23 +888,27 @@ fn paint_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
         });
 }
 
-fn to_color32(c: lua::Color) -> egui::Color32 {
-    egui::Color32::from_rgba_unmultiplied(
-        (c.r * 255.0).round() as u8,
-        (c.g * 255.0).round() as u8,
-        (c.b * 255.0).round() as u8,
-        (c.a * 255.0).round() as u8,
-    )
-}
-
-fn translate_event_position(event: WindowEvent, scale_factor: f64) -> WindowEvent {
+/// Rebase pointer positions from the outer window onto the content area, which is egui's own
+/// coordinate origin.
+///
+/// `content_origin` comes from `WindowState::inner_offset()` — i.e. from the very same
+/// `Decorations::content_origin()` the content is *drawn* at, rather than being re-derived from
+/// the metrics a second time.
+///
+/// The old form subtracted the border and header in *logical* space and converted back, which
+/// agreed with the layout only at integer scale factors: the layout rounds each metric to
+/// physical pixels separately, so a fractional factor left the two up to half a pixel apart
+/// (+0.5px at 1.5x and 2.5x, -0.25px at 1.25x). Sub-pixel with `plain`'s 1px border — but it
+/// also hardcoded that border, so any theme with a thicker one would have been out by whole
+/// pixels. Taking the origin from one place makes the two unable to disagree at all.
+fn translate_event_position(event: WindowEvent, content_origin: (u32, u32)) -> WindowEvent {
     match event {
         WindowEvent::CursorMoved {
             device_id,
             position,
         } => WindowEvent::CursorMoved {
             device_id,
-            position: translate_position(position, scale_factor),
+            position: translate_position(position, content_origin),
         },
         WindowEvent::Touch(Touch {
             device_id,
@@ -828,7 +919,7 @@ fn translate_event_position(event: WindowEvent, scale_factor: f64) -> WindowEven
         }) => WindowEvent::Touch(Touch {
             device_id,
             phase,
-            location: translate_position(location, scale_factor),
+            location: translate_position(location, content_origin),
             force,
             id,
         }),
@@ -836,10 +927,470 @@ fn translate_event_position(event: WindowEvent, scale_factor: f64) -> WindowEven
     }
 }
 
-fn translate_position(position: PhysicalPosition<f64>, scale_factor: f64) -> PhysicalPosition<f64> {
-    let mut logical_position: LogicalPosition<f64> = position.to_logical(scale_factor);
-    logical_position.x -= 1.0;
-    logical_position.y -= 1.0 + HEADER_HEIGHT as f64;
+fn translate_position(
+    position: PhysicalPosition<f64>,
+    (origin_x, origin_y): (u32, u32),
+) -> PhysicalPosition<f64> {
+    PhysicalPosition::new(position.x - origin_x as f64, position.y - origin_y as f64)
+}
 
-    logical_position.to_physical(scale_factor)
+#[cfg(test)]
+mod tests {
+    use winit::dpi::PhysicalSize;
+
+    use super::*;
+    use crate::window::decorations::Decorations;
+    use crate::window::redraw::RedrawRequester;
+    use crate::window::theme::{Appearance, Metrics};
+
+    /// `plain`'s metrics plus stand-ins for themes yet to be written, so the agreement below is
+    /// a property of the seam rather than of one theme's numbers.
+    const METRICS: &[Metrics] = &[
+        Metrics::PLAIN,
+        Metrics {
+            header_height: 18,
+            border_width: 4,
+        },
+        Metrics {
+            header_height: 37,
+            border_width: 1,
+        },
+    ];
+
+    fn content_origin(metrics: Metrics, scale_factor: f64) -> (u32, u32) {
+        Decorations::new(
+            true,
+            metrics,
+            Theme::Plain.chrome(Appearance::Light),
+            PhysicalSize::new(200, 150),
+            scale_factor,
+            None,
+            true,
+            RedrawRequester::detached(),
+        )
+        .content_origin()
+    }
+
+    /// The regression this seam exists to prevent: egui's coordinate origin has to be the exact
+    /// pixel the content is drawn at. A mismatch does not look broken — it silently sends clicks
+    /// to the wrong widget — and the old hardcoded translation drifted from `content_origin()`
+    /// at every fractional scale factor.
+    #[test]
+    fn a_pointer_at_the_content_origin_lands_on_eguis_own_origin() {
+        for &metrics in METRICS {
+            for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
+                let origin = content_origin(metrics, scale);
+                let at_origin = PhysicalPosition::new(origin.0 as f64, origin.1 as f64);
+
+                assert_eq!(
+                    translate_position(at_origin, origin),
+                    PhysicalPosition::new(0.0, 0.0),
+                    "{metrics:?} at {scale}x"
+                );
+            }
+        }
+    }
+
+    /// Offsets inside the content area survive the rebase unchanged, so a click 10px into the
+    /// content is a click 10px into egui.
+    #[test]
+    fn offsets_within_the_content_area_are_preserved() {
+        for &metrics in METRICS {
+            for scale in [1.0, 1.5, 2.0] {
+                let origin = content_origin(metrics, scale);
+                let position =
+                    PhysicalPosition::new(origin.0 as f64 + 10.0, origin.1 as f64 + 20.0);
+
+                assert_eq!(
+                    translate_position(position, origin),
+                    PhysicalPosition::new(10.0, 20.0),
+                    "{metrics:?} at {scale}x"
+                );
+            }
+        }
+    }
+
+    /// A pointer over the decorations themselves rebases to negative coordinates rather than
+    /// wrapping into the content area — egui must see it as outside, not as a click near (0, 0).
+    #[test]
+    fn a_pointer_over_the_header_rebases_outside_the_content() {
+        for &metrics in METRICS {
+            let origin = content_origin(metrics, 1.0);
+            let in_header = PhysicalPosition::new(origin.0 as f64, 0.0);
+
+            let translated = translate_position(in_header, origin);
+            assert!(translated.y < 0.0, "{metrics:?} header y={}", translated.y);
+        }
+    }
+
+    /// Only pointer events are rebased; everything else passes through untouched.
+    #[test]
+    fn non_pointer_events_pass_through() {
+        let event = WindowEvent::Focused(true);
+        assert!(matches!(
+            translate_event_position(event, (1, 25)),
+            WindowEvent::Focused(true)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod dialog_layout_tests {
+    use super::*;
+    use crate::window::theme::Appearance;
+
+    const PANEL: f32 = 400.0;
+
+    fn buttons(count: usize) -> Vec<DialogButton> {
+        (0..count)
+            .map(|index| DialogButton {
+                id: format!("b{index}"),
+                label: format!("Button {index}"),
+                default: index == 0,
+            })
+            .collect()
+    }
+
+    fn elements(button_count: usize) -> Vec<DialogElementState> {
+        vec![
+            DialogElementState::Input {
+                id: "field".to_owned(),
+                placeholder: None,
+                value: String::new(),
+            },
+            DialogElementState::Buttons {
+                id: None,
+                options: buttons(button_count),
+            },
+        ]
+    }
+
+    /// Lay a dialog out in a `PANEL`-wide viewport and return the rect of every filled rectangle
+    /// egui emitted, plus where it put each piece of text.
+    ///
+    /// `paint_dialog` only needs a `Ui`, so this exercises the real layout with no window, no wgpu
+    /// and no egui-winit — which is what makes the geometry testable at all.
+    fn layout(button_count: usize) -> (Vec<egui::Rect>, Vec<(String, egui::Pos2)>) {
+        layout_themed(Theme::Plain, button_count)
+    }
+
+    /// As [`layout`], but with a theme's real style applied — the spacing and control metrics a
+    /// theme sets are exactly what can push content out of the region it was allocated, so a
+    /// harness on egui's defaults cannot see those problems at all.
+    fn layout_themed(
+        theme: Theme,
+        button_count: usize,
+    ) -> (Vec<egui::Rect>, Vec<(String, egui::Pos2)>) {
+        let (rects, texts) = layout_shapes(theme, button_count);
+        (rects.into_iter().map(|(rect, _)| rect).collect(), texts)
+    }
+
+    /// As [`layout_themed`], but keeping each rectangle's fill.
+    #[allow(clippy::type_complexity)]
+    fn layout_shapes(
+        theme: Theme,
+        button_count: usize,
+    ) -> (Vec<(egui::Rect, egui::Color32)>, Vec<(String, egui::Pos2)>) {
+        let ctx = egui::Context::default();
+        ctx.set_global_style(theme::window_style(theme, Appearance::Light, None));
+        if let Some(fonts) = theme.widget_font_definitions() {
+            ctx.set_fonts(fonts);
+        }
+
+        let mut elements = elements(button_count);
+
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(PANEL, 300.0),
+            )),
+            ..Default::default()
+        };
+
+        let output = ctx.run_ui(input, |ui| {
+            paint_dialog(
+                ui,
+                &mut elements,
+                Some("b0"),
+                &theme.widget_edge(Appearance::Light),
+            );
+        });
+
+        let mut rects = Vec::new();
+        let mut texts = Vec::new();
+        for shape in &output.shapes {
+            match &shape.shape {
+                egui::epaint::Shape::Rect(rect) => rects.push((rect.rect, rect.fill)),
+                egui::epaint::Shape::Text(text) => {
+                    texts.push((text.galley.text().to_owned(), text.pos))
+                }
+                _ => {}
+            }
+        }
+
+        (rects, texts)
+    }
+
+    /// egui paints an orange "Unaligned" marker (debug builds only) when a `Ui`'s content overflows
+    /// the region it was allocated. That is a layout error, not cosmetic noise, so nothing a dialog
+    /// lays out may provoke one.
+    #[test]
+    fn no_debug_warnings_are_emitted() {
+        for &theme in crate::window::theme::ALL_THEMES {
+            for count in [1, 2, 8] {
+                let (_, texts) = layout_themed(theme, count);
+                let warnings: Vec<&String> = texts
+                    .iter()
+                    .map(|(text, _)| text)
+                    .filter(|text| text.contains("Unaligned") || text.contains("Debug"))
+                    .collect();
+
+                assert!(
+                    warnings.is_empty(),
+                    "{theme:?}, {count} buttons: egui flagged the layout: {warnings:?}"
+                );
+            }
+        }
+    }
+
+    /// The dialog's background must cover the whole window, not just the strip its content
+    /// occupies — otherwise the surface's clear colour (black) shows through beneath.
+    ///
+    /// This filled by accident until the button row stopped being infinitely wide: the infinite
+    /// rect stretched the frame's `min_rect` to the bottom of the window.
+    #[test]
+    fn the_dialog_background_covers_the_whole_window() {
+        for count in [1, 2, 8] {
+            let (rects, _) = layout(count);
+
+            let covers = rects.iter().any(|rect| {
+                rect.min.x <= 0.5
+                    && rect.min.y <= 0.5
+                    && rect.max.x >= PANEL - 0.5
+                    && rect.max.y >= 299.5
+            });
+
+            assert!(
+                covers,
+                "{count} buttons: nothing fills the 400x300 window; largest was {:?}",
+                rects.iter().max_by(|a, b| a.area().total_cmp(&b.area()))
+            );
+        }
+    }
+
+    /// A theme's text field should be the same height as its buttons — a short field beside a tall
+    /// button is the sort of mismatch that makes a themed dialog look assembled rather than
+    /// designed. egui sizes a `TextEdit` from its font and ignores `interact_size`, so this only
+    /// holds because `paint_dialog` pads it out deliberately.
+    #[test]
+    fn a_text_field_matches_its_themes_control_height() {
+        for &theme in crate::window::theme::ALL_THEMES {
+            let (rects, _) = layout_themed(theme, 1);
+
+            let input = rects
+                .iter()
+                .filter(|rect| rect.width() > PANEL / 2.0 && rect.height() < 60.0)
+                .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+                .expect("the input should have been drawn");
+            let button = button_rects(&rects)
+                .into_iter()
+                .next()
+                .expect("the button should have been drawn");
+
+            let difference = (input.height() - button.height()).abs();
+            assert!(
+                difference <= 2.0,
+                "{theme:?}: the text field is {} tall but its buttons are {}",
+                input.height(),
+                button.height()
+            );
+        }
+    }
+
+    /// The rects that are buttons: control-sized, and not the panel background.
+    ///
+    /// The lower bound matters for the bevelled themes: those paint their edges as one-point strips,
+    /// so without it a two-button `redmond` dialog reports eighteen "buttons".
+    fn button_rects(rects: &[egui::Rect]) -> Vec<egui::Rect> {
+        rects
+            .iter()
+            .copied()
+            .filter(|rect| {
+                rect.width() < PANEL / 2.0
+                    && rect.height() < 40.0
+                    && rect.width() > 8.0
+                    && rect.height() > 8.0
+            })
+            .collect()
+    }
+
+    /// Nothing may be laid out at an infinite coordinate.
+    ///
+    /// This is what `with_main_justify(true)` did on a *wrapping* layout: a wrapping layout reports
+    /// an infinite available main extent, so "fill the main axis" produced a button of infinite
+    /// width. Clipped to the panel it looked like a single wide bar, its label was drawn at
+    /// x = infinity where nothing is visible, and every button after the first vanished.
+    #[test]
+    fn nothing_is_laid_out_at_an_infinite_coordinate() {
+        for count in [1, 2, 3, 8] {
+            let (rects, texts) = layout(count);
+
+            for rect in &rects {
+                assert!(
+                    rect.min.x.is_finite() && rect.max.x.is_finite(),
+                    "{count} buttons: rect {rect:?} is not finite"
+                );
+            }
+            for (text, pos) in &texts {
+                assert!(
+                    pos.x.is_finite() && pos.y.is_finite(),
+                    "{count} buttons: {text:?} placed at {pos:?}"
+                );
+            }
+        }
+    }
+
+    /// Every button is drawn, and every label lands inside the button it belongs to.
+    #[test]
+    fn every_button_is_drawn_with_its_label_inside_it() {
+        for &theme in crate::window::theme::ALL_THEMES {
+            for count in [1, 2, 3, 8] {
+                let (rects, texts) = layout_themed(theme, count);
+                let drawn = button_rects(&rects);
+
+                assert_eq!(
+                    drawn.len(),
+                    count,
+                    "{theme:?}, {count} buttons: drew {}",
+                    drawn.len()
+                );
+
+                for index in 0..count {
+                    let label = format!("Button {index}");
+                    let (_, pos) = texts
+                        .iter()
+                        .find(|(text, _)| *text == label)
+                        .unwrap_or_else(|| {
+                            panic!("{theme:?}, {count} buttons: {label:?} was never drawn")
+                        });
+
+                    assert!(
+                        drawn.iter().any(|rect| rect.contains(*pos)),
+                        "{theme:?}, {count} buttons: {label:?} at {pos:?} is outside every button"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A bevelled theme's button really is two-toned: its edges are painted in more than one colour,
+    /// which is the whole reason those themes are not left to `egui::Style`.
+    #[test]
+    fn a_bevelled_theme_paints_a_two_tone_edge() {
+        for &theme in crate::window::theme::ALL_THEMES {
+            let bevelled = matches!(
+                theme.widget_edge(Appearance::Light),
+                WidgetEdge::Bevel { .. }
+            );
+
+            let (shapes, _) = layout_shapes(theme, 1);
+            let button = button_rects(&shapes.iter().map(|(rect, _)| *rect).collect::<Vec<_>>())
+                .into_iter()
+                .next()
+                .expect("a button should have been drawn");
+
+            // The one-point strips inside the button's own bounds are its edges.
+            let edge_tones: std::collections::BTreeSet<[u8; 4]> = shapes
+                .iter()
+                .filter(|(rect, _)| {
+                    button.contains(rect.center())
+                        && (rect.width() <= 2.0 || rect.height() <= 2.0)
+                        && rect.width() > 0.0
+                        && rect.height() > 0.0
+                })
+                .map(|(_, fill)| fill.to_array())
+                .collect();
+
+            if bevelled {
+                assert!(
+                    edge_tones.len() >= 2,
+                    "{theme:?} claims a bevel but paints {} edge tone(s)",
+                    edge_tones.len()
+                );
+            } else {
+                assert!(
+                    edge_tones.is_empty(),
+                    "{theme:?} is flat but painted edge strips: {edge_tones:?}"
+                );
+            }
+        }
+    }
+
+    /// A row that fits is centred, matching the centred text above it. The enclosing
+    /// `top_down(Align::Center)` does the centring; the row only has to be allocated at its own
+    /// width rather than the full panel's.
+    #[test]
+    fn a_button_row_that_fits_is_centred_on_one_line() {
+        let (rects, _) = layout(2);
+        let drawn = button_rects(&rects);
+        assert_eq!(drawn.len(), 2);
+
+        // One line.
+        assert_eq!(
+            drawn[0].min.y, drawn[1].min.y,
+            "two buttons should share a row: {drawn:?}"
+        );
+
+        let row = drawn[0].union(drawn[1]);
+        let offset = (row.center().x - PANEL / 2.0).abs();
+        assert!(
+            offset < 2.0,
+            "row is not centred: centre {}",
+            row.center().x
+        );
+    }
+
+    /// More buttons than fit wrap onto further lines rather than overflowing the dialog, so a mode
+    /// that declares a lot of them still leaves every one reachable.
+    #[test]
+    fn too_many_buttons_wrap_instead_of_overflowing() {
+        let (rects, _) = layout(8);
+        let drawn = button_rects(&rects);
+        assert_eq!(drawn.len(), 8);
+
+        let rows: std::collections::BTreeSet<i32> =
+            drawn.iter().map(|rect| rect.min.y as i32).collect();
+        assert!(rows.len() > 1, "8 buttons did not wrap: {drawn:?}");
+
+        for rect in &drawn {
+            assert!(
+                rect.max.x <= PANEL,
+                "button {rect:?} overflows the {PANEL}-wide dialog"
+            );
+        }
+    }
+
+    /// The row sits directly beneath the element above it.
+    ///
+    /// `left_to_right(Align::Center)` sets the *cross* align, and the row's region spans all the
+    /// height left in the dialog — so centring stranded the buttons in the middle of the empty
+    /// space below the content instead of under it.
+    #[test]
+    fn the_button_row_follows_the_element_above_it() {
+        let (rects, _) = layout(2);
+        let drawn = button_rects(&rects);
+
+        // The text field: full-width-ish, but not the panel background.
+        let input = rects
+            .iter()
+            .filter(|rect| rect.width() > PANEL / 2.0 && rect.height() < 40.0)
+            .max_by(|a, b| a.min.y.total_cmp(&b.min.y))
+            .expect("the input should have been drawn");
+
+        let gap = drawn[0].min.y - input.max.y;
+        assert!(
+            (0.0..=24.0).contains(&gap),
+            "buttons are {gap} below the input, which is not directly beneath it"
+        );
+    }
 }

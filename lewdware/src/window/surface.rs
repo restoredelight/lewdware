@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use tiny_skia::Color;
 use winit::window::Window;
+
+use crate::window::theme::{BorderRing, ring_band};
 
 pub enum Surface {
     Wgpu {
@@ -65,8 +66,8 @@ impl<'a> Buffer<'a> {
         blit_u32(self.pixels, self.width, src, src_width, x, y);
     }
 
-    pub fn draw_border(&mut self) {
-        stroke_border(self.pixels, self.width, self.height);
+    pub fn draw_border(&mut self, rings: &[BorderRing], thickness: u32) {
+        stroke_border(self.pixels, self.width, self.height, rings, thickness);
     }
 }
 
@@ -114,25 +115,53 @@ fn blit_u32(dst: &mut [u32], dst_width: u32, src: &[u32], src_width: u32, x: u32
     }
 }
 
-/// Stroke a 1-pixel black border around the edge of `dst`.
-fn stroke_border(dst: &mut [u32], width: u32, height: u32) {
-    let black = Color::BLACK.to_color_u8();
-    let color = ((black.alpha() as u32) << 24)
-        | ((black.red() as u32) << 16)
-        | ((black.green() as u32) << 8)
-        | (black.blue() as u32);
-    let width = width as usize;
-    let height = height as usize;
-
-    for i in 0..width {
-        dst[i] = color;
-        dst[width * (height - 1) + i] = color;
+/// Stroke a themed border, `thickness` physical pixels deep, around the edge of `dst`.
+///
+/// `rings` are one logical pixel each, outermost first, and are distributed across `thickness` by
+/// [`ring_band`] — so the whole reserved border is painted rather than just its outer pixel. That
+/// matters above 1x, where the layout reserves `round(border_width * scale_factor)` pixels: only
+/// the outermost used to be filled, leaving the rest of the reserved band unpainted between the
+/// border and the content.
+fn stroke_border(dst: &mut [u32], width: u32, height: u32, rings: &[BorderRing], thickness: u32) {
+    if rings.is_empty() || thickness == 0 {
+        return;
     }
 
-    for i in 0..height {
-        dst[i * width] = color;
-        dst[i * width + (width - 1)] = color;
+    let w = width as usize;
+    let h = height as usize;
+
+    for (index, ring) in rings.iter().enumerate() {
+        let (start, end) = ring_band(index, rings.len(), thickness);
+        let top_left = pack_color(ring.top_left());
+        let bottom_right = pack_color(ring.bottom_right());
+
+        for inset in start as usize..end as usize {
+            // Stop once the rings have met in the middle, which a thick border on a small window
+            // can do.
+            if inset * 2 >= w.min(h) {
+                break;
+            }
+
+            for x in inset..w - inset {
+                dst[inset * w + x] = top_left;
+                dst[(h - 1 - inset) * w + x] = bottom_right;
+            }
+            for y in inset..h - inset {
+                dst[y * w + inset] = top_left;
+                dst[y * w + (w - 1 - inset)] = bottom_right;
+            }
+        }
     }
+}
+
+/// Pack a colour for the border.
+///
+/// Unlike [`pack_rgba`] this keeps alpha in the top byte. Softbuffer ignores it either way, but the
+/// hardcoded border this replaced wrote `0xAARRGGBB`, and matching it bit for bit keeps the
+/// existing pixel assertions meaningful.
+fn pack_color(color: crate::lua::Color) -> u32 {
+    let channel = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    (channel(color.a) << 24) | (channel(color.r) << 16) | (channel(color.g) << 8) | channel(color.b)
 }
 
 #[cfg(test)]
@@ -210,10 +239,17 @@ mod tests {
         assert_eq!(dst, expected);
     }
 
+    const BLACK_RING: [BorderRing; 1] = [BorderRing::Uniform(crate::lua::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    })];
+
     #[test]
     fn border_covers_the_perimeter_and_nothing_else() {
         let mut dst = vec![0u32; 4 * 3];
-        stroke_border(&mut dst, 4, 3);
+        stroke_border(&mut dst, 4, 3, &BLACK_RING, 1);
 
         #[rustfmt::skip]
         let expected = vec![
@@ -227,7 +263,35 @@ mod tests {
     #[test]
     fn border_on_a_minimal_buffer_does_not_panic() {
         let mut dst = vec![0u32; 1];
-        stroke_border(&mut dst, 1, 1);
+        stroke_border(&mut dst, 1, 1, &BLACK_RING, 1);
         assert_eq!(dst, vec![BLACK]);
+    }
+
+    /// A single logical ring scaled up covers the whole physical thickness — the HiDPI case the
+    /// old hardcoded one-pixel stroke left partly unpainted.
+    #[test]
+    fn one_ring_fills_the_whole_physical_thickness() {
+        let mut dst = vec![0u32; 6 * 6];
+        stroke_border(&mut dst, 6, 6, &BLACK_RING, 2);
+
+        #[rustfmt::skip]
+        let expected = vec![
+            BLACK, BLACK, BLACK, BLACK, BLACK, BLACK,
+            BLACK, BLACK, BLACK, BLACK, BLACK, BLACK,
+            BLACK, BLACK, 0,     0,     BLACK, BLACK,
+            BLACK, BLACK, 0,     0,     BLACK, BLACK,
+            BLACK, BLACK, BLACK, BLACK, BLACK, BLACK,
+            BLACK, BLACK, BLACK, BLACK, BLACK, BLACK,
+        ];
+        assert_eq!(dst, expected);
+    }
+
+    /// Rings thicker than the window they surround must stop when they meet rather than index
+    /// past the buffer.
+    #[test]
+    fn a_border_thicker_than_the_window_does_not_panic() {
+        let mut dst = vec![0u32; 3 * 3];
+        stroke_border(&mut dst, 3, 3, &BLACK_RING, 8);
+        assert!(dst.iter().all(|&p| p == BLACK));
     }
 }

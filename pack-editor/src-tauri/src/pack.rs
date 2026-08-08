@@ -4,35 +4,35 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
-        Arc, RwLock as StdRwLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock as StdRwLock,
     },
     thread::{available_parallelism, sleep},
     time::{Duration, Instant},
 };
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
 use rusqlite::{
-    OpenFlags, OptionalExtension, TransactionBehavior,
     backup::{Backup, StepResult},
     named_params, params,
     types::Value,
     vtab::array::{self, Array},
+    OpenFlags, OptionalExtension, TransactionBehavior,
 };
 use serde::{Deserialize, Serialize};
 use shared::{
     behaviour::Behaviour,
     encode::{FileInfo, FileInfoParts, FileType},
-    read_pack::{HEADER_SIZE, Header, Metadata},
+    read_pack::{Header, Metadata, HEADER_SIZE},
 };
 use tokio::{
-    fs::{File, OpenOptions, remove_file},
+    fs::{remove_file, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    sync::{Mutex as AsyncMutex, RwLock, mpsc, oneshot},
-    task::{JoinHandle, spawn_blocking},
+    sync::{mpsc, oneshot, Mutex as AsyncMutex, RwLock},
+    task::{spawn_blocking, JoinHandle},
 };
 use uuid::Uuid;
 
@@ -3451,46 +3451,38 @@ mod tests {
 
     #[test]
     fn range_resolution_rejects_invalid_bounds_and_clamps_valid_ones() {
-        assert!(
-            resolve_range(
-                Range {
-                    start: Some(500),
-                    end: Some(100),
-                },
-                1_000,
-            )
-            .is_err()
-        );
-        assert!(
-            resolve_range(
-                Range {
-                    start: Some(5_000),
-                    end: None,
-                },
-                1_000,
-            )
-            .is_err()
-        );
-        assert!(
-            resolve_range(
-                Range {
-                    start: Some(0),
-                    end: Some(u64::MAX),
-                },
-                1_000,
-            )
-            .is_ok_and(|range| range == (0, 1_000))
-        );
-        assert!(
-            resolve_range(
-                Range {
-                    start: Some(0),
-                    end: None,
-                },
-                0,
-            )
-            .is_err()
-        );
+        assert!(resolve_range(
+            Range {
+                start: Some(500),
+                end: Some(100),
+            },
+            1_000,
+        )
+        .is_err());
+        assert!(resolve_range(
+            Range {
+                start: Some(5_000),
+                end: None,
+            },
+            1_000,
+        )
+        .is_err());
+        assert!(resolve_range(
+            Range {
+                start: Some(0),
+                end: Some(u64::MAX),
+            },
+            1_000,
+        )
+        .is_ok_and(|range| range == (0, 1_000)));
+        assert!(resolve_range(
+            Range {
+                start: Some(0),
+                end: None,
+            },
+            0,
+        )
+        .is_err());
     }
 
     #[test]

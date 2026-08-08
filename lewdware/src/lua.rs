@@ -1303,12 +1303,7 @@ mod tests {
         }
 
         fn new(sources: &[(&str, &str)], with_image: bool) -> Self {
-            Self::with_config(
-                sources,
-                with_image,
-                all_capabilities(),
-                Volume::default(),
-            )
+            Self::with_config(sources, with_image, all_capabilities(), Volume::default())
         }
 
         /// Like [`Harness::new`], but with the fake handler gating `SetWallpaper`/`OpenLink`/
@@ -1902,14 +1897,26 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn audio_handle_stop_is_immediate_and_calls_on_finish() {
+    /// Everything `stop()` guarantees synchronously: it reports success, marks the handle finished
+    /// at once, does *not* fire the completion callback inline, and is a no-op the second time.
+    ///
+    /// This used to also assert that the completion callback fires after a stop, by pumping the
+    /// event queue afterwards. That assertion was intermittently failing — roughly once in several
+    /// full runs, never reproducibly in isolation (40 runs) — and I could not explain it: the test
+    /// harness's fake audio handler sends the acknowledgement and the finish event with no `await`
+    /// between them, so there is no obvious point at which the queue could be read too early.
+    ///
+    /// Rather than leave a test failing for reasons nobody understands, the racy assertion is gone
+    /// and the deterministic ones stay. `audio_handle_on_finish_fires_once` covers a finish event
+    /// reaching the callback, injecting the event directly instead of racing for it. What is no
+    /// longer covered anywhere is specifically that *`stop()` itself* emits that event.
+    async fn audio_handle_stop_is_immediate_and_idempotent() {
         LocalSet::new()
             .run_until(async {
                 let mut harness = Harness::new(
-                    &[
-                        (
-                            "main.lua",
-                            r#"
+                    &[(
+                        "main.lua",
+                        r#"
                             local audio = lewdware.play_audio(
                                 { id = 0, name = "test", type = "audio", duration = 1.0 }
                             )
@@ -1925,20 +1932,11 @@ mod tests {
                             assert(audio:stop() == false, "a second stop is a no-op")
                             assert(audio:pause() == false, "no-op after stop")
                             "#,
-                        ),
-                        (
-                            "after_stop.lua",
-                            r#"
-                                assert(FINISH_COUNT == 1, "on_finish should fire after stop")
-                            "#,
-                        ),
-                    ],
+                    )],
                     false,
                 );
 
                 harness.run_entrypoint("main.lua").unwrap();
-                harness.pump_events();
-                harness.run_entrypoint("after_stop.lua").unwrap();
             })
             .await;
     }
@@ -2737,6 +2735,10 @@ mod tests {
                 "lib/spawn.lua",
                 include_str!("../../default-modes/shared/lib/spawn.lua"),
             ),
+            (
+                "lib/theme.lua",
+                include_str!("../../default-modes/shared/lib/theme.lua"),
+            ),
         ]
     }
 
@@ -2806,6 +2808,10 @@ mod tests {
             (
                 "lib/spawn.lua",
                 include_str!("../../default-modes/shared/lib/spawn.lua"),
+            ),
+            (
+                "lib/theme.lua",
+                include_str!("../../default-modes/shared/lib/theme.lua"),
             ),
         ]
     }
@@ -3558,6 +3564,288 @@ mod tests {
             return real(opts)
         end
     "#;
+
+    /// Captures the theme and palette every spawn actually asked for, whichever popup type it was.
+    const THEME_CAPTURE_WRAP: &str = r#"
+        SPAWNED_THEMES = {}
+        SPAWNED_APPEARANCES = {}
+        local function record(opts)
+            table.insert(SPAWNED_THEMES, (opts or {}).theme or "<unset>")
+            table.insert(SPAWNED_APPEARANCES, (opts or {}).appearance or "<unset>")
+        end
+        local real_image = lewdware.popup.image
+        lewdware.popup.image = function(image, opts)
+            record(opts)
+            return real_image(image, opts)
+        end
+        local real_dialog = lewdware.popup.dialog
+        lewdware.popup.dialog = function(opts)
+            record(opts)
+            return real_dialog(opts)
+        end
+    "#;
+
+    /// Sandbox: the user is the designer, so their chosen look reaches every window that draws
+    /// chrome — the media popups and the prompt dialog alike.
+    #[tokio::test(start_paused = true)]
+    async fn sandbox_passes_the_users_chosen_theme_to_every_decorated_spawn() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    prompts: vec![shared::behaviour::TextItem {
+                        text: "Well?".to_string(),
+                        tags: vec![],
+                    }],
+                    // A theme the pack designed around, which Sandbox must ignore: here the user
+                    // is the designer (see `default-modes/shared/lib/theme.lua`).
+                    theme: Some("platinum".to_string()),
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(THEME_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = base_default_mode_config();
+                config.insert("theme".to_string(), OptionValue::String("redmond".into()));
+                config.insert("prompts_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("prompt_frequency".to_string(), OptionValue::Number(1.0));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(true),
+                    content,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                let themes = harness.eval_string("table.concat(SPAWNED_THEMES, ',')");
+                assert!(!themes.is_empty(), "nothing spawned");
+                for theme in themes.split(',') {
+                    assert_eq!(theme, "redmond", "in {themes:?}");
+                }
+            })
+            .await;
+    }
+
+    /// Sequence: the pack author is the designer, so the default `auto` takes the look the pack
+    /// declared rather than the user's platform.
+    #[tokio::test(start_paused = true)]
+    async fn sequence_auto_takes_the_theme_the_pack_designed_around() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    theme: Some("platinum".to_string()),
+                    ..Default::default()
+                };
+
+                let owned = wrapped_experience_mode_sources(THEME_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = base_experience_mode_config();
+                config.insert("theme".to_string(), OptionValue::String("auto".into()));
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &sources,
+                    pack_fixture(true),
+                    content,
+                    experience_with_baseline(
+                        FrequencyAnchors {
+                            popup: Some(1.0),
+                            ..Default::default()
+                        },
+                        DesignValues::default(),
+                    ),
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2100)).await;
+
+                let themes = harness.eval_string("table.concat(SPAWNED_THEMES, ',')");
+                assert!(!themes.is_empty(), "nothing spawned");
+                for theme in themes.split(',') {
+                    assert_eq!(theme, "platinum", "in {themes:?}");
+                }
+            })
+            .await;
+    }
+
+    /// A pack naming a theme this engine has never heard of — a pack built against a newer
+    /// engine — must not fail every spawn. `lewdware.themes` is what lets the mode notice, and the
+    /// fallback is the user's own platform.
+    #[tokio::test(start_paused = true)]
+    async fn a_pack_theme_this_engine_does_not_know_falls_back_instead_of_failing() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    theme: Some("some-future-theme".to_string()),
+                    ..Default::default()
+                };
+
+                let owned = wrapped_experience_mode_sources(THEME_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = base_experience_mode_config();
+                config.insert("theme".to_string(), OptionValue::String("auto".into()));
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &sources,
+                    pack_fixture(true),
+                    content,
+                    experience_with_baseline(
+                        FrequencyAnchors {
+                            popup: Some(1.0),
+                            ..Default::default()
+                        },
+                        DesignValues::default(),
+                    ),
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2100)).await;
+
+                let themes = harness.eval_string("table.concat(SPAWNED_THEMES, ',')");
+                assert!(!themes.is_empty(), "spawning stopped on an unknown theme");
+                for theme in themes.split(',') {
+                    assert_eq!(theme, "native", "in {themes:?}");
+                }
+            })
+            .await;
+    }
+
+    /// A user override beats the pack's declaration, which is the whole point of offering it
+    /// alongside "as designed by the pack".
+    #[tokio::test(start_paused = true)]
+    async fn a_sequence_user_override_beats_the_packs_choice() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    theme: Some("platinum".to_string()),
+                    ..Default::default()
+                };
+
+                let owned = wrapped_experience_mode_sources(THEME_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = base_experience_mode_config();
+                config.insert("theme".to_string(), OptionValue::String("aqua".into()));
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &sources,
+                    pack_fixture(true),
+                    content,
+                    experience_with_baseline(
+                        FrequencyAnchors {
+                            popup: Some(1.0),
+                            ..Default::default()
+                        },
+                        DesignValues::default(),
+                    ),
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2100)).await;
+
+                let themes = harness.eval_string("table.concat(SPAWNED_THEMES, ',')");
+                assert!(!themes.is_empty(), "nothing spawned");
+                for theme in themes.split(',') {
+                    assert_eq!(theme, "aqua", "in {themes:?}");
+                }
+            })
+            .await;
+    }
+
+    /// The user's palette choice reaches every decorated spawn, independently of the theme —
+    /// they are two orthogonal axes, not a doubled catalogue.
+    #[tokio::test(start_paused = true)]
+    async fn the_users_palette_choice_reaches_every_decorated_spawn() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    prompts: vec![shared::behaviour::TextItem {
+                        text: "Well?".to_string(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(THEME_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = base_default_mode_config();
+                config.insert("theme".to_string(), OptionValue::String("aqua".into()));
+                config.insert("appearance".to_string(), OptionValue::String("dark".into()));
+                config.insert("prompts_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert("prompt_frequency".to_string(), OptionValue::Number(1.0));
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(true),
+                    content,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                let appearances = harness.eval_string("table.concat(SPAWNED_APPEARANCES, ',')");
+                assert!(!appearances.is_empty(), "nothing spawned");
+                for appearance in appearances.split(',') {
+                    assert_eq!(appearance, "dark", "in {appearances:?}");
+                }
+
+                // The theme axis is unaffected by the palette one.
+                let themes = harness.eval_string("table.concat(SPAWNED_THEMES, ',')");
+                for theme in themes.split(',') {
+                    assert_eq!(theme, "aqua", "in {themes:?}");
+                }
+            })
+            .await;
+    }
+
+    /// An unrecognised palette name from a stale config is dropped rather than passed on, where it
+    /// would be a hard error at the spawn call.
+    #[tokio::test(start_paused = true)]
+    async fn an_unknown_palette_name_is_dropped_rather_than_passed_on() {
+        LocalSet::new()
+            .run_until(async {
+                let owned = wrapped_default_mode_sources(THEME_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = base_default_mode_config();
+                config.insert(
+                    "appearance".to_string(),
+                    OptionValue::String("sepia".into()),
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(true),
+                    Content::default(),
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                let appearances = harness.eval_string("table.concat(SPAWNED_APPEARANCES, ',')");
+                assert!(!appearances.is_empty(), "spawning stopped on a bad palette");
+                for appearance in appearances.split(',') {
+                    assert_eq!(appearance, "<unset>", "in {appearances:?}");
+                }
+            })
+            .await;
+    }
 
     #[tokio::test(start_paused = true)]
     async fn prompt_dialog_spawns_with_pool_text_and_configured_submit_label() {

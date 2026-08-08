@@ -1,11 +1,12 @@
 use std::{io::Cursor, rc::Rc};
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use rusqlite::{
-    Connection, OptionalExtension, Transaction, TransactionBehavior, params,
-    session::{ConflictAction, Session, invert_strm},
+    params,
+    session::{invert_strm, ConflictAction, Session},
     types::Value,
     vtab::array::Array,
+    Connection, OptionalExtension, Transaction, TransactionBehavior,
 };
 use serde::Serialize;
 use uuid::Uuid;

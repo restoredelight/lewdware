@@ -43,7 +43,7 @@ async fn check_for_update() -> Result<Option<String>, String> {
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 use shared::{
-    behaviour::{Behaviour, effective_options},
+    behaviour::{effective_options, Behaviour},
     db::migrate,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, ShowWhen, StoredValue},
     read_pack::{read_pack_metadata, RecommendedMode},
@@ -524,11 +524,10 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
         let pack = state.pack.lock().unwrap();
         let recommended = pack.as_ref().and_then(|p| p.recommended_mode.clone());
         let experience_label = pack.as_ref().and_then(|p| {
-            p.behaviour.experience.as_ref().and_then(|e| {
-                e.label
-                    .clone()
-                    .filter(|_| !e.timeline.stages.is_empty())
-            })
+            p.behaviour
+                .experience
+                .as_ref()
+                .and_then(|e| e.label.clone().filter(|_| !e.timeline.stages.is_empty()))
         });
         (recommended, experience_label)
     };
@@ -547,7 +546,9 @@ fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
             ModeEntryDto {
                 id: ModeIdDto::Experience,
                 name: builtin_mode_label(
-                    experience_label.as_deref().unwrap_or(&state.experience_mode.name),
+                    experience_label
+                        .as_deref()
+                        .unwrap_or(&state.experience_mode.name),
                     matches!(recommended, Some(RecommendedMode::Experience)),
                 ),
             },
@@ -641,7 +642,8 @@ fn stored_options_for(
 }
 
 fn get_mode_options_for(config: &AppConfig, state: &AppState) -> ModeOptionsDto {
-    let Some((entries, needs_permissions, pack_has)) = effective_entries_for_mode(&config.mode, state)
+    let Some((entries, needs_permissions, pack_has)) =
+        effective_entries_for_mode(&config.mode, state)
     else {
         return ModeOptionsDto {
             needs_permissions: Vec::new(),

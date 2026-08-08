@@ -1,16 +1,16 @@
 use axum::{
-    Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
+    Router,
 };
 use serde::Deserialize;
 use tokio::net::TcpListener;
 
 use crate::{
-    PackState,
     pack::{InvalidRange, Range},
+    PackState,
 };
 
 #[derive(Clone)]
@@ -253,7 +253,7 @@ mod tests {
 
     use tokio::sync::Mutex;
 
-    use super::{Authentication, MediaServerState, authenticate, parse_range};
+    use super::{authenticate, parse_range, Authentication, MediaServerState};
 
     #[test]
     fn requires_the_startup_media_token() {
@@ -261,15 +261,13 @@ mod tests {
             pack: Arc::new(Mutex::new(None)),
             token: "secret".into(),
         };
-        assert!(
-            authenticate(
-                &state,
-                &Authentication {
-                    token: Some("secret".into())
-                }
-            )
-            .is_ok()
-        );
+        assert!(authenticate(
+            &state,
+            &Authentication {
+                token: Some("secret".into())
+            }
+        )
+        .is_ok());
         let response = authenticate(&state, &Authentication { token: None }).unwrap_err();
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
     }

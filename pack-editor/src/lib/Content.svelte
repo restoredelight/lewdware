@@ -7,6 +7,7 @@
 	import ContentGroupsEditor from './ContentGroupsEditor.svelte';
 	import WebLinksEditor from './WebLinksEditor.svelte';
 	import Tabs from '$ui/Tabs.svelte';
+	import Select, { type SelectOption } from '$ui/Select.svelte';
 	import {
 		flushBehaviourSave,
 		initializeBehaviourHistory,
@@ -14,7 +15,27 @@
 	} from './behaviourSave.svelte.js';
 
 	type Tab =
-		'groups' | 'captions' | 'prompts' | 'notifications' | 'subliminals' | 'web_links' | 'wallpaper';
+		| 'groups'
+		| 'captions'
+		| 'prompts'
+		| 'notifications'
+		| 'subliminals'
+		| 'web_links'
+		| 'wallpaper'
+		| 'appearance';
+
+	// The engine's theme names, in the order it offers them. `native`/`native-retro` are
+	// deliberately absent: they are the *user's* answer to "match my system", and a pack declaring
+	// one would be telling every machine to look like itself. A pack names a look or says nothing.
+	const themes: SelectOption[] = [
+		{ value: '', label: 'No preference — leave it to the user' },
+		{ value: 'plain', label: 'Plain' },
+		{ value: 'fluent', label: 'Windows 11' },
+		{ value: 'redmond', label: 'Windows 95' },
+		{ value: 'aqua', label: 'macOS' },
+		{ value: 'adwaita', label: 'GNOME' },
+		{ value: 'platinum', label: 'Mac OS 9' }
+	];
 
 	const tabs = $derived<{ id: Tab; label: string; group: string; badge?: number }[]>([
 		{
@@ -53,7 +74,8 @@
 			group: 'Other',
 			badge: store.behaviour?.content.web_links.length
 		},
-		{ id: 'wallpaper', label: 'Wallpaper & Splash', group: 'Other' }
+		{ id: 'wallpaper', label: 'Wallpaper & Splash', group: 'Other' },
+		{ id: 'appearance', label: 'Window Style', group: 'Other' }
 	]);
 
 	const sectionInfo: Record<Tab, { title: string; description: string }> = {
@@ -83,6 +105,11 @@
 		wallpaper: {
 			title: 'Wallpaper & Splash',
 			description: 'Choose which tagged media can be used as wallpaper or as the startup image.'
+		},
+		appearance: {
+			title: 'Window Style',
+			description:
+				'The look you designed this pack around. Applies when someone runs it with the Sequence mode, which follows the pack author’s design — they can still override it.'
 		}
 	};
 
@@ -196,6 +223,28 @@
 										No splash tags selected. No startup image will be shown.
 									</p>{/if}
 							</section>
+						</div>
+					{:else if activeTab === 'appearance'}
+						<div class="flex max-w-md flex-col gap-2">
+							<Select
+								label="Window style"
+								value={store.behaviour!.content.theme ?? ''}
+								options={themes}
+								description="How popup frames, buttons and text fields look."
+								onchange={(value) => {
+									// The engine omits `theme` entirely when unset, so a pack written before
+									// this existed has no key at all — normalize to `null` rather than
+									// leaving `undefined` in the document.
+									store.behaviour!.content.theme = value === '' ? null : value;
+									scheduleBehaviourSave();
+								}}
+							/>
+							{#if (store.behaviour!.content.theme ?? null) === null}
+								<p class="text-muted text-xs italic">
+									No preference. Whoever runs this pack sees their own choice of style, which
+									defaults to matching their system.
+								</p>
+							{/if}
 						</div>
 					{/if}
 				</div>

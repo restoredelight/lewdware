@@ -560,9 +560,16 @@ mod tests {
         )
         .unwrap();
 
-        let decoded = Metadata::from_buf(&buf).expect("a pre-`needs_permissions` mode must still decode");
+        let decoded =
+            Metadata::from_buf(&buf).expect("a pre-`needs_permissions` mode must still decode");
         assert!(decoded.needs_permissions.is_empty());
-        assert!(decoded.get_option("enabled").unwrap().needs_permissions.is_empty());
+        assert!(
+            decoded
+                .get_option("enabled")
+                .unwrap()
+                .needs_permissions
+                .is_empty()
+        );
     }
 
     #[test]

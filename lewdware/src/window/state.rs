@@ -11,10 +11,12 @@ use winit::window::Window;
 use crate::app::UserEvent;
 use crate::error::LewdwareError;
 use crate::lua::{self, Coord, Easing, FadeOpts, ItemId, MoveOpts};
+use crate::window::appearance;
 use crate::window::decorations::Decorations;
 use crate::window::opts::WindowOpts;
 use crate::window::redraw::RedrawRequester;
 use crate::window::target::RenderTarget;
+use crate::window::theme::{Appearance, Theme};
 
 /// Everything about a window that isn't the rendering backend: geometry, the move/fade
 /// animations, pointer state, decorations, and the channel back to Lua.
@@ -39,6 +41,8 @@ pub struct WindowState {
     pub opacity: f32,
     transparent: bool,
     background_color: Option<lua::Color>,
+    theme: Theme,
+    appearance: Appearance,
     content_hover: bool,
     content_clicked: bool,
 }
@@ -89,8 +93,15 @@ impl WindowState {
 
         let redraw = RedrawRequester::new(window.clone(), event_loop_proxy, redraw_wakeup_pending);
 
+        // Resolved here rather than on the Lua thread because `auto` is runtime state only the
+        // main thread can read -- and resolvable this late precisely because appearance never
+        // changes the window's metrics, which were already fixed when it was created.
+        let appearance = appearance::resolve(opts.popup_opts.appearance, &window);
+
         let decorations = Decorations::new(
             opts.popup_opts.decorations,
+            opts.popup_opts.theme.metrics(),
+            opts.popup_opts.theme.chrome(appearance),
             inner_size,
             scale_factor,
             opts.popup_opts.title.clone(),
@@ -126,6 +137,8 @@ impl WindowState {
             opacity: opts.popup_opts.opacity,
             transparent: opts.popup_opts.transparent,
             background_color: opts.popup_opts.background_color,
+            theme: opts.popup_opts.theme,
+            appearance,
             content_hover: false,
             content_clicked: false,
         }
@@ -137,6 +150,19 @@ impl WindowState {
 
     pub fn background_color(&self) -> Option<lua::Color> {
         self.background_color
+    }
+
+    /// The named look this window is drawn with. Its metrics are already baked into
+    /// [`Self::decorations`]; this is for the parts resolved later, such as the egui style a
+    /// dialog's widgets use.
+    pub fn theme(&self) -> Theme {
+        self.theme
+    }
+
+    /// The palette this window resolved to. Already applied to its decorations; this is for the
+    /// widget half, which is built later.
+    pub fn appearance(&self) -> Appearance {
+        self.appearance
     }
 
     pub fn inner_size(&self) -> PhysicalSize<u32> {

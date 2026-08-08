@@ -46,6 +46,19 @@ lewdware = {}
 ---@type { [string]: number | string | boolean }
 lewdware.config = {}
 
+---Every [Theme](lua://Theme) name this engine understands, in the order they are worth offering.
+---
+---Check against this before passing on a theme name that came from *pack* data: an unknown name
+---raises an error at the spawn call, which is what you want for a typo in your own mode but not
+---for a pack built against a newer engine.
+---@type string[]
+lewdware.themes = {}
+
+---Every [Appearance](lua://Appearance) name this engine understands. Companion to
+---`lewdware.themes`, and useful for the same reason.
+---@type string[]
+lewdware.appearances = {}
+
 ---@alias MediaType
 ---| "image"
 ---| "video"
@@ -70,6 +83,39 @@ lewdware.config = {}
 ---| "ease_in"
 ---| "ease_out"
 ---| "ease_in_out"
+
+---A named window look: the border, header, buttons and text fields are all drawn in its style.
+---Atomic — you cannot mix one theme's header with another's buttons.
+---
+---`"native"` and `"native-retro"` are not looks of their own but aliases resolved when the window
+---spawns, so the same mode looks at home on each platform. Every other value is one specific
+---appearance and renders identically everywhere.
+---
+---`lewdware.themes` lists every value this engine accepts, which is worth checking against if the
+---name came from pack data rather than from your own code — a pack built for a newer engine may
+---name a theme this one has never heard of.
+---@alias Theme
+---| "plain" Minimal and monochrome, with no resemblance to any OS. The default.
+---| "native" Whatever this platform's windows currently look like.
+---| "native-retro" Whatever this platform's windows used to look like.
+---| "fluent" Windows 11.
+---| "redmond" Windows 95/98.
+---| "aqua" macOS.
+---| "adwaita" GNOME.
+---| "platinum" Mac OS 9.
+
+---Which palette a [Theme](lua://Theme) is drawn in.
+---
+---Never affects a window's size: every theme's border and header measure the same light or dark,
+---so `outer_width`/`outer_height` do not depend on this.
+---
+---Not every theme has a dark version — `"platinum"` has none, since Mac OS 9 never did — and one
+---that doesn't stays light rather than being given an invented palette.
+---@alias Appearance
+---| "light" The default.
+---| "dark"
+---| "auto" Follow the desktop's own light/dark setting, falling back to light where it cannot be
+---  determined (a bare compositor, or a Linux desktop with no settings portal).
 
 -- ─── Media types ─────────────────────────────────────────────────────────────
 
@@ -124,6 +170,12 @@ function lewdware.monitors.primary() end
 ---@field id number A unique identifier for the window.
 ---@field width number The width of the window, in pixels.
 ---@field height number The height of the window, in pixels.
+---Note that `outer_width`/`outer_height` depend on the window's
+---[theme](lua://Theme): each has its own border width and header height. `"plain"` is the one
+---theme whose metrics are fixed and identical on every platform and version, so it is the safe
+---choice if you do arithmetic against these. Under `"native"` they vary by platform, and you
+---should read them back from the window rather than assuming them.
+---
 ---@field outer_width number The width of the window, including the border and decorations, if
 ---  present.
 ---@field outer_height number The height of the window, including the border and decorations, if
@@ -505,6 +557,10 @@ lewdware.popup = {}
 ---  it's a dialog, never fires `on_select()`/`on_submit()` either), since it can't receive clicks.
 ---@field clamp? boolean Whether to keep the window entirely within its chosen monitor, adjusting
 ---  the spawn position if it would otherwise go off-screen. Defaults to true.
+---@field theme? Theme Which named look to draw the window's border, header, buttons and text
+---  fields with. Defaults to `"plain"`. Ignored for the header if `decorations` is false, but it
+---  still styles a dialog's widgets.
+---@field appearance? Appearance Which palette that look is drawn in. Defaults to `"light"`.
 
 ---@class ImagePopupOpts : PopupOpts
 ---Options for [lewdware.popup.image()](lua://lewdware.popup.image).

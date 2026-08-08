@@ -6,7 +6,6 @@ use egui_software_backend::{BufferMutRef, ColorFieldOrder, EguiSoftwareRender};
 use egui_wgpu::{RendererOptions, wgpu};
 use winit::{dpi::PhysicalSize, event::WindowEvent, window::Window};
 
-use crate::lua::Color;
 use crate::wgpu::WgpuState;
 use crate::window::RedrawRequester;
 
@@ -37,7 +36,7 @@ impl EguiGpuRenderer {
         opacity: f32,
         premultiplied_alpha: bool,
         force_opaque: bool,
-        background_color: Option<Color>,
+        style: egui::Style,
         font_definitions: Option<egui::FontDefinitions>,
         redraw: RedrawRequester,
     ) -> Result<Self> {
@@ -71,18 +70,7 @@ impl EguiGpuRenderer {
             repaint_redraw.request_redraw();
         });
 
-        let mut visuals = egui::Visuals::light();
-        if let Some(c) = background_color {
-            let color = egui::Color32::from_rgba_unmultiplied(
-                (c.r * 255.0).round() as u8,
-                (c.g * 255.0).round() as u8,
-                (c.b * 255.0).round() as u8,
-                (c.a * 255.0).round() as u8,
-            );
-            visuals.window_fill = color;
-            visuals.panel_fill = color;
-        }
-        context.set_visuals(visuals);
+        context.set_global_style(style);
 
         let (texture, texture_view, bind_group) =
             create_egui_texture(wgpu_state, inner_size.width, inner_size.height);
@@ -329,7 +317,7 @@ pub struct EguiCPUWindow {
 impl EguiCPUWindow {
     pub fn new(
         window: Arc<Window>,
-        background_color: Option<Color>,
+        style: egui::Style,
         font_definitions: Option<egui::FontDefinitions>,
         redraw: RedrawRequester,
     ) -> Result<Self> {
@@ -357,18 +345,7 @@ impl EguiCPUWindow {
             repaint_redraw.request_redraw();
         });
 
-        let mut visuals = egui::Visuals::light();
-        if let Some(c) = background_color {
-            let color = egui::Color32::from_rgba_unmultiplied(
-                (c.r * 255.0).round() as u8,
-                (c.g * 255.0).round() as u8,
-                (c.b * 255.0).round() as u8,
-                (c.a * 255.0).round() as u8,
-            );
-            visuals.window_fill = color;
-            visuals.panel_fill = color;
-        }
-        context.set_visuals(visuals);
+        context.set_global_style(style);
 
         Ok(Self {
             context,

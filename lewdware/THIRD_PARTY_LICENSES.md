@@ -52,3 +52,33 @@ GPL build (e.g. from `apt`/Homebrew) - that's fine for local development,
 but if *you* redistribute a binary built this way, you take on the same GPL
 considerations documented in `pack-editor/THIRD_PARTY_LICENSES.md`. Official
 releases always use the vendored LGPL-only build described above.
+
+## Bundled fonts (SIL Open Font License 1.1)
+
+The engine embeds the typefaces below (`lewdware/assets/fonts/`) so that text
+popups and window themes render identically everywhere, without depending on
+what is installed on the user's machine. Each is used unmodified.
+
+The OFL permits bundling and redistribution — including inside a commercial or
+proprietary application — and, unlike a code license, does not extend to the
+program that embeds the font. It does require that the license text travel with
+the font, which is why a copy of each sits in
+[`assets/fonts/licenses/`](assets/fonts/licenses). Its one real constraint is on
+*modifying* a font: a derivative must stay under the OFL and must not use a
+Reserved Font Name. We do neither.
+
+| Font | Used for | Copyright | License |
+| --- | --- | --- | --- |
+| Anton | The `display` text font | The Anton Project Authors | OFL 1.1 |
+| W95FA | The `pixel` text font, and the `redmond` theme | Alina Sava | OFL 1.1 |
+| Selawik | The `fluent` theme — Microsoft's own metrically-compatible substitute for Segoe UI, which is not redistributable | Microsoft Corporation (Reserved Font Name "Selawik") | [OFL 1.1](assets/fonts/licenses/Selawik-OFL.txt) |
+| Inter | The `aqua` and `platinum` themes — the closest freely-licensed stand-in for San Francisco | The Inter Project Authors | [OFL 1.1](assets/fonts/licenses/Inter-OFL.txt) |
+| Cantarell | The `adwaita` theme — GNOME's own UI font | The Cantarell Project Authors | [OFL 1.1](assets/fonts/licenses/Cantarell-OFL.txt) |
+
+Anton and W95FA predate this file. Both are OFL 1.1, but unlike the three added
+later their license texts are not yet checked in beside them — worth doing before
+release, since the OFL asks that the license travel with the font.
+
+None of the platform UI fonts these imitate — Segoe UI, San Francisco,
+Charcoal — are redistributable, which is why each theme uses a free substitute
+rather than the real thing.

@@ -7,6 +7,7 @@
 -- easy additive follow-up via `lewdware.storage` later.
 
 local content = require("lib.content")
+local theme = require("lib.theme")
 
 local M = {}
 
@@ -20,7 +21,10 @@ function M.fire(active_tags)
 	local prompt = content.pick_prompt(active_tags and active_tags())
 	if not prompt then return false end
 	local settings = content.prompt_settings()
+	local chrome = theme.opts()
 	local dialog = lewdware.popup.dialog({
+		theme = chrome.theme,
+		appearance = chrome.appearance,
 		elements = {
 			{ type = "text", text = prompt.text }, { type = "input", id = "response" },
 			{ type = "buttons", options = {{ id = "submit", label = settings.submit_label or DEFAULT_SUBMIT_LABEL, default = true }} },

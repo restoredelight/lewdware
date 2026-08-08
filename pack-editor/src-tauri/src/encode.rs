@@ -7,12 +7,12 @@ use std::{
 };
 
 use anyhow::anyhow;
-use futures::{StreamExt, stream};
+use futures::{stream, StreamExt};
 use infer::MatcherType;
 use serde::Serialize;
-use shared::encode::{HardwareEncoder, encode_file, hash_file};
+use shared::encode::{encode_file, hash_file, HardwareEncoder};
 use tempfile::TempDir;
-use tokio::sync::{RwLock, Semaphore, oneshot, watch};
+use tokio::sync::{oneshot, watch, RwLock, Semaphore};
 use uuid::Uuid;
 use walkdir::WalkDir;
 

@@ -55,7 +55,7 @@ async fn check_for_update() -> Result<Option<String>, String> {
 }
 use shared::read_pack::{Metadata, RecommendedMode};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::{Mutex, RwLock, watch};
+use tokio::sync::{watch, Mutex, RwLock};
 
 use shared::encode::HardwareEncoder;
 

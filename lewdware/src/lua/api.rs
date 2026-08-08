@@ -6,7 +6,7 @@ use mlua::{
 use serde::{Deserialize, Serialize};
 use shared::mode::OptionValue;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
     pub r: f32,
     pub g: f32,
@@ -80,7 +80,7 @@ use crate::{
     media::{MediaManager, MediaTypes, TagFilter},
     monitor::Monitor,
     utils::{calculate_media_popup_size, calculate_text_popup_size, random_position},
-    window::HEADER_HEIGHT,
+    window::{AppearanceChoice, Theme, ThemeChoice},
 };
 
 pub struct ApiOptions {
@@ -140,6 +140,23 @@ pub fn create_api<T: EventPoster>(
         .set("__lewdware_experience", experience_value)?;
 
     api_table.set("config", config.into_lua(lua)?)?;
+
+    // The theme names this engine understands, so a mode can validate one that came from pack
+    // data before passing it to a spawn call (where an unknown name is a hard error).
+    api_table.set(
+        "themes",
+        ThemeChoice::ALL
+            .iter()
+            .map(|choice| choice.name())
+            .collect::<Vec<_>>(),
+    )?;
+    api_table.set(
+        "appearances",
+        AppearanceChoice::ALL
+            .iter()
+            .map(|choice| choice.name())
+            .collect::<Vec<_>>(),
+    )?;
 
     let storage_table = lua.create_table()?;
     {
@@ -853,6 +870,15 @@ pub struct SpawnWindowOpts {
     pub click_through: bool,
     #[serde(default = "return_true")]
     pub clamp: bool,
+    /// Which named look to draw the window's chrome and widgets with. `plain` by default — the
+    /// predictable value, whose metrics are a documented contract. The bundled modes default
+    /// their own option to `native` instead; see `design/window-themes.md`.
+    #[serde(default)]
+    pub theme: ThemeChoice,
+    /// Which palette that look is drawn in. `light` by default, for the same predictability
+    /// reason as `theme`; the bundled modes default their own option to `auto`.
+    #[serde(default)]
+    pub appearance: AppearanceChoice,
 }
 
 impl Default for SpawnWindowOpts {
@@ -872,6 +898,8 @@ impl Default for SpawnWindowOpts {
             background_color: None,
             click_through: false,
             clamp: true,
+            theme: ThemeChoice::default(),
+            appearance: AppearanceChoice::default(),
         }
     }
 }
@@ -920,9 +948,22 @@ pub struct PopupSpawnOpts {
     pub title: Option<String>,
     pub closeable: bool,
     pub background_color: Option<Color>,
+    /// The palette the look is drawn in, still *unresolved*: `auto` depends on runtime state only
+    /// the main thread can read, so — like `monitor_id` above — this carries the request and
+    /// `WindowState::new` resolves it once the window exists. Safe to defer precisely because
+    /// appearance never changes the metrics the sizing below is computed from.
+    pub appearance: AppearanceChoice,
+    /// The named look this window's chrome and widgets are drawn with. Not yet settable from
+    /// Lua — see `design/window-themes.md`'s step 5; for now every window resolves to the
+    /// `plain` default, whose metrics are what the sizing above is computed from.
+    pub theme: Theme,
 }
 
 impl PopupSpawnOpts {
+    /// Fails only on a window that could never be drawn: an explicitly requested width or height
+    /// that resolves to zero or less. Sizes the engine derives itself (from media dimensions or a
+    /// text measurement) are not checked here — those are the engine's own business, and
+    /// `Header::new` clamps a degenerate one rather than failing a spawn the mode did not ask for.
     pub fn resolve(
         spawn_opts: SpawnWindowOpts,
         size_behaviour: WindowSizeBehaviour,
@@ -930,10 +971,15 @@ impl PopupSpawnOpts {
         gpu_available: bool,
         mut gpu: bool,
         transparent: bool,
-    ) -> Self {
+    ) -> Result<Self, InvalidWindowSize> {
         if !gpu_available {
             gpu = false;
         }
+
+        // Before anything else: a zero-sized window has no content area, no drawable header, and
+        // no way for the user to close it. Better a Lua error at the call site than a window that
+        // exists but cannot be seen or dismissed.
+        check_requested_size(&spawn_opts, monitor)?;
         let transparent = transparent && gpu;
         let force_opaque = spawn_opts.transparent == Some(false);
 
@@ -976,10 +1022,15 @@ impl PopupSpawnOpts {
             ),
         };
 
+        // Resolved here, once, so that a `native` alias becomes a concrete look before anything
+        // downstream — window sizing included — ever asks what platform it is on.
+        let theme = spawn_opts.theme.resolve();
+
         let (mut outer_width, mut outer_height) = (width, height);
         if spawn_opts.decorations {
-            outer_width += 2;
-            outer_height += HEADER_HEIGHT + 2;
+            let (padding_x, padding_y) = theme.metrics().outer_padding();
+            outer_width += padding_x;
+            outer_height += padding_y;
         }
 
         let x: i32 = {
@@ -1015,7 +1066,7 @@ impl PopupSpawnOpts {
             }
         };
 
-        Self {
+        Ok(Self {
             monitor_id: monitor.id,
             x,
             y,
@@ -1032,8 +1083,51 @@ impl PopupSpawnOpts {
             title: spawn_opts.title,
             closeable: spawn_opts.closeable,
             background_color: spawn_opts.background_color,
+            appearance: spawn_opts.appearance,
+            theme,
+        })
+    }
+}
+
+/// A window size a mode asked for that cannot be drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidWindowSize {
+    /// `"width"` or `"height"`.
+    pub axis: &'static str,
+    pub pixels: i32,
+}
+
+impl std::fmt::Display for InvalidWindowSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "window {} must be greater than zero, got {}",
+            self.axis, self.pixels
+        )
+    }
+}
+
+impl std::error::Error for InvalidWindowSize {}
+
+/// Reject an explicitly requested size that resolves to zero or less, including a percentage that
+/// rounds down to nothing on a small monitor.
+fn check_requested_size(
+    spawn_opts: &SpawnWindowOpts,
+    monitor: &Monitor,
+) -> Result<(), InvalidWindowSize> {
+    for (axis, coord, total) in [
+        ("width", &spawn_opts.width, monitor.width),
+        ("height", &spawn_opts.height, monitor.height),
+    ] {
+        if let Some(coord) = coord {
+            let pixels = coord.to_pixels(total);
+            if pixels <= 0 {
+                return Err(InvalidWindowSize { axis, pixels });
+            }
         }
     }
+
+    Ok(())
 }
 
 /// Pick the monitor a popup should spawn on: the one the mode explicitly asked for (from an
@@ -1081,15 +1175,6 @@ pub enum TextAlign {
     Right,
 }
 
-fn default_text_color() -> Color {
-    Color {
-        r: 0.0,
-        g: 0.0,
-        b: 0.0,
-        a: 1.0,
-    }
-}
-
 fn default_font_size() -> FontSize {
     FontSize::Value(32.0)
 }
@@ -1104,8 +1189,11 @@ pub struct TextStyle {
     pub font: TextFont,
     #[serde(default = "default_font_size")]
     pub font_size: FontSize,
-    #[serde(default = "default_text_color")]
-    pub color: Color,
+    /// `None` means "whatever suits the surface this is drawn on": a dialog's text follows its
+    /// theme's palette, so it stays readable in a dark one, while a text popup — which floats over
+    /// the desktop with no background of its own — keeps black.
+    #[serde(default)]
+    pub color: Option<Color>,
     #[serde(default)]
     pub bold: bool,
     #[serde(default)]
@@ -1121,7 +1209,7 @@ impl Default for TextStyle {
         Self {
             font: TextFont::default(),
             font_size: default_font_size(),
-            color: default_text_color(),
+            color: None,
             bold: false,
             align: TextAlign::default(),
             outline_color: None,
@@ -1182,7 +1270,8 @@ fn spawn_text_popup<T: EventPoster>(
         gpu_available,
         transparent,
         transparent,
-    );
+    )
+    .into_lua_err()?;
 
     let props = request_sender.spawn_text(text.clone(), opts.style, window_opts)?;
 
@@ -1255,7 +1344,8 @@ fn spawn_image_popup<T: EventPoster>(
         gpu_available,
         transparent,
         transparent,
-    );
+    )
+    .into_lua_err()?;
 
     // Monitor pick and size resolution happen here, on the Lua thread; only the actual window
     // creation and (slow) decode happen on the main thread, which still acks the spawn — with a
@@ -1360,7 +1450,8 @@ fn spawn_video_popup<T: EventPoster>(
         gpu_available,
         true,
         transparent,
-    );
+    )
+    .into_lua_err()?;
 
     // As with images, monitor pick / size resolution happen here, on the Lua thread; only the
     // actual window creation / decode happen on the main thread -- see `App::spawn_video`.
@@ -1558,7 +1649,8 @@ fn spawn_dialog<T: EventPoster>(
         gpu_available,
         transparent,
         transparent,
-    );
+    )
+    .into_lua_err()?;
 
     let props = request_sender.spawn_dialog(opts.elements, window_opts)?;
 
@@ -1717,6 +1809,187 @@ fn every(_: &Lua, (ms, function): (u64, mlua::Function), dev_mode: bool) -> mlua
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn monitor() -> Monitor {
+        Monitor {
+            id: 1,
+            primary: true,
+            width: 1000,
+            height: 800,
+            scale_factor: 1.0,
+        }
+    }
+
+    fn resolve_with(opts: SpawnWindowOpts) -> Result<PopupSpawnOpts, InvalidWindowSize> {
+        PopupSpawnOpts::resolve(
+            opts,
+            WindowSizeBehaviour::UseDefaults {
+                width: 200,
+                height: 150,
+            },
+            &monitor(),
+            false,
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn a_theme_is_resolved_before_the_window_is_sized() {
+        // `native` is an alias; what reaches the window must already be a concrete look, and the
+        // outer size must have been computed from *that* theme's metrics.
+        let opts = SpawnWindowOpts {
+            theme: ThemeChoice::Native,
+            ..Default::default()
+        };
+        let resolved = resolve_with(opts).unwrap();
+
+        assert!(crate::window::theme::ALL_THEMES.contains(&resolved.theme));
+
+        let (pad_x, pad_y) = resolved.theme.metrics().outer_padding();
+        assert_eq!(resolved.outer_width, resolved.width + pad_x);
+        assert_eq!(resolved.outer_height, resolved.height + pad_y);
+    }
+
+    /// Each theme's own metrics drive the outer size, which is the whole reason the theme has to
+    /// be known this early rather than at draw time.
+    #[test]
+    fn each_theme_sizes_its_window_by_its_own_metrics() {
+        for &theme in crate::window::theme::ALL_THEMES {
+            let choice = match theme {
+                Theme::Plain => ThemeChoice::Plain,
+                Theme::Fluent => ThemeChoice::Fluent,
+                Theme::Redmond => ThemeChoice::Redmond,
+                Theme::Aqua => ThemeChoice::Aqua,
+                Theme::Adwaita => ThemeChoice::Adwaita,
+                Theme::Platinum => ThemeChoice::Platinum,
+            };
+
+            let resolved = resolve_with(SpawnWindowOpts {
+                theme: choice,
+                ..Default::default()
+            })
+            .unwrap();
+
+            let (pad_x, pad_y) = theme.metrics().outer_padding();
+            assert_eq!(resolved.theme, theme);
+            assert_eq!(resolved.outer_width, resolved.width + pad_x, "{theme:?}");
+            assert_eq!(resolved.outer_height, resolved.height + pad_y, "{theme:?}");
+        }
+    }
+
+    #[test]
+    fn an_undecorated_window_has_no_padding_whatever_its_theme() {
+        let resolved = resolve_with(SpawnWindowOpts {
+            theme: ThemeChoice::Redmond,
+            decorations: false,
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(resolved.outer_width, resolved.width);
+        assert_eq!(resolved.outer_height, resolved.height);
+    }
+
+    /// A zero-sized window has no content area, no drawable header and no close button, so asking
+    /// for one is a mistake worth reporting rather than a window that cannot be seen or dismissed.
+    #[test]
+    fn a_zero_or_negative_requested_size_is_rejected() {
+        for (width, height, axis) in [
+            (Some(Coord::Pixel(0)), None, "width"),
+            (None, Some(Coord::Pixel(0)), "height"),
+            (Some(Coord::Pixel(-10)), None, "width"),
+            (None, Some(Coord::Pixel(-1)), "height"),
+            // A percentage that rounds down to nothing is the same mistake, less obviously.
+            (Some(Coord::Percent { percent: 0.0 }), None, "width"),
+            (Some(Coord::Percent { percent: 0.04 }), None, "width"),
+        ] {
+            let error = resolve_with(SpawnWindowOpts {
+                width,
+                height,
+                ..Default::default()
+            })
+            .expect_err("expected a rejection");
+
+            assert_eq!(error.axis, axis);
+            assert!(error.pixels <= 0);
+        }
+    }
+
+    #[test]
+    fn a_positive_requested_size_is_accepted() {
+        for (width, height) in [
+            (Some(Coord::Pixel(1)), None),
+            (None, Some(Coord::Pixel(1))),
+            (Some(Coord::Percent { percent: 0.1 }), None),
+            (Some(Coord::Pixel(400)), Some(Coord::Pixel(300))),
+        ] {
+            assert!(
+                resolve_with(SpawnWindowOpts {
+                    width: width.clone(),
+                    height: height.clone(),
+                    ..Default::default()
+                })
+                .is_ok(),
+                "{width:?} x {height:?} should be allowed"
+            );
+        }
+    }
+
+    /// Sizes the engine derives itself are not rejected: a mode that never asked for a size should
+    /// not have a spawn fail because a measurement came out small.
+    #[test]
+    fn an_engine_derived_size_is_never_rejected() {
+        let resolved = PopupSpawnOpts::resolve(
+            SpawnWindowOpts::default(),
+            WindowSizeBehaviour::UseDefaults {
+                width: 0,
+                height: 0,
+            },
+            &monitor(),
+            false,
+            false,
+            false,
+        );
+
+        assert!(resolved.is_ok());
+    }
+
+    /// The error text is what a mode author sees in `lw mode dev`, so it should name the axis and
+    /// the value rather than just failing.
+    #[test]
+    fn the_size_error_names_the_axis_and_value() {
+        let error = resolve_with(SpawnWindowOpts {
+            width: Some(Coord::Pixel(0)),
+            ..Default::default()
+        })
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("width"), "{message}");
+        assert!(message.contains('0'), "{message}");
+    }
+
+    /// The Lua-facing spelling of the option, since a mode writes it as a string.
+    #[test]
+    fn the_theme_option_deserialises_from_its_lua_name() {
+        let opts: SpawnWindowOpts =
+            serde_json::from_str(r#"{"theme": "native-retro"}"#).expect("should deserialise");
+        assert_eq!(opts.theme, ThemeChoice::NativeRetro);
+
+        // Absent means the predictable default, not the system's look.
+        let opts: SpawnWindowOpts = serde_json::from_str("{}").expect("should deserialise");
+        assert_eq!(opts.theme, ThemeChoice::Plain);
+    }
+
+    /// An unknown name is an error rather than a silent fallback: for a mode author that is a
+    /// typo worth surfacing. Pack-supplied names are checked against `lewdware.themes` first —
+    /// see `default-modes/shared/lib/theme.lua`.
+    #[test]
+    fn an_unknown_theme_name_is_rejected() {
+        let result: Result<SpawnWindowOpts, _> = serde_json::from_str(r#"{"theme": "win7"}"#);
+        assert!(result.is_err());
+    }
 
     #[test]
     fn anchor_resolves_each_axis_independently() {
