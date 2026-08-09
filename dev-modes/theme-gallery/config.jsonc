@@ -1,0 +1,43 @@
+{
+  "$schema": "../../docs/src/data/config.schema.json",
+  "id": "e27d4a49-630b-4d9d-a5ee-c2b5cc8c365b",
+  "name": "Theme gallery",
+  "version": "0.1.0",
+  "author": "restoredelight",
+  "include": ["src"],
+  "entrypoint": "src/main.lua",
+  "options": {
+    "palettes": {
+      "label": "Palettes",
+      "description": "Which appearances to show. Themes with no dark variant (platinum) draw light either way",
+      "type": "enum",
+      "default": "both",
+      "values": {
+        "both": "Light and dark",
+        "light": "Light only",
+        "dark": "Dark only",
+        "auto": "Whatever my system says"
+      }
+    },
+    "include_aliases": {
+      "label": "Include native aliases",
+      "description": "Also show \"native\" and \"native-retro\", which reveals what they resolve to on this machine",
+      "type": "boolean",
+      "default": false
+    },
+    "columns": {
+      "label": "Columns",
+      "description": "0 fits the grid to the screen automatically",
+      "type": "integer",
+      "default": 0,
+      "min": 0,
+      "max": 8
+    },
+    "closeable": {
+      "label": "Show close buttons",
+      "description": "Turn off to see each header without its buttons, as an undismissable popup does. The panic key still ends the session",
+      "type": "boolean",
+      "default": true
+    }
+  }
+}

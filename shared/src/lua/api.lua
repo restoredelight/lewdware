@@ -102,7 +102,9 @@ lewdware.appearances = {}
 ---| "redmond" Windows 95/98.
 ---| "aqua" macOS.
 ---| "adwaita" GNOME.
+---| "breeze" KDE Plasma.
 ---| "platinum" Mac OS 9.
+---| "cde" CDE/Motif.
 
 ---Which palette a [Theme](lua://Theme) is drawn in.
 ---
@@ -604,7 +606,9 @@ function lewdware.popup.video(video, opts) end
 ---and by `text` elements in [lewdware.popup.dialog()](lua://lewdware.popup.dialog), so styled
 ---text looks the same everywhere.
 ---
----@field font? TextFont Which bundled font to use. Defaults to `"default"`.
+---@field font? TextFont Which bundled font to use. Defaults to the window theme's UI font inside
+---  a dialog, and to `"default"` for a standalone text popup. An explicit non-default face always
+---  overrides the theme.
 ---@field font_size? FontSize The font size. Defaults to 32.
 ---@field color? string The text colour as a hex string (`"#rrggbb"` or `"#rrggbbaa"`). Defaults
 ---  to black.

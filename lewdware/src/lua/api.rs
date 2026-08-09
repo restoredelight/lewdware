@@ -1862,7 +1862,9 @@ mod tests {
                 Theme::Redmond => ThemeChoice::Redmond,
                 Theme::Aqua => ThemeChoice::Aqua,
                 Theme::Adwaita => ThemeChoice::Adwaita,
+                Theme::Breeze => ThemeChoice::Breeze,
                 Theme::Platinum => ThemeChoice::Platinum,
+                Theme::Cde => ThemeChoice::Cde,
             };
 
             let resolved = resolve_with(SpawnWindowOpts {

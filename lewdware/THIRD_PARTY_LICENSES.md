@@ -72,8 +72,11 @@ Reserved Font Name. We do neither.
 | Anton | The `display` text font | The Anton Project Authors | OFL 1.1 |
 | W95FA | The `pixel` text font, and the `redmond` theme | Alina Sava | OFL 1.1 |
 | Selawik | The `fluent` theme — Microsoft's own metrically-compatible substitute for Segoe UI, which is not redistributable | Microsoft Corporation (Reserved Font Name "Selawik") | [OFL 1.1](assets/fonts/licenses/Selawik-OFL.txt) |
-| Inter | The `aqua` and `platinum` themes — the closest freely-licensed stand-in for San Francisco | The Inter Project Authors | [OFL 1.1](assets/fonts/licenses/Inter-OFL.txt) |
+| Inter | The `aqua` theme — the closest freely-licensed stand-in for San Francisco | The Inter Project Authors | [OFL 1.1](assets/fonts/licenses/Inter-OFL.txt) |
 | Cantarell | The `adwaita` theme — GNOME's own UI font | The Cantarell Project Authors | [OFL 1.1](assets/fonts/licenses/Cantarell-OFL.txt) |
+| Noto Sans | The `breeze` theme — KDE Plasma's default UI face | The Noto Project Authors | [OFL 1.1](assets/fonts/licenses/NotoSans-OFL.txt) |
+| Liberation Sans | The `cde` theme — a metrically compatible substitute for its Helvetica-family UI typography | Red Hat | [SIL OFL 1.1](assets/fonts/licenses/LiberationSans-LICENSE.txt) |
+| Source Sans 3 | The `platinum` theme — a compact UI-oriented stand-in for Charcoal | Adobe | [OFL 1.1](assets/fonts/licenses/SourceSans3-OFL.md) |
 
 Anton and W95FA predate this file. Both are OFL 1.1, but unlike the three added
 later their license texts are not yet checked in beside them — worth doing before

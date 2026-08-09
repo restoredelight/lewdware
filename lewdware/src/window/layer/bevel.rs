@@ -14,16 +14,46 @@
 
 use egui::{Response, Sense, Ui, Vec2};
 
-use crate::window::theme::{BorderRing, WidgetEdge};
+use crate::window::theme::{BorderRing, DefaultButtonStyle, WidgetEdge};
+
+/// Overlay a recessed themed edge on egui's real text edit. The widget keeps ownership of text,
+/// cursor, selection, IME and clipboard behavior; only its otherwise-flat perimeter is replaced.
+pub fn input_edge(ui: &Ui, response: &Response, edge: &WidgetEdge) {
+    let WidgetEdge::Bevel { pressed, .. } = edge else {
+        return;
+    };
+
+    // A field is permanently recessed, so it uses the same inverted rings as a held button.
+    paint_rings(ui.painter(), response.rect, pressed);
+}
 
 /// Draw a button with a themed edge and return its response, mirroring `ui.button(label)`.
 ///
 /// Sized exactly as egui sizes its own buttons — galley plus `button_padding`, at least
 /// `interact_size` — so a bevelled row and a flat one lay out identically and the row-width
 /// measurement in `paint_dialog` stays correct for both.
-pub fn button(ui: &mut Ui, label: &str, edge: &WidgetEdge) -> Response {
+pub fn button(
+    ui: &mut Ui,
+    label: &str,
+    edge: &WidgetEdge,
+    default_style: Option<DefaultButtonStyle>,
+) -> Response {
     let WidgetEdge::Bevel { raised, pressed } = edge else {
-        return ui.button(label);
+        return match default_style {
+            Some(DefaultButtonStyle::Filled {
+                idle,
+                hover,
+                active,
+                text,
+                border,
+            }) => flat_default_button(ui, label, idle, hover, active, text, border),
+            Some(DefaultButtonStyle::Outline(stroke)) => {
+                let response = ui.button(label);
+                paint_outline(ui.painter(), response.rect, stroke);
+                response
+            }
+            None => ui.button(label),
+        };
     };
 
     let font_id = egui::TextStyle::Button.resolve(ui.style());
@@ -56,12 +86,78 @@ pub fn button(ui: &mut Ui, label: &str, edge: &WidgetEdge) -> Response {
     let text_pos = rect.center() - galley.size() / 2.0 + offset;
     painter.galley(text_pos, galley, visuals.text_color());
 
+    if let Some(DefaultButtonStyle::Outline(stroke)) = default_style {
+        // Reinforce the outside edge. An inset outline boxes the label and obscures the face;
+        // this leaves both bevel rings visible immediately inside it.
+        paint_outline(painter, rect, stroke);
+    }
+
     // Keyboard focus, which egui's own button would otherwise have drawn.
     if response.has_focus() {
         painter.rect_stroke(
             rect.shrink(3.0),
             0.0,
             egui::Stroke::new(1.0_f32, visuals.text_color()),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    response
+}
+
+fn paint_outline(painter: &egui::Painter, rect: egui::Rect, stroke: egui::Stroke) {
+    // All outline-only themes have square controls. Line segments avoid introducing a second
+    // filled rectangle into egui's shape list and keep the mark on the actual outer edge.
+    let rect = rect.shrink(stroke.width / 2.0);
+    painter.line_segment([rect.left_top(), rect.right_top()], stroke);
+    painter.line_segment([rect.right_top(), rect.right_bottom()], stroke);
+    painter.line_segment([rect.right_bottom(), rect.left_bottom()], stroke);
+    painter.line_segment([rect.left_bottom(), rect.left_top()], stroke);
+}
+
+/// A modern theme's filled primary action. Painted here instead of using `Button::fill`, whose
+/// fixed override suppresses the theme-specific hover and pressed colours.
+fn flat_default_button(
+    ui: &mut Ui,
+    label: &str,
+    idle: egui::Color32,
+    hover: egui::Color32,
+    active: egui::Color32,
+    text: egui::Color32,
+    border: egui::Stroke,
+) -> Response {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui
+        .ctx()
+        .fonts_mut(|fonts| fonts.layout_no_wrap(label.to_owned(), font_id, text));
+    let padding = ui.spacing().button_padding;
+    let desired = Vec2::new(
+        galley.size().x + padding.x * 2.0,
+        (galley.size().y + padding.y * 2.0).max(ui.spacing().interact_size.y),
+    );
+    let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+
+    let fill = if response.is_pointer_button_down_on() {
+        active
+    } else if response.hovered() {
+        hover
+    } else {
+        idle
+    };
+    let radius = ui.style().visuals.widgets.inactive.corner_radius;
+    ui.painter()
+        .rect(rect, radius, fill, border, egui::StrokeKind::Inside);
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, text);
+
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect.shrink(3.0),
+            radius,
+            egui::Stroke::new(1.0_f32, text),
             egui::StrokeKind::Inside,
         );
     }

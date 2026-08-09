@@ -42,9 +42,15 @@ pub enum Theme {
     /// GNOME: tall flat headerbar, centred title, round close button.
     #[serde(rename = "adwaita")]
     Adwaita,
+    /// KDE Plasma: Breeze's cool greys, blue accent and compact controls.
+    #[serde(rename = "breeze")]
+    Breeze,
     /// Mac OS 9: pinstriped bar, black frame, close box on the left.
     #[serde(rename = "platinum")]
     Platinum,
+    /// CDE/Motif: teal title bar, sculpted grey controls and workstation-era typography.
+    #[serde(rename = "cde")]
+    Cde,
 }
 
 /// Which palette a theme draws in.
@@ -113,13 +119,17 @@ pub enum ThemeChoice {
     Aqua,
     #[serde(rename = "adwaita")]
     Adwaita,
+    #[serde(rename = "breeze")]
+    Breeze,
     #[serde(rename = "platinum")]
     Platinum,
-    /// Whatever this platform's current windows look like.
+    #[serde(rename = "cde")]
+    Cde,
+    /// Whatever this platform's current windows look like. On Linux this distinguishes KDE Plasma
+    /// from other desktops, using Breeze for KDE and Adwaita as the general fallback.
     #[serde(rename = "native")]
     Native,
-    /// Whatever this platform's windows *used* to look like. Linux has no retro native look users
-    /// would recognise, so it falls back to `redmond` — documented rather than pretended.
+    /// Whatever this platform's windows *used* to look like. Linux resolves to CDE/Motif.
     #[serde(rename = "native-retro")]
     NativeRetro,
 }
@@ -134,7 +144,9 @@ impl ThemeChoice {
         Self::Redmond,
         Self::Aqua,
         Self::Adwaita,
+        Self::Breeze,
         Self::Platinum,
+        Self::Cde,
     ];
 
     /// The Lua-facing name, matching the `serde(rename)` above.
@@ -150,7 +162,9 @@ impl ThemeChoice {
             Self::Redmond => "redmond",
             Self::Aqua => "aqua",
             Self::Adwaita => "adwaita",
+            Self::Breeze => "breeze",
             Self::Platinum => "platinum",
+            Self::Cde => "cde",
             Self::Native => "native",
             Self::NativeRetro => "native-retro",
         }
@@ -163,7 +177,9 @@ impl ThemeChoice {
             Self::Redmond => Theme::Redmond,
             Self::Aqua => Theme::Aqua,
             Self::Adwaita => Theme::Adwaita,
+            Self::Breeze => Theme::Breeze,
             Self::Platinum => Theme::Platinum,
+            Self::Cde => Theme::Cde,
             Self::Native => Self::native(),
             Self::NativeRetro => Self::native_retro(),
         }
@@ -179,7 +195,23 @@ impl ThemeChoice {
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     fn native() -> Theme {
-        Theme::Adwaita
+        Self::native_unix(
+            std::env::var("XDG_CURRENT_DESKTOP")
+                .as_deref()
+                .unwrap_or(""),
+        )
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    fn native_unix(desktop: &str) -> Theme {
+        if desktop
+            .split(':')
+            .any(|part| matches!(part.trim().to_ascii_lowercase().as_str(), "kde" | "plasma"))
+        {
+            Theme::Breeze
+        } else {
+            Theme::Adwaita
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -190,11 +222,9 @@ impl ThemeChoice {
     fn native_retro() -> Theme {
         Theme::Platinum
     }
-    /// No retro Linux look is recognisable enough to be worth inventing one; `redmond` is the
-    /// documented fallback rather than a pretence that it is native here.
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     fn native_retro() -> Theme {
-        Theme::Redmond
+        Theme::Cde
     }
 }
 
@@ -208,7 +238,9 @@ pub const ALL_THEMES: &[Theme] = &[
     Theme::Redmond,
     Theme::Aqua,
     Theme::Adwaita,
+    Theme::Breeze,
     Theme::Platinum,
+    Theme::Cde,
 ];
 
 impl Theme {
@@ -231,9 +263,17 @@ impl Theme {
                 header_height: 37,
                 border_width: 1,
             },
+            Self::Breeze => Metrics {
+                header_height: 32,
+                border_width: 1,
+            },
             Self::Platinum => Metrics {
                 header_height: 20,
                 border_width: 1,
+            },
+            Self::Cde => Metrics {
+                header_height: 22,
+                border_width: 3,
             },
         }
     }
@@ -271,7 +311,11 @@ impl Theme {
             (Self::Aqua, Appearance::Dark) => AQUA_CHROME_DARK,
             (Self::Adwaita, Appearance::Light) => ADWAITA_CHROME,
             (Self::Adwaita, Appearance::Dark) => ADWAITA_CHROME_DARK,
+            (Self::Breeze, Appearance::Light) => BREEZE_CHROME,
+            (Self::Breeze, Appearance::Dark) => BREEZE_CHROME_DARK,
             (Self::Platinum, _) => PLATINUM_CHROME,
+            (Self::Cde, Appearance::Light) => CDE_CHROME,
+            (Self::Cde, Appearance::Dark) => CDE_CHROME_DARK,
         }
     }
 
@@ -289,9 +333,13 @@ impl Theme {
             Self::Redmond => Face::Pixel,
             Self::Aqua => Face::Inter,
             Self::Adwaita => Face::Cantarell,
-            // Mac OS 9's Charcoal has no freely-licensed equivalent; Inter is at least a neutral
-            // humanist sans rather than egui's Ubuntu.
-            Self::Platinum => Face::Inter,
+            Self::Breeze => Face::NotoSans,
+            // Not a Charcoal clone, but its compact, high-x-height UI proportions are much closer
+            // to Platinum's sturdy screen typography than the modern geometric Inter fallback.
+            Self::Platinum => Face::SourceSans,
+            // CDE specified Helvetica-family UI fonts; Liberation Sans is its freely licensed,
+            // metric-compatible replacement and keeps this distinct from Platinum.
+            Self::Cde => Face::LiberationSans,
         }
     }
 
@@ -304,7 +352,9 @@ impl Theme {
             Self::Redmond => 12.0,
             Self::Aqua => 13.0,
             Self::Adwaita => 14.0,
+            Self::Breeze => 13.0,
             Self::Platinum => 12.0,
+            Self::Cde => 12.0,
         }
     }
 
@@ -335,7 +385,116 @@ impl Theme {
                 raised: PLATINUM_RAISED,
                 pressed: PLATINUM_PRESSED,
             },
+            Self::Cde => match self.effective(appearance) {
+                Appearance::Light => WidgetEdge::Bevel {
+                    raised: CDE_RAISED,
+                    pressed: CDE_PRESSED,
+                },
+                Appearance::Dark => WidgetEdge::Bevel {
+                    raised: CDE_RAISED_DARK,
+                    pressed: CDE_PRESSED_DARK,
+                },
+            },
             _ => WidgetEdge::Flat,
+        }
+    }
+
+    /// The persistent treatment used to identify a dialog's default action.
+    ///
+    /// This is separate from keyboard focus: the default remains the action Enter activates while
+    /// the cursor is in a text field, so it must remain visible when focus is elsewhere. Modern
+    /// themes use their platform's accent colour; `plain` uses a monochrome inversion; and the
+    /// period themes reinforce the outer edge their controls already speak in.
+    pub fn default_button_style(self, appearance: Appearance) -> DefaultButtonStyle {
+        let appearance = self.effective(appearance);
+        let filled = |idle, hover, active, text| DefaultButtonStyle::Filled {
+            idle: to_color32(idle),
+            hover: to_color32(hover),
+            active: to_color32(active),
+            text: to_color32(text),
+            border: egui::Stroke::NONE,
+        };
+
+        match (self, appearance) {
+            (Self::Plain, Appearance::Light) => filled(
+                rgb8(45, 45, 45),
+                rgb8(70, 70, 70),
+                rgb8(105, 105, 105),
+                WHITE,
+            ),
+            (Self::Plain, Appearance::Dark) => filled(
+                rgb8(235, 235, 235),
+                rgb8(210, 210, 210),
+                rgb8(175, 175, 175),
+                BLACK,
+            ),
+            (Self::Fluent, Appearance::Light) => DefaultButtonStyle::Filled {
+                idle: to_color32(rgb8(0, 103, 192)),
+                hover: to_color32(rgb8(25, 117, 197)),
+                active: to_color32(rgb8(0, 90, 158)),
+                text: egui::Color32::WHITE,
+                border: egui::Stroke::new(1.0_f32, to_color32(rgb8(0, 90, 158))),
+            },
+            (Self::Fluent, Appearance::Dark) => DefaultButtonStyle::Filled {
+                idle: to_color32(rgb8(0, 95, 158)),
+                hover: to_color32(rgb8(18, 112, 178)),
+                active: to_color32(rgb8(0, 78, 130)),
+                text: egui::Color32::WHITE,
+                border: egui::Stroke::new(1.0_f32, to_color32(rgb8(0, 70, 117))),
+            },
+            (Self::Redmond, Appearance::Light) => {
+                DefaultButtonStyle::Outline(egui::Stroke::new(1.0_f32, egui::Color32::BLACK))
+            }
+            (Self::Redmond, Appearance::Dark) => DefaultButtonStyle::Outline(egui::Stroke::new(
+                1.0_f32,
+                to_color32(REDMOND_GLYPH_DARK),
+            )),
+            (Self::Aqua, Appearance::Light) => filled(
+                rgb8(0, 122, 255),
+                rgb8(20, 132, 255),
+                rgb8(0, 96, 205),
+                WHITE,
+            ),
+            (Self::Aqua, Appearance::Dark) => filled(
+                rgb8(10, 132, 255),
+                rgb8(40, 146, 255),
+                rgb8(0, 105, 220),
+                WHITE,
+            ),
+            (Self::Adwaita, Appearance::Light) => filled(
+                rgb8(53, 132, 228),
+                rgb8(70, 145, 232),
+                rgb8(38, 112, 204),
+                WHITE,
+            ),
+            (Self::Adwaita, Appearance::Dark) => filled(
+                rgb8(28, 113, 216),
+                rgb8(48, 128, 222),
+                rgb8(20, 92, 180),
+                WHITE,
+            ),
+            (Self::Breeze, Appearance::Light) => filled(
+                rgb8(61, 174, 233),
+                rgb8(83, 184, 236),
+                rgb8(41, 143, 197),
+                WHITE,
+            ),
+            (Self::Breeze, Appearance::Dark) => filled(
+                rgb8(61, 174, 233),
+                rgb8(83, 184, 236),
+                rgb8(41, 143, 197),
+                WHITE,
+            ),
+            (Self::Platinum, _) => {
+                DefaultButtonStyle::Outline(egui::Stroke::new(1.0_f32, egui::Color32::BLACK))
+            }
+            (Self::Cde, Appearance::Light) => {
+                DefaultButtonStyle::Outline(egui::Stroke::new(1.0_f32, egui::Color32::BLACK))
+            }
+            (Self::Cde, Appearance::Dark) => DefaultButtonStyle::Outline(egui::Stroke::new(
+                1.0_f32,
+                to_color32(rgb8(235, 240, 232)),
+            )),
         }
     }
 
@@ -348,14 +507,16 @@ impl Theme {
     /// Overridden in turn by a window's `background_color`, which has always won here.
     fn panel_fill(self, appearance: Appearance) -> Option<Color> {
         let (light, dark) = match self {
-            Self::Plain => (rgb8(242, 242, 242), rgb8(26, 26, 26)),
+            Self::Plain => (rgb8(245, 245, 245), rgb8(24, 24, 24)),
             Self::Fluent => (rgb8(243, 243, 243), rgb8(32, 32, 32)),
             // Win95 dialogs are the same grey as their buttons; the buttons are told apart by their
             // border, not their fill.
-            Self::Redmond => (REDMOND_FACE, rgb8(79, 75, 92)),
+            Self::Redmond => (REDMOND_FACE, REDMOND_PANEL_DARK),
             Self::Aqua => (rgb8(236, 236, 236), rgb8(50, 50, 52)),
             Self::Adwaita => (rgb8(250, 250, 250), rgb8(36, 36, 36)),
-            Self::Platinum => (rgb8(238, 238, 238), rgb8(238, 238, 238)),
+            Self::Breeze => (rgb8(239, 240, 241), rgb8(49, 54, 59)),
+            Self::Platinum => (PLATINUM_FACE, PLATINUM_FACE),
+            Self::Cde => (CDE_FACE, CDE_PANEL_DARK),
         };
 
         Some(match self.effective(appearance) {
@@ -390,9 +551,17 @@ impl Theme {
                 (rgb8(197, 221, 246), rgb8(20, 84, 140)),
                 (rgb8(38, 69, 107), rgb8(214, 230, 250)),
             ),
+            Self::Breeze => (
+                (rgb8(183, 225, 247), rgb8(0, 82, 120)),
+                (rgb8(38, 88, 112), rgb8(224, 246, 255)),
+            ),
             Self::Platinum => (
                 (rgb8(198, 208, 224), rgb8(0, 0, 128)),
                 (rgb8(198, 208, 224), rgb8(0, 0, 128)),
+            ),
+            Self::Cde => (
+                (rgb8(175, 205, 202), rgb8(20, 72, 70)),
+                (rgb8(51, 93, 90), rgb8(232, 246, 241)),
             ),
         };
 
@@ -416,7 +585,7 @@ impl Theme {
         // (button padding x/y, control height, spacing between controls x/y)
         let (padding, height, gap) = match self {
             // Tight and unobtrusive, and distinct from every platform's proportions.
-            Self::Plain => ((9.0, 4.0), 24.0, (7.0, 5.0)),
+            Self::Plain => ((8.0, 3.0), 22.0, (7.0, 5.0)),
             // Windows 11: generously padded, tall, roomy.
             Self::Fluent => ((11.0, 6.0), 32.0, (8.0, 6.0)),
             // Windows 95: tight and small, with the squat controls of the era.
@@ -425,8 +594,12 @@ impl Theme {
             Self::Aqua => ((13.0, 4.0), 24.0, (10.0, 6.0)),
             // GNOME: the most generous of the lot.
             Self::Adwaita => ((14.0, 7.0), 34.0, (8.0, 6.0)),
+            // KDE Breeze: compact but comfortably modern.
+            Self::Breeze => ((10.0, 5.0), 30.0, (8.0, 6.0)),
             // Mac OS 9: small, tight, square-ish.
             Self::Platinum => ((10.0, 3.0), 20.0, (6.0, 4.0)),
+            // Motif-era controls are compact and visibly sculpted.
+            Self::Cde => ((9.0, 3.0), 22.0, (6.0, 4.0)),
         };
 
         spacing.button_padding = egui::vec2(padding.0, padding.1);
@@ -475,14 +648,14 @@ impl Theme {
                 let (face, edge, hover, press, field) = match appearance {
                     Appearance::Light => (
                         WHITE,
-                        rgb8(77, 77, 77),
+                        rgb8(48, 48, 48),
                         rgb8(220, 220, 220),
                         rgb8(180, 180, 180),
                         WHITE,
                     ),
                     Appearance::Dark => (
                         rgb8(51, 51, 51),
-                        rgb8(128, 128, 128),
+                        rgb8(160, 160, 160),
                         rgb8(77, 77, 77),
                         rgb8(102, 102, 102),
                         rgb8(13, 13, 13),
@@ -528,7 +701,7 @@ impl Theme {
 
                 let (face, shadow) = match appearance {
                     Appearance::Light => (REDMOND_FACE, rgb8(128, 128, 128)),
-                    Appearance::Dark => (REDMOND_FACE_DARK, rgb8(69, 65, 91)),
+                    Appearance::Dark => (REDMOND_FACE_DARK, REDMOND_SHADOW_DARK),
                 };
 
                 for widget in widget_states(&mut visuals) {
@@ -538,19 +711,26 @@ impl Theme {
                 }
                 let (hover, press) = match appearance {
                     Appearance::Light => (rgb8(214, 210, 202), rgb8(160, 160, 160)),
-                    Appearance::Dark => (rgb8(131, 126, 152), rgb8(85, 80, 106)),
+                    Appearance::Dark => (rgb8(137, 132, 148), rgb8(82, 77, 92)),
                 };
                 set_pointer_fills(&mut visuals, hover, press);
                 visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, to_color32(BLACK));
                 visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, to_color32(BLACK));
+                // egui's default body grey is too modern for the stark Win95 light palette and
+                // too dim against the period dark scheme.
+                visuals.override_text_color = Some(to_color32(match appearance {
+                    Appearance::Light => BLACK,
+                    Appearance::Dark => rgb8(230, 225, 245),
+                }));
                 visuals.extreme_bg_color = to_color32(match appearance {
                     Appearance::Light => WHITE,
-                    Appearance::Dark => rgb8(38, 34, 48),
+                    Appearance::Dark => rgb8(34, 31, 39),
                 });
             }
             Self::Aqua => {
-                // Fully rounded: macOS's push buttons are capsules, not rounded rectangles.
-                round_widgets(&mut visuals, 12);
+                // Modern macOS rounds controls generously without turning ordinary dialog fields
+                // and push buttons into the full capsules used by iOS.
+                round_widgets(&mut visuals, 6);
 
                 let face = match appearance {
                     Appearance::Light => WHITE,
@@ -565,8 +745,13 @@ impl Theme {
                     Appearance::Light => rgb8(232, 232, 232),
                     Appearance::Dark => rgb8(110, 110, 112),
                 };
-                // Pressed is the accent blue, as on macOS — the one state it does make loud.
-                set_pointer_fills(&mut visuals, hover, rgb8(0, 122, 255));
+                // Accent belongs to the primary/default action. An ordinary push button darkens
+                // neutrally while held so it responds without briefly claiming primary status.
+                let press = match appearance {
+                    Appearance::Light => rgb8(205, 205, 207),
+                    Appearance::Dark => rgb8(75, 75, 78),
+                };
+                set_pointer_fills(&mut visuals, hover, press);
                 // Aqua has no borders to find a control by, so the text field has to be told apart
                 // from the dialog by its fill alone — clearly darker, as macOS does in dark mode.
                 visuals.extreme_bg_color = to_color32(match appearance {
@@ -577,6 +762,14 @@ impl Theme {
             Self::Adwaita => {
                 // Libadwaita rounds everything to the same generous radius.
                 round_widgets(&mut visuals, 8);
+
+                // Cantarell in egui's generic mid-grey makes ordinary GNOME content look
+                // insensitive, especially in dark mode. Use Adwaita's own foreground tones;
+                // weak text (including placeholders) remains muted independently.
+                visuals.override_text_color = Some(to_color32(match appearance {
+                    Appearance::Light => ADWAITA_TEXT,
+                    Appearance::Dark => rgb8(246, 245, 244),
+                }));
 
                 // Darker than the headerbar-grey panel behind it. Adwaita's own dialog buttons are
                 // roughly 10% black over the window background rather than the near-white they were
@@ -603,6 +796,35 @@ impl Theme {
                     Appearance::Dark => rgb8(30, 30, 30),
                 });
             }
+            Self::Breeze => {
+                round_widgets(&mut visuals, 3);
+                let (face, edge, hover, press, field, text) = match appearance {
+                    Appearance::Light => (
+                        rgb8(247, 247, 247),
+                        rgb8(189, 195, 199),
+                        rgb8(225, 228, 230),
+                        rgb8(207, 212, 215),
+                        WHITE,
+                        rgb8(35, 38, 41),
+                    ),
+                    Appearance::Dark => (
+                        rgb8(59, 64, 69),
+                        rgb8(97, 102, 107),
+                        rgb8(82, 90, 98),
+                        rgb8(98, 108, 116),
+                        rgb8(35, 38, 41),
+                        rgb8(239, 240, 241),
+                    ),
+                };
+                for widget in widget_states(&mut visuals) {
+                    widget.bg_fill = to_color32(face);
+                    widget.weak_bg_fill = to_color32(face);
+                    widget.bg_stroke = egui::Stroke::new(1.0_f32, to_color32(edge));
+                }
+                set_pointer_fills(&mut visuals, hover, press);
+                visuals.extreme_bg_color = to_color32(field);
+                visuals.override_text_color = Some(to_color32(text));
+            }
             Self::Platinum => {
                 // Square, not the 3pt tried first: `bevel::button` paints a bevel on square
                 // corners, and a rounded fill under square edges reads as a mistake. Mac OS 9's
@@ -616,6 +838,35 @@ impl Theme {
                 // Darkens on hover rather than lightening, which leaves room for the press state.
                 set_pointer_fills(&mut visuals, rgb8(198, 198, 198), rgb8(170, 170, 170));
                 visuals.extreme_bg_color = to_color32(WHITE);
+            }
+            Self::Cde => {
+                round_widgets(&mut visuals, 0);
+                let (face, shadow, hover, press, field, text) = match appearance {
+                    Appearance::Light => (
+                        CDE_FACE,
+                        CDE_SHADOW,
+                        rgb8(205, 205, 194),
+                        rgb8(151, 151, 143),
+                        WHITE,
+                        BLACK,
+                    ),
+                    Appearance::Dark => (
+                        CDE_FACE_DARK,
+                        CDE_SHADOW_DARK,
+                        rgb8(111, 119, 115),
+                        rgb8(67, 72, 70),
+                        rgb8(30, 33, 32),
+                        rgb8(235, 240, 232),
+                    ),
+                };
+                for widget in widget_states(&mut visuals) {
+                    widget.bg_fill = to_color32(face);
+                    widget.weak_bg_fill = to_color32(face);
+                    widget.bg_stroke = egui::Stroke::new(1.0_f32, to_color32(shadow));
+                }
+                set_pointer_fills(&mut visuals, hover, press);
+                visuals.extreme_bg_color = to_color32(field);
+                visuals.override_text_color = Some(to_color32(text));
             }
         }
 
@@ -802,6 +1053,22 @@ pub enum WidgetEdge {
     },
 }
 
+/// How a dialog distinguishes the action activated by Enter from its other buttons.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DefaultButtonStyle {
+    /// Keep the normal themed face and reinforce its outer edge. Used by themes where a filled
+    /// primary action would be anachronistic or needlessly loud.
+    Outline(egui::Stroke),
+    /// A platform accent fill, with a separate response for hover and press.
+    Filled {
+        idle: egui::Color32,
+        hover: egui::Color32,
+        active: egui::Color32,
+        text: egui::Color32,
+        border: egui::Stroke,
+    },
+}
+
 /// The outline a chrome button is filled within.
 #[allow(dead_code)] // see the note above: step 4's vocabulary
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -817,6 +1084,8 @@ pub enum ButtonShape {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glyph {
     Cross,
+    /// A more open cross spanning most of a circular decoration, as in KDE Breeze.
+    WideCross,
     /// Nothing — an inert button, or one whose glyph only appears on hover.
     None,
 }
@@ -838,6 +1107,9 @@ pub enum ButtonAction {
 pub struct ButtonPaint {
     pub fill: Fill,
     pub glyph: Color,
+    /// Optional outer rim for circular chrome controls. Rectangular buttons fill their whole slot
+    /// and leave their edge to the window theme's border vocabulary.
+    pub rim: Option<Color>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -919,6 +1191,15 @@ const fn paint(fill: Color, glyph: Color) -> ButtonPaint {
     ButtonPaint {
         fill: Fill::Solid(fill),
         glyph,
+        rim: None,
+    }
+}
+
+const fn rimmed(fill: Fill, glyph: Color, rim: Color) -> ButtonPaint {
+    ButtonPaint {
+        fill,
+        glyph,
+        rim: Some(rim),
     }
 }
 
@@ -942,14 +1223,17 @@ const fn plain_close(bar: Color, glyph: Color) -> Button {
         idle: ButtonPaint {
             fill: Fill::Solid(bar),
             glyph,
+            rim: None,
         },
         hover: ButtonPaint {
             fill: Fill::Solid(PLAIN_CLOSE_HOVER),
             glyph: WHITE,
+            rim: None,
         },
         active: ButtonPaint {
             fill: Fill::Solid(PLAIN_CLOSE_ACTIVE),
             glyph: WHITE,
+            rim: None,
         },
     }
 }
@@ -988,7 +1272,7 @@ const FLUENT_CHROME: Chrome = Chrome {
     border: &[BorderRing::Uniform(rgb8(180, 180, 180))],
     title: TitleStyle {
         font: Face::Selawik,
-        size: 14.0,
+        size: 12.0,
         color: FLUENT_TEXT,
         padding: 12.0,
         // Windows puts its title at the left, unlike the centred plain bar.
@@ -1073,22 +1357,22 @@ const REDMOND_PRESSED: &[BorderRing] = &[
 
 const REDMOND_RAISED_DARK: &[BorderRing] = &[
     BorderRing::Bevel {
-        top_left: rgb8(142, 138, 163),
+        top_left: REDMOND_HIGHLIGHT_DARK,
         bottom_right: BLACK,
     },
     BorderRing::Bevel {
-        top_left: rgb8(169, 165, 188),
-        bottom_right: rgb8(69, 65, 91),
+        top_left: REDMOND_BRIGHT_DARK,
+        bottom_right: REDMOND_SHADOW_DARK,
     },
 ];
 const REDMOND_PRESSED_DARK: &[BorderRing] = &[
     BorderRing::Bevel {
         top_left: BLACK,
-        bottom_right: rgb8(142, 138, 163),
+        bottom_right: REDMOND_HIGHLIGHT_DARK,
     },
     BorderRing::Bevel {
-        top_left: rgb8(69, 65, 91),
-        bottom_right: rgb8(169, 165, 188),
+        top_left: REDMOND_SHADOW_DARK,
+        bottom_right: REDMOND_BRIGHT_DARK,
     },
 ];
 
@@ -1114,6 +1398,28 @@ const PLATINUM_PRESSED: &[BorderRing] = &[
 const AQUA_DISABLED: Color = rgb8(213, 213, 213);
 const AQUA_LIGHT_RATIO: f32 = 0.43;
 
+const fn aqua_disabled_light() -> ButtonPaint {
+    rimmed(
+        Fill::VerticalGradient {
+            from: rgb8(226, 226, 226),
+            to: AQUA_DISABLED,
+        },
+        TRANSPARENT,
+        rgb8(190, 190, 190),
+    )
+}
+
+const fn aqua_red(fill_top: Color, fill_bottom: Color, glyph: Color) -> ButtonPaint {
+    rimmed(
+        Fill::VerticalGradient {
+            from: fill_top,
+            to: fill_bottom,
+        },
+        glyph,
+        rgb8(218, 72, 66),
+    )
+}
+
 /// One of aqua's inert lights: flat grey, no glyph, no reaction to the pointer.
 const fn aqua_inert() -> Button {
     Button {
@@ -1121,9 +1427,9 @@ const fn aqua_inert() -> Button {
         shape: ButtonShape::Circle,
         glyph: Glyph::None,
         width_ratio: AQUA_LIGHT_RATIO,
-        idle: paint(AQUA_DISABLED, TRANSPARENT),
-        hover: paint(AQUA_DISABLED, TRANSPARENT),
-        active: paint(AQUA_DISABLED, TRANSPARENT),
+        idle: aqua_disabled_light(),
+        hover: aqua_disabled_light(),
+        active: aqua_disabled_light(),
     }
 }
 
@@ -1152,9 +1458,9 @@ const AQUA_CHROME: Chrome = Chrome {
                 width_ratio: AQUA_LIGHT_RATIO,
                 // The glyph is transparent until hovered, exactly as Aqua hides its marks until
                 // the pointer enters the cluster.
-                idle: paint(rgb8(255, 95, 87), TRANSPARENT),
-                hover: paint(rgb8(255, 95, 87), rgb8(77, 0, 0)),
-                active: paint(rgb8(191, 71, 66), rgb8(77, 0, 0)),
+                idle: aqua_red(rgb8(255, 128, 122), rgb8(255, 95, 87), TRANSPARENT),
+                hover: aqua_red(rgb8(255, 128, 122), rgb8(255, 95, 87), rgb8(77, 0, 0)),
+                active: aqua_red(rgb8(211, 87, 81), rgb8(191, 71, 66), rgb8(77, 0, 0)),
             },
             aqua_inert(),
             aqua_inert(),
@@ -1192,6 +1498,155 @@ const ADWAITA_CHROME: Chrome = Chrome {
     },
 };
 
+// breeze — KDE Plasma. Cool neutral surfaces, compact geometry and KDE's blue accent. KWin
+// decorations vary by distribution, so this follows upstream Breeze rather than a distro skin.
+const BREEZE_HEADER: Color = rgb8(239, 240, 241);
+const BREEZE_TEXT: Color = rgb8(35, 38, 41);
+
+const BREEZE_CHROME: Chrome = Chrome {
+    header: Fill::Solid(BREEZE_HEADER),
+    border: &[BorderRing::Uniform(rgb8(189, 195, 199))],
+    title: TitleStyle {
+        font: Face::NotoSans,
+        size: 13.0,
+        color: BREEZE_TEXT,
+        padding: 10.0,
+        align: TextAlign::Center,
+    },
+    buttons: Buttons {
+        side: Side::Right,
+        inset: 6.0,
+        gap: 0.0,
+        buttons: &[Button {
+            action: ButtonAction::Close,
+            shape: ButtonShape::Circle,
+            glyph: Glyph::WideCross,
+            width_ratio: 0.55,
+            idle: paint(BREEZE_HEADER, BREEZE_TEXT),
+            hover: paint(rgb8(255, 130, 145), WHITE),
+            active: paint(rgb8(225, 82, 105), WHITE),
+        }],
+    },
+};
+
+// cde — the Common Desktop Environment's Motif language: blue-green active title, warm grey
+// faces and deeply modelled bevels. The palette is intentionally workstation-like rather than a
+// clone of any one vendor's CDE defaults, which differed across Solaris, HP-UX and AIX.
+const CDE_FACE: Color = rgb8(184, 184, 174);
+const CDE_SHADOW: Color = rgb8(82, 82, 76);
+const CDE_TITLE: Color = rgb8(45, 98, 96);
+const CDE_FACE_DARK: Color = rgb8(91, 98, 94);
+const CDE_PANEL_DARK: Color = rgb8(62, 67, 65);
+const CDE_SHADOW_DARK: Color = rgb8(25, 28, 27);
+const CDE_TITLE_DARK: Color = rgb8(26, 75, 73);
+
+const CDE_RAISED: &[BorderRing] = &[
+    BorderRing::Bevel {
+        top_left: rgb8(238, 238, 226),
+        bottom_right: rgb8(70, 70, 65),
+    },
+    BorderRing::Bevel {
+        top_left: rgb8(211, 211, 200),
+        bottom_right: rgb8(118, 118, 109),
+    },
+];
+const CDE_PRESSED: &[BorderRing] = &[
+    BorderRing::Bevel {
+        top_left: rgb8(70, 70, 65),
+        bottom_right: rgb8(238, 238, 226),
+    },
+    BorderRing::Bevel {
+        top_left: rgb8(118, 118, 109),
+        bottom_right: rgb8(211, 211, 200),
+    },
+];
+const CDE_RAISED_DARK: &[BorderRing] = &[
+    BorderRing::Bevel {
+        top_left: rgb8(154, 164, 158),
+        bottom_right: CDE_SHADOW_DARK,
+    },
+    BorderRing::Bevel {
+        top_left: rgb8(124, 134, 129),
+        bottom_right: rgb8(47, 51, 49),
+    },
+];
+const CDE_PRESSED_DARK: &[BorderRing] = &[
+    BorderRing::Bevel {
+        top_left: CDE_SHADOW_DARK,
+        bottom_right: rgb8(154, 164, 158),
+    },
+    BorderRing::Bevel {
+        top_left: rgb8(47, 51, 49),
+        bottom_right: rgb8(124, 134, 129),
+    },
+];
+
+const CDE_CHROME: Chrome = Chrome {
+    header: Fill::Solid(CDE_TITLE),
+    border: &[
+        BorderRing::Bevel {
+            top_left: rgb8(238, 238, 226),
+            bottom_right: rgb8(55, 55, 51),
+        },
+        BorderRing::Bevel {
+            top_left: rgb8(211, 211, 200),
+            bottom_right: CDE_SHADOW,
+        },
+        BorderRing::Uniform(CDE_FACE),
+    ],
+    title: TitleStyle {
+        font: Face::LiberationSansBold,
+        size: 12.0,
+        color: WHITE,
+        padding: 4.0,
+        align: TextAlign::Left,
+    },
+    buttons: Buttons {
+        side: Side::Right,
+        inset: 2.0,
+        gap: 0.0,
+        buttons: &[rect_close(
+            0.85,
+            paint(CDE_FACE, BLACK),
+            paint(rgb8(205, 205, 194), BLACK),
+            paint(rgb8(145, 145, 137), BLACK),
+        )],
+    },
+};
+
+const CDE_CHROME_DARK: Chrome = Chrome {
+    header: Fill::Solid(CDE_TITLE_DARK),
+    border: &[
+        BorderRing::Bevel {
+            top_left: rgb8(154, 164, 158),
+            bottom_right: rgb8(18, 20, 19),
+        },
+        BorderRing::Bevel {
+            top_left: rgb8(124, 134, 129),
+            bottom_right: CDE_SHADOW_DARK,
+        },
+        BorderRing::Uniform(CDE_FACE_DARK),
+    ],
+    title: TitleStyle {
+        font: Face::LiberationSansBold,
+        size: 12.0,
+        color: WHITE,
+        padding: 4.0,
+        align: TextAlign::Left,
+    },
+    buttons: Buttons {
+        side: Side::Right,
+        inset: 2.0,
+        gap: 0.0,
+        buttons: &[rect_close(
+            0.85,
+            paint(CDE_FACE_DARK, WHITE),
+            paint(rgb8(111, 119, 115), WHITE),
+            paint(rgb8(67, 72, 70), WHITE),
+        )],
+    },
+};
+
 // platinum — Mac OS 9. Pinstriped bar, black frame, close box on the *left*. No zoom or collapse
 // box: Mac OS 9 omits them on windows that cannot do either, so nothing has to be faked.
 const PLATINUM_FACE: Color = rgb8(221, 221, 221);
@@ -1209,7 +1664,7 @@ const PLATINUM_CHROME: Chrome = Chrome {
     },
     border: &[BorderRing::Uniform(BLACK)],
     title: TitleStyle {
-        font: Face::Inter,
+        font: Face::SourceSansSemibold,
         size: 12.0,
         color: BLACK,
         padding: 4.0,
@@ -1266,7 +1721,7 @@ const FLUENT_CHROME_DARK: Chrome = Chrome {
     border: &[BorderRing::Uniform(rgb8(74, 74, 74))],
     title: TitleStyle {
         font: Face::Selawik,
-        size: 14.0,
+        size: 12.0,
         color: WHITE,
         padding: 12.0,
         align: TextAlign::Left,
@@ -1290,20 +1745,24 @@ const FLUENT_CHROME_DARK: Chrome = Chrome {
 // Note the title bar is *lighter* than the light variant's, which is not a mistake: the light bar
 // is `#000080` navy, already darker than most dark-mode chrome. What actually darkens is the face
 // — the frame, the button fills and the dialog background around the content.
-const REDMOND_FACE_DARK: Color = rgb8(107, 102, 128);
-const REDMOND_TITLE_DARK: Color = rgb8(59, 51, 72);
+const REDMOND_FACE_DARK: Color = rgb8(112, 108, 124);
+const REDMOND_PANEL_DARK: Color = rgb8(78, 77, 85);
+const REDMOND_TITLE_DARK: Color = rgb8(46, 32, 60);
+const REDMOND_HIGHLIGHT_DARK: Color = rgb8(174, 169, 190);
+const REDMOND_BRIGHT_DARK: Color = rgb8(211, 206, 222);
+const REDMOND_SHADOW_DARK: Color = rgb8(67, 63, 75);
 const REDMOND_GLYPH_DARK: Color = rgb8(240, 238, 245);
 
 const REDMOND_CHROME_DARK: Chrome = Chrome {
     header: Fill::Solid(REDMOND_TITLE_DARK),
     border: &[
         BorderRing::Bevel {
-            top_left: rgb8(142, 138, 163),
+            top_left: REDMOND_HIGHLIGHT_DARK,
             bottom_right: BLACK,
         },
         BorderRing::Bevel {
-            top_left: rgb8(169, 165, 188),
-            bottom_right: rgb8(69, 65, 91),
+            top_left: REDMOND_BRIGHT_DARK,
+            bottom_right: REDMOND_SHADOW_DARK,
         },
         BorderRing::Uniform(REDMOND_FACE_DARK),
     ],
@@ -1331,15 +1790,26 @@ const REDMOND_CHROME_DARK: Chrome = Chrome {
 // the bar and title change. The inert pair moves to dark mode's own disabled grey.
 const AQUA_DISABLED_DARK: Color = rgb8(90, 90, 90);
 
+const fn aqua_disabled_dark_paint() -> ButtonPaint {
+    rimmed(
+        Fill::VerticalGradient {
+            from: rgb8(105, 105, 105),
+            to: AQUA_DISABLED_DARK,
+        },
+        TRANSPARENT,
+        rgb8(65, 65, 65),
+    )
+}
+
 const fn aqua_inert_dark() -> Button {
     Button {
         action: ButtonAction::Inert,
         shape: ButtonShape::Circle,
         glyph: Glyph::None,
         width_ratio: AQUA_LIGHT_RATIO,
-        idle: paint(AQUA_DISABLED_DARK, TRANSPARENT),
-        hover: paint(AQUA_DISABLED_DARK, TRANSPARENT),
-        active: paint(AQUA_DISABLED_DARK, TRANSPARENT),
+        idle: aqua_disabled_dark_paint(),
+        hover: aqua_disabled_dark_paint(),
+        active: aqua_disabled_dark_paint(),
     }
 }
 
@@ -1366,9 +1836,9 @@ const AQUA_CHROME_DARK: Chrome = Chrome {
                 shape: ButtonShape::Circle,
                 glyph: Glyph::Cross,
                 width_ratio: AQUA_LIGHT_RATIO,
-                idle: paint(rgb8(255, 95, 87), TRANSPARENT),
-                hover: paint(rgb8(255, 95, 87), rgb8(77, 0, 0)),
-                active: paint(rgb8(191, 71, 66), rgb8(77, 0, 0)),
+                idle: aqua_red(rgb8(255, 128, 122), rgb8(255, 95, 87), TRANSPARENT),
+                hover: aqua_red(rgb8(255, 128, 122), rgb8(255, 95, 87), rgb8(77, 0, 0)),
+                active: aqua_red(rgb8(211, 87, 81), rgb8(191, 71, 66), rgb8(77, 0, 0)),
             },
             aqua_inert_dark(),
             aqua_inert_dark(),
@@ -1401,6 +1871,34 @@ const ADWAITA_CHROME_DARK: Chrome = Chrome {
             idle: paint(rgb8(69, 69, 69), WHITE),
             hover: paint(rgb8(85, 85, 85), WHITE),
             active: paint(rgb8(102, 102, 102), WHITE),
+        }],
+    },
+};
+
+const BREEZE_HEADER_DARK: Color = rgb8(49, 54, 59);
+
+const BREEZE_CHROME_DARK: Chrome = Chrome {
+    header: Fill::Solid(BREEZE_HEADER_DARK),
+    border: &[BorderRing::Uniform(rgb8(23, 26, 28))],
+    title: TitleStyle {
+        font: Face::NotoSans,
+        size: 13.0,
+        color: rgb8(239, 240, 241),
+        padding: 10.0,
+        align: TextAlign::Center,
+    },
+    buttons: Buttons {
+        side: Side::Right,
+        inset: 6.0,
+        gap: 0.0,
+        buttons: &[Button {
+            action: ButtonAction::Close,
+            shape: ButtonShape::Circle,
+            glyph: Glyph::WideCross,
+            width_ratio: 0.55,
+            idle: paint(BREEZE_HEADER_DARK, rgb8(239, 240, 241)),
+            hover: paint(rgb8(255, 130, 145), WHITE),
+            active: paint(rgb8(225, 82, 105), WHITE),
         }],
     },
 };
@@ -1589,7 +2087,9 @@ mod tests {
             ThemeChoice::Redmond,
             ThemeChoice::Aqua,
             ThemeChoice::Adwaita,
+            ThemeChoice::Breeze,
             ThemeChoice::Platinum,
+            ThemeChoice::Cde,
             ThemeChoice::Native,
             ThemeChoice::NativeRetro,
         ] {
@@ -1610,7 +2110,9 @@ mod tests {
         assert_eq!(ThemeChoice::Redmond.resolve(), Theme::Redmond);
         assert_eq!(ThemeChoice::Aqua.resolve(), Theme::Aqua);
         assert_eq!(ThemeChoice::Adwaita.resolve(), Theme::Adwaita);
+        assert_eq!(ThemeChoice::Breeze.resolve(), Theme::Breeze);
         assert_eq!(ThemeChoice::Platinum.resolve(), Theme::Platinum);
+        assert_eq!(ThemeChoice::Cde.resolve(), Theme::Cde);
     }
 
     /// The API default is `plain` on every platform — the predictable value, not the
@@ -1622,8 +2124,7 @@ mod tests {
     }
 
     /// `native` and `native-retro` must not resolve to the same look, or the retro alias is
-    /// pointless on that platform. (Linux is the exception: it has no recognisable retro native
-    /// look, so both may legitimately differ from each other only by documentation.)
+    /// pointless on that platform.
     #[test]
     fn native_and_native_retro_differ() {
         assert_ne!(
@@ -1657,9 +2158,22 @@ mod tests {
         assert_eq!(name(ThemeChoice::Redmond), "\"redmond\"");
         assert_eq!(name(ThemeChoice::Aqua), "\"aqua\"");
         assert_eq!(name(ThemeChoice::Adwaita), "\"adwaita\"");
+        assert_eq!(name(ThemeChoice::Breeze), "\"breeze\"");
         assert_eq!(name(ThemeChoice::Platinum), "\"platinum\"");
+        assert_eq!(name(ThemeChoice::Cde), "\"cde\"");
         assert_eq!(name(ThemeChoice::Native), "\"native\"");
         assert_eq!(name(ThemeChoice::NativeRetro), "\"native-retro\"");
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[test]
+    fn linux_native_distinguishes_plasma_from_other_desktops() {
+        assert_eq!(ThemeChoice::native_unix("KDE"), Theme::Breeze);
+        assert_eq!(ThemeChoice::native_unix("ubuntu:KDE"), Theme::Breeze);
+        assert_eq!(ThemeChoice::native_unix("Plasma"), Theme::Breeze);
+        assert_eq!(ThemeChoice::native_unix("GNOME"), Theme::Adwaita);
+        assert_eq!(ThemeChoice::native_unix(""), Theme::Adwaita);
+        assert_eq!(ThemeChoice::native_retro(), Theme::Cde);
     }
 
     /// A header has to be tall enough for the title and buttons to fit, and a border thin enough
@@ -1744,12 +2258,18 @@ mod tests {
             assert_eq!(button.glyph, Glyph::None);
             assert_eq!(button.idle, button.hover, "inert light reacts to hover");
             assert_eq!(button.idle, button.active, "inert light reacts to a press");
-            // Grey, not a colour: identical channels.
-            let Fill::Solid(fill) = button.idle.fill else {
-                panic!("inert light is not a flat fill");
+            // Both ends of the dimensional fill stay grey, not canonical yellow/green.
+            let Fill::VerticalGradient { from, to } = button.idle.fill else {
+                panic!("inert light is not deliberately shaded");
             };
-            assert_eq!(fill.r, fill.g, "inert light is coloured");
-            assert_eq!(fill.g, fill.b, "inert light is coloured");
+            for fill in [from, to] {
+                assert_eq!(fill.r, fill.g, "inert light is coloured");
+                assert_eq!(fill.g, fill.b, "inert light is coloured");
+            }
+            assert!(
+                button.idle.rim.is_some(),
+                "inert light has no intentional rim"
+            );
         }
     }
 
@@ -1761,6 +2281,37 @@ mod tests {
         assert_eq!(close.action, ButtonAction::Close);
         assert_eq!(close.idle.glyph.a, 0.0, "idle glyph should be invisible");
         assert!(close.hover.glyph.a > 0.0, "hover glyph should be visible");
+    }
+
+    #[test]
+    fn aquas_controls_are_mac_rounded_and_secondary_press_stays_neutral() {
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let style = Theme::Aqua.widget_style(appearance);
+            assert_eq!(
+                style.visuals.widgets.inactive.corner_radius,
+                egui::CornerRadius::same(6)
+            );
+            let fill = style.visuals.widgets.active.weak_bg_fill;
+            assert_eq!(fill.r(), fill.g(), "{appearance:?}");
+            assert!(
+                (fill.r() as i16 - fill.b() as i16).abs() <= 3,
+                "{appearance:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn adwaita_uses_its_own_foreground_in_both_appearances() {
+        let light = Theme::Adwaita.widget_style(Appearance::Light);
+        let dark = Theme::Adwaita.widget_style(Appearance::Dark);
+        assert_eq!(
+            light.visuals.override_text_color,
+            Some(to_color32(ADWAITA_TEXT))
+        );
+        assert_eq!(
+            dark.visuals.override_text_color,
+            Some(to_color32(rgb8(246, 245, 244)))
+        );
     }
 
     /// The two Mac themes put their close control on the left, which is the placement that made
@@ -1804,16 +2355,23 @@ mod tests {
         }
     }
 
-    /// A theme's title bar and its widgets must be set in the same face. Different faces above and
-    /// below the header line is the clearest sign a theme is only skin-deep.
+    /// A theme's title bar and its widgets must be set in the same family. A heavier companion
+    /// face is fine; an unrelated typeface above and below the header line is the clearest sign a
+    /// theme is only skin-deep.
     #[test]
     fn a_themes_title_matches_its_widgets() {
         for &theme in ALL_THEMES {
             for appearance in [Appearance::Light, Appearance::Dark] {
-                assert_eq!(
-                    theme.chrome(appearance).title.font,
-                    theme.widget_font(),
-                    "{theme:?} {appearance:?}"
+                let title = theme.chrome(appearance).title.font;
+                let widgets = theme.widget_font();
+                assert!(
+                    title == widgets
+                        || matches!(
+                            (title, widgets),
+                            (Face::SourceSansSemibold, Face::SourceSans)
+                                | (Face::LiberationSansBold, Face::LiberationSans)
+                        ),
+                    "{theme:?} {appearance:?}: {title:?} does not match {widgets:?}"
                 );
             }
         }
@@ -2057,7 +2615,7 @@ mod tests {
         for &theme in ALL_THEMES {
             for appearance in [Appearance::Light, Appearance::Dark] {
                 let bevelled = matches!(theme.widget_edge(appearance), WidgetEdge::Bevel { .. });
-                let expected = matches!(theme, Theme::Redmond | Theme::Platinum);
+                let expected = matches!(theme, Theme::Redmond | Theme::Platinum | Theme::Cde);
                 assert_eq!(bevelled, expected, "{theme:?} {appearance:?}");
             }
         }
@@ -2387,22 +2945,30 @@ mod tests {
 
             let close = &buttons[0];
             assert_eq!(close.action, ButtonAction::Close);
-            let Fill::Solid(fill) = close.idle.fill else {
-                panic!("aqua's close light is not a flat fill");
+            let Fill::VerticalGradient { from, to } = close.idle.fill else {
+                panic!("aqua's close light is not shaded");
             };
             // Still red, not greyed: dark mode does not disable it.
-            assert!(fill.r > fill.g && fill.r > fill.b, "{appearance:?}");
+            for fill in [from, to] {
+                assert!(fill.r > fill.g && fill.r > fill.b, "{appearance:?}");
+            }
 
             for button in buttons.iter().filter(|b| b.action == ButtonAction::Inert) {
                 assert_eq!(button.glyph, Glyph::None, "{appearance:?}");
                 assert_eq!(button.idle, button.hover, "{appearance:?}");
                 assert_eq!(button.idle, button.active, "{appearance:?}");
 
-                let Fill::Solid(fill) = button.idle.fill else {
-                    panic!("aqua's inert light is not a flat fill");
+                let Fill::VerticalGradient { from, to } = button.idle.fill else {
+                    panic!("aqua's inert light is not shaded");
                 };
-                assert_eq!(fill.r, fill.g, "{appearance:?} inert light is coloured");
-                assert_eq!(fill.g, fill.b, "{appearance:?} inert light is coloured");
+                for fill in [from, to] {
+                    assert_eq!(fill.r, fill.g, "{appearance:?} inert light is coloured");
+                    assert_eq!(fill.g, fill.b, "{appearance:?} inert light is coloured");
+                }
+                assert!(
+                    button.idle.rim.is_some(),
+                    "{appearance:?} inert light has no rim"
+                );
             }
         }
     }
@@ -2421,6 +2987,31 @@ mod tests {
                 "dark ring {index} is not raised"
             );
         }
+    }
+
+    #[test]
+    fn redmond_dark_keeps_a_clear_period_palette_hierarchy() {
+        let brightness = |color: Color| color.r + color.g + color.b;
+        let chrome = Theme::Redmond.chrome(Appearance::Dark);
+        let Fill::Solid(title) = chrome.header else {
+            panic!("redmond title bar should be solid");
+        };
+        let style = Theme::Redmond.widget_style(Appearance::Dark);
+        let panel = style.visuals.panel_fill;
+        let panel_brightness = (panel.r() as f32 + panel.g() as f32 + panel.b() as f32) / 255.0;
+
+        assert!(
+            brightness(title) < panel_brightness,
+            "title bar is not the strongest dark plane"
+        );
+        assert!(
+            panel_brightness < brightness(REDMOND_FACE_DARK),
+            "panel and raised controls do not separate"
+        );
+        assert!(
+            brightness(REDMOND_BRIGHT_DARK) > brightness(REDMOND_HIGHLIGHT_DARK),
+            "inner bevel highlight should be brightest"
+        );
     }
 
     // ── Chrome ───────────────────────────────────────────────────────────────────

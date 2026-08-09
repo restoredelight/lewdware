@@ -22,7 +22,9 @@
         "redmond": "Windows 95",
         "aqua": "macOS",
         "adwaita": "GNOME",
-        "platinum": "Mac OS 9"
+        "breeze": "KDE Plasma",
+        "platinum": "Mac OS 9",
+        "cde": "CDE / Motif"
       }
     },
     "appearance": {

@@ -26,6 +26,16 @@ pub enum Face {
     Inter,
     /// Cantarell — GNOME's own UI font, for `adwaita`.
     Cantarell,
+    /// Noto Sans — KDE Plasma's default UI face, for `breeze`.
+    NotoSans,
+    /// Liberation Sans — metrically compatible with Helvetica, for CDE/Motif widgets.
+    LiberationSans,
+    /// Liberation Sans Bold — CDE/Motif's sturdy active-title companion.
+    LiberationSansBold,
+    /// Source Sans 3 Regular — compact UI face used as a redistributable Charcoal stand-in.
+    SourceSans,
+    /// Source Sans 3 Semibold — the sturdier title-bar companion for `platinum`.
+    SourceSansSemibold,
 }
 
 impl From<TextFont> for Face {
@@ -77,6 +87,31 @@ impl Face {
                 bytes: include_bytes!("../assets/fonts/Cantarell-Regular.otf"),
                 data_name: "Cantarell-Regular",
                 family: "lewdware-cantarell",
+            },
+            Self::NotoSans => Bundled {
+                bytes: include_bytes!("../assets/fonts/NotoSans.ttf"),
+                data_name: "NotoSans",
+                family: "lewdware-noto-sans",
+            },
+            Self::LiberationSans => Bundled {
+                bytes: include_bytes!("../assets/fonts/LiberationSans-Regular.ttf"),
+                data_name: "LiberationSans-Regular",
+                family: "lewdware-liberation-sans",
+            },
+            Self::LiberationSansBold => Bundled {
+                bytes: include_bytes!("../assets/fonts/LiberationSans-Bold.ttf"),
+                data_name: "LiberationSans-Bold",
+                family: "lewdware-liberation-sans-bold",
+            },
+            Self::SourceSans => Bundled {
+                bytes: include_bytes!("../assets/fonts/SourceSans3-Regular.ttf"),
+                data_name: "SourceSans3-Regular",
+                family: "lewdware-source-sans",
+            },
+            Self::SourceSansSemibold => Bundled {
+                bytes: include_bytes!("../assets/fonts/SourceSans3-Semibold.ttf"),
+                data_name: "SourceSans3-Semibold",
+                family: "lewdware-source-sans-semibold",
             },
         };
         Some(bundled)

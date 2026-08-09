@@ -238,6 +238,35 @@ impl Header {
         let pen_y = (self.physical_size.height as f32 / 2.0) + (scaled_font.ascent() / 2.0)
             - (1.0 * self.scale_factor as f32);
 
+        // A pinstriped classic-Mac title bar interrupts its stripes behind the caption. Printing
+        // directly over them makes the letters shimmer and looks like a texture laid under text,
+        // not Platinum chrome. Use the midpoint of the stripe pair so the plaque belongs to the
+        // bar while remaining visibly solid.
+        if let Fill::Pinstripe { base, stripe, .. } = self.chrome.header {
+            let average = crate::lua::Color {
+                r: (base.r + stripe.r) / 2.0,
+                g: (base.g + stripe.g) / 2.0,
+                b: (base.b + stripe.b) / 2.0,
+                a: (base.a + stripe.a) / 2.0,
+            };
+            let plaque_padding = 4.0 * self.scale_factor as f32;
+            let left = (pen_x - plaque_padding).max(0.0);
+            let right = (pen_x + text_width + plaque_padding).min(full_width);
+            if let Some(rect) = Rect::from_xywh(
+                left,
+                0.0,
+                (right - left).max(0.0),
+                self.physical_size.height as f32,
+            ) {
+                self.pixmap.fill_rect(
+                    rect,
+                    &fill_paint(Fill::Solid(average), rect),
+                    Transform::identity(),
+                    None,
+                );
+            }
+        }
+
         let text_pixmap = rasterise_text(
             &text,
             &font,
@@ -284,8 +313,29 @@ impl Header {
                         continue;
                     };
 
+                    if let Some(rim) = paint.rim {
+                        let mut rim_path = PathBuilder::new();
+                        rim_path.push_circle(center.0, center.1, radius);
+                        if let Some(rim_path) = rim_path.finish() {
+                            let mut rim_paint = Paint::default();
+                            rim_paint.set_color(to_tiny_skia(rim));
+                            self.pixmap.fill_path(
+                                &rim_path,
+                                &rim_paint,
+                                tiny_skia::FillRule::Winding,
+                                transform,
+                                None,
+                            );
+                        }
+                    }
+
+                    let inner_radius = if paint.rim.is_some() {
+                        (radius - 1.0).max(0.0)
+                    } else {
+                        radius
+                    };
                     let mut path = PathBuilder::new();
-                    path.push_circle(center.0, center.1, radius);
+                    path.push_circle(center.0, center.1, inner_radius);
                     if let Some(path) = path.finish() {
                         self.pixmap.fill_path(
                             &path,
@@ -307,13 +357,17 @@ impl Header {
     /// Sized from the *button*, not the title bar: scaling a cross to a 28px header inside `aqua`'s
     /// 12px light drew it outside the circle entirely. Shared with the test that checks glyphs stay
     /// inside their buttons, so the two cannot drift apart.
-    fn glyph_reach(&self, shape: ButtonShape, width: f32) -> f32 {
+    fn glyph_reach(&self, glyph: Glyph, shape: ButtonShape, width: f32) -> f32 {
         let extent = width.min(self.size.height as f32);
-        match shape {
-            ButtonShape::Rect => extent / 6.0,
+        match (glyph, shape) {
+            (Glyph::None, _) => 0.0,
+            (Glyph::Cross | Glyph::WideCross, ButtonShape::Rect) => extent / 6.0,
             // A cross inscribed in a circle reaches `offset * sqrt(2)` from the centre, so it has
             // to be pulled in further than in a rectangle of the same size.
-            ButtonShape::Circle => extent / 6.0 * std::f32::consts::FRAC_1_SQRT_2,
+            (Glyph::Cross, ButtonShape::Circle) => extent / 6.0 * std::f32::consts::FRAC_1_SQRT_2,
+            (Glyph::WideCross, ButtonShape::Circle) => {
+                extent / 3.0 * std::f32::consts::FRAC_1_SQRT_2
+            }
         }
     }
 
@@ -326,9 +380,9 @@ impl Header {
         color: crate::lua::Color,
         transform: Transform,
     ) {
-        let Glyph::Cross = glyph else {
+        if glyph == Glyph::None {
             return;
-        };
+        }
 
         let mut paint = Paint::default();
         paint.set_color(to_tiny_skia(color));
@@ -337,7 +391,7 @@ impl Header {
         let middle_x = x + width / 2.0;
         let middle_y = height / 2.0;
 
-        let offset = self.glyph_reach(shape, width);
+        let offset = self.glyph_reach(glyph, shape, width);
 
         for (from, to) in [
             ((-offset, -offset), (offset, offset)),
@@ -584,6 +638,7 @@ mod tests {
     const PAINT: ButtonPaint = ButtonPaint {
         fill: Fill::Solid(OPAQUE),
         glyph: OPAQUE,
+        rim: None,
     };
 
     const fn button(action: ButtonAction, width_ratio: f32) -> Button {
@@ -729,6 +784,7 @@ mod tests {
                 a: 1.0,
             }),
             glyph: OPAQUE,
+            rim: None,
         };
 
         let mut header = header(
@@ -1076,7 +1132,7 @@ mod tests {
                     }
 
                     let (x, width) = header.button_span(index);
-                    let reach = header.glyph_reach(button.shape, width);
+                    let reach = header.glyph_reach(button.glyph, button.shape, width);
 
                     // The cross's corners, which are its furthest points from the centre.
                     let (centre_x, centre_y) = (x + width / 2.0, header_height / 2.0);

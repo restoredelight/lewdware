@@ -136,6 +136,7 @@ fn paint_dialog(
     elements: &mut [DialogElementState],
     default_button_id: Option<&str>,
     edge: &WidgetEdge,
+    default_button_style: theme::DefaultButtonStyle,
 ) -> Option<DialogInteraction> {
     let mut interaction = None;
 
@@ -177,6 +178,7 @@ fn paint_dialog(
                                 input = input.hint_text(placeholder.as_str());
                             }
                             let response = ui.add(input);
+                            bevel::input_edge(ui, &response, edge);
                             if response.lost_focus()
                                 && ui.input(|i| i.key_pressed(egui::Key::Enter))
                             {
@@ -217,7 +219,9 @@ fn paint_dialog(
                                     // between widgets in a horizontal layout, and adding more on
                                     // top is what made `button_row_width` under-measure.
                                     for option in options.iter() {
-                                        if bevel::button(ui, &option.label, edge).clicked() {
+                                        let style = (Some(option.id.as_str()) == default_button_id)
+                                            .then_some(default_button_style);
+                                        if bevel::button(ui, &option.label, edge, style).clicked() {
                                             interaction =
                                                 Some(DialogInteraction::Select(option.id.clone()));
                                         }
@@ -269,7 +273,12 @@ fn button_row_width(ui: &egui::Ui, options: &[DialogButton]) -> f32 {
 /// which centers within the whole window for a standalone text popup).
 fn paint_dialog_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
     let font_size = style.font_size.to_pixels(0);
-    let font_id = egui::FontId::new(font_size, text_font::font_family(style.font));
+    // `default` means the surrounding UI face inside a dialog. Explicit author faces still win;
+    // standalone text popups retain their existing neutral default because they have no themed
+    // controls to belong to.
+    let family = dialog_text_family(ui, style.font);
+    let font_id = egui::FontId::new(font_size, family);
+
     // Unset follows the theme, so a dialog's own text is readable in a dark palette rather than
     // black on near-black. The dialog owns its background, so it knows what suits it.
     let color = style
@@ -335,6 +344,14 @@ fn paint_dialog_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
     painter.galley_with_override_text_color(pos, galley, color);
 }
 
+fn dialog_text_family(ui: &egui::Ui, font: lua::TextFont) -> egui::FontFamily {
+    if font == lua::TextFont::Default {
+        egui::TextStyle::Body.resolve(ui.style()).family
+    } else {
+        text_font::font_family(font)
+    }
+}
+
 /// Content painted with egui: either a dialog (interactive elements) or a static text popup.
 /// The two share all of their plumbing and differ only in what they paint and which Lua
 /// operations apply to them.
@@ -346,6 +363,8 @@ pub struct EguiLayer {
     /// Resolved once, at construction: `draw_cpu` paints without access to the `WindowState` the
     /// theme lives on.
     edge: WidgetEdge,
+    /// Persistent theme-specific mark for the action Enter activates.
+    default_button_style: theme::DefaultButtonStyle,
     /// Set while painting, sent by [`EguiLayer::flush_events`] once the frame is done — building
     /// the values snapshot needs a fresh immutable borrow of `elements`, which the paint closure
     /// held mutably.
@@ -377,12 +396,23 @@ enum EguiPaint {
 impl EguiPaint {
     /// Paint one frame. Returns the button click / input submit that occurred, if any — always
     /// `None` for text content.
-    fn run(&mut self, ui: &mut egui::Ui, edge: &WidgetEdge) -> Option<DialogInteraction> {
+    fn run(
+        &mut self,
+        ui: &mut egui::Ui,
+        edge: &WidgetEdge,
+        default_button_style: theme::DefaultButtonStyle,
+    ) -> Option<DialogInteraction> {
         match self {
             Self::Dialog {
                 elements,
                 default_button_id,
-            } => paint_dialog(ui, elements, default_button_id.as_deref(), edge),
+            } => paint_dialog(
+                ui,
+                elements,
+                default_button_id.as_deref(),
+                edge,
+                default_button_style,
+            ),
             Self::Text { text, style } => {
                 paint_text(ui, text, style);
                 None
@@ -471,6 +501,7 @@ impl EguiLayer {
             backend,
             background_color,
             edge: state.theme().widget_edge(state.appearance()),
+            default_button_style: state.theme().default_button_style(state.appearance()),
             pending: None,
         })
     }
@@ -498,6 +529,7 @@ impl EguiLayer {
             backend,
             background_color,
             edge: state.theme().widget_edge(state.appearance()),
+            default_button_style: state.theme().default_button_style(state.appearance()),
             pending: None,
         })
     }
@@ -553,10 +585,11 @@ impl EguiLayer {
         let inner_size = state.inner_size();
         let paint = &mut self.paint;
         let edge = self.edge;
+        let default_button_style = self.default_button_style;
 
         let mut interaction = None;
         gpu.render_to_texture(frame.wgpu, &window, inner_size, |ui| {
-            interaction = paint.run(ui, &edge);
+            interaction = paint.run(ui, &edge, default_button_style);
         })?;
         gpu.set_opacity(&frame.wgpu.queue, frame.opacity);
 
@@ -596,9 +629,10 @@ impl EguiLayer {
 
         let paint = &mut self.paint;
         let edge = self.edge;
+        let default_button_style = self.default_button_style;
         let mut interaction = None;
         let _ = cpu.redraw(&mut buffer_ref, |ui| {
-            interaction = paint.run(ui, &edge);
+            interaction = paint.run(ui, &edge, default_button_style);
         });
 
         buffer.copy_from_u32_buf(&pixels, content.width, content.x, content.y);
@@ -1113,6 +1147,7 @@ mod dialog_layout_tests {
                 &mut elements,
                 Some("b0"),
                 &theme.widget_edge(Appearance::Light),
+                theme.default_button_style(Appearance::Light),
             );
         });
 
@@ -1129,6 +1164,28 @@ mod dialog_layout_tests {
         }
 
         (rects, texts)
+    }
+
+    #[test]
+    fn unstyled_dialog_text_inherits_the_theme_face_but_explicit_fonts_win() {
+        for &theme in crate::window::theme::ALL_THEMES {
+            let ctx = egui::Context::default();
+            ctx.set_global_style(theme::window_style(theme, Appearance::Light, None));
+
+            let mut inherited = None;
+            let mut explicit = None;
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                inherited = Some(dialog_text_family(ui, lua::TextFont::Default));
+                explicit = Some(dialog_text_family(ui, lua::TextFont::Mono));
+            });
+
+            assert_eq!(
+                inherited,
+                Some(text_font::font_family(theme.widget_font())),
+                "{theme:?}"
+            );
+            assert_eq!(explicit, Some(egui::FontFamily::Monospace), "{theme:?}");
+        }
     }
 
     /// egui paints an orange "Unaligned" marker (debug builds only) when a `Ui`'s content overflows
@@ -1212,7 +1269,7 @@ mod dialog_layout_tests {
     /// The lower bound matters for the bevelled themes: those paint their edges as one-point strips,
     /// so without it a two-button `redmond` dialog reports eighteen "buttons".
     fn button_rects(rects: &[egui::Rect]) -> Vec<egui::Rect> {
-        rects
+        let candidates: Vec<_> = rects
             .iter()
             .copied()
             .filter(|rect| {
@@ -1220,6 +1277,22 @@ mod dialog_layout_tests {
                     && rect.height() < 40.0
                     && rect.width() > 8.0
                     && rect.height() > 8.0
+            })
+            .collect();
+
+        // A default-action outline is another control-sized rectangle nested just inside its
+        // button. Keep only the outermost candidate so decoration is not mistaken for a second
+        // control.
+        candidates
+            .iter()
+            .copied()
+            .filter(|rect| {
+                !candidates.iter().any(|other| {
+                    other != rect
+                        && other.contains(rect.min)
+                        && other.contains(rect.max)
+                        && other.area() > rect.area()
+                })
             })
             .collect()
     }
@@ -1283,6 +1356,34 @@ mod dialog_layout_tests {
         }
     }
 
+    /// Flat themes paint the default action as a filled primary button, rather than presenting
+    /// keyboard focus as a second outline around an otherwise ordinary control.
+    #[test]
+    fn flat_themes_fill_only_the_default_button_with_their_primary_colour() {
+        for theme in [Theme::Plain, Theme::Fluent, Theme::Aqua, Theme::Adwaita] {
+            let (shapes, _) = layout_shapes(theme, 2);
+            let rects: Vec<_> = shapes.iter().map(|(rect, _)| *rect).collect();
+            let buttons = button_rects(&rects);
+            assert_eq!(buttons.len(), 2, "{theme:?}");
+
+            let fills: Vec<_> = buttons
+                .iter()
+                .map(|button| {
+                    shapes
+                        .iter()
+                        .find(|(rect, _)| rect == button)
+                        .expect("button should have a painted face")
+                        .1
+                })
+                .collect();
+
+            assert_ne!(
+                fills[0], fills[1],
+                "{theme:?}: default face was not distinct"
+            );
+        }
+    }
+
     /// A bevelled theme's button really is two-toned: its edges are painted in more than one colour,
     /// which is the whole reason those themes are not left to `egui::Style`.
     #[test]
@@ -1321,6 +1422,42 @@ mod dialog_layout_tests {
                 assert!(
                     edge_tones.is_empty(),
                     "{theme:?} is flat but painted edge strips: {edge_tones:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_bevelled_theme_recesses_its_text_field() {
+        for &theme in crate::window::theme::ALL_THEMES {
+            let bevelled = matches!(
+                theme.widget_edge(Appearance::Light),
+                WidgetEdge::Bevel { .. }
+            );
+            let (shapes, _) = layout_shapes(theme, 1);
+            let input = shapes
+                .iter()
+                .map(|(rect, _)| *rect)
+                .filter(|rect| rect.width() > PANEL / 2.0 && rect.height() < 60.0)
+                .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+                .expect("the input should have been drawn");
+            let edge_tones: std::collections::BTreeSet<_> = shapes
+                .iter()
+                .filter(|(rect, _)| {
+                    input.contains(rect.center())
+                        && (rect.width() <= 2.0 || rect.height() <= 2.0)
+                        && rect.width() > 0.0
+                        && rect.height() > 0.0
+                })
+                .map(|(_, fill)| fill.to_array())
+                .collect();
+
+            if bevelled {
+                assert!(edge_tones.len() >= 2, "{theme:?}: field is not recessed");
+            } else {
+                assert!(
+                    edge_tones.is_empty(),
+                    "{theme:?}: flat field drew edge strips"
                 );
             }
         }
