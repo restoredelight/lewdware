@@ -28,6 +28,25 @@ pub struct AppConfig {
     #[serde_as(as = "Vec<(_, _)>")]
     #[serde(default)]
     pub experience_options: HashMap<Uuid, HashMap<String, StoredValue>>,
+    /// The named window look every popup is drawn with, unless the running mode names one
+    /// itself for a particular window. `design/window-themes.md`, Ownership.
+    ///
+    /// User-owned rather than mode-owned because the alternative leaves the user's control at
+    /// the mercy of a mode author's diligence: a mode that simply never mentions themes -- the
+    /// overwhelmingly common case -- would strand its user on whatever the engine defaulted to,
+    /// with nothing in `config/` to change it. As a default the engine applies, doing nothing is
+    /// the user-respecting thing to do, and a mode that genuinely needs a specific look (a fake
+    /// Win95 error box) still names it per window, which always wins.
+    ///
+    /// A free-form string, not an enum: `shared` does not depend on the engine's `ThemeChoice`,
+    /// and a config written against a newer engine may name a theme this one has never heard of.
+    /// The engine falls back to its own default rather than refusing to load the config.
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Which palette [`AppConfig::theme`] is drawn in: `"light"`, `"dark"`, or `"auto"` to
+    /// follow the desktop's own setting. Same string-not-enum reasoning as `theme`.
+    #[serde(default = "default_appearance")]
+    pub appearance: String,
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,
@@ -205,6 +224,21 @@ pub struct Modifiers {
     pub meta: bool,
 }
 
+/// `native` rather than the engine's own `plain`: the API default is the predictable one (a mode
+/// doing arithmetic against `outer_*` gets stable metrics by naming a theme), but the *product*
+/// default is the one that looks like the machine it is running on. `design/window-themes.md`,
+/// Defaults.
+fn default_theme() -> String {
+    "native".to_string()
+}
+
+/// `auto`, for the same reason: matching the user's desktop is what a user expects, and the
+/// legibility argument for a predictable `light` applies to the Lua API, where an author's own
+/// `background_color` and text colours can collide with a flipped palette.
+fn default_appearance() -> String {
+    "auto".to_string()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -213,6 +247,8 @@ impl Default for AppConfig {
             mode: Mode::default(),
             mode_options: HashMap::new(),
             experience_options: HashMap::new(),
+            theme: default_theme(),
+            appearance: default_appearance(),
             panic_button: Key {
                 name: "Escape".to_string(),
                 code: "Escape".to_string(),

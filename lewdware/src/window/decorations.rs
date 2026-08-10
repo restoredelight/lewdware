@@ -46,7 +46,8 @@ impl Decorations {
         closeable: bool,
         redraw: RedrawRequester,
     ) -> Self {
-        let (border_offset, header_height) = metrics.physical(scale_factor);
+        let (border_offset, header_height) =
+            crate::window::theme::physical_metrics(metrics, scale_factor);
 
         let inner = enabled.then(|| Inner {
             header: Header::new(
@@ -480,7 +481,7 @@ mod tests {
     fn the_content_origin_clears_the_border_and_header() {
         for metrics in metric_sets() {
             for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
-                let (border, header) = metrics.physical(scale);
+                let (border, header) = crate::window::theme::physical_metrics(metrics, scale);
                 assert_eq!(
                     decorations(metrics, scale).content_origin(),
                     (border, border + header),
@@ -514,7 +515,7 @@ mod tests {
             for scale in [1u32, 2, 3] {
                 let (pad_x, pad_y) = metrics.outer_padding();
                 let (outer_w, outer_h) = ((INNER_W + pad_x) * scale, (INNER_H + pad_y) * scale);
-                let (border, _) = metrics.physical(scale as f64);
+                let (border, _) = crate::window::theme::physical_metrics(metrics, scale as f64);
                 let (origin_x, origin_y) = decorations(metrics, scale as f64).content_origin();
 
                 assert_eq!(

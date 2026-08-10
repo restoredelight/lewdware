@@ -1,0 +1,74 @@
+/* The UI faces the window themes are drawn in, so a preview reads as the platform it imitates —
+ * a Win95 dialog set in a modern UI font is neither.
+ *
+ * The same files the engine embeds (`assets/fonts/`, shared between the two binaries; see
+ * `lewdware/THIRD_PARTY_LICENSES.md`, which covers this app too now that it ships them). Vite
+ * inlines them into the bundle at build time, so nothing is read from disk at run time.
+ *
+ * Every face a theme can name is here, including the neutral one `plain` uses: the engine bundles
+ * that explicitly too, rather than falling through to egui's own font, so the two draw the same
+ * text in the same typeface instead of "whatever each side happens to have".
+ *
+ * `Face::Mono` and `Face::Display` are deliberately absent. No theme can name either — they are
+ * text-popup styles a mode picks — so bundling them here would add a megabyte that no preview can
+ * ever show. */
+
+@font-face {
+	font-family: 'lw-default';
+	src: url('../../../assets/fonts/Ubuntu-Light.ttf') format('truetype');
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'lw-pixel';
+	src: url('../../../assets/fonts/W95FA.otf') format('opentype');
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'lw-selawik';
+	src: url('../../../assets/fonts/Selawik-Regular.ttf') format('truetype');
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'lw-cantarell';
+	src: url('../../../assets/fonts/Cantarell-Regular.otf') format('opentype');
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'lw-inter';
+	src: url('../../../assets/fonts/Inter-Regular.ttf') format('truetype');
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'lw-noto-sans';
+	src: url('../../../assets/fonts/NotoSans.ttf') format('truetype');
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'lw-liberation';
+	src: url('../../../assets/fonts/LiberationSans-Regular.ttf') format('truetype');
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'lw-liberation-bold';
+	src: url('../../../assets/fonts/LiberationSans-Bold.ttf') format('truetype');
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'lw-source-sans';
+	src: url('../../../assets/fonts/SourceSans3-Regular.ttf') format('truetype');
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'lw-source-sans-semibold';
+	src: url('../../../assets/fonts/SourceSans3-Semibold.ttf') format('truetype');
+	font-display: block;
+}

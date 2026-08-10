@@ -15,6 +15,7 @@ import type {
 	QuietHoursDto,
 	ScheduleStatusDto,
 	SupervisorStatusDto,
+	ThemeCatalogueDto,
 	Volume,
 	WallpaperRestore,
 	WindowDto
@@ -72,6 +73,9 @@ class AppStore {
 	monitorsLoading = $state(false);
 	monitorsError = $state<string | null>(null);
 	modeGroups = $state<ModeGroupDto[]>([]);
+	/** The window looks on offer, read once at load. Static for the life of the app -- it is the
+	 * engine's own catalogue (`shared::theme`), not anything the user can change. */
+	themeCatalogue = $state<ThemeCatalogueDto>({ themes: [], appearances: [] });
 	modeOptions = $state<OptionEntryDto[]>([]);
 	/** Permissions the selected mode uses regardless of how it is configured -- they hang off no
 	 * single option, so they are surfaced once above the option list rather than on a row. */
@@ -139,14 +143,16 @@ class AppStore {
 		// and the Monitors section renders its own loading/error state.
 		void this.loadMonitors();
 		try {
-			const [config, modeGroups, modeOptions] = await Promise.all([
+			const [config, modeGroups, modeOptions, themeCatalogue] = await Promise.all([
 				api.getConfig(),
 				api.getModeGroups(),
-				api.getModeOptions()
+				api.getModeOptions(),
+				api.getThemeCatalogue()
 			]);
 			this.config = config;
 			this.modeGroups = modeGroups;
 			this.applyModeOptions(modeOptions);
+			this.themeCatalogue = themeCatalogue;
 			taskFeedback.dismiss('load');
 		} catch (err) {
 			this.loadError = String(err);
@@ -206,6 +212,21 @@ class AppStore {
 		}
 		this.config = { ...this.config, disabled_monitors: disabled };
 		this.monitors = this.monitors.map((m) => (m.id === id ? { ...m, disabled: !enabled } : m));
+		this.saveConfig();
+	}
+
+	// The user's window look. Both axes are plain `ConfigDto` fields the engine reads at spawn
+	// time (see `AppConfig::theme`), so saving is all there is to do -- nothing to tell a running
+	// session, which reads its chrome per window as it opens them.
+	setTheme(theme: string) {
+		if (!this.config) return;
+		this.config = { ...this.config, theme };
+		this.saveConfig();
+	}
+
+	setAppearance(appearance: string) {
+		if (!this.config) return;
+		this.config = { ...this.config, appearance };
 		this.saveConfig();
 	}
 

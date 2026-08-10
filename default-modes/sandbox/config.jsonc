@@ -8,35 +8,6 @@
   "author": "restoredelight",
   "entrypoint": "src/main.lua",
   "options": {
-    "theme": {
-      "label": "Window style",
-      "description": "How popup frames, buttons and text fields look",
-      "type": "enum",
-      "default": "native",
-      "values": {
-        "native": "Match my system",
-        "native-retro": "Match my system (retro)",
-        "plain": "Plain",
-        "fluent": "Windows 11",
-        "redmond": "Windows 95",
-        "aqua": "macOS",
-        "adwaita": "GNOME",
-        "breeze": "KDE Plasma",
-        "platinum": "Mac OS 9",
-        "cde": "CDE / Motif"
-      }
-    },
-    "appearance": {
-      "label": "Light or dark",
-      "description": "Which palette the window style is drawn in. Some styles have no dark version and stay light",
-      "type": "enum",
-      "default": "auto",
-      "values": {
-        "auto": "Match my system",
-        "light": "Light",
-        "dark": "Dark"
-      }
-    },
     "popup_frequency": {
       "label": "Popup frequency (seconds)",
       "description": "How often popups appear",

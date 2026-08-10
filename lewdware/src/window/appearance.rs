@@ -128,9 +128,14 @@ mod tests {
         }
     }
 
+    /// The palette a window falls back to is the user's own, and `auto` -- follow the desktop --
+    /// is what most users mean by that. A mode wanting a predictable palette names one.
     #[test]
-    fn the_api_default_is_light_not_auto() {
-        assert_eq!(AppearanceChoice::default(), AppearanceChoice::Light);
+    fn the_fallback_palette_is_the_users_own() {
+        assert_eq!(
+            crate::window::ChromeDefaults::default().appearance,
+            AppearanceChoice::Auto
+        );
     }
 
     #[test]

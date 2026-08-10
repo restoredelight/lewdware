@@ -8,25 +8,8 @@
 
 local media = require("lib.media")
 local content = require("lib.content")
-local theme = require("lib.theme")
 
 local M = {}
-
---- Copy `spawn_opts` with this session's chrome options filled in, unless the caller named them
---- itself. A copy rather than a mutation: callers reuse their tables (the mitosis path builds one
---- per child), and these are this module's defaults, not their choice.
----@param spawn_opts table|nil
----@return table|nil
-local function with_chrome(spawn_opts)
-	local chrome = theme.opts()
-
-	local merged = {}
-	for key, value in pairs(spawn_opts or {}) do merged[key] = value end
-	for key, value in pairs(chrome) do
-		if merged[key] == nil then merged[key] = value end
-	end
-	return merged
-end
 
 --- Accepts either a plain value (Sandbox's call site: a fixed user option) or a getter function
 --- (Experience's call site: re-read the current timeline level fresh at each spawn/close
@@ -171,11 +154,13 @@ function M.make_spawner(opts)
 		if not item then return false end
 
 		local window
-		local popup_opts = with_chrome(spawn_opts)
+		-- No theme named, here or at any other spawn site in these modes: a popup is drawn in
+		-- whatever look the user picked in the app, which is what a mode should want unless the
+		-- look is part of what it is building.
 		if item.type == "image" then
-			window = lewdware.popup.image(item, popup_opts)
+			window = lewdware.popup.image(item, spawn_opts)
 		elseif item.type == "video" then
-			window = lewdware.popup.video(item, popup_opts)
+			window = lewdware.popup.video(item, spawn_opts)
 		end
 
 		if opts.captions_enabled then

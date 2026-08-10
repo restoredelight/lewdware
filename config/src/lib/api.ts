@@ -10,6 +10,7 @@ import type {
 	PickPackResult,
 	ScheduleStatusDto,
 	StoredValue,
+	ThemeCatalogueDto,
 	UploadModeResult,
 	WallpaperSupportDto
 } from './types';
@@ -18,6 +19,8 @@ export const api = {
 	getConfig: () => invoke<ConfigDto>('get_config'),
 
 	saveConfig: (config: ConfigDto) => invoke<void>('save_config', { config }),
+
+	getThemeCatalogue: () => invoke<ThemeCatalogueDto>('get_theme_catalogue'),
 
 	getMonitors: () => invoke<MonitorDto[]>('get_monitors'),
 

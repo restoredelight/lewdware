@@ -20,12 +20,165 @@ export interface ConfigDto {
 	mode: ModeId;
 	mode_options: ModeOptionsEntry[];
 	experience_options: ExperienceOptionsEntry[];
+	/** The window look every popup is drawn in, unless the running mode names one itself. One of
+	 * `ThemeInfo.name` from `getThemeCatalogue()`. */
+	theme: string;
+	/** The palette that look is drawn in: `auto`, `light` or `dark`. */
+	appearance: string;
 	panic_button: Key;
 	disabled_monitors: string[];
 	capabilities: Capabilities;
 	wallpaper: WallpaperConfig;
 	volume: Volume;
 	schedule: ScheduleDto;
+}
+
+/** One selectable window look. The list comes from the backend (`shared::theme`) rather than
+ * being written out here, so it cannot fall behind the looks the engine can actually draw. */
+export interface ThemeInfo {
+	name: string;
+	label: string;
+	/** False means the look has no dark palette and stays light whatever `appearance` says. */
+	supports_dark: boolean;
+	/** True for `native`/`native-retro`, which resolve to a different look per machine. */
+	is_alias: boolean;
+}
+
+export interface AppearanceInfo {
+	name: string;
+	label: string;
+}
+
+/** A colour, as `#rrggbb` or `#rrggbbaa`. */
+export type Color = string;
+
+/** How an area of chrome is filled. Serialised from Rust's `Fill`, hence the tagged shape. */
+export type Fill =
+	| { Solid: Color }
+	| { VerticalGradient: { from: Color; to: Color } }
+	| { Pinstripe: { base: Color; stripe: Color; period: number } };
+
+/** One 1px ring of a window border, outermost first. `Bevel` is what makes a Win95 frame look
+ * raised: two colours, light down the top and left, dark down the right and bottom. */
+export type BorderRing = { Uniform: Color } | { Bevel: { top_left: Color; bottom_right: Color } };
+
+export interface Stroke {
+	width: number;
+	color: Color;
+}
+
+export interface ButtonPaint {
+	fill: Fill;
+	glyph: Color;
+	/** An outline just inside the button's edge, where a theme draws one. */
+	rim: Color | null;
+}
+
+export interface ChromeButton {
+	/** `Inert` never responds to the pointer — Aqua's grey minimise and zoom dots, which are
+	 * drawn for authenticity and deliberately do nothing. */
+	action: 'Close' | 'Inert';
+	shape: 'Rect' | 'Circle';
+	/** `WideCross` is the more open mark Breeze draws in its circular button. */
+	glyph: 'Cross' | 'WideCross' | 'None';
+	/** Width as a multiple of the header height. */
+	width_ratio: number;
+	idle: ButtonPaint;
+	hover: ButtonPaint;
+	active: ButtonPaint;
+}
+
+export interface Chrome {
+	header: Fill;
+	/** Outermost ring first; one ring is one logical pixel. */
+	border: BorderRing[];
+	title: {
+		font: FaceName;
+		size: number;
+		color: Color;
+		padding: number;
+		align: 'left' | 'center' | 'right';
+	};
+	buttons: {
+		side: 'Left' | 'Right';
+		inset: number;
+		gap: number;
+		buttons: ChromeButton[];
+	};
+}
+
+/** The bundled typefaces, as `shared::theme::Face` serialises them. */
+export type FaceName =
+	| 'default'
+	| 'mono'
+	| 'display'
+	| 'pixel'
+	| 'selawik'
+	| 'inter'
+	| 'cantarell'
+	| 'noto-sans'
+	| 'liberation-sans'
+	| 'liberation-sans-bold'
+	| 'source-sans'
+	| 'source-sans-semibold';
+
+export interface ControlPaint {
+	fill: Color;
+	border: Stroke;
+}
+
+/** A theme's widget half: what a dialog's controls are drawn with. */
+export interface Widgets {
+	base: 'light' | 'dark';
+	panel: Color;
+	text: Color;
+	caret: Stroke;
+	field: Color;
+	selection: Color;
+	selection_text: Color;
+	idle: ControlPaint;
+	hover: ControlPaint;
+	pressed: ControlPaint;
+	metrics: {
+		button_padding: [number, number];
+		control_height: number;
+		item_spacing: [number, number];
+		corner_radius: number;
+	};
+	font: FaceName;
+	font_size: number;
+	edge: 'Flat' | { Bevel: { raised: BorderRing[]; pressed: BorderRing[] } };
+	default_button:
+		| { Outline: Stroke }
+		| { Filled: { idle: Color; hover: Color; active: Color; text: Color; border: Stroke } };
+}
+
+/** Everything needed to draw one theme in one palette — the same values the engine paints with. */
+export interface ThemeLook {
+	metrics: { header_height: number; border_width: number };
+	chrome: Chrome;
+	widgets: Widgets;
+}
+
+/** One card in the picker. An alias (`native`/`native-retro`) is merged with the look it resolves
+ * to on this machine: it wears that look's `label` and the concrete entry is left out of the list
+ * entirely, since offering both would be the same window twice under two names. */
+export interface ThemeEntry {
+	/** The value stored in the config — an alias keeps its own name, so the choice stays
+	 * "follow this machine" rather than pinning today's answer. */
+	name: string;
+	label: string;
+	supports_dark: boolean;
+	matches_system: boolean;
+	/** The look an alias stands for here, so a config pinning that look still selects this card. */
+	resolves_to: string | null;
+	light: ThemeLook;
+	dark: ThemeLook;
+}
+
+export interface ThemeCatalogueDto {
+	themes: ThemeEntry[];
+	appearances: AppearanceInfo[];
 }
 
 /** `days[0]` = Monday .. `days[6]` = Sunday. */

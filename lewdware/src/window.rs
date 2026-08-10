@@ -18,4 +18,4 @@ pub use popup::{Popup, RenderOutcome};
 pub(crate) use redraw::RedrawRequester;
 pub use state::WindowState;
 pub use target::RenderTarget;
-pub use theme::{AppearanceChoice, Theme, ThemeChoice};
+pub use theme::{AppearanceChoice, ChromeDefaults, Theme, ThemeChoice};

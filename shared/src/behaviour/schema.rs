@@ -35,19 +35,6 @@ pub struct Content {
     /// Tags identifying splash media. See `wallpaper_tags`'s doc comment -- same reasoning.
     #[serde(default)]
     pub splash_tags: Vec<String>,
-    /// The window look the pack was designed around, as one of the engine's named themes (see
-    /// `design/window-themes.md`). `None` means the pack expresses no preference.
-    ///
-    /// Deliberately in `content` rather than `experience`: a theme is pack-wide presentation, not
-    /// timeline data, and a pack shipping its own mode should be able to declare it too. Only a
-    /// mode where the author holds design authority acts on it -- Sequence does, Sandbox (where
-    /// the user is the designer) offers the user their own choice instead.
-    ///
-    /// A free-form string rather than an enum: `shared` has no dependency on the engine's theme
-    /// type, and a pack naming a theme this engine does not know should fall back to the default
-    /// rather than failing to load. The engine validates it when it resolves the name.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub theme: Option<String>,
 }
 
 /// A single content-pool entry, taggable independently of any other entry in the same pool
@@ -473,41 +460,6 @@ mod tests {
         let content = Content::default();
         assert_eq!(content.wallpaper_tags, Vec::<String>::new());
         assert_eq!(content.splash_tags, Vec::<String>::new());
-    }
-
-    /// Every `behaviour.json` written before themes existed has no `theme` key, and must still
-    /// load — as "no preference", not as some half-set value.
-    #[test]
-    fn a_behaviour_without_a_theme_still_loads() {
-        let json = serde_json::json!({ "version": VERSION, "content": { "captions": [] } });
-        let behaviour: Behaviour =
-            serde_json::from_value(json).expect("should decode without a theme key");
-
-        assert_eq!(behaviour.content.theme, None);
-    }
-
-    /// Omitted rather than written as `null` when unset, so adding the field does not churn every
-    /// pack's `behaviour.json` on the next save.
-    #[test]
-    fn an_unset_theme_is_not_serialised_at_all() {
-        let json = serde_json::to_string(&Content::default()).unwrap();
-        assert!(!json.contains("theme"), "{json}");
-    }
-
-    /// A pack may name a theme this engine has never heard of — one built against a newer engine —
-    /// and that has to load, so the mode can fall back rather than the pack failing to open.
-    #[test]
-    fn an_unknown_theme_name_still_loads() {
-        let json = serde_json::json!({
-            "version": VERSION,
-            "content": { "theme": "some-future-theme" }
-        });
-        let behaviour: Behaviour = serde_json::from_value(json).expect("should decode");
-
-        assert_eq!(
-            behaviour.content.theme.as_deref(),
-            Some("some-future-theme")
-        );
     }
 
     fn sample_behaviour() -> Behaviour {

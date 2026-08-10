@@ -9,6 +9,8 @@
 	import Card from '$ui/Card.svelte';
 	import Button from '$ui/Button.svelte';
 	import RadioGroup from '$ui/RadioGroup.svelte';
+	import Select from '$ui/Select.svelte';
+	import ThemePreview from './ThemePreview.svelte';
 	import { taskFeedback } from './taskFeedback.svelte';
 	import type { Capabilities, Key, Volume, WallpaperSupportDto } from './types';
 
@@ -148,6 +150,27 @@
 			description: 'Allow the pack/mode to show desktop notifications.'
 		}
 	];
+
+	// The look every popup is drawn in. A mode may still name its own for a particular window --
+	// one pretending to be a Win95 error box, say -- but nothing else overrides this, and a mode
+	// that never mentions themes (most of them) follows it for everything it opens.
+	// A card is the current one either by its own name or by the look it stands for: someone whose
+	// config pins `breeze` should see the merged "KDE Plasma" card selected, not nothing at all.
+	const selectedTheme = $derived(
+		store.themeCatalogue.themes.find(
+			(theme) => theme.name === store.config?.theme || theme.resolves_to === store.config?.theme
+		) ?? null
+	);
+
+	// Which palette the cards are drawn in. `auto` has no answer of its own here -- the engine
+	// resolves it against the desktop at spawn time -- so the preview follows this app's own
+	// setting, which is dark.
+	const previewAppearance = $derived(store.config?.appearance === 'light' ? 'light' : 'dark');
+
+	// Saying so beats leaving someone to wonder why switching to dark changed nothing.
+	const darkUnavailable = $derived(
+		selectedTheme !== null && !selectedTheme.supports_dark && store.config?.appearance !== 'light'
+	);
 
 	const volumeSliders: { key: keyof Volume; label: string; description: string }[] = [
 		{
@@ -308,6 +331,83 @@
 						</div>
 					{/if}
 				{/each}
+			</Card>
+		</section>
+
+		<!-- Window style -->
+		<section class="border-border flex flex-col gap-2 border-t pt-6">
+			<h2 class="ui-section-title">Window style</h2>
+			<p class="text-muted text-xs">
+				How popup frames, buttons and text fields look. A mode can still pick its own style for a
+				window where the look is part of what it&rsquo;s doing.
+			</p>
+			<Card class="flex flex-col gap-4 p-4">
+				<div class="flex items-end justify-between gap-4">
+					<p class="text-muted m-0 text-xs">
+						Each one is live &mdash; hover its close button, press a button, type in the field.
+					</p>
+					<Select
+						class="w-44"
+						size="compact"
+						label="Light or dark"
+						value={store.config?.appearance ?? ''}
+						options={store.themeCatalogue.appearances.map((appearance) => ({
+							value: appearance.name,
+							label: appearance.label
+						}))}
+						onchange={(value) => store.setAppearance(value)}
+					/>
+				</div>
+
+				<div class="grid grid-cols-[repeat(auto-fill,minmax(270px,1fr))] gap-3">
+					{#each store.themeCatalogue.themes as theme (theme.name)}
+						{@const selected = theme === selectedTheme}
+						<div
+							class="border-border bg-bg flex flex-col gap-2 rounded-sm border p-3 transition-colors"
+							class:!border-[var(--ui-accent)]={selected}
+						>
+							<div class="flex items-baseline justify-between gap-2">
+								<label class="flex cursor-pointer items-center gap-2 text-sm">
+									<input
+										type="radio"
+										name="window-theme"
+										class="accent-[var(--ui-accent)]"
+										checked={selected}
+										onchange={() => store.setTheme(theme.name)}
+									/>
+									<span class="text-text font-medium">{theme.label}</span>
+								</label>
+								{#if theme.matches_system}
+									<span class="text-muted font-mono text-[10px]"
+										>{theme.name === 'native-retro'
+											? 'your system, retro'
+											: 'matches your system'}</span
+									>
+								{:else if !theme.supports_dark}
+									<span class="text-muted font-mono text-[10px]">light only</span>
+								{/if}
+							</div>
+							<!-- The preview is decoration for a control the label already provides, so it is
+						     not a second way to choose: being able to click into a real window's widgets
+						     is the point of it being live. -->
+							<ThemePreview
+								look={previewAppearance === 'dark' ? theme.dark : theme.light}
+								title={theme.label}
+							/>
+						</div>
+					{/each}
+				</div>
+
+				{#if darkUnavailable}
+					<p class="text-muted m-0 text-xs">
+						{selectedTheme?.label} has no dark version and is always drawn light.
+					</p>
+				{:else if selectedTheme?.matches_system}
+					<p class="text-muted m-0 text-xs">
+						Windows are drawn to look like this machine&rsquo;s own, so a pack you share won&rsquo;t
+						look the same on someone else&rsquo;s.
+					</p>
+				{/if}
 			</Card>
 		</section>
 

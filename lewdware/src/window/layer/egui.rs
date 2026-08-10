@@ -424,7 +424,7 @@ impl EguiPaint {
     /// widgets take the theme's, while its `text` elements still style themselves individually.
     fn font_definitions(&self, theme: Theme) -> Option<egui::FontDefinitions> {
         match self {
-            Self::Dialog { .. } => theme.widget_font_definitions(),
+            Self::Dialog { .. } => theme::widget_font_definitions(theme),
             Self::Text { style, .. } => text_font::build_font_definitions(style.font),
         }
     }
@@ -1127,7 +1127,7 @@ mod dialog_layout_tests {
     ) -> (Vec<(egui::Rect, egui::Color32)>, Vec<(String, egui::Pos2)>) {
         let ctx = egui::Context::default();
         ctx.set_global_style(theme::window_style(theme, Appearance::Light, None));
-        if let Some(fonts) = theme.widget_font_definitions() {
+        if let Some(fonts) = theme::widget_font_definitions(theme) {
             ctx.set_fonts(fonts);
         }
 
@@ -1184,7 +1184,13 @@ mod dialog_layout_tests {
                 Some(text_font::font_family(theme.widget_font())),
                 "{theme:?}"
             );
-            assert_eq!(explicit, Some(egui::FontFamily::Monospace), "{theme:?}");
+            // A named family, not egui's generic `Monospace`: the mono face is bundled like every
+            // other, so nothing is left to egui's own choice of file.
+            assert_eq!(
+                explicit,
+                Some(text_font::font_family(lua::TextFont::Mono)),
+                "{theme:?}"
+            );
         }
     }
 

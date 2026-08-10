@@ -90,13 +90,6 @@ function M.pick_prompt(active_tags)
 end
 
 ---@return table
---- The window look the pack was designed around, if it declared one. Only meaningful to a mode
---- where the pack author holds design authority; Sandbox ignores it (see `lib/theme.lua`).
----@return string|nil
-function M.theme()
-	return content().theme
-end
-
 function M.prompt_settings()
 	return content().prompt_settings or {}
 end

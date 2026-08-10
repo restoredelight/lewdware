@@ -6,67 +6,11 @@ use mlua::{
 use serde::{Deserialize, Serialize};
 use shared::mode::OptionValue;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Color {
-    pub r: f32,
-    pub g: f32,
-    pub b: f32,
-    pub a: f32,
-}
-
-impl Serialize for Color {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let r = (self.r * 255.0).round() as u8;
-        let g = (self.g * 255.0).round() as u8;
-        let b = (self.b * 255.0).round() as u8;
-        let a = (self.a * 255.0).round() as u8;
-        if a == 255 {
-            serializer.serialize_str(&format!("#{r:02x}{g:02x}{b:02x}"))
-        } else {
-            serializer.serialize_str(&format!("#{r:02x}{g:02x}{b:02x}{a:02x}"))
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for Color {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        let hex = s
-            .strip_prefix('#')
-            .ok_or_else(|| serde::de::Error::custom("color must start with '#'"))?;
-
-        fn channel(s: &str) -> Option<f32> {
-            u8::from_str_radix(s, 16).ok().map(|v| v as f32 / 255.0)
-        }
-
-        match hex.len() {
-            6 => Ok(Color {
-                r: channel(&hex[0..2])
-                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
-                g: channel(&hex[2..4])
-                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
-                b: channel(&hex[4..6])
-                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
-                a: 1.0,
-            }),
-            8 => Ok(Color {
-                r: channel(&hex[0..2])
-                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
-                g: channel(&hex[2..4])
-                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
-                b: channel(&hex[4..6])
-                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
-                a: channel(&hex[6..8])
-                    .ok_or_else(|| serde::de::Error::custom("invalid hex digit"))?,
-            }),
-            _ => Err(serde::de::Error::custom(
-                "color must be '#rrggbb' or '#rrggbbaa'",
-            )),
-        }
-    }
-}
-
 use rand::seq::IndexedRandom;
+
+// The Lua layer's own names for these: they describe a colour and an alignment, and a *theme*
+// needs to as well, so they live with the themes and are re-exported here.
+pub use shared::theme::{Color, TextAlign};
 
 use crate::{
     app::EventPoster,
@@ -80,7 +24,7 @@ use crate::{
     media::{MediaManager, MediaTypes, TagFilter},
     monitor::Monitor,
     utils::{calculate_media_popup_size, calculate_text_popup_size, random_position},
-    window::{AppearanceChoice, Theme, ThemeChoice},
+    window::{AppearanceChoice, ChromeDefaults, Theme, ThemeChoice},
 };
 
 pub struct ApiOptions {
@@ -90,6 +34,8 @@ pub struct ApiOptions {
     pub content: shared::behaviour::Content,
     /// Options for `Mode::Experience`.
     pub experience: shared::behaviour::Experience,
+    /// The user's own window look, applied to any window the mode does not theme itself.
+    pub chrome: ChromeDefaults,
     pub gpu_available: bool,
     pub dev_mode: bool,
 }
@@ -108,6 +54,7 @@ pub fn create_api<T: EventPoster>(
         config,
         content,
         experience,
+        chrome,
         gpu_available,
         dev_mode,
     } = options;
@@ -157,6 +104,13 @@ pub fn create_api<T: EventPoster>(
             .map(|choice| choice.name())
             .collect::<Vec<_>>(),
     )?;
+
+    // The user's own choice, which every window already uses unless the mode overrides it. Here
+    // so a mode can deliberately *differ* from it for one window while leaving the rest alone —
+    // as the name it was chosen by, not the look it resolves to, since that is what a mode would
+    // pass back to a spawn call.
+    api_table.set("user_theme", chrome.theme.name())?;
+    api_table.set("user_appearance", chrome.appearance.name())?;
 
     let storage_table = lua.create_table()?;
     {
@@ -347,6 +301,7 @@ pub fn create_api<T: EventPoster>(
                     args,
                     request_sender.clone(),
                     windows.clone(),
+                    chrome,
                     gpu_available,
                     dev_mode,
                 )
@@ -366,6 +321,7 @@ pub fn create_api<T: EventPoster>(
                     args,
                     request_sender.clone(),
                     windows.clone(),
+                    chrome,
                     gpu_available,
                     dev_mode,
                 )
@@ -385,6 +341,7 @@ pub fn create_api<T: EventPoster>(
                     args,
                     request_sender.clone(),
                     windows.clone(),
+                    chrome,
                     gpu_available,
                     dev_mode,
                 )
@@ -404,6 +361,7 @@ pub fn create_api<T: EventPoster>(
                     args,
                     request_sender.clone(),
                     windows.clone(),
+                    chrome,
                     gpu_available,
                     dev_mode,
                 )
@@ -870,15 +828,19 @@ pub struct SpawnWindowOpts {
     pub click_through: bool,
     #[serde(default = "return_true")]
     pub clamp: bool,
-    /// Which named look to draw the window's chrome and widgets with. `plain` by default — the
-    /// predictable value, whose metrics are a documented contract. The bundled modes default
-    /// their own option to `native` instead; see `design/window-themes.md`.
+    /// Which named look to draw the window's chrome and widgets with.
+    ///
+    /// `None` — the mode said nothing — means the user's own setting (`AppConfig::theme`), which
+    /// is what almost every window should use. It is an `Option` rather than a defaulted enum
+    /// precisely so that "said nothing" stays distinguishable from an explicit choice: naming a
+    /// theme is also how a mode pins the metrics its layout arithmetic depends on, and that has
+    /// to keep working even when the user's setting happens to be the same value.
     #[serde(default)]
-    pub theme: ThemeChoice,
-    /// Which palette that look is drawn in. `light` by default, for the same predictability
-    /// reason as `theme`; the bundled modes default their own option to `auto`.
+    pub theme: Option<ThemeChoice>,
+    /// Which palette that look is drawn in. `None` means the user's own setting
+    /// (`AppConfig::appearance`), for the same reason as `theme`.
     #[serde(default)]
-    pub appearance: AppearanceChoice,
+    pub appearance: Option<AppearanceChoice>,
 }
 
 impl Default for SpawnWindowOpts {
@@ -898,8 +860,8 @@ impl Default for SpawnWindowOpts {
             background_color: None,
             click_through: false,
             clamp: true,
-            theme: ThemeChoice::default(),
-            appearance: AppearanceChoice::default(),
+            theme: None,
+            appearance: None,
         }
     }
 }
@@ -953,9 +915,10 @@ pub struct PopupSpawnOpts {
     /// `WindowState::new` resolves it once the window exists. Safe to defer precisely because
     /// appearance never changes the metrics the sizing below is computed from.
     pub appearance: AppearanceChoice,
-    /// The named look this window's chrome and widgets are drawn with. Not yet settable from
-    /// Lua — see `design/window-themes.md`'s step 5; for now every window resolves to the
-    /// `plain` default, whose metrics are what the sizing above is computed from.
+    /// The named look this window's chrome and widgets are drawn with, already concrete: the
+    /// mode's own choice where it made one, and the user's setting otherwise. Its metrics are
+    /// what the sizing above is computed from, which is why — unlike `appearance` — this one
+    /// cannot be deferred past window creation.
     pub theme: Theme,
 }
 
@@ -968,6 +931,7 @@ impl PopupSpawnOpts {
         spawn_opts: SpawnWindowOpts,
         size_behaviour: WindowSizeBehaviour,
         monitor: &Monitor,
+        chrome: ChromeDefaults,
         gpu_available: bool,
         mut gpu: bool,
         transparent: bool,
@@ -1023,8 +987,9 @@ impl PopupSpawnOpts {
         };
 
         // Resolved here, once, so that a `native` alias becomes a concrete look before anything
-        // downstream — window sizing included — ever asks what platform it is on.
-        let theme = spawn_opts.theme.resolve();
+        // downstream — window sizing included — ever asks what platform it is on. A mode that
+        // named no theme gets the user's, which is the whole point of that setting.
+        let theme = spawn_opts.theme.unwrap_or(chrome.theme).resolve();
 
         let (mut outer_width, mut outer_height) = (width, height);
         if spawn_opts.decorations {
@@ -1083,7 +1048,7 @@ impl PopupSpawnOpts {
             title: spawn_opts.title,
             closeable: spawn_opts.closeable,
             background_color: spawn_opts.background_color,
-            appearance: spawn_opts.appearance,
+            appearance: spawn_opts.appearance.unwrap_or(chrome.appearance),
             theme,
         })
     }
@@ -1164,17 +1129,6 @@ pub enum TextFont {
     Pixel,
 }
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextAlign {
-    #[serde(rename = "left")]
-    Left,
-    #[serde(rename = "center")]
-    #[default]
-    Center,
-    #[serde(rename = "right")]
-    Right,
-}
-
 fn default_font_size() -> FontSize {
     FontSize::Value(32.0)
 }
@@ -1237,6 +1191,7 @@ fn spawn_text_popup<T: EventPoster>(
     (text, opts): (String, Option<SpawnTextOpts>),
     request_sender: RequestSender<T>,
     windows: Windows<T>,
+    chrome: ChromeDefaults,
     gpu_available: bool,
     dev_mode: bool,
 ) -> mlua::Result<Rc<TextWindow<T>>> {
@@ -1267,6 +1222,7 @@ fn spawn_text_popup<T: EventPoster>(
             outline_width,
         },
         &monitor,
+        chrome,
         gpu_available,
         transparent,
         transparent,
@@ -1309,6 +1265,7 @@ fn spawn_image_popup<T: EventPoster>(
     (image, opts): (Media, Option<SpawnImageOpts>),
     request_sender: RequestSender<T>,
     windows: Windows<T>,
+    chrome: ChromeDefaults,
     gpu_available: bool,
     dev_mode: bool,
 ) -> mlua::Result<Rc<ImageWindow<T>>> {
@@ -1341,6 +1298,7 @@ fn spawn_image_popup<T: EventPoster>(
             height: image_height,
         },
         &monitor,
+        chrome,
         gpu_available,
         transparent,
         transparent,
@@ -1412,6 +1370,7 @@ fn spawn_video_popup<T: EventPoster>(
     (video, opts): (Media, Option<SpawnVideoOpts>),
     request_sender: RequestSender<T>,
     windows: Windows<T>,
+    chrome: ChromeDefaults,
     gpu_available: bool,
     dev_mode: bool,
 ) -> mlua::Result<Rc<VideoWindow<T>>> {
@@ -1447,6 +1406,7 @@ fn spawn_video_popup<T: EventPoster>(
             height: video_height,
         },
         &monitor,
+        chrome,
         gpu_available,
         true,
         transparent,
@@ -1612,6 +1572,7 @@ fn spawn_dialog<T: EventPoster>(
     opts: SpawnDialogOpts,
     request_sender: RequestSender<T>,
     windows: Windows<T>,
+    chrome: ChromeDefaults,
     gpu_available: bool,
     dev_mode: bool,
 ) -> mlua::Result<Rc<DialogWindow<T>>> {
@@ -1646,6 +1607,7 @@ fn spawn_dialog<T: EventPoster>(
             height: 400,
         },
         &monitor,
+        chrome,
         gpu_available,
         transparent,
         transparent,
@@ -1821,6 +1783,21 @@ mod tests {
     }
 
     fn resolve_with(opts: SpawnWindowOpts) -> Result<PopupSpawnOpts, InvalidWindowSize> {
+        // A fixed, platform-independent pair, so that a test saying nothing about chrome gets the
+        // same answer on every machine. Tests about the user's own setting name one explicitly.
+        resolve_with_chrome(
+            opts,
+            ChromeDefaults {
+                theme: ThemeChoice::Plain,
+                appearance: AppearanceChoice::Light,
+            },
+        )
+    }
+
+    fn resolve_with_chrome(
+        opts: SpawnWindowOpts,
+        chrome: ChromeDefaults,
+    ) -> Result<PopupSpawnOpts, InvalidWindowSize> {
         PopupSpawnOpts::resolve(
             opts,
             WindowSizeBehaviour::UseDefaults {
@@ -1828,10 +1805,96 @@ mod tests {
                 height: 150,
             },
             &monitor(),
+            chrome,
             false,
             false,
             false,
         )
+    }
+
+    /// The point of the user's setting: a mode that never mentions themes -- the common case, and
+    /// every mode written before themes existed -- draws in the look the user picked, with no
+    /// cooperation from the mode's author required.
+    #[test]
+    fn a_window_the_mode_did_not_theme_takes_the_users_choice() {
+        let chrome = ChromeDefaults {
+            theme: ThemeChoice::Redmond,
+            appearance: AppearanceChoice::Dark,
+        };
+        let resolved = resolve_with_chrome(SpawnWindowOpts::default(), chrome).unwrap();
+
+        assert_eq!(resolved.theme, Theme::Redmond);
+        assert_eq!(resolved.appearance, AppearanceChoice::Dark);
+
+        // And it is sized by that theme's metrics, not by the API default's.
+        let (pad_x, pad_y) = Theme::Redmond.metrics().outer_padding();
+        assert_eq!(resolved.outer_width, resolved.width + pad_x);
+        assert_eq!(resolved.outer_height, resolved.height + pad_y);
+    }
+
+    /// The other half of that bargain: a mode that *does* name a look gets it, so a window built
+    /// to impersonate a specific OS still can, and so naming a theme remains the way to pin the
+    /// metrics a mode's own layout arithmetic depends on.
+    #[test]
+    fn a_theme_the_mode_named_beats_the_users_choice() {
+        let chrome = ChromeDefaults {
+            theme: ThemeChoice::Redmond,
+            appearance: AppearanceChoice::Dark,
+        };
+        let opts = SpawnWindowOpts {
+            theme: Some(ThemeChoice::Aqua),
+            appearance: Some(AppearanceChoice::Light),
+            ..Default::default()
+        };
+        let resolved = resolve_with_chrome(opts, chrome).unwrap();
+
+        assert_eq!(resolved.theme, Theme::Aqua);
+        assert_eq!(resolved.appearance, AppearanceChoice::Light);
+    }
+
+    /// Each axis falls back on its own: a mode fixing the look it draws in has not thereby said
+    /// anything about light or dark, and the user's answer to that still stands.
+    #[test]
+    fn the_two_axes_fall_back_independently() {
+        let chrome = ChromeDefaults {
+            theme: ThemeChoice::Redmond,
+            appearance: AppearanceChoice::Dark,
+        };
+        let resolved = resolve_with_chrome(
+            SpawnWindowOpts {
+                theme: Some(ThemeChoice::Aqua),
+                ..Default::default()
+            },
+            chrome,
+        )
+        .unwrap();
+
+        assert_eq!(resolved.theme, Theme::Aqua);
+        assert_eq!(resolved.appearance, AppearanceChoice::Dark);
+    }
+
+    /// A theme name this engine has never heard of -- a config written by a newer one -- must not
+    /// take chrome down with it, and `plain` would be a poor guess at what the user meant: they
+    /// asked for *some* real look.
+    #[test]
+    fn an_unknown_configured_theme_falls_back_to_the_product_default() {
+        let chrome = ChromeDefaults::from_config("some-future-theme", "sepia");
+
+        assert_eq!(chrome, ChromeDefaults::default());
+        assert_eq!(chrome.theme, ThemeChoice::Native);
+        assert_eq!(chrome.appearance, AppearanceChoice::Auto);
+    }
+
+    /// Every name the config app can write must round-trip, or a user's saved choice silently
+    /// becomes someone else's.
+    #[test]
+    fn every_theme_name_reads_back_as_the_choice_it_names() {
+        for &choice in ThemeChoice::ALL {
+            assert_eq!(ThemeChoice::from_name(choice.name()), Some(choice));
+        }
+        for &choice in AppearanceChoice::ALL {
+            assert_eq!(AppearanceChoice::from_name(choice.name()), Some(choice));
+        }
     }
 
     #[test]
@@ -1839,7 +1902,7 @@ mod tests {
         // `native` is an alias; what reaches the window must already be a concrete look, and the
         // outer size must have been computed from *that* theme's metrics.
         let opts = SpawnWindowOpts {
-            theme: ThemeChoice::Native,
+            theme: Some(ThemeChoice::Native),
             ..Default::default()
         };
         let resolved = resolve_with(opts).unwrap();
@@ -1868,7 +1931,7 @@ mod tests {
             };
 
             let resolved = resolve_with(SpawnWindowOpts {
-                theme: choice,
+                theme: Some(choice),
                 ..Default::default()
             })
             .unwrap();
@@ -1883,7 +1946,7 @@ mod tests {
     #[test]
     fn an_undecorated_window_has_no_padding_whatever_its_theme() {
         let resolved = resolve_with(SpawnWindowOpts {
-            theme: ThemeChoice::Redmond,
+            theme: Some(ThemeChoice::Redmond),
             decorations: false,
             ..Default::default()
         })
@@ -1949,6 +2012,7 @@ mod tests {
                 height: 0,
             },
             &monitor(),
+            ChromeDefaults::default(),
             false,
             false,
             false,
@@ -1977,16 +2041,18 @@ mod tests {
     fn the_theme_option_deserialises_from_its_lua_name() {
         let opts: SpawnWindowOpts =
             serde_json::from_str(r#"{"theme": "native-retro"}"#).expect("should deserialise");
-        assert_eq!(opts.theme, ThemeChoice::NativeRetro);
+        assert_eq!(opts.theme, Some(ThemeChoice::NativeRetro));
 
-        // Absent means the predictable default, not the system's look.
+        // Absent stays absent, rather than collapsing into a default here: it is what tells
+        // `resolve` to use the user's own setting instead of a look the mode chose.
         let opts: SpawnWindowOpts = serde_json::from_str("{}").expect("should deserialise");
-        assert_eq!(opts.theme, ThemeChoice::Plain);
+        assert_eq!(opts.theme, None);
+        assert_eq!(opts.appearance, None);
     }
 
     /// An unknown name is an error rather than a silent fallback: for a mode author that is a
-    /// typo worth surfacing. Pack-supplied names are checked against `lewdware.themes` first —
-    /// see `default-modes/shared/lib/theme.lua`.
+    /// typo worth surfacing. A mode passing on a name it got from somewhere less trustworthy
+    /// checks it against `lewdware.themes` first.
     #[test]
     fn an_unknown_theme_name_is_rejected() {
         let result: Result<SpawnWindowOpts, _> = serde_json::from_str(r#"{"theme": "win7"}"#);

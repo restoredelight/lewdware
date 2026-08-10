@@ -14,7 +14,9 @@
 
 use egui::{Response, Sense, Ui, Vec2};
 
-use crate::window::theme::{BorderRing, DefaultButtonStyle, WidgetEdge};
+use crate::window::theme::{
+    BorderRing, DefaultButtonStyle, WidgetEdge, to_color32, to_egui_stroke,
+};
 
 /// Overlay a recessed themed edge on egui's real text edit. The widget keeps ownership of text,
 /// cursor, selection, IME and clipboard behavior; only its otherwise-flat perimeter is replaced.
@@ -46,10 +48,18 @@ pub fn button(
                 active,
                 text,
                 border,
-            }) => flat_default_button(ui, label, idle, hover, active, text, border),
+            }) => flat_default_button(
+                ui,
+                label,
+                to_color32(idle),
+                to_color32(hover),
+                to_color32(active),
+                to_color32(text),
+                to_egui_stroke(border),
+            ),
             Some(DefaultButtonStyle::Outline(stroke)) => {
                 let response = ui.button(label);
-                paint_outline(ui.painter(), response.rect, stroke);
+                paint_outline(ui.painter(), response.rect, to_egui_stroke(stroke));
                 response
             }
             None => ui.button(label),
@@ -89,7 +99,7 @@ pub fn button(
     if let Some(DefaultButtonStyle::Outline(stroke)) = default_style {
         // Reinforce the outside edge. An inset outline boxes the label and obscures the face;
         // this leaves both bevel rings visible immediately inside it.
-        paint_outline(painter, rect, stroke);
+        paint_outline(painter, rect, to_egui_stroke(stroke));
     }
 
     // Keyboard focus, which egui's own button would otherwise have drawn.

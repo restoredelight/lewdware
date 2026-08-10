@@ -3,40 +3,9 @@ use std::sync::{Arc, LazyLock};
 use ab_glyph::FontArc;
 use egui::{Align, FontData, FontDefinitions, FontFamily, FontId, Vec2, text::LayoutJob};
 
-use crate::lua::{TextAlign, TextFont};
+use shared::theme::Face;
 
-/// A typeface the engine can draw with.
-///
-/// Wider than the Lua-facing [`TextFont`], which every author-set style uses: themes also need the
-/// UI faces of the platforms they imitate, and those are not offered as text styles. Every
-/// `TextFont` maps onto one of these (see the `From` impl); the rest are theme-only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Face {
-    /// egui's own proportional font, and what the header draws with unless a theme says otherwise.
-    Default,
-    /// egui's own monospace font.
-    Mono,
-    /// Anton — bold and high-impact, for emphasis.
-    Display,
-    /// W95FA — the Windows 95 UI face, for `redmond`.
-    Pixel,
-    /// Selawik — Microsoft's metrically-compatible substitute for Segoe UI, for `fluent`.
-    Selawik,
-    /// Inter — the closest freely-licensed stand-in for San Francisco, for `aqua`.
-    Inter,
-    /// Cantarell — GNOME's own UI font, for `adwaita`.
-    Cantarell,
-    /// Noto Sans — KDE Plasma's default UI face, for `breeze`.
-    NotoSans,
-    /// Liberation Sans — metrically compatible with Helvetica, for CDE/Motif widgets.
-    LiberationSans,
-    /// Liberation Sans Bold — CDE/Motif's sturdy active-title companion.
-    LiberationSansBold,
-    /// Source Sans 3 Regular — compact UI face used as a redistributable Charcoal stand-in.
-    SourceSans,
-    /// Source Sans 3 Semibold — the sturdier title-bar companion for `platinum`.
-    SourceSansSemibold,
-}
+use crate::lua::{TextAlign, TextFont};
 
 impl From<TextFont> for Face {
     fn from(font: TextFont) -> Self {
@@ -58,70 +27,87 @@ struct Bundled {
     family: &'static str,
 }
 
-impl Face {
-    /// The bundled face's data, or `None` for the two that egui already provides.
-    fn bundled(self) -> Option<Bundled> {
-        let bundled = match self {
-            Self::Default | Self::Mono => return None,
-            Self::Display => Bundled {
-                bytes: include_bytes!("../assets/fonts/Anton-Regular.ttf"),
-                data_name: "Anton-Regular",
-                family: "lewdware-display",
-            },
-            Self::Pixel => Bundled {
-                bytes: include_bytes!("../assets/fonts/W95FA.otf"),
-                data_name: "W95FA",
-                family: "lewdware-pixel",
-            },
-            Self::Selawik => Bundled {
-                bytes: include_bytes!("../assets/fonts/Selawik-Regular.ttf"),
-                data_name: "Selawik-Regular",
-                family: "lewdware-selawik",
-            },
-            Self::Inter => Bundled {
-                bytes: include_bytes!("../assets/fonts/Inter-Regular.ttf"),
-                data_name: "Inter-Regular",
-                family: "lewdware-inter",
-            },
-            Self::Cantarell => Bundled {
-                bytes: include_bytes!("../assets/fonts/Cantarell-Regular.otf"),
-                data_name: "Cantarell-Regular",
-                family: "lewdware-cantarell",
-            },
-            Self::NotoSans => Bundled {
-                bytes: include_bytes!("../assets/fonts/NotoSans.ttf"),
-                data_name: "NotoSans",
-                family: "lewdware-noto-sans",
-            },
-            Self::LiberationSans => Bundled {
-                bytes: include_bytes!("../assets/fonts/LiberationSans-Regular.ttf"),
-                data_name: "LiberationSans-Regular",
-                family: "lewdware-liberation-sans",
-            },
-            Self::LiberationSansBold => Bundled {
-                bytes: include_bytes!("../assets/fonts/LiberationSans-Bold.ttf"),
-                data_name: "LiberationSans-Bold",
-                family: "lewdware-liberation-sans-bold",
-            },
-            Self::SourceSans => Bundled {
-                bytes: include_bytes!("../assets/fonts/SourceSans3-Regular.ttf"),
-                data_name: "SourceSans3-Regular",
-                family: "lewdware-source-sans",
-            },
-            Self::SourceSansSemibold => Bundled {
-                bytes: include_bytes!("../assets/fonts/SourceSans3-Semibold.ttf"),
-                data_name: "SourceSans3-Semibold",
-                family: "lewdware-source-sans-semibold",
-            },
-        };
-        Some(bundled)
+/// The bundled face's data.
+///
+/// Every face is a file in `assets/fonts/`, including the two egui ships with — the engine used to
+/// reach into `FontDefinitions::default()` for those, which meant `config/` had nothing it could
+/// point an `@font-face` at and its preview of `plain` fell back to whatever sans the machine had.
+/// Bundling them makes the two renderers agree by construction.
+///
+/// A free function rather than a method: [`Face`] is a description and lives with the themes, so
+/// only the crate that actually embeds the bytes can hold the mapping to them.
+fn bundled(face: Face) -> Bundled {
+    match face {
+        // egui's own two faces, now named explicitly rather than inherited.
+        Face::Default => Bundled {
+            bytes: include_bytes!("../../assets/fonts/Ubuntu-Light.ttf"),
+            data_name: "Ubuntu-Light",
+            family: "lewdware-default",
+        },
+        Face::Mono => Bundled {
+            bytes: include_bytes!("../../assets/fonts/Hack-Regular.ttf"),
+            data_name: "Hack",
+            family: "lewdware-mono",
+        },
+        Face::Display => Bundled {
+            bytes: include_bytes!("../../assets/fonts/Anton-Regular.ttf"),
+            data_name: "Anton-Regular",
+            family: "lewdware-display",
+        },
+        Face::Pixel => Bundled {
+            bytes: include_bytes!("../../assets/fonts/W95FA.otf"),
+            data_name: "W95FA",
+            family: "lewdware-pixel",
+        },
+        Face::Selawik => Bundled {
+            bytes: include_bytes!("../../assets/fonts/Selawik-Regular.ttf"),
+            data_name: "Selawik-Regular",
+            family: "lewdware-selawik",
+        },
+        Face::Inter => Bundled {
+            bytes: include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
+            data_name: "Inter-Regular",
+            family: "lewdware-inter",
+        },
+        Face::Cantarell => Bundled {
+            bytes: include_bytes!("../../assets/fonts/Cantarell-Regular.otf"),
+            data_name: "Cantarell-Regular",
+            family: "lewdware-cantarell",
+        },
+        Face::NotoSans => Bundled {
+            bytes: include_bytes!("../../assets/fonts/NotoSans.ttf"),
+            data_name: "NotoSans",
+            family: "lewdware-noto-sans",
+        },
+        Face::LiberationSans => Bundled {
+            bytes: include_bytes!("../../assets/fonts/LiberationSans-Regular.ttf"),
+            data_name: "LiberationSans-Regular",
+            family: "lewdware-liberation-sans",
+        },
+        Face::LiberationSansBold => Bundled {
+            bytes: include_bytes!("../../assets/fonts/LiberationSans-Bold.ttf"),
+            data_name: "LiberationSans-Bold",
+            family: "lewdware-liberation-sans-bold",
+        },
+        Face::SourceSans => Bundled {
+            bytes: include_bytes!("../../assets/fonts/SourceSans3-Regular.ttf"),
+            data_name: "SourceSans3-Regular",
+            family: "lewdware-source-sans",
+        },
+        Face::SourceSansSemibold => Bundled {
+            bytes: include_bytes!("../../assets/fonts/SourceSans3-Semibold.ttf"),
+            data_name: "SourceSans3-Semibold",
+            family: "lewdware-source-sans-semibold",
+        },
     }
 }
 
-/// The custom font definitions needed to render `font`, or `None` when egui's own defaults are
-/// enough (`Face::Default` and `Face::Mono`).
+/// The font definitions needed to render `font`.
+///
+/// Always `Some`: every face is bundled, so egui is always told explicitly which file to draw
+/// with rather than falling through to whichever of its own it would otherwise pick.
 pub fn build_font_definitions(font: impl Into<Face>) -> Option<FontDefinitions> {
-    let bundled = font.into().bundled()?;
+    let bundled = bundled(font.into());
 
     let mut definitions = FontDefinitions::default();
     definitions.font_data.insert(
@@ -147,18 +133,6 @@ pub fn build_font_definitions(font: impl Into<Face>) -> Option<FontDefinitions> 
 
 /// One of egui's own fonts, as an `ab_glyph` face.
 ///
-/// The window chrome is drawn with tiny-skia rather than egui, so it needs the face itself rather
-/// than a `FontFamily`. Pulling it out of `FontDefinitions::default()` keeps a header's text
-/// matching egui's — the two are side by side on screen.
-fn egui_font(name: &str) -> Option<FontArc> {
-    let definitions = FontDefinitions::default();
-    let data = definitions.font_data.get(name)?;
-    FontArc::try_from_vec(data.font.to_vec()).ok()
-}
-
-static DEFAULT_CHROME_FONT: LazyLock<Option<FontArc>> = LazyLock::new(|| egui_font("Ubuntu-Light"));
-static MONO_CHROME_FONT: LazyLock<Option<FontArc>> = LazyLock::new(|| egui_font("Hack"));
-
 /// Parsed faces, keyed by the bundled data name. A face is parsed once and shared thereafter;
 /// hundreds of windows may each have a header.
 static BUNDLED_CHROME_FONTS: LazyLock<
@@ -168,15 +142,7 @@ static BUNDLED_CHROME_FONTS: LazyLock<
 /// The face a window's title bar draws `font` with, or `None` if it could not be loaded — in which
 /// case the title is simply not drawn, exactly as before this was themeable.
 pub fn chrome_font(font: impl Into<Face>) -> Option<FontArc> {
-    let face = font.into();
-
-    let Some(bundled) = face.bundled() else {
-        // `FontArc` is an `Arc` internally, so this shares the parsed face rather than copying it.
-        return match face {
-            Face::Mono => (*MONO_CHROME_FONT).clone(),
-            _ => (*DEFAULT_CHROME_FONT).clone(),
-        };
-    };
+    let bundled = bundled(font.into());
 
     let mut cache = BUNDLED_CHROME_FONTS
         .lock()
@@ -188,12 +154,9 @@ pub fn chrome_font(font: impl Into<Face>) -> Option<FontArc> {
 }
 
 pub fn font_family(font: impl Into<Face>) -> FontFamily {
-    let face = font.into();
-    match face.bundled() {
-        Some(bundled) => FontFamily::Name(bundled.family.into()),
-        None if face == Face::Mono => FontFamily::Monospace,
-        None => FontFamily::Proportional,
-    }
+    // Every face is a named family of its own now, including the two that used to fall through to
+    // egui's `Proportional`/`Monospace`.
+    FontFamily::Name(bundled(font.into()).family.into())
 }
 
 pub fn to_egui_align(align: TextAlign) -> Align {

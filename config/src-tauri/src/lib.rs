@@ -206,12 +206,30 @@ impl From<ScheduleDto> for ScheduleConfig {
     }
 }
 
+/// A frontend that predates these fields (or a partial payload) must not silently reset the
+/// user's look, so both mirror `AppConfig`'s own defaults rather than falling back to `String`'s.
+fn default_theme_dto() -> String {
+    AppConfig::default().theme
+}
+
+fn default_appearance_dto() -> String {
+    AppConfig::default().appearance
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConfigDto {
     pub pack_path: Option<String>,
     pub mode: ModeIdDto,
     pub mode_options: Vec<ModeOptionsEntry>,
     pub experience_options: Vec<ExperienceOptionsEntry>,
+    /// The window look every popup is drawn in, unless the running mode names one itself. See
+    /// `AppConfig::theme` for why this is the user's setting rather than a mode option. Both this
+    /// and `appearance` round-trip like every other field here, for the reason `wallpaper`
+    /// documents below.
+    #[serde(default = "default_theme_dto")]
+    pub theme: String,
+    #[serde(default = "default_appearance_dto")]
+    pub appearance: String,
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
     pub capabilities: Capabilities,
@@ -257,6 +275,8 @@ impl From<AppConfig> for ConfigDto {
             mode: c.mode.into(),
             mode_options,
             experience_options,
+            theme: c.theme,
+            appearance: c.appearance,
             panic_button: c.panic_button,
             disabled_monitors: c.disabled_monitors,
             capabilities: c.capabilities,
@@ -287,6 +307,8 @@ impl From<ConfigDto> for AppConfig {
             mode: dto.mode.into(),
             mode_options,
             experience_options,
+            theme: dto.theme,
+            appearance: dto.appearance,
             panic_button: dto.panic_button,
             disabled_monitors: dto.disabled_monitors,
             capabilities: dto.capabilities,
@@ -294,6 +316,54 @@ impl From<ConfigDto> for AppConfig {
             volume: dto.volume,
             schedule: dto.schedule.into(),
         }
+    }
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ThemeCatalogueDto {
+    pub themes: Vec<ThemeEntryDto>,
+    pub appearances: Vec<shared::theme::AppearanceInfo>,
+}
+
+/// One selectable look, with everything needed to *draw* it in the picker.
+///
+/// The frontend renders a small live window from this — border, title bar, buttons, a text field —
+/// so a user can see and poke a theme before choosing it. It is the same data the engine paints
+/// with (`shared::theme`), not a description of it written twice.
+#[derive(Serialize, Clone, Debug)]
+pub struct ThemeEntryDto {
+    /// The value stored in `AppConfig::theme`. An alias keeps its own name here — picking the
+    /// merged card means "follow this machine", not "pin whatever it happens to be today".
+    pub name: &'static str,
+    /// What to call it in the picker. An alias borrows the label of whatever it resolves to
+    /// *here*, because that is what the user is actually looking at.
+    pub label: &'static str,
+    /// Whether this look has a dark palette, answered for the look that will really be drawn —
+    /// so an alias reports its resolution's answer rather than the catalogue's placeholder.
+    pub supports_dark: bool,
+    /// True for `native`/`native-retro`. The card says so, since the *label* no longer does.
+    pub matches_system: bool,
+    /// The concrete look an alias stands for on this machine, so a config that pins that look
+    /// directly still lights up the merged card.
+    pub resolves_to: Option<&'static str>,
+    /// Both palettes up front: the preview redraws when the user flips light/dark, and there are
+    /// only ten themes, so fetching one and asking for the other later buys nothing.
+    pub light: ThemeLookDto,
+    pub dark: ThemeLookDto,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ThemeLookDto {
+    pub metrics: shared::theme::Metrics,
+    pub chrome: shared::theme::Chrome,
+    pub widgets: shared::theme::Widgets,
+}
+
+fn theme_look(theme: shared::theme::Theme, appearance: shared::theme::Appearance) -> ThemeLookDto {
+    ThemeLookDto {
+        metrics: theme.metrics(),
+        chrome: theme.chrome(appearance),
+        widgets: *theme.widgets(appearance),
     }
 }
 
@@ -725,6 +795,63 @@ fn save_config(state: State<'_>, config: ConfigDto) -> Result<(), String> {
 /// Lists monitors by asking the engine, rather than reading them from this process.
 ///
 /// This app is a native Wayland Tauri app; the engine forces winit onto XWayland because Wayland
+/// The window looks the user can choose between, and what each one looks like.
+///
+/// Straight from `shared::theme`, which is where the engine reads them too -- so the picker can
+/// never offer a look the engine cannot draw, show one in the wrong colours, or fall behind a
+/// theme added since. A command rather than a constant baked into the frontend for exactly that
+/// reason: one source of truth, with the agreement between the catalogue and the drawable set
+/// pinned by a test.
+#[tauri::command]
+fn get_theme_catalogue() -> ThemeCatalogueDto {
+    use shared::theme::{Appearance, ThemeChoice, ThemeInfo};
+
+    let resolve = |info: &ThemeInfo| {
+        ThemeChoice::from_name(info.name)
+            .expect("the catalogue and ThemeChoice agree -- pinned by a test in shared")
+            .resolve()
+    };
+
+    // What the aliases come out as here. On this machine those *are* those looks, so offering both
+    // would be the same card twice under two names -- the concrete ones are dropped below and the
+    // alias wears their label instead.
+    let aliased: Vec<&'static str> = shared::theme::THEMES
+        .iter()
+        .filter(|info| info.is_alias)
+        .map(|info| resolve(info).name())
+        .collect();
+
+    let themes = shared::theme::THEMES
+        .iter()
+        .filter(|info| info.is_alias || !aliased.contains(&resolve(info).name()))
+        .map(|info| {
+            let theme = resolve(info);
+            let label = if info.is_alias {
+                // Whatever it resolved to, named plainly. "Match my system" told the user nothing
+                // about what they were looking at.
+                shared::theme::theme(theme.name()).map_or(info.label, |resolved| resolved.label)
+            } else {
+                info.label
+            };
+
+            ThemeEntryDto {
+                name: info.name,
+                label,
+                supports_dark: theme.supports_dark(),
+                matches_system: info.is_alias,
+                resolves_to: info.is_alias.then(|| theme.name()),
+                light: theme_look(theme, Appearance::Light),
+                dark: theme_look(theme, Appearance::Dark),
+            }
+        })
+        .collect();
+
+    ThemeCatalogueDto {
+        themes,
+        appearances: shared::theme::APPEARANCES.to_vec(),
+    }
+}
+
 /// can't position windows. The two disagree about both monitor names and geometry (see
 /// `shared::monitor`), so anything measured here would be written into `disabled_monitors` and
 /// then never match what the engine compares it against -- which is exactly the bug this replaces.
@@ -1463,6 +1590,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
+            get_theme_catalogue,
             get_monitors,
             get_mode_groups,
             get_mode_options,

@@ -53,34 +53,48 @@ but if *you* redistribute a binary built this way, you take on the same GPL
 considerations documented in `pack-editor/THIRD_PARTY_LICENSES.md`. Official
 releases always use the vendored LGPL-only build described above.
 
-## Bundled fonts (SIL Open Font License 1.1)
+## Bundled fonts
 
-The engine embeds the typefaces below (`lewdware/assets/fonts/`) so that text
-popups and window themes render identically everywhere, without depending on
-what is installed on the user's machine. Each is used unmodified.
+The engine embeds the typefaces below (the repo-level [`assets/fonts/`](../assets/fonts))
+so that text popups and window themes render identically everywhere, without
+depending on what is installed on the user's machine. Each is used unmodified.
 
-The OFL permits bundling and redistribution — including inside a commercial or
+They sit outside this crate because they have a second consumer: `config/`
+embeds the UI faces to draw a theme's widgets in its picker, so the same
+obligations below apply to that binary too. Neither reads the files at run
+time — each embeds what it needs at build time.
+
+Most are under the SIL Open Font License 1.1. The OFL permits bundling and redistribution — including inside a commercial or
 proprietary application — and, unlike a code license, does not extend to the
 program that embeds the font. It does require that the license text travel with
 the font, which is why a copy of each sits in
-[`assets/fonts/licenses/`](assets/fonts/licenses). Its one real constraint is on
+[`assets/fonts/licenses/`](../assets/fonts/licenses). Its one real constraint is on
 *modifying* a font: a derivative must stay under the OFL and must not use a
 Reserved Font Name. We do neither.
 
+Two of them are not OFL and carry their own terms, both permitting redistribution
+and embedding: the **Ubuntu Font Licence 1.0** for Ubuntu, and the **MIT License**
+for Hack (whose glyphs derive from the public-domain DejaVu project). These two
+were previously used *via egui*, which bundles them itself; they are embedded
+directly now so that the engine and `config/` draw the same text with the same
+file rather than each reaching for its own default.
+
 | Font | Used for | Copyright | License |
 | --- | --- | --- | --- |
+| Ubuntu | The neutral UI face — the `plain` theme, and the default text font | Canonical Ltd. | [UFL 1.0](../assets/fonts/licenses/Ubuntu-UFL.txt) |
+| Hack | The `mono` text font | Source Foundry Authors; DejaVu (public domain) | [MIT](../assets/fonts/licenses/Hack-LICENSE.md) |
 | Anton | The `display` text font | The Anton Project Authors | OFL 1.1 |
 | W95FA | The `pixel` text font, and the `redmond` theme | Alina Sava | OFL 1.1 |
-| Selawik | The `fluent` theme — Microsoft's own metrically-compatible substitute for Segoe UI, which is not redistributable | Microsoft Corporation (Reserved Font Name "Selawik") | [OFL 1.1](assets/fonts/licenses/Selawik-OFL.txt) |
-| Inter | The `aqua` theme — the closest freely-licensed stand-in for San Francisco | The Inter Project Authors | [OFL 1.1](assets/fonts/licenses/Inter-OFL.txt) |
-| Cantarell | The `adwaita` theme — GNOME's own UI font | The Cantarell Project Authors | [OFL 1.1](assets/fonts/licenses/Cantarell-OFL.txt) |
-| Noto Sans | The `breeze` theme — KDE Plasma's default UI face | The Noto Project Authors | [OFL 1.1](assets/fonts/licenses/NotoSans-OFL.txt) |
-| Liberation Sans | The `cde` theme — a metrically compatible substitute for its Helvetica-family UI typography | Red Hat | [SIL OFL 1.1](assets/fonts/licenses/LiberationSans-LICENSE.txt) |
-| Source Sans 3 | The `platinum` theme — a compact UI-oriented stand-in for Charcoal | Adobe | [OFL 1.1](assets/fonts/licenses/SourceSans3-OFL.md) |
+| Selawik | The `fluent` theme — Microsoft's own metrically-compatible substitute for Segoe UI, which is not redistributable | Microsoft Corporation (Reserved Font Name "Selawik") | [OFL 1.1](../assets/fonts/licenses/Selawik-OFL.txt) |
+| Inter | The `aqua` theme — the closest freely-licensed stand-in for San Francisco | The Inter Project Authors | [OFL 1.1](../assets/fonts/licenses/Inter-OFL.txt) |
+| Cantarell | The `adwaita` theme — GNOME's own UI font | The Cantarell Project Authors | [OFL 1.1](../assets/fonts/licenses/Cantarell-OFL.txt) |
+| Noto Sans | The `breeze` theme — KDE Plasma's default UI face | The Noto Project Authors | [OFL 1.1](../assets/fonts/licenses/NotoSans-OFL.txt) |
+| Liberation Sans | The `cde` theme — a metrically compatible substitute for its Helvetica-family UI typography | Red Hat | [SIL OFL 1.1](../assets/fonts/licenses/LiberationSans-LICENSE.txt) |
+| Source Sans 3 | The `platinum` theme — a compact UI-oriented stand-in for Charcoal | Adobe | [OFL 1.1](../assets/fonts/licenses/SourceSans3-OFL.md) |
 
-Anton and W95FA predate this file. Both are OFL 1.1, but unlike the three added
-later their license texts are not yet checked in beside them — worth doing before
-release, since the OFL asks that the license travel with the font.
+Anton and W95FA predate this file. Both are OFL 1.1, but unlike the others their
+license texts are not yet checked in beside them — worth doing before release,
+since the OFL asks that the license travel with the font.
 
 None of the platform UI fonts these imitate — Segoe UI, San Francisco,
 Charcoal — are redistributable, which is why each theme uses a free substitute

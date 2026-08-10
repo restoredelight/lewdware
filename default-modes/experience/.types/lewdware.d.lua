@@ -48,9 +48,9 @@ lewdware.config = {}
 
 ---Every [Theme](lua://Theme) name this engine understands, in the order they are worth offering.
 ---
----Check against this before passing on a theme name that came from *pack* data: an unknown name
----raises an error at the spawn call, which is what you want for a typo in your own mode but not
----for a pack built against a newer engine.
+---Check against this before passing on a theme name that did not come from your own source code:
+---an unknown name raises an error at the spawn call, which is what you want for a typo you wrote
+---but not for a name that reached you from a config or a pack built against a newer engine.
 ---@type string[]
 lewdware.themes = {}
 
@@ -58,6 +58,21 @@ lewdware.themes = {}
 ---`lewdware.themes`, and useful for the same reason.
 ---@type string[]
 lewdware.appearances = {}
+
+---The window look the user chose in the Lewdware app, which is what every window you spawn is
+---already drawn with unless you say otherwise. Reading it is only useful if you want to *vary*
+---from it deliberately — say, drawing one window in a fixed theme while leaving the rest alone.
+---
+---Always one of [`lewdware.themes`](lua://lewdware.themes), and may be `"native"` or
+---`"native-retro"`: this is the user's choice as written, not the concrete look it resolves to on
+---this machine.
+---@type string
+lewdware.user_theme = ""
+
+---The palette the user chose, the companion to [`lewdware.user_theme`](lua://lewdware.user_theme).
+---May be `"auto"`, which is the user asking to follow whatever their desktop is set to.
+---@type string
+lewdware.user_appearance = ""
 
 ---@alias MediaType
 ---| "image"
@@ -92,17 +107,22 @@ lewdware.appearances = {}
 ---appearance and renders identically everywhere.
 ---
 ---`lewdware.themes` lists every value this engine accepts, which is worth checking against if the
----name came from pack data rather than from your own code — a pack built for a newer engine may
----name a theme this one has never heard of.
+---name reached you from somewhere other than your own source code — a config or a pack written
+---for a newer engine may name a theme this one has never heard of.
+---
+---A window you do not give a theme to is drawn in the user's own choice
+---([`lewdware.user_theme`](lua://lewdware.user_theme)), which is what you usually want.
 ---@alias Theme
----| "plain" Minimal and monochrome, with no resemblance to any OS. The default.
+---| "plain" Minimal and monochrome, with no resemblance to any OS.
 ---| "native" Whatever this platform's windows currently look like.
 ---| "native-retro" Whatever this platform's windows used to look like.
 ---| "fluent" Windows 11.
 ---| "redmond" Windows 95/98.
 ---| "aqua" macOS.
 ---| "adwaita" GNOME.
+---| "breeze" KDE Plasma.
 ---| "platinum" Mac OS 9.
+---| "cde" CDE/Motif.
 
 ---Which palette a [Theme](lua://Theme) is drawn in.
 ---
@@ -112,7 +132,7 @@ lewdware.appearances = {}
 ---Not every theme has a dark version — `"platinum"` has none, since Mac OS 9 never did — and one
 ---that doesn't stays light rather than being given an invented palette.
 ---@alias Appearance
----| "light" The default.
+---| "light"
 ---| "dark"
 ---| "auto" Follow the desktop's own light/dark setting, falling back to light where it cannot be
 ---  determined (a bare compositor, or a Linux desktop with no settings portal).
@@ -171,10 +191,11 @@ function lewdware.monitors.primary() end
 ---@field width number The width of the window, in pixels.
 ---@field height number The height of the window, in pixels.
 ---Note that `outer_width`/`outer_height` depend on the window's
----[theme](lua://Theme): each has its own border width and header height. `"plain"` is the one
----theme whose metrics are fixed and identical on every platform and version, so it is the safe
----choice if you do arithmetic against these. Under `"native"` they vary by platform, and you
----should read them back from the window rather than assuming them.
+---[theme](lua://Theme): each has its own border width and header height. A window you did not
+---give a `theme` to is drawn in the *user's* choice, so its numbers vary from machine to machine
+---— read them back from the window rather than assuming them. If you need to know them in
+---advance, name a theme when you spawn: every one of them has fixed metrics, and `"plain"`'s in
+---particular are identical on every platform and every version of Lewdware.
 ---
 ---@field outer_width number The width of the window, including the border and decorations, if
 ---  present.
@@ -558,9 +579,15 @@ lewdware.popup = {}
 ---@field clamp? boolean Whether to keep the window entirely within its chosen monitor, adjusting
 ---  the spawn position if it would otherwise go off-screen. Defaults to true.
 ---@field theme? Theme Which named look to draw the window's border, header, buttons and text
----  fields with. Defaults to `"plain"`. Ignored for the header if `decorations` is false, but it
----  still styles a dialog's widgets.
----@field appearance? Appearance Which palette that look is drawn in. Defaults to `"light"`.
+---  fields with. **Defaults to the look the user chose in the Lewdware app**
+---  ([`lewdware.user_theme`](lua://lewdware.user_theme)), so leaving it unset is the right thing
+---  to do for most windows. Set it only where the look is part of what you are building — a
+---  window pretending to be a Windows 95 error box — or where you need the fixed metrics naming
+---  a theme guarantees (see `outer_width`). Ignored for the header if `decorations` is false, but
+---  it still styles a dialog's widgets.
+---@field appearance? Appearance Which palette that look is drawn in. Defaults to the user's own
+---  choice ([`lewdware.user_appearance`](lua://lewdware.user_appearance)), which is usually
+---  `"auto"`.
 
 ---@class ImagePopupOpts : PopupOpts
 ---Options for [lewdware.popup.image()](lua://lewdware.popup.image).
@@ -604,7 +631,9 @@ function lewdware.popup.video(video, opts) end
 ---and by `text` elements in [lewdware.popup.dialog()](lua://lewdware.popup.dialog), so styled
 ---text looks the same everywhere.
 ---
----@field font? TextFont Which bundled font to use. Defaults to `"default"`.
+---@field font? TextFont Which bundled font to use. Defaults to the window theme's UI font inside
+---  a dialog, and to `"default"` for a standalone text popup. An explicit non-default face always
+---  overrides the theme.
 ---@field font_size? FontSize The font size. Defaults to 32.
 ---@field color? string The text colour as a hex string (`"#rrggbb"` or `"#rrggbbaa"`). Defaults
 ---  to black.
