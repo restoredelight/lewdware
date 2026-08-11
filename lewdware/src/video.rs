@@ -598,12 +598,32 @@ fn frame_timing(
     time_base: ffmpeg::Rational,
     nominal: Duration,
 ) -> (Duration, Duration) {
+    timing_from_units(
+        frame.pts().unwrap_or(0),
+        frame.packet().duration,
+        time_base,
+        nominal,
+    )
+}
+
+/// The arithmetic behind [`frame_timing`], over the raw `time_base` units rather than a frame.
+///
+/// Split out so the rules above can be exercised directly: which `AVFrame` field a duration is
+/// read from moves between FFmpeg versions (`pkt_duration` before 7.0, `duration` after), so a
+/// test that reached into a frame to plant one would be testing the ffmpeg build it happened to
+/// link against as much as the rules here.
+fn timing_from_units(
+    pts: i64,
+    duration: i64,
+    time_base: ffmpeg::Rational,
+    nominal: Duration,
+) -> (Duration, Duration) {
     let seconds = |units: i64| units as f64 * (time_base.0 as f64 / time_base.1 as f64);
 
     // A negative timestamp is not a time we can represent, and `from_secs_f64` panics on one.
-    let pts = Duration::from_secs_f64(seconds(frame.pts().unwrap_or(0)).max(0.0));
+    let pts = Duration::from_secs_f64(seconds(pts).max(0.0));
 
-    let duration = Some(frame.packet().duration)
+    let duration = Some(duration)
         .filter(|raw| *raw > 0)
         .map(|raw| Duration::from_secs_f64(seconds(raw)))
         .filter(|duration| *duration <= MAX_FRAME_DURATION)
@@ -1187,25 +1207,16 @@ mod pacing {
     fn an_implausible_frame_duration_is_not_trusted() {
         let nominal = Duration::from_millis(33);
         let time_base = ffmpeg::Rational::new(1, 1000);
+        let duration = |raw| timing_from_units(0, raw, time_base, nominal).1;
 
-        let mut frame = Video::empty();
         // No duration at all: the stream's nominal frame duration stands in.
-        assert_eq!(frame_timing(&frame, time_base, nominal).1, nominal);
+        assert_eq!(duration(0), nominal);
 
         // A duration past anything a real frame holds for is refused the same way.
-        unsafe {
-            (*frame.as_mut_ptr()).duration = 60_000;
-        }
-        assert_eq!(frame_timing(&frame, time_base, nominal).1, nominal);
+        assert_eq!(duration(60_000), nominal);
 
         // A plausible one is taken at face value.
-        unsafe {
-            (*frame.as_mut_ptr()).duration = 40;
-        }
-        assert_eq!(
-            frame_timing(&frame, time_base, nominal).1,
-            Duration::from_millis(40)
-        );
+        assert_eq!(duration(40), Duration::from_millis(40));
     }
 }
 

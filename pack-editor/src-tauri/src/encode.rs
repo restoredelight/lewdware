@@ -31,7 +31,7 @@ impl UploadErrorPayload {
     pub(crate) fn new(path: &Path, error: impl Into<String>) -> Self {
         let file_name = path
             .file_name()
-            .unwrap_or_else(|| path.as_os_str())
+            .unwrap_or(path.as_os_str())
             .to_string_lossy()
             .into_owned();
         Self {
@@ -308,6 +308,9 @@ pub async fn process_files(
     let _ = app.emit("upload:done", ());
 }
 
+// The per-file arguments are one path; the rest is the loop-invariant context every file in a
+// batch shares, which the caller resolves once before the stream starts.
+#[allow(clippy::too_many_arguments)]
 async fn process_one_file(
     pack_state: &crate::PackState,
     pack_id: Uuid,

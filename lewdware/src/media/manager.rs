@@ -73,6 +73,10 @@ pub enum MediaRequirement {
     },
 }
 
+/// A decoder is much larger than a handle to a sound or a decoded image, but only one of these
+/// exists per piece of media in flight and each is moved straight into the item that asked for
+/// it, so boxing the variant would buy an allocation rather than save one.
+#[allow(clippy::large_enum_variant)]
 pub enum ResolvedMedia {
     Image(ImageData),
     Video(VideoDecoder),

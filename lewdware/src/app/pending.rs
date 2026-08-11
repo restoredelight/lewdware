@@ -71,6 +71,8 @@ pub(super) struct Requirement {
     pub state: RequirementState,
 }
 
+/// Sized by [`ResolvedMedia`], which is deliberately unboxed — see its own note.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum RequirementState {
     Pending(MediaRequirement),
     Resolved(ResolvedMedia),

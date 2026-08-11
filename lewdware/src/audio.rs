@@ -73,8 +73,7 @@ impl AudioPlayer {
     }
 
     pub fn position(&self) -> Duration {
-        let pos = self.sink.get_pos();
-        pos
+        self.sink.get_pos()
     }
 }
 

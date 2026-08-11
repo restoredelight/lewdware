@@ -51,6 +51,7 @@ jobs:
             libxtst-dev \
             libxrandr-dev \
             libxcursor-dev \
+            libdav1d-dev \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             patchelf \
@@ -58,13 +59,17 @@ jobs:
       # cmake/ninja-build (alongside nasm, above) are for build_avifenc_sidecar.sh, which builds
       # libavif + a local libaom from source -- no prebuilt static Linux avifenc is published
       # upstream (see deploy/linux/build_avifenc_sidecar.sh).
-      # Note: no libavcodec-dev/libdav1d-dev etc. here on purpose. Ubuntu's
-      # ffmpeg packages are built --enable-gpl (they depend on libx264-dev),
-      # so linking against them would make the distributed lewdware binary a
-      # GPL combined work. Installer A instead builds the `lewdware` crate
-      # with --features build-ffmpeg, which vendors and statically links a
-      # pristine, LGPL-only FFmpeg (see lewdware/Cargo.toml). `nasm` above is
-      # required to build that vendored copy.
+      # libdav1d-dev is what the `image` crate's `avif-native` feature decodes pack AVIFs with
+      # (dav1d-sys finds it by pkg-config or fails the build). It is BSD-2, not GPL, so unlike
+      # the ffmpeg packages below there is nothing to avoid here; build_installer_a.sh bundles
+      # the .so alongside the binaries the same way it does every other non-system dep.
+      # Note: no libavcodec-dev etc. here on purpose. Ubuntu's ffmpeg packages
+      # are built --enable-gpl (they depend on libx264-dev), so linking against
+      # them would make the distributed lewdware binary a GPL combined work.
+      # Installer A instead builds the `lewdware` crate with --features
+      # build-ffmpeg, which vendors and statically links a pristine, LGPL-only
+      # FFmpeg (see lewdware/Cargo.toml). `nasm` above is required to build
+      # that vendored copy.
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -118,8 +123,12 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install nasm cmake ninja
-          echo "BREW_DEPS=$(brew ls --versions nasm cmake ninja | tr '\n' ' ')" >> $GITHUB_ENV
+          brew install nasm cmake ninja dav1d
+          echo "BREW_DEPS=$(brew ls --versions nasm cmake ninja dav1d | tr '\n' ' ')" >> $GITHUB_ENV
+      # dav1d is what the `image` crate's `avif-native` feature decodes pack AVIFs with
+      # (dav1d-sys finds it by pkg-config or fails the build). It is BSD-2, not GPL, so unlike
+      # ffmpeg below there is nothing to avoid here; build_installer_a.sh bundles the dylib into
+      # Frameworks/ the same way it does every other non-system dep.
       # Note: no `brew install ffmpeg` here on purpose. Homebrew's ffmpeg
       # formula is unconditionally built --enable-gpl --enable-libx264
       # --enable-libx265 (its declared license is literally GPL-3.0-or-later),

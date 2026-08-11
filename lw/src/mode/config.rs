@@ -140,41 +140,24 @@ fn parse_entry(key: &str, value: JsonValue) -> Result<mode::ModeEntry> {
             entries,
         }))
     } else {
-        let ModeOption {
-            label,
-            description,
-            optional,
-            enabled_by_default,
-            show_when: raw_show_when,
-            needs_permissions,
-            option_type,
-        } = serde_json::from_value(value)
+        let option: ModeOption = serde_json::from_value(value)
             .with_context(|| format!("Error parsing option `{key}`"))?;
-        let show_when = parse_show_when(raw_show_when)?;
-        let meta_opt = convert_option(
-            key,
-            label,
-            description,
-            optional,
-            enabled_by_default,
-            option_type,
-            show_when,
-            needs_permissions,
-        )?;
-        Ok(mode::ModeEntry::Option(meta_opt))
+        Ok(mode::ModeEntry::Option(convert_option(key, option)?))
     }
 }
 
-fn convert_option(
-    key: &str,
-    label: String,
-    description: Option<String>,
-    optional: bool,
-    enabled_by_default: bool,
-    option_type: OptionType,
-    show_when: Option<mode::ShowWhen>,
-    needs_permissions: Vec<mode::Permission>,
-) -> Result<mode::ModeOption> {
+fn convert_option(key: &str, option: ModeOption) -> Result<mode::ModeOption> {
+    let ModeOption {
+        label,
+        description,
+        optional,
+        enabled_by_default,
+        show_when: raw_show_when,
+        needs_permissions,
+        option_type,
+    } = option;
+    let show_when = parse_show_when(raw_show_when)?;
+
     let has_default = match &option_type {
         OptionType::Integer { default, .. } => default.is_some(),
         OptionType::Number { default, .. } => default.is_some(),

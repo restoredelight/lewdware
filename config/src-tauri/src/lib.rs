@@ -43,10 +43,10 @@ async fn check_for_update() -> Result<Option<String>, String> {
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 use shared::{
-    behaviour::{Behaviour, effective_options},
+    behaviour::{effective_options, Behaviour},
     db::migrate,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, ShowWhen, StoredValue},
-    read_pack::{RecommendedMode, read_pack_metadata},
+    read_pack::{read_pack_metadata, RecommendedMode},
     schedule::{QuietHours, ScheduleConfig, Window},
     user_config::{self, AppConfig, Capabilities, Key, Mode, Volume, WallpaperConfig},
 };
@@ -614,14 +614,7 @@ fn builtin_mode_label(name: &str, recommended: bool) -> String {
 /// and every caller that wants one generally wants the other. Also returns the pack-derived
 /// `pack_has_*` facts that drive `show_when` visibility -- a default mode reports every fact (all
 /// false with no pack loaded), custom modes get an empty map.
-fn effective_entries_for_mode(
-    mode: &Mode,
-    state: &AppState,
-) -> Option<(
-    IndexMap<String, ModeEntry>,
-    Vec<Permission>,
-    IndexMap<String, OptionValue>,
-)> {
+fn effective_entries_for_mode(mode: &Mode, state: &AppState) -> Option<EffectiveEntries> {
     let mode_meta = match mode {
         Mode::Sandbox => Some(state.sandbox_mode.clone()),
         Mode::Experience => Some(state.experience_mode.clone()),
@@ -651,10 +644,27 @@ fn effective_entries_for_mode(
             .map(|p| p.behaviour.clone())
             .unwrap_or_default();
         let schema = effective_options(&mode_meta, &behaviour);
-        Some((schema.entries, needs_permissions, schema.pack_has))
+        Some(EffectiveEntries {
+            entries: schema.entries,
+            needs_permissions,
+            pack_has: schema.pack_has,
+        })
     } else {
-        Some((mode_meta.entries, needs_permissions, IndexMap::new()))
+        Some(EffectiveEntries {
+            entries: mode_meta.entries,
+            needs_permissions,
+            pack_has: IndexMap::new(),
+        })
     }
+}
+
+/// What [`effective_entries_for_mode`] resolves a mode to.
+struct EffectiveEntries {
+    entries: IndexMap<String, ModeEntry>,
+    /// The mode's unconditional permissions, off the same `Metadata` the entries came from.
+    needs_permissions: Vec<Permission>,
+    /// The pack-derived facts that drive `show_when` visibility; empty for a custom mode.
+    pack_has: IndexMap<String, OptionValue>,
 }
 
 /// Resolves the values a mode's stored options should read from: `Mode::Experience` is scoped
@@ -678,8 +688,11 @@ fn stored_options_for(
 }
 
 fn get_mode_options_for(config: &AppConfig, state: &AppState) -> ModeOptionsDto {
-    let Some((entries, needs_permissions, pack_has)) =
-        effective_entries_for_mode(&config.mode, state)
+    let Some(EffectiveEntries {
+        entries,
+        needs_permissions,
+        pack_has,
+    }) = effective_entries_for_mode(&config.mode, state)
     else {
         return ModeOptionsDto {
             needs_permissions: Vec::new(),
@@ -1479,8 +1492,8 @@ fn request_input_monitoring(#[allow(unused)] app_handle: AppHandle) -> Result<bo
     #[cfg(target_vendor = "apple")]
     {
         use std::sync::{
-            Arc,
             atomic::{AtomicBool, Ordering},
+            Arc,
         };
 
         let granted = Arc::new(AtomicBool::new(false));

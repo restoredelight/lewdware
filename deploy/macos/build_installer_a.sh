@@ -71,8 +71,10 @@ cp "target/release/lewdware-engine" "$MAC_BIN_DIR/lewdware-engine"
 chmod +x "$MAC_BIN_DIR/lw" "$MAC_BIN_DIR/lewdware-supervisor" "$MAC_BIN_DIR/lewdware-engine"
 
 # 3. Dynamic Library Bundling and Relinking (dylib)
-# FFmpeg and dav1d are statically linked into lewdware-engine (see the
-# --features build-ffmpeg cargo invocation above), so they won't show up here.
+# FFmpeg is statically linked into lewdware-engine (see the --features
+# build-ffmpeg cargo invocation above), so it won't show up here. libdav1d
+# will: the `image` crate's avif-native feature links Homebrew's, which is why
+# the workflow installs it.
 echo "Resolving dynamic library dependencies..."
 
 # Recursively copy all non-system dylib deps of $1 into Frameworks/ and relink.

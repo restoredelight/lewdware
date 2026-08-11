@@ -622,7 +622,7 @@ impl MediaPack {
                 let runtime = runtime
                     .as_ref()
                     .ok_or_else(|| anyhow!("pack has no index"))?;
-                editor_db::import_runtime(&mut conn, &runtime, &metadata_for_db)?;
+                editor_db::import_runtime(&mut conn, runtime, &metadata_for_db)?;
             } else {
                 editor_db::initialize(&conn)?;
                 if let Some(runtime) = &runtime {
@@ -3285,15 +3285,26 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
     {
         fs::File::open(path.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()?;
     }
+    // There is no directory handle to fsync off Unix, so the argument goes unread there.
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
 fn is_storage_full(error: &anyhow::Error) -> bool {
+    // ENOSPC is out of space and EDQUOT is over quota -- the same thing as far as a save is
+    // concerned. 112 is Windows' ERROR_DISK_FULL, which `raw_os_error` reports directly and
+    // libc has no name for. EDQUOT exists only on Unix, so it cannot be named unconditionally.
+    #[cfg(unix)]
+    const FULL: &[i32] = &[libc::ENOSPC, libc::EDQUOT, 112];
+    #[cfg(not(unix))]
+    const FULL: &[i32] = &[libc::ENOSPC, 112];
+
     error.chain().any(|cause| {
         cause
             .downcast_ref::<io::Error>()
             .and_then(io::Error::raw_os_error)
-            .is_some_and(|code| code == libc::ENOSPC || code == libc::EDQUOT || code == 112)
+            .is_some_and(|code| FULL.contains(&code))
     })
 }
 

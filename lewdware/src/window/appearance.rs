@@ -27,28 +27,25 @@ pub fn resolve(choice: AppearanceChoice, window: &Window) -> Appearance {
 
 /// The desktop's preference, or `None` where it cannot be determined — a bare compositor, a
 /// missing portal, X11.
+///
+/// On Linux, use the same XDG portal Firefox and other desktop-aware applications use.
+/// `Window::theme()` is unsupported on X11 and only reports winit's explicit theme override on
+/// Wayland, so consulting it first can turn a light desktop dark merely because the window was
+/// created with dark application chrome.
+#[cfg(target_os = "linux")]
+fn detect(_window: &Window) -> Option<Appearance> {
+    shared::theme::system_appearance()
+}
+
+/// The desktop's preference, or `None` where it cannot be determined.
+///
+/// winit covers Windows and macOS.
+#[cfg(not(target_os = "linux"))]
 fn detect(window: &Window) -> Option<Appearance> {
-    // On Linux, use the same XDG portal Firefox and other desktop-aware applications use.
-    // `Window::theme()` is unsupported on X11 and only reports winit's explicit theme override on
-    // Wayland, so consulting it first can turn a light desktop dark merely because the window was
-    // created with dark application chrome.
-    #[cfg(target_os = "linux")]
-    {
-        let _ = window;
-        return shared::theme::system_appearance();
-    }
-
-    // winit covers Windows and macOS.
-    #[cfg(not(target_os = "linux"))]
-    if let Some(theme) = window.theme() {
-        return Some(match theme {
-            winit::window::Theme::Light => Appearance::Light,
-            winit::window::Theme::Dark => Appearance::Dark,
-        });
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    None
+    Some(match window.theme()? {
+        winit::window::Theme::Light => Appearance::Light,
+        winit::window::Theme::Dark => Appearance::Dark,
+    })
 }
 
 #[cfg(test)]

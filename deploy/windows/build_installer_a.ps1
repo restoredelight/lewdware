@@ -22,8 +22,24 @@ if (-not (Test-Path $vcRedistCacheDir)) {
 }
 
 if (-not (Test-Path $vcRedistCache)) {
-    Write-Host "Downloading Visual C++ Redistributable..."
-    Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vcRedistCache
+    # aka.ms redirects to a CDN that intermittently cuts the response short ("The response ended
+    # prematurely"), which used to fail the whole build before a line of it had been compiled.
+    # Retry rather than let a hiccup on someone else's server decide whether a release ships.
+    $attempts = 3
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+        Write-Host "Downloading Visual C++ Redistributable (attempt $attempt/$attempts)..."
+        try {
+            Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vcRedistCache
+            break
+        } catch {
+            # A part-written file would otherwise be taken for a good download by the check above.
+            Remove-Item -Path $vcRedistCache -Force -ErrorAction SilentlyContinue
+            if ($attempt -eq $attempts) {
+                throw "Could not download the Visual C++ Redistributable: $_"
+            }
+            Start-Sleep -Seconds (5 * $attempt)
+        }
+    }
 }
 
 Write-Host "Staging Visual C++ Redistributable..."

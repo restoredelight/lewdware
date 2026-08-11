@@ -42,11 +42,13 @@ pub async fn start(pack: PackState, token: String) -> anyhow::Result<u16> {
     Ok(port)
 }
 
-fn authenticate(state: &MediaServerState, authentication: &Authentication) -> Result<(), Response> {
+/// The rejection to send back when a request's token is not the one this server started with, or
+/// `None` when it is and the handler should carry on.
+fn rejection(state: &MediaServerState, authentication: &Authentication) -> Option<Response> {
     if authentication.token.as_deref() == Some(state.token.as_str()) {
-        Ok(())
+        None
     } else {
-        Err((StatusCode::UNAUTHORIZED, "Invalid media token").into_response())
+        Some((StatusCode::UNAUTHORIZED, "Invalid media token").into_response())
     }
 }
 
@@ -55,7 +57,7 @@ async fn thumbnail_handler(
     Query(authentication): Query<Authentication>,
     Path(id): Path<u64>,
 ) -> Response {
-    if let Err(response) = authenticate(&state, &authentication) {
+    if let Some(response) = rejection(&state, &authentication) {
         return response;
     }
     let view = {
@@ -85,7 +87,7 @@ async fn preview_handler(
     Query(authentication): Query<Authentication>,
     Path(id): Path<u64>,
 ) -> Response {
-    if let Err(response) = authenticate(&state, &authentication) {
+    if let Some(response) = rejection(&state, &authentication) {
         return response;
     }
     let view = {
@@ -115,7 +117,7 @@ async fn display_handler(
     Query(authentication): Query<Authentication>,
     Path(id): Path<u64>,
 ) -> Response {
-    if let Err(response) = authenticate(&state, &authentication) {
+    if let Some(response) = rejection(&state, &authentication) {
         return response;
     }
     let view = {
@@ -146,7 +148,7 @@ async fn file_handler(
     Path(id): Path<u64>,
     request_headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authenticate(&state, &authentication) {
+    if let Some(response) = rejection(&state, &authentication) {
         return response;
     }
     let view = {
@@ -253,7 +255,7 @@ mod tests {
 
     use tokio::sync::Mutex;
 
-    use super::{authenticate, parse_range, Authentication, MediaServerState};
+    use super::{parse_range, rejection, Authentication, MediaServerState};
 
     #[test]
     fn requires_the_startup_media_token() {
@@ -261,14 +263,14 @@ mod tests {
             pack: Arc::new(Mutex::new(None)),
             token: "secret".into(),
         };
-        assert!(authenticate(
+        assert!(rejection(
             &state,
             &Authentication {
                 token: Some("secret".into())
             }
         )
-        .is_ok());
-        let response = authenticate(&state, &Authentication { token: None }).unwrap_err();
+        .is_none());
+        let response = rejection(&state, &Authentication { token: None }).expect("rejection");
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
 

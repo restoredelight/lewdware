@@ -68,6 +68,8 @@ enum ItemSlot {
     Audio(AudioPlayer),
 }
 
+/// `MediaResolved` carries a [`ResolvedMedia`], which is deliberately unboxed — see its own note.
+#[allow(clippy::large_enum_variant)]
 pub enum UserEvent {
     Exit,
     LuaRequest,

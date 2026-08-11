@@ -64,8 +64,10 @@ cp "target/release/lewdware-supervisor" "$STAGE_DIR/usr/lib/lewdware/lewdware-su
 chmod +x "$STAGE_DIR/usr/bin/"* "$STAGE_DIR/usr/lib/lewdware/lewdware-engine" "$STAGE_DIR/usr/lib/lewdware/lewdware-supervisor"
 
 # 3. Dynamic Library Bundling (transitive deps of any dynamically-linked libs).
-# FFmpeg and dav1d are statically linked into lewdware-engine (see the
-# --features build-ffmpeg cargo invocation above), so they won't show up here.
+# FFmpeg is statically linked into lewdware-engine (see the --features
+# build-ffmpeg cargo invocation above), so it won't show up here. libdav1d
+# will: the `image` crate's avif-native feature links the system one, which is
+# why the workflow installs libdav1d-dev.
 echo "Bundling dynamic library dependencies..."
 
 # System libraries that must remain as host deps (UI, audio, core runtime).

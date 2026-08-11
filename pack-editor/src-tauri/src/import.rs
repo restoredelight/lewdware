@@ -204,6 +204,9 @@ pub async fn run_import(
     let _ = app.emit("upload:done", ());
 }
 
+// As in `encode::process_one_file`: one media item, plus the batch-wide context resolved once
+// by the caller.
+#[allow(clippy::too_many_arguments)]
 async fn import_one_media(
     pack_state: &crate::PackState,
     pack_id: Uuid,

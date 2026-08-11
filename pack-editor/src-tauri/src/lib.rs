@@ -840,7 +840,8 @@ async fn add_mode_dialog(
     use tauri_plugin_dialog::DialogExt;
     let app_c = app.clone();
     let picked = tokio::task::spawn_blocking(move || {
-        app_c.dialog()
+        app_c
+            .dialog()
             .file()
             .set_title("Add custom mode")
             .add_filter("Lewdware Mode", &["lwmode"])
