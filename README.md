@@ -68,7 +68,7 @@ repo root:
 
 The engine and config apps require the default modes to be built:
 
-``` bash
+```bash
 cd default-modes
 cargo run -p lw -- mode build
 ```
@@ -77,20 +77,20 @@ Once those are built, you should be able to run the four apps.
 
 To run the lewdware engine:
 
-``` bash
+```bash
 cargo run -p lewdware
 ```
 
 To run the config app:
 
-``` bash
+```bash
 cd config
 pnpm tauri dev
 ```
 
 To run the pack-editor:
 
-``` bash
+```bash
 cd pack-editor
 pnpm tauri dev
 ```
@@ -116,21 +116,7 @@ cargo run -p lw -- <subcommand>
 
 All of Lewdware's own source code is licensed under the MIT License (see
 [`LICENSE`](LICENSE)). That covers everything you write or change in this
-repository. Some of the binaries we *distribute*, however, also bundle
-third-party components under different licenses, since MIT doesn't override
-what those components require of you when you redistribute them:
-
-- **`pack-editor`** invokes `ffmpeg`/`ffprobe` as subprocesses and bundles
-  prebuilt copies of them (built with GPL-only components like `libx264`) in
-  its installer. pack-editor's own source stays MIT, but the distributed
-  installer as a whole carries GPLv3 obligations for those bundled binaries.
-  See [`pack-editor/THIRD_PARTY_LICENSES.md`](pack-editor/THIRD_PARTY_LICENSES.md).
-- **`lewdware`/`config`/`lw`** (the engine and its companions) link against
-  FFmpeg directly. Official release builds link a vendored, LGPL-only FFmpeg
-  (no GPL/nonfree components), so these releases remain genuinely MIT, with
-  the lighter obligations LGPL imposes on statically-linked code. See
-  [`lewdware/THIRD_PARTY_LICENSES.md`](lewdware/THIRD_PARTY_LICENSES.md).
-
-In short: this repository's code is MIT, but a distributed *binary* can carry
-additional obligations from whatever it links or bundles - check the
-`THIRD_PARTY_LICENSES.md` next to an app if you plan to redistribute it.
+repository. Additionally, all the binaries distributed by Lewdware are
+MIT-licensed, _except_ [`lewdware-pack-editor`](./pack-editor/), which
+is GPL-licensed since it bundles a GPL-licensed ffmpeg binary (see
+[`pack-editor/THIRD_PARTY_LICENSES.md`](pack-editor/THIRD_PARTY_LICENSES.md)).
