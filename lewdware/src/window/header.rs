@@ -73,10 +73,17 @@ impl Header {
         }
     }
 
-    /// The buttons actually painted and hit-tested: none at all when the window is not closeable,
-    /// since a themed cluster of dead controls would be decoration pretending to be function.
+    /// The buttons actually painted. Hit-testing goes through [`Self::button_at`], which refuses
+    /// every one of them on an unclosable window.
+    ///
+    /// A window that cannot be closed either drops the cluster entirely or draws it in the theme's
+    /// disabled paint ([`Buttons::unclosable`]), depending on what the platform does. Neither
+    /// lies about function: a *coloured* button that did nothing would be the violation, while a
+    /// greyed-out one says "this window cannot be closed" — which is otherwise something the user
+    /// can only find out by clicking. See `design/window-themes.md`, "Aqua's traffic lights, and
+    /// the function-honesty rule".
     fn buttons(&self) -> &'static [Button] {
-        if self.closeable {
+        if self.closeable || self.chrome.buttons.unclosable.is_some() {
             self.chrome.buttons.buttons
         } else {
             &[]
@@ -127,6 +134,12 @@ impl Header {
     }
 
     fn paint_for(&self, index: usize, button: &Button) -> ButtonPaint {
+        // Disabled beats every pointer state: an unclosable window's cluster is drawn only because
+        // the theme supplied a paint saying so, and nothing in it can be hovered or pressed.
+        if !self.closeable {
+            return self.chrome.buttons.unclosable.unwrap_or(button.idle);
+        }
+
         if button.action == ButtonAction::Inert {
             return button.idle;
         }
@@ -151,6 +164,37 @@ impl Header {
         };
 
         self.fill_area(self.chrome.header, rect);
+    }
+
+    /// The theme's hairline along the bottom edge of the bar, if it has one.
+    ///
+    /// Drawn last, over the buttons as well as the bar: it marks where the chrome ends, and a
+    /// button that interrupted it would make the line look like it belonged to the bar's fill
+    /// rather than to the window's structure.
+    fn draw_separator(&mut self) {
+        let Some(color) = self.chrome.separator else {
+            return;
+        };
+
+        // One *logical* pixel, at the bottom of the bar — the same visual weight at every scale
+        // factor, since the transform scales it.
+        let Some(rect) = Rect::from_xywh(
+            0.0,
+            self.size.height as f32 - 1.0,
+            self.size.width as f32,
+            1.0,
+        ) else {
+            return;
+        };
+
+        let mut paint = Paint::default();
+        paint.set_color(to_tiny_skia(color));
+        // Above 1x this line covers a fractional number of physical pixels. Antialiased, it blends
+        // back towards the bar and the edge it is there to draw stops reading as an edge — the
+        // same reason `fill_area` draws pinstripes hard.
+        paint.anti_alias = false;
+
+        self.pixmap.fill_rect(rect, &paint, self.transform(), None);
     }
 
     /// Fill `rect` with `fill`. Anything tiny-skia can express as a `Paint` goes through
@@ -219,6 +263,11 @@ impl Header {
             Side::Right => (padding, full_width - buttons.max(padding)),
         };
 
+        // Nowhere to draw: a window too narrow to hold its own buttons.
+        if safe_right <= safe_left {
+            return;
+        }
+
         // `Center` gives way to the near edge when the text would not fit between the padding and
         // the buttons; `Left`/`Right` sit against their end of the safe span regardless.
         let pen_x = match style.align {
@@ -250,8 +299,8 @@ impl Header {
                 a: (base.a + stripe.a) / 2.0,
             };
             let plaque_padding = 4.0 * self.scale_factor as f32;
-            let left = (pen_x - plaque_padding).max(0.0);
-            let right = (pen_x + text_width + plaque_padding).min(full_width);
+            let left = (pen_x - plaque_padding).max(safe_left);
+            let right = (pen_x + text_width + plaque_padding).min(safe_right);
             if let Some(rect) = Rect::from_xywh(
                 left,
                 0.0,
@@ -275,6 +324,7 @@ impl Header {
             pen_y,
             style.color,
             self.physical_size,
+            (safe_left, safe_right),
         );
 
         self.pixmap.draw_pixmap(
@@ -348,7 +398,7 @@ impl Header {
                 }
             }
 
-            self.draw_glyph(button.glyph, button.shape, x, width, paint.glyph, transform);
+            self.draw_glyph(button, x, width, paint.glyph, transform);
         }
     }
 
@@ -357,30 +407,28 @@ impl Header {
     /// Sized from the *button*, not the title bar: scaling a cross to a 28px header inside `aqua`'s
     /// 12px light drew it outside the circle entirely. Shared with the test that checks glyphs stay
     /// inside their buttons, so the two cannot drift apart.
-    fn glyph_reach(&self, glyph: Glyph, shape: ButtonShape, width: f32) -> f32 {
-        let extent = width.min(self.size.height as f32);
-        match (glyph, shape) {
-            (Glyph::None, _) => 0.0,
-            (Glyph::Cross | Glyph::WideCross, ButtonShape::Rect) => extent / 6.0,
-            // A cross inscribed in a circle reaches `offset * sqrt(2)` from the centre, so it has
-            // to be pulled in further than in a rectangle of the same size.
-            (Glyph::Cross, ButtonShape::Circle) => extent / 6.0 * std::f32::consts::FRAC_1_SQRT_2,
-            (Glyph::WideCross, ButtonShape::Circle) => {
-                extent / 3.0 * std::f32::consts::FRAC_1_SQRT_2
-            }
+    ///
+    /// The proportion itself is the theme's ([`Button::glyph_ratio`]), not this function's. It used
+    /// to be decided here, keyed on the [`Glyph`] variant — which meant every theme drawing a cross
+    /// shared one number, so correcting macOS's mark silently resized KDE's and GNOME's too.
+    fn glyph_reach(&self, button: &Button, width: f32) -> f32 {
+        if button.glyph == Glyph::None {
+            return 0.0;
         }
+
+        width.min(self.size.height as f32) * button.glyph_ratio
     }
 
     fn draw_glyph(
         &mut self,
-        glyph: Glyph,
-        shape: ButtonShape,
+        button: &Button,
         x: f32,
         width: f32,
         color: crate::lua::Color,
         transform: Transform,
     ) {
-        if glyph == Glyph::None {
+        let offset = self.glyph_reach(button, width);
+        if offset <= 0.0 {
             return;
         }
 
@@ -390,8 +438,6 @@ impl Header {
         let height = self.size.height as f32;
         let middle_x = x + width / 2.0;
         let middle_y = height / 2.0;
-
-        let offset = self.glyph_reach(glyph, shape, width);
 
         for (from, to) in [
             ((-offset, -offset), (offset, offset)),
@@ -436,6 +482,7 @@ impl Header {
         self.draw_background();
         self.draw_title();
         self.draw_buttons();
+        self.draw_separator();
 
         self.needs_redraw = false;
     }
@@ -443,6 +490,11 @@ impl Header {
     /// The button under `position`, given in header-local **physical** pixels. `None` for inert
     /// buttons, so they can never hover or activate.
     fn button_at(&self, position: PhysicalPosition<f64>) -> Option<usize> {
+        // A disabled cluster is painted but never live -- see `buttons()`.
+        if !self.closeable {
+            return None;
+        }
+
         // Signed logical, so a pointer over the border above the header stays negative rather
         // than wrapping into the header's own range.
         let position: LogicalPosition<f64> = position.to_logical(self.scale_factor);
@@ -515,6 +567,12 @@ impl Header {
 
 /// Rasterise `text` into its own transparent pixmap, ready to be composited over the header.
 ///
+/// `clip` is the horizontal span, in physical pixels, the text is allowed to occupy: a title too
+/// long for its bar is cut off at the edge of that span rather than running on underneath the
+/// buttons. Underneath is not hidden — a themed button is a circle or a rounded box, so glyphs
+/// behind it show through the gaps around it, which is what made a long caption appear to spill
+/// past the close button.
+///
 /// Separate from [`Header::draw_title`] so the pixels can be inspected directly: this is the one
 /// place in the engine that writes into a tiny-skia `Pixmap` by hand rather than going through a
 /// `Paint`, and `Pixmap` is **premultiplied**, so it is the one place that can produce pixels
@@ -530,6 +588,7 @@ fn rasterise_text(
     pen_y: f32,
     color: crate::lua::Color,
     size: PhysicalSize<u32>,
+    clip: (f32, f32),
 ) -> Pixmap {
     let scaled_font = font.as_scaled(scale);
     let color = to_tiny_skia(color).to_color_u8();
@@ -539,9 +598,17 @@ fn rasterise_text(
         Pixmap::new(size.width, size.height).expect("size is clamped to at least 1x1 in `new`");
     let width = pixmap.width() as i32;
     let height = pixmap.height() as i32;
+    let clip_left = (clip.0.round() as i32).max(0);
+    let clip_right = (clip.1.round() as i32).min(width);
     let data = pixmap.data_mut();
 
     for c in text.chars() {
+        // Glyphs only ever advance rightwards, so once the pen is past the clip there is nothing
+        // left to draw.
+        if pen_x >= clip_right as f32 {
+            break;
+        }
+
         let glyph_id = scaled_font.glyph_id(c);
         let glyph = glyph_id.with_scale_and_position(scale, ab_glyph::point(pen_x, pen_y));
 
@@ -552,7 +619,7 @@ fn rasterise_text(
                 let px = bounds.min.x as i32 + x as i32;
                 let py = bounds.min.y as i32 + y as i32;
 
-                if px >= 0 && px < width && py >= 0 && py < height {
+                if px >= clip_left && px < clip_right && py >= 0 && py < height {
                     let index = ((py * width + px) * 4) as usize;
 
                     // Premultiplied: every channel scaled by the alpha it is stored with. Writing
@@ -647,6 +714,7 @@ mod tests {
             shape: ButtonShape::Circle,
             glyph: Glyph::None,
             width_ratio,
+            glyph_ratio: 0.25,
             idle: PAINT,
             hover: PAINT,
             active: PAINT,
@@ -709,6 +777,7 @@ mod tests {
                 inset: 8.0,
                 gap: 4.0,
                 buttons: &TRAFFIC_LIGHTS,
+                unclosable: None,
             },
             true,
         );
@@ -758,6 +827,7 @@ mod tests {
                 inset: 0.0,
                 gap: 0.0,
                 buttons: &TRAFFIC_LIGHTS,
+                unclosable: None,
             },
             true,
         );
@@ -793,6 +863,7 @@ mod tests {
                 inset: 0.0,
                 gap: 0.0,
                 buttons: &TRAFFIC_LIGHTS,
+                unclosable: None,
             },
             true,
         );
@@ -802,6 +873,8 @@ mod tests {
         assert_eq!(header.paint_for(1, &inert), inert.idle);
     }
 
+    /// A theme with no disabled paint drops the cluster entirely on an unclosable window — GNOME,
+    /// KDE and Mac OS 9 all simply omit a close button a window does not have.
     #[test]
     fn an_unclosable_window_has_no_buttons_at_all() {
         let mut header = header(Theme::Plain.chrome(Appearance::Light).buttons, false);
@@ -813,6 +886,80 @@ mod tests {
         header.handle_cursor_moved(at(x as f64 + 1.0, 5.0));
         header.handle_mouse_down();
         assert!(!header.handle_mouse_up());
+    }
+
+    /// A theme that supplies one keeps the cluster and greys it: painted, but dead to the pointer
+    /// in every state. Drawn *because* it says "cannot be closed" — the function-honesty rule
+    /// forbids a control that looks live and isn't, not one that looks disabled and is.
+    #[test]
+    fn a_disabled_cluster_is_painted_but_never_live() {
+        for &theme in crate::window::theme::ALL_THEMES {
+            for appearance in [Appearance::Light, Appearance::Dark] {
+                let chrome = theme.chrome(appearance);
+                let Some(disabled) = chrome.buttons.unclosable else {
+                    continue;
+                };
+
+                let mut header = Header::new(
+                    RedrawRequester::detached(),
+                    chrome,
+                    PhysicalSize::new(400, 100),
+                    1.0,
+                    theme.metrics().header_height,
+                    None,
+                    false,
+                );
+
+                assert_eq!(
+                    header.buttons().len(),
+                    chrome.buttons.buttons.len(),
+                    "{theme:?} {appearance:?} dropped its disabled cluster"
+                );
+
+                let (x, width) = header.button_span(0);
+                let over = at((x + width / 2.0) as f64, (theme.metrics().header_height / 2) as f64);
+
+                // Every button wears the disabled paint, whatever the pointer is doing.
+                for (index, button) in header.buttons().iter().enumerate() {
+                    assert_eq!(
+                        header.paint_for(index, button),
+                        disabled,
+                        "{theme:?} {appearance:?} button {index}"
+                    );
+                }
+
+                // And none of them can be hovered, pressed or activated.
+                assert_eq!(header.button_at(over), None, "{theme:?} {appearance:?}");
+                header.handle_cursor_moved(over);
+                assert_eq!(header.hovered, None, "{theme:?} {appearance:?} hovered");
+                header.handle_mouse_down();
+                assert!(
+                    !header.handle_mouse_up(),
+                    "{theme:?} {appearance:?} closed an unclosable window"
+                );
+            }
+        }
+    }
+
+    /// The catalogue's own division: only the platforms that really do grey a caption button keep
+    /// one on an unclosable window. Pinned so a future theme has to make the choice deliberately
+    /// rather than inheriting whichever default it was copied from.
+    #[test]
+    fn only_windows_and_macos_grey_their_close_button() {
+        use crate::window::theme::Theme;
+
+        for &theme in crate::window::theme::ALL_THEMES {
+            let greys = theme.chrome(Appearance::Light).buttons.unclosable.is_some();
+            let expected = matches!(theme, Theme::Fluent | Theme::Redmond | Theme::Aqua);
+            assert_eq!(greys, expected, "{theme:?}");
+
+            // Light and dark cannot disagree about whether the theme greys at all.
+            assert_eq!(
+                theme.chrome(Appearance::Dark).buttons.unclosable.is_some(),
+                greys,
+                "{theme:?} greys in one appearance but not the other"
+            );
+        }
     }
 
     #[test]
@@ -1039,8 +1186,16 @@ mod tests {
                 a: 1.0,
             },
         ] {
-            let pixmap =
-                rasterise_text("Title", &font, PxScale::from(20.0), 4.0, 20.0, color, size);
+            let pixmap = rasterise_text(
+                "Title",
+                &font,
+                PxScale::from(20.0),
+                4.0,
+                20.0,
+                color,
+                size,
+                (0.0, size.width as f32),
+            );
 
             for (index, px) in pixmap.data().chunks_exact(4).enumerate() {
                 let (r, g, b, a) = (px[0], px[1], px[2], px[3]);
@@ -1105,6 +1260,228 @@ mod tests {
         );
     }
 
+    /// A title too long for its bar is cut off at the buttons, and never draws behind them.
+    ///
+    /// Compared against the same header with no title at all rather than against a colour, so it
+    /// holds for every theme: any pixel in the buttons' own columns that the title changes is a
+    /// pixel of caption showing through the gaps around a circular or rounded button — which is
+    /// what made a long caption look like it ran past the close button.
+    #[test]
+    fn a_long_title_never_reaches_the_buttons_columns() {
+        const LONG: &str = "default caption. no mood associated. and it keeps going, and going";
+
+        for &theme in crate::window::theme::ALL_THEMES {
+            for appearance in [Appearance::Light, Appearance::Dark] {
+                for scale in [1.0, 1.5, 2.0] {
+                    let build = |title: Option<String>| {
+                        Header::new(
+                            RedrawRequester::detached(),
+                            theme.chrome(appearance),
+                            LogicalSize::new(200u32, 100).to_physical(scale),
+                            scale,
+                            theme.metrics().header_height,
+                            title,
+                            true,
+                        )
+                    };
+
+                    let mut bare = build(None);
+                    let mut titled = build(Some(LONG.to_owned()));
+
+                    // The columns the button cluster owns, in physical pixels.
+                    let extent = bare.buttons_extent() * scale as f32;
+                    let full = bare.physical_size.width as f32;
+                    let (from, to) = match theme.chrome(appearance).buttons.side {
+                        Side::Left => (0.0, extent),
+                        Side::Right => (full - extent, full),
+                    };
+
+                    for x in (from.round().max(0.0) as u32)..(to.round().min(full) as u32) {
+                        for y in 0..bare.physical_size.height {
+                            assert_eq!(
+                                pixel(&mut titled, x, y),
+                                pixel(&mut bare, x, y),
+                                "{theme:?} {appearance:?} at {scale}x: the title bled into the \
+                                 buttons' columns at ({x}, {y})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The clip is a hard cut, not a whole-title drop: a caption that overflows still shows the
+    /// part of itself that fits.
+    #[test]
+    fn a_clipped_title_still_draws_the_part_that_fits() {
+        let font = text_font::chrome_font(crate::lua::TextFont::Default).expect("default font");
+        let size = PhysicalSize::new(200, 30);
+        let color = Color {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+
+        let painted = |clip: (f32, f32)| {
+            let pixmap = rasterise_text(
+                "A title far too long for the space it has",
+                &font,
+                PxScale::from(20.0),
+                4.0,
+                20.0,
+                color,
+                size,
+                clip,
+            );
+
+            let columns: Vec<usize> = pixmap
+                .data()
+                .chunks_exact(4)
+                .enumerate()
+                .filter(|(_, px)| px[3] > 0)
+                .map(|(index, _)| index % size.width as usize)
+                .collect();
+
+            (
+                *columns.iter().min().expect("some text drawn"),
+                *columns.iter().max().expect("some text drawn"),
+            )
+        };
+
+        let (unclipped_left, unclipped_right) = painted((0.0, size.width as f32));
+        assert!(unclipped_right > 100, "the sample text needs to overflow");
+
+        let (left, right) = painted((0.0, 100.0));
+        assert_eq!(left, unclipped_left, "the start of the title is untouched");
+        assert!(right < 100, "drawn past the clip, at column {right}");
+        assert!(right > 80, "clipped far too early, at column {right}");
+    }
+
+    /// The themes whose bar is the same colour as the panel below it must be separated from it
+    /// somehow, or a small popup reads as one undifferentiated block — worst of all on a window
+    /// with no close button to give the bar away.
+    ///
+    /// Two mechanisms are allowed, matching what each platform does: a hairline (`breeze`, which
+    /// is KWin's own), or a tonal step between bar and panel (`fluent`, since Windows draws no
+    /// line). This asserts each theme has *one* of them, not which.
+    #[test]
+    fn a_flat_theme_separates_its_bar_from_its_panel() {
+        for &theme in crate::window::theme::ALL_THEMES {
+            for appearance in [Appearance::Light, Appearance::Dark] {
+                let chrome = theme.chrome(appearance);
+                let Fill::Solid(bar) = chrome.header else {
+                    // A gradient or pinstripe is already visibly not a flat panel.
+                    continue;
+                };
+                let panel = theme.widgets(appearance).panel;
+
+                let distance = |a: crate::lua::Color, b: crate::lua::Color| {
+                    ((a.r - b.r).abs() + (a.g - b.g).abs() + (a.b - b.b).abs()) / 3.0
+                };
+
+                // A bar that already differs from the panel needs no help.
+                if distance(bar, panel) > 0.01 {
+                    continue;
+                }
+
+                assert!(
+                    chrome.separator.is_some(),
+                    "{theme:?} {appearance:?}: the bar is the panel colour and has no separator, \
+                     so the header has no edge at all"
+                );
+            }
+        }
+    }
+
+    /// The separator is drawn over the buttons, not just the bar: it is the window's structure,
+    /// and a gap where a button sits would make it read as part of the bar's fill.
+    #[test]
+    fn the_separator_runs_the_full_width_of_the_bar() {
+        let theme = crate::window::theme::Theme::Breeze;
+        let chrome = theme.chrome(Appearance::Light);
+        let separator = chrome.separator.expect("breeze draws a separator");
+        let expected = [
+            (separator.r * 255.0).round() as u8,
+            (separator.g * 255.0).round() as u8,
+            (separator.b * 255.0).round() as u8,
+            255,
+        ];
+
+        // Including fractional scale factors, where an antialiased hairline would blend back into
+        // the bar and stop reading as an edge at all.
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let mut header = Header::new(
+                RedrawRequester::detached(),
+                chrome,
+                LogicalSize::new(200u32, 100).to_physical(scale),
+                scale,
+                theme.metrics().header_height,
+                Some("A title long enough to reach the buttons".to_owned()),
+                true,
+            );
+
+            let (width, height) = (header.physical_size.width, header.physical_size.height);
+
+            for x in 0..width {
+                assert_eq!(
+                    pixel(&mut header, x, height - 1),
+                    expected,
+                    "at {scale}x, column {x} of the separator row"
+                );
+            }
+
+            // And it is a line on the bar, not a band: above it, the bar is still the bar.
+            assert_ne!(pixel(&mut header, 2, height / 2), expected, "at {scale}x");
+        }
+    }
+
+    /// Each platform's mark is its own proportion, and changing one must not move another.
+    ///
+    /// This is the property the old design could not hold: the size lived on the [`Glyph`] variant,
+    /// so every theme drawing a cross shared one number. Sizing macOS's light correctly took
+    /// Breeze's cross to 94% of its circle, and moved GNOME's without anyone touching Adwaita.
+    /// The numbers below are per-theme measurements, so a wrong one is wrong on its own.
+    #[test]
+    fn every_theme_marks_its_close_button_in_its_own_proportion() {
+        use crate::window::theme::Theme;
+
+        // (theme, the mark's span as a fraction of its button)
+        let expected = [
+            (Theme::Plain, 1.0 / 3.0),
+            (Theme::Fluent, 1.0 / 3.0),
+            (Theme::Redmond, 1.0 / 3.0),
+            (Theme::Platinum, 1.0 / 3.0),
+            (Theme::Cde, 1.0 / 3.0),
+            // macOS spans half its traffic light; GNOME leaves visible margin round a symbolic
+            // icon in a much larger circle; Breeze sits between them.
+            (Theme::Aqua, 0.5),
+            (Theme::Adwaita, 0.4),
+            (Theme::Breeze, 0.4714),
+        ];
+
+        for (theme, span) in expected {
+            for appearance in [Appearance::Light, Appearance::Dark] {
+                let chrome = theme.chrome(appearance);
+                let close = chrome
+                    .buttons
+                    .buttons
+                    .iter()
+                    .find(|button| button.glyph != Glyph::None)
+                    .unwrap_or_else(|| panic!("{theme:?} has no marked button"));
+
+                assert!(
+                    (close.glyph_ratio * 2.0 - span).abs() < 0.001,
+                    "{theme:?} {appearance:?}: marks its close button at {:.1}% of the button, \
+                     expected {:.1}%",
+                    close.glyph_ratio * 200.0,
+                    span * 100.0
+                );
+            }
+        }
+    }
+
     /// A close button's glyph has to stay inside the button it marks.
     ///
     /// It used to be scaled from the *title bar* height, so `aqua`'s 12px traffic light got a cross
@@ -1132,7 +1509,7 @@ mod tests {
                     }
 
                     let (x, width) = header.button_span(index);
-                    let reach = header.glyph_reach(button.glyph, button.shape, width);
+                    let reach = header.glyph_reach(button, width);
 
                     // The cross's corners, which are its furthest points from the centre.
                     let (centre_x, centre_y) = (x + width / 2.0, header_height / 2.0);
@@ -1155,6 +1532,15 @@ mod tests {
                         ButtonShape::Circle => {
                             let radius = width.min(header_height) / 2.0;
                             let corner = (corner_x * corner_x + corner_y * corner_y).sqrt();
+                            // Fitting is not enough: a mark whose corners graze the rim reads as a
+                            // cross wedged into a circle rather than a mark drawn inside one.
+                            // `breeze` sat at 94% of its radius before this bound existed, which
+                            // "stays inside its button" was perfectly happy with.
+                            assert!(
+                                corner <= radius * 0.8,
+                                "{theme:?} {appearance:?} button {index}: the cross reaches \
+                                 {corner} of a {radius} radius — it crowds its circle"
+                            );
                             assert!(
                                 corner <= radius,
                                 "{theme:?} {appearance:?} button {index}: the cross reaches \
@@ -1285,6 +1671,7 @@ mod tests {
                 inset: 0.0,
                 gap: 0.0,
                 buttons: &[],
+                unclosable: None,
             },
             ..Theme::Plain.chrome(Appearance::Light)
         };

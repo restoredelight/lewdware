@@ -634,7 +634,9 @@ function lewdware.popup.video(video, opts) end
 ---@field font? TextFont Which bundled font to use. Defaults to the window theme's UI font inside
 ---  a dialog, and to `"default"` for a standalone text popup. An explicit non-default face always
 ---  overrides the theme.
----@field font_size? FontSize The font size. Defaults to 32.
+---@field font_size? FontSize The font size. Like `font`, the default follows the surface: inside
+---  a dialog it is the window theme's own body size, so text matches the buttons and fields
+---  beside it; a standalone text popup defaults to 32.
 ---@field color? string The text colour as a hex string (`"#rrggbb"` or `"#rrggbbaa"`). Defaults
 ---  to black.
 ---@field bold? boolean Whether to render the text in (synthetic) bold. Defaults to false.

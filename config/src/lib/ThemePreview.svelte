@@ -12,8 +12,9 @@
     - A title-bar button is the **full height of the bar** and `width_ratio × that height` wide.
       `inset` is a horizontal offset from the bar's end only, and there is one of it, not two
       (`Header::button_span`/`buttons_extent` in `lewdware/src/window/header.rs`).
-    - A glyph is sized from its *button*, not the bar: `extent / 6` from the centre on each axis,
-      pulled in by 1/√2 again inside a circle (`Header::glyph_reach`).
+    - A glyph is sized from its *button*, not the bar: `extent × glyph_ratio` from the centre on
+      each axis, where the ratio is the theme's own measurement of its platform
+      (`Header::glyph_reach`).
     - The dialog is a 10pt margin, centred content, and a centred button row
       (`paint_dialog` in `window/layer/egui.rs`).
 
@@ -117,15 +118,11 @@
 					chrome.buttons.gap * (chrome.buttons.buttons.length - 1)
 	);
 
-	/** `Header::glyph_reach`: how far the mark reaches from its button's centre, on each axis. */
+	/** `Header::glyph_reach`: how far the mark reaches from its button's centre, on each axis.
+	 * The proportion is the theme's own `glyph_ratio`, not a rule applied here. */
 	function glyphSize(button: ChromeButton): number {
-		const extent = Math.min(buttonWidth(button), headerHeight);
 		if (button.glyph === 'None') return 0;
-		const wide = button.glyph === 'WideCross';
-		if (button.shape === 'Circle') {
-			return 2 * ((extent / (wide ? 3 : 6)) * Math.SQRT1_2);
-		}
-		return 2 * (extent / 6);
+		return 2 * (Math.min(buttonWidth(button), headerHeight) * button.glyph_ratio);
 	}
 
 	const strokeCss = (s: Stroke) =>
@@ -198,7 +195,7 @@
 			<path
 				d="M0 0 L10 10 M10 0 L0 10"
 				stroke={color}
-				stroke-width={button.glyph === 'WideCross' ? 1.1 : 1.4}
+				stroke-width="1.4"
 				stroke-linecap="square"
 			/>
 		</svg>
@@ -257,6 +254,12 @@
 		>
 			{title}
 		</span>
+
+		{#if chrome.separator}
+			<!-- Over the buttons as well as the bar, exactly as `Header::draw_separator` paints it:
+			     it belongs to the window's structure, not to the bar's fill. -->
+			<span class="separator" style="background:{chrome.separator}"></span>
+		{/if}
 	</div>
 
 	<div
@@ -349,9 +352,17 @@
 	}
 
 	.header {
+		position: relative;
 		display: flex;
 		align-items: stretch;
 		overflow: hidden;
+	}
+
+	.separator {
+		position: absolute;
+		inset-inline: 0;
+		bottom: 0;
+		height: 1px;
 	}
 
 	.title {

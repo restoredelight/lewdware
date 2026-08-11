@@ -785,12 +785,11 @@ pub enum ButtonShape {
     Circle,
 }
 
-/// The mark drawn on top of a chrome button's fill.
+/// The mark drawn on top of a chrome button's fill. *Which* mark — how big it is drawn is
+/// [`Button::glyph_ratio`], a per-theme number rather than a variant here.
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glyph {
     Cross,
-    /// A more open cross spanning most of a circular decoration, as in KDE Breeze.
-    WideCross,
     /// Nothing — an inert button, or one whose glyph only appears on hover.
     None,
 }
@@ -824,6 +823,15 @@ pub struct Button {
     pub glyph: Glyph,
     /// Width as a multiple of the header height, so buttons scale with the title bar.
     pub width_ratio: f32,
+    /// How far the glyph reaches from the button's centre on each axis, as a fraction of the
+    /// button's own extent — so a cross spans `2 * glyph_ratio` of the button it marks.
+    ///
+    /// Per theme, because the platforms genuinely differ: macOS's traffic-light cross spans half
+    /// its light, GNOME's is nearer two fifths of a much larger button, and Windows' rectangular
+    /// caption buttons are a third. Encoding that as a shared constant keyed on [`Glyph`] is what
+    /// previously chained the three together — sizing one platform's mark correctly silently
+    /// resized the others, twice.
+    pub glyph_ratio: f32,
     pub idle: ButtonPaint,
     /// Ignored for [`ButtonAction::Inert`], which never leaves `idle`.
     pub hover: ButtonPaint,
@@ -840,6 +848,16 @@ pub struct Buttons {
     pub gap: f32,
     /// In visual order from `side` inwards.
     pub buttons: &'static [Button],
+    /// How the cluster is drawn on a window that cannot be closed (`closeable = false`).
+    ///
+    /// `None` — the default for most themes — draws no cluster at all. `Some(paint)` draws every
+    /// button in the cluster in that one paint, hit-testing none of them: the platform's own
+    /// *disabled* control, which says "this window cannot be closed" rather than leaving the user
+    /// to discover it by clicking. See `design/window-themes.md`, "Aqua's traffic lights, and the
+    /// function-honesty rule" — a greyed-out control is the opposite of a decoration that lies,
+    /// so this is opt-in per theme, and only for the platforms that really do grey their caption
+    /// buttons (Windows and macOS) rather than dropping them (GNOME, KDE, Mac OS 9).
+    pub unclosable: Option<ButtonPaint>,
 }
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -869,9 +887,30 @@ pub struct Chrome {
     /// Outermost ring first. Its length is the border width in logical pixels, and must equal
     /// [`Metrics::border_width`] — a test holds every theme to that.
     pub border: &'static [BorderRing],
+    /// A hairline drawn along the bottom edge of the title bar, in logical pixels.
+    ///
+    /// Only for the themes whose platform draws one. A flat theme whose bar is the same colour as
+    /// the panel below it (`breeze`, `fluent`) has nothing else to mark where the chrome ends —
+    /// on a real desktop the window's drop shadow and its non-uniform content do that work, and
+    /// this engine has neither. `None` for every theme whose bar is already a different colour,
+    /// or whose platform genuinely runs the two together.
+    pub separator: Option<Color>,
     pub title: TitleStyle,
     pub buttons: Buttons,
 }
+
+/// Glyph sizes, as a fraction of the button's extent. Each is the platform's own proportion,
+/// measured against a real window; see [`Button::glyph_ratio`] for why they are separate numbers.
+///
+/// A rectangular caption button (Windows, Mac OS 9, CDE) puts a small mark in a large slot.
+const RECT_GLYPH: f32 = 1.0 / 6.0;
+/// macOS: the cross spans half its traffic light.
+const AQUA_GLYPH: f32 = 0.25;
+/// KDE Breeze: a slightly more open mark than macOS's, in a slightly larger circle.
+const BREEZE_GLYPH: f32 = 0.2357;
+/// GNOME: `window-close-symbolic` in a 24px circle leaves visible margin all round -- the mark is
+/// nearer two fifths of the button than the half macOS draws.
+const ADWAITA_GLYPH: f32 = 0.2;
 
 /// A close button that fills its corner of the bar, Windows-style.
 const fn rect_close(
@@ -885,6 +924,7 @@ const fn rect_close(
         shape: ButtonShape::Rect,
         glyph: Glyph::Cross,
         width_ratio,
+        glyph_ratio: RECT_GLYPH,
         idle,
         hover,
         active,
@@ -924,6 +964,7 @@ const fn plain_close(bar: Color, glyph: Color) -> Button {
         shape: ButtonShape::Rect,
         glyph: Glyph::Cross,
         width_ratio: 1.0,
+        glyph_ratio: RECT_GLYPH,
         idle: ButtonPaint {
             fill: Fill::Solid(bar),
             glyph,
@@ -945,6 +986,7 @@ const fn plain_close(bar: Color, glyph: Color) -> Button {
 const PLAIN_CHROME: Chrome = Chrome {
     header: Fill::Solid(PLAIN_HEADER),
     border: &[BorderRing::Uniform(BLACK)],
+    separator: None,
     title: TitleStyle {
         font: Face::Default,
         size: 12.0,
@@ -957,6 +999,7 @@ const PLAIN_CHROME: Chrome = Chrome {
         inset: 0.0,
         gap: 0.0,
         buttons: &[plain_close(PLAIN_HEADER, BLACK)],
+        unclosable: None,
     },
 };
 
@@ -968,12 +1011,17 @@ const PLAIN_CHROME: Chrome = Chrome {
 // fluent — Windows 11. Today's chrome, corrected: a lighter bar and Windows' actual close red
 // (#C42B1C) rather than pure red. Square corners; see `design/window-themes.md` on why rounding is
 // not expressible yet.
-const FLUENT_HEADER: Color = rgb8(243, 243, 243);
+// A shade lighter than `FLUENT_WIDGETS.panel` (#f3f3f3), which is how a real Win32 window under
+// Windows 11 reads in light mode: a near-white caption over a slightly grey client area. Windows
+// draws no separator line, so this tonal step is the only thing marking the bar — matching the
+// platform, and the reason `fluent` does not take the hairline `breeze` does.
+const FLUENT_HEADER: Color = rgb8(251, 251, 251);
 const FLUENT_TEXT: Color = rgb8(26, 26, 26);
 
 const FLUENT_CHROME: Chrome = Chrome {
     header: Fill::Solid(FLUENT_HEADER),
     border: &[BorderRing::Uniform(rgb8(180, 180, 180))],
+    separator: None,
     title: TitleStyle {
         font: Face::Selawik,
         size: 12.0,
@@ -992,6 +1040,8 @@ const FLUENT_CHROME: Chrome = Chrome {
             paint(rgb8(196, 43, 28), WHITE),
             paint(rgb8(168, 36, 25), WHITE),
         )],
+        // Windows keeps the caption button and greys its glyph rather than dropping it.
+        unclosable: Some(paint(FLUENT_HEADER, rgb8(155, 155, 155))),
     },
 };
 
@@ -1013,6 +1063,7 @@ const REDMOND_CHROME: Chrome = Chrome {
         },
         BorderRing::Uniform(REDMOND_FACE),
     ],
+    separator: None,
     title: TitleStyle {
         font: Face::Pixel,
         size: 12.0,
@@ -1032,6 +1083,10 @@ const REDMOND_CHROME: Chrome = Chrome {
             paint(rgb8(212, 208, 200), BLACK),
             paint(rgb8(160, 160, 160), BLACK),
         )],
+        // The greyed-out close box on a Win95 dialog that will not be dismissed -- a setup wizard
+        // mid-copy, a modal progress box. The button face stays; only the glyph goes to the
+        // system's disabled grey.
+        unclosable: Some(paint(REDMOND_FACE, rgb8(128, 128, 128))),
     },
 };
 
@@ -1131,6 +1186,7 @@ const fn aqua_inert() -> Button {
         shape: ButtonShape::Circle,
         glyph: Glyph::None,
         width_ratio: AQUA_LIGHT_RATIO,
+        glyph_ratio: AQUA_GLYPH,
         idle: aqua_disabled_light(),
         hover: aqua_disabled_light(),
         active: aqua_disabled_light(),
@@ -1143,6 +1199,7 @@ const AQUA_CHROME: Chrome = Chrome {
         to: rgb8(232, 232, 232),
     },
     border: &[BorderRing::Uniform(rgb8(176, 176, 176))],
+    separator: None,
     title: TitleStyle {
         font: Face::Inter,
         size: 13.0,
@@ -1160,6 +1217,7 @@ const AQUA_CHROME: Chrome = Chrome {
                 shape: ButtonShape::Circle,
                 glyph: Glyph::Cross,
                 width_ratio: AQUA_LIGHT_RATIO,
+                glyph_ratio: AQUA_GLYPH,
                 // The glyph is transparent until hovered, exactly as Aqua hides its marks until
                 // the pointer enters the cluster.
                 idle: aqua_red(rgb8(255, 128, 122), rgb8(255, 95, 87), TRANSPARENT),
@@ -1169,6 +1227,9 @@ const AQUA_CHROME: Chrome = Chrome {
             aqua_inert(),
             aqua_inert(),
         ],
+        // All three lights flat grey: macOS's own look for a window that cannot be closed, and
+        // already this theme's idiom for the two it never offers.
+        unclosable: Some(aqua_disabled_light()),
     },
 };
 
@@ -1179,6 +1240,7 @@ const ADWAITA_TEXT: Color = rgb8(46, 52, 54);
 const ADWAITA_CHROME: Chrome = Chrome {
     header: Fill::Solid(ADWAITA_HEADER),
     border: &[BorderRing::Uniform(rgb8(192, 191, 188))],
+    separator: None,
     title: TitleStyle {
         font: Face::Cantarell,
         size: 14.0,
@@ -1195,10 +1257,12 @@ const ADWAITA_CHROME: Chrome = Chrome {
             shape: ButtonShape::Circle,
             glyph: Glyph::Cross,
             width_ratio: 0.65,
+            glyph_ratio: ADWAITA_GLYPH,
             idle: paint(rgb8(214, 210, 205), ADWAITA_TEXT),
             hover: paint(rgb8(198, 194, 188), ADWAITA_TEXT),
             active: paint(rgb8(180, 176, 170), ADWAITA_TEXT),
         }],
+        unclosable: None,
     },
 };
 
@@ -1210,6 +1274,11 @@ const BREEZE_TEXT: Color = rgb8(35, 38, 41);
 const BREEZE_CHROME: Chrome = Chrome {
     header: Fill::Solid(BREEZE_HEADER),
     border: &[BorderRing::Uniform(rgb8(189, 195, 199))],
+    // Breeze's bar *is* the window colour — the flat, seamless look is the point — so the hairline
+    // beneath it is the only thing marking where the chrome ends. KWin's Breeze decoration draws
+    // exactly this line; it matches the window border, which is what keeps the frame reading as
+    // one shape.
+    separator: Some(rgb8(189, 195, 199)),
     title: TitleStyle {
         font: Face::NotoSans,
         size: 13.0,
@@ -1224,12 +1293,14 @@ const BREEZE_CHROME: Chrome = Chrome {
         buttons: &[Button {
             action: ButtonAction::Close,
             shape: ButtonShape::Circle,
-            glyph: Glyph::WideCross,
+            glyph: Glyph::Cross,
             width_ratio: 0.55,
+            glyph_ratio: BREEZE_GLYPH,
             idle: paint(BREEZE_HEADER, BREEZE_TEXT),
             hover: paint(rgb8(255, 130, 145), WHITE),
             active: paint(rgb8(225, 82, 105), WHITE),
         }],
+        unclosable: None,
     },
 };
 
@@ -1298,6 +1369,7 @@ const CDE_CHROME: Chrome = Chrome {
         },
         BorderRing::Uniform(CDE_FACE),
     ],
+    separator: None,
     title: TitleStyle {
         font: Face::LiberationSansBold,
         size: 12.0,
@@ -1315,6 +1387,7 @@ const CDE_CHROME: Chrome = Chrome {
             paint(rgb8(205, 205, 194), BLACK),
             paint(rgb8(145, 145, 137), BLACK),
         )],
+        unclosable: None,
     },
 };
 
@@ -1331,6 +1404,7 @@ const CDE_CHROME_DARK: Chrome = Chrome {
         },
         BorderRing::Uniform(CDE_FACE_DARK),
     ],
+    separator: None,
     title: TitleStyle {
         font: Face::LiberationSansBold,
         size: 12.0,
@@ -1348,6 +1422,7 @@ const CDE_CHROME_DARK: Chrome = Chrome {
             paint(rgb8(111, 119, 115), WHITE),
             paint(rgb8(67, 72, 70), WHITE),
         )],
+        unclosable: None,
     },
 };
 
@@ -1367,6 +1442,7 @@ const PLATINUM_CHROME: Chrome = Chrome {
         period: 2,
     },
     border: &[BorderRing::Uniform(BLACK)],
+    separator: None,
     title: TitleStyle {
         font: Face::SourceSansSemibold,
         size: 12.0,
@@ -1384,6 +1460,7 @@ const PLATINUM_CHROME: Chrome = Chrome {
             paint(rgb8(238, 238, 238), BLACK),
             paint(rgb8(170, 170, 170), BLACK),
         )],
+        unclosable: None,
     },
 };
 
@@ -1402,6 +1479,7 @@ const PLAIN_CHROME_DARK: Chrome = Chrome {
     header: Fill::Solid(PLAIN_HEADER_DARK),
     // Mid-grey rather than black: a dark border against a dark header leaves no visible edge.
     border: &[BorderRing::Uniform(rgb8(128, 128, 128))],
+    separator: None,
     title: TitleStyle {
         font: Face::Default,
         size: 12.0,
@@ -1414,15 +1492,19 @@ const PLAIN_CHROME_DARK: Chrome = Chrome {
         inset: 0.0,
         gap: 0.0,
         buttons: &[plain_close(PLAIN_HEADER_DARK, PLAIN_TEXT_DARK)],
+        unclosable: None,
     },
 };
 
 // fluent dark — Windows 11's own dark title bar, keeping the same close red.
-const FLUENT_HEADER_DARK: Color = rgb8(32, 32, 32);
+// The same one-step separation as `FLUENT_HEADER`, in the direction dark mode moves: a caption
+// slightly lighter than the #202020 panel beneath it.
+const FLUENT_HEADER_DARK: Color = rgb8(43, 43, 43);
 
 const FLUENT_CHROME_DARK: Chrome = Chrome {
     header: Fill::Solid(FLUENT_HEADER_DARK),
     border: &[BorderRing::Uniform(rgb8(74, 74, 74))],
+    separator: None,
     title: TitleStyle {
         font: Face::Selawik,
         size: 12.0,
@@ -1440,6 +1522,8 @@ const FLUENT_CHROME_DARK: Chrome = Chrome {
             paint(rgb8(196, 43, 28), WHITE),
             paint(rgb8(168, 36, 25), WHITE),
         )],
+        // See `FLUENT_CHROME`.
+        unclosable: Some(paint(FLUENT_HEADER_DARK, rgb8(122, 122, 122))),
     },
 };
 
@@ -1470,6 +1554,7 @@ const REDMOND_CHROME_DARK: Chrome = Chrome {
         },
         BorderRing::Uniform(REDMOND_FACE_DARK),
     ],
+    separator: None,
     title: TitleStyle {
         font: Face::Pixel,
         size: 12.0,
@@ -1487,6 +1572,8 @@ const REDMOND_CHROME_DARK: Chrome = Chrome {
             paint(rgb8(124, 119, 148), REDMOND_GLYPH_DARK),
             paint(rgb8(90, 86, 112), REDMOND_GLYPH_DARK),
         )],
+        // See `REDMOND_CHROME`.
+        unclosable: Some(paint(REDMOND_FACE_DARK, rgb8(163, 159, 178))),
     },
 };
 
@@ -1511,6 +1598,7 @@ const fn aqua_inert_dark() -> Button {
         shape: ButtonShape::Circle,
         glyph: Glyph::None,
         width_ratio: AQUA_LIGHT_RATIO,
+        glyph_ratio: AQUA_GLYPH,
         idle: aqua_disabled_dark_paint(),
         hover: aqua_disabled_dark_paint(),
         active: aqua_disabled_dark_paint(),
@@ -1523,6 +1611,7 @@ const AQUA_CHROME_DARK: Chrome = Chrome {
         to: rgb8(44, 44, 46),
     },
     border: &[BorderRing::Uniform(rgb8(74, 74, 76))],
+    separator: None,
     title: TitleStyle {
         font: Face::Inter,
         size: 13.0,
@@ -1540,6 +1629,7 @@ const AQUA_CHROME_DARK: Chrome = Chrome {
                 shape: ButtonShape::Circle,
                 glyph: Glyph::Cross,
                 width_ratio: AQUA_LIGHT_RATIO,
+                glyph_ratio: AQUA_GLYPH,
                 idle: aqua_red(rgb8(255, 128, 122), rgb8(255, 95, 87), TRANSPARENT),
                 hover: aqua_red(rgb8(255, 128, 122), rgb8(255, 95, 87), rgb8(77, 0, 0)),
                 active: aqua_red(rgb8(211, 87, 81), rgb8(191, 71, 66), rgb8(77, 0, 0)),
@@ -1547,6 +1637,8 @@ const AQUA_CHROME_DARK: Chrome = Chrome {
             aqua_inert_dark(),
             aqua_inert_dark(),
         ],
+        // See `AQUA_CHROME`.
+        unclosable: Some(aqua_disabled_dark_paint()),
     },
 };
 
@@ -1556,6 +1648,7 @@ const ADWAITA_HEADER_DARK: Color = rgb8(48, 48, 48);
 const ADWAITA_CHROME_DARK: Chrome = Chrome {
     header: Fill::Solid(ADWAITA_HEADER_DARK),
     border: &[BorderRing::Uniform(rgb8(27, 27, 27))],
+    separator: None,
     title: TitleStyle {
         font: Face::Cantarell,
         size: 14.0,
@@ -1572,10 +1665,12 @@ const ADWAITA_CHROME_DARK: Chrome = Chrome {
             shape: ButtonShape::Circle,
             glyph: Glyph::Cross,
             width_ratio: 0.65,
+            glyph_ratio: ADWAITA_GLYPH,
             idle: paint(rgb8(69, 69, 69), WHITE),
             hover: paint(rgb8(85, 85, 85), WHITE),
             active: paint(rgb8(102, 102, 102), WHITE),
         }],
+        unclosable: None,
     },
 };
 
@@ -1584,6 +1679,9 @@ const BREEZE_HEADER_DARK: Color = rgb8(49, 54, 59);
 const BREEZE_CHROME_DARK: Chrome = Chrome {
     header: Fill::Solid(BREEZE_HEADER_DARK),
     border: &[BorderRing::Uniform(rgb8(23, 26, 28))],
+    // See `BREEZE_CHROME`. A step darker than the bar rather than the near-black window border,
+    // which at this size would read as a gap in the window rather than a line on it.
+    separator: Some(rgb8(38, 42, 46)),
     title: TitleStyle {
         font: Face::NotoSans,
         size: 13.0,
@@ -1598,12 +1696,14 @@ const BREEZE_CHROME_DARK: Chrome = Chrome {
         buttons: &[Button {
             action: ButtonAction::Close,
             shape: ButtonShape::Circle,
-            glyph: Glyph::WideCross,
+            glyph: Glyph::Cross,
             width_ratio: 0.55,
+            glyph_ratio: BREEZE_GLYPH,
             idle: paint(BREEZE_HEADER_DARK, rgb8(239, 240, 241)),
             hover: paint(rgb8(255, 130, 145), WHITE),
             active: paint(rgb8(225, 82, 105), WHITE),
         }],
+        unclosable: None,
     },
 };
 

@@ -4,22 +4,16 @@ export type ModeId =
 	| { type: 'Pack'; id: number }
 	| { type: 'File'; path: string };
 
-export interface ModeOptionsEntry {
-	mode: ModeId;
-	options: Record<string, StoredValue>;
-}
-
-/** A `Mode::Experience` options entry, keyed by pack UUID (string). */
-export interface ExperienceOptionsEntry {
-	pack_id: string;
-	options: Record<string, StoredValue>;
-}
-
+/** The settings this app owns, as `get_config` sends them and `save_config` takes them back.
+ *
+ * Deliberately not everything in the user's config file. Mode option values are missing on
+ * purpose: they are written by `set_mode_option`, which persists each one as it goes, so this
+ * object — a snapshot taken when the page loaded — would be stale for them the moment the user
+ * changed one. Sending them back would revert every option set this session. See
+ * `apply_config_dto` in `config/src-tauri/src/lib.rs`. */
 export interface ConfigDto {
 	pack_path: string | null;
 	mode: ModeId;
-	mode_options: ModeOptionsEntry[];
-	experience_options: ExperienceOptionsEntry[];
 	/** The window look every popup is drawn in, unless the running mode names one itself. One of
 	 * `ThemeInfo.name` from `getThemeCatalogue()`. */
 	theme: string;
@@ -79,10 +73,13 @@ export interface ChromeButton {
 	 * drawn for authenticity and deliberately do nothing. */
 	action: 'Close' | 'Inert';
 	shape: 'Rect' | 'Circle';
-	/** `WideCross` is the more open mark Breeze draws in its circular button. */
-	glyph: 'Cross' | 'WideCross' | 'None';
+	glyph: 'Cross' | 'None';
 	/** Width as a multiple of the header height. */
 	width_ratio: number;
+	/** How far the mark reaches from the button's centre, as a fraction of the button's extent —
+	 * so it spans twice this. Per theme, because the platforms genuinely differ: macOS spans half
+	 * its traffic light, GNOME two fifths of a larger circle, Windows a third of its slab. */
+	glyph_ratio: number;
 	idle: ButtonPaint;
 	hover: ButtonPaint;
 	active: ButtonPaint;
@@ -92,6 +89,9 @@ export interface Chrome {
 	header: Fill;
 	/** Outermost ring first; one ring is one logical pixel. */
 	border: BorderRing[];
+	/** A hairline along the bottom of the title bar, for the themes whose bar is the same colour
+	 * as the panel below it and would otherwise have no edge (Breeze). */
+	separator: Color | null;
 	title: {
 		font: FaceName;
 		size: number;
@@ -104,6 +104,10 @@ export interface Chrome {
 		inset: number;
 		gap: number;
 		buttons: ChromeButton[];
+		/** How the cluster is drawn on a window that cannot be closed. `null` drops it entirely;
+		 * a paint greys every button in it instead, which is what Windows and macOS do. The
+		 * preview always shows a closeable window, so this is carried for completeness. */
+		unclosable: ButtonPaint | null;
 	};
 }
 

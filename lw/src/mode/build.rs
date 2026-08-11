@@ -84,14 +84,12 @@ fn write_files(
     for dir in include_dirs {
         for entry in walkdir::WalkDir::new(&dir)
             .into_iter()
-            .inspect(|entry| println!("{:?}", entry))
             .filter_map(|x| x.inspect_err(|err| eprintln!("{err}")).ok())
             .filter(|entry| {
                 entry.path().is_file() && entry.path().extension().is_some_and(|ext| ext == "lua")
             })
         {
             let absolute_path = entry.path();
-            println!("{}", absolute_path.display());
             if let Ok(path) = absolute_path.strip_prefix(&dir) {
                 let mut lua_file = File::open(absolute_path)?;
 
@@ -99,8 +97,6 @@ fn write_files(
                     .to_str()
                     .ok_or_else(|| anyhow!("Path (src/{}) contains invalid UTF-8", path.display()))?
                     .replace("\\", "/");
-
-                println!("{module_path}");
 
                 zstd::stream::copy_encode(&mut lua_file, &mut file, 0)?;
 

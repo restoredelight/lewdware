@@ -1129,9 +1129,10 @@ pub enum TextFont {
     Pixel,
 }
 
-fn default_font_size() -> FontSize {
-    FontSize::Value(32.0)
-}
+/// What a *standalone* text popup uses when the mode names no size. A dialog's text has a better
+/// answer available — the size of the theme it is sitting in — so it resolves its own default at
+/// paint time instead; see [`TextStyle::font_size`].
+pub const DEFAULT_TEXT_POPUP_FONT_SIZE: FontSize = FontSize::Value(32.0);
 
 fn default_outline_width() -> f32 {
     2.0
@@ -1141,8 +1142,14 @@ fn default_outline_width() -> f32 {
 pub struct TextStyle {
     #[serde(default)]
     pub font: TextFont,
-    #[serde(default = "default_font_size")]
-    pub font_size: FontSize,
+    /// `None` means "whatever suits the surface this is drawn on", exactly as `color` does below.
+    /// A standalone text popup floats over the desktop at
+    /// [`DEFAULT_TEXT_POPUP_FONT_SIZE`], while a dialog's text takes its theme's body size — the
+    /// same size the buttons and fields beside it are set in. Left as one fixed 32pt for both,
+    /// a dialog's caption came out more than twice the height of its own controls, and appeared
+    /// to change size between themes as the face changed underneath it.
+    #[serde(default)]
+    pub font_size: Option<FontSize>,
     /// `None` means "whatever suits the surface this is drawn on": a dialog's text follows its
     /// theme's palette, so it stays readable in a dark one, while a text popup — which floats over
     /// the desktop with no background of its own — keeps black.
@@ -1162,7 +1169,7 @@ impl Default for TextStyle {
     fn default() -> Self {
         Self {
             font: TextFont::default(),
-            font_size: default_font_size(),
+            font_size: None,
             color: None,
             bold: false,
             align: TextAlign::default(),
@@ -1203,10 +1210,11 @@ fn spawn_text_popup<T: EventPoster>(
     // text is usually meant to float over the desktop rather than sit in an opaque panel.
     let transparent = opts.window_opts.transparent.unwrap_or(true);
 
-    // Resolve a percentage font size to a concrete point size now that the monitor (and so its
-    // height, the basis for `FontSize::Percent`) is known. From here on `font_size` is always
-    // `FontSize::Value`.
-    opts.style.font_size = FontSize::Value(opts.style.font_size.to_pixels(monitor.height));
+    // Apply the text popup's own default, then resolve a percentage to a concrete point size now
+    // that the monitor (and so its height, the basis for `FontSize::Percent`) is known. From here
+    // on `font_size` is always `Some(FontSize::Value)`.
+    let requested = opts.style.font_size.unwrap_or(DEFAULT_TEXT_POPUP_FONT_SIZE);
+    opts.style.font_size = Some(FontSize::Value(requested.to_pixels(monitor.height)));
     let outline_width = if opts.style.outline_color.is_some() {
         opts.style.outline_width
     } else {
@@ -1218,7 +1226,7 @@ fn spawn_text_popup<T: EventPoster>(
         WindowSizeBehaviour::MeasureText {
             text: text.clone(),
             font: opts.style.font,
-            font_size: opts.style.font_size,
+            font_size: opts.style.font_size.unwrap_or(DEFAULT_TEXT_POPUP_FONT_SIZE),
             outline_width,
         },
         &monitor,

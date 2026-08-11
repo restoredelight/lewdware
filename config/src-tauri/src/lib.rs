@@ -92,20 +92,6 @@ impl From<ModeIdDto> for Mode {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ModeOptionsEntry {
-    pub mode: ModeIdDto,
-    pub options: HashMap<String, StoredValue>,
-}
-
-/// A `Mode::Experience` options entry, keyed by pack UUID (string form for JS-friendliness) --
-/// see `AppConfig::experience_options`'s doc comment.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ExperienceOptionsEntry {
-    pub pack_id: String,
-    pub options: HashMap<String, StoredValue>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WindowDto {
     pub days: [bool; 7],
     pub start_hour: u32,
@@ -216,12 +202,18 @@ fn default_appearance_dto() -> String {
     AppConfig::default().appearance
 }
 
+/// The settings the **frontend** owns, as it sends them back.
+///
+/// Deliberately not the whole of an `AppConfig`. A field belongs here only if the frontend is the
+/// thing that changes it; anything a backend command owns instead (`mode_options` via
+/// `set_mode_option`, `uploaded_modes` via `upload_mode`) is left out and carried across by
+/// [`apply_config_dto`]. The frontend's config is a *snapshot* taken when the page loaded, so a
+/// backend-owned field sent back through here would arrive holding whatever was true then —
+/// undoing every change made since. Leaving it out of the DTO is what makes that unrepresentable.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConfigDto {
     pub pack_path: Option<String>,
     pub mode: ModeIdDto,
-    pub mode_options: Vec<ModeOptionsEntry>,
-    pub experience_options: Vec<ExperienceOptionsEntry>,
     /// The window look every popup is drawn in, unless the running mode names one itself. See
     /// `AppConfig::theme` for why this is the user's setting rather than a mode option. Both this
     /// and `appearance` round-trip like every other field here, for the reason `wallpaper`
@@ -252,29 +244,9 @@ pub struct ConfigDto {
 
 impl From<AppConfig> for ConfigDto {
     fn from(c: AppConfig) -> Self {
-        let mode_options = c
-            .mode_options
-            .into_iter()
-            .map(|(k, v)| ModeOptionsEntry {
-                mode: k.into(),
-                options: v,
-            })
-            .collect();
-
-        let experience_options = c
-            .experience_options
-            .into_iter()
-            .map(|(pack_id, options)| ExperienceOptionsEntry {
-                pack_id: pack_id.to_string(),
-                options,
-            })
-            .collect();
-
         ConfigDto {
             pack_path: c.pack_path.and_then(|p| p.to_str().map(str::to_string)),
             mode: c.mode.into(),
-            mode_options,
-            experience_options,
             theme: c.theme,
             appearance: c.appearance,
             panic_button: c.panic_button,
@@ -288,25 +260,15 @@ impl From<AppConfig> for ConfigDto {
 }
 
 impl From<ConfigDto> for AppConfig {
+    /// Backend-owned fields come out empty here and are filled in by [`apply_config_dto`], which
+    /// is the only thing that should build an `AppConfig` from a DTO.
     fn from(dto: ConfigDto) -> Self {
-        let mode_options = dto
-            .mode_options
-            .into_iter()
-            .map(|e| (Mode::from(e.mode), e.options))
-            .collect();
-
-        let experience_options = dto
-            .experience_options
-            .into_iter()
-            .filter_map(|e| Some((Uuid::parse_str(&e.pack_id).ok()?, e.options)))
-            .collect();
-
         AppConfig {
             pack_path: dto.pack_path.map(PathBuf::from),
             uploaded_modes: Vec::new(),
             mode: dto.mode.into(),
-            mode_options,
-            experience_options,
+            mode_options: HashMap::new(),
+            experience_options: HashMap::new(),
             theme: dto.theme,
             appearance: dto.appearance,
             panic_button: dto.panic_button,
@@ -771,6 +733,25 @@ fn save_to_disk(config: &AppConfig, uploaded: &[UploadedModeEntry]) -> anyhow::R
     user_config::save_config(&c)
 }
 
+/// Fold the frontend's settings onto the config this process already holds.
+///
+/// Split out of `save_config` so the rule can be stated once and tested without a Tauri `State`:
+/// **the DTO supplies what the frontend owns; everything else is kept from `current`.**
+///
+/// The fields kept are the ones their own commands write and persist as they go —
+/// `set_mode_option` for the two option maps, `upload_mode`/`remove_uploaded_mode` for the mode
+/// list. The frontend never learns about those writes (it holds a snapshot from page load), so
+/// taking them from the DTO reverted every mode option the user had set that session as soon as
+/// anything else was saved — changing the theme, the volume, or switching mode.
+fn apply_config_dto(current: &AppConfig, dto: ConfigDto) -> AppConfig {
+    AppConfig {
+        mode_options: current.mode_options.clone(),
+        experience_options: current.experience_options.clone(),
+        uploaded_modes: current.uploaded_modes.clone(),
+        ..dto.into()
+    }
+}
+
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -781,10 +762,7 @@ fn get_config(state: State<'_>) -> ConfigDto {
 #[tauri::command]
 fn save_config(state: State<'_>, config: ConfigDto) -> Result<(), String> {
     let mut current = state.config.lock().unwrap();
-    let mut new_config: AppConfig = config.into();
-
-    // Preserve fields managed separately from the DTO
-    new_config.uploaded_modes = current.uploaded_modes.clone();
+    let new_config = apply_config_dto(&current, config);
 
     let uploaded = state.uploaded.lock().unwrap();
     save_to_disk(&new_config, &uploaded).map_err(|e| e.to_string())?;
@@ -1634,6 +1612,60 @@ mod tests {
             files: HashMap::new(),
             needs_permissions: Vec::new(),
         }
+    }
+
+    /// The bug this guards: mode option values are written by `set_mode_option` and persisted as
+    /// it goes, but the frontend's copy of the config is a snapshot from page load, so it never
+    /// learns about those writes. Rebuilding the whole `AppConfig` from that snapshot reverted
+    /// every option the user had set that session — the visible symptom being that changing the
+    /// theme (or the volume, or the mode) silently reset the mode's settings.
+    #[test]
+    fn saving_frontend_settings_keeps_the_options_the_backend_owns() {
+        let pack = Uuid::new_v4();
+        let stored = || HashMap::from([("popup_frequency".to_string(), StoredValue::Float(4.0))]);
+
+        let current = AppConfig {
+            theme: "plain".to_string(),
+            mode_options: HashMap::from([(Mode::Sandbox, stored())]),
+            experience_options: HashMap::from([(pack, stored())]),
+            uploaded_modes: vec![PathBuf::from("/modes/custom.lwmode")],
+            ..Default::default()
+        };
+
+        // What the frontend sends when the user changes one unrelated setting: its own fields,
+        // and nothing at all about the options.
+        let dto = ConfigDto {
+            theme: "breeze".to_string(),
+            ..AppConfig::default().into()
+        };
+
+        let saved = apply_config_dto(&current, dto);
+
+        assert_eq!(saved.theme, "breeze", "the frontend's own field is taken");
+        assert_eq!(saved.mode_options, current.mode_options);
+        assert_eq!(saved.experience_options, current.experience_options);
+        assert_eq!(saved.uploaded_modes, current.uploaded_modes);
+    }
+
+    /// The frontend cannot send option values even if it wanted to — they are not in the DTO —
+    /// which is what makes the case above unrepresentable rather than merely handled.
+    #[test]
+    fn the_dto_carries_no_option_values() {
+        let dto = ConfigDto {
+            ..AppConfig {
+                mode_options: HashMap::from([(
+                    Mode::Sandbox,
+                    HashMap::from([("k".to_string(), StoredValue::Bool(true))]),
+                )]),
+                ..Default::default()
+            }
+            .into()
+        };
+
+        let json = serde_json::to_value(&dto).unwrap();
+        let object = json.as_object().expect("the DTO is a JSON object");
+        assert!(!object.contains_key("mode_options"), "{object:?}");
+        assert!(!object.contains_key("experience_options"), "{object:?}");
     }
 
     fn behaviour_with_one_content_group() -> Behaviour {

@@ -272,10 +272,20 @@ fn button_row_width(ui: &egui::Ui, options: &[DialogButton]) -> f32 {
 /// Paint one `text` element inline within the dialog's vertical stack (unlike `paint_text`,
 /// which centers within the whole window for a standalone text popup).
 fn paint_dialog_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
-    let font_size = style.font_size.to_pixels(0);
-    // `default` means the surrounding UI face inside a dialog. Explicit author faces still win;
-    // standalone text popups retain their existing neutral default because they have no themed
-    // controls to belong to.
+    // `default` means the surrounding UI face inside a dialog, and an unset size means its
+    // surrounding UI *size* — a caption belongs to the panel it is in, and should read as its
+    // body text rather than as a poster laid over it. Explicit author values still win; standalone
+    // text popups keep their own neutral defaults because they have no themed controls to belong
+    // to.
+    //
+    // Taking both from the same `Body` style is also what keeps a dialog looking the same across
+    // themes: each theme's size is tuned to its own face, so a single fixed number produced text
+    // that visibly changed size as the face changed under it.
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let font_size = style
+        .font_size
+        .map(|size| size.to_pixels(0))
+        .unwrap_or(body.size);
     let family = dialog_text_family(ui, style.font);
     let font_id = egui::FontId::new(font_size, family);
 
@@ -695,7 +705,7 @@ impl EguiLayer {
                     style.font = font;
                 }
                 if let Some(font_size) = props.font_size {
-                    style.font_size = font_size;
+                    style.font_size = Some(font_size);
                 }
                 if let Some(color) = props.color {
                     style.color = Some(color);
@@ -842,10 +852,12 @@ fn paint_text(ui: &mut egui::Ui, text: &str, style: &TextStyle) {
         .frame(frame)
         .show_inside(ui, |ui| {
             let available = ui.available_rect_before_wrap();
-            // `style.font_size` is always `FontSize::Value` by the time it reaches here — percentage
-            // sizes are resolved once in `App::spawn_text`, while the monitor is known — so the
-            // argument here is unused.
-            let font_size = style.font_size.to_pixels(0);
+            // `style.font_size` is always `Some(FontSize::Value)` by the time it reaches here —
+            // both the default and any percentage are resolved once in `App::spawn_text`, while
+            // the monitor is known — so the argument here is unused and the fallback unreachable.
+            let requested: lua::FontSize =
+                style.font_size.unwrap_or(lua::DEFAULT_TEXT_POPUP_FONT_SIZE);
+            let font_size = requested.to_pixels(0);
             let font_id = egui::FontId::new(font_size, text_font::font_family(style.font));
             // Unset stays black here, unlike a dialog: a text popup floats over the desktop with a
             // transparent background by default, so there is no surface to take a cue from — which
@@ -1191,6 +1203,74 @@ mod dialog_layout_tests {
                 Some(text_font::font_family(lua::TextFont::Mono)),
                 "{theme:?}"
             );
+        }
+    }
+
+    /// An unstyled dialog caption is set at the theme's own body size, and an explicit size still
+    /// wins.
+    ///
+    /// The size used to be a flat 32pt for every theme and every surface, which made a caption
+    /// more than twice the height of the controls under it — and, because the *face* already
+    /// followed the theme, made the text appear to change size from theme to theme as the face
+    /// changed beneath a constant number.
+    #[test]
+    fn unstyled_dialog_text_takes_the_themes_own_size() {
+        for &theme in crate::window::theme::ALL_THEMES {
+            let ctx = egui::Context::default();
+            ctx.set_global_style(theme::window_style(theme, Appearance::Light, None));
+            if let Some(fonts) = theme::widget_font_definitions(theme) {
+                ctx.set_fonts(fonts);
+            }
+
+            let mut elements = vec![
+                DialogElementState::Text {
+                    id: None,
+                    text: "inherited".to_owned(),
+                    style: TextStyle::default(),
+                },
+                DialogElementState::Text {
+                    id: None,
+                    text: "explicit".to_owned(),
+                    style: TextStyle {
+                        font_size: Some(lua::FontSize::Value(40.0)),
+                        ..Default::default()
+                    },
+                },
+            ];
+
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(PANEL, 300.0),
+                )),
+                ..Default::default()
+            };
+
+            let output = ctx.run_ui(input, |ui| {
+                paint_dialog(
+                    ui,
+                    &mut elements,
+                    None,
+                    &theme.widget_edge(Appearance::Light),
+                    theme.default_button_style(Appearance::Light),
+                );
+            });
+
+            let sizes: HashMap<String, f32> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) => Some((
+                        text.galley.job.text.clone(),
+                        text.galley.job.sections[0].format.font_id.size,
+                    )),
+                    _ => None,
+                })
+                .collect();
+
+            let body = theme.widgets(Appearance::Light).font_size;
+            assert_eq!(sizes.get("inherited"), Some(&body), "{theme:?}");
+            assert_eq!(sizes.get("explicit"), Some(&40.0), "{theme:?}");
         }
     }
 

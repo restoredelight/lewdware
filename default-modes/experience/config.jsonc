@@ -137,6 +137,7 @@
       "options": {
         "prompts_enabled": {
           "label": "Show prompts",
+          "description": "Dialogs that stay up until you type the pack's text back exactly",
           "type": "boolean",
           "default": true
         }

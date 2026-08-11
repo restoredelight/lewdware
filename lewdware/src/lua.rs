@@ -42,8 +42,8 @@ use crate::{
 };
 
 pub use api::{
-    Color, Coord, DialogButton, DialogElement, DialogElementUpdate, Notification, PopupSpawnOpts,
-    TextAlign, TextFont, TextStyle,
+    Color, Coord, DEFAULT_TEXT_POPUP_FONT_SIZE, DialogButton, DialogElement, DialogElementUpdate,
+    FontSize, Notification, PopupSpawnOpts, TextAlign, TextFont, TextStyle,
 };
 pub use media::{Media, MediaData, MediaType};
 pub use request::{AudioAction, ItemAction, LuaRequest, WindowAction};
@@ -3740,8 +3740,11 @@ mod tests {
             .await;
     }
 
+    /// A prompt is text to copy out, not a question: it closes only once the user has typed it
+    /// back, whether they submit with the button or with Enter. Anything else clears the box and
+    /// leaves the dialog up.
     #[tokio::test(start_paused = true)]
-    async fn prompt_submit_and_select_both_close_the_dialog() {
+    async fn a_prompt_closes_only_once_its_text_has_been_typed_back() {
         async fn spawn_one_prompt_dialog() -> Harness {
             let content = Content {
                 prompts: vec![shared::behaviour::TextItem {
@@ -3769,28 +3772,62 @@ mod tests {
             harness
         }
 
+        fn typed(response: &str) -> HashMap<String, String> {
+            HashMap::from([("response".to_string(), response.to_string())])
+        }
+
         LocalSet::new()
             .run_until(async {
-                let mut harness = spawn_one_prompt_dialog().await;
-                harness.send_event(Event::DialogSelect {
-                    id: ItemId(0),
-                    button_id: "submit".to_string(),
-                    values: HashMap::new(),
-                });
-                harness.pump_events();
-                assert_eq!(
-                    harness.recorded(),
-                    vec![
-                        Recorded::SpawnDialog,
-                        Recorded::CloseWindow { id: ItemId(0) },
-                    ]
-                );
+                // The submit button, with every answer that is not the prompt's own text.
+                for wrong in ["", "well?", "Well", "Something else"] {
+                    let mut harness = spawn_one_prompt_dialog().await;
+                    harness.send_event(Event::DialogSelect {
+                        id: ItemId(0),
+                        button_id: "submit".to_string(),
+                        values: typed(wrong),
+                    });
+                    harness.pump_events();
+                    assert_eq!(
+                        harness.recorded(),
+                        vec![Recorded::SpawnDialog],
+                        "{wrong:?} closed the prompt"
+                    );
+                }
 
+                // ...and with the text typed back. Surrounding whitespace is invisible, so it is
+                // forgiven; nothing else is.
+                for right in ["Well?", "  Well? "] {
+                    let mut harness = spawn_one_prompt_dialog().await;
+                    harness.send_event(Event::DialogSelect {
+                        id: ItemId(0),
+                        button_id: "submit".to_string(),
+                        values: typed(right),
+                    });
+                    harness.pump_events();
+                    assert_eq!(
+                        harness.recorded(),
+                        vec![
+                            Recorded::SpawnDialog,
+                            Recorded::CloseWindow { id: ItemId(0) },
+                        ],
+                        "{right:?} did not close the prompt"
+                    );
+                }
+
+                // Enter in the input reaches the same check.
                 let mut harness = spawn_one_prompt_dialog().await;
                 harness.send_event(Event::DialogSubmit {
                     id: ItemId(0),
                     element_id: "response".to_string(),
-                    values: HashMap::new(),
+                    values: typed("nope"),
+                });
+                harness.pump_events();
+                assert_eq!(harness.recorded(), vec![Recorded::SpawnDialog]);
+
+                harness.send_event(Event::DialogSubmit {
+                    id: ItemId(0),
+                    element_id: "response".to_string(),
+                    values: typed("Well?"),
                 });
                 harness.pump_events();
                 assert_eq!(
