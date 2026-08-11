@@ -11,8 +11,10 @@
 
 use serde::{Deserialize, Serialize};
 
+mod appearance;
 mod color;
 
+pub use appearance::system_appearance;
 pub use color::{Color, Face, TextAlign};
 
 /// One selectable window look.
@@ -74,19 +76,19 @@ pub const THEMES: &[ThemeInfo] = &[
     },
     ThemeInfo {
         name: "aqua",
-        label: "macOS",
+        label: "macOS (Aqua)",
         supports_dark: true,
         is_alias: false,
     },
     ThemeInfo {
         name: "adwaita",
-        label: "GNOME",
+        label: "GNOME (Adwaita)",
         supports_dark: true,
         is_alias: false,
     },
     ThemeInfo {
         name: "breeze",
-        label: "KDE Plasma",
+        label: "KDE Plasma (Breeze)",
         supports_dark: true,
         is_alias: false,
     },
@@ -98,7 +100,7 @@ pub const THEMES: &[ThemeInfo] = &[
     },
     ThemeInfo {
         name: "cde",
-        label: "CDE / Motif",
+        label: "CDE / Motif-inspired",
         supports_dark: true,
         is_alias: false,
     },
@@ -446,7 +448,10 @@ impl Theme {
                 border_width: 1,
             },
             Self::Adwaita => Metrics {
-                header_height: 37,
+                // AdwHeaderBar's current minimum height. The old 37px value is specifically its
+                // compact `.default-decoration`, not the centred application headerbar copied by
+                // this theme.
+                header_height: 47,
                 border_width: 1,
             },
             Self::Breeze => Metrics {
@@ -781,6 +786,8 @@ pub struct Widgets {
 pub enum ButtonShape {
     /// A full-height rectangle, as on Windows.
     Rect,
+    /// A square centred vertically in the title bar, as on classic Mac OS.
+    Square,
     /// A circle centred in the header, as on macOS.
     Circle,
 }
@@ -790,6 +797,8 @@ pub enum ButtonShape {
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glyph {
     Cross,
+    /// The inset outline in Mac OS 8/9's close box.
+    Square,
     /// Nothing — an inert button, or one whose glyph only appears on hover.
     None,
 }
@@ -823,6 +832,12 @@ pub struct Button {
     pub glyph: Glyph,
     /// Width as a multiple of the header height, so buttons scale with the title bar.
     pub width_ratio: f32,
+    /// Diameter of a circular button's painted disc as a multiple of the header height.
+    ///
+    /// Usually this equals [`Self::width_ratio`]. Adwaita is the important exception: GTK gives
+    /// its 24px close disc a wider transparent button slot, so the title clearance and hit target
+    /// are larger than the thing a user sees.
+    pub diameter_ratio: f32,
     /// How far the glyph reaches from the button's centre on each axis, as a fraction of the
     /// button's own extent — so a cross spans `2 * glyph_ratio` of the button it marks.
     ///
@@ -924,6 +939,7 @@ const fn rect_close(
         shape: ButtonShape::Rect,
         glyph: Glyph::Cross,
         width_ratio,
+        diameter_ratio: width_ratio,
         glyph_ratio: RECT_GLYPH,
         idle,
         hover,
@@ -964,6 +980,7 @@ const fn plain_close(bar: Color, glyph: Color) -> Button {
         shape: ButtonShape::Rect,
         glyph: Glyph::Cross,
         width_ratio: 1.0,
+        diameter_ratio: 1.0,
         glyph_ratio: RECT_GLYPH,
         idle: ButtonPaint {
             fill: Fill::Solid(bar),
@@ -1026,7 +1043,8 @@ const FLUENT_CHROME: Chrome = Chrome {
         font: Face::Selawik,
         size: 12.0,
         color: FLUENT_TEXT,
-        padding: 12.0,
+        // With no icon, Microsoft's title-bar guidance places the caption 16px from the edge.
+        padding: 16.0,
         // Windows puts its title at the left, unlike the centred plain bar.
         align: TextAlign::Left,
     },
@@ -1035,7 +1053,8 @@ const FLUENT_CHROME: Chrome = Chrome {
         inset: 0.0,
         gap: 0.0,
         buttons: &[rect_close(
-            1.5,
+            // Windows reserves 46px for a caption control in its standard 32px title bar.
+            46.0 / 32.0,
             paint(FLUENT_HEADER, FLUENT_TEXT),
             paint(rgb8(196, 43, 28), WHITE),
             paint(rgb8(168, 36, 25), WHITE),
@@ -1186,6 +1205,7 @@ const fn aqua_inert() -> Button {
         shape: ButtonShape::Circle,
         glyph: Glyph::None,
         width_ratio: AQUA_LIGHT_RATIO,
+        diameter_ratio: AQUA_LIGHT_RATIO,
         glyph_ratio: AQUA_GLYPH,
         idle: aqua_disabled_light(),
         hover: aqua_disabled_light(),
@@ -1217,6 +1237,7 @@ const AQUA_CHROME: Chrome = Chrome {
                 shape: ButtonShape::Circle,
                 glyph: Glyph::Cross,
                 width_ratio: AQUA_LIGHT_RATIO,
+                diameter_ratio: AQUA_LIGHT_RATIO,
                 glyph_ratio: AQUA_GLYPH,
                 // The glyph is transparent until hovered, exactly as Aqua hides its marks until
                 // the pointer enters the cluster.
@@ -1234,12 +1255,14 @@ const AQUA_CHROME: Chrome = Chrome {
 };
 
 // adwaita — GNOME. A tall flat headerbar with a centred title and a round close button.
-const ADWAITA_HEADER: Color = rgb8(235, 235, 233);
-const ADWAITA_TEXT: Color = rgb8(46, 52, 54);
+// Current libadwaita defaults. Its foreground is 80%-opaque near-black; this is that colour
+// composited over the white header bar, since our chrome has no translucent backing layer.
+const ADWAITA_HEADER: Color = WHITE;
+const ADWAITA_TEXT: Color = rgb8(51, 51, 56);
 
 const ADWAITA_CHROME: Chrome = Chrome {
     header: Fill::Solid(ADWAITA_HEADER),
-    border: &[BorderRing::Uniform(rgb8(192, 191, 188))],
+    border: &[BorderRing::Uniform(rgb8(224, 224, 224))],
     separator: None,
     title: TitleStyle {
         font: Face::Cantarell,
@@ -1250,17 +1273,19 @@ const ADWAITA_CHROME: Chrome = Chrome {
     },
     buttons: Buttons {
         side: Side::Right,
-        inset: 6.0,
+        inset: 7.0,
         gap: 0.0,
         buttons: &[Button {
             action: ButtonAction::Close,
             shape: ButtonShape::Circle,
             glyph: Glyph::Cross,
-            width_ratio: 0.65,
+            // A 24px circular image inside a 34px image-button slot.
+            width_ratio: 34.0 / 47.0,
+            diameter_ratio: 24.0 / 47.0,
             glyph_ratio: ADWAITA_GLYPH,
-            idle: paint(rgb8(214, 210, 205), ADWAITA_TEXT),
-            hover: paint(rgb8(198, 194, 188), ADWAITA_TEXT),
-            active: paint(rgb8(180, 176, 170), ADWAITA_TEXT),
+            idle: paint(rgb8(230, 230, 231), ADWAITA_TEXT),
+            hover: paint(rgb8(210, 210, 212), ADWAITA_TEXT),
+            active: paint(rgb8(190, 190, 192), ADWAITA_TEXT),
         }],
         unclosable: None,
     },
@@ -1268,7 +1293,8 @@ const ADWAITA_CHROME: Chrome = Chrome {
 
 // breeze — KDE Plasma. Cool neutral surfaces, compact geometry and KDE's blue accent. KWin
 // decorations vary by distribution, so this follows upstream Breeze rather than a distro skin.
-const BREEZE_HEADER: Color = rgb8(239, 240, 241);
+// BreezeLight's active Header background. #eff0f1 is its inactive header and window body.
+const BREEZE_HEADER: Color = rgb8(222, 224, 226);
 const BREEZE_TEXT: Color = rgb8(35, 38, 41);
 
 const BREEZE_CHROME: Chrome = Chrome {
@@ -1295,10 +1321,12 @@ const BREEZE_CHROME: Chrome = Chrome {
             shape: ButtonShape::Circle,
             glyph: Glyph::Cross,
             width_ratio: 0.55,
+            diameter_ratio: 0.55,
             glyph_ratio: BREEZE_GLYPH,
             idle: paint(BREEZE_HEADER, BREEZE_TEXT),
-            hover: paint(rgb8(255, 130, 145), WHITE),
-            active: paint(rgb8(225, 82, 105), WHITE),
+            // KWin lightens/darkens the scheme's #da4453 Negative foreground.
+            hover: paint(rgb8(255, 102, 124), WHITE),
+            active: paint(rgb8(109, 34, 42), BREEZE_HEADER),
         }],
         unclosable: None,
     },
@@ -1454,12 +1482,17 @@ const PLATINUM_CHROME: Chrome = Chrome {
         side: Side::Left,
         inset: 4.0,
         gap: 0.0,
-        buttons: &[rect_close(
-            0.6,
-            paint(PLATINUM_FACE, BLACK),
-            paint(rgb8(238, 238, 238), BLACK),
-            paint(rgb8(170, 170, 170), BLACK),
-        )],
+        buttons: &[Button {
+            action: ButtonAction::Close,
+            shape: ButtonShape::Square,
+            glyph: Glyph::Square,
+            width_ratio: 0.6,
+            diameter_ratio: 0.6,
+            glyph_ratio: RECT_GLYPH,
+            idle: paint(PLATINUM_FACE, BLACK),
+            hover: paint(rgb8(238, 238, 238), BLACK),
+            active: paint(rgb8(170, 170, 170), BLACK),
+        }],
         unclosable: None,
     },
 };
@@ -1509,7 +1542,7 @@ const FLUENT_CHROME_DARK: Chrome = Chrome {
         font: Face::Selawik,
         size: 12.0,
         color: WHITE,
-        padding: 12.0,
+        padding: 16.0,
         align: TextAlign::Left,
     },
     buttons: Buttons {
@@ -1517,7 +1550,7 @@ const FLUENT_CHROME_DARK: Chrome = Chrome {
         inset: 0.0,
         gap: 0.0,
         buttons: &[rect_close(
-            1.5,
+            46.0 / 32.0,
             paint(FLUENT_HEADER_DARK, WHITE),
             paint(rgb8(196, 43, 28), WHITE),
             paint(rgb8(168, 36, 25), WHITE),
@@ -1598,6 +1631,7 @@ const fn aqua_inert_dark() -> Button {
         shape: ButtonShape::Circle,
         glyph: Glyph::None,
         width_ratio: AQUA_LIGHT_RATIO,
+        diameter_ratio: AQUA_LIGHT_RATIO,
         glyph_ratio: AQUA_GLYPH,
         idle: aqua_disabled_dark_paint(),
         hover: aqua_disabled_dark_paint(),
@@ -1629,6 +1663,7 @@ const AQUA_CHROME_DARK: Chrome = Chrome {
                 shape: ButtonShape::Circle,
                 glyph: Glyph::Cross,
                 width_ratio: AQUA_LIGHT_RATIO,
+                diameter_ratio: AQUA_LIGHT_RATIO,
                 glyph_ratio: AQUA_GLYPH,
                 idle: aqua_red(rgb8(255, 128, 122), rgb8(255, 95, 87), TRANSPARENT),
                 hover: aqua_red(rgb8(255, 128, 122), rgb8(255, 95, 87), rgb8(77, 0, 0)),
@@ -1643,11 +1678,11 @@ const AQUA_CHROME_DARK: Chrome = Chrome {
 };
 
 // adwaita dark — GNOME's own dark headerbar.
-const ADWAITA_HEADER_DARK: Color = rgb8(48, 48, 48);
+const ADWAITA_HEADER_DARK: Color = rgb8(46, 46, 50);
 
 const ADWAITA_CHROME_DARK: Chrome = Chrome {
     header: Fill::Solid(ADWAITA_HEADER_DARK),
-    border: &[BorderRing::Uniform(rgb8(27, 27, 27))],
+    border: &[BorderRing::Uniform(rgb8(29, 29, 32))],
     separator: None,
     title: TitleStyle {
         font: Face::Cantarell,
@@ -1658,23 +1693,24 @@ const ADWAITA_CHROME_DARK: Chrome = Chrome {
     },
     buttons: Buttons {
         side: Side::Right,
-        inset: 6.0,
+        inset: 7.0,
         gap: 0.0,
         buttons: &[Button {
             action: ButtonAction::Close,
             shape: ButtonShape::Circle,
             glyph: Glyph::Cross,
-            width_ratio: 0.65,
+            width_ratio: 34.0 / 47.0,
+            diameter_ratio: 24.0 / 47.0,
             glyph_ratio: ADWAITA_GLYPH,
-            idle: paint(rgb8(69, 69, 69), WHITE),
-            hover: paint(rgb8(85, 85, 85), WHITE),
-            active: paint(rgb8(102, 102, 102), WHITE),
+            idle: paint(rgb8(67, 67, 71), WHITE),
+            hover: paint(rgb8(83, 83, 87), WHITE),
+            active: paint(rgb8(101, 101, 105), WHITE),
         }],
         unclosable: None,
     },
 };
 
-const BREEZE_HEADER_DARK: Color = rgb8(49, 54, 59);
+const BREEZE_HEADER_DARK: Color = rgb8(41, 44, 48);
 
 const BREEZE_CHROME_DARK: Chrome = Chrome {
     header: Fill::Solid(BREEZE_HEADER_DARK),
@@ -1698,10 +1734,14 @@ const BREEZE_CHROME_DARK: Chrome = Chrome {
             shape: ButtonShape::Circle,
             glyph: Glyph::Cross,
             width_ratio: 0.55,
+            diameter_ratio: 0.55,
             glyph_ratio: BREEZE_GLYPH,
-            idle: paint(BREEZE_HEADER_DARK, rgb8(239, 240, 241)),
-            hover: paint(rgb8(255, 130, 145), WHITE),
-            active: paint(rgb8(225, 82, 105), WHITE),
+            idle: paint(BREEZE_HEADER_DARK, rgb8(252, 252, 252)),
+            hover: paint(rgb8(255, 102, 124), WHITE),
+            // KWin uses the title-bar colour here, but that is nearly black in Breeze Dark and
+            // misses even a basic contrast floor against the darkened red. Keep the canonical
+            // pressed fill and the scheme's white foreground so the close mark remains legible.
+            active: paint(rgb8(109, 34, 42), WHITE),
         }],
         unclosable: None,
     },
@@ -2002,7 +2042,7 @@ const AQUA_WIDGETS_DARK: Widgets = Widgets {
 
 const ADWAITA_WIDGETS: Widgets = Widgets {
     base: Appearance::Light,
-    panel: rgb8(250, 250, 250),
+    panel: rgb8(250, 250, 251),
     // Cantarell in egui's generic mid-grey made ordinary GNOME content look insensitive. Adwaita's
     // own foreground tones instead; weak text (including placeholders) stays muted independently.
     text: ADWAITA_TEXT,
@@ -2015,9 +2055,9 @@ const ADWAITA_WIDGETS: Widgets = Widgets {
     // couple of levels from the surface and invisible. The hairline matters for the same reason —
     // egui draws text fields with the same visuals as buttons, and an unbordered white field on a
     // near-white panel cannot be found at all.
-    idle: ControlPaint::new(rgb8(225, 222, 219), Stroke::hairline(rgb8(205, 199, 194))),
-    hover: ControlPaint::new(rgb8(201, 197, 193), Stroke::hairline(rgb8(205, 199, 194))),
-    pressed: ControlPaint::new(rgb8(180, 176, 171), Stroke::hairline(rgb8(205, 199, 194))),
+    idle: ControlPaint::new(rgb8(235, 235, 236), Stroke::hairline(rgb8(211, 211, 213))),
+    hover: ControlPaint::new(rgb8(211, 211, 213), Stroke::hairline(rgb8(194, 194, 196))),
+    pressed: ControlPaint::new(rgb8(190, 190, 192), Stroke::hairline(rgb8(178, 178, 181))),
     metrics: WidgetMetrics {
         button_padding: (14.0, 7.0),
         control_height: 34.0,
@@ -2039,10 +2079,10 @@ const ADWAITA_WIDGETS: Widgets = Widgets {
 
 const ADWAITA_WIDGETS_DARK: Widgets = Widgets {
     base: Appearance::Dark,
-    panel: rgb8(36, 36, 36),
-    text: rgb8(246, 245, 244),
-    caret: Stroke::new(MODERN_CARET, rgb8(246, 245, 244)),
-    field: rgb8(30, 30, 30),
+    panel: rgb8(34, 34, 38),
+    text: WHITE,
+    caret: Stroke::new(MODERN_CARET, WHITE),
+    field: rgb8(29, 29, 32),
     selection: rgb8(38, 69, 107),
     selection_text: rgb8(214, 230, 250),
     idle: ControlPaint::new(rgb8(56, 56, 56), Stroke::hairline(rgb8(74, 74, 74))),
@@ -2069,7 +2109,7 @@ const BREEZE_WIDGETS: Widgets = Widgets {
     field: WHITE,
     selection: rgb8(183, 225, 247),
     selection_text: rgb8(0, 82, 120),
-    idle: ControlPaint::new(rgb8(247, 247, 247), Stroke::hairline(rgb8(189, 195, 199))),
+    idle: ControlPaint::new(rgb8(252, 252, 252), Stroke::hairline(rgb8(189, 195, 199))),
     hover: ControlPaint::new(rgb8(225, 228, 230), Stroke::hairline(rgb8(189, 195, 199))),
     pressed: ControlPaint::new(rgb8(207, 212, 215), Stroke::hairline(rgb8(189, 195, 199))),
     metrics: WidgetMetrics {
@@ -2092,13 +2132,13 @@ const BREEZE_WIDGETS: Widgets = Widgets {
 
 const BREEZE_WIDGETS_DARK: Widgets = Widgets {
     base: Appearance::Dark,
-    panel: rgb8(49, 54, 59),
-    text: rgb8(239, 240, 241),
-    caret: Stroke::new(MODERN_CARET, rgb8(239, 240, 241)),
-    field: rgb8(35, 38, 41),
+    panel: rgb8(32, 35, 38),
+    text: rgb8(252, 252, 252),
+    caret: Stroke::new(MODERN_CARET, rgb8(252, 252, 252)),
+    field: rgb8(20, 22, 24),
     selection: rgb8(38, 88, 112),
     selection_text: rgb8(224, 246, 255),
-    idle: ControlPaint::new(rgb8(59, 64, 69), Stroke::hairline(rgb8(97, 102, 107))),
+    idle: ControlPaint::new(rgb8(41, 44, 48), Stroke::hairline(rgb8(97, 102, 107))),
     hover: ControlPaint::new(rgb8(82, 90, 98), Stroke::hairline(rgb8(97, 102, 107))),
     pressed: ControlPaint::new(rgb8(98, 108, 116), Stroke::hairline(rgb8(97, 102, 107))),
     metrics: BREEZE_WIDGETS.metrics,
@@ -2528,10 +2568,7 @@ mod tests {
     #[test]
     fn adwaita_uses_its_own_foreground_in_both_appearances() {
         assert_eq!(Theme::Adwaita.widgets(Appearance::Light).text, ADWAITA_TEXT);
-        assert_eq!(
-            Theme::Adwaita.widgets(Appearance::Dark).text,
-            rgb8(246, 245, 244)
-        );
+        assert_eq!(Theme::Adwaita.widgets(Appearance::Dark).text, WHITE);
     }
 
     /// The two Mac themes put their close control on the left, which is the placement that made
@@ -2546,6 +2583,26 @@ mod tests {
             Theme::Platinum.chrome(Appearance::Light).buttons.side,
             Side::Left
         );
+    }
+
+    #[test]
+    fn platinum_uses_the_classic_square_close_box() {
+        let close = Theme::Platinum.chrome(Appearance::Light).buttons.buttons[0];
+        assert_eq!(close.shape, ButtonShape::Square);
+        assert_eq!(close.glyph, Glyph::Square);
+    }
+
+    #[test]
+    fn platform_header_measurements_stay_pinned() {
+        assert_eq!(Theme::Fluent.metrics().header_height, 32);
+        assert_eq!(Theme::Adwaita.metrics().header_height, 47);
+
+        let windows = Theme::Fluent.chrome(Appearance::Light).buttons.buttons[0];
+        assert!((windows.width_ratio * 32.0 - 46.0).abs() < f32::EPSILON);
+
+        let gnome = Theme::Adwaita.chrome(Appearance::Light).buttons.buttons[0];
+        assert!((gnome.width_ratio * 47.0 - 34.0).abs() < f32::EPSILON);
+        assert!((gnome.diameter_ratio * 47.0 - 24.0).abs() < f32::EPSILON);
     }
 
     /// A theme's title bar and its widgets must be set in the same family. A heavier companion

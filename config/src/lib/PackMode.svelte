@@ -250,14 +250,14 @@
 
 {#snippet permissionHint(permissions: Permission[])}
 	<!-- Deliberately quiet: muted, small, no warning colour. It states a fact and offers a route,
-       it doesn't sound an alarm. "Behaviour" jumps to that page (no router; just a tab swap). -->
+	     it doesn't sound an alarm. "Safety" jumps to that page (no router; just a tab swap). -->
 	<p class="text-muted m-0 text-[11px] leading-snug">
 		Requires the {permissionSentence(permissions)}
 		{permissions.length > 1 ? 'permissions' : 'permission'} ·
 		<button
 			type="button"
 			class="hover:text-text underline decoration-dotted underline-offset-2 transition-colors"
-			onclick={() => (store.activeTab = 'behaviour')}>Behaviour</button
+			onclick={() => (store.activeTab = 'safety')}>Safety</button
 		>
 	</p>
 {/snippet}
@@ -371,7 +371,8 @@
 						<Button
 							size="compact"
 							variant="secondary"
-							loading={store.isBusy('pack')}
+							disabled={store.isBusy('pack')}
+							loading={store.isWorking('pick-pack')}
 							onclick={() => store.pickPack()}>Change pack…</Button
 						>
 					</div>
@@ -387,7 +388,8 @@
 					<Button
 						size="compact"
 						variant="primary"
-						loading={store.isBusy('pack')}
+						disabled={store.isBusy('pack')}
+						loading={store.isWorking('pick-pack')}
 						onclick={() => store.pickPack()}>Choose pack…</Button
 					>
 				</Card>
@@ -404,7 +406,8 @@
 				<Button
 					size="compact"
 					variant="secondary"
-					loading={store.isBusy('mode')}
+					disabled={store.isBusy('mode')}
+					loading={store.isWorking('upload-mode')}
 					onclick={() => store.uploadMode()}
 				>
 					<span class="h-4 w-4"><Icon src={ArrowUpTray} mini /></span> Upload mode

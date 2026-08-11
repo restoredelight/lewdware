@@ -3778,7 +3778,6 @@ dependencies = [
  "windows 0.62.2",
  "winit",
  "x11-dl",
- "zbus",
  "zstd",
 ]
 
@@ -3865,6 +3864,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tray-icon",
+ "uuid",
  "windows 0.62.2",
 ]
 
@@ -4063,6 +4063,7 @@ name = "lw"
 version = "0.0.2"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "include_dir",
  "indexmap 2.14.0",
@@ -6661,6 +6662,7 @@ dependencies = [
  "which",
  "windows 0.62.2",
  "winreg 0.56.0",
+ "zbus",
  "zstd",
 ]
 

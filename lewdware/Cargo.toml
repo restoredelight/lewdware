@@ -50,9 +50,6 @@ objc2-metal = { version = "0.3.2", features = ["MTLDevice", "MTLTexture", "MTLRe
 objc2-io-surface = { version = "0.3.2", features = ["IOSurfaceRef", "objc2"], default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Reading the XDG settings portal for the desktop's light/dark preference. Already in
-# this binary via notify-rust, so this adds no compilation.
-zbus = "5"
 ash = "0.38"
 x11-dl = "2"
 

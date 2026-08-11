@@ -28,8 +28,18 @@ pub fn resolve(choice: AppearanceChoice, window: &Window) -> Appearance {
 /// The desktop's preference, or `None` where it cannot be determined — a bare compositor, a
 /// missing portal, X11.
 fn detect(window: &Window) -> Option<Appearance> {
-    // winit covers Windows and macOS. Its docs mark this unsupported on X11 and "theme overrides
-    // only" on Wayland, so on Linux it is usually `None` and the portal below answers instead.
+    // On Linux, use the same XDG portal Firefox and other desktop-aware applications use.
+    // `Window::theme()` is unsupported on X11 and only reports winit's explicit theme override on
+    // Wayland, so consulting it first can turn a light desktop dark merely because the window was
+    // created with dark application chrome.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = window;
+        return shared::theme::system_appearance();
+    }
+
+    // winit covers Windows and macOS.
+    #[cfg(not(target_os = "linux"))]
     if let Some(theme) = window.theme() {
         return Some(match theme {
             winit::window::Theme::Light => Appearance::Light,
@@ -37,66 +47,8 @@ fn detect(window: &Window) -> Option<Appearance> {
         });
     }
 
-    #[cfg(target_os = "linux")]
-    return linux::color_scheme();
-
     #[cfg(not(target_os = "linux"))]
     None
-}
-
-#[cfg(target_os = "linux")]
-mod linux {
-    use std::sync::OnceLock;
-
-    use super::Appearance;
-
-    /// Cached because it costs a D-Bus round trip and does not change within a session (live
-    /// switching is out of scope — see the module comment). `None` means "asked, and could not
-    /// tell", which is not worth re-asking on every popup.
-    static CACHED: OnceLock<Option<Appearance>> = OnceLock::new();
-
-    pub fn color_scheme() -> Option<Appearance> {
-        *CACHED.get_or_init(read_portal)
-    }
-
-    /// Read `org.freedesktop.appearance`'s `color-scheme` from the XDG settings portal.
-    ///
-    /// The portal is the cross-desktop standard for exactly this question — GNOME, Plasma 5.24+ and
-    /// others implement it — so one call replaces what would otherwise be a per-desktop pile of
-    /// fragile string-matching against theme names. (Contrast `shared::wallpaper`, which *does*
-    /// branch per desktop: *setting* a wallpaper has no comparable portal.)
-    fn read_portal() -> Option<Appearance> {
-        // zbus rather than shelling out to `gdbus`/`busctl`: it is already in this binary via
-        // `notify-rust`, it needs no external command to be installed, and this is a plain typed
-        // property read rather than something to parse out of nested-variant text.
-        let connection = zbus::blocking::Connection::session().ok()?;
-
-        let reply = connection
-            .call_method(
-                Some("org.freedesktop.portal.Desktop"),
-                "/org/freedesktop/portal/desktop",
-                Some("org.freedesktop.portal.Settings"),
-                "Read",
-                &("org.freedesktop.appearance", "color-scheme"),
-            )
-            .ok()?;
-
-        // Doubly wrapped: `Read` returns a variant, whose payload is itself a variant holding the
-        // `u32`. The body has to outlive the borrow taken to deserialise it.
-        let body = reply.body();
-        let outer: zbus::zvariant::Value<'_> = body.deserialize().ok()?;
-        let value = match outer {
-            zbus::zvariant::Value::Value(inner) => u32::try_from(*inner).ok()?,
-            other => u32::try_from(other).ok()?,
-        };
-
-        // 0 = no preference, 1 = prefer dark, 2 = prefer light.
-        match value {
-            1 => Some(Appearance::Dark),
-            2 => Some(Appearance::Light),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]

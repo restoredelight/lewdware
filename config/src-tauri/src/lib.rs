@@ -43,14 +43,14 @@ async fn check_for_update() -> Result<Option<String>, String> {
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 use shared::{
-    behaviour::{effective_options, Behaviour},
+    behaviour::{Behaviour, effective_options},
     db::migrate,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, ShowWhen, StoredValue},
-    read_pack::{read_pack_metadata, RecommendedMode},
+    read_pack::{RecommendedMode, read_pack_metadata},
     schedule::{QuietHours, ScheduleConfig, Window},
     user_config::{self, AppConfig, Capabilities, Key, Mode, Volume, WallpaperConfig},
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
@@ -285,6 +285,10 @@ impl From<ConfigDto> for AppConfig {
 pub struct ThemeCatalogueDto {
     pub themes: Vec<ThemeEntryDto>,
     pub appearances: Vec<shared::theme::AppearanceInfo>,
+    /// The XDG portal's current answer, used when the picker previews `auto`. `None` means the
+    /// desktop expressed no preference or could not be queried, matching the engine's light
+    /// fallback.
+    pub system_appearance: Option<shared::theme::Appearance>,
 }
 
 /// One selectable look, with everything needed to *draw* it in the picker.
@@ -781,7 +785,7 @@ fn save_config(state: State<'_>, config: ConfigDto) -> Result<(), String> {
 /// reason: one source of truth, with the agreement between the catalogue and the drawable set
 /// pinned by a test.
 #[tauri::command]
-fn get_theme_catalogue() -> ThemeCatalogueDto {
+fn get_theme_catalogue(window: tauri::WebviewWindow) -> ThemeCatalogueDto {
     use shared::theme::{Appearance, ThemeChoice, ThemeInfo};
 
     let resolve = |info: &ThemeInfo| {
@@ -824,9 +828,23 @@ fn get_theme_catalogue() -> ThemeCatalogueDto {
         })
         .collect();
 
+    #[cfg(target_os = "linux")]
+    let system_appearance = {
+        let _ = window;
+        shared::theme::system_appearance()
+    };
+
+    #[cfg(not(target_os = "linux"))]
+    let system_appearance = window.theme().ok().map(|theme| match theme {
+        tauri::Theme::Light => Appearance::Light,
+        tauri::Theme::Dark => Appearance::Dark,
+        _ => Appearance::Light,
+    });
+
     ThemeCatalogueDto {
         themes,
         appearances: shared::theme::APPEARANCES.to_vec(),
+        system_appearance,
     }
 }
 
@@ -958,6 +976,9 @@ async fn pick_pack(
     let Some(path) = path else {
         return Ok(None);
     };
+    app_handle
+        .emit("picker:pack-selected", ())
+        .map_err(|e| e.to_string())?;
 
     let loaded = tokio::task::spawn_blocking({
         let path = path.clone();
@@ -1088,6 +1109,9 @@ async fn pick_restore_image(app_handle: AppHandle) -> Result<Option<String>, Str
     let Some(picked) = picked else {
         return Ok(None);
     };
+    app_handle
+        .emit("picker:restore-image-selected", ())
+        .map_err(|e| e.to_string())?;
 
     let adopted = tokio::task::spawn_blocking(move || -> anyhow::Result<PathBuf> {
         let dir = dirs::data_local_dir()
@@ -1155,6 +1179,9 @@ async fn upload_mode(
     let Some(path) = path else {
         return Ok(None);
     };
+    app_handle
+        .emit("picker:mode-selected", ())
+        .map_err(|e| e.to_string())?;
 
     {
         let uploaded = state.uploaded.lock().unwrap();
@@ -1229,6 +1256,9 @@ async fn launch_lewdware() -> Result<(), String> {
         shared::ipc::Response::Ok
         | shared::ipc::Response::Busy { .. }
         | shared::ipc::Response::Status(_) => Ok(()),
+        shared::ipc::Response::DevLogReady | shared::ipc::Response::DevLog { .. } => {
+            Err("unexpected development log response while launching".to_string())
+        }
     }
 }
 
@@ -1449,8 +1479,8 @@ fn request_input_monitoring(#[allow(unused)] app_handle: AppHandle) -> Result<bo
     #[cfg(target_vendor = "apple")]
     {
         use std::sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         };
 
         let granted = Arc::new(AtomicBool::new(false));
@@ -1483,6 +1513,73 @@ fn open_input_monitoring_settings() {
 }
 
 // ─── Logs ─────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct SystemInfoDto {
+    lewdware_version: String,
+    os: String,
+    architecture: String,
+    log_directory: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DiagnosticsDto {
+    system: SystemInfoDto,
+    logs: Vec<shared::logging::LogRecord>,
+}
+
+fn os_description() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(contents) = std::fs::read_to_string("/etc/os-release") {
+            if let Some(value) = contents.lines().find_map(|line| {
+                line.strip_prefix("PRETTY_NAME=")
+                    .map(|value| value.trim_matches('"').to_string())
+            }) {
+                return value;
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+        {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !version.is_empty() {
+                return format!("macOS {version}");
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = std::process::Command::new("cmd")
+            .args(["/C", "ver"])
+            .output()
+        {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !version.is_empty() {
+                return version;
+            }
+        }
+    }
+    std::env::consts::OS.to_string()
+}
+
+#[tauri::command]
+fn get_diagnostics(limit: Option<usize>) -> DiagnosticsDto {
+    DiagnosticsDto {
+        system: SystemInfoDto {
+            lewdware_version: shared::VERSION.to_string(),
+            os: os_description(),
+            architecture: std::env::consts::ARCH.to_string(),
+            log_directory: shared::logging::log_dir()
+                .map(|path| path.to_string_lossy().into_owned()),
+        },
+        logs: shared::logging::recent_records(limit.unwrap_or(2_000).clamp(1, 5_000)),
+    }
+}
 
 fn open_log_dir() -> Result<(), String> {
     let dir = shared::logging::log_dir().ok_or("Could not determine log directory")?;
@@ -1584,6 +1681,7 @@ pub fn run() {
             set_schedule_enabled,
             reload_supervisor_schedule,
             open_logs,
+            get_diagnostics,
             check_for_update,
             input_monitoring_granted,
             request_input_monitoring,

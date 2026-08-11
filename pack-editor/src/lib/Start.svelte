@@ -11,6 +11,7 @@
 	let showUnsavedDialog = $state(false);
 	let pendingInfo = $state<PackInfo | null>(null);
 	let busy = $state<'new' | 'open' | 'import' | null>(null);
+	let working = $state<'new' | 'open' | 'import' | null>(null);
 	let error = $state<string | null>(null);
 	let recents = $state<RecentPack[]>([]);
 	let modifierLabel = $state('Ctrl');
@@ -61,6 +62,7 @@
 
 	async function newPack() {
 		busy = 'new';
+		working = 'new';
 		error = null;
 		try {
 			const info = await api.newPack();
@@ -68,6 +70,7 @@
 		} catch (err) {
 			error = `Could not create the pack. ${String(err)}`;
 		} finally {
+			working = null;
 			busy = null;
 		}
 	}
@@ -76,7 +79,7 @@
 		busy = 'open';
 		error = null;
 		try {
-			const info = await api.openPackDialog();
+			const info = await api.openPackDialog(() => (working = 'open'));
 			if (!info) return;
 			if (info.has_unsaved_changes) {
 				pendingInfo = info;
@@ -87,12 +90,14 @@
 		} catch (err) {
 			error = `Could not open the pack. ${String(err)}`;
 		} finally {
+			working = null;
 			busy = null;
 		}
 	}
 
 	async function openRecent(recent: RecentPack) {
 		busy = 'open';
+		working = 'open';
 		error = null;
 		try {
 			const info = await api.openRecentPack(recent);
@@ -103,6 +108,7 @@
 		} catch (err) {
 			error = `Could not open ${recent.name}. ${String(err)}`;
 		} finally {
+			working = null;
 			busy = null;
 		}
 	}
@@ -144,7 +150,7 @@
 		busy = 'import';
 		error = null;
 		try {
-			const result = await api.importEdgewarePackDialog();
+			const result = await api.importEdgewarePackDialog(() => (working = 'import'));
 			if (!result) return;
 			store.openPack(result.info.name, [], [], [], false, false);
 			history.reset(false);
@@ -156,6 +162,7 @@
 		} catch (err) {
 			error = `Import failed. ${String(err)}`;
 		} finally {
+			working = null;
 			busy = null;
 		}
 	}
@@ -188,7 +195,7 @@
 				<Button
 					variant="primary"
 					onclick={newPack}
-					loading={busy === 'new'}
+					loading={working === 'new'}
 					disabled={busy !== null}
 					title={`New pack (${modifierLabel}+N)`}>New pack</Button
 				>
@@ -202,7 +209,7 @@
 				</div>
 				<Button
 					onclick={openPack}
-					loading={busy === 'open'}
+					loading={working === 'open'}
 					disabled={busy !== null}
 					title={`Open pack (${modifierLabel}+O)`}>Open pack…</Button
 				>
@@ -256,7 +263,7 @@
 			<Button
 				size="compact"
 				onclick={importEdgeware}
-				loading={busy === 'import'}
+				loading={working === 'import'}
 				disabled={busy !== null}>Import Edgeware pack…</Button
 			>
 		</div>

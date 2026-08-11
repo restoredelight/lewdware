@@ -72,10 +72,12 @@ export interface ChromeButton {
 	/** `Inert` never responds to the pointer — Aqua's grey minimise and zoom dots, which are
 	 * drawn for authenticity and deliberately do nothing. */
 	action: 'Close' | 'Inert';
-	shape: 'Rect' | 'Circle';
-	glyph: 'Cross' | 'None';
+	shape: 'Rect' | 'Square' | 'Circle';
+	glyph: 'Cross' | 'Square' | 'None';
 	/** Width as a multiple of the header height. */
 	width_ratio: number;
+	/** Painted diameter for a circular control. This can be smaller than its layout/hit slot. */
+	diameter_ratio: number;
 	/** How far the mark reaches from the button's centre, as a fraction of the button's extent —
 	 * so it spans twice this. Per theme, because the platforms genuinely differ: macOS spans half
 	 * its traffic light, GNOME two fifths of a larger circle, Windows a third of its slab. */
@@ -183,6 +185,7 @@ export interface ThemeEntry {
 export interface ThemeCatalogueDto {
 	themes: ThemeEntry[];
 	appearances: AppearanceInfo[];
+	system_appearance: 'light' | 'dark' | null;
 }
 
 /** `days[0]` = Monday .. `days[6]` = Sunday. */
@@ -283,6 +286,33 @@ export interface MonitorDto {
 	height: number;
 	primary: boolean;
 	disabled: boolean;
+}
+
+export type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'trace';
+
+export interface LogRecordDto {
+	schema: number;
+	timestamp: string;
+	level: LogLevel;
+	component: string;
+	target: string;
+	message: string;
+	file: string | null;
+	line: number | null;
+	session_id: string | null;
+	fields: Record<string, unknown>;
+}
+
+export interface SystemInfoDto {
+	lewdware_version: string;
+	os: string;
+	architecture: string;
+	log_directory: string | null;
+}
+
+export interface DiagnosticsDto {
+	system: SystemInfoDto;
+	logs: LogRecordDto[];
 }
 
 export interface ModeEntryDto {

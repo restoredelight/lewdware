@@ -10,6 +10,11 @@
 	const running = $derived(store.engineStatus.running);
 	const hasPack = $derived(!!store.config?.pack_path);
 	const panicKey = $derived(store.config ? formatKey(store.config.panic_button, '+') : null);
+	const packName = $derived(store.config?.pack_path?.split(/[\\/]/).filter(Boolean).at(-1) ?? null);
+	const modeName = $derived(
+		store.modeGroups.flatMap((group) => group.entries).find((mode) => store.isModeSelected(mode.id))
+			?.name ?? null
+	);
 
 	// Engine-level failures -- a crash after a successful launch, the supervisor giving up on
 	// restarts -- arrive on the pushed status rather than from the launch call, so they are routed
@@ -70,17 +75,54 @@
 		<span>{running ? 'running' : 'stopped'}</span>
 	</div>
 
-	<!-- The panic key is the one thing worth reading at the moment you launch, so it is a readout
-	     here rather than only a setting three clicks away. -->
+	<!-- This is a launch summary, not a second set of settings. The values link back to their
+	     canonical pages, while Launch/Stop remains the panel's only action. -->
 	{#if !hasPack}
-		<p class="text-muted m-0 truncate font-mono text-[11px]">select a pack first</p>
-	{:else if panicKey}
-		<p
-			class="text-muted m-0 truncate font-mono text-[11px]"
-			title={`Panic key: ${formatKey(store.config!.panic_button)}`}
+		<button
+			type="button"
+			class="text-muted hover:text-text -mx-1 cursor-pointer rounded-sm px-1 py-0.5 text-left font-mono text-[11px] transition-colors"
+			onclick={() => (store.activeTab = 'pack_mode')}
 		>
-			panic {panicKey}
-		</p>
+			select a pack first
+		</button>
+	{:else}
+		<button
+			type="button"
+			class="group -mx-1 flex w-full min-w-0 cursor-pointer flex-col gap-1.5 rounded-sm px-1 py-0.5 text-left"
+			aria-label={`Change pack or mode. Pack: ${packName}; mode: ${modeName ?? 'unknown'}`}
+			onclick={() => (store.activeTab = 'pack_mode')}
+		>
+			<span class="flex min-w-0 flex-col gap-0.5">
+				<span class="text-muted text-[10px]">Pack</span>
+				<span
+					class="text-text block w-full truncate font-mono text-[11px]"
+					title={store.config!.pack_path}
+				>
+					{packName}
+				</span>
+			</span>
+			<span class="flex min-w-0 flex-col gap-0.5">
+				<span class="text-muted text-[10px]">Mode</span>
+				<span
+					class="text-text block w-full truncate font-mono text-[11px]"
+					title={modeName ?? 'Unknown'}
+				>
+					{modeName ?? 'unknown'}
+				</span>
+			</span>
+		</button>
+	{/if}
+
+	{#if panicKey}
+		<button
+			type="button"
+			class="group -mx-1 flex min-w-0 cursor-pointer flex-col gap-0.5 rounded-sm px-1 py-0.5 text-left"
+			title={`Change panic key, currently ${formatKey(store.config!.panic_button)}`}
+			onclick={() => (store.activeTab = 'safety')}
+		>
+			<span class="text-muted text-[10px]">Panic key</span>
+			<span class="text-text truncate font-mono text-[11px]">{panicKey}</span>
+		</button>
 	{/if}
 
 	{#if running}

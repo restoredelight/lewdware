@@ -30,25 +30,56 @@
 		class: className = '',
 		onclick
 	}: Props = $props();
+
+	const LOADING_DELAY_MS = 250;
+	const MIN_LOADING_VISIBLE_MS = 300;
+
+	let showSpinner = $state(false);
+	let spinnerShownAt = 0;
+
+	$effect(() => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+
+		if (loading) {
+			if (!showSpinner) {
+				timer = setTimeout(() => {
+					spinnerShownAt = Date.now();
+					showSpinner = true;
+				}, LOADING_DELAY_MS);
+			}
+		} else if (showSpinner) {
+			const remaining = Math.max(0, MIN_LOADING_VISIBLE_MS - (Date.now() - spinnerShownAt));
+			timer = setTimeout(() => {
+				showSpinner = false;
+			}, remaining);
+		}
+
+		return () => {
+			if (timer) clearTimeout(timer);
+		};
+	});
+
+	let visuallyBusy = $derived(loading || showSpinner);
 </script>
 
 <button
 	{type}
-	disabled={disabled || loading}
+	disabled={disabled || visuallyBusy}
 	{title}
 	aria-label={ariaLabel}
 	aria-haspopup={ariaHaspopup}
 	aria-expanded={ariaExpanded}
-	aria-busy={loading || undefined}
-	class={`${variant} ${size} ${className}`}
+	aria-busy={visuallyBusy || undefined}
+	class={`${variant} ${size} ${visuallyBusy ? 'loading' : ''} ${className}`}
 	{onclick}
 >
-	{#if loading}<span class="spinner" aria-hidden="true"></span>{/if}
-	{@render children()}
+	{#if showSpinner}<span class="spinner" aria-hidden="true"></span>{/if}
+	<span class:content-hidden={showSpinner} class="content">{@render children()}</span>
 </button>
 
 <style>
 	button {
+		position: relative;
 		display: inline-flex;
 		flex: none;
 		align-items: center;
@@ -73,9 +104,21 @@
 		outline: 2px solid var(--ui-focus);
 		outline-offset: 2px;
 	}
-	button:disabled {
+	button:disabled:not(.loading) {
 		cursor: not-allowed;
 		opacity: 0.45;
+	}
+	button.loading {
+		cursor: default;
+	}
+	.content {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+	}
+	.content-hidden {
+		visibility: hidden;
 	}
 	.compact {
 		height: var(--ui-control-compact);
@@ -119,16 +162,24 @@
 		background: var(--ui-danger-bg);
 	}
 	.spinner {
+		position: absolute;
+		inset: 50% auto auto 50%;
 		width: 12px;
 		height: 12px;
 		border: 2px solid currentColor;
 		border-right-color: transparent;
 		border-radius: 50%;
 		animation: spin 0.7s linear infinite;
+		transform: translate(-50%, -50%);
 	}
 	@keyframes spin {
 		to {
-			transform: rotate(360deg);
+			transform: translate(-50%, -50%) rotate(360deg);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.spinner {
+			animation: none;
 		}
 	}
 </style>

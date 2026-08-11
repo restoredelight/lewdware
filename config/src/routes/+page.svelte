@@ -1,19 +1,18 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { listen } from '@tauri-apps/api/event';
-	import { DocumentText, Icon } from 'svelte-hero-icons';
 	import type { SupervisorStatusDto } from '$lib/types';
 	import { store } from '$lib/store.svelte';
-	import { api } from '$lib/api';
-	import Behaviour from '$lib/Behaviour.svelte';
+	import Safety from '$lib/Safety.svelte';
+	import SoundDisplays from '$lib/SoundDisplays.svelte';
+	import WindowStyle from '$lib/WindowStyle.svelte';
+	import Diagnostics from '$lib/Diagnostics.svelte';
 	import PackMode from '$lib/PackMode.svelte';
 	import Scheduling from '$lib/Scheduling.svelte';
 	import SessionControl from '$lib/SessionControl.svelte';
 	import Tabs from '$ui/Tabs.svelte';
 	import Button from '$ui/Button.svelte';
-	import IconButton from '$ui/IconButton.svelte';
 	import TaskStatus from '$lib/TaskStatus.svelte';
-	import { taskFeedback } from '$lib/taskFeedback.svelte';
 
 	onMount(() => {
 		void store.load();
@@ -26,42 +25,40 @@
 		};
 	});
 
-	const tabs = [
+	const settingsTabs = [
 		{ id: 'pack_mode' as const, label: 'Pack & mode' },
-		{ id: 'behaviour' as const, label: 'Behaviour' },
+		{ id: 'safety' as const, label: 'Safety' },
+		{ id: 'sound_displays' as const, label: 'Sound & displays' },
+		{ id: 'window_style' as const, label: 'Window style' },
 		{ id: 'scheduling' as const, label: 'Scheduling' }
 	];
-
-	async function openLogs() {
-		taskFeedback.progress('logs', 'Opening logs folder…');
-		try {
-			await api.openLogs();
-			taskFeedback.success('logs', 'Logs folder opened');
-		} catch (err) {
-			taskFeedback.error('logs', `Couldn’t open logs folder: ${String(err)}`);
-		}
-	}
+	const utilityTabs = [{ id: 'diagnostics' as const, label: 'Diagnostics' }];
 </script>
 
 <div class="bg-bg flex h-full min-h-0 font-sans">
 	<!-- Sidebar -->
 	<aside class="bg-surface border-border flex w-48 shrink-0 flex-col border-r">
-		<div class="border-border flex h-16 items-center gap-1 border-b px-4">
+		<div class="border-border flex h-16 items-center border-b px-4">
 			<div class="min-w-0 flex-1">
 				<span class="text-text block text-sm font-semibold">Lewdware</span>
 				<span class="text-muted block text-xs">Settings</span>
 			</div>
-			<IconButton label="Open logs folder" onclick={openLogs}>
-				<span class="block h-4 w-4"><Icon src={DocumentText} /></span>
-			</IconButton>
 		</div>
-		<nav class="p-3" aria-label="Settings sections">
+		<nav class="flex flex-col p-3" aria-label="Settings sections">
 			<Tabs
-				{tabs}
+				tabs={settingsTabs}
 				active={store.activeTab}
 				orientation="vertical"
 				onselect={(id) => (store.activeTab = id as typeof store.activeTab)}
 			/>
+			<div class="border-border mt-3 border-t pt-3">
+				<Tabs
+					tabs={utilityTabs}
+					active={store.activeTab}
+					orientation="vertical"
+					onselect={(id) => (store.activeTab = id as typeof store.activeTab)}
+				/>
+			</div>
 		</nav>
 		{#if store.ready}
 			<SessionControl />
@@ -84,10 +81,16 @@
 			</div>
 		{:else if store.activeTab === 'pack_mode'}
 			<PackMode />
-		{:else if store.activeTab === 'behaviour'}
-			<Behaviour />
+		{:else if store.activeTab === 'safety'}
+			<Safety />
+		{:else if store.activeTab === 'sound_displays'}
+			<SoundDisplays />
+		{:else if store.activeTab === 'window_style'}
+			<WindowStyle />
 		{:else if store.activeTab === 'scheduling'}
 			<Scheduling />
+		{:else if store.activeTab === 'diagnostics'}
+			<Diagnostics />
 		{/if}
 	</main>
 	<TaskStatus />

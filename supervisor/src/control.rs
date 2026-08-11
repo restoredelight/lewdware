@@ -8,6 +8,7 @@ use shared::ipc::{
 };
 use shared::schedule::{Boundary, BoundaryKind};
 use tokio::sync::{mpsc, oneshot, watch};
+use uuid::Uuid;
 
 use crate::session::{self, SessionCommand, SessionExit};
 use crate::{backoff, engine, schedule, wallpaper};
@@ -98,7 +99,8 @@ struct Episode {
     warning: Option<String>,
     last_runtime_error: Option<String>,
     last_exit: Option<ExitInfo>,
-    pending_restart: Option<(PathBuf, bool)>,
+    pending_restart: Option<(PathBuf, bool, Option<Uuid>)>,
+    dev_stream_id: Option<Uuid>,
     intent: Intent,
 }
 
@@ -136,6 +138,7 @@ pub struct Control {
     /// Push side of `Request::Subscribe`: every handled message re-publishes the current
     /// `StatusInfo` here (deduplicated), and the IPC server streams it to subscribers.
     status_tx: watch::Sender<StatusInfo>,
+    dev_log_tx: tokio::sync::broadcast::Sender<(Uuid, shared::logging::LogRecord)>,
 }
 
 impl Control {
@@ -143,6 +146,7 @@ impl Control {
         control_tx: mpsc::Sender<ControlMessage>,
         initial_schedule: shared::schedule::ScheduleConfig,
         status_tx: watch::Sender<StatusInfo>,
+        dev_log_tx: tokio::sync::broadcast::Sender<(Uuid, shared::logging::LogRecord)>,
     ) -> Self {
         Self {
             episode: None,
@@ -151,6 +155,7 @@ impl Control {
             schedule: schedule::ScheduleEngine::new(initial_schedule),
             schedule_generation: 0,
             status_tx,
+            dev_log_tx,
         }
     }
 
@@ -238,23 +243,30 @@ impl Control {
             Request::Subscribe => Response::Error {
                 message: "Subscribe is a streaming request".to_string(),
             },
+            Request::SubscribeDevLogs { .. } => Response::Error {
+                message: "SubscribeDevLogs is a streaming request".to_string(),
+            },
             Request::StartSession { mode_path, dev } => {
                 if let Some(episode) = self.episode.as_ref().filter(|e| e.is_active()) {
                     return Response::Busy {
                         current: episode.summary(),
                     };
                 }
-                self.spawn_episode(SessionKind::Manual, mode_path, dev, 0)
+                self.spawn_episode(SessionKind::Manual, mode_path, dev, None, 0)
                     .await
             }
-            Request::RestartSession { mode_path, dev } => {
+            Request::RestartSession {
+                mode_path,
+                dev,
+                dev_stream_id,
+            } => {
                 if let Some(episode) = self.episode.as_mut().filter(|e| e.is_active()) {
                     episode.intent = Intent::Stopping;
-                    episode.pending_restart = Some((mode_path, dev));
+                    episode.pending_restart = Some((mode_path, dev, dev_stream_id));
                     let _ = episode.to_session.send(SessionCommand::Terminate).await;
                     Response::Ok
                 } else {
-                    self.spawn_episode(SessionKind::Dev, Some(mode_path), dev, 0)
+                    self.spawn_episode(SessionKind::Dev, Some(mode_path), dev, dev_stream_id, 0)
                         .await
                 }
             }
@@ -294,12 +306,13 @@ impl Control {
         kind: SessionKind,
         mode_path: Option<PathBuf>,
         dev: bool,
+        dev_stream_id: Option<Uuid>,
         attempts: u32,
     ) -> Response {
         let seq = self.next_seq;
         self.next_seq += 1;
 
-        let cmd = match engine::build_command(seq, mode_path.as_deref(), dev) {
+        let cmd = match engine::build_command(seq, mode_path.as_deref(), dev, dev_stream_id) {
             Ok(cmd) => cmd,
             Err(err) => {
                 return Response::Error {
@@ -326,6 +339,7 @@ impl Control {
                     last_runtime_error: None,
                     last_exit: None,
                     pending_restart: None,
+                    dev_stream_id,
                     intent: Intent::None,
                 });
                 Response::Ok
@@ -354,6 +368,11 @@ impl Control {
                     classification: ExitClassification::Crashed,
                     error: Some(message),
                 });
+            }
+            EngineToSupervisor::Log { record } => {
+                if let Some(stream_id) = episode.dev_stream_id {
+                    let _ = self.dev_log_tx.send((stream_id, record));
+                }
             }
         }
     }
@@ -385,8 +404,8 @@ impl Control {
             error,
         });
 
-        if let Some((mode_path, dev)) = episode.pending_restart.take() {
-            self.spawn_episode(episode.kind, Some(mode_path), dev, 0)
+        if let Some((mode_path, dev, dev_stream_id)) = episode.pending_restart.take() {
+            self.spawn_episode(episode.kind, Some(mode_path), dev, dev_stream_id, 0)
                 .await;
             return;
         }
@@ -443,8 +462,10 @@ impl Control {
         let mode_path = episode.mode_path.clone();
         let dev = episode.dev;
         let attempts = episode.attempts;
+        let dev_stream_id = episode.dev_stream_id;
 
-        self.spawn_episode(kind, mode_path, dev, attempts).await;
+        self.spawn_episode(kind, mode_path, dev, dev_stream_id, attempts)
+            .await;
     }
 
     fn on_idle_timeout(&mut self, seq: Option<u64>) {
@@ -487,7 +508,7 @@ impl Control {
             if !already_active {
                 // Same idempotency check `Request::StartSession` already uses: any already-alive
                 // session (manual, scheduled, or dev) satisfies the window and this is a no-op.
-                self.spawn_episode(SessionKind::Scheduled, None, false, 0)
+                self.spawn_episode(SessionKind::Scheduled, None, false, None, 0)
                     .await;
             }
         } else if let Some(episode) = self

@@ -1,7 +1,10 @@
 use anyhow::Result;
 use shared::ipc::{self, Request, Response, StatusInfo, Stream, prelude::*};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use uuid::Uuid;
+
+type DevLog = (Uuid, shared::logging::LogRecord);
 
 use crate::control::ControlMessage;
 
@@ -10,6 +13,7 @@ use crate::control::ControlMessage;
 pub async fn run(
     control_tx: mpsc::Sender<ControlMessage>,
     status_rx: watch::Receiver<StatusInfo>,
+    dev_log_rx: broadcast::Receiver<DevLog>,
 ) -> Result<()> {
     let name = ipc::control_socket_name()?;
     let listener = ipc::bind_listener(name)?;
@@ -25,8 +29,9 @@ pub async fn run(
 
         let control_tx = control_tx.clone();
         let status_rx = status_rx.clone();
+        let dev_log_rx = dev_log_rx.resubscribe();
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(conn, control_tx, status_rx).await {
+            if let Err(err) = handle_connection(conn, control_tx, status_rx, dev_log_rx).await {
                 tracing::warn!("ipc connection error: {err}");
             }
         });
@@ -37,6 +42,7 @@ async fn handle_connection(
     conn: Stream,
     control_tx: mpsc::Sender<ControlMessage>,
     status_rx: watch::Receiver<StatusInfo>,
+    dev_log_rx: broadcast::Receiver<DevLog>,
 ) -> Result<()> {
     let mut reader = BufReader::new(&conn);
     let mut line = String::new();
@@ -46,8 +52,12 @@ async fn handle_connection(
 
     let req: Request = serde_json::from_str(line.trim_end())?;
 
-    if matches!(req, Request::Subscribe) {
-        return stream_status(conn, status_rx).await;
+    match &req {
+        Request::Subscribe => return stream_status(conn, status_rx).await,
+        Request::SubscribeDevLogs { stream_id } => {
+            return stream_dev_logs(conn, dev_log_rx, *stream_id).await;
+        }
+        _ => {}
     }
 
     let (respond_to, response) = oneshot::channel();
@@ -59,6 +69,28 @@ async fn handle_connection(
     write_response(&conn, &response).await?;
 
     Ok(())
+}
+
+async fn stream_dev_logs(
+    conn: Stream,
+    mut dev_log_rx: broadcast::Receiver<DevLog>,
+    stream_id: Uuid,
+) -> Result<()> {
+    write_response(&conn, &Response::DevLogReady).await?;
+    loop {
+        match dev_log_rx.recv().await {
+            Ok((record_stream_id, record)) if record_stream_id == stream_id => {
+                if write_response(&conn, &Response::DevLog { record })
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            }
+            Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+            Err(broadcast::error::RecvError::Closed) => return Ok(()),
+        }
+    }
 }
 
 /// Writes the current status immediately, then again on every change, until the subscriber

@@ -342,6 +342,8 @@ async fn open_pack_dialog(
 
     let Some(path) = file else { return Ok(None) };
     let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
+    app.emit("picker:pack-selected", ())
+        .map_err(|e| e.to_string())?;
 
     let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
     let pack = MediaPack::open(path.clone(), &data_dir)
@@ -443,6 +445,8 @@ async fn import_edgeware_pack_dialog(
         return Ok(None);
     };
     let source_path: PathBuf = picked.into_path().map_err(|e| e.to_string())?;
+    app.emit("picker:edgeware-selected", ())
+        .map_err(|e| e.to_string())?;
 
     // Converting is I/O-only (JSON + directory listings, never media bytes) and runs
     // synchronously here -- before any pack is created or a destination is even picked -- so an
@@ -538,6 +542,8 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
         .map_err(|e| e.to_string())?;
         let Some(file) = file else { return Ok(None) };
         let path: PathBuf = file.into_path().map_err(|e| e.to_string())?;
+        app.emit("picker:save-destination-selected", ())
+            .map_err(|e| e.to_string())?;
         let _uploads = state.upload_lock.write().await;
         let pack = state
             .pack
@@ -636,6 +642,8 @@ async fn save_pack_as_dialog(
 
     let Some(path) = file else { return Ok(None) };
     let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
+    app.emit("picker:save-as-destination-selected", ())
+        .map_err(|e| e.to_string())?;
 
     let _uploads = state.upload_lock.write().await;
     let pack = state.pack.lock().await.as_ref().cloned();
@@ -830,8 +838,9 @@ async fn add_mode_dialog(
     app: AppHandle,
 ) -> Result<Option<EmbeddedMode>, String> {
     use tauri_plugin_dialog::DialogExt;
+    let app_c = app.clone();
     let picked = tokio::task::spawn_blocking(move || {
-        app.dialog()
+        app_c.dialog()
             .file()
             .set_title("Add custom mode")
             .add_filter("Lewdware Mode", &["lwmode"])
@@ -843,6 +852,8 @@ async fn add_mode_dialog(
         return Ok(None);
     };
     let path: PathBuf = picked.into_path().map_err(|error| error.to_string())?;
+    app.emit("picker:mode-selected", ())
+        .map_err(|error| error.to_string())?;
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|error| error.to_string())?;

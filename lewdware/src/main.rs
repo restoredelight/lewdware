@@ -31,22 +31,12 @@ fn main() -> Result<()> {
         return monitor::list_monitors();
     }
 
-    let _log_guard = shared::logging::init("lewdware");
-
-    // TODO: Move this to supervisor
-    //
-    // Now that we know we're the only instance running, it's safe to clear out any temp files
-    // left behind by a previous session (see `utils::prepare_temp_dir`).
-    if let Err(err) = utils::prepare_temp_dir() {
-        tracing::warn!("Failed to prepare temp dir: {err}");
-    }
-
-    utils::raise_fd_limit();
     let mut args = args_os();
 
     let mut mode_path = None;
     let mut dev_mode = false;
     let mut control_token = None;
+    let mut dev_stream_id = None;
     while let Some(arg) = args.next() {
         if &arg == "--mode-path" {
             mode_path = Some(PathBuf::from(args.next().context("No mode path provided")?));
@@ -64,9 +54,34 @@ fn main() -> Result<()> {
                     .into_owned(),
             );
         }
+
+        if &arg == "--dev-stream-id" {
+            dev_stream_id = Some(
+                args.next()
+                    .context("No development stream ID provided")?
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
     }
 
-    let stop_rx = supervisor_link::connect(control_token);
+    let stop_rx = supervisor_link::connect(control_token.clone());
+    if dev_mode && dev_stream_id.is_some() {
+        shared::logging::set_record_sink(|record| {
+            supervisor_link::report(shared::ipc::EngineToSupervisor::Log { record });
+        });
+    }
+    let _log_guard = shared::logging::init_with_session("lewdware", control_token);
+
+    // TODO: Move this to supervisor
+    //
+    // Now that we know we're the only instance running, it's safe to clear out any temp files
+    // left behind by a previous session (see `utils::prepare_temp_dir`).
+    if let Err(err) = utils::prepare_temp_dir() {
+        tracing::warn!("Failed to prepare temp dir: {err}");
+    }
+
+    utils::raise_fd_limit();
 
     let mut config = load_config().inspect_err(|err| report_fatal_startup_error(err))?;
 

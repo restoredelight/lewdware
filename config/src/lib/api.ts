@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type {
 	ConfigDto,
+	DiagnosticsDto,
 	EngineStatusDto,
 	Key,
 	ModeGroupDto,
@@ -14,6 +16,19 @@ import type {
 	UploadModeResult,
 	WallpaperSupportDto
 } from './types';
+
+async function invokeAfterSelection<T>(
+	command: string,
+	event: string,
+	onSelected?: () => void
+): Promise<T> {
+	const unlisten = await listen(event, () => onSelected?.());
+	try {
+		return await invoke<T>(command);
+	} finally {
+		unlisten();
+	}
+}
 
 export const api = {
 	getConfig: () => invoke<ConfigDto>('get_config'),
@@ -33,11 +48,17 @@ export const api = {
 	setModeOption: (key: string, value: StoredValue) =>
 		invoke<void>('set_mode_option', { key, value }),
 
-	pickPack: () => invoke<PickPackResult | null>('pick_pack'),
+	pickPack: (onSelected?: () => void) =>
+		invokeAfterSelection<PickPackResult | null>('pick_pack', 'picker:pack-selected', onSelected),
 
 	removePack: () => invoke<void>('remove_pack'),
 
-	uploadMode: () => invoke<UploadModeResult | null>('upload_mode'),
+	uploadMode: (onSelected?: () => void) =>
+		invokeAfterSelection<UploadModeResult | null>(
+			'upload_mode',
+			'picker:mode-selected',
+			onSelected
+		),
 
 	removeUploadedMode: (path: string) => invoke<ModeGroupDto[]>('remove_uploaded_mode', { path }),
 
@@ -55,6 +76,8 @@ export const api = {
 
 	openLogs: () => invoke<void>('open_logs'),
 
+	getDiagnostics: (limit = 2000) => invoke<DiagnosticsDto>('get_diagnostics', { limit }),
+
 	inputMonitoringGranted: () => invoke<boolean>('input_monitoring_granted'),
 
 	requestInputMonitoring: () => invoke<boolean>('request_input_monitoring'),
@@ -66,7 +89,12 @@ export const api = {
 	wallpaperRestorePreview: (path: string) =>
 		invoke<string | null>('wallpaper_restore_preview', { path }),
 
-	pickRestoreImage: () => invoke<string | null>('pick_restore_image'),
+	pickRestoreImage: (onSelected?: () => void) =>
+		invokeAfterSelection<string | null>(
+			'pick_restore_image',
+			'picker:restore-image-selected',
+			onSelected
+		),
 
 	defaultRestoreImage: () => invoke<string>('default_restore_image')
 };

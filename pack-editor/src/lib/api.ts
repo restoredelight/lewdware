@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type {
 	ArtistSummary,
 	Behaviour,
@@ -13,17 +14,46 @@ import type {
 	TagSummary
 } from './types.js';
 
+async function invokeAfterSelection<T>(
+	command: string,
+	event: string,
+	onSelected?: () => void
+): Promise<T> {
+	const unlisten = await listen(event, () => onSelected?.());
+	try {
+		return await invoke<T>(command);
+	} finally {
+		unlisten();
+	}
+}
+
 export const api = {
 	newPack: () => invoke<PackInfo>('new_pack'),
-	openPackDialog: () => invoke<PackInfo | null>('open_pack_dialog'),
+	openPackDialog: (onSelected?: () => void) =>
+		invokeAfterSelection<PackInfo | null>('open_pack_dialog', 'picker:pack-selected', onSelected),
 	openRecentPack: (recent: RecentPack) =>
 		invoke<PackInfo>('open_recent_pack', { path: recent.path, draftId: recent.draft_id }),
 	getRecentPacks: () => invoke<RecentPack[]>('get_recent_packs'),
 	removeRecentPack: (recent: RecentPack) =>
 		invoke<void>('remove_recent_pack', { path: recent.path, draftId: recent.draft_id }),
-	importEdgewarePackDialog: () => invoke<ImportResult | null>('import_edgeware_pack_dialog'),
-	savePack: () => invoke<PackInfo | null>('save_pack'),
-	savePackAsDialog: () => invoke<PackInfo | null>('save_pack_as_dialog'),
+	importEdgewarePackDialog: (onSelected?: () => void) =>
+		invokeAfterSelection<ImportResult | null>(
+			'import_edgeware_pack_dialog',
+			'picker:edgeware-selected',
+			onSelected
+		),
+	savePack: (onSelected?: () => void) =>
+		invokeAfterSelection<PackInfo | null>(
+			'save_pack',
+			'picker:save-destination-selected',
+			onSelected
+		),
+	savePackAsDialog: (onSelected?: () => void) =>
+		invokeAfterSelection<PackInfo | null>(
+			'save_pack_as_dialog',
+			'picker:save-as-destination-selected',
+			onSelected
+		),
 	discardChanges: () => invoke<MetadataDto>('discard_changes'),
 	discardPack: () => invoke<void>('discard_pack'),
 	closePack: () => invoke<void>('close_pack'),
@@ -39,7 +69,12 @@ export const api = {
 	setFileSourceUrl: (id: number, url: string | null) =>
 		invoke<void>('set_file_source_url', { id, url }),
 	getModes: () => invoke<EmbeddedMode[]>('get_modes'),
-	addModeDialog: () => invoke<EmbeddedMode | null>('add_mode_dialog'),
+	addModeDialog: (onSelected?: () => void) =>
+		invokeAfterSelection<EmbeddedMode | null>(
+			'add_mode_dialog',
+			'picker:mode-selected',
+			onSelected
+		),
 	removeMode: (id: number) => invoke<void>('remove_mode', { id }),
 
 	getAllTags: () => invoke<string[]>('get_all_tags'),

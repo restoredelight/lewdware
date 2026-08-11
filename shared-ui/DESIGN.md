@@ -199,6 +199,12 @@ border-color`. Respect `prefers-reduced-motion`.
   copy). The copy toast renders neutral grey.
 - **Don't flash.** Progress badges appear only after ~250ms (CSS `status-appear`
   delay) so fast operations never blink.
+- **Buttons wait too.** `Button` locks and becomes `aria-busy` immediately, but its spinner appears
+  only after 250ms and stays visible for at least 300ms. Keep the action label stable; the shared
+  component replaces it in-place so the control never changes size.
+- **Choosing is not loading.** Do not show a spinner while a native file picker is open. Disable
+  related actions while necessary, then begin delayed loading feedback only after a file or
+  destination has been selected and the app starts reading, converting, copying, or saving it.
 - **"Live/go" is the only place red pulses.** A "running" dot is carmine; routine
   states (Allowed/Enabled) are plain text vs. muted, not colored.
 - **Routine states are not warnings.** The pack editor's save/recovery indicator is a

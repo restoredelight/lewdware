@@ -86,11 +86,15 @@ async fn run_services(
             next_session: None,
         },
     });
+    // Development records are ephemeral and session-scoped. A bounded broadcast channel keeps a
+    // slow or disconnected `lw mode dev` client from back-pressuring the engine.
+    let (dev_log_tx, _) = tokio::sync::broadcast::channel(1024);
 
     {
         let control_tx = control_tx.clone();
+        let dev_log_rx = dev_log_tx.subscribe();
         tokio::spawn(async move {
-            if let Err(err) = crate::ipc_server::run(control_tx, status_rx).await {
+            if let Err(err) = crate::ipc_server::run(control_tx, status_rx, dev_log_rx).await {
                 tracing::error!("ipc server exited: {err}");
             }
         });
@@ -104,7 +108,7 @@ async fn run_services(
         });
     }
 
-    Control::new(control_tx, config.schedule, status_tx)
+    Control::new(control_tx, config.schedule, status_tx, dev_log_tx)
         .run(control_rx)
         .await;
 }

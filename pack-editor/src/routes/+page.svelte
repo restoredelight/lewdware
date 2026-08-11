@@ -159,11 +159,11 @@
 			taskFeedback.warning('save', 'Waiting for the import to finish before the first save…');
 		else if (store.uploading)
 			taskFeedback.warning('save', 'Saving now — unfinished uploads won’t be included');
-		else taskFeedback.progress('save', 'Saving pack…');
+		else if (store.packHasDestination) taskFeedback.progress('save', 'Saving pack…');
 		try {
 			await flushMetadataSave();
 			await flushBehaviourSave();
-			const info = await api.savePack();
+			const info = await api.savePack(() => taskFeedback.progress('save', 'Saving pack…'));
 			if (!info) {
 				pendingClose = false;
 				store.endSave();

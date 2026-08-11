@@ -351,8 +351,19 @@ impl Header {
                         self.fill_area(paint.fill, rect);
                     }
                 }
+                ButtonShape::Square => {
+                    let size = (height * button.diameter_ratio).min(width).min(height);
+                    if let Some(rect) =
+                        Rect::from_xywh(x + (width - size) / 2.0, (height - size) / 2.0, size, size)
+                    {
+                        self.fill_area(paint.fill, rect);
+                    }
+                }
                 ButtonShape::Circle => {
-                    let radius = width.min(height) / 2.0;
+                    // The layout slot and painted disc are separate measurements. In particular,
+                    // Adwaita centres a 24px disc in a 34px image-button slot.
+                    let diameter = (height * button.diameter_ratio).min(width).min(height);
+                    let radius = diameter / 2.0;
                     let center = (x + width / 2.0, height / 2.0);
                     let Some(bounds) = Rect::from_xywh(
                         center.0 - radius,
@@ -416,7 +427,14 @@ impl Header {
             return 0.0;
         }
 
-        width.min(self.size.height as f32) * button.glyph_ratio
+        let extent = match button.shape {
+            ButtonShape::Rect => width.min(self.size.height as f32),
+            ButtonShape::Square | ButtonShape::Circle => (self.size.height as f32
+                * button.diameter_ratio)
+                .min(width)
+                .min(self.size.height as f32),
+        };
+        extent * button.glyph_ratio
     }
 
     fn draw_glyph(
@@ -439,18 +457,35 @@ impl Header {
         let middle_x = x + width / 2.0;
         let middle_y = height / 2.0;
 
-        for (from, to) in [
-            ((-offset, -offset), (offset, offset)),
-            ((-offset, offset), (offset, -offset)),
-        ] {
-            let mut line = PathBuilder::new();
-            line.move_to(middle_x + from.0, middle_y + from.1);
-            line.line_to(middle_x + to.0, middle_y + to.1);
+        match button.glyph {
+            Glyph::Cross => {
+                for (from, to) in [
+                    ((-offset, -offset), (offset, offset)),
+                    ((-offset, offset), (offset, -offset)),
+                ] {
+                    let mut line = PathBuilder::new();
+                    line.move_to(middle_x + from.0, middle_y + from.1);
+                    line.line_to(middle_x + to.0, middle_y + to.1);
 
-            if let Some(path) = line.finish() {
-                self.pixmap
-                    .stroke_path(&path, &paint, &Stroke::default(), transform, None);
+                    if let Some(path) = line.finish() {
+                        self.pixmap
+                            .stroke_path(&path, &paint, &Stroke::default(), transform, None);
+                    }
+                }
             }
+            Glyph::Square => {
+                let mut outline = PathBuilder::new();
+                outline.move_to(middle_x - offset, middle_y - offset);
+                outline.line_to(middle_x + offset, middle_y - offset);
+                outline.line_to(middle_x + offset, middle_y + offset);
+                outline.line_to(middle_x - offset, middle_y + offset);
+                outline.close();
+                if let Some(path) = outline.finish() {
+                    self.pixmap
+                        .stroke_path(&path, &paint, &Stroke::default(), transform, None);
+                }
+            }
+            Glyph::None => {}
         }
     }
 
@@ -714,6 +749,7 @@ mod tests {
             shape: ButtonShape::Circle,
             glyph: Glyph::None,
             width_ratio,
+            diameter_ratio: width_ratio,
             glyph_ratio: 0.25,
             idle: PAINT,
             hover: PAINT,
@@ -917,7 +953,10 @@ mod tests {
                 );
 
                 let (x, width) = header.button_span(0);
-                let over = at((x + width / 2.0) as f64, (theme.metrics().header_height / 2) as f64);
+                let over = at(
+                    (x + width / 2.0) as f64,
+                    (theme.metrics().header_height / 2) as f64,
+                );
 
                 // Every button wears the disabled paint, whatever the pointer is doing.
                 for (index, button) in header.buttons().iter().enumerate() {
@@ -1517,7 +1556,7 @@ mod tests {
                     let corner_y = reach;
 
                     match button.shape {
-                        ButtonShape::Rect => {
+                        ButtonShape::Rect | ButtonShape::Square => {
                             assert!(
                                 centre_x - corner_x >= x && centre_x + corner_x <= x + width,
                                 "{theme:?} {appearance:?} button {index}: cross is wider than its \
@@ -1530,7 +1569,10 @@ mod tests {
                             );
                         }
                         ButtonShape::Circle => {
-                            let radius = width.min(header_height) / 2.0;
+                            let radius = (header_height * button.diameter_ratio)
+                                .min(width)
+                                .min(header_height)
+                                / 2.0;
                             let corner = (corner_x * corner_x + corner_y * corner_y).sqrt();
                             // Fitting is not enough: a mark whose corners graze the rim reads as a
                             // cross wedged into a circle rather than a mark drawn inside one.

@@ -12,7 +12,11 @@ pub fn run(command: Command) -> Result<()> {
         let req = match command {
             Command::Status => Request::Status,
             Command::Start { mode_path, dev } => Request::StartSession { mode_path, dev },
-            Command::Restart { mode_path, dev } => Request::RestartSession { mode_path, dev },
+            Command::Restart { mode_path, dev } => Request::RestartSession {
+                mode_path,
+                dev,
+                dev_stream_id: None,
+            },
             Command::Stop => Request::StopSession,
             Command::Panic => Request::Panic,
         };

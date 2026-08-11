@@ -21,4 +21,5 @@ zstd = "0.13.3"
 ureq = { version = "3.3.0", features = ["json"] }
 
 [dev-dependencies]
+chrono = "0.4.45"
 tempfile = "3.27.0"

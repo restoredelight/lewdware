@@ -58,6 +58,7 @@
 	let showClosePackDialog = $state(false);
 	let closePackAfterSave = $state(false);
 	let removingMedia = $state(false);
+	let saveDestinationChosen = $state(false);
 	let modifierLabel = $state('Ctrl');
 	let packTitle = $state(store.packName);
 	let packTitleInput = $state<HTMLInputElement>();
@@ -84,6 +85,15 @@
 		if (store.packSaved) void finishClosePack();
 		else showClosePackDialog = true;
 	});
+
+	$effect(() => {
+		if (!store.saveActive) saveDestinationChosen = false;
+	});
+
+	function onSaveDestinationChosen() {
+		saveDestinationChosen = true;
+		taskFeedback.progress('save', 'Saving pack…');
+	}
 
 	onMount(() => {
 		modifierLabel = navigator.platform.includes('Mac') ? '⌘' : 'Ctrl';
@@ -214,11 +224,11 @@
 			taskFeedback.warning('save', 'Waiting for the import to finish before the first save…');
 		else if (store.uploading)
 			taskFeedback.warning('save', 'Saving now — unfinished uploads won’t be included');
-		else taskFeedback.progress('save', 'Saving pack…');
+		else if (store.packHasDestination) taskFeedback.progress('save', 'Saving pack…');
 		try {
 			await flushMetadataSave();
 			await flushBehaviourSave();
-			const info = await api.savePack();
+			const info = await api.savePack(onSaveDestinationChosen);
 			if (info) {
 				store.packName = info.name;
 				store.packHasDestination = info.has_destination;
@@ -240,11 +250,10 @@
 		saveError = null;
 		if (store.uploading)
 			taskFeedback.warning('save', 'Waiting for the import to finish before Save As…');
-		else taskFeedback.progress('save', 'Choosing save location…');
 		try {
 			await flushMetadataSave();
 			await flushBehaviourSave();
-			const info = await api.savePackAsDialog();
+			const info = await api.savePackAsDialog(onSaveDestinationChosen);
 			if (info) {
 				store.packName = info.name;
 				store.packHasDestination = true;
@@ -346,7 +355,7 @@
 		try {
 			await flushMetadataSave();
 			await flushBehaviourSave();
-			const info = await api.savePack();
+			const info = await api.savePack(onSaveDestinationChosen);
 			if (!info) {
 				store.endSave();
 				taskFeedback.dismiss('save');
@@ -489,9 +498,9 @@
 			size="compact"
 			variant="primary"
 			onclick={save}
-			disabled={store.packSaved}
-			loading={store.saveActive}
-			title={`Save (${modifierLabel}+S)`}>{store.saveActive ? 'Saving…' : 'Save'}</Button
+			disabled={store.packSaved || store.saveActive}
+			loading={store.saveActive && (store.packHasDestination || saveDestinationChosen)}
+			title={`Save (${modifierLabel}+S)`}>Save</Button
 		>
 		<Popover align="end" label="Pack actions">
 			{#snippet trigger(toggle, open)}

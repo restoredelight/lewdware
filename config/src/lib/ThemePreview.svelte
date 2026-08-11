@@ -65,6 +65,17 @@
 		return `repeating-linear-gradient(to bottom, ${base} 0 ${period - 1}px, ${stripe} ${period - 1}px ${period}px)`;
 	}
 
+	/** The engine interrupts Platinum's stripes with the midpoint of the stripe pair behind the
+	 * caption. Returning the same opaque colour here keeps the picker from showing striped text. */
+	function titlePlaque(f: Fill): string | null {
+		if (!('Pinstripe' in f)) return null;
+		const channels = (color: string) =>
+			[1, 3, 5].map((at) => Number.parseInt(color.slice(at, at + 2), 16));
+		const base = channels(f.Pinstripe.base);
+		const stripe = channels(f.Pinstripe.stripe);
+		return `rgb(${base.map((channel, i) => Math.round((channel + stripe[i]) / 2)).join(' ')})`;
+	}
+
 	/** A ring as the four border colours of one nested box. */
 	function ringColors(ring: BorderRing): string {
 		if ('Uniform' in ring) return ring.Uniform;
@@ -122,8 +133,15 @@
 	 * The proportion is the theme's own `glyph_ratio`, not a rule applied here. */
 	function glyphSize(button: ChromeButton): number {
 		if (button.glyph === 'None') return 0;
-		return 2 * (Math.min(buttonWidth(button), headerHeight) * button.glyph_ratio);
+		const extent =
+			button.shape !== 'Rect'
+				? Math.min(buttonWidth(button), headerHeight * button.diameter_ratio)
+				: Math.min(buttonWidth(button), headerHeight);
+		return 2 * extent * button.glyph_ratio;
 	}
+
+	const circleDiameter = (button: ChromeButton) =>
+		Math.min(buttonWidth(button), headerHeight * button.diameter_ratio);
 
 	const strokeCss = (s: Stroke) =>
 		s.width === 0 ? '0 solid transparent' : `${s.width}px solid ${s.color}`;
@@ -193,9 +211,10 @@
 			style="width:{size}px;height:{size}px;overflow:visible"
 		>
 			<path
-				d="M0 0 L10 10 M10 0 L0 10"
+				d={button.glyph === 'Square' ? 'M0 0 L10 0 L10 10 L0 10 Z' : 'M0 0 L10 10 M10 0 L0 10'}
 				stroke={color}
-				stroke-width="1.4"
+				stroke-width="1"
+				vector-effect="non-scaling-stroke"
 				stroke-linecap="square"
 			/>
 		</svg>
@@ -230,15 +249,17 @@
 				style="width:{buttonWidth(button)}px;--idle:{fill(button.idle.fill)};--hover:{fill(
 					button.hover.fill
 				)};--active:{fill(button.active.fill)};--idle-glyph:{button.idle
-					.glyph};--hover-glyph:{button.hover.glyph};--rim:{button.idle.rim ??
-					'transparent'};{button.shape === 'Circle'
-					? // A circle is `min(width, height)` across and centred in the bar, not stretched to
-						// its full height — `Header::draw_buttons`.
-						`border-radius:50%;align-self:center;height:${Math.min(buttonWidth(button), headerHeight)}px`
-					: ''}"
+					.glyph};--hover-glyph:{button.hover.glyph};--rim:{button.idle.rim ?? 'transparent'}"
 				title={button.action === 'Close' ? 'Close' : 'Inert — drawn for the look, does nothing'}
 			>
-				{@render glyphMark(button, 'currentColor')}
+				<span
+					class="chrome-button-face"
+					style={button.shape !== 'Rect'
+						? `width:${circleDiameter(button)}px;height:${circleDiameter(button)}px;${button.shape === 'Circle' ? 'border-radius:50%' : ''}`
+						: 'width:100%;height:100%'}
+				>
+					{@render glyphMark(button, 'currentColor')}
+				</span>
 			</span>
 		{/each}
 
@@ -252,7 +273,12 @@
 					`margin-inline-${chrome.buttons.side === 'Left' ? 'end' : 'start'}:${clusterWidth}px`
 				: ''}"
 		>
-			{title}
+			<span
+				class="title-text"
+				style={titlePlaque(chrome.header)
+					? `background:${titlePlaque(chrome.header)};padding-inline:4px`
+					: ''}>{title}</span
+			>
 		</span>
 
 		{#if chrome.separator}
@@ -375,25 +401,39 @@
 		line-height: 1;
 	}
 
+	.title-text {
+		display: inline-block;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		vertical-align: middle;
+	}
+
 	/* Full bar height and `width_ratio` of it wide, as the engine draws them. */
 	.chrome-button {
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		flex: none;
+	}
+
+	.chrome-button-face {
+		display: flex;
+		align-items: center;
+		justify-content: center;
 		background: var(--idle);
 		color: var(--idle-glyph);
 		box-shadow: inset 0 0 0 1px var(--rim);
 	}
 
-	.chrome-button:not(.inert):hover {
+	.chrome-button:not(.inert):hover .chrome-button-face {
 		background: var(--hover);
 		/* Aqua's marks only appear on hover, which is the theme's own idiom, not a state change
 		   invented here — the colour comes from its `hover` paint. */
 		color: var(--hover-glyph);
 	}
 
-	.chrome-button:not(.inert):active {
+	.chrome-button:not(.inert):active .chrome-button-face {
 		background: var(--active);
 	}
 

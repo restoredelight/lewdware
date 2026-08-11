@@ -18,6 +18,7 @@
 	let modes = $state<EmbeddedMode[]>([]);
 	let loaded = $state(false);
 	let adding = $state(false);
+	let addingMode = $state(false);
 	let removing = $state<EmbeddedMode | null>(null);
 	let error = $state<string | null>(null);
 
@@ -72,7 +73,7 @@
 		adding = true;
 		error = null;
 		try {
-			const mode = await api.addModeDialog();
+			const mode = await api.addModeDialog(() => (addingMode = true));
 			if (!mode) return;
 			modes = [...modes, mode];
 			history.record({
@@ -81,6 +82,7 @@
 		} catch (cause) {
 			error = String(cause);
 		} finally {
+			addingMode = false;
 			adding = false;
 		}
 	}
@@ -122,7 +124,7 @@
 			</p>
 		</div>
 		{#if loaded && modes.length > 0}
-			<Button variant="primary" onclick={addMode} loading={adding}
+			<Button variant="primary" onclick={addMode} disabled={adding} loading={addingMode}
 				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add mode…</Button
 			>
 		{/if}

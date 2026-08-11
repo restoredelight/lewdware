@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::logging::LogRecord;
 
 // ─── CLI / config-app protocol (one-shot request/response) ────────────────────
 
@@ -13,6 +16,11 @@ pub enum Request {
     /// one `Response::Status` line, then another on every state change, until the client
     /// disconnects. The push counterpart to `Status` polling.
     Subscribe,
+    /// Streams structured records for one `lw mode dev` owner. The client subscribes before its
+    /// first restart so no startup records are lost.
+    SubscribeDevLogs {
+        stream_id: Uuid,
+    },
     StartSession {
         mode_path: Option<PathBuf>,
         dev: bool,
@@ -20,6 +28,7 @@ pub enum Request {
     RestartSession {
         mode_path: PathBuf,
         dev: bool,
+        dev_stream_id: Option<Uuid>,
     },
     StopSession,
     Panic,
@@ -33,6 +42,8 @@ pub enum Request {
 #[serde(tag = "type")]
 pub enum Response {
     Status(StatusInfo),
+    DevLogReady,
+    DevLog { record: LogRecord },
     Ok,
     Busy { current: SessionSummary },
     Error { message: String },
@@ -134,6 +145,9 @@ pub enum EngineToSupervisor {
     FailedToStart {
         message: String,
     },
+    Log {
+        record: LogRecord,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,6 +168,7 @@ mod client {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     use super::{EngineToSupervisor, Request, Response};
+    use uuid::Uuid;
 
     // Re-exported so downstream crates (the supervisor) don't need their own direct
     // `interprocess` dependency just to name these types.
@@ -268,6 +283,51 @@ mod client {
         })
     }
 
+    pub struct DevLogSubscription {
+        reader: BufReader<RecvHalf>,
+        _send: SendHalf,
+    }
+
+    impl DevLogSubscription {
+        pub async fn next(&mut self) -> Result<crate::logging::LogRecord> {
+            let mut line = String::new();
+            let n = self.reader.read_line(&mut line).await?;
+            if n == 0 {
+                anyhow::bail!("development log subscription closed");
+            }
+            match serde_json::from_str(line.trim_end())? {
+                Response::DevLog { record } => Ok(record),
+                other => Err(anyhow!(
+                    "unexpected response on development log subscription: {other:?}"
+                )),
+            }
+        }
+    }
+
+    pub async fn subscribe_dev_logs(stream_id: Uuid) -> Result<DevLogSubscription> {
+        let name = control_socket_name()?;
+        let conn = Stream::connect(name)
+            .await
+            .context("could not connect to the supervisor")?;
+        write_line(
+            &conn,
+            &serde_json::to_string(&Request::SubscribeDevLogs { stream_id })?,
+        )
+        .await?;
+        let line = read_line(&conn).await?;
+        if !matches!(
+            serde_json::from_str::<Response>(line.trim_end())?,
+            Response::DevLogReady
+        ) {
+            anyhow::bail!("supervisor did not acknowledge development log subscription");
+        }
+        let (recv, send) = conn.split();
+        Ok(DevLogSubscription {
+            reader: BufReader::new(recv),
+            _send: send,
+        })
+    }
+
     /// Ensures a supervisor is reachable, spawning one on demand (per scheduling.md: "the config
     /// app always talks to the supervisor, starting it on demand if absent") if `request` can't
     /// reach one yet.
@@ -356,6 +416,7 @@ mod tests {
         roundtrip(Request::RestartSession {
             mode_path: PathBuf::from("/tmp/mode.lwmode"),
             dev: true,
+            dev_stream_id: Some(Uuid::nil()),
         });
         roundtrip(Request::StopSession);
         roundtrip(Request::Panic);
@@ -365,6 +426,7 @@ mod tests {
     #[test]
     fn response_variants_roundtrip() {
         roundtrip(Response::Ok);
+        roundtrip(Response::DevLogReady);
         roundtrip(Response::Error {
             message: "boom".to_string(),
         });
@@ -440,6 +502,20 @@ mod tests {
         });
         roundtrip(EngineToSupervisor::FailedToStart {
             message: "no pack configured".to_string(),
+        });
+        roundtrip(EngineToSupervisor::Log {
+            record: crate::logging::LogRecord {
+                schema: 1,
+                timestamp: Utc::now(),
+                level: crate::logging::LogLevel::Info,
+                component: "engine".to_string(),
+                target: "lewdware::lua".to_string(),
+                message: "started".to_string(),
+                file: None,
+                line: None,
+                session_id: Some("7".to_string()),
+                fields: Default::default(),
+            },
         });
     }
 

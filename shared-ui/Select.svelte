@@ -28,12 +28,19 @@
 	const listId = `select-list-${uid}`;
 	let open = $state(false);
 	let highlighted = $state(0);
+	let openAbove = $state(false);
+	let availableHeight = $state(280);
 	let root: HTMLDivElement;
 	let trigger: HTMLButtonElement;
 	const selected = $derived(options.find((option) => option.value === value));
 
 	function openList() {
 		if (disabled) return;
+		const rect = trigger.getBoundingClientRect();
+		const spaceBelow = window.innerHeight - rect.bottom - 12;
+		const spaceAbove = rect.top - 12;
+		openAbove = spaceBelow < 160 && spaceAbove > spaceBelow;
+		availableHeight = Math.max(48, Math.min(280, openAbove ? spaceAbove : spaceBelow));
 		highlighted = Math.max(
 			0,
 			options.findIndex((option) => option.value === value)
@@ -112,7 +119,14 @@
 		>
 	</button>
 	{#if open}
-		<div id={listId} class="list" role="listbox" aria-label={label}>
+		<div
+			id={listId}
+			class="list"
+			class:above={openAbove}
+			style:max-height={`${availableHeight}px`}
+			role="listbox"
+			aria-label={label}
+		>
 			{#each options as option, index (option.value)}
 				<button
 					id={`${listId}-${index}`}
@@ -211,6 +225,10 @@
 		border-radius: var(--ui-radius-md);
 		background: var(--ui-surface);
 		box-shadow: 0 12px 32px rgb(0 0 0 / 0.4);
+	}
+	.list.above {
+		top: auto;
+		bottom: calc(100% + 4px);
 	}
 	.list button {
 		display: flex;

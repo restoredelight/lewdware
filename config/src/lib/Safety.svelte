@@ -3,22 +3,19 @@
 	import { store } from './store.svelte';
 	import { api } from './api';
 	import { MODIFIER_KEYS, formatKey } from './keys';
-	import Slider from '$ui/Slider.svelte';
 	import Toggle from '$ui/Toggle.svelte';
-	import Checkbox from '$ui/Checkbox.svelte';
 	import Card from '$ui/Card.svelte';
 	import Button from '$ui/Button.svelte';
 	import RadioGroup from '$ui/RadioGroup.svelte';
-	import Select from '$ui/Select.svelte';
-	import ThemePreview from './ThemePreview.svelte';
 	import { taskFeedback } from './taskFeedback.svelte';
-	import type { Capabilities, Key, Volume, WallpaperSupportDto } from './types';
+	import type { Capabilities, Key, WallpaperSupportDto } from './types';
 
 	// Read once on mount rather than polled: it runs a real snapshot against the desktop, and the
 	// answer only changes across a session switch, by which point this page is being re-opened.
 	let support = $state<WallpaperSupportDto | null>(null);
 	let preview = $state<string | null>(null);
 	let picking = $state(false);
+	let adoptingImage = $state(false);
 	let inputMonitoringGranted = $state(true);
 	let inputMonitoringPromptFailed = $state(false);
 	let recording = $state(false);
@@ -124,11 +121,12 @@
 	async function pickImage() {
 		picking = true;
 		try {
-			const path = await api.pickRestoreImage();
+			const path = await api.pickRestoreImage(() => (adoptingImage = true));
 			if (path) store.setWallpaperRestore({ kind: 'image', path });
 		} catch {
 			// The dialog was dismissed or the copy failed; leave the current choice alone.
 		} finally {
+			adoptingImage = false;
 			picking = false;
 		}
 	}
@@ -150,49 +148,14 @@
 			description: 'Allow the pack/mode to show desktop notifications.'
 		}
 	];
-
-	// The look every popup is drawn in. A mode may still name its own for a particular window --
-	// one pretending to be a Win95 error box, say -- but nothing else overrides this, and a mode
-	// that never mentions themes (most of them) follows it for everything it opens.
-	// A card is the current one either by its own name or by the look it stands for: someone whose
-	// config pins `breeze` should see the merged "KDE Plasma" card selected, not nothing at all.
-	const selectedTheme = $derived(
-		store.themeCatalogue.themes.find(
-			(theme) => theme.name === store.config?.theme || theme.resolves_to === store.config?.theme
-		) ?? null
-	);
-
-	// Which palette the cards are drawn in. `auto` has no answer of its own here -- the engine
-	// resolves it against the desktop at spawn time -- so the preview follows this app's own
-	// setting, which is dark.
-	const previewAppearance = $derived(store.config?.appearance === 'light' ? 'light' : 'dark');
-
-	// Saying so beats leaving someone to wonder why switching to dark changed nothing.
-	const darkUnavailable = $derived(
-		selectedTheme !== null && !selectedTheme.supports_dark && store.config?.appearance !== 'light'
-	);
-
-	const volumeSliders: { key: keyof Volume; label: string; description: string }[] = [
-		{
-			key: 'video',
-			label: 'Video volume',
-			description: "Master volume for a video popup's embedded audio track."
-		},
-		{
-			key: 'audio',
-			label: 'Audio volume',
-			description: 'Master volume for standalone audio the pack/mode plays.'
-		}
-	];
 </script>
 
 <div class="flex-1 overflow-y-auto">
 	<div class="mx-auto flex w-full max-w-4xl flex-col gap-6 p-8">
 		<header class="max-w-2xl">
-			<h1 class="ui-page-title">Behaviour</h1>
+			<h1 class="ui-page-title">Safety</h1>
 			<p class="text-muted mt-1.5 mb-0 text-sm">
-				Control how to stop a running session, what it may do outside its windows, and how loudly
-				and where it plays media.
+				Control how to stop a running session and what packs and modes may do outside their windows.
 			</p>
 		</header>
 
@@ -325,168 +288,18 @@
 											</p>
 										{/if}
 									</div>
-									<Button size="compact" loading={picking} onclick={pickImage}>Choose…</Button>
+									<Button
+										size="compact"
+										disabled={picking}
+										loading={adoptingImage}
+										onclick={pickImage}>Choose…</Button
+									>
 								</div>
 							{/if}
 						</div>
 					{/if}
 				{/each}
 			</Card>
-		</section>
-
-		<!-- Window style -->
-		<section class="border-border flex flex-col gap-2 border-t pt-6">
-			<h2 class="ui-section-title">Window style</h2>
-			<p class="text-muted text-xs">
-				How popup frames, buttons and text fields look. A mode can still pick its own style for a
-				window where the look is part of what it&rsquo;s doing.
-			</p>
-			<Card class="flex flex-col gap-4 p-4">
-				<div class="flex items-end justify-between gap-4">
-					<p class="text-muted m-0 text-xs">
-						Each one is live &mdash; hover its close button, press a button, type in the field.
-					</p>
-					<Select
-						class="w-44"
-						size="compact"
-						label="Light or dark"
-						value={store.config?.appearance ?? ''}
-						options={store.themeCatalogue.appearances.map((appearance) => ({
-							value: appearance.name,
-							label: appearance.label
-						}))}
-						onchange={(value) => store.setAppearance(value)}
-					/>
-				</div>
-
-				<div class="grid grid-cols-[repeat(auto-fill,minmax(270px,1fr))] gap-3">
-					{#each store.themeCatalogue.themes as theme (theme.name)}
-						{@const selected = theme === selectedTheme}
-						<div
-							class="border-border bg-bg flex flex-col gap-2 rounded-sm border p-3 transition-colors"
-							class:!border-[var(--ui-accent)]={selected}
-						>
-							<div class="flex items-baseline justify-between gap-2">
-								<label class="flex cursor-pointer items-center gap-2 text-sm">
-									<input
-										type="radio"
-										name="window-theme"
-										class="accent-[var(--ui-accent)]"
-										checked={selected}
-										onchange={() => store.setTheme(theme.name)}
-									/>
-									<span class="text-text font-medium">{theme.label}</span>
-								</label>
-								{#if theme.matches_system}
-									<span class="text-muted font-mono text-[10px]"
-										>{theme.name === 'native-retro'
-											? 'your system, retro'
-											: 'matches your system'}</span
-									>
-								{:else if !theme.supports_dark}
-									<span class="text-muted font-mono text-[10px]">light only</span>
-								{/if}
-							</div>
-							<!-- The preview is decoration for a control the label already provides, so it is
-						     not a second way to choose: being able to click into a real window's widgets
-						     is the point of it being live. -->
-							<ThemePreview
-								look={previewAppearance === 'dark' ? theme.dark : theme.light}
-								title={theme.label}
-							/>
-						</div>
-					{/each}
-				</div>
-
-				{#if darkUnavailable}
-					<p class="text-muted m-0 text-xs">
-						{selectedTheme?.label} has no dark version and is always drawn light.
-					</p>
-				{:else if selectedTheme?.matches_system}
-					<p class="text-muted m-0 text-xs">
-						Windows are drawn to look like this machine&rsquo;s own, so a pack you share won&rsquo;t
-						look the same on someone else&rsquo;s.
-					</p>
-				{/if}
-			</Card>
-		</section>
-
-		<!-- Volume -->
-		<section class="border-border flex flex-col gap-2 border-t pt-6">
-			<h2 class="ui-section-title">Volume</h2>
-			<p class="text-muted text-xs">
-				Master volume, applied on top of whatever volume the pack/mode requests for a track.
-			</p>
-			<div class="grid grid-cols-2 gap-3">
-				{#each volumeSliders as slider (slider.key)}
-					<Card class="flex flex-col gap-3 p-4">
-						<div class="flex items-center justify-between">
-							<span class="text-text text-sm font-medium">{slider.label}</span>
-							<span
-								class="bg-bg text-text rounded px-2 py-1 font-mono text-[11px] font-semibold tabular-nums"
-							>
-								{Math.round((store.config?.volume[slider.key] ?? 0) * 100)}%
-							</span>
-						</div>
-						<p class="text-muted m-0 text-xs">{slider.description}</p>
-						<Slider
-							ariaLabel={`${slider.label} volume`}
-							min={0}
-							max={1}
-							step={0.01}
-							value={store.config?.volume[slider.key] ?? 0}
-							oninput={(value) => store.previewVolume(slider.key, value)}
-							onchange={() => store.saveConfig()}
-						/>
-					</Card>
-				{/each}
-			</div>
-		</section>
-
-		<!-- Monitors -->
-		<section class="border-border flex flex-col gap-2 border-t pt-6">
-			<h2 class="ui-section-title">Monitors</h2>
-			<p class="text-muted text-xs">Choose where popup media may appear.</p>
-			{#if store.monitorsLoading}
-				<Card class="border-dashed !border-[var(--ui-border-strong)] p-6 text-center"
-					><p class="text-muted m-0 text-xs" role="status">Detecting monitors…</p></Card
-				>
-			{:else if store.monitorsError}
-				<Card
-					class="flex flex-col items-center gap-2 border-dashed !border-[var(--ui-border-strong)] p-6 text-center"
-				>
-					<p class="text-text m-0 text-xs font-semibold">Monitors couldn’t be detected</p>
-					<p class="text-muted m-0 max-w-md text-xs">{store.monitorsError}</p>
-					<Button class="mt-1" size="compact" onclick={() => store.loadMonitors()}>Try again</Button
-					>
-				</Card>
-			{:else if store.monitors.length > 0}
-				<Card class="divide-border divide-y">
-					{#each store.monitors as monitor (monitor.id)}
-						<label
-							class="hover:bg-surface-2 flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors first:rounded-t-md last:rounded-b-md"
-						>
-							<Checkbox
-								checked={!monitor.disabled}
-								ariaLabel={monitor.name}
-								onchange={(checked) => store.setMonitorEnabled(monitor.id, checked)}
-							/>
-							<span class="text-text min-w-0 flex-1 truncate text-sm">{monitor.name}</span>
-							<span class="text-muted shrink-0 font-mono text-[11px]"
-								>{monitor.width}×{monitor.height}</span
-							>
-							{#if monitor.primary}<span
-									class="border-border bg-bg text-muted rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-									>Primary</span
-								>{/if}
-						</label>
-					{/each}
-				</Card>
-			{:else}
-				<Card class="border-dashed !border-[var(--ui-border-strong)] p-6 text-center"
-					><p class="text-muted m-0 text-xs">No monitors were detected.</p></Card
-				>
-			{/if}
 		</section>
 	</div>
 </div>

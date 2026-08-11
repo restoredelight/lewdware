@@ -2,6 +2,7 @@ use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{Result, anyhow};
+use uuid::Uuid;
 
 /// Builds the command to spawn one engine session. `--control-token` is always passed so the
 /// engine knows which `engine_link` connection to open and identify itself with; `--mode-path`/
@@ -11,6 +12,7 @@ pub fn build_command(
     seq: u64,
     mode_path: Option<&Path>,
     dev: bool,
+    dev_stream_id: Option<Uuid>,
 ) -> Result<tokio::process::Command> {
     let cmd = shared::child::find_engine_binary()
         .ok_or_else(|| anyhow!("could not find the lewdware-engine binary"))?;
@@ -22,6 +24,9 @@ pub fn build_command(
     }
     if dev {
         cmd.arg("--dev");
+    }
+    if let Some(stream_id) = dev_stream_id {
+        cmd.arg("--dev-stream-id").arg(stream_id.to_string());
     }
 
     cmd.stdin(Stdio::null())

@@ -75,7 +75,11 @@ class AppStore {
 	modeGroups = $state<ModeGroupDto[]>([]);
 	/** The window looks on offer, read once at load. Static for the life of the app -- it is the
 	 * engine's own catalogue (`shared::theme`), not anything the user can change. */
-	themeCatalogue = $state<ThemeCatalogueDto>({ themes: [], appearances: [] });
+	themeCatalogue = $state<ThemeCatalogueDto>({
+		themes: [],
+		appearances: [],
+		system_appearance: null
+	});
 	modeOptions = $state<OptionEntryDto[]>([]);
 	/** Permissions the selected mode uses regardless of how it is configured -- they hang off no
 	 * single option, so they are surfaced once above the option list rather than on a row. */
@@ -83,10 +87,13 @@ class AppStore {
 	/** Pack-derived `pack_has_*` facts for the selected mode, seeded into `show_when` evaluation
 	 * alongside the live option values (see `PackMode.svelte`). */
 	packHas = $state<Record<string, ConditionValue>>({});
-	activeTab = $state<'pack_mode' | 'behaviour' | 'scheduling'>('pack_mode');
+	activeTab = $state<
+		'pack_mode' | 'safety' | 'sound_displays' | 'window_style' | 'scheduling' | 'diagnostics'
+	>('pack_mode');
 	loading = $state(false);
 	loadError = $state<string | null>(null);
 	busyActions = $state<string[]>([]);
+	workingActions = $state<string[]>([]);
 	// Kept fresh by the `supervisor:status` push event (see +page.svelte); the initial values
 	// come from one fetch at startup.
 	engineStatus = $state<EngineStatusDto>({ running: false, error: null, warning: null });
@@ -166,10 +173,20 @@ class AppStore {
 		return this.busyActions.includes(action);
 	}
 
+	isWorking(action: string) {
+		return this.workingActions.includes(action);
+	}
+
 	private setBusy(action: string, busy: boolean) {
 		this.busyActions = busy
 			? [...new Set([...this.busyActions, action])]
 			: this.busyActions.filter((item) => item !== action);
+	}
+
+	private setWorking(action: string, working: boolean) {
+		this.workingActions = working
+			? [...new Set([...this.workingActions, action])]
+			: this.workingActions.filter((item) => item !== action);
 	}
 
 	async saveConfig(): Promise<boolean> {
@@ -360,7 +377,7 @@ class AppStore {
 	async pickPack() {
 		this.setBusy('pack', true);
 		try {
-			const result = await api.pickPack();
+			const result = await api.pickPack(() => this.setWorking('pick-pack', true));
 			if (!result || !this.config) return;
 			taskFeedback.progress('pack', 'Opening pack…');
 			this.config = { ...this.config, pack_path: result.pack_path };
@@ -370,6 +387,7 @@ class AppStore {
 		} catch (err) {
 			taskFeedback.error('pack', `Couldn’t select pack: ${String(err)}`);
 		} finally {
+			this.setWorking('pick-pack', false);
 			this.setBusy('pack', false);
 		}
 	}
@@ -427,13 +445,14 @@ class AppStore {
 	async uploadMode() {
 		this.setBusy('mode', true);
 		try {
-			const result = await api.uploadMode();
+			const result = await api.uploadMode(() => this.setWorking('upload-mode', true));
 			if (!result) return;
 			this.modeGroups = result.mode_groups;
 			taskFeedback.success('mode', 'Mode uploaded');
 		} catch (err) {
 			taskFeedback.error('mode', `Couldn’t upload mode: ${String(err)}`);
 		} finally {
+			this.setWorking('upload-mode', false);
 			this.setBusy('mode', false);
 		}
 	}

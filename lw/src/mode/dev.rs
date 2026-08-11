@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{IsTerminal, Read, Seek, SeekFrom};
+use std::io::{IsTerminal, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -8,6 +8,8 @@ use std::{fs, io, thread};
 use clap::Args;
 use notify::{Event, EventKind, RecommendedWatcher, Watcher};
 use shared::ipc::{Request, Response};
+use shared::logging::LogRecord;
+use uuid::Uuid;
 
 use crate::mode::build::build_to;
 use crate::mode::config::Config;
@@ -62,9 +64,12 @@ pub fn dev(_args: DevArgs) -> anyhow::Result<()> {
         .enable_all()
         .build()?;
 
-    spawn_log_tail();
+    let dev_stream_id = Uuid::new_v4();
+    rt.block_on(shared::ipc::ensure_supervisor_running())?;
+    let log_subscription = rt.block_on(shared::ipc::subscribe_dev_logs(dev_stream_id))?;
+    spawn_dev_log_stream(log_subscription);
 
-    rt.block_on(restart_session(&file.path))?;
+    rt.block_on(restart_session(&file.path, dev_stream_id))?;
 
     println!("Spawned");
 
@@ -85,7 +90,7 @@ pub fn dev(_args: DevArgs) -> anyhow::Result<()> {
         file.file.seek(SeekFrom::Start(0))?;
         build_to(&mut file.file, &root, config)?;
 
-        rt.block_on(restart_session(&file.path))?;
+        rt.block_on(restart_session(&file.path, dev_stream_id))?;
     }
 
     Ok(())
@@ -94,12 +99,13 @@ pub fn dev(_args: DevArgs) -> anyhow::Result<()> {
 /// Asks the supervisor (starting it on demand if it isn't already running) to run this build,
 /// replacing whatever session it's currently supervising -- both the very first spawn and every
 /// rebuild go through this same call, since `RestartSession` is unconditional.
-async fn restart_session(mode_path: &Path) -> anyhow::Result<()> {
+async fn restart_session(mode_path: &Path, dev_stream_id: Uuid) -> anyhow::Result<()> {
     shared::ipc::ensure_supervisor_running().await?;
 
     match shared::ipc::request(&Request::RestartSession {
         mode_path: mode_path.to_path_buf(),
         dev: true,
+        dev_stream_id: Some(dev_stream_id),
     })
     .await?
     {
@@ -108,111 +114,46 @@ async fn restart_session(mode_path: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Reprints new lines appended to the engine's own rolling log file into this terminal. Now that
-/// the supervisor -- not `lw dev` -- spawns the engine, `lw dev` no longer inherits its stdio for
-/// free, so this reads the same file `shared::logging::init` already writes to instead (`tracing`'s
-/// daily rotation names it `lewdware.log.<date>`, so the newest `lewdware.log*` file in the log
-/// dir is tailed rather than a fixed name -- this also means a day rollover mid-session is
-/// handled automatically, by switching to the fresh file). Starts from the current end of
-/// whichever file is newest, not its history. Known limitation: this log file is shared per-day
-/// across every engine session, not just this one -- lines from a concurrently-running
-/// Sandbox/Experience session would interleave, an acceptable trade-off for a single-developer
-/// workflow.
-fn spawn_log_tail() {
-    let Some(dir) = shared::logging::log_dir() else {
-        return;
-    };
-
+/// Renders the typed, session-scoped stream supplied by the supervisor. This thread owns a small
+/// runtime because the file watcher below deliberately remains blocking; neither side needs to
+/// poll a shared log file or interpret tracing's presentation format.
+fn spawn_dev_log_stream(mut subscription: shared::ipc::DevLogSubscription) {
     thread::spawn(move || {
-        let mut current: Option<PathBuf> = None;
-        let mut offset = 0u64;
         let use_ansi = std::io::stdout().is_terminal();
-
-        loop {
-            thread::sleep(Duration::from_millis(150));
-
-            let Some(latest) = latest_log_file(&dir) else {
-                continue;
-            };
-
-            if current.as_ref() != Some(&latest) {
-                // First time, or a day rollover produced a fresh file -- start from its current
-                // end (0 if it was just created), not its whole history.
-                offset = fs::metadata(&latest).map(|m| m.len()).unwrap_or(0);
-                current = Some(latest);
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return;
+        };
+        rt.block_on(async move {
+            while let Ok(record) = subscription.next().await {
+                println!("{}", format_dev_log_record(&record, use_ansi));
             }
-            let path = current.as_ref().expect("just set above");
-
-            let Ok(metadata) = fs::metadata(path) else {
-                continue;
-            };
-            let len = metadata.len();
-            if len <= offset {
-                continue;
-            }
-
-            let Ok(mut log_file) = File::open(path) else {
-                continue;
-            };
-            if log_file.seek(SeekFrom::Start(offset)).is_err() {
-                continue;
-            }
-
-            let mut buf = String::new();
-            if log_file.read_to_string(&mut buf).is_ok() {
-                for line in buf.lines() {
-                    println!("{}", format_dev_log_line(line, use_ansi));
-                }
-                offset = len;
-            }
-        }
+        });
     });
 }
 
-/// Turns tracing's full file format into the concise format useful while developing a mode.
-/// The rolling log remains detailed and ANSI-free; only the copy shown by `lw mode dev` is
-/// reformatted and colourized.
-fn format_dev_log_line(line: &str, use_ansi: bool) -> String {
-    const LEVELS: [(&str, &str); 5] = [
-        ("ERROR", "\x1b[31m"),
-        ("WARN", "\x1b[33m"),
-        ("INFO", "\x1b[32m"),
-        ("DEBUG", "\x1b[34m"),
-        ("TRACE", "\x1b[35m"),
-    ];
-
-    let Some((level, colour, rest)) = LEVELS.iter().find_map(|(level, colour)| {
-        line.split_once(&format!(" {level} "))
-            .map(|(_, rest)| (*level, *colour, rest))
-    }) else {
-        // Continuation lines and output not produced by tracing have no metadata to remove.
-        return line.to_owned();
+fn format_dev_log_record(record: &LogRecord, use_ansi: bool) -> String {
+    let level = record.level.label();
+    let colour = match record.level {
+        shared::logging::LogLevel::Error => "\x1b[31m",
+        shared::logging::LogLevel::Warn => "\x1b[33m",
+        shared::logging::LogLevel::Info => "\x1b[32m",
+        shared::logging::LogLevel::Debug => "\x1b[34m",
+        shared::logging::LogLevel::Trace => "\x1b[35m",
     };
-
-    // The file formatter emits `<target>: <file>:<line>: <message>` after the level.
-    let message = rest
-        .split_once(": ")
-        .and_then(|(_, source_and_message)| source_and_message.split_once(": "))
-        .map_or(rest, |(_, message)| message);
+    let message = if record.message.is_empty() && !record.fields.is_empty() {
+        serde_json::to_string(&record.fields).unwrap_or_default()
+    } else {
+        record.message.clone()
+    };
 
     if use_ansi {
         format!("{colour}{level}\x1b[0m {message}")
     } else {
         format!("{level} {message}")
     }
-}
-
-fn latest_log_file(dir: &Path) -> Option<PathBuf> {
-    fs::read_dir(dir)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("lewdware.log"))
-        })
-        .max_by_key(|path| fs::metadata(path).and_then(|m| m.modified()).ok())
 }
 
 // Resolves config.include entries (paths relative to root) to canonical,
@@ -275,25 +216,41 @@ impl Drop for BuildFile {
 
 #[cfg(test)]
 mod tests {
-    use super::format_dev_log_line;
+    use std::collections::BTreeMap;
 
-    #[test]
-    fn dev_log_lines_only_show_level_and_message() {
-        let line = "2026-07-21T12:53:48.411427Z ERROR lewdware_engine::app: lewdware/src/app.rs:90: something broke";
-        assert_eq!(format_dev_log_line(line, false), "ERROR something broke");
+    use chrono::Utc;
+
+    use super::format_dev_log_record;
+    use shared::logging::{LogLevel, LogRecord};
+
+    fn record(level: LogLevel, message: &str) -> LogRecord {
+        LogRecord {
+            schema: 1,
+            timestamp: Utc::now(),
+            level,
+            component: "lewdware".into(),
+            target: "lewdware::lua".into(),
+            message: message.into(),
+            file: None,
+            line: None,
+            session_id: Some("1".into()),
+            fields: BTreeMap::new(),
+        }
     }
 
     #[test]
-    fn dev_log_levels_are_colourized_for_terminals() {
-        let line = "2026-07-21T12:53:48.411427Z WARN lewdware_engine::app: lewdware/src/app.rs:90: be careful";
+    fn dev_log_records_only_show_level_and_message() {
         assert_eq!(
-            format_dev_log_line(line, true),
-            "\x1b[33mWARN\x1b[0m be careful"
+            format_dev_log_record(&record(LogLevel::Error, "something broke"), false),
+            "ERROR something broke"
         );
     }
 
     #[test]
-    fn unstructured_and_continuation_lines_are_preserved() {
-        assert_eq!(format_dev_log_line("extra context", true), "extra context");
+    fn dev_log_levels_are_colourized_for_terminals() {
+        assert_eq!(
+            format_dev_log_record(&record(LogLevel::Warn, "be careful"), true),
+            "\x1b[33mWARN\x1b[0m be careful"
+        );
     }
 }

@@ -10,22 +10,22 @@ labels: bug
 
 ## Steps to reproduce
 
-1. 
-2. 
-3. 
+1.
+2.
+3.
 
 ## Expected behaviour
 
 <!-- What you expected to happen instead. -->
 
-## System info
-
-- **OS**: <!-- e.g. Windows 11, macOS 14, Ubuntu 24.04 -->
-- **Lewdware version**: <!-- shown in the config app or the About menu -->
-
-## Logs
+## Diagnostics
 
 <!--
-  Open the config app → General → "Open logs folder" and attach the relevant
-  log file(s), or paste the relevant lines below.
+  Open the config app → Diagnostics, click "Copy diagnostics", and paste the
+  report below. It includes system information and recent logs. Please review
+  it for filenames or URLs you do not want to share before submitting.
+
+  If only a few entries are relevant, filter the log viewer and use "Copy
+  visible" instead. If the config app cannot open, include your OS and Lewdware
+  version here and attach files from the logs folder if possible.
 -->
