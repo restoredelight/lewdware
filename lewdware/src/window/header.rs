@@ -549,6 +549,18 @@ impl Header {
             .map(|(index, _)| index)
     }
 
+    /// Whether a header-local position is part of the draggable title-bar background. Live
+    /// buttons are deliberately excluded so pressing close never starts a window drag.
+    pub fn is_drag_region(&self, position: PhysicalPosition<f64>) -> bool {
+        let logical: LogicalPosition<f64> = position.to_logical(self.scale_factor);
+
+        logical.x >= 0.0
+            && logical.x < self.size.width as f64
+            && logical.y >= 0.0
+            && logical.y < self.size.height as f64
+            && self.button_at(position).is_none()
+    }
+
     fn request_redraw(&mut self) {
         self.needs_redraw = true;
         self.redraw.request_redraw();
@@ -851,6 +863,17 @@ mod tests {
             header.button_at(at(x as f64 + 1.0, HEADER_H as f64 + 1.0)),
             None
         );
+    }
+
+    #[test]
+    fn only_header_background_is_a_drag_region() {
+        let header = plain_header();
+        let (button_x, _) = header.button_span(0);
+
+        assert!(header.is_drag_region(at(20.0, 5.0)));
+        assert!(!header.is_drag_region(at(button_x as f64 + 1.0, 5.0)));
+        assert!(!header.is_drag_region(at(20.0, -1.0)));
+        assert!(!header.is_drag_region(at(20.0, HEADER_H as f64)));
     }
 
     /// Inert buttons are never hit-tested, so they cannot hover or activate — the honesty rule

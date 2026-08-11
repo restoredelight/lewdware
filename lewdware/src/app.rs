@@ -1238,6 +1238,11 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
                         popup.state.handle_cursor_moved(position);
                     }
                 }
+                WindowEvent::Moved(position) => {
+                    if let ItemSlot::Window(popup) = entry.get_mut() {
+                        popup.state.handle_window_moved(position);
+                    }
+                }
                 WindowEvent::CursorLeft { .. } => {
                     if let ItemSlot::Window(popup) = entry.get_mut() {
                         popup.state.handle_cursor_left();

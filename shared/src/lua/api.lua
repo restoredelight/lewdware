@@ -556,6 +556,8 @@ lewdware.popup = {}
 ---@field closeable? boolean Whether the header should include a close button. Defaults to true.
 ---  If this is false, then the user will not be able to close the window manually. If
 ---  `decorations` is false, this will be ignored.
+---@field draggable? boolean Whether the window can be moved by dragging its header. Defaults to
+---  false. If `decorations` is false or `click_through` is true, this has no effect.
 ---@field opacity? number A number between 0 and 1, where 0 is fully
 ---  transparent and 1 is opaque. Use [Window:fade()](lua://Window.fade) to change this value
 ---  later.

@@ -818,6 +818,9 @@ pub struct SpawnWindowOpts {
     pub title: Option<String>,
     #[serde(default = "return_true")]
     pub closeable: bool,
+    /// Whether the window can be moved by dragging its custom header.
+    #[serde(default)]
+    pub draggable: bool,
     #[serde(default)]
     pub opacity: Option<f32>,
     #[serde(default)]
@@ -855,6 +858,7 @@ impl Default for SpawnWindowOpts {
             decorations: true,
             title: None,
             closeable: true,
+            draggable: false,
             opacity: None,
             transparent: None,
             background_color: None,
@@ -909,6 +913,7 @@ pub struct PopupSpawnOpts {
     pub decorations: bool,
     pub title: Option<String>,
     pub closeable: bool,
+    pub draggable: bool,
     pub background_color: Option<Color>,
     /// The palette the look is drawn in, still *unresolved*: `auto` depends on runtime state only
     /// the main thread can read, so — like `monitor_id` above — this carries the request and
@@ -1047,6 +1052,7 @@ impl PopupSpawnOpts {
             decorations: spawn_opts.decorations,
             title: spawn_opts.title,
             closeable: spawn_opts.closeable,
+            draggable: spawn_opts.draggable,
             background_color: spawn_opts.background_color,
             appearance: spawn_opts.appearance.unwrap_or(chrome.appearance),
             theme,
@@ -2056,6 +2062,17 @@ mod tests {
         let opts: SpawnWindowOpts = serde_json::from_str("{}").expect("should deserialise");
         assert_eq!(opts.theme, None);
         assert_eq!(opts.appearance, None);
+    }
+
+    #[test]
+    fn draggable_defaults_to_false_and_resolves_when_enabled() {
+        let defaults: SpawnWindowOpts =
+            serde_json::from_str("{}").expect("should deserialise defaults");
+        assert!(!defaults.draggable);
+
+        let opts: SpawnWindowOpts =
+            serde_json::from_str(r#"{"draggable": true}"#).expect("should deserialise option");
+        assert!(resolve_with(opts).unwrap().draggable);
     }
 
     /// An unknown name is an error rather than a silent fallback: for a mode author that is a

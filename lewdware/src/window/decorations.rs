@@ -163,9 +163,28 @@ impl Decorations {
         }
     }
 
+    fn header_position(inner: &Inner, position: PhysicalPosition<f64>) -> PhysicalPosition<f64> {
+        PhysicalPosition::new(
+            position.x - inner.border_offset as f64,
+            position.y - inner.border_offset as f64,
+        )
+    }
+
+    /// Whether a window-local position is over the custom header background rather than one of
+    /// its live buttons.
+    pub fn is_drag_region(&self, position: PhysicalPosition<f64>) -> bool {
+        self.inner.as_ref().is_some_and(|inner| {
+            inner
+                .header
+                .is_drag_region(Self::header_position(inner, position))
+        })
+    }
+
     pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         if let Some(inner) = &mut self.inner {
-            inner.header.handle_cursor_moved(position);
+            inner
+                .header
+                .handle_cursor_moved(Self::header_position(inner, position));
         }
     }
 
@@ -563,6 +582,19 @@ mod tests {
         let decorations = Decorations { inner: None };
         assert_eq!(decorations.content_origin(), (0, 0));
         assert!(!decorations.enabled());
+    }
+
+    #[test]
+    fn drag_hit_testing_rebases_past_the_border() {
+        let metrics = Metrics {
+            header_height: 20,
+            border_width: 4,
+        };
+        let decorations = decorations(metrics, 1.0);
+
+        assert!(!decorations.is_drag_region(PhysicalPosition::new(10.0, 3.0)));
+        assert!(decorations.is_drag_region(PhysicalPosition::new(10.0, 4.0)));
+        assert!(!decorations.is_drag_region(PhysicalPosition::new(10.0, 24.0)));
     }
 
     /// Stands in for already-drawn content, so anything decorations overwrite is visible.

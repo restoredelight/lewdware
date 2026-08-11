@@ -43,6 +43,8 @@ pub struct WindowState {
     background_color: Option<lua::Color>,
     theme: Theme,
     appearance: Appearance,
+    draggable: bool,
+    cursor_position: Option<PhysicalPosition<f64>>,
     content_hover: bool,
     content_clicked: bool,
 }
@@ -139,6 +141,8 @@ impl WindowState {
             background_color: opts.popup_opts.background_color,
             theme: opts.popup_opts.theme,
             appearance,
+            draggable: opts.popup_opts.draggable,
+            cursor_position: None,
             content_hover: false,
             content_clicked: false,
         }
@@ -394,11 +398,13 @@ impl WindowState {
     }
 
     pub fn handle_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
+        self.cursor_position = Some(position);
         self.decorations.handle_cursor_moved(position);
         self.content_hover = self.in_content_bounds(position);
     }
 
     pub fn handle_cursor_left(&mut self) {
+        self.cursor_position = None;
         self.decorations.handle_cursor_left();
         self.content_hover = false;
         self.content_clicked = false;
@@ -406,9 +412,32 @@ impl WindowState {
 
     pub fn handle_mouse_down(&mut self) {
         self.decorations.handle_mouse_down();
+
+        if self.draggable
+            && self
+                .cursor_position
+                .is_some_and(|position| self.decorations.is_drag_region(position))
+        {
+            // A scripted move and an interactive move cannot sensibly own the window at once.
+            self.current_move = None;
+            if let Err(error) = self.window.drag_window() {
+                tracing::warn!("Could not start dragging window: {error}");
+            }
+        }
+
         if self.content_hover {
             self.content_clicked = true;
         }
+    }
+
+    /// Keep the position used by subsequent scripted relative moves in sync with an interactive
+    /// header drag. Winit reports an outer position in physical desktop coordinates.
+    pub fn handle_window_moved(&mut self, position: PhysicalPosition<i32>) {
+        let absolute: LogicalPosition<i32> = position.to_logical(self.window.scale_factor());
+        self.position = LogicalPosition::new(
+            absolute.x - self.monitor_position.x,
+            absolute.y - self.monitor_position.y,
+        );
     }
 
     pub fn handle_mouse_up(&mut self) -> MouseUpResult {
