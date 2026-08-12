@@ -82,6 +82,25 @@
 		return tv?.step as number | undefined;
 	}
 
+	// Both number widgets need a step, and the browser's fallback is 1. On a fractional range that
+	// leaves only the endpoints reachable: a 0–1 option sitting at 0.15 snaps its thumb to 0 while
+	// the filled track, drawn from the real value, stops at 15%, and the field's arrows jump
+	// straight to the maximum. `step` is optional for mode authors, so derive one when it is
+	// missing -- the largest power of ten that still cuts the range into 100-odd positions, never
+	// coarser than 1.
+	//
+	// A derived step only governs how finely the *controls* move. Values the user types are not
+	// held to it (see `handleNumberInput`) -- only a step the mode actually declared narrows what
+	// the option accepts.
+	function uiStep(opt: ModeOptionDto): number {
+		const declared = getStep(opt);
+		if (declared != null) return declared;
+		if (optionTypeKey(opt) === 'Integer') return 1;
+		const range = (getMax(opt) ?? 100) - (getMin(opt) ?? 0);
+		if (!(range > 0)) return 1;
+		return Math.min(1, 10 ** Math.floor(Math.log10(range / 100)));
+	}
+
 	function enumValues(opt: ModeOptionDto): Record<string, string> {
 		const tv = optionTypeValue(opt) as Record<string, unknown>;
 		return (tv?.values ?? {}) as Record<string, string>;
@@ -112,10 +131,13 @@
 		return typeof fallback === 'number' ? fallback : 0;
 	}
 
-	function handleNumberInput(opt: ModeOptionDto, raw: string) {
+	// The slider passes its own `step`: it snaps to `uiStep`, which may be finer than the mode's
+	// declared step, and rounding to the step actually used is what keeps float noise
+	// (0.30000000000000004) out of the stored config. Typed input passes nothing, so it is held
+	// only to a declared step -- a derived one must not narrow what the user can enter.
+	function handleNumberInput(opt: ModeOptionDto, raw: string, step = getStep(opt)) {
 		const n = parseFloat(raw);
 		if (isNaN(n)) return;
-		const step = getStep(opt);
 		const stepped = step != null ? roundToStep(n, step) : n;
 		const clamped = clampValue(stepped, opt);
 		store.setModeOption(opt.key, clamped);
@@ -295,14 +317,15 @@
 	{:else if typeKey === 'Integer' || typeKey === 'Number'}
 		{#if isSlider(opt)}
 			{@const displayVal = sliderDisplayValue(opt)}
+			{@const step = uiStep(opt)}
 			<Slider
 				ariaLabel={opt.label}
 				min={getMin(opt) ?? 0}
 				max={getMax(opt) ?? 100}
-				step={getStep(opt) ?? 1}
+				{step}
 				value={displayVal}
 				{disabled}
-				oninput={(value) => handleNumberInput(opt, String(value))}
+				oninput={(value) => handleNumberInput(opt, String(value), step)}
 				class="w-40 sm:w-52"
 			/>
 			<input
@@ -310,10 +333,10 @@
 				value={opt.value as number}
 				min={getMin(opt)}
 				max={getMax(opt)}
-				step={getStep(opt)}
+				step={uiStep(opt)}
 				{disabled}
 				oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
-				class="border-border bg-bg text-text w-20 rounded-sm border px-2.5 py-1.5 text-sm transition-colors hover:border-[var(--ui-border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+				class="border-border bg-bg text-text w-24 rounded-sm border px-2.5 py-1.5 text-sm transition-colors hover:border-[var(--ui-border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
 			/>
 		{:else}
 			<input
@@ -321,7 +344,7 @@
 				value={opt.value as number}
 				min={getMin(opt)}
 				max={getMax(opt)}
-				step={getStep(opt)}
+				step={uiStep(opt)}
 				{disabled}
 				oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
 				class="border-border bg-bg text-text w-24 rounded-sm border px-2.5 py-1.5 text-sm transition-colors hover:border-[var(--ui-border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
