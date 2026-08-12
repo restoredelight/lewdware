@@ -422,7 +422,14 @@ export type OptionType =
 	  }
 	| { String: { default: string } }
 	| { Boolean: { default: boolean } }
-	| { Enum: { default: string; values: Record<string, string> } };
+	| { Enum: { default: string; values: Record<string, EnumValue> } };
+
+/**
+ * One member of an `Enum` option (Rust: `shared::mode::EnumValue`). A bare string is the
+ * shorthand for "this label, no description", and is what every mode written before descriptions
+ * existed sends -- so both shapes arrive here and both have to be handled.
+ */
+export type EnumValue = string | { label: string; description?: string | null };
 
 export type ConditionValue = boolean | number | string;
 export type ShowWhen = Record<string, ConditionValue>;

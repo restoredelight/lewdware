@@ -2,6 +2,7 @@
 	import { clampScroll } from '$ui/scroll';
 	import { store } from './store.svelte';
 	import type {
+		EnumValue,
 		ModeOptionDto,
 		OptionEntryDto,
 		OptionGroupEntryDto,
@@ -12,7 +13,7 @@
 	import { ArrowUpTray, Check, ChevronRight, FolderOpen, Icon, XMark } from 'svelte-hero-icons';
 	import Slider from '$ui/Slider.svelte';
 	import Toggle from '$ui/Toggle.svelte';
-	import Select from '$ui/Select.svelte';
+	import Select, { type SelectOption } from '$ui/Select.svelte';
 	import Button from '$ui/Button.svelte';
 	import Card from '$ui/Card.svelte';
 	import Dialog from '$ui/Dialog.svelte';
@@ -101,9 +102,16 @@
 		return Math.min(1, 10 ** Math.floor(Math.log10(range / 100)));
 	}
 
-	function enumValues(opt: ModeOptionDto): Record<string, string> {
+	// A member arrives either as a bare label or as `{ label, description }` (see `EnumValue`);
+	// normalising here keeps that entirely out of the markup.
+	function enumOptions(opt: ModeOptionDto): SelectOption[] {
 		const tv = optionTypeValue(opt) as Record<string, unknown>;
-		return (tv?.values ?? {}) as Record<string, string>;
+		const values = (tv?.values ?? {}) as Record<string, EnumValue>;
+		return Object.entries(values).map(([value, member]) =>
+			typeof member === 'string'
+				? { value, label: member }
+				: { value, label: member.label, description: member.description }
+		);
 	}
 
 	function roundToStep(value: number, step: number): number {
@@ -155,7 +163,7 @@
 		if (typeKey === 'Integer' || typeKey === 'Number') return (tv?.min as number) ?? 0;
 		if (typeKey === 'Boolean') return true;
 		if (typeKey === 'Enum')
-			return Object.keys((tv?.values as Record<string, string>) ?? {})[0] ?? '';
+			return Object.keys((tv?.values as Record<string, EnumValue>) ?? {})[0] ?? '';
 		return '';
 	}
 
@@ -233,6 +241,17 @@
 		return true;
 	}
 
+	// A group is no more visible than its contents. `show_when` usually sits on the options rather
+	// than the group around them -- "Wallpaper & splash" holds two `pack_has_*`-gated options and is
+	// itself unconditional -- so a pack with neither would otherwise get an empty card with a
+	// heading and nothing to configure. Recursive, since a group may hold groups.
+	function hasVisibleContent(entry: OptionEntryDto): boolean {
+		if (entry.kind === 'Option') return true;
+		return entry.entries.some(
+			(child) => isVisible(child.show_when) && hasVisibleContent(child)
+		);
+	}
+
 	type EntryChunk =
 		| { kind: 'options'; items: (ModeOptionDto & { kind: 'Option' })[] }
 		| { kind: 'group'; group: OptionGroupEntryDto };
@@ -304,14 +323,18 @@
 			class="border-border bg-bg text-text w-56 rounded-sm border px-2.5 py-1.5 text-sm transition-colors hover:border-[var(--ui-border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
 		/>
 	{:else if typeKey === 'Enum'}
+		<!-- Sizes to its longest label rather than sitting at a fixed width: enum labels come from
+		     whatever mode is loaded, so a fixed box truncates perfectly reasonable ones while the
+		     row still has free space. The floor keeps short enums aligned with the text input
+		     above; past the ceiling the row wraps and `.value` ellipsizes as a last resort. -->
 		<Select
-			class="w-56"
+			class="w-fit min-w-56 max-w-80"
 			size="compact"
 			hideLabel
 			label={opt.label}
 			value={opt.value as string}
 			{disabled}
-			options={Object.entries(enumValues(opt)).map(([value, label]) => ({ value, label }))}
+			options={enumOptions(opt)}
 			onchange={(value) => store.setModeOption(opt.key, value)}
 		/>
 	{:else if typeKey === 'Integer' || typeKey === 'Number'}
@@ -613,7 +636,9 @@
 	bare: boolean = false,
 	inheritedDisabled: boolean = false
 )}
-	{@const chunks = chunkEntries(entries.filter((entry) => isVisible(entry.show_when)))}
+	{@const chunks = chunkEntries(
+		entries.filter((entry) => isVisible(entry.show_when) && hasVisibleContent(entry))
+	)}
 	{#each chunks as chunk, index (chunk.kind === 'group' ? `group:${chunk.group.key}` : `options:${chunk.items[0].key}`)}
 		{#if chunk.kind === 'options'}
 			<div

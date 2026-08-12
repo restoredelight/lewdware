@@ -181,8 +181,27 @@
             "values": {
               "type": "object",
               "additionalProperties": {
-                "type": "string",
-                "description": "The label shown to the user"
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "description": "The label shown to the user"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "description": "The label shown to the user"
+                      },
+                      "description": {
+                        "type": "string",
+                        "description": "A line explaining what choosing this does, shown under the label when the choice is open. Put the explanation here rather than growing the label into a sentence."
+                      }
+                    },
+                    "required": ["label"],
+                    "additionalProperties": false
+                  }
+                ]
               },
               "minProperties": 1
             },

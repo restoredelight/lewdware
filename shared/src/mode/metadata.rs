@@ -198,8 +198,87 @@ pub enum OptionType {
     },
     Enum {
         default: String,
-        values: IndexMap<String, String>,
+        values: IndexMap<String, EnumValue>,
     },
+}
+
+/// One member of an `Enum` option: the label shown for it, and optionally a line explaining what
+/// choosing it does.
+///
+/// Descriptions exist because an enum member's label is a *name*, not an explanation. Without
+/// somewhere to put the explanation, authors grow the label into a sentence, which then has to be
+/// truncated wherever the choice is displayed.
+///
+/// Both the authoring syntax and the built `.lwmode` metadata accept a bare string as shorthand
+/// for "this label, no description":
+///
+/// ```jsonc
+/// "values": {
+///   "constant": "Constant",
+///   "through": { "label": "Passes through", "description": "Clicks reach whatever is behind." }
+/// }
+/// ```
+///
+/// and a member without a description serialises back to a bare string, so a mode that uses none
+/// stays readable by engines built before this field existed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumValue {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+impl EnumValue {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            description: None,
+        }
+    }
+
+    pub fn described(label: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            description: Some(description.into()),
+        }
+    }
+}
+
+/// The two shapes an `EnumValue` is written in. Kept private: it is the serialisation form, not a
+/// thing callers should have to match on.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum EnumValueRepr {
+    Label(String),
+    Detailed {
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+}
+
+impl Serialize for EnumValue {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.description {
+            None => EnumValueRepr::Label(self.label.clone()),
+            Some(description) => EnumValueRepr::Detailed {
+                label: self.label.clone(),
+                description: Some(description.clone()),
+            },
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for EnumValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match EnumValueRepr::deserialize(deserializer)? {
+            EnumValueRepr::Label(label) => Self {
+                label,
+                description: None,
+            },
+            EnumValueRepr::Detailed { label, description } => Self { label, description },
+        })
+    }
 }
 
 /// An option value as it sits in the user's `config.json` (or arrives from `config/`'s
@@ -430,8 +509,13 @@ mod tests {
 
         let mut group_entries = IndexMap::new();
         let mut values = IndexMap::new();
-        values.insert("a".to_string(), "Option A".to_string());
-        values.insert("b".to_string(), "Option B".to_string());
+        values.insert("a".to_string(), EnumValue::new("Option A"));
+        // Described, so `metadata_roundtrip` covers the object form of an enum member through
+        // real CBOR -- untagged deserialisation is the part that could plausibly break there.
+        values.insert(
+            "b".to_string(),
+            EnumValue::described("Option B", "The other one"),
+        );
         group_entries.insert(
             "variant".to_string(),
             ModeEntry::Option(ModeOption {
@@ -696,11 +780,44 @@ mod tests {
         }
     }
 
+    /// The shorthand is what keeps every mode written before descriptions existed building, and
+    /// every `.lwmode` built before them loading. The asymmetry in the other direction matters
+    /// just as much: a member with no description must come back out as a bare string, so adding
+    /// this field didn't quietly change the format of modes that don't use it.
+    #[test]
+    fn an_enum_member_is_a_bare_label_unless_it_has_something_to_explain() {
+        let shorthand: EnumValue = serde_json::from_str(r#""Constant""#).unwrap();
+        assert_eq!(shorthand, EnumValue::new("Constant"));
+        assert_eq!(shorthand.description, None);
+
+        let detailed: EnumValue =
+            serde_json::from_str(r#"{"label": "Passes through", "description": "Clicks reach what's behind."}"#)
+                .unwrap();
+        assert_eq!(
+            detailed,
+            EnumValue::described("Passes through", "Clicks reach what's behind.")
+        );
+
+        // A `label`-only object is legal too -- an author adding a description to one member
+        // shouldn't have to keep the others in the shorthand form to avoid changing them.
+        let bare_object: EnumValue = serde_json::from_str(r#"{"label": "Constant"}"#).unwrap();
+        assert_eq!(bare_object, EnumValue::new("Constant"));
+
+        assert_eq!(serde_json::to_string(&shorthand).unwrap(), r#""Constant""#);
+        assert!(serde_json::to_string(&detailed).unwrap().starts_with('{'));
+
+        for value in [shorthand, detailed, bare_object] {
+            let round_tripped: EnumValue =
+                serde_json::from_str(&serde_json::to_string(&value).unwrap()).unwrap();
+            assert_eq!(round_tripped, value);
+        }
+    }
+
     #[test]
     fn each_option_type_accepts_its_own_stored_shape() {
         let mut enum_values = IndexMap::new();
-        enum_values.insert("a".to_string(), "A".to_string());
-        enum_values.insert("b".to_string(), "B".to_string());
+        enum_values.insert("a".to_string(), EnumValue::new("A"));
+        enum_values.insert("b".to_string(), EnumValue::new("B"));
 
         let pairs: &[(OptionType, StoredValue, OptionValue)] = &[
             (
@@ -793,8 +910,11 @@ mod tests {
 
     fn enum_option() -> ModeOption {
         let mut values = IndexMap::new();
-        values.insert("constant".to_string(), "Constant".to_string());
-        values.insert("accelerating".to_string(), "Accelerating".to_string());
+        values.insert("constant".to_string(), EnumValue::new("Constant"));
+        values.insert(
+            "accelerating".to_string(),
+            EnumValue::described("Accelerating", "Gets faster as it goes"),
+        );
         make_option(OptionType::Enum {
             default: "constant".to_string(),
             values,

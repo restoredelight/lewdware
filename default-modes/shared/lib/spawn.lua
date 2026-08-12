@@ -113,6 +113,24 @@ end
 ---   decision (not pace-scaled -- it's a probability, not a rate).
 --- @field close_count integer|(fun(): integer|nil) Mitosis spawn count -- same ownership as
 ---   close_chance.
+--- @field decorations boolean|nil Whether popups get a header, border and close button. Absent =
+---   true. With this off there is no close button and no header, so `draggable` is inert and
+---   captions have nowhere to render -- `click_to_close` or `auto_close_ms` become the only ways a
+---   popup goes away.
+--- @field draggable boolean|nil Whether popups can be dragged by their header. Absent = false.
+--- @field opacity number|nil Popup opacity between 0 and 1. Absent = fully opaque. Values below 1
+---   make the window transparent automatically (see PopupOpts.transparent).
+--- @field click_through boolean|nil Whether clicks pass through popups to whatever is beneath.
+---   Absent = false. This disables the *whole* window's hit-testing, header included, so a
+---   click-through popup cannot be closed by hand at all -- only by `auto_close_ms`, by dormancy,
+---   or by the panic key. Also makes `draggable` and `click_to_close` inert (the engine never
+---   delivers the events).
+--- @field click_to_close boolean|nil Whether clicking a popup's content closes it. Absent = false.
+---   Clicks on the header/close button are excluded by the engine, so this composes with
+---   `draggable`: drag by the header, click the content to dismiss.
+--- @field auto_close_ms integer|nil Close each popup this long after it appears on screen. Absent =
+---   popups stay until closed some other way. The clock starts at `on_spawn`, not at the call to
+---   open the popup, so slow-loading media gets its full time on screen.
 --- @field is_dormant fun(): boolean Sandbox: the dormancy cycle. Experience (no dormancy in this
 ---   milestone): a function that always returns false.
 --- @field on_spawn fun(window: Window)|nil Called right after a popup is opened and captioned,
@@ -127,7 +145,8 @@ end
 --- `spawn_opts`/`close_trigger` mirror the original inline function's parameters: an optional
 --- `{x, y, monitor}` spawn position (nil picks a random spot) and whether a close should be able
 --- to trigger mitosis (defaults true; mitosis's own recursive spawns pass false, matching the
---- pre-extraction behaviour).
+--- pre-extraction behaviour). `close_trigger` gates mitosis only -- popup-count bookkeeping happens
+--- for every popup regardless.
 ---@param opts SpawnOpts
 ---@return fun(spawn_opts?: table, close_trigger?: boolean)
 function M.make_spawner(opts)
@@ -153,14 +172,27 @@ function M.make_spawner(opts)
 		local item = media.random({ type = opts.popup_types, tags = tags })
 		if not item then return false end
 
+		-- The caller's `spawn_opts` only ever carries placement (see this function's docs); the
+		-- window-behaviour options are the mode's, and are the same for every popup it spawns. Copy
+		-- rather than mutate: the top-level call site passes nil, and mitosis builds a fresh table
+		-- per child that has no business gaining these keys.
+		local popup_opts = {}
+		if spawn_opts then
+			for k, v in pairs(spawn_opts) do popup_opts[k] = v end
+		end
+		popup_opts.decorations = opts.decorations
+		popup_opts.draggable = opts.draggable
+		popup_opts.opacity = opts.opacity
+		popup_opts.click_through = opts.click_through
+
 		local window
 		-- No theme named, here or at any other spawn site in these modes: a popup is drawn in
 		-- whatever look the user picked in the app, which is what a mode should want unless the
 		-- look is part of what it is building.
 		if item.type == "image" then
-			window = lewdware.popup.image(item, spawn_opts)
+			window = lewdware.popup.image(item, popup_opts)
 		elseif item.type == "video" then
-			window = lewdware.popup.video(item, spawn_opts)
+			window = lewdware.popup.video(item, popup_opts)
 		end
 
 		if opts.captions_enabled then
@@ -183,10 +215,34 @@ function M.make_spawner(opts)
 			start_movement(window, speed)
 		end
 
-		if close_trigger then
-			window:on_close(function()
-				popup_count = popup_count - 1
+		if opts.click_to_close then
+			-- Inert under `click_through` -- the engine never delivers the click -- so no guard
+			-- here; the two are mutually exclusive answers to one question at the call site.
+			window:on_click(function() window:close() end)
+		end
 
+		-- Set just before an automatic close, and read by the handler below to keep auto-closes out
+		-- of mitosis: a popup the user never touched shouldn't multiply.
+		local auto_closed = false
+		if opts.auto_close_ms then
+			-- Timed from `on_spawn` rather than from here: spawning is deferred while media loads
+			-- (execution model rule 5), so starting the clock now would eat a slow video's time on
+			-- screen. A window whose media fails never spawns, and never arms this.
+			window:on_spawn(function()
+				lewdware.after(opts.auto_close_ms, function()
+					auto_closed = true
+					window:close()
+				end)
+			end)
+		end
+
+		-- Registered unconditionally: the count must be given back for *every* popup, including
+		-- mitosis's own children (which pass close_trigger = false). Gating this on close_trigger
+		-- leaked a slot per child, ratcheting `max_popups` shut over a long run.
+		window:on_close(function()
+			popup_count = popup_count - 1
+
+			if close_trigger and not auto_closed then
 				-- `close_chance` absent means mitosis is inert for this pack (same convention as
 				-- movement above); when present but `close_count` isn't, one spawn is the sane
 				-- minimum rather than erroring on a nil loop bound.
@@ -209,8 +265,8 @@ function M.make_spawner(opts)
 						end)
 					end
 				end
-			end)
-		end
+			end
+		end)
 		return true
 	end
 

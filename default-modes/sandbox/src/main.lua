@@ -26,6 +26,11 @@ local spawn = require("lib.spawn")
 ---    movement_enabled: boolean,
 ---    movement_speed_min: number,
 ---    movement_speed_max: number,
+---    decorations_enabled: boolean,
+---    click_action: "nothing" | "close" | "through",
+---    draggable: boolean,
+---    window_opacity: number,
+---    auto_close_after: number | nil,
 ---    captions_enabled: boolean,
 ---    notifications_enabled: boolean,
 ---    notification_frequency: number,
@@ -80,9 +85,26 @@ if config.videos_enabled then table.insert(popup_types, "video") end
 -- lib/spawn.lua); this mode supplies its own values (user options) plus dormancy's window-list
 -- bookkeeping via `on_spawn`, which the shared module has no opinion on.
 
+-- The three click behaviours are mutually exclusive answers to one question ("what does clicking a
+-- popup do?"), which is why they're one enum option rather than two booleans: it makes the
+-- contradictory pairs -- click-to-close on a window that can't receive clicks -- unrepresentable
+-- instead of something to validate.
+local click_through = config.click_action == "through"
+local click_to_close = config.click_action == "close"
+
 local open_popup = spawn.make_spawner({
 	popup_types = popup_types,
 	max_popups = config.max_popups,
+	decorations = config.decorations_enabled,
+	draggable = config.draggable,
+	opacity = config.window_opacity,
+	click_through = click_through,
+	click_to_close = click_to_close,
+	-- Deliberately not forced on when `click_through` is set. Click-through popups can't be
+	-- dismissed by hand at all, so this combination fills the screen until `max_popups` is reached
+	-- and then stops spawning -- which is a legitimate thing to want, and the option's description
+	-- says so plainly rather than the mode overriding the choice.
+	auto_close_ms = config.auto_close_after and secs(config.auto_close_after),
 	captions_enabled = config.captions_enabled,
 	movement_enabled = config.movement_enabled,
 	movement_speed_min = config.movement_speed_min,

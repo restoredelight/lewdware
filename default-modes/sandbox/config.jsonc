@@ -8,44 +8,6 @@
   "author": "restoredelight",
   "entrypoint": "src/main.lua",
   "options": {
-    "popup_frequency": {
-      "label": "Popup frequency (seconds)",
-      "description": "How often popups appear",
-      "type": "number",
-      "default": 1,
-      "min": 0.1,
-      "max": 60,
-      "step": 0.1,
-      "show_when": { "spawn_mode": "constant" }
-    },
-    "max_popups": {
-      "label": "Maximum simultaneous popups",
-      "type": "integer",
-      "optional": true,
-      "default": 5,
-      "min": 1
-    },
-    "media_types": {
-      "type": "group",
-      "label": "Media types",
-      "options": {
-        "images_enabled": {
-          "label": "Images",
-          "type": "boolean",
-          "default": true
-        },
-        "videos_enabled": {
-          "label": "Videos",
-          "type": "boolean",
-          "default": true
-        },
-        "audio_enabled": {
-          "label": "Audio",
-          "type": "boolean",
-          "default": true
-        }
-      }
-    },
     "spawn_pattern": {
       "type": "group",
       "label": "Spawn pattern",
@@ -55,14 +17,33 @@
           "type": "enum",
           "default": "constant",
           "values": {
-            "constant": "Constant",
-            "accelerating": "Accelerating",
-            "random": "Random interval"
+            "constant": {
+              "label": "Constant",
+              "description": "Spawn a popup at a constant rate"
+            },
+            "accelerating": {
+              "label": "Accelerating",
+              "description": "Starts slow and gets faster with every popup"
+            },
+            "random": {
+              "label": "Random interval",
+              "description": "Waits a random amount of time between popups"
+            }
           }
+        },
+        "popup_frequency": {
+          "label": "Popup frequency (seconds)",
+          "description": "How often popups appear",
+          "type": "number",
+          "default": 1,
+          "min": 0.1,
+          "max": 60,
+          "step": 0.1,
+          "show_when": { "spawn_mode": "constant" }
         },
         "start_frequency": {
           "label": "Starting frequency (seconds)",
-          "description": "Initial time between popups; shrinks each spawn",
+          "description": "Initial time between popups",
           "type": "number",
           "default": 5,
           "min": 0.1,
@@ -71,7 +52,7 @@
         },
         "acceleration_factor": {
           "label": "Acceleration factor",
-          "description": "Interval is multiplied by this after each popup — values below 1 get faster over time",
+          "description": "The interval is multiplied by this after each popup",
           "type": "number",
           "default": 0.9,
           "min": 0.01,
@@ -103,6 +84,34 @@
           "min": 0.1,
           "step": 0.1,
           "show_when": { "spawn_mode": "random" }
+        },
+        "max_popups": {
+          "label": "Maximum simultaneous popups",
+          "type": "integer",
+          "optional": true,
+          "default": 50,
+          "min": 1
+        }
+      }
+    },
+    "media_types": {
+      "type": "group",
+      "label": "Media types",
+      "options": {
+        "images_enabled": {
+          "label": "Images",
+          "type": "boolean",
+          "default": true
+        },
+        "videos_enabled": {
+          "label": "Videos",
+          "type": "boolean",
+          "default": true
+        },
+        "audio_enabled": {
+          "label": "Audio",
+          "type": "boolean",
+          "default": true
         }
       }
     },
@@ -186,7 +195,7 @@
           "default": false
         },
         "movement_speed_min": {
-          "label": "Minimum speed (px/s)",
+          "label": "Minimum speed",
           "type": "number",
           "default": 50,
           "min": 10,
@@ -194,12 +203,67 @@
           "show_when": { "movement_enabled": true }
         },
         "movement_speed_max": {
-          "label": "Maximum speed (px/s)",
+          "label": "Maximum speed",
           "type": "number",
           "default": 150,
           "min": 10,
           "step": 10,
           "show_when": { "movement_enabled": true }
+        }
+      }
+    },
+    "window_behaviour": {
+      "type": "group",
+      "label": "Window behaviour",
+      "options": {
+        "click_action": {
+          "label": "Clicking a popup",
+          "description": "Triggered when the content of a popup is clicked",
+          "type": "enum",
+          "default": "nothing",
+          "values": {
+            "nothing": {
+              "label": "Does nothing"
+            },
+            "close": {
+              "label": "Closes it"
+            },
+            "through": {
+              "label": "Passes through",
+              "description": "The click reaches whatever is behind the popup. Popups will ignore the mouse completely, so you will not be able to close them manually."
+            }
+          }
+        },
+        "decorations_enabled": {
+          "label": "Popup header and decorations",
+          "type": "boolean",
+          "default": true
+        },
+        "draggable": {
+          "label": "Drag popups by their header",
+          "description": "No effect on popups that pass clicks through",
+          "type": "boolean",
+          "default": false,
+          "show_when": { "decorations_enabled": true }
+        },
+        "window_opacity": {
+          "label": "Popup opacity",
+          "type": "number",
+          "default": 1,
+          "min": 0.2,
+          "max": 1,
+          "step": 0.05,
+          "slider": true
+        },
+        "auto_close_after": {
+          "label": "Close popups automatically after (seconds)",
+          "description": "Timed from when the popup appears. Popups closed this way never spawn more, even with the close trigger enabled.",
+          "type": "number",
+          "optional": true,
+          "enabled_by_default": false,
+          "default": 10,
+          "min": 0.5,
+          "step": 0.5
         }
       }
     },
@@ -239,7 +303,7 @@
     },
     "web_opening": {
       "type": "group",
-      "label": "Web opening",
+      "label": "Links",
       "show_when": { "pack_has_web_links": true },
       "needs_permissions": ["open_links"],
       "options": {

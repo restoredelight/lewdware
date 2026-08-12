@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Check, ChevronDown, Icon } from '$icons';
-	export type SelectOption = { value: string; label: string; disabled?: boolean };
+	export type SelectOption = {
+		value: string;
+		label: string;
+		/** Shown under the label in the open list, never in the trigger — the trigger names the
+		 *  current choice, it doesn't re-explain it. */
+		description?: string | null;
+		disabled?: boolean;
+	};
 	type Props = {
 		label: string;
 		value?: string;
@@ -26,21 +33,45 @@
 	}: Props = $props();
 	const uid = $props.id();
 	const listId = `select-list-${uid}`;
+	// The width `.list.described` asks for, needed here too so `openList` can tell whether it fits.
+	const DESCRIBED_WIDTH = 340;
+	// Breathing room kept between the list and the edge of the window, on every side.
+	const EDGE_MARGIN = 12;
+
 	let open = $state(false);
 	let highlighted = $state(0);
 	let openAbove = $state(false);
+	let alignRight = $state(false);
 	let availableHeight = $state(280);
+	let availableWidth = $state(DESCRIBED_WIDTH);
 	let root: HTMLDivElement;
 	let trigger: HTMLButtonElement;
 	const selected = $derived(options.find((option) => option.value === value));
+	// Descriptions change how the list has to be sized: see `.list.described`.
+	const described = $derived(options.some((option) => option.description));
 
 	function openList() {
 		if (disabled) return;
 		const rect = trigger.getBoundingClientRect();
-		const spaceBelow = window.innerHeight - rect.bottom - 12;
-		const spaceAbove = rect.top - 12;
+		const spaceBelow = window.innerHeight - rect.bottom - EDGE_MARGIN;
+		const spaceAbove = rect.top - EDGE_MARGIN;
 		openAbove = spaceBelow < 160 && spaceAbove > spaceBelow;
 		availableHeight = Math.max(48, Math.min(280, openAbove ? spaceAbove : spaceBelow));
+
+		// Same flip on the horizontal axis. The list can be wider than the trigger it hangs off —
+		// descriptions make it reliably so — and a trigger sitting near the right edge of the window
+		// would then run the list off-screen, where a viewport-relative `max-width` can't save it:
+		// that knows the window's width but not where in the window this element is. So measure the
+		// room on each side and anchor to whichever of the trigger's edges leaves the list on screen.
+		//
+		// `desired` is the trigger's own width when there are no descriptions: the list is
+		// `max-content` then, and its growth past the trigger is opportunistic rather than something
+		// to relocate the whole list for.
+		const desired = described ? DESCRIBED_WIDTH : rect.width;
+		const spaceRight = window.innerWidth - rect.left - EDGE_MARGIN;
+		const spaceLeft = rect.right - EDGE_MARGIN;
+		alignRight = desired > spaceRight && spaceLeft > spaceRight;
+		availableWidth = Math.max(rect.width, alignRight ? spaceLeft : spaceRight);
 		highlighted = Math.max(
 			0,
 			options.findIndex((option) => option.value === value)
@@ -123,7 +154,10 @@
 			id={listId}
 			class="list"
 			class:above={openAbove}
+			class:right={alignRight}
+			class:described
 			style:max-height={`${availableHeight}px`}
+			style:max-width={`${availableWidth}px`}
 			role="listbox"
 			aria-label={label}
 		>
@@ -138,7 +172,10 @@
 					onpointerenter={() => (highlighted = index)}
 					onclick={(event) => choose(option, event)}
 				>
-					<span>{option.label}</span>{#if option.value === value}<span
+					<span class="option-text">
+						<span class="option-label">{option.label}</span>
+						{#if option.description}<small>{option.description}</small>{/if}
+					</span>{#if option.value === value}<span
 							class="selected-icon"
 							aria-hidden="true"><Icon src={Check} mini /></span
 						>{/if}
@@ -217,14 +254,34 @@
 		left: 0;
 		width: max-content;
 		min-width: 100%;
-		max-width: min(360px, calc(100vw - 24px));
+		/* Real ceiling is the inline `max-width` from `openList`, which knows how much room there
+		   actually is beside this particular trigger. This is only the cap on how wide a long list
+		   of labels may get when there is room to spare. */
+		max-width: 420px;
 		max-height: 280px;
+		/* `overflow-y: auto` alone would compute `overflow-x` to `auto` as well, making this a
+		   scroll container on both axes — anything too wide would be clipped and scrollable
+		   sideways instead of being wrapped or ellipsized. Say what we mean instead. */
+		overflow-x: hidden;
 		overflow-y: auto;
 		padding: 4px;
 		border: 1px solid var(--ui-border);
 		border-radius: var(--ui-radius-md);
 		background: var(--ui-surface);
 		box-shadow: 0 12px 32px rgb(0 0 0 / 0.4);
+	}
+	/* A description has to wrap, and wrapping needs a width to wrap *into*. `max-content` can't
+	   supply one: a wrapping element's max-content contribution is its full unwrapped length, so
+	   the list asks for a width no description will ever be given and then clips what overflows.
+	   With descriptions present, take a definite width and let the text flow inside it. */
+	.list.described {
+		width: 340px;
+	}
+	/* Anchored to the trigger's right edge instead of its left, so a list wider than its trigger
+	   grows into the window rather than out of it. See `openList`. */
+	.list.right {
+		left: auto;
+		right: 0;
 	}
 	.list.above {
 		top: auto;
@@ -247,6 +304,24 @@
 		text-align: left;
 		white-space: nowrap;
 		cursor: pointer;
+	}
+	.option-text {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		gap: 2px;
+	}
+	/* The label stays on one line and ellipsizes; only the description wraps, so a long explanation
+	   grows the row downwards instead of squeezing the name it belongs to. */
+	.option-label {
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.option-text small {
+		color: var(--ui-muted);
+		font-size: 11px;
+		line-height: 1.35;
+		white-space: normal;
 	}
 	.list button.highlighted {
 		background: var(--ui-surface-raised);

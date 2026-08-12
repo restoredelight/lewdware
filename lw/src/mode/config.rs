@@ -87,7 +87,10 @@ pub enum OptionType {
     #[serde(rename = "enum")]
     Enum {
         default: Option<String>,
-        values: IndexMap<String, String>,
+        /// Each member is either a bare label or `{ "label": ..., "description": ... }` -- see
+        /// `shared::mode::EnumValue`, which is reused verbatim so the authoring syntax and the
+        /// built metadata can't drift apart.
+        values: IndexMap<String, mode::EnumValue>,
     },
 }
 
