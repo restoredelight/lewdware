@@ -851,6 +851,64 @@ mod tests {
         file
     }
 
+    /// `pack_fixture_with_tagged_image`'s counterpart for a *video*. Needed because the media type
+    /// a pack ends up storing is not the one the author supplied: an animated GIF -- Edgeware's
+    /// usual `loading_splash` -- probes as `FileInfo::Video` (see `shared/src/encode.rs`), so a
+    /// splash-tagged video is the ordinary case, not an exotic one.
+    fn pack_fixture_with_tagged_video(tags: &[&str]) -> NamedTempFile {
+        const VIDEO_BYTES: &[u8] = b"not a real webm, just needs to be some bytes";
+
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        shared::db::migrate(&db).unwrap();
+
+        db.execute(
+            "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, duration, audio, hash) \
+             VALUES ('clip.webm', 'video', 0, 0, 64, 64, 0, 1.5, 0, x'00')",
+            [],
+        )
+        .unwrap();
+        for tag in tags {
+            db.execute("INSERT INTO tags (name) VALUES (?)", [*tag])
+                .unwrap();
+            let tag_id = db.last_insert_rowid();
+            db.execute(
+                "INSERT INTO media_tags (media_id, tag_id) VALUES (1, ?)",
+                [tag_id],
+            )
+            .unwrap();
+        }
+
+        let metadata = shared::read_pack::Metadata {
+            name: "test-pack".to_string(),
+            ..Default::default()
+        };
+        let metadata_bytes = metadata.to_buf().unwrap();
+
+        let mut header = shared::read_pack::Header::new();
+        header.metadata_offset = shared::read_pack::HEADER_SIZE as u64;
+        header.metadata_length = metadata_bytes.len() as u64;
+        header.index_offset = header.metadata_offset + header.metadata_length;
+
+        let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
+        header.index_length = db_bytes.len() as u64;
+        let video_offset = header.index_offset + header.index_length;
+
+        db.execute(
+            "UPDATE media SET offset = ?, length = ? WHERE file_name = 'clip.webm'",
+            rusqlite::params![video_offset, VIDEO_BYTES.len() as u64],
+        )
+        .unwrap();
+        let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&header.to_buf().unwrap()).unwrap();
+        file.write_all(&metadata_bytes).unwrap();
+        file.write_all(&db_bytes).unwrap();
+        file.write_all(VIDEO_BYTES).unwrap();
+        file.flush().unwrap();
+        file
+    }
+
     /// Build a `.lwpack` fixture with the given tagged image rows (name, tags) and, if `Some`, a
     /// `pack_data` row named `"behaviour"` holding the given bytes. Media rows use empty archive
     /// ranges because `list`/`random` queries never read their bytes (see `MediaPack::parse_media`).
@@ -3625,7 +3683,10 @@ mod tests {
                 let sources = as_str_sources(&owned);
 
                 let mut config = base_default_mode_config();
-                config.insert("decorations_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert(
+                    "decorations_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
                 config.insert("draggable".to_string(), OptionValue::Boolean(true));
                 config.insert("window_opacity".to_string(), OptionValue::Number(0.5));
                 config.insert(
@@ -4211,6 +4272,134 @@ mod tests {
                     harness.recorded(),
                     vec![
                         Recorded::SpawnImage { media_id: 1 },
+                        Recorded::CloseWindow { id: ItemId(0) },
+                    ]
+                );
+            })
+            .await;
+    }
+
+    /// The pack's wallpaper and its splash are scenery, not popup content: they were picked to sit
+    /// behind everything and to open the session. Letting the ordinary spawn loop draw from them
+    /// puts the desktop background in a popup and gives away that the splash was never special.
+    /// Media rows here are ids 1..=3 in fixture order, so the assertion names exactly which ones
+    /// were allowed through.
+    #[tokio::test(start_paused = true)]
+    async fn ordinary_popups_never_draw_from_the_wallpaper_or_splash_pools() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    wallpaper_tags: vec!["wallpaper".to_string()],
+                    splash_tags: vec!["splash".to_string()],
+                    ..Default::default()
+                };
+
+                let mut config = base_default_mode_config();
+                // Leave the two features themselves off: this is about the *popup* pool, and their
+                // own spawns would otherwise be mixed into what we assert on.
+                config.insert("wallpaper_enabled".to_string(), OptionValue::Boolean(false));
+                config.insert("splash_enabled".to_string(), OptionValue::Boolean(false));
+                config.insert("max_popups".to_string(), OptionValue::Null);
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture_with_data(
+                        &[
+                            ("ordinary.avif", &[]),
+                            ("bg.avif", &["wallpaper"]),
+                            ("intro.avif", &["splash"]),
+                        ],
+                        None,
+                    ),
+                    content,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                // Long enough that a pool of three would almost certainly have offered up both of
+                // the excluded rows at least once.
+                harness.advance(Duration::from_millis(40_000)).await;
+
+                let spawned: Vec<u64> = harness
+                    .recorded()
+                    .into_iter()
+                    .filter_map(|record| match record {
+                        Recorded::SpawnImage { media_id } => Some(media_id),
+                        _ => None,
+                    })
+                    .collect();
+
+                assert!(
+                    spawned.len() > 5,
+                    "expected a run of popups, got {spawned:?}"
+                );
+                for media_id in spawned {
+                    assert_eq!(
+                        media_id, 1,
+                        "only `ordinary.avif` (id 1) should ever be spawned as a popup"
+                    );
+                }
+            })
+            .await;
+    }
+
+    /// The splash a pack actually ships is usually animated, and animation means the pack stores a
+    /// *video* (`shared/src/encode.rs` probes animated gif/apng/webp as `FileInfo::Video`). Querying
+    /// images alone sent every one of those down rule 5's skip branch, so `splash_enabled` was shown
+    /// and honoured for still splashes while doing nothing at all for the common case.
+    #[tokio::test(start_paused = true)]
+    async fn an_animated_splash_is_shown_like_any_other() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    splash_tags: vec!["splash".to_string()],
+                    ..Default::default()
+                };
+
+                let mut config = isolated_process_config();
+                config.insert("splash_enabled".to_string(), OptionValue::Boolean(true));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture_with_tagged_video(&["splash"]),
+                    content,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                assert_eq!(
+                    harness.recorded(),
+                    vec![Recorded::SpawnVideo {
+                        media_id: 1,
+                        volume: 1.0
+                    }],
+                    "an animated splash should spawn as a video popup"
+                );
+
+                // Same fade-in -> hold -> fade-out -> close chain as the still case: the window's
+                // lifetime is the schedule's, not the video's, which is why it loops.
+                harness.send_event(Event::FadeFinish {
+                    id: ItemId(0),
+                    fade_id: 0,
+                });
+                harness.pump_events();
+                harness.advance(Duration::from_millis(1600)).await;
+                harness.send_event(Event::FadeFinish {
+                    id: ItemId(0),
+                    fade_id: 1,
+                });
+                harness.pump_events();
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnVideo {
+                            media_id: 1,
+                            volume: 1.0
+                        },
                         Recorded::CloseWindow { id: ItemId(0) },
                     ]
                 );

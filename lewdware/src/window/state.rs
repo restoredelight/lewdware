@@ -44,6 +44,12 @@ pub struct WindowState {
     theme: Theme,
     appearance: Appearance,
     draggable: bool,
+    /// Where in the window the cursor grabbed it, when an interactive drag is in progress: the
+    /// window-relative physical position of the press that started it. `None` when not dragging.
+    ///
+    /// Held fixed for the whole drag — that point of the header stays under the cursor, which is
+    /// what makes the window follow rather than drift.
+    drag_anchor: Option<PhysicalPosition<f64>>,
     cursor_position: Option<PhysicalPosition<f64>>,
     content_hover: bool,
     content_clicked: bool,
@@ -72,6 +78,31 @@ struct Fade {
     duration: Duration,
     start: Instant,
     easing: Easing,
+}
+
+/// Where a window being dragged should sit, so that the point the cursor grabbed stays under the
+/// cursor.
+///
+/// `current` is the window's monitor-relative logical position; `anchor` and `cursor` are both
+/// window-relative *physical* positions — the press that started the drag and where the cursor is
+/// now. Their difference is how far the grabbed point has travelled, and the window has to travel
+/// the same distance to catch up with it.
+///
+/// Pulled out of `handle_cursor_moved` because the mixed coordinate spaces are the part worth
+/// testing, and `WindowState` itself needs a live window to exist.
+fn dragged_position(
+    current: LogicalPosition<i32>,
+    anchor: PhysicalPosition<f64>,
+    cursor: PhysicalPosition<f64>,
+    scale_factor: f64,
+) -> LogicalPosition<i32> {
+    let delta: LogicalPosition<f64> =
+        PhysicalPosition::new(cursor.x - anchor.x, cursor.y - anchor.y).to_logical(scale_factor);
+
+    LogicalPosition::new(
+        current.x + delta.x.round() as i32,
+        current.y + delta.y.round() as i32,
+    )
 }
 
 impl WindowState {
@@ -142,6 +173,7 @@ impl WindowState {
             theme: opts.popup_opts.theme,
             appearance,
             draggable: opts.popup_opts.draggable,
+            drag_anchor: None,
             cursor_position: None,
             content_hover: false,
             content_clicked: false,
@@ -401,6 +433,32 @@ impl WindowState {
         self.cursor_position = Some(position);
         self.decorations.handle_cursor_moved(position);
         self.content_hover = self.in_content_bounds(position);
+
+        // We move the window ourselves rather than handing the drag to the window manager. Every
+        // popup is a dock-type window on Linux (see `WindowPool`), and window managers do not let
+        // the user move panels: KWin drops the `_NET_WM_MOVERESIZE` that winit's `drag_window()`
+        // sends, succeeding client-side while nothing happens. Doing it here also keeps the drag
+        // free of the snapping and tiling a WM would apply — behaviour meant for application
+        // windows, not for an undecorated always-on-top overlay — and behaves the same everywhere.
+        //
+        // Deliberately *not* clamped to the monitor's allowed area: that limit governs where
+        // Lewdware puts windows, not where the user is allowed to drag one to.
+        if let Some(anchor) = self.drag_anchor {
+            let target =
+                dragged_position(self.position, anchor, position, self.window.scale_factor());
+
+            // `self.position` is deliberately left to `handle_window_moved`, which is the single
+            // writer for it. Until the move lands, the window has not moved, so each further
+            // event reports a cursor that has travelled further from the anchor and the target
+            // grows to match; once it lands, the cursor returns towards the anchor and the delta
+            // shrinks. Writing the position here as well would count the same motion twice.
+            if target != self.position {
+                self.window.set_outer_position(LogicalPosition::new(
+                    self.monitor_position.x + target.x,
+                    self.monitor_position.y + target.y,
+                ));
+            }
+        }
     }
 
     pub fn handle_cursor_left(&mut self) {
@@ -408,21 +466,22 @@ impl WindowState {
         self.decorations.handle_cursor_left();
         self.content_hover = false;
         self.content_clicked = false;
+        // `drag_anchor` deliberately survives this. A drag faster than the window can follow takes
+        // the cursor outside it, and the press holds an implicit pointer grab, so the moves and the
+        // release still arrive here — dropping the drag on the way out would abort exactly the
+        // gestures that need it most. The release is what ends a drag.
     }
 
     pub fn handle_mouse_down(&mut self) {
         self.decorations.handle_mouse_down();
 
         if self.draggable
-            && self
-                .cursor_position
-                .is_some_and(|position| self.decorations.is_drag_region(position))
+            && let Some(position) = self.cursor_position
+            && self.decorations.is_drag_region(position)
         {
             // A scripted move and an interactive move cannot sensibly own the window at once.
             self.current_move = None;
-            if let Err(error) = self.window.drag_window() {
-                tracing::warn!("Could not start dragging window: {error}");
-            }
+            self.drag_anchor = Some(position);
         }
 
         if self.content_hover {
@@ -442,6 +501,8 @@ impl WindowState {
 
     pub fn handle_mouse_up(&mut self) -> MouseUpResult {
         let should_close = self.decorations.handle_mouse_up();
+
+        self.drag_anchor = None;
 
         let content_click = self.content_hover && self.content_clicked;
         self.content_clicked = false;
@@ -535,5 +596,78 @@ fn x11_raise(window: &Window) {
     unsafe {
         (xlib.XRaiseWindow)(display.as_ptr().cast(), xlib_win.window);
         (xlib.XFlush)(display.as_ptr().cast());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The window has to travel exactly as far as the cursor did, so the grabbed point of the
+    /// header stays under the pointer instead of sliding away from it over a long drag.
+    #[test]
+    fn a_window_follows_the_cursor_by_the_distance_it_moved() {
+        let moved = dragged_position(
+            LogicalPosition::new(100, 200),
+            PhysicalPosition::new(40.0, 10.0),
+            PhysicalPosition::new(55.0, 30.0),
+            1.0,
+        );
+        assert_eq!(moved, LogicalPosition::new(115, 220));
+    }
+
+    /// Cursor positions arrive physical while window positions are logical, so the delta has to be
+    /// scaled on the way across. Getting this wrong is invisible at 1x — which is exactly the scale
+    /// the decorations' own drag-region tests run at — and moves the window by twice the cursor's
+    /// travel on the HiDPI screens where dragging actually gets used.
+    #[test]
+    fn the_cursor_delta_is_scaled_out_of_physical_space() {
+        let moved = dragged_position(
+            LogicalPosition::new(0, 0),
+            PhysicalPosition::new(0.0, 0.0),
+            PhysicalPosition::new(30.0, 60.0),
+            2.0,
+        );
+        assert_eq!(moved, LogicalPosition::new(15, 30));
+    }
+
+    #[test]
+    fn dragging_up_and_left_moves_the_window_up_and_left() {
+        let moved = dragged_position(
+            LogicalPosition::new(300, 300),
+            PhysicalPosition::new(50.0, 50.0),
+            PhysicalPosition::new(20.0, 30.0),
+            1.0,
+        );
+        assert_eq!(moved, LogicalPosition::new(270, 280));
+    }
+
+    /// Negative coordinates are reachable on purpose: positions are relative to the area the user
+    /// allowed Lewdware to use, and that limit is about where *Lewdware* puts windows, not where
+    /// the user may drag one to. Nothing here clamps.
+    #[test]
+    fn a_drag_may_take_a_window_outside_the_allowed_area() {
+        let moved = dragged_position(
+            LogicalPosition::new(10, 10),
+            PhysicalPosition::new(30.0, 30.0),
+            PhysicalPosition::new(0.0, 0.0),
+            1.0,
+        );
+        assert_eq!(moved, LogicalPosition::new(-20, -20));
+    }
+
+    /// A fractional scale factor is the common case on the desktops this runs on (the log from the
+    /// report that prompted this showed 2.09375), so rounding has to be defined rather than
+    /// truncating a sub-pixel remainder towards zero on every event and losing ground over a drag.
+    #[test]
+    fn a_fractional_scale_factor_rounds_rather_than_truncates() {
+        let moved = dragged_position(
+            LogicalPosition::new(0, 0),
+            PhysicalPosition::new(0.0, 0.0),
+            PhysicalPosition::new(10.0, 10.0),
+            2.09375,
+        );
+        // 10 / 2.09375 = 4.776…
+        assert_eq!(moved, LogicalPosition::new(5, 5));
     }
 }

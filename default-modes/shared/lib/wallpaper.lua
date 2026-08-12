@@ -58,17 +58,32 @@ function M.show_splash()
 	local tags = content().splash_tags
 	if not tags or #tags == 0 then return end -- opt-in only: no tags declared, no feature
 
-	local image = media.random({ type = { "image" }, tags = tags })
-	if not image then return end -- rule 5: no matching media, skip
+	-- Videos count as splashes, not just stills. Edgeware's `loading_splash` is very often an
+	-- animated GIF, and an animated GIF is a *video* once a pack is built (see `shared/src/encode.rs`
+	-- -- animated gif/apng/webp all probe as `FileInfo::Video`). Querying images alone made every
+	-- animated splash silently take rule 5's skip branch and never appear at all.
+	local item = media.random({ type = { "image", "video" }, tags = tags })
+	if not item then return end -- rule 5: no matching media, skip
 
-	local window = lewdware.popup.image(image, {
+	local opts = {
 		decorations = false,
 		click_through = true,
 		opacity = 0,
 		x = { percent = 50 },
 		y = { percent = 50 },
 		anchor = "center",
-	})
+	}
+
+	local window
+	if item.type == "video" then
+		-- Looping is what the default already does, said explicitly because this window's lifetime
+		-- belongs to the fade schedule below: `loop = false` closes the window when the video ends,
+		-- which would race the hold and the fade-out.
+		opts.loop = true
+		window = lewdware.popup.video(item, opts)
+	else
+		window = lewdware.popup.image(item, opts)
+	end
 
 	window:fade({ opacity = 1, duration = SPLASH_FADE_MS }, function()
 		lewdware.after(SPLASH_HOLD_MS, function()

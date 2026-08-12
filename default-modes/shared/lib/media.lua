@@ -29,6 +29,25 @@ local function disabled_tags()
 end
 M.disabled_tags = disabled_tags
 
+-- Tags marking media the pack uses for one of its own mechanisms rather than as popup content. A
+-- popup showing the desktop wallpaper or the loading splash is a bug: those were chosen to be a
+-- backdrop and an intro, they are usually the least interesting images in the pack, and seeing the
+-- splash again as an ordinary popup gives away that it was never special. See
+-- behaviour-design/default-mode.md: "The modes' own special-tag exclusions live in the same query
+-- layer; exclusion always wins over any inclusion."
+--
+-- These two lists are the whole set, because they are the only *media* tag lists in `Content` --
+-- subliminals look like a third but are a text pool (see lib/subliminals.lua).
+---@return string[]
+local function special_tags()
+	local content = rawget(_G, "__lewdware_content") or {}
+	local special = {}
+	for _, list in ipairs({ content.wallpaper_tags or {}, content.splash_tags or {} }) do
+		for _, tag in ipairs(list) do table.insert(special, tag) end
+	end
+	return special
+end
+
 -- Normalizes the shorthand array form (`tags = { "a", "b" }`, meaning "any of these" -- see
 -- `lewdware.media.*`'s documented shorthand) to the object form, so `merge_tags` always has
 -- `.any`/`.all`/`.none` to read regardless of which form the caller used. Without this, a
@@ -43,16 +62,29 @@ local function normalize_tags(tags)
 	return tags
 end
 
--- Unions the disabled-group tags into opts.tags.none, on top of whatever the caller already
--- asked to exclude. A pure union composes correctly regardless of what else populates `none`
--- later (e.g. a future timeline tag change) -- see default-mode.md's "disabled groups subtract
--- *after* timeline tag changes".
+-- Unions the disabled-group tags and the special tags into opts.tags.none, on top of whatever the
+-- caller already asked to exclude. A pure union composes correctly regardless of what else
+-- populates `none` later (e.g. a future timeline tag change) -- see default-mode.md's "disabled
+-- groups subtract *after* timeline tag changes".
 local function merge_tags(opts)
 	opts = opts or {}
+	local tags = normalize_tags(opts.tags)
+
+	-- A query that names a special tag is asking for exactly that media -- wallpaper.lua's two
+	-- queries are the entire reason these tags exist -- so an explicit inclusion opts out of its own
+	-- exclusion. Anything else gets it, including a pool narrowed by a timeline's tag set, which is
+	-- what makes this safe as a default: a query has to ask for the wallpaper by name to get one,
+	-- and a new call site added later is excluded without having to remember to be.
+	local requested = {}
+	for _, tag in ipairs(tags.any or {}) do requested[tag] = true end
+	for _, tag in ipairs(tags.all or {}) do requested[tag] = true end
+
 	local excluded = disabled_tags()
+	for _, tag in ipairs(special_tags()) do
+		if not requested[tag] then table.insert(excluded, tag) end
+	end
 	if #excluded == 0 then return opts end
 
-	local tags = normalize_tags(opts.tags)
 	local none = {}
 	for _, t in ipairs(tags.none or {}) do table.insert(none, t) end
 	for _, t in ipairs(excluded) do table.insert(none, t) end
