@@ -17,6 +17,7 @@ Notable modules:
 - `ipc` — the IPC protocols used to talk to the supervisor daemon.
 - `wallpaper` — getting, setting and restoring the desktop wallpaper.
 - `encode` — shared media-encoding helpers.
-- `monitor` — monitor identity, reconciled between the engine and the config app.
+- `monitor` — monitor identity, reconciled between the engine and the config app,
+  and the per-monitor region popups are confined to.
 - `attribution` — best-effort artist/source extraction from media metadata,
   used to pre-fill the pack editor's attribution fields.

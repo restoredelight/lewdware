@@ -1,4 +1,5 @@
 pub mod attribution;
+pub mod audio;
 #[cfg(feature = "autostart")]
 pub mod autostart;
 pub mod behaviour;

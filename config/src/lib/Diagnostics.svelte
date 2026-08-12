@@ -1,9 +1,10 @@
 <script lang="ts">
+	import { clampScroll } from '$ui/scroll';
 	import { onMount, tick } from 'svelte';
 	import { api } from './api';
 	import { store } from './store.svelte';
 	import { taskFeedback } from './taskFeedback.svelte';
-	import type { DiagnosticsDto, LogLevel, LogRecordDto } from './types';
+	import { isFullRegion, type DiagnosticsDto, type LogLevel, type LogRecordDto } from './types';
 	import Button from '$ui/Button.svelte';
 	import Card from '$ui/Card.svelte';
 	import Select from '$ui/Select.svelte';
@@ -164,10 +165,16 @@
 		const system = diagnostics.system;
 		const monitors = store.monitors.length
 			? store.monitors
-					.map(
-						(monitor) =>
-							`- ${monitor.name}: ${monitor.width}×${monitor.height}${monitor.primary ? ' (primary)' : ''}${monitor.disabled ? ' (disabled)' : ''}`
-					)
+					.map((monitor) => {
+						// The region belongs in a bug report: "popups only appear in one corner" is
+						// indistinguishable from a placement bug without it.
+						const region = isFullRegion(monitor.region)
+							? ''
+							: ` (area ${Math.round(monitor.region.width * 100)}%×${Math.round(monitor.region.height * 100)}%` +
+								` at ${Math.round(monitor.region.x * 100)}%,${Math.round(monitor.region.y * 100)}%)`;
+
+						return `- ${monitor.name}: ${monitor.width}×${monitor.height}${monitor.primary ? ' (primary)' : ''}${monitor.disabled ? ' (disabled)' : ''}${region}`;
+					})
 					.join('\n')
 			: '- Unavailable';
 		return [
@@ -215,7 +222,7 @@
 	}
 </script>
 
-<div class="min-h-0 flex-1 overflow-y-auto">
+<div class="min-h-0 flex-1 overflow-y-auto" use:clampScroll>
 	<div class="mx-auto flex h-full min-h-[36rem] w-full max-w-5xl flex-col gap-6 p-8">
 		<header class="flex items-start justify-between gap-6">
 			<div class="max-w-2xl">

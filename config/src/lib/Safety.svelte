@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { clampScroll } from '$ui/scroll';
 	import { onMount } from 'svelte';
 	import { store } from './store.svelte';
 	import { api } from './api';
@@ -150,7 +151,7 @@
 	];
 </script>
 
-<div class="flex-1 overflow-y-auto">
+<div class="flex-1 overflow-y-auto" use:clampScroll>
 	<div class="mx-auto flex w-full max-w-4xl flex-col gap-6 p-8">
 		<header class="max-w-2xl">
 			<h1 class="ui-page-title">Safety</h1>

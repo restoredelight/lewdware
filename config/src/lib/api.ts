@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
+	AudioDeviceInfo,
 	ConfigDto,
 	DiagnosticsDto,
 	EngineStatusDto,
@@ -12,6 +13,7 @@ import type {
 	PickPackResult,
 	ScheduleStatusDto,
 	StoredValue,
+	TestAudioResult,
 	ThemeCatalogueDto,
 	UploadModeResult,
 	WallpaperSupportDto
@@ -38,6 +40,13 @@ export const api = {
 	getThemeCatalogue: () => invoke<ThemeCatalogueDto>('get_theme_catalogue'),
 
 	getMonitors: () => invoke<MonitorDto[]>('get_monitors'),
+
+	getAudioDevices: () => invoke<AudioDeviceInfo[]>('get_audio_devices'),
+
+	// Resolves only once the chime has finished playing, so the button can stay busy for its
+	// duration. `device` is `null` for the system default.
+	testAudioDevice: (device: string | null) =>
+		invoke<TestAudioResult>('test_audio_device', { device }),
 
 	getModeGroups: () => invoke<ModeGroupDto[]>('get_mode_groups'),
 

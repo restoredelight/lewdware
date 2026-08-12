@@ -49,12 +49,28 @@ pub struct AppConfig {
     pub appearance: String,
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
+    /// The sub-area of each monitor popups are confined to, keyed exactly like
+    /// `disabled_monitors` (see `shared::monitor`) -- a monitor with no entry gets the whole
+    /// screen. `#[serde(default)]` is required: every pre-existing `config.json` has no
+    /// `"monitor_regions"` key.
+    ///
+    /// Deliberately separate from `disabled_monitors` rather than folded into it as a zero-area
+    /// region: "don't use this screen" and "use this corner of this screen" are different
+    /// answers, and a user who disables a monitor and re-enables it should get their region back,
+    /// not a monitor that is on but unusable.
+    #[serde(default)]
+    pub monitor_regions: HashMap<String, crate::monitor::MonitorRegion>,
     pub capabilities: Capabilities,
     /// Sub-settings for the `capabilities.set_wallpaper` permission. `#[serde(default)]` is required:
     /// every pre-existing `config.json` has no `"wallpaper"` key.
     #[serde(default)]
     pub wallpaper: WallpaperConfig,
     pub volume: Volume,
+    /// Which output device sounds play on. `None` -- the default, and every pre-existing
+    /// `config.json` -- means the system default, which the engine re-resolves every time it opens
+    /// a sink rather than pinning once, so plugging in headphones does the expected thing.
+    #[serde(default)]
+    pub audio_device: Option<AudioDeviceChoice>,
     /// `design/scheduling.md`'s schedule vocabulary (windows/jitter/quiet hours) plus the
     /// grace-notification toggle. `enabled` also drives OS autostart-at-login registration
     /// one-to-one (see `config/src-tauri/src/lib.rs`'s `set_schedule_enabled`). `#[serde(default)]`
@@ -163,6 +179,25 @@ impl Default for Volume {
     }
 }
 
+/// A chosen audio output: the id the engine resolves, plus the name it went by when it was picked.
+///
+/// The name is carried purely so the picker can say *which* output is missing when that output
+/// isn't connected -- an id like `pulseaudio:bluez_output.F4_9D_8A_09_4E_AA.1` is not something to
+/// show a user. It is never used to find a device: `id` is the identity, and a present device is
+/// always labelled from the live enumeration, so a device renamed since it was chosen shows its
+/// current name rather than this one.
+///
+/// A device that is absent when a session starts falls back to the default *for that session* and
+/// keeps this setting intact, so unplugging a USB headset never silently rewrites the choice.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct AudioDeviceChoice {
+    /// `cpal::DeviceId`'s `Display` form (`host:backend-id`) -- see
+    /// [`crate::audio::AudioDeviceInfo::id`].
+    pub id: String,
+    /// The device's name as it read when chosen. Display-only, and only when the device is absent.
+    pub name: String,
+}
+
 /// Which mode runs, and where its `.lwmode` data comes from. Each variant identifies exactly one
 /// mode -- there's no "which mode within the file" selector, since one `.lwmode` file is now
 /// always exactly one mode (see `shared::mode::Metadata`'s doc comment). `Sandbox`/`Experience`
@@ -258,9 +293,11 @@ impl Default for AppConfig {
                 },
             },
             disabled_monitors: Vec::new(),
+            monitor_regions: HashMap::new(),
             capabilities: Capabilities::default(),
             wallpaper: WallpaperConfig::default(),
             volume: Volume::default(),
+            audio_device: None,
             schedule: ScheduleConfig::default(),
         }
     }
@@ -414,6 +451,50 @@ mod tests {
 
         let config: AppConfig = serde_json::from_value(json).unwrap();
         assert!(config.capabilities.open_links);
+    }
+
+    /// Same risk as `schedule` below, one field later: nobody's `config.json` has a
+    /// `"monitor_regions"` key, and a monitor with no entry means the whole screen.
+    #[test]
+    fn config_json_without_monitor_regions_still_loads() {
+        let json = serde_json::json!({
+            "pack_path": null, "uploaded_modes": [], "mode": "Sandbox",
+            "mode_options": [], "experience_options": [],
+            "panic_button": {
+                "name": "Escape", "code": "Escape",
+                "modifiers": { "alt": false, "ctrl": false, "shift": true, "meta": false }
+            },
+            "disabled_monitors": [],
+            "capabilities": { "set_wallpaper": true, "open_links": true, "send_notifications": true },
+            "volume": { "video": 1.0, "audio": 1.0 }
+        });
+
+        let config: AppConfig =
+            serde_json::from_value(json).expect("should decode without a monitor_regions key");
+        assert!(config.monitor_regions.is_empty());
+    }
+
+    /// The shape the Svelte side writes, and the engine reads back.
+    #[test]
+    fn a_monitor_region_round_trips_by_monitor_id() {
+        let mut config = AppConfig::default();
+        config.monitor_regions.insert(
+            "eDP-1".to_owned(),
+            crate::monitor::MonitorRegion {
+                x: 0.5,
+                y: 0.0,
+                width: 0.5,
+                height: 1.0,
+            },
+        );
+
+        let encoded = serde_json::to_string(&config).unwrap();
+        let decoded: AppConfig = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(
+            decoded.monitor_regions.get("eDP-1").copied(),
+            config.monitor_regions.get("eDP-1").copied()
+        );
     }
 
     #[test]

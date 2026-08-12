@@ -172,7 +172,15 @@
 		animation: spin 0.7s linear infinite;
 		transform: translate(-50%, -50%);
 	}
+	/* Both keyframes spell out the *same* transform function list, and the `from` is explicit.
+	   Without it the implicit 0% keyframe is the element's own `translate(-50%, -50%)` -- a
+	   one-function list interpolating towards a two-function one -- and WebKitGTK does not pad the
+	   shorter list, so it holds the start value and the spinner sits there as a static ring. Other
+	   engines cope, which is why this only showed up in the app. Keep the lists identical. */
 	@keyframes spin {
+		from {
+			transform: translate(-50%, -50%) rotate(0deg);
+		}
 		to {
 			transform: translate(-50%, -50%) rotate(360deg);
 		}

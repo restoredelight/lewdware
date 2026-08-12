@@ -8,14 +8,21 @@ use ffmpeg_next::{
 use std::{
     num::NonZero,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc,
     },
     thread::{self},
     time::Duration,
 };
 
-use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source, buffer::SamplesBuffer};
+use rodio::{
+    DeviceSinkBuilder, MixerDeviceSink, Player,
+    buffer::SamplesBuffer,
+    cpal,
+    cpal::traits::{DeviceTrait, HostTrait},
+    source::UniformSourceIterator,
+};
 
 use crate::{
     app::{EventPoster, UserEvent},
@@ -167,7 +174,10 @@ impl AudioFrames {
                 return None;
             }
 
-            tracing::info!("Looping");
+            // Debug, not info: a short track looping under a mode that plays many of them at once
+            // is several lines a second in the log file and the dev-log stream, which drowns
+            // everything worth reading. Looping is the normal case, not an event.
+            tracing::debug!("Looping");
 
             if let Err(err) = self.ictx.seek(0, ..0) {
                 tracing::error!("Failed to seek to start: {err}");
@@ -220,24 +230,445 @@ impl AudioFrames {
     }
 }
 
+/// How many device opens go by between summaries. Every open is logged at `debug`, but the file
+/// and dev-log layers are filtered at `info` (`shared::logging`), so a per-open line at that level
+/// is invisible where it would actually be read -- and one *per sound* at info would be noise in a
+/// normal session. A periodic summary is the compromise: nothing in the log for a pack that plays
+/// the occasional sting, real numbers the moment something plays a lot of them.
+const DEVICE_OPEN_SUMMARY_EVERY: u64 = 16;
+
+static DEVICE_OPENS: AtomicU64 = AtomicU64::new(0);
+static DEVICE_OPEN_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+static DEVICE_OPEN_MAX_US: AtomicU64 = AtomicU64::new(0);
+
+/// Note how long one output device open took, and summarise every
+/// [`DEVICE_OPEN_SUMMARY_EVERY`] of them.
+///
+/// The engine opens a device stream per playing item, so this is a per-sound cost that lands on
+/// the media manager thread ahead of everything queued behind it. If the mean here is tens of
+/// milliseconds, that alone explains audio being slow to start when a mode plays many sounds at
+/// once -- and it is the number to check before blaming mixing or decoding.
+fn record_device_open(elapsed: Duration) {
+    let micros = elapsed.as_micros() as u64;
+
+    tracing::debug!(
+        elapsed_ms = micros as f64 / 1000.0,
+        "opened an output device sink"
+    );
+
+    let opens = DEVICE_OPENS.fetch_add(1, Ordering::Relaxed) + 1;
+    let total = DEVICE_OPEN_TOTAL_US.fetch_add(micros, Ordering::Relaxed) + micros;
+    DEVICE_OPEN_MAX_US.fetch_max(micros, Ordering::Relaxed);
+
+    if opens.is_multiple_of(DEVICE_OPEN_SUMMARY_EVERY) {
+        tracing::info!(
+            opens,
+            mean_ms = (total as f64 / opens as f64) / 1000.0,
+            worst_ms = DEVICE_OPEN_MAX_US.load(Ordering::Relaxed) as f64 / 1000.0,
+            "output device sinks opened so far (one per playing item)"
+        );
+    }
+}
+
+/// How many buffers may sit between the decoder thread and the audio callback.
+///
+/// One buffer is [`DECODE_CHUNK_FRAMES`] frames -- about 21ms at 48kHz -- so this is roughly two
+/// thirds of a second of slack. Enough that an ordinary scheduling hiccup or a loop's seek-and-flush
+/// never reaches the audio side, small enough that a stopped track throws away almost nothing, and
+/// bounded so that a hundred playing sounds cannot each grow a queue.
+const DECODE_QUEUE_BUFFERS: usize = 32;
+
+/// Frames per buffer handed to the audio side.
+///
+/// Fixed here rather than following ffmpeg's frame size because the worker now resamples, and its
+/// output frame count no longer matches the decoder's input.
+const DECODE_CHUNK_FRAMES: usize = 1024;
+
+/// How much silence to hand the audio side when the queue is empty anyway.
+///
+/// An underrun has to produce *something*: returning `None` would end the track, and blocking
+/// would stall the callback -- and once a device sink is shared between every playing sound
+/// (`design`/step B), stalling one source stalls all of them. A short slice of silence is the only
+/// answer that keeps the deadline, and it is audible as a tick rather than a dropout.
+const UNDERRUN_SILENCE: Duration = Duration::from_millis(10);
+
+/// The audio side of one track: pops buffers that are already decoded *and already in the device's
+/// format*, and does no work of its own.
+///
+/// Both halves of that matter, and both were measured rather than assumed
+/// (`dev-modes/audio-stress`). Decoding used to happen inside the source pull -- on whichever
+/// thread drives the sink -- so every sound paid for its own ffmpeg decode on a realtime audio
+/// thread. Moving that off alone changed nothing, because a profile of the audio thread showed the
+/// real cost was *resampling*: `SampleRateConverter` and friends were around 20% of it, against
+/// roughly 8% for the actual OS-facing output.
+///
+/// So the worker resamples too, to whatever the device asked for. `SampleRateConverter::next`
+/// short-circuits to a plain passthrough when its input and output rates are equal
+/// (`conversions/sample_rate.rs`), so the converter still sitting in the player's chain costs one
+/// forwarded call per sample instead of an interpolation.
+///
+/// Doing it on the worker also keeps it *correct*: a resampler carries state across its input, so
+/// converting each decoded buffer independently would put a discontinuity at every buffer
+/// boundary. One converter spans the whole track here.
+struct DecodedBuffers {
+    rx: mpsc::Receiver<SamplesBuffer>,
+    /// One buffer fetched during setup, so playback does not open with an underrun.
+    first: Option<SamplesBuffer>,
+    /// The device's format, which is also every buffer's format -- including the silence below.
+    channels: NonZero<u16>,
+    rate: NonZero<u32>,
+}
+
+impl DecodedBuffers {
+    /// Start decoding and resampling `frames` on its own thread, targeting the device's
+    /// `channels`/`rate`, and wait for the first buffer.
+    ///
+    /// Blocking for that one is deliberate: it runs on the media manager thread during setup,
+    /// before the sink is playing, and it costs a single chunk's decode against a device open on
+    /// that same thread measured at 31-119ms. It also means a file that cannot be decoded at all
+    /// fails here, as "no audio stream available", rather than becoming a sound that plays nothing.
+    ///
+    /// `None` means the track produced no audio at all.
+    fn start(frames: AudioFrames, channels: NonZero<u16>, rate: NonZero<u32>) -> Option<Self> {
+        let (tx, rx) = mpsc::sync_channel(DECODE_QUEUE_BUFFERS);
+
+        thread::spawn(move || {
+            // One converter over the whole track, so its state is continuous. `from_fn` is
+            // the same adapter the audio side used to hold; here it is just the front of the
+            // worker's chain.
+            let decoded = rodio::source::from_fn({
+                let mut frames = frames;
+                move || frames.next_buffer()
+            });
+            let mut resampled = UniformSourceIterator::new(decoded, channels, rate);
+
+            let chunk_samples = DECODE_CHUNK_FRAMES * channels.get() as usize;
+
+            loop {
+                let mut chunk = Vec::with_capacity(chunk_samples);
+                for _ in 0..chunk_samples {
+                    match resampled.next() {
+                        Some(sample) => chunk.push(sample),
+                        None => break,
+                    }
+                }
+
+                if chunk.is_empty() {
+                    break;
+                }
+
+                let finished = chunk.len() < chunk_samples;
+
+                // Ends when the track does, or when the receiver goes away -- dropping the sink
+                // drops the source, which drops `rx`, which fails the next send even if this
+                // thread is parked inside one.
+                if tx.send(SamplesBuffer::new(channels, rate, chunk)).is_err() || finished {
+                    break;
+                }
+            }
+        });
+
+        let first = rx.recv().ok()?;
+
+        Some(Self {
+            channels,
+            rate,
+            first: Some(first),
+            rx,
+        })
+    }
+
+    /// The next buffer to play: a decoded one if the worker has kept up, silence if it has not,
+    /// and `None` once the track is finished and the worker has gone.
+    fn next(&mut self) -> Option<SamplesBuffer> {
+        if let Some(first) = self.first.take() {
+            return Some(first);
+        }
+
+        match self.rx.try_recv() {
+            Ok(buffer) => Some(buffer),
+            Err(mpsc::TryRecvError::Empty) => Some(self.silence()),
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        }
+    }
+
+    fn silence(&self) -> SamplesBuffer {
+        let frames = (self.rate.get() as u128 * UNDERRUN_SILENCE.as_micros() / 1_000_000) as usize;
+
+        SamplesBuffer::new(
+            self.channels,
+            self.rate,
+            vec![0.0; frames * self.channels.get() as usize],
+        )
+    }
+}
+
+/// The device id from `AppConfig::audio_device`, published once at startup by
+/// [`set_output_device`].
+///
+/// A process-global rather than a parameter threaded down to every sink open: the output device is
+/// one process-wide choice read once from the config, while the two `AudioPlayer::new` call sites
+/// sit at the bottom of the media stack (`video`, `media::manager`) with no view of the config.
+static CONFIGURED_DEVICE: OnceLock<Option<String>> = OnceLock::new();
+
+/// [`CONFIGURED_DEVICE`] looked up against the host, done once.
+///
+/// Cached because resolution means enumerating the host's devices, and this file's own numbers say
+/// what that would cost: a sink is opened *per playing item*, on the media manager thread, already
+/// measured at 31-119ms a time. Paying a full enumeration on top of every sound would land
+/// squarely on the path a mode playing many sounds at once is already waiting behind.
+static RESOLVED_DEVICE: OnceLock<Option<cpal::Device>> = OnceLock::new();
+
+/// Records which output device sinks should open on. Call once, at startup, before any audio
+/// plays; later calls are ignored.
+pub fn set_output_device(device: Option<String>) {
+    if CONFIGURED_DEVICE.set(device).is_err() {
+        tracing::warn!("the output device was already set; ignoring the later choice");
+    }
+}
+
+/// Looks up a device by its `cpal::DeviceId` string, or `None` for "system default".
+///
+/// `None` is also what an id that no longer matches anything returns -- an unplugged headset, or a
+/// config written on another machine. That is a fallback to the default device for this session
+/// and *not* a rewrite of the setting: see `AppConfig::audio_device`.
+fn resolve_device(id: &str) -> Option<cpal::Device> {
+    let parsed = match id.parse::<cpal::DeviceId>() {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            tracing::warn!(%id, "could not parse the saved audio device id ({err}); using the default device");
+            return None;
+        }
+    };
+
+    match cpal::default_host().device_by_id(&parsed) {
+        Some(device) => Some(device),
+        None => {
+            tracing::warn!(
+                %id,
+                "the chosen audio device is not available; using the default device for this session"
+            );
+            None
+        }
+    }
+}
+
+/// The device to open sinks on, or `None` to let rodio pick the default.
+fn output_device() -> Option<&'static cpal::Device> {
+    RESOLVED_DEVICE
+        .get_or_init(|| {
+            let id = CONFIGURED_DEVICE.get()?.as_deref()?;
+            let device = resolve_device(id);
+
+            if let Some(device) = &device {
+                tracing::info!(
+                    %id,
+                    name = device.description().ok().map(|d| d.name().to_owned()),
+                    "playing audio on the chosen output device"
+                );
+            }
+
+            device
+        })
+        .as_ref()
+}
+
+/// Which device a sink ended up on, relative to what was asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SinkDevice {
+    /// The chosen device, or the system default where that is what was chosen.
+    AsRequested,
+    /// A device was named but could not be used, so the system default was opened instead.
+    FellBack,
+}
+
+/// Opens an output sink on the configured device, falling back to the default.
+///
+/// The fallback is a second line of defence behind [`resolve_device`]: a device can be listed and
+/// still refuse to open (exclusive use by another app, a bluetooth sink that dropped between
+/// resolution and now). Silence would be the alternative, and audio on the wrong speakers beats no
+/// audio at all.
+fn open_sink() -> Result<(MixerDeviceSink, SinkDevice), rodio::DeviceSinkError> {
+    // Distinguishes "no device chosen" from "chosen device could not be resolved" -- both leave
+    // `output_device()` empty, but only the second is a fallback worth reporting.
+    let named = CONFIGURED_DEVICE.get().is_some_and(Option::is_some);
+
+    let Some(device) = output_device() else {
+        let outcome = if named {
+            SinkDevice::FellBack
+        } else {
+            SinkDevice::AsRequested
+        };
+        return DeviceSinkBuilder::open_default_sink().map(|stream| (stream, outcome));
+    };
+
+    let opened = DeviceSinkBuilder::from_device(device.clone())
+        .and_then(|builder| builder.open_sink_or_fallback());
+
+    match opened {
+        Ok(stream) => Ok((stream, SinkDevice::AsRequested)),
+        Err(err) => {
+            tracing::warn!("could not open the chosen audio device ({err}); using the default");
+            DeviceSinkBuilder::open_default_sink().map(|stream| (stream, SinkDevice::FellBack))
+        }
+    }
+}
+
+/// Prints this process's view of the output devices as JSON, then exits. Driven by
+/// `shared::audio::LIST_AUDIO_DEVICES_FLAG`.
+///
+/// Lives in the engine for the reason that flag documents: the id the config app stores carries
+/// the *host* cpal chose, and only this binary's choice of host is the one that will later have to
+/// resolve it.
+pub fn list_audio_devices() -> Result<()> {
+    let host = cpal::default_host();
+
+    // Which device the host would pick on its own -- shown against "System default" so the picker
+    // can say what that currently means rather than leaving it abstract.
+    let default_id = host
+        .default_output_device()
+        .and_then(|device| device.id().ok());
+
+    let devices = host
+        .output_devices()
+        .context("could not list the audio output devices")?
+        .filter_map(|device| {
+            // Both are needed and both can fail per-device (a device can disappear mid-enumeration),
+            // so a device missing either is skipped rather than sinking the whole list: without an
+            // id it cannot be stored, and without a description it cannot be labelled.
+            let id = device.id().ok()?;
+            let description = device.description().ok()?;
+
+            if !description.supports_output() {
+                return None;
+            }
+
+            Some(shared::audio::AudioDeviceInfo {
+                is_default: default_id.as_ref() == Some(&id),
+                id: id.to_string(),
+                name: description.name().to_owned(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    println!("{}", serde_json::to_string(&devices)?);
+
+    Ok(())
+}
+
+/// How loud the test tone is. Well under full scale: this plays at whatever the OS volume happens
+/// to be, and a user checking which speakers are live should not be startled by it.
+const TEST_TONE_AMPLITUDE: f32 = 0.22;
+
+/// Plays a short chime on `device` and returns once it has finished. Driven by
+/// `shared::audio::TEST_AUDIO_FLAG`.
+///
+/// Goes through [`open_sink`], the same path a real sound takes, so a device that fails here is a
+/// device that would have failed in a session -- which is the entire point of a test button. That
+/// includes the fallback: if the chosen device cannot be opened the tone plays on the default one,
+/// matching what a session would do rather than reporting a failure the engine wouldn't have.
+pub fn play_test_tone(device: Option<String>) -> Result<()> {
+    set_output_device(device);
+
+    let (mut stream, outcome) = open_sink().context("could not open an audio output device")?;
+
+    // Same reason as `setup_decoder`: rodio otherwise prints a "Dropping DeviceSink" notice to
+    // stderr on the way out, and stderr is what the config app quotes back to the user when a
+    // probe fails.
+    stream.log_on_drop(false);
+
+    let config = stream.config();
+    let (channels, rate) = (config.channel_count(), config.sample_rate());
+
+    let sink = Player::connect_new(stream.mixer());
+    sink.append(test_tone(channels, rate));
+    sink.sleep_until_end();
+
+    let result = shared::audio::TestAudioResult {
+        fell_back: outcome == SinkDevice::FellBack,
+    };
+    println!("{}", serde_json::to_string(&result)?);
+
+    Ok(())
+}
+
+/// A two-note chime, generated rather than shipped as an asset so the test needs nothing from a
+/// pack -- it has to work before a pack is even chosen.
+///
+/// Both notes decay exponentially and the second overlaps the first, which is what stops it
+/// sounding like two beeps. The envelope also matters mechanically: a tone that stopped at full
+/// amplitude would end on a step discontinuity and click.
+fn test_tone(channels: NonZero<u16>, rate: NonZero<u32>) -> SamplesBuffer {
+    /// Hz, and when each note starts in seconds. A fifth apart -- D5 and A5.
+    const NOTES: [(f32, f32); 2] = [(587.33, 0.0), (880.0, 0.13)];
+    const LENGTH: Duration = Duration::from_millis(650);
+    /// Larger decays faster. Tuned so each note is inaudible well before the buffer ends.
+    const DECAY: f32 = 7.0;
+
+    let rate_f = rate.get() as f32;
+    let frames = (rate.get() as u64 * LENGTH.as_millis() as u64 / 1000) as usize;
+
+    let mut samples = Vec::with_capacity(frames * channels.get() as usize);
+    for frame in 0..frames {
+        let t = frame as f32 / rate_f;
+
+        let value: f32 = NOTES
+            .iter()
+            .filter(|(_, start)| t >= *start)
+            .map(|(frequency, start)| {
+                let age = t - start;
+                (age * frequency * std::f32::consts::TAU).sin() * (-age * DECAY).exp()
+            })
+            .sum();
+
+        // Mono content written to every channel, so it comes out of both speakers rather than
+        // only the left -- a test tone that only played on one side would read as a fault.
+        let sample = value * TEST_TONE_AMPLITUDE;
+        samples.extend(std::iter::repeat_n(sample, channels.get() as usize));
+    }
+
+    SamplesBuffer::new(channels, rate, samples)
+}
+
 pub fn setup_decoder(
     source: MediaSource,
     loop_audio: Arc<AtomicBool>,
 ) -> Result<Option<(MixerDeviceSink, Player)>> {
-    let mut frames = match AudioFrames::open(source, loop_audio)? {
+    // Opened before the device, so that a video with no audio track costs nothing: this returns
+    // `None` and no output stream is ever opened for it.
+    let frames = match AudioFrames::open(source, loop_audio)? {
         Some(frames) => frames,
         None => return Ok(None),
     };
 
-    let mut stream = DeviceSinkBuilder::open_default_sink()?;
+    // One output device stream per playing item, opened here on the media manager thread -- which
+    // resolves requirements one at a time, so this sits in front of every other piece of media
+    // queued behind it. Timed because the cost is the whole question when a mode plays many sounds
+    // at once: see `dev-modes/audio-stress`.
+    let open_started = std::time::Instant::now();
+    let (mut stream, _) = open_sink()?;
+    record_device_open(open_started.elapsed());
 
     stream.log_on_drop(false);
+
+    // The device's format is the worker's target: matching it here is what lets the resampler in
+    // the player's chain fall through to a passthrough instead of interpolating every sample.
+    let config = stream.config();
+    let Some(mut decoded) =
+        DecodedBuffers::start(frames, config.channel_count(), config.sample_rate())
+    else {
+        return Ok(None);
+    };
 
     let sink = Player::connect_new(stream.mixer());
 
     sink.pause();
 
-    let source = rodio::source::from_factory(move || frames.next_buffer()).buffered();
+    // No `.buffered()`. It exists to let a source be replayed, and kept every sample ever decoded
+    // in memory to do it -- unbounded growth for a looping track, and pointless here besides:
+    // looping is handled by `AudioFrames` seeking back to the start, so nothing is ever replayed
+    // from the cache.
+    let source = rodio::source::from_fn(move || decoded.next());
 
     sink.append(source);
 

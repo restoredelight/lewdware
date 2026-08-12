@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { clampScroll } from '$ui/scroll';
 	import { store } from './store.svelte.js';
 </script>
 
@@ -11,7 +12,7 @@
 			{store.importWarnings.length} part{store.importWarnings.length === 1 ? '' : 's'} of the Edgeware
 			pack couldn't be converted:
 		</p>
-		<div class="mb-4 flex flex-1 flex-col gap-2 overflow-y-auto">
+		<div class="mb-4 flex flex-1 flex-col gap-2 overflow-y-auto" use:clampScroll>
 			{#each store.importWarnings as warning}
 				<div class="border-border bg-bg rounded border p-2 text-xs">
 					<span class="text-muted mb-0.5 block font-mono text-[11px]">

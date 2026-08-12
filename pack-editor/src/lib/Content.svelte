@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { clampScroll } from '$ui/scroll';
 	import { onDestroy, onMount } from 'svelte';
 	import { api } from './api.js';
 	import { store } from './store.svelte.js';
@@ -131,7 +132,11 @@
 				/>
 			</aside>
 
-			<div class="min-w-0 flex-1 overflow-y-auto p-6 max-[700px]:p-4" bind:this={panel}>
+			<div
+				class="min-w-0 flex-1 overflow-y-auto p-6 max-[700px]:p-4"
+				bind:this={panel}
+				use:clampScroll
+			>
 				<div class="mx-auto w-full max-w-[800px]">
 					<div class="mb-5 max-w-2xl">
 						<h2 class="ui-page-title">{sectionInfo[activeTab].title}</h2>

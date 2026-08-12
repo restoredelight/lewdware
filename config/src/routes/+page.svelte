@@ -4,7 +4,8 @@
 	import type { SupervisorStatusDto } from '$lib/types';
 	import { store } from '$lib/store.svelte';
 	import Safety from '$lib/Safety.svelte';
-	import SoundDisplays from '$lib/SoundDisplays.svelte';
+	import Monitors from '$lib/Monitors.svelte';
+	import Audio from '$lib/Audio.svelte';
 	import WindowStyle from '$lib/WindowStyle.svelte';
 	import Diagnostics from '$lib/Diagnostics.svelte';
 	import PackMode from '$lib/PackMode.svelte';
@@ -28,7 +29,8 @@
 	const settingsTabs = [
 		{ id: 'pack_mode' as const, label: 'Pack & mode' },
 		{ id: 'safety' as const, label: 'Safety' },
-		{ id: 'sound_displays' as const, label: 'Sound & displays' },
+		{ id: 'monitors' as const, label: 'Monitors' },
+		{ id: 'audio' as const, label: 'Audio' },
 		{ id: 'window_style' as const, label: 'Window style' },
 		{ id: 'scheduling' as const, label: 'Scheduling' }
 	];
@@ -83,8 +85,10 @@
 			<PackMode />
 		{:else if store.activeTab === 'safety'}
 			<Safety />
-		{:else if store.activeTab === 'sound_displays'}
-			<SoundDisplays />
+		{:else if store.activeTab === 'monitors'}
+			<Monitors />
+		{:else if store.activeTab === 'audio'}
+			<Audio />
 		{:else if store.activeTab === 'window_style'}
 			<WindowStyle />
 		{:else if store.activeTab === 'scheduling'}

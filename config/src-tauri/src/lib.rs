@@ -46,9 +46,12 @@ use shared::{
     behaviour::{effective_options, Behaviour},
     db::migrate,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, ShowWhen, StoredValue},
+    monitor::MonitorRegion,
     read_pack::{read_pack_metadata, RecommendedMode},
     schedule::{QuietHours, ScheduleConfig, Window},
-    user_config::{self, AppConfig, Capabilities, Key, Mode, Volume, WallpaperConfig},
+    user_config::{
+        self, AppConfig, AudioDeviceChoice, Capabilities, Key, Mode, Volume, WallpaperConfig,
+    },
 };
 use tauri::{AppHandle, Emitter, Manager};
 use tempfile::NamedTempFile;
@@ -224,6 +227,11 @@ pub struct ConfigDto {
     pub appearance: String,
     pub panic_button: Key,
     pub disabled_monitors: Vec<String>,
+    /// Round-tripped for the same reason `wallpaper` and `schedule` are: `save_config` rebuilds a
+    /// whole `AppConfig` from this DTO, so a region left out here would be wiped by any unrelated
+    /// save.
+    #[serde(default)]
+    pub monitor_regions: HashMap<String, MonitorRegion>,
     pub capabilities: Capabilities,
     /// Carried here for the same reason `schedule` is: `save_config` rebuilds a whole fresh
     /// `AppConfig` from this DTO, so a field that isn't round-tripped is silently reset. Leaving it
@@ -231,6 +239,10 @@ pub struct ConfigDto {
     #[serde(default)]
     pub wallpaper: WallpaperConfig,
     pub volume: Volume,
+    /// The chosen audio output; `None` for the system default. See `AppConfig::audio_device`.
+    /// `#[serde(default)]` and round-tripped for the same reason as the fields above.
+    #[serde(default)]
+    pub audio_device: Option<AudioDeviceChoice>,
     /// A normal `ConfigDto` field, round-tripping through `get_config`/`save_config` like every
     /// other setting here -- deliberately, not an oversight: `save_config` reconstructs a whole
     /// fresh `AppConfig` from whatever this DTO carries (that's already why `uploaded_modes` has
@@ -251,9 +263,11 @@ impl From<AppConfig> for ConfigDto {
             appearance: c.appearance,
             panic_button: c.panic_button,
             disabled_monitors: c.disabled_monitors,
+            monitor_regions: c.monitor_regions,
             capabilities: c.capabilities,
             wallpaper: c.wallpaper,
             volume: c.volume,
+            audio_device: c.audio_device,
             schedule: c.schedule.into(),
         }
     }
@@ -273,9 +287,11 @@ impl From<ConfigDto> for AppConfig {
             appearance: dto.appearance,
             panic_button: dto.panic_button,
             disabled_monitors: dto.disabled_monitors,
+            monitor_regions: dto.monitor_regions,
             capabilities: dto.capabilities,
             wallpaper: dto.wallpaper,
             volume: dto.volume,
+            audio_device: dto.audio_device,
             schedule: dto.schedule.into(),
         }
     }
@@ -341,6 +357,15 @@ pub struct MonitorDto {
     pub height: u32,
     pub primary: bool,
     pub disabled: bool,
+    /// Desktop-space position, in the same physical pixels as `width`/`height`, so the picker can
+    /// draw the monitors in their real arrangement rather than in a row.
+    pub x: i32,
+    pub y: i32,
+    /// `width`/`height` are physical; a region resolves against *logical* pixels. Carried so the
+    /// picker can show a region's size in the numbers a mode would actually see.
+    pub scale_factor: f64,
+    /// The area of this monitor popups may use. Whole monitor unless the user has narrowed it.
+    pub region: MonitorRegion,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -787,9 +812,6 @@ fn save_config(state: State<'_>, config: ConfigDto) -> Result<(), String> {
     Ok(())
 }
 
-/// Lists monitors by asking the engine, rather than reading them from this process.
-///
-/// This app is a native Wayland Tauri app; the engine forces winit onto XWayland because Wayland
 /// The window looks the user can choose between, and what each one looks like.
 ///
 /// Straight from `shared::theme`, which is where the engine reads them too -- so the picker can
@@ -861,6 +883,9 @@ fn get_theme_catalogue(window: tauri::WebviewWindow) -> ThemeCatalogueDto {
     }
 }
 
+/// Lists monitors by asking the engine, rather than reading them from this process.
+///
+/// This app is a native Wayland Tauri app; the engine forces winit onto XWayland because Wayland
 /// can't position windows. The two disagree about both monitor names and geometry (see
 /// `shared::monitor`), so anything measured here would be written into `disabled_monitors` and
 /// then never match what the engine compares it against -- which is exactly the bug this replaces.
@@ -870,7 +895,13 @@ fn get_theme_catalogue(window: tauri::WebviewWindow) -> ThemeCatalogueDto {
 /// quietly does nothing.
 #[tauri::command]
 async fn get_monitors(state: State<'_>) -> Result<Vec<MonitorDto>, String> {
-    let disabled = state.config.lock().unwrap().disabled_monitors.clone();
+    let (disabled, regions) = {
+        let config = state.config.lock().unwrap();
+        (
+            config.disabled_monitors.clone(),
+            config.monitor_regions.clone(),
+        )
+    };
 
     let mut command = tokio::process::Command::from(
         shared::child::find_engine_binary()
@@ -903,11 +934,15 @@ async fn get_monitors(state: State<'_>) -> Result<Vec<MonitorDto>, String> {
         .into_iter()
         .map(|monitor| MonitorDto {
             disabled: disabled.contains(&monitor.id),
+            region: regions.get(&monitor.id).copied().unwrap_or_default(),
             id: monitor.id,
             name: monitor.name,
             width: monitor.width,
             height: monitor.height,
             primary: monitor.primary,
+            x: monitor.x,
+            y: monitor.y,
+            scale_factor: monitor.scale_factor,
         })
         .collect();
 
@@ -916,6 +951,82 @@ async fn get_monitors(state: State<'_>) -> Result<Vec<MonitorDto>, String> {
     }
 
     Ok(monitors)
+}
+
+/// Runs the engine binary as a short-lived probe and returns its stdout.
+///
+/// Shared by the audio commands below and shaped like the monitor probe above: same "ask the
+/// process that will actually do the work" reasoning (see `shared::audio`), same timeout-and-quote-
+/// stderr error handling.
+async fn run_engine_probe(
+    args: &[&str],
+    timeout: std::time::Duration,
+    what: &str,
+) -> Result<Vec<u8>, String> {
+    let mut command = tokio::process::Command::from(
+        shared::child::find_engine_binary()
+            .ok_or_else(|| "could not find the lewdware-engine binary".to_string())?,
+    );
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let output = tokio::time::timeout(timeout, command.output())
+        .await
+        .map_err(|_| format!("timed out asking the engine to {what}"))?
+        .map_err(|e| format!("could not run the engine to {what}: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "the engine could not {what}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(output.stdout)
+}
+
+/// Lists the audio outputs by asking the engine, for the reason `shared::audio` documents: the id
+/// stored in `audio_device` carries the cpal host that produced it, so only the engine's own view
+/// of the devices yields ids the engine will later resolve.
+#[tauri::command]
+async fn get_audio_devices() -> Result<Vec<shared::audio::AudioDeviceInfo>, String> {
+    // Enumeration talks to the sound server, so it is capped like the monitor probe rather than
+    // left to hang the settings window if that server is wedged. Much shorter than the monitor
+    // probe's 15s: no event loop or display server is involved, and a local enumeration that has
+    // taken three seconds is not going to finish.
+    let stdout = run_engine_probe(
+        &[shared::audio::LIST_AUDIO_DEVICES_FLAG],
+        std::time::Duration::from_secs(5),
+        "list the audio devices",
+    )
+    .await?;
+
+    serde_json::from_slice(&stdout)
+        .map_err(|e| format!("could not read the engine's audio device list: {e}"))
+}
+
+/// Plays the test chime on `device` (or the system default when `None`) and resolves once it has
+/// finished, reporting whether the engine had to fall back to another device.
+#[tauri::command]
+async fn test_audio_device(
+    device: Option<String>,
+) -> Result<shared::audio::TestAudioResult, String> {
+    let device = device.unwrap_or_else(|| shared::audio::TEST_AUDIO_DEFAULT.to_string());
+
+    // The tone itself is well under a second; the rest of the budget covers opening a device that
+    // has to wake up first -- a bluetooth sink resuming can take a couple of seconds on its own.
+    let stdout = run_engine_probe(
+        &[shared::audio::TEST_AUDIO_FLAG, &device],
+        std::time::Duration::from_secs(15),
+        "play the test sound",
+    )
+    .await?;
+
+    serde_json::from_slice(&stdout)
+        .map_err(|e| format!("could not read the engine's test sound result: {e}"))
 }
 
 #[tauri::command]
@@ -1196,13 +1307,13 @@ async fn upload_mode(
         .emit("picker:mode-selected", ())
         .map_err(|e| e.to_string())?;
 
-    {
-        let uploaded = state.uploaded.lock().unwrap();
-        if uploaded.iter().any(|u| u.path == path) {
-            return Ok(Some(UploadModeResult {
-                mode_groups: build_mode_groups(&state),
-            }));
-        }
+    // Note the guard is released before `build_mode_groups`, which locks `uploaded` itself --
+    // holding it across the call self-deadlocks (`Mutex` is not reentrant) and hangs the UI.
+    let already_uploaded = state.uploaded.lock().unwrap().iter().any(|u| u.path == path);
+    if already_uploaded {
+        return Ok(Some(UploadModeResult {
+            mode_groups: build_mode_groups(&state),
+        }));
     }
 
     let entry = tokio::task::spawn_blocking({
@@ -1215,10 +1326,12 @@ async fn upload_mode(
 
     state.uploaded.lock().unwrap().push(entry);
 
-    let mut config = state.config.lock().unwrap();
-    config.uploaded_modes.push(path);
-    let uploaded = state.uploaded.lock().unwrap();
-    save_to_disk(&config, &uploaded).map_err(|e| e.to_string())?;
+    {
+        let mut config = state.config.lock().unwrap();
+        config.uploaded_modes.push(path);
+        let uploaded = state.uploaded.lock().unwrap();
+        save_to_disk(&config, &uploaded).map_err(|e| e.to_string())?;
+    }
 
     Ok(Some(UploadModeResult {
         mode_groups: build_mode_groups(&state),
@@ -1231,15 +1344,17 @@ fn remove_uploaded_mode(state: State<'_>, path: String) -> Result<Vec<ModeGroupD
 
     state.uploaded.lock().unwrap().retain(|u| u.path != path);
 
-    let mut config = state.config.lock().unwrap();
-    config.uploaded_modes.retain(|p| p != &path);
-    if let Mode::File { path: ref mp, .. } = config.mode.clone() {
-        if mp == &path {
-            config.mode = Mode::default();
+    {
+        let mut config = state.config.lock().unwrap();
+        config.uploaded_modes.retain(|p| p != &path);
+        if let Mode::File { path: ref mp, .. } = config.mode.clone() {
+            if mp == &path {
+                config.mode = Mode::default();
+            }
         }
+        let uploaded = state.uploaded.lock().unwrap();
+        save_to_disk(&config, &uploaded).map_err(|e| e.to_string())?;
     }
-    let uploaded = state.uploaded.lock().unwrap();
-    save_to_disk(&config, &uploaded).map_err(|e| e.to_string())?;
 
     Ok(build_mode_groups(&state))
 }
@@ -1680,6 +1795,8 @@ pub fn run() {
             save_config,
             get_theme_catalogue,
             get_monitors,
+            get_audio_devices,
+            test_audio_device,
             get_mode_groups,
             get_mode_options,
             set_mode_option,
@@ -1777,6 +1894,44 @@ mod tests {
         let object = json.as_object().expect("the DTO is a JSON object");
         assert!(!object.contains_key("mode_options"), "{object:?}");
         assert!(!object.contains_key("experience_options"), "{object:?}");
+    }
+
+    /// The mirror of the bug above, for a field the *frontend* owns: `save_config` rebuilds a
+    /// whole fresh `AppConfig` from the DTO, so a frontend field missing from `ConfigDto` is reset
+    /// to its default by any unrelated save -- picking an output device and then touching the
+    /// volume slider would silently put it back to "system default".
+    #[test]
+    fn saving_keeps_the_chosen_audio_device() {
+        let current = AppConfig {
+            audio_device: Some(AudioDeviceChoice {
+                id: "pulseaudio:some-sink".to_string(),
+                name: "Some speakers".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        // The frontend's snapshot, as it would come back with some other setting changed.
+        let dto = ConfigDto {
+            theme: "breeze".to_string(),
+            ..current.clone().into()
+        };
+
+        let saved = apply_config_dto(&current, dto);
+
+        assert_eq!(saved.audio_device, current.audio_device);
+    }
+
+    /// A `config.json` written before output devices existed has no `audio_device` key at all, and
+    /// must still load rather than failing the whole config.
+    #[test]
+    fn a_config_without_an_audio_device_loads_as_the_system_default() {
+        let json = serde_json::to_value(AppConfig::default()).unwrap();
+        let mut object = json.as_object().unwrap().clone();
+        object.remove("audio_device");
+
+        let config: AppConfig = serde_json::from_value(object.into()).expect("loads without it");
+
+        assert_eq!(config.audio_device, None);
     }
 
     fn behaviour_with_one_content_group() -> Behaviour {

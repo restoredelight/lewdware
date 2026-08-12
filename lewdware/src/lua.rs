@@ -594,13 +594,24 @@ impl<T: EventPoster> LuaRuntime<T> {
     }
 }
 
+/// A mode's `print`, routed into the log rather than to stdout.
+///
+/// `println!` would be the obvious implementation and is the one thing that cannot work: the
+/// supervisor spawns the engine with its stdout and stderr set to `Stdio::null()`
+/// (`supervisor/src/engine.rs`), so everything printed by every mode ever written has gone
+/// straight into the void. Through `tracing` it reaches all three places output is actually read
+/// -- `lw mode dev`'s terminal (via the dev-log stream), the JSONL log file, and the config app's
+/// diagnostics -- and a mode author gets the debugging tool they reasonably assumed they had.
+///
+/// `info`, not `debug`: a mode printing something did so deliberately, and the file and dev-log
+/// layers are filtered at `info`.
 fn print(_: &Lua, args: mlua::Variadic<mlua::Value>) -> mlua::Result<()> {
     let args_str = args
         .into_iter()
         .map(|value| value.to_string())
         .collect::<mlua::Result<Vec<_>>>()?;
 
-    println!("{}", args_str.join("\t"));
+    tracing::info!(target: "mode", "{}", args_str.join("\t"));
 
     Ok(())
 }

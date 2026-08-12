@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { clampScroll } from '$ui/scroll';
 	import { Icon, MusicalNote, Play } from 'svelte-hero-icons';
 	import { Menu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
 	import { LogicalPosition } from '@tauri-apps/api/dpi';
@@ -236,6 +237,7 @@
 	onblur={() => (gridFocused = false)}
 	oncontextmenu={(e) => showContextMenu(e)}
 	class="media-grid bg-bg relative h-full w-full overflow-auto rounded-sm p-2"
+	use:clampScroll
 	onclick={() => {
 		store.clearSelection();
 		store.gridActiveId = null;

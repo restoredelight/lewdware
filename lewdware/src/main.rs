@@ -23,12 +23,35 @@ mod wgpu;
 mod window;
 mod zero_copy;
 
+/// The argument following `flag`, if the flag was passed at all.
+///
+/// Only used by the probe flags handled before the main argument loop below, which needs to read
+/// its own values from a single pass over the arguments.
+fn flag_value(flag: &str) -> Option<std::ffi::OsString> {
+    let mut args = args_os();
+    args.find(|arg| arg == flag)?;
+    args.next()
+}
+
 fn main() -> Result<()> {
     // Handled before anything else: this is a short-lived probe run by the config app, not a
     // session. It must not touch the log file, the temp dir or the fd limit of a real engine that
     // may be running at the same time.
     if args_os().any(|arg| arg == shared::monitor::LIST_MONITORS_FLAG) {
         return monitor::list_monitors();
+    }
+
+    // The audio equivalents, and short-lived probes for the same reason -- see
+    // `shared::audio::LIST_AUDIO_DEVICES_FLAG`.
+    if args_os().any(|arg| arg == shared::audio::LIST_AUDIO_DEVICES_FLAG) {
+        return audio::list_audio_devices();
+    }
+
+    if let Some(device) = flag_value(shared::audio::TEST_AUDIO_FLAG) {
+        let device = device.to_string_lossy().into_owned();
+        return audio::play_test_tone(
+            (device != shared::audio::TEST_AUDIO_DEFAULT).then_some(device),
+        );
     }
 
     let mut args = args_os();
@@ -88,6 +111,12 @@ fn main() -> Result<()> {
     if let Some(mode_path) = mode_path {
         config.mode = Mode::File { path: mode_path };
     }
+
+    // Published before any media can start, since it is read once and cached the first time a sink
+    // is opened.
+    // Only the id: the stored name is a label for the config app's picker and has no bearing on
+    // which device gets opened.
+    audio::set_output_device(config.audio_device.as_ref().map(|device| device.id.clone()));
 
     tracing::debug!("{:?}", config);
 

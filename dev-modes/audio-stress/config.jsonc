@@ -1,0 +1,53 @@
+{
+  "$schema": "../../docs/src/data/config.schema.json",
+  "id": "3e11f51f-7bfa-4ba7-a0f3-de472e9fed78",
+  "name": "Audio stress",
+  "version": "0.1.0",
+  "author": "restoredelight",
+  "include": ["src"],
+  "entrypoint": "src/main.lua",
+  "options": {
+    "voices": {
+      "label": "Voices",
+      "description": "How many copies of the same track to play at once",
+      "type": "integer",
+      "default": 16,
+      "min": 1,
+      "max": 64
+    },
+    "ramp_ms": {
+      "label": "Ramp (ms)",
+      "description": "Delay between starting each voice. 0 starts them all in one go; a ramp lets you hear the exact voice count where it breaks down",
+      "type": "integer",
+      "default": 500,
+      "min": 0,
+      "max": 5000
+    },
+    "loop_audio": {
+      "label": "Loop each voice",
+      "description": "Keep every voice playing, so the load holds steady instead of decaying as tracks end",
+      "type": "boolean",
+      "default": true
+    },
+    "volume": {
+      "label": "Volume per voice",
+      "description": "Kept low by default: dozens of copies of one track sum to a very loud, very clipped noise",
+      "type": "number",
+      "default": 0.15,
+      "min": 0,
+      "max": 1
+    },
+    "track": {
+      "label": "Track",
+      "description": "File name to play, e.g. amen.mp3. Empty picks the first in the pack. Use it to compare a cheap-to-decode file (wav) against an expensive one (mp3/ogg) at the same voice count — that difference separates decode cost from mixing cost",
+      "type": "string",
+      "default": ""
+    },
+    "video_instead": {
+      "label": "Use videos instead",
+      "description": "Spawn video popups with sound rather than bare audio, so the measurement includes the decode and render load a real session has",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

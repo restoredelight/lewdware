@@ -133,7 +133,10 @@ impl LewdwareApp {
             dev_mode,
         );
 
-        let monitors = Monitors::new(config.disabled_monitors.clone());
+        let monitors = Monitors::new(
+            config.disabled_monitors.clone(),
+            config.monitor_regions.clone(),
+        );
 
         Ok(Self {
             running: false,
@@ -259,9 +262,15 @@ impl LewdwareApp {
         let monitor_position: LogicalPosition<i32> =
             monitor_handle.position().to_logical(scale_factor);
 
+        // The one place the user's region becomes a real screen position. Everything upstream --
+        // `PopupSpawnOpts::resolve`, and the mode itself -- worked in coordinates relative to the
+        // region, because `Monitors::refresh` handed them the region's size as the monitor's. The
+        // origin is read from the same refresh the monitor above came from, so the two agree.
+        let (region_x, region_y) = self.monitors.region_origin(popup_opts.monitor_id);
+
         let position = LogicalPosition::new(
-            monitor_position.x + popup_opts.x,
-            monitor_position.y + popup_opts.y,
+            monitor_position.x + region_x + popup_opts.x,
+            monitor_position.y + region_y + popup_opts.y,
         );
 
         Ok(WindowOpts {

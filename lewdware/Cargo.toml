@@ -19,7 +19,19 @@ fast_image_resize = { version = "6.1.0", features = ["image"] }
 wgpu = { version = "29.0.3", features = ["static-dxc"] }
 notify-rust = "4.11.7"
 rand = "0.10.0"
-rodio = "0.22.2"
+# Pinned to git, not 0.22.2, for the audio output device picker: choosing a device needs
+# `cpal::DeviceId`/`Device::description`, which arrived in cpal 0.18, and the only rodio that uses
+# cpal 0.18 is still unreleased (its changelog has "Updated cpal to v0.18" under Unreleased).
+#
+# The point of cpal 0.18 here is its PulseAudio backend -- pure Rust (the `pulseaudio` crate speaks
+# the protocol over a socket), so it adds no C build dependency, and `default_host()` prefers it
+# over ALSA on Linux. That is what turns device names from
+# "alsa_output.pci-0000_00_1f.3...HiFi__Speaker__sink" into "soundcore Space One". Its `pipewire`
+# feature is deliberately left off: that one *does* link libpipewire, and pipewire-pulse already
+# serves the PulseAudio protocol on the desktops that run PipeWire.
+#
+# Swap back to a version requirement once this lands in a release (0.23?).
+rodio = { git = "https://github.com/RustAudio/rodio.git", rev = "c5f1e94290922fe4ee963ce6f85754ea6ba36243" }
 rusqlite = { version = "0.40.1", features = ["bundled", "fallible_uint", "serialize"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.143"

@@ -226,6 +226,17 @@ Prefer these over hand-rolling. They already encode the rules above:
 (bordered), `quiet` (transparent, muted → text on hover), `destructive` (coral
 outline). Sizes: `compact` (32px), `normal` (36px).
 
+`Field` takes an optional `suffix` (`%`, `px`, `s`) — a unit drawn inside the
+field's right edge in the mono readout face. A suffixed `number` field drops its
+spinner buttons, since the two cannot share that edge; arrow keys still step it.
+
+Not a component, but shared and worth knowing: **`use:clampScroll`**
+(`shared-ui/scroll.ts`) — attach it to any element that scrolls. WebKitGTK does not
+reliably re-clamp `scrollTop` when content below it collapses, so a section closing
+can strand the view past the end of the page, showing blank space. This pulls it
+back, and is a no-op on engines that clamp correctly. Every page-level scroll
+container in both apps already uses it; use it on any new one.
+
 ---
 
 ## Quick checklist for a UI change

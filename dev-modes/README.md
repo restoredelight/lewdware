@@ -17,3 +17,4 @@ rebuilds/restarts on every file change. `Shift+Escape` (the default panic key) e
 | Mode | What it is for |
 | --- | --- |
 | `theme-gallery` | Every named window theme, laid out in a grid, so the catalogue can be compared side by side. See [`design/window-themes.md`](../design/window-themes.md). |
+| `audio-stress` | One track played many times at once, to measure what limits simultaneous audio. |

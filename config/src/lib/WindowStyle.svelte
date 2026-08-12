@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { clampScroll } from '$ui/scroll';
 	import { store } from './store.svelte';
 	import Card from '$ui/Card.svelte';
 	import Select from '$ui/Select.svelte';
@@ -25,7 +26,7 @@
 	);
 </script>
 
-<div class="flex-1 overflow-y-auto">
+<div class="flex-1 overflow-y-auto" use:clampScroll>
 	<div class="mx-auto flex w-full max-w-4xl flex-col gap-6 p-8">
 		<header class="max-w-2xl">
 			<h1 class="ui-page-title">Window style</h1>

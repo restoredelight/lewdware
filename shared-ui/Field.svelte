@@ -13,6 +13,12 @@
 		step?: number;
 		size?: 'compact' | 'normal';
 		hideLabel?: boolean;
+		/** A unit shown inside the field's right edge, in the mono readout face: `%`, `px`, `s`.
+		 * Part of the value, not a label -- keep it to a couple of characters.
+		 *
+		 * A suffixed `number` field drops its spinner buttons: the two cannot share the right edge
+		 * without one of them looking wedged in. Arrow keys still step the value. */
+		suffix?: string;
 		class?: string;
 		oninput?: (value: string, event: Event) => void;
 		onchange?: (value: string, event: Event) => void;
@@ -32,6 +38,7 @@
 		step,
 		size = 'normal',
 		hideLabel = false,
+		suffix,
 		class: className = '',
 		oninput,
 		onchange
@@ -50,22 +57,28 @@
 		>{label}{#if required}<span class="required" aria-hidden="true"> *</span>{/if}</span
 	>
 	{#if description}<span id={`${id}-description`} class="description">{description}</span>{/if}
-	<input
-		{id}
-		{type}
-		{value}
-		{placeholder}
-		{required}
-		{disabled}
-		{min}
-		{max}
-		{step}
-		class:size-compact={size === 'compact'}
-		aria-invalid={error ? 'true' : undefined}
-		aria-describedby={describedBy}
-		oninput={(event) => oninput?.(event.currentTarget.value, event)}
-		onchange={(event) => onchange?.(event.currentTarget.value, event)}
-	/>
+	<span class="control">
+		<input
+			{id}
+			{type}
+			{value}
+			{placeholder}
+			{required}
+			{disabled}
+			{min}
+			{max}
+			{step}
+			class:size-compact={size === 'compact'}
+			class:has-suffix={suffix !== undefined}
+			aria-invalid={error ? 'true' : undefined}
+			aria-describedby={describedBy}
+			oninput={(event) => oninput?.(event.currentTarget.value, event)}
+			onchange={(event) => onchange?.(event.currentTarget.value, event)}
+		/>
+		<!-- Decoration for a unit the value already implies, so it is hidden from screen readers:
+		     they read the label, which says what the number means. -->
+		{#if suffix !== undefined}<span class="suffix" aria-hidden="true">{suffix}</span>{/if}
+	</span>
 	{#if error}<span id={`${id}-error`} class="error">{error}</span>{/if}
 </label>
 
@@ -95,6 +108,32 @@
 	}
 	.description {
 		color: var(--ui-muted);
+	}
+	.control {
+		position: relative;
+		display: block;
+		min-width: 0;
+	}
+	.suffix {
+		position: absolute;
+		top: 0;
+		right: 10px;
+		height: 100%;
+		display: flex;
+		align-items: center;
+		font-family: var(--ui-font-mono);
+		font-size: 12px;
+		color: var(--ui-muted);
+		pointer-events: none;
+	}
+	input.has-suffix {
+		padding-right: 26px;
+		appearance: textfield;
+	}
+	input.has-suffix::-webkit-outer-spin-button,
+	input.has-suffix::-webkit-inner-spin-button {
+		appearance: none;
+		margin: 0;
 	}
 	input {
 		width: 100%;

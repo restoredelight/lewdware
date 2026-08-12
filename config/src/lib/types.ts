@@ -21,9 +21,14 @@ export interface ConfigDto {
 	appearance: string;
 	panic_button: Key;
 	disabled_monitors: string[];
+	/** Per-monitor popup areas, keyed by `MonitorDto.id`. A monitor with no entry gets the whole
+	 * screen. */
+	monitor_regions: Record<string, MonitorRegion>;
 	capabilities: Capabilities;
 	wallpaper: WallpaperConfig;
 	volume: Volume;
+	/** The chosen audio output, or `null` for the system default. */
+	audio_device: AudioDeviceChoice | null;
 	schedule: ScheduleDto;
 }
 
@@ -252,6 +257,28 @@ export interface Volume {
 	audio: number;
 }
 
+/** One selectable audio output, as reported by the engine (`shared::audio::AudioDeviceInfo`). */
+export interface AudioDeviceInfo {
+	/** The opaque `cpal::DeviceId` string stored in `audio_device`. Never shown to the user. */
+	id: string;
+	name: string;
+	/** Whether this is what "System default" currently resolves to. */
+	is_default: boolean;
+}
+
+/** The saved output choice (`shared::user_config::AudioDeviceChoice`). */
+export interface AudioDeviceChoice {
+	id: string;
+	/** The name it went by when chosen. Display-only, and only used while the device is absent —
+	 * a connected device is always labelled from the live list, so a rename shows through. */
+	name: string;
+}
+
+export interface TestAudioResult {
+	/** True when the chosen device was unavailable and the chime played on the default instead. */
+	fell_back: boolean;
+}
+
 export interface EngineStatusDto {
 	running: boolean;
 	/** Why the last launch failed to start, if it died before reaching a running state. */
@@ -282,10 +309,38 @@ export interface Modifiers {
 export interface MonitorDto {
 	id: string;
 	name: string;
+	/** Physical pixels, as the engine's probe reports them. */
 	width: number;
 	height: number;
 	primary: boolean;
 	disabled: boolean;
+	/** Desktop-space position, in the same physical pixels as `width`/`height`. */
+	x: number;
+	y: number;
+	scale_factor: number;
+	region: MonitorRegion;
+}
+
+/** The part of a monitor popups may use, as fractions of that monitor (0–1, origin top-left).
+ *
+ * Fractions rather than pixels because this app and the engine measure the same display
+ * differently — see `shared/src/monitor.rs`. The engine applies a region by shrinking the monitor:
+ * a mode sees the region as the whole screen. */
+export interface MonitorRegion {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+export const FULL_REGION: MonitorRegion = { x: 0, y: 0, width: 1, height: 1 };
+
+/** Matches `shared::monitor::MIN_REGION_SIZE`: the engine rounds anything smaller up, so the
+ * picker refuses to draw one smaller rather than showing a lie. In logical pixels. */
+export const MIN_REGION_SIZE = 100;
+
+export function isFullRegion(region: MonitorRegion): boolean {
+	return region.x === 0 && region.y === 0 && region.width === 1 && region.height === 1;
 }
 
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'trace';

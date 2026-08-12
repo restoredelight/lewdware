@@ -162,10 +162,17 @@ lewdware.user_appearance = ""
 -- ─── Monitors ────────────────────────────────────────────────────────────────
 
 ---@class Monitor
+---
+---A monitor, as the *user* has allowed you to use it. They may restrict Lewdware to a rectangle of
+---a screen (the Monitors settings tab), in which case `width` and `height` are that rectangle's,
+---not the panel's, and window coordinates are relative to its top left corner. There is no way to
+---see past it, and nothing to do differently: treat what you are given as the whole screen and it
+---is correct either way.
+---
 ---@field id number A unique identifier for the monitor.
 ---@field primary boolean Whether this is the user's primary monitor.
----@field width number The width of the monitor, in pixels.
----@field height number The height of the monitor, in pixels.
+---@field width number The width of the usable area, in pixels.
+---@field height number The height of the usable area, in pixels.
 
 ---@class LewdwareMonitors
 lewdware.monitors = {}
@@ -543,10 +550,15 @@ lewdware.popup = {}
 ---@field anchor? Anchor Where to place the window relative to the specified coordinates. By
 ---  default, "top-left" is used, meaning that the top-left corner of the window is placed at the
 ---  specified coordinates.
----@field width? Coord The width of the window. Defaults to the width of the image/video, or a
----  third of the monitor width if it is too big.
----@field height? Coord The height of the window. Defaults to the height of the image/video, or a
----  third of the monitor height if it is too big.
+---@field width? Coord The width of the window. Defaults to the width of the image/video, scaled
+---  down if it is too big: at most a third of the monitor's width.
+---@field height? Coord The height of the window. Defaults to the height of the image/video,
+---  scaled to match whichever of the two limits binds first: at most half the monitor's height.
+---
+---  Both limits have a floor, so that a [monitor](lua://Monitor) the user has restricted to a
+---  small area does not shrink popups twice over: below roughly 900x400 pixels the limit becomes
+---  the area itself, and a popup may fill it entirely. On a whole screen the fractions above are
+---  what apply.
 ---@field monitor? Monitor The monitor to spawn the window on. By default, chooses a monitor at
 ---  random.
 ---@field decorations? boolean Whether to spawn the window with a header and border (defaults to
@@ -656,8 +668,9 @@ function lewdware.popup.video(video, opts) end
 ---
 ---If `width`/`height` are omitted, the window is sized to fit the text at the chosen `font_size`
 ---(wrapping rather than shrinking the font if it would otherwise be wider than a third of the
----monitor's width) — similar in spirit to how image and video popups size themselves from the
----media's dimensions. Text is always centered vertically within the window.
+---monitor's width, or than the whole of a small area) — similar in spirit to how image and video
+---popups size themselves from the media's dimensions. Text is always centered vertically within
+---the window.
 
 ---Spawn a popup displaying text.
 ---@param text string

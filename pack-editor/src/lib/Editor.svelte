@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { clampScroll } from '$ui/scroll';
 	import Button from '$ui/Button.svelte';
 	import Tabs from '$ui/Tabs.svelte';
 	import IconButton from '$ui/IconButton.svelte';
@@ -641,7 +642,7 @@
 				{:else if store.activeView === 'modes'}
 					<Modes />
 				{:else}
-					<div class="flex-1 overflow-y-auto">
+					<div class="flex-1 overflow-y-auto" use:clampScroll>
 						<Options />
 					</div>
 				{/if}

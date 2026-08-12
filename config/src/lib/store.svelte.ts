@@ -1,5 +1,7 @@
 import { api } from './api';
 import type {
+	AudioDeviceChoice,
+	AudioDeviceInfo,
 	Capabilities,
 	ConditionValue,
 	ConfigDto,
@@ -12,6 +14,7 @@ import type {
 	Permission,
 	OptionValue,
 	MonitorDto,
+	MonitorRegion,
 	QuietHoursDto,
 	ScheduleStatusDto,
 	SupervisorStatusDto,
@@ -72,6 +75,13 @@ class AppStore {
 	monitors = $state<MonitorDto[]>([]);
 	monitorsLoading = $state(false);
 	monitorsError = $state<string | null>(null);
+	// Same deal for audio outputs -- another engine probe. Unlike monitors this is *not* loaded up
+	// front: it is only ever needed by the Audio page, and devices come and go (headphones,
+	// bluetooth), so a list fetched at app start would be stale by the time anyone looked at it.
+	// `loadAudioDevices` is called when that page mounts instead.
+	audioDevices = $state<AudioDeviceInfo[]>([]);
+	audioDevicesLoading = $state(false);
+	audioDevicesError = $state<string | null>(null);
 	modeGroups = $state<ModeGroupDto[]>([]);
 	/** The window looks on offer, read once at load. Static for the life of the app -- it is the
 	 * engine's own catalogue (`shared::theme`), not anything the user can change. */
@@ -88,7 +98,7 @@ class AppStore {
 	 * alongside the live option values (see `PackMode.svelte`). */
 	packHas = $state<Record<string, ConditionValue>>({});
 	activeTab = $state<
-		'pack_mode' | 'safety' | 'sound_displays' | 'window_style' | 'scheduling' | 'diagnostics'
+		'pack_mode' | 'safety' | 'monitors' | 'audio' | 'window_style' | 'scheduling' | 'diagnostics'
 	>('pack_mode');
 	loading = $state(false);
 	loadError = $state<string | null>(null);
@@ -140,6 +150,18 @@ class AppStore {
 			this.monitorsError = String(err);
 		} finally {
 			this.monitorsLoading = false;
+		}
+	}
+
+	async loadAudioDevices() {
+		this.audioDevicesLoading = true;
+		this.audioDevicesError = null;
+		try {
+			this.audioDevices = await api.getAudioDevices();
+		} catch (err) {
+			this.audioDevicesError = String(err);
+		} finally {
+			this.audioDevicesLoading = false;
 		}
 	}
 
@@ -232,6 +254,29 @@ class AppStore {
 		this.saveConfig();
 	}
 
+	/** Narrow (or restore) the part of a monitor popups may use.
+	 *
+	 * `null` deletes the entry rather than storing a full-screen rectangle, so a monitor the user
+	 * never restricted stays absent from `config.json` — and a region is never mistaken for a
+	 * deliberate choice when the monitor is later resized. `MonitorDto.region` is kept in step so
+	 * the picker doesn't have to re-run the (slow) monitor probe to see its own edit. */
+	setMonitorRegion(id: string, region: MonitorRegion | null) {
+		if (!this.config) return;
+
+		const regions = { ...this.config.monitor_regions };
+		if (region === null) {
+			delete regions[id];
+		} else {
+			regions[id] = region;
+		}
+
+		this.config = { ...this.config, monitor_regions: regions };
+		this.monitors = this.monitors.map((m) =>
+			m.id === id ? { ...m, region: region ?? { x: 0, y: 0, width: 1, height: 1 } } : m
+		);
+		this.saveConfig();
+	}
+
 	// The user's window look. Both axes are plain `ConfigDto` fields the engine reads at spawn
 	// time (see `AppConfig::theme`), so saving is all there is to do -- nothing to tell a running
 	// session, which reads its chrome per window as it opens them.
@@ -270,6 +315,18 @@ class AppStore {
 	previewVolume(key: keyof Volume, value: number) {
 		if (!this.config) return;
 		this.config = { ...this.config, volume: { ...this.config.volume, [key]: value } };
+	}
+
+	// Which output sounds play on; `null` is the system default, which the engine re-resolves each
+	// time it opens a sink. Takes effect for sinks opened from here on, which in practice means the
+	// next session -- the engine reads this once at startup, exactly like `volume`.
+	//
+	// The name is stored alongside the id only so the picker can name a device that is no longer
+	// connected; see `AudioDeviceChoice`.
+	setAudioDevice(device: AudioDeviceChoice | null) {
+		if (!this.config) return;
+		this.config = { ...this.config, audio_device: device };
+		this.saveConfig();
 	}
 
 	// `saveConfig()` (schedule content is a normal ConfigDto field, so this alone persists it) plus
