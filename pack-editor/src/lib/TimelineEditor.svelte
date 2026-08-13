@@ -5,11 +5,14 @@
 	import Select from '$ui/Select.svelte';
 	import Toggle from '$ui/Toggle.svelte';
 	import EventScheduleEditor from './EventScheduleEditor.svelte';
+	import MediaSlot from './MediaSlot.svelte';
 	import StageTabs from './StageTabs.svelte';
 	import TagPicker from './TagPicker.svelte';
 	import TransitionEditor from './TransitionEditor.svelte';
-	import { scheduleBehaviourSave } from './behaviourSave.svelte.js';
+	import { api } from './api.js';
+	import { flushBehaviourSave, scheduleBehaviourSave } from './behaviourSave.svelte.js';
 	import { store } from './store.svelte.js';
+	import { taskFeedback } from './taskFeedback.svelte.js';
 	import type { EventSchedule, Stage } from './types.js';
 	import {
 		duplicateStage as duplicateTimelineStage,
@@ -46,6 +49,16 @@
 		transition ? stages.find((item) => item.id === transition.to_stage) : undefined
 	);
 	const previous = $derived(activeIndex > 0 ? stages[activeIndex - 1] : undefined);
+	// What this stage's wallpaper would be if it sets none: the nearest earlier stage that sets
+	// one, or the pack's own. A stage's wallpaper is an absolute write, so "empty" isn't "none" --
+	// it's "whatever is already up", and the author can only judge that if we name it.
+	const inheritedWallpaper = $derived.by(() => {
+		for (let index = activeIndex - 1; index >= 0; index--) {
+			const name = stages[index].content.wallpaper;
+			if (name) return name;
+		}
+		return store.behaviour?.content.wallpaper;
+	});
 	const next = $derived(activeIndex >= 0 ? stages[activeIndex + 1] : undefined);
 	const outgoing = $derived(
 		stage && next
@@ -97,11 +110,28 @@
 		activeId = selected.id;
 		scheduleBehaviourSave();
 	}
-	function confirmRemove() {
+	async function confirmRemove() {
 		if (!removing || stages.length === 1) return;
-		const i = stages.indexOf(removing);
-		removeTimelineStage(store.behaviour!.experience!.timeline, removing);
-		activeId = stages[Math.min(i, stages.length - 1)].id;
+		const target = removing;
+		const index = stages.indexOf(target);
+		// A stage's wallpaper is a media slot, so retiring the stage retires the slot: a file that
+		// was only ever this stage's scenery leaves with it, exactly as the slot's own Remove does
+		// (see `MediaPack::clear_media_slot`). Cleared through the backend because only it knows
+		// whether the file is scenery and whether anything else still points at it. The stage is
+		// then removed locally and saved over the top, so both ends agree on the end state.
+		if (target.content.wallpaper) {
+			try {
+				await flushBehaviourSave();
+				const result = await api.clearMediaSlot({ kind: 'stage_wallpaper', stage: target.id });
+				if (result?.deleted_id != null) store.removeFilesById([result.deleted_id], true);
+			} catch (error) {
+				// The stage still goes; a wallpaper left behind is tidier than a stage that won't
+				// delete, and the file is still reachable from the Media tab.
+				taskFeedback.error('stage-wallpaper', `Could not clear the stage wallpaper: ${error}`);
+			}
+		}
+		removeTimelineStage(store.behaviour!.experience!.timeline, target);
+		activeId = stages[Math.min(index, stages.length - 1)].id;
 		removing = null;
 		scheduleBehaviourSave();
 	}
@@ -183,29 +213,15 @@
 							id={`stage-content-${stage.id}`}
 							onchange={(tags) => (stage.content.tags = tags)}
 						/>{/if}
-					<div class="toggle-row">
-						<div>
-							<strong>Change wallpaper</strong>{#if previous}<small
-									>Previous stage: {previous.content.wallpaper_tags
-										? `${previous.content.wallpaper_tags.length} selected`
-										: 'Pack default'}</small
-								>{/if}
-						</div>
-						<Toggle
-							ariaLabel="Change wallpaper"
-							checked={!!stage.content.wallpaper_tags}
-							onchange={(on) => {
-								if (on) stage.content.wallpaper_tags = [];
-								else delete stage.content.wallpaper_tags;
-								scheduleBehaviourSave();
-							}}
-						/>
-					</div>
-					{#if stage.content.wallpaper_tags}<TagPicker
-							tags={stage.content.wallpaper_tags}
-							id={`stage-wallpaper-${stage.id}`}
-							onchange={(tags) => (stage.content.wallpaper_tags = tags)}
-						/>{/if}
+					<MediaSlot
+						slot={{ kind: 'stage_wallpaper', stage: stage.id }}
+						name={stage.content.wallpaper}
+						title="Wallpaper"
+						description="The wallpaper this stage sets. Every stage writes it outright, so leaving it empty is what keeps the one already in effect."
+						emptyNote={inheritedWallpaper
+							? `Keeps “${inheritedWallpaper}”.`
+							: 'Keeps whatever wallpaper is already in effect.'}
+					/>
 				</section>
 
 				<section class="card">
@@ -373,7 +389,9 @@
 </section>
 {#if removing}<Dialog
 		title={`Remove “${removing.label}”?`}
-		description="This stage and its settings will be removed. Transitions to its neighbours will be reset."
+		description={`This stage and its settings will be removed. Transitions to its neighbours will be reset.${
+			removing.content.wallpaper ? ' Its wallpaper is cleared with it.' : ''
+		}`}
 		buttons={[
 			{ label: 'Cancel', onclick: () => (removing = null) },
 			{ label: 'Remove stage', destructive: true, onclick: confirmRemove }

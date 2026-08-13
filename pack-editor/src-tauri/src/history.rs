@@ -3,7 +3,7 @@ use std::{io::Cursor, rc::Rc};
 use anyhow::{bail, Result};
 use rusqlite::{
     params,
-    session::{invert_strm, ConflictAction, Session},
+    session::{invert_strm, ChangesetItem, ConflictAction, ConflictType, Session},
     types::Value,
     vtab::array::Array,
     Connection, OptionalExtension, Transaction, TransactionBehavior,
@@ -256,13 +256,78 @@ pub fn add_imported_media(
     Ok(())
 }
 
-pub fn finish_media_import(connection: &mut Connection, history_id: i64) -> Result<Status> {
+/// Folds one more operation into a *pending* media import, so the whole thing undoes as one
+/// entry.
+///
+/// Importing a file and pointing a media slot at it is one action to the author ("set the
+/// wallpaper"), and two undo steps for it would be a lie about what they did. The import half
+/// can't be a changeset -- undoing an import soft-deletes the media row so its bytes survive for
+/// redo (see `collect_garbage`), where an inverted changeset would hard-delete it and orphan the
+/// loose file. So the other half rides along instead: the operation's changeset is stored on the
+/// visibility entry and applied beside it (see `apply_at_cursor`).
+///
+/// Call once per pending entry, before `finish_media_import`.
+pub fn record_into_pending<T>(
+    connection: &mut Connection,
+    history_id: i64,
+    operation: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    let mut session = Session::new(connection)?;
+    for table in TRACKED_TABLES {
+        session.attach(Some(*table))?;
+    }
+
+    let tx = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
+    let value = operation(&tx)?;
+    let mut forward = Vec::new();
+    session.changeset_strm(&mut forward)?;
+    if forward.is_empty() {
+        tx.commit()?;
+        return Ok(value);
+    }
+    let mut inverse = Vec::new();
+    invert_strm(&mut Cursor::new(&forward), &mut inverse)?;
+    tx.execute(
+        "UPDATE history_entries SET forward_changeset = ?, inverse_changeset = ?
+         WHERE id = ? AND status = 'pending'",
+        params![forward, inverse, history_id],
+    )?;
+    tx.commit()?;
+    Ok(value)
+}
+
+/// Finalizes a pending media import. `label` overrides the default "Import N media items" for a
+/// caller that folded something else in and wants the entry named after the whole action.
+pub fn finish_media_import(
+    connection: &mut Connection,
+    history_id: i64,
+    label: Option<&str>,
+) -> Result<Status> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let count: i64 = tx.query_row(
         "SELECT COUNT(*) FROM history_media_refs WHERE history_id = ?",
         [history_id],
         |row| row.get(0),
     )?;
+    // A folded operation with no media of its own -- filling a slot from a file the pack already
+    // had. Nothing to make visible, but the changeset is still a real edit, so the entry stays as
+    // an ordinary changeset rather than being discarded as an empty import.
+    let folded: bool = tx.query_row(
+        "SELECT forward_changeset IS NOT NULL FROM history_entries WHERE id = ?",
+        [history_id],
+        |row| row.get(0),
+    )?;
+    if count == 0 && folded {
+        tx.execute(
+            "UPDATE history_entries SET kind = 'changeset', label = ?, status = 'ready'
+             WHERE id = ?",
+            params![label.unwrap_or("Edit pack"), history_id],
+        )?;
+        trim(&tx)?;
+        collect_garbage(&tx)?;
+        tx.commit()?;
+        return status(connection);
+    }
     if count == 0 {
         let entry: Option<(i64, String, Option<String>)> = tx
             .query_row(
@@ -294,10 +359,10 @@ pub fn finish_media_import(connection: &mut Connection, history_id: i64) -> Resu
             }
         }
     } else {
-        let label = if count == 1 {
-            "Import media item".to_string()
-        } else {
-            format!("Import {count} media items")
+        let label = match label {
+            Some(label) => label.to_string(),
+            None if count == 1 => "Import media item".to_string(),
+            None => format!("Import {count} media items"),
         };
         tx.execute(
             "UPDATE history_entries SET label = ?, status = 'ready' WHERE id = ?",
@@ -308,6 +373,25 @@ pub fn finish_media_import(connection: &mut Connection, history_id: i64) -> Resu
     }
     tx.commit()?;
     status(connection)
+}
+
+/// What to do when a change in a history changeset doesn't fit the database it's being applied
+/// to.
+///
+/// `NOTFOUND` is expected and benign: our tracked tables cascade, so an inverted changeset that
+/// deletes a `tags` row takes the `media_tags` rows referencing it along, and the changeset's own
+/// delete for those rows then finds nothing. The end state is the one the change was asking for,
+/// so skipping it is right -- aborting instead made undo fail outright on any entry that created
+/// a tag and attached it in one step (creating a tag from the media sidebar, or filling a media
+/// slot, which applies its marker the same way).
+///
+/// Anything else is a real disagreement about the state -- a row that exists where the changeset
+/// expected none, or different values than it recorded -- and must not be papered over.
+fn on_conflict(conflict: ConflictType, _item: ChangesetItem) -> ConflictAction {
+    match conflict {
+        ConflictType::SQLITE_CHANGESET_NOTFOUND => ConflictAction::SQLITE_CHANGESET_OMIT,
+        _ => ConflictAction::SQLITE_CHANGESET_ABORT,
+    }
 }
 
 fn apply_at_cursor(connection: &mut Connection, redo: bool) -> Result<Status> {
@@ -352,9 +436,7 @@ fn apply_at_cursor(connection: &mut Connection, redo: bool) -> Result<Status> {
                 if redo { forward } else { inverse }
                     .ok_or_else(|| anyhow::anyhow!("missing changeset"))?,
             );
-            tx.apply_strm(&mut changeset, None::<fn(&str) -> bool>, |_, _| {
-                ConflictAction::SQLITE_CHANGESET_ABORT
-            })?;
+            tx.apply_strm(&mut changeset, None::<fn(&str) -> bool>, on_conflict)?;
         }
         "media_visibility" => {
             let applied_deleted = payload.as_deref().unwrap_or("0") == "1";
@@ -369,6 +451,12 @@ fn apply_at_cursor(connection: &mut Connection, redo: bool) -> Result<Status> {
                   WHERE history_id = (SELECT id FROM history_entries WHERE sequence = ?))",
                 params![deleted, sequence],
             )?;
+            // An entry that folded a second operation in (see `record_into_pending`) carries its
+            // changeset too, and the two are one action -- they move together or the author gets
+            // a slot pointing at media this same step just hid.
+            if let Some(changeset) = if redo { forward } else { inverse } {
+                tx.apply_strm(&mut Cursor::new(changeset), None::<fn(&str) -> bool>, on_conflict)?;
+            }
         }
         _ => bail!("unsupported history entry kind {kind}"),
     }

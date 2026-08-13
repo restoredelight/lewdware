@@ -3,15 +3,15 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 /// Data read by both default modes: captions, prompts, notifications, subliminals, web links,
-/// wallpaper/splash tags, and the content groups a user can toggle. See
+/// the wallpaper/splash media references, and the content groups a user can toggle. See
 /// `behaviour-design/behaviour-tab.md` and `behaviour-design/default-mode.md` (Ownership).
 ///
-/// Wallpaper/splash are pure tagged media -- `wallpaper_tags`/`splash_tags` name which tags
-/// identify that media, rather than carrying the media itself. Both are opt-in like every other
-/// field here: empty means the pack doesn't use engine-managed wallpaper/splash at all, full
-/// stop -- there is deliberately no mechanical fallback tag (e.g. assuming anything tagged
-/// `"wallpaper"` is wallpaper media), since a pack author using that word for an unrelated
-/// organizational tag would otherwise get surprise behaviour they never asked for.
+/// Wallpaper and splash are single media *references*, not tag queries: one named file each,
+/// resolved at runtime through `lewdware.media.get`. They were tag lists once, which asked an
+/// author to know that `wallpaper` was a mechanical tag and to keep it off ordinary media --
+/// while every format they can come from is single-image anyway (Edgeware has one
+/// `wallpaper.png`, one `loading_splash.*`, and one wallpaper per corruption level). Both stay
+/// opt-in: `None` means the pack doesn't use engine-managed wallpaper/splash at all.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Content {
     #[serde(default)]
@@ -28,13 +28,29 @@ pub struct Content {
     pub subliminals: Vec<TextItem>,
     #[serde(default)]
     pub web_links: Vec<WebLink>,
-    /// Tags identifying wallpaper media. Empty means the pack has no wallpaper feature at all --
-    /// see this struct's doc comment.
-    #[serde(default)]
-    pub wallpaper_tags: Vec<String>,
-    /// Tags identifying splash media. See `wallpaper_tags`'s doc comment -- same reasoning.
-    #[serde(default)]
-    pub splash_tags: Vec<String>,
+    /// Name of the media file used as the desktop wallpaper. `None` means the pack has no
+    /// wallpaper feature at all -- see this struct's doc comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallpaper: Option<String>,
+    /// Name of the media file shown as the startup splash. See `wallpaper`'s doc comment --
+    /// same reasoning, except that a splash may also be a video (an animated GIF probes as one;
+    /// see `shared/src/encode.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub splash: Option<String>,
+}
+
+/// One place in a behaviour document that names a media file -- the address of a media slot,
+/// independent of what (if anything) currently fills it. See `Behaviour::take_media_references`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MediaSlot {
+    /// `Content::wallpaper`.
+    Wallpaper,
+    /// `Content::splash`.
+    Splash,
+    /// The wallpaper a timeline stage sets, addressed by stage id rather than by position: a
+    /// slot may be filled long after it was read, and ids are what survive editing in between.
+    StageWallpaper { stage: String },
 }
 
 /// A single content-pool entry, taggable independently of any other entry in the same pool
@@ -165,19 +181,109 @@ impl Behaviour {
         for item in &mut content.web_links {
             rewrite(&mut item.tags, from, replacement);
         }
-        rewrite(&mut content.wallpaper_tags, from, replacement);
-        rewrite(&mut content.splash_tags, from, replacement);
+        // `content.wallpaper`/`splash` and a stage's `wallpaper` are media *names*, not tags --
+        // renaming a tag can't touch them. Renaming a media file can; that's
+        // `rewrite_media_name`.
 
         if let Some(experience) = &mut self.experience {
             for stage in &mut experience.timeline.stages {
                 if let Some(tags) = &mut stage.content.tags {
                     rewrite(tags, from, replacement);
                 }
-                if let Some(tags) = &mut stage.content.wallpaper_tags {
-                    rewrite(tags, from, replacement);
-                }
             }
         }
+    }
+
+    /// Rewrites every reference to a media file name in this behaviour document -- the
+    /// referential-integrity half of the wallpaper/splash slots (see `Content`).
+    ///
+    /// `replacement = None` clears the reference, which is what deleting the file means; passing
+    /// a name is what renaming it means. Returns whether anything changed, so a caller can skip
+    /// re-persisting an untouched document.
+    pub fn rewrite_media_name(&mut self, from: &str, replacement: Option<&str>) -> bool {
+        let mut changed = false;
+        for (_, value) in self.media_reference_slots() {
+            if value.as_deref() == Some(from) {
+                *value = replacement.map(str::to_string);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Empties every media slot, returning what each one pointed at.
+    ///
+    /// For a writer that can't yet check the names it wants to use: the Edgeware importer knows
+    /// which file belongs in which slot long before it knows what that file will end up being
+    /// called (a name collision suffixes it, and a duplicate or a failed encode means it never
+    /// arrives at all). Taking the references out lets the rest of the document be persisted
+    /// immediately, with the slots filled back in by [`Behaviour::fill_media_reference`] once
+    /// their files really exist -- so a reference is never written on trust.
+    pub fn take_media_references(&mut self) -> Vec<(MediaSlot, String)> {
+        self.media_reference_slots()
+            .filter_map(|(slot, value)| value.take().map(|name| (slot, name)))
+            .collect()
+    }
+
+    /// Points `slot` at `name`, if that slot exists and is still empty.
+    ///
+    /// Only-if-empty because filling a slot is the tail end of a long-running import, and the
+    /// Content tab is live throughout: a slot the author set themselves in the meantime is their
+    /// answer, not one to overwrite. Returns whether it was filled.
+    pub fn fill_media_reference(&mut self, slot: &MediaSlot, name: String) -> bool {
+        for (candidate, value) in self.media_reference_slots() {
+            if &candidate == slot && value.is_none() {
+                *value = Some(name);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Every slot that holds a media file name, with a mutable handle on it. The single place
+    /// that knows where references live, so adding a slot later can't leave one of the operations
+    /// above quietly not covering it.
+    fn media_reference_slots(&mut self) -> impl Iterator<Item = (MediaSlot, &mut Option<String>)> {
+        let stages = self
+            .experience
+            .iter_mut()
+            .flat_map(|experience| experience.timeline.stages.iter_mut())
+            .map(|stage| {
+                (
+                    MediaSlot::StageWallpaper {
+                        stage: stage.id.clone(),
+                    },
+                    &mut stage.content.wallpaper,
+                )
+            });
+        [
+            (MediaSlot::Wallpaper, &mut self.content.wallpaper),
+            (MediaSlot::Splash, &mut self.content.splash),
+        ]
+        .into_iter()
+        .chain(stages)
+    }
+
+    /// Every media file name this document references, in no particular order. Used to decide
+    /// whether a file a slot is being cleared from is still needed elsewhere (see the pack
+    /// editor's slot lifecycle) -- a base wallpaper reused by a timeline stage is Edgeware's
+    /// ordinary case, so "clear this stage's wallpaper" must not take the pack's main one with
+    /// it.
+    pub fn referenced_media_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = [&self.content.wallpaper, &self.content.splash]
+            .into_iter()
+            .filter_map(|slot| slot.as_deref())
+            .collect();
+        if let Some(experience) = &self.experience {
+            names.extend(
+                experience
+                    .timeline
+                    .stages
+                    .iter()
+                    .filter_map(|stage| stage.content.wallpaper.as_deref()),
+            );
+        }
+        names
     }
 }
 
@@ -283,9 +389,11 @@ pub struct ContentSelection {
     /// `None` uses all content; `Some([])` deliberately selects none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
-    /// `None` retains the pack-level wallpaper selection.
+    /// Name of the media file this stage sets as the wallpaper. `None` retains whatever the
+    /// previous stage (or `Content::wallpaper`) left in effect -- an absolute write, not a
+    /// delta, which is why one name is enough.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wallpaper_tags: Option<Vec<String>>,
+    pub wallpaper: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -454,12 +562,111 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wallpaper_and_splash_tags_are_opt_in_with_no_mechanical_default() {
-        // No mechanical fallback: an author who never declares wallpaper_tags/splash_tags gets an
-        // empty list, not an assumed "wallpaper"/"splash" tag -- see `Content`'s doc comment.
+    fn wallpaper_and_splash_are_opt_in_with_no_mechanical_default() {
+        // No mechanical fallback: an author who never fills either slot gets `None`, not an
+        // assumed "wallpaper.png"/"loading_splash.png" -- see `Content`'s doc comment.
         let content = Content::default();
-        assert_eq!(content.wallpaper_tags, Vec::<String>::new());
-        assert_eq!(content.splash_tags, Vec::<String>::new());
+        assert_eq!(content.wallpaper, None);
+        assert_eq!(content.splash, None);
+    }
+
+    fn behaviour_with_slots(wallpaper: &str, splash: &str, stage_wallpaper: &str) -> Behaviour {
+        let mut behaviour = Behaviour::new();
+        behaviour.content.wallpaper = Some(wallpaper.to_string());
+        behaviour.content.splash = Some(splash.to_string());
+        behaviour.experience = Some(Experience {
+            timeline: Timeline {
+                stages: vec![Stage {
+                    id: "stage-1".to_string(),
+                    label: "Stage 1".to_string(),
+                    end: None,
+                    content: ContentSelection {
+                        tags: None,
+                        wallpaper: Some(stage_wallpaper.to_string()),
+                    },
+                    events: Events::default(),
+                    movement: None,
+                    mitosis: None,
+                }],
+                transitions: vec![],
+            },
+            label: None,
+        });
+        behaviour
+    }
+
+    #[test]
+    fn taking_media_references_empties_every_slot_and_reports_where_each_pointed() {
+        let mut behaviour = behaviour_with_slots("bg.png", "intro.gif", "bg2.png");
+
+        let taken = behaviour.take_media_references();
+
+        assert_eq!(
+            taken,
+            vec![
+                (MediaSlot::Wallpaper, "bg.png".to_string()),
+                (MediaSlot::Splash, "intro.gif".to_string()),
+                (
+                    MediaSlot::StageWallpaper {
+                        stage: "stage-1".to_string()
+                    },
+                    "bg2.png".to_string()
+                ),
+            ]
+        );
+        assert_eq!(behaviour.referenced_media_names(), Vec::<&str>::new());
+        // An empty slot has nothing to report, and taking again is a no-op.
+        assert!(behaviour.take_media_references().is_empty());
+    }
+
+    #[test]
+    fn filling_a_media_reference_respects_a_slot_that_is_already_set() {
+        // The import fills slots at the end of a long-running job, and the Content tab is live
+        // throughout: a slot the author set in the meantime is their answer, not one to replace.
+        let mut behaviour = behaviour_with_slots("bg.png", "intro.gif", "bg2.png");
+        behaviour.take_media_references();
+        behaviour.content.splash = Some("author-picked.png".to_string());
+
+        assert!(behaviour.fill_media_reference(&MediaSlot::Wallpaper, "bg (1).png".to_string()));
+        assert!(!behaviour.fill_media_reference(&MediaSlot::Splash, "intro.gif".to_string()));
+        assert!(behaviour.fill_media_reference(
+            &MediaSlot::StageWallpaper {
+                        stage: "stage-1".to_string()
+                    },
+            "bg2.png".to_string()
+        ));
+        // A stage deleted while the import ran simply has nowhere to fill.
+        assert!(!behaviour.fill_media_reference(
+            &MediaSlot::StageWallpaper {
+                stage: "gone".to_string()
+            },
+            "bg2.png".to_string()
+        ));
+
+        assert_eq!(behaviour.content.wallpaper.as_deref(), Some("bg (1).png"));
+        assert_eq!(
+            behaviour.content.splash.as_deref(),
+            Some("author-picked.png")
+        );
+        let stage = &behaviour.experience.as_ref().unwrap().timeline.stages[0];
+        assert_eq!(stage.content.wallpaper.as_deref(), Some("bg2.png"));
+    }
+
+    #[test]
+    fn rewriting_a_media_name_covers_every_slot_that_names_it() {
+        // Renaming a file the base wallpaper and a stage both use has to move both, and deleting
+        // it has to clear both -- the referential integrity the pack editor's lifecycle needs.
+        let mut behaviour = behaviour_with_slots("bg.png", "intro.gif", "bg.png");
+
+        assert!(behaviour.rewrite_media_name("bg.png", Some("backdrop.png")));
+        assert_eq!(
+            behaviour.referenced_media_names(),
+            vec!["backdrop.png", "intro.gif", "backdrop.png"]
+        );
+
+        assert!(behaviour.rewrite_media_name("backdrop.png", None));
+        assert_eq!(behaviour.referenced_media_names(), vec!["intro.gif"]);
+        assert!(!behaviour.rewrite_media_name("backdrop.png", None));
     }
 
     fn sample_behaviour() -> Behaviour {
@@ -482,7 +689,7 @@ mod tests {
                     args: vec!["edgeware packs".to_string()],
                     tags: vec![],
                 }],
-                wallpaper_tags: vec!["bg".to_string()],
+                wallpaper: Some("bg.png".to_string()),
                 ..Content::default()
             },
             experience: Some(Experience {
@@ -514,7 +721,7 @@ mod tests {
                             end: None,
                             content: ContentSelection {
                                 tags: Some(vec!["kinky".to_string()]),
-                                wallpaper_tags: None,
+                                wallpaper: None,
                             },
                             events: Events::default(),
                             movement: Some(Movement {
@@ -608,11 +815,11 @@ mod tests {
             "notifications": [{"text":"Notification","tags":["old"]}],
             "subliminals": [{"text":"Subliminal","tags":["old"]}],
             "web_links": [{"url":"https://example.com","tags":["old"]}],
-            "wallpaper_tags": ["old"],
-            "splash_tags": ["old"]
+            "wallpaper": "old.png",
+            "splash": "old.png"
           },
           "experience": {"timeline":{"stages":[{
-            "id":"stage","label":"Stage","content":{"tags":["old"],"wallpaper_tags":["old"]}
+            "id":"stage","label":"Stage","content":{"tags":["old"],"wallpaper":"old.png"}
           }],"transitions":[]}}
         }"#).unwrap();
 
@@ -623,17 +830,15 @@ mod tests {
         assert_eq!(behaviour.content.notifications[0].tags, vec!["new"]);
         assert_eq!(behaviour.content.subliminals[0].tags, vec!["new"]);
         assert_eq!(behaviour.content.web_links[0].tags, vec!["new"]);
-        assert_eq!(behaviour.content.wallpaper_tags, vec!["new"]);
-        assert_eq!(behaviour.content.splash_tags, vec!["new"]);
+        // Media references are names, not tags: renaming a tag leaves them exactly as they were.
+        assert_eq!(behaviour.content.wallpaper.as_deref(), Some("old.png"));
+        assert_eq!(behaviour.content.splash.as_deref(), Some("old.png"));
         let stage = &behaviour.experience.as_ref().unwrap().timeline.stages[0];
         assert_eq!(
             stage.content.tags.as_deref(),
             Some(["new".into()].as_slice())
         );
-        assert_eq!(
-            stage.content.wallpaper_tags.as_deref(),
-            Some(["new".into()].as_slice())
-        );
+        assert_eq!(stage.content.wallpaper.as_deref(), Some("old.png"));
 
         behaviour.rewrite_tag("new", None);
         assert!(behaviour.content.content_groups[0].tags.is_empty());

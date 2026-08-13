@@ -160,14 +160,14 @@
       "label": "Close trigger",
       "options": {
         "close_trigger_enabled": {
-          "label": "Spawn popups when closing",
+          "label": "Spawn popups on close",
           "description": "Closing a popup may spawn more",
           "type": "boolean",
           "default": false
         },
         "close_chance": {
           "label": "Spawn chance (0–1)",
-          "description": "Probability that closing a popup triggers more spawns",
+          "description": "Probability that closing a popup triggers more popups",
           "type": "number",
           "default": 0.5,
           "min": 0.01,
@@ -257,7 +257,6 @@
         },
         "auto_close_after": {
           "label": "Close popups automatically after (seconds)",
-          "description": "Timed from when the popup appears. Popups closed this way never spawn more, even with the close trigger enabled.",
           "type": "number",
           "optional": true,
           "enabled_by_default": false,

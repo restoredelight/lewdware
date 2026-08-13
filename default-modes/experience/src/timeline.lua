@@ -178,7 +178,7 @@ function M.events() return current.events or {} end
 function M.movement() return current.movement end
 function M.mitosis() return current.mitosis end
 function M.tags() return (current.content or {}).tags end
-function M.wallpaper_tags() return (current.content or {}).wallpaper_tags end
+function M.wallpaper() return (current.content or {}).wallpaper end
 function M.phase() return phase end
 function M.stage_index() return stage_index end
 

@@ -45,9 +45,7 @@ behaviour:
     notifications: []
     subliminals: []
     web_links: []
-    wallpaper_tags:
-      - wallpaper
-    splash_tags: []
+    wallpaper: wallpaper.png
   experience:
     timeline:
       stages:
@@ -64,8 +62,7 @@ behaviour:
             tags:
               - corruption-moodless
               - vanilla
-            wallpaper_tags:
-              - wallpaper
+            wallpaper: wallpaper.png
           events:
             popup:
               interval:
@@ -101,8 +98,7 @@ behaviour:
               - corrupted
               - corruption-moodless
               - kinky
-            wallpaper_tags:
-              - wallpaper-1
+            wallpaper: wallpaper2.png
           events:
             popup:
               interval:
@@ -142,11 +138,11 @@ media:
   - source_path: wallpaper.png
     suggested_name: wallpaper.png
     tags:
-      - wallpaper
+      - __lewdware-non-popup
   - source_path: wallpaper2.png
     suggested_name: wallpaper2.png
     tags:
-      - wallpaper-1
+      - __lewdware-non-popup
 icon: ~
 warnings:
   - kind: ConfigNotConverted

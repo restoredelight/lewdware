@@ -33,6 +33,13 @@
 	import UploadProgress from './UploadProgress.svelte';
 	import MediaViewer from './MediaViewer.svelte';
 	import ImportWarnings from './ImportWarnings.svelte';
+	import { mediaSlotUsage } from './tagReferences.js';
+
+	/** "a", "a and b", "a, b and c" -- for naming what a removal will clear. */
+	function formatList(items: string[]): string {
+		if (items.length <= 1) return items[0] ?? '';
+		return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+	}
 	import MediaToolbar from './MediaToolbar.svelte';
 	import Tags from './Tags.svelte';
 	import Artists from './Artists.svelte';
@@ -412,7 +419,14 @@
 			`Removing ${ids.length} media item${ids.length === 1 ? '' : 's'}…`
 		);
 		try {
-			await api.removeFiles(ids);
+			// Deleting a file clears any slot that named it -- see `MediaPack::remove_files`. Flush
+			// first, or a pending debounced write lands afterwards and restores the dead reference.
+			await flushBehaviourSave();
+			const behaviour = await api.removeFiles(ids);
+			if (behaviour) {
+				store.behaviour = behaviour;
+				initializeBehaviourHistory(behaviour);
+			}
 			store.cancelMediaRemoval();
 			store.removeFilesById(ids, true);
 			history.record({

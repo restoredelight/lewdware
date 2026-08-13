@@ -3,6 +3,9 @@
 	import { store } from './store.svelte.js';
 	import type { FileInfo } from './types.js';
 	import TagInput from '$ui/TagInput.svelte';
+	import Toggle from '$ui/Toggle.svelte';
+	import { NON_POPUP_TAG, withoutManagedTags } from './tags.js';
+	import { flushBehaviourSave, initializeBehaviourHistory } from './behaviourSave.svelte.js';
 	import Button from '$ui/Button.svelte';
 	import { api } from './api.js';
 	import { onMount } from 'svelte';
@@ -57,12 +60,30 @@
 	const selCount = $derived(store.selectedIds.size);
 	const primary = $derived(store.primaryFile);
 	const selected = $derived(store.selectedFiles);
+	// Managed tags are the editor's, not the author's: they're applied and cleared by the media
+	// slots and the popup toggle below, and they'd be undeletable clutter in this list (the
+	// backend refuses to remove one through a tag command). See ./tags.ts.
 	const tagCounts = $derived.by(() => {
 		const counts = new Map<string, number>();
 		for (const file of selected)
-			for (const tag of file.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+			for (const tag of withoutManagedTags(file.tags))
+				counts.set(tag, (counts.get(tag) ?? 0) + 1);
 		return counts;
 	});
+
+	const shownAsPopup = $derived(primary != null && !primary.tags.includes(NON_POPUP_TAG));
+
+	async function toggleShownAsPopup(shown: boolean) {
+		if (!primary) return;
+		const id = primary.id;
+		const name = primary.file_name;
+		await api.setShownAsPopup(id, shown);
+		if (shown) store.removeTagFromFiles([id], NON_POPUP_TAG, true);
+		else store.addTagToFiles([id], NON_POPUP_TAG, true);
+		history.record({
+			label: shown ? `Show “${name}” in popups` : `Hide “${name}” from popups`
+		});
+	}
 	const commonTags = $derived(
 		[...tagCounts]
 			.filter(([, count]) => count === selCount)
@@ -234,7 +255,14 @@
 		const before = primary.file_name;
 		const after = titleValue.trim();
 		try {
-			await api.setFileTitle(id, after);
+			// A slot referencing this file follows the rename, so this returns the behaviour. Flush
+			// first: a pending debounced write still holds the old name and would land afterwards.
+			await flushBehaviourSave();
+			const behaviour = await api.setFileTitle(id, after);
+			if (behaviour) {
+				store.behaviour = behaviour;
+				initializeBehaviourHistory(behaviour);
+			}
 			store.updateFileName(id, after, true);
 			history.record({
 				label: `Rename “${before}”`
@@ -391,6 +419,28 @@
 					</div>
 				{/if}
 			</section>
+
+			{#if selCount === 1}
+				<section>
+					<div class="section-heading">
+						<h2>Popups</h2>
+					</div>
+					<div class="toggle-row">
+						<div>
+							<span>Show in popups</span>
+							<small>
+								Off for a file that’s only scenery — a wallpaper or splash. Turning it on keeps
+								the file in its slot and adds it to the popup pool as well.
+							</small>
+						</div>
+						<Toggle
+							ariaLabel="Show in popups"
+							checked={shownAsPopup}
+							onchange={toggleShownAsPopup}
+						/>
+					</div>
+				</section>
+			{/if}
 
 			<section>
 				<div class="section-heading">
@@ -579,6 +629,27 @@
 	.mixed-label {
 		color: var(--ui-muted);
 		font-size: 10px;
+	}
+	.toggle-row {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 10px;
+	}
+	.toggle-row > div {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.toggle-row span {
+		color: var(--ui-text);
+		font-size: 11px;
+	}
+	.toggle-row small {
+		color: var(--ui-muted);
+		font-size: 10px;
+		line-height: 1.4;
 	}
 	.title-field {
 		display: flex;

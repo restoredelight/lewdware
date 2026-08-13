@@ -6,6 +6,8 @@ use crate::mode::{
     Metadata, ModeEntry, ModeGroup, ModeOption, OptionType, OptionValue, StoredValue,
 };
 
+use crate::encode::FileType;
+
 use super::schema::{Behaviour, Content};
 
 /// Prefix for synthesized content-group toggle option keys (see `effective_options`). Lets a
@@ -27,12 +29,42 @@ pub struct EffectiveSchema {
     pub pack_has: IndexMap<String, OptionValue>,
 }
 
+/// Resolves a media file name against the pack's own media, for the `pack_has_*` facts that ask
+/// about a file rather than a list (`pack_has_wallpaper`/`pack_has_splash`). `None` means the
+/// pack has no file by that name.
+///
+/// A function rather than a concrete index because the two callers reach the pack's media very
+/// differently: the engine has a live `MediaManager`, while `config` only holds the pack's
+/// extracted index db. See `no_media` for the "no pack loaded at all" case.
+pub trait MediaLookup {
+    fn file_type(&self, name: &str) -> Option<FileType>;
+}
+
+impl<F: Fn(&str) -> Option<FileType>> MediaLookup for F {
+    fn file_type(&self, name: &str) -> Option<FileType> {
+        self(name)
+    }
+}
+
+/// A `MediaLookup` for "there is no pack": every name resolves to nothing, so every
+/// media-dependent `pack_has_*` fact is false.
+pub fn no_media(_name: &str) -> Option<FileType> {
+    None
+}
+
 /// Synthesizes the schema a default mode actually presents for a given pack: the mode's own
 /// options plus one boolean toggle per content group (rendered as a single "Content" checklist),
 /// and the `pack_has_*` facts used to drive `show_when` visibility elsewhere in the schema.
 /// Injects no option *defaults* from behaviour data — a content group's `enabled_by_default`
 /// becomes the synthesized option's own schema default, not a behaviour-data override.
-pub fn effective_options(mode_schema: &Metadata, behaviour: &Behaviour) -> EffectiveSchema {
+///
+/// `media` answers what the wallpaper/splash references actually resolve to; see
+/// `pack_has_constants`.
+pub fn effective_options(
+    mode_schema: &Metadata,
+    behaviour: &Behaviour,
+    media: &dyn MediaLookup,
+) -> EffectiveSchema {
     let mut entries = mode_schema.entries.clone();
 
     if !behaviour.content.content_groups.is_empty() {
@@ -65,12 +97,24 @@ pub fn effective_options(mode_schema: &Metadata, behaviour: &Behaviour) -> Effec
         );
     }
 
-    let pack_has = pack_has_constants(&behaviour.content, behaviour.experience.is_some());
+    let pack_has = pack_has_constants(&behaviour.content, behaviour.experience.is_some(), media);
 
     EffectiveSchema { entries, pack_has }
 }
 
-fn pack_has_constants(content: &Content, has_experience: bool) -> IndexMap<String, OptionValue> {
+/// The `pack_has_*` facts.
+///
+/// The list-backed ones are "the pack declares any", but wallpaper and splash are single media
+/// references, and a reference is only a promise. These two ask whether the referenced file is
+/// really there and really usable: a `wallpaper` naming a file that was since deleted, or naming
+/// a video (`lewdware.wallpaper.set` takes an image), would otherwise show the user a toggle
+/// that cannot do anything. Splash accepts video too -- Edgeware's `loading_splash` is very
+/// often an animated GIF, which probes as a video once encoded.
+fn pack_has_constants(
+    content: &Content,
+    has_experience: bool,
+    media: &dyn MediaLookup,
+) -> IndexMap<String, OptionValue> {
     let mut map = IndexMap::new();
     map.insert(
         "pack_has_captions".to_string(),
@@ -100,13 +144,21 @@ fn pack_has_constants(content: &Content, has_experience: bool) -> IndexMap<Strin
         "pack_has_experience".to_string(),
         OptionValue::Boolean(has_experience),
     );
+    let resolves_to = |slot: &Option<String>, accepted: &[FileType]| {
+        slot.as_deref()
+            .and_then(|name| media.file_type(name))
+            .is_some_and(|file_type| accepted.contains(&file_type))
+    };
     map.insert(
         "pack_has_wallpaper".to_string(),
-        OptionValue::Boolean(!content.wallpaper_tags.is_empty()),
+        OptionValue::Boolean(resolves_to(&content.wallpaper, &[FileType::Image])),
     );
     map.insert(
         "pack_has_splash".to_string(),
-        OptionValue::Boolean(!content.splash_tags.is_empty()),
+        OptionValue::Boolean(resolves_to(
+            &content.splash,
+            &[FileType::Image, FileType::Video],
+        )),
     );
     map
 }
@@ -179,7 +231,7 @@ mod tests {
 
     #[test]
     fn no_content_groups_means_no_synthesized_entry() {
-        let schema = effective_options(&empty_mode_schema(), &Behaviour::new());
+        let schema = effective_options(&empty_mode_schema(), &Behaviour::new(), &no_media);
         assert!(!schema.entries.contains_key(CONTENT_GROUPS_ENTRY_KEY));
     }
 
@@ -202,7 +254,7 @@ mod tests {
             },
         ]);
 
-        let schema = effective_options(&empty_mode_schema(), &behaviour);
+        let schema = effective_options(&empty_mode_schema(), &behaviour, &no_media);
 
         let ModeEntry::Group(group) = schema
             .entries
@@ -228,7 +280,7 @@ mod tests {
 
     #[test]
     fn pack_has_facts_reflect_empty_content() {
-        let schema = effective_options(&empty_mode_schema(), &Behaviour::new());
+        let schema = effective_options(&empty_mode_schema(), &Behaviour::new(), &no_media);
         for key in [
             "pack_has_captions",
             "pack_has_prompts",
@@ -266,7 +318,7 @@ mod tests {
         // prompts/notifications/subliminals/web_links left empty deliberately, so each flag
         // is checked independently rather than all flipping together.
 
-        let schema = effective_options(&empty_mode_schema(), &behaviour);
+        let schema = effective_options(&empty_mode_schema(), &behaviour, &no_media);
 
         assert_eq!(
             schema.pack_has.get("pack_has_captions"),
@@ -298,43 +350,87 @@ mod tests {
         );
     }
 
+    /// A `MediaLookup` over a fixed name -> type table.
+    fn media_with<'a>(files: &'a [(&'a str, FileType)]) -> impl MediaLookup + 'a {
+        move |name: &str| {
+            files
+                .iter()
+                .find(|(candidate, _)| *candidate == name)
+                .map(|&(_, file_type)| file_type)
+        }
+    }
+
+    fn behaviour_with_slots(wallpaper: Option<&str>, splash: Option<&str>) -> Behaviour {
+        let mut behaviour = Behaviour::new();
+        behaviour.content.wallpaper = wallpaper.map(str::to_string);
+        behaviour.content.splash = splash.map(str::to_string);
+        behaviour
+    }
+
+    fn slot_facts(behaviour: &Behaviour, media: &dyn MediaLookup) -> (bool, bool) {
+        let schema = effective_options(&empty_mode_schema(), behaviour, media);
+        let fact = |key: &str| match schema.pack_has.get(key) {
+            Some(&OptionValue::Boolean(value)) => value,
+            other => panic!("expected a boolean {key}, got {other:?}"),
+        };
+        (fact("pack_has_wallpaper"), fact("pack_has_splash"))
+    }
+
     #[test]
-    fn pack_has_wallpaper_false_when_not_declared() {
-        // No mechanical fallback: a pack that never sets wallpaper_tags/splash_tags in
-        // behaviour.json gets `pack_has_wallpaper`/`pack_has_splash` = false, even if it happens
-        // to tag some media "wallpaper"/"splash" -- see `Content`'s doc comment on why there's no
-        // guessing here (opt-in only).
-        let schema = effective_options(&empty_mode_schema(), &Behaviour::new());
+    fn pack_has_wallpaper_and_splash_false_when_no_slot_is_set() {
+        // Opt-in only: a pack that never fills either slot gets both facts false, even if it
+        // happens to ship a file called "wallpaper.png" -- see `Content`'s doc comment.
+        let media = media_with(&[("wallpaper.png", FileType::Image)]);
+        assert_eq!(slot_facts(&Behaviour::new(), &media), (false, false));
+    }
+
+    #[test]
+    fn pack_has_wallpaper_and_splash_true_when_the_slots_resolve() {
+        let media = media_with(&[
+            ("bg.png", FileType::Image),
+            ("intro.png", FileType::Image),
+            ("intro.gif", FileType::Video),
+        ]);
+
         assert_eq!(
-            schema.pack_has.get("pack_has_wallpaper"),
-            Some(&OptionValue::Boolean(false))
+            slot_facts(&behaviour_with_slots(Some("bg.png"), Some("intro.png")), &media),
+            (true, true)
         );
+        // An animated splash is a *video* once encoded, and still a splash.
         assert_eq!(
-            schema.pack_has.get("pack_has_splash"),
-            Some(&OptionValue::Boolean(false))
+            slot_facts(&behaviour_with_slots(None, Some("intro.gif")), &media),
+            (false, true)
         );
     }
 
     #[test]
-    fn pack_has_wallpaper_true_once_author_declares_tags() {
-        let mut behaviour = Behaviour::new();
-        behaviour.content.wallpaper_tags = vec!["bg".to_string()];
-        behaviour.content.splash_tags = vec!["intro".to_string()];
+    fn pack_has_wallpaper_and_splash_false_when_the_reference_does_not_resolve() {
+        // The honesty fix: a reference is only a promise. A slot naming a file that isn't in the
+        // pack (deleted since, or never imported), or naming media of a type the feature can't
+        // use, must not offer the user a toggle that can't do anything. `wallpaper.set` takes an
+        // image; splash takes an image or a video; audio is neither.
+        let media = media_with(&[
+            ("clip.mp4", FileType::Video),
+            ("hum.opus", FileType::Audio),
+        ]);
 
-        let schema = effective_options(&empty_mode_schema(), &behaviour);
         assert_eq!(
-            schema.pack_has.get("pack_has_wallpaper"),
-            Some(&OptionValue::Boolean(true))
+            slot_facts(&behaviour_with_slots(Some("gone.png"), Some("gone.png")), &media),
+            (false, false)
         );
         assert_eq!(
-            schema.pack_has.get("pack_has_splash"),
-            Some(&OptionValue::Boolean(true))
+            slot_facts(&behaviour_with_slots(Some("clip.mp4"), None), &media),
+            (false, false)
+        );
+        assert_eq!(
+            slot_facts(&behaviour_with_slots(None, Some("hum.opus")), &media),
+            (false, false)
         );
     }
 
     #[test]
     fn effective_config_prefers_stored_value_for_real_option() {
-        let schema = effective_options(&mode_schema_with_option(), &Behaviour::new());
+        let schema = effective_options(&mode_schema_with_option(), &Behaviour::new(), &no_media);
         let mut stored = HashMap::new();
         stored.insert("popup_frequency".to_string(), StoredValue::Float(5.0));
 
@@ -348,7 +444,7 @@ mod tests {
 
     #[test]
     fn effective_config_falls_back_to_default_when_missing_or_mismatched() {
-        let schema = effective_options(&mode_schema_with_option(), &Behaviour::new());
+        let schema = effective_options(&mode_schema_with_option(), &Behaviour::new(), &no_media);
         let mut stored = HashMap::new();
         stored.insert(
             "popup_frequency".to_string(),
@@ -372,7 +468,7 @@ mod tests {
             tags: vec!["kinky".to_string()],
             enabled_by_default: true,
         }]);
-        let schema = effective_options(&empty_mode_schema(), &behaviour);
+        let schema = effective_options(&empty_mode_schema(), &behaviour, &no_media);
         let key = format!("{CONTENT_GROUP_KEY_PREFIX}kinky");
 
         // No stored value yet -> falls back to the group's `enabled_by_default`.
@@ -403,7 +499,7 @@ mod tests {
             tags: vec!["kinky".to_string()],
             enabled_by_default: true,
         }]);
-        let schema = effective_options(&mode_schema_with_option(), &behaviour);
+        let schema = effective_options(&mode_schema_with_option(), &behaviour, &no_media);
 
         assert!(schema.entries.contains_key("popup_frequency"));
         assert!(schema.entries.contains_key(CONTENT_GROUPS_ENTRY_KEY));

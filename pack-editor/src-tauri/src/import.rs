@@ -13,12 +13,25 @@
 //! dependency on encoding having finished -- waiting for the whole (potentially large) media
 //! pipeline before the Content/Experience tabs had anything to show was an artificial delay, not a
 //! real one.
+//!
+//! The wallpaper/splash slots are the exception, because they reference media by *name* and a
+//! name isn't final until its file has arrived (a collision suffixes it; a duplicate or a failed
+//! encode means it never arrives at all). Those are left out of that first write and filled in by
+//! `fill_media_references` once the pipeline has finished, so the pack never carries a reference
+//! to a file it doesn't have.
 
-use std::{io, path::Path, sync::Arc, thread::available_parallelism};
+use std::{
+    collections::HashMap,
+    io,
+    path::Path,
+    sync::{Arc, Mutex},
+    thread::available_parallelism,
+};
 
 use anyhow::{anyhow, Context};
 use converter::{convert, ConversionOutput, ConvertedMedia, DirSource, PackSource, ZipSource};
 use futures::{stream, StreamExt};
+use shared::behaviour::{Behaviour, MediaSlot};
 use shared::encode::{encode_file, hash_file, HardwareEncoder};
 use tauri::Emitter;
 use tempfile::TempDir;
@@ -26,7 +39,7 @@ use tokio::sync::{oneshot, watch, RwLock};
 use uuid::Uuid;
 
 use crate::encode::{wait_cancelled, DiscardOnDrop, UploadErrorPayload};
-use crate::pack::MediaFile;
+use crate::pack::{AddOutcome, MediaFile};
 
 #[derive(Debug)]
 enum ImportErrorKind {
@@ -79,10 +92,12 @@ pub fn load(
 /// converter's warnings) is returned directly from the Tauri command instead, since conversion
 /// itself already finished by the time this task starts (as did the behaviour.json/metadata write
 /// -- see this module's own doc comment).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_import(
     pack_state: crate::PackState,
     source: Arc<dyn PackSource + Send + Sync>,
     media: Vec<ConvertedMedia>,
+    media_references: Vec<(MediaSlot, String)>,
     app: tauri::AppHandle,
     encoder: HardwareEncoder,
     upload_lock: Arc<RwLock<()>>,
@@ -138,6 +153,11 @@ pub async fn run_import(
 
     let limit = available_parallelism().map(|x| x.get()).ok();
 
+    // Source file name -> the name that file actually landed under, for the slot references held
+    // back from the behaviour write (see `fill_media_references`). A converted name missing from
+    // this at the end is one that never arrived.
+    let imported: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+
     let process_all = stream::iter(media).for_each_concurrent(limit, |item| {
         let pack_state = pack_state.clone();
         let app = app.clone();
@@ -146,8 +166,10 @@ pub async fn run_import(
         let upload_lock = upload_lock.clone();
         let source = source.clone();
         let staging = staging.clone();
+        let imported = imported.clone();
         async move {
             let source_path = item.source_path.clone();
+            let suggested_name = item.suggested_name.clone();
             match import_one_media(
                 &pack_state,
                 pack_id,
@@ -162,6 +184,10 @@ pub async fn run_import(
             .await
             {
                 Ok(Some(media_file)) => {
+                    imported
+                        .lock()
+                        .unwrap()
+                        .insert(suggested_name, media_file.file_name.clone());
                     let _ = app.emit("upload:added", &media_file);
                 }
                 Ok(None) => {}
@@ -187,9 +213,19 @@ pub async fn run_import(
     }
 
     {
+        let imported = std::mem::take(&mut *imported.lock().unwrap());
         let lock = pack_state.lock().await;
         if let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) {
-            if let Err(error) = pack.finish_media_import(history_id).await {
+            if let Err(error) = fill_media_references(pack, media_references, &imported).await {
+                let _ = app.emit(
+                    "upload:error",
+                    UploadErrorPayload::new(
+                        &dir,
+                        format!("Could not fill in the pack's media slots: {error}"),
+                    ),
+                );
+            }
+            if let Err(error) = pack.finish_media_import(history_id, None).await {
                 let _ = app.emit(
                     "upload:error",
                     UploadErrorPayload::new(
@@ -202,6 +238,40 @@ pub async fn run_import(
     }
 
     let _ = app.emit("upload:done", ());
+}
+
+/// Fills in the media slots (wallpaper/splash -- see `shared::behaviour::Content`) that
+/// `import_edgeware_pack_dialog` held back from its behaviour write, now that the files they
+/// name either exist under a known name or are known not to have arrived.
+///
+/// A slot whose file never arrived -- a duplicate, a failed encode, a cancelled import -- is
+/// simply left empty, which is the honest answer: `pack_has_wallpaper`/`pack_has_splash` then
+/// report the feature as absent rather than offering a toggle with nothing behind it.
+async fn fill_media_references(
+    pack: &crate::pack::MediaPack,
+    references: Vec<(MediaSlot, String)>,
+    imported: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    let resolved: Vec<(MediaSlot, String)> = references
+        .into_iter()
+        .filter_map(|(slot, wanted)| Some((slot, imported.get(&wanted)?.clone())))
+        .collect();
+    if resolved.is_empty() {
+        return Ok(());
+    }
+    let Some(bytes) = pack.get_pack_data("behaviour").await? else {
+        return Ok(());
+    };
+    let mut behaviour = Behaviour::from_json_bytes(&bytes)?;
+    let mut filled = false;
+    for (slot, name) in resolved {
+        filled |= behaviour.fill_media_reference(&slot, name);
+    }
+    if !filled {
+        return Ok(());
+    }
+    pack.set_pack_data("behaviour", behaviour.to_json_bytes()?)
+        .await
 }
 
 // As in `encode::process_one_file`: one media item, plus the batch-wide context resolved once
@@ -313,7 +383,10 @@ async fn import_one_media(
         )
         .await
         .map_err(ImportErrorKind::PackError)?;
-    let mut media_file = match added {
+    // A bulk import skips a file the pack already has -- the copy that's here is as good, and a
+    // second one would only be clutter. (A slot fill answers `Duplicate` differently; see
+    // `AddOutcome`.)
+    let mut media_file = match added.and_then(AddOutcome::into_added) {
         Some(m) => m,
         None => return Err(ImportErrorKind::Skipped),
     };

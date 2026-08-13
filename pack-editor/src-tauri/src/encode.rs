@@ -6,7 +6,7 @@ use std::{
     thread::available_parallelism,
 };
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use futures::{stream, StreamExt};
 use infer::MatcherType;
 use serde::Serialize;
@@ -18,7 +18,9 @@ use walkdir::WalkDir;
 
 use tauri::Emitter;
 
-use crate::pack::MediaFile;
+use shared::behaviour::{Behaviour, MediaSlot};
+
+use crate::pack::{AddOutcome, MediaFile};
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct UploadErrorPayload {
@@ -293,7 +295,7 @@ pub async fn process_files(
     {
         let lock = pack_state.lock().await;
         if let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) {
-            if let Err(error) = pack.finish_media_import(history_id).await {
+            if let Err(error) = pack.finish_media_import(history_id, None).await {
                 let _ = app.emit(
                     "upload:error",
                     UploadErrorPayload::new(
@@ -308,6 +310,92 @@ pub async fn process_files(
     let _ = app.emit("upload:done", ());
 }
 
+/// Brings in one file and puts it in `slot`, as a single action.
+///
+/// Same pipeline as `process_files`, minus the batch: one staging directory, no cancellation (a
+/// single encode is short enough that "cancel" means closing the dialog). The `upload:added`
+/// event still fires, so the media grid picks the file up exactly as it would from any other add.
+/// A file the pack already has comes back as `AddOutcome::Duplicate` rather than an error -- for
+/// a slot that's a perfectly good answer.
+///
+/// The slot write happens *inside* the import's own history entry rather than after it, so the
+/// whole thing is one undo step: "set the wallpaper", not "import a file" and then "set the
+/// wallpaper" (see `history::record_into_pending`).
+pub async fn process_file_into_slot(
+    pack_state: &crate::PackState,
+    path: &Path,
+    app: &tauri::AppHandle,
+    encoder: HardwareEncoder,
+    upload_lock: &Arc<RwLock<()>>,
+    slot: MediaSlot,
+    label: String,
+) -> anyhow::Result<(AddOutcome, Behaviour)> {
+    let _batch_guard = upload_lock.read().await;
+    let (dir, pack_id) = {
+        let lock = pack_state.lock().await;
+        let pack = lock.as_ref().context("No pack is open")?;
+        (pack.dir().to_path_buf(), pack.id())
+    };
+    let staging = Arc::new(
+        tempfile::Builder::new()
+            .prefix("pack-editor-slot-")
+            .tempdir_in(&dir)
+            .context("Could not create upload staging directory")?,
+    );
+    let history_id = {
+        let lock = pack_state.lock().await;
+        let pack = lock
+            .as_ref()
+            .filter(|pack| pack.id() == pack_id)
+            .context("No pack is open")?;
+        pack.begin_media_import().await?
+    };
+
+    let outcome = process_one_file_outcome(
+        pack_state,
+        pack_id,
+        path,
+        &dir,
+        &staging,
+        encoder,
+        upload_lock,
+        history_id,
+    )
+    .await
+    .map_err(|err| anyhow!("{err}"));
+
+    // The import entry has to be finished either way -- an abandoned pending entry blocks undo
+    // for everything after it -- so the slot write and the finish are both guarded rather than
+    // short-circuited on failure.
+    let filled = match &outcome {
+        Ok(outcome) => {
+            let lock = pack_state.lock().await;
+            match lock.as_ref().filter(|pack| pack.id() == pack_id) {
+                Some(pack) => pack
+                    .fill_media_slot_during_import(slot, outcome.file().id, history_id)
+                    .await
+                    .map(Some),
+                None => Ok(None),
+            }
+        }
+        Err(_) => Ok(None),
+    };
+
+    {
+        let lock = pack_state.lock().await;
+        if let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) {
+            pack.finish_media_import(history_id, Some(label)).await?;
+        }
+    }
+
+    let outcome = outcome?;
+    let behaviour = filled?.context("The pack was closed while importing")?;
+    if let AddOutcome::Added(file) = &outcome {
+        let _ = app.emit("upload:added", file);
+    }
+    Ok((outcome, behaviour))
+}
+
 // The per-file arguments are one path; the rest is the loop-invariant context every file in a
 // batch shares, which the caller resolves once before the stream starts.
 #[allow(clippy::too_many_arguments)]
@@ -318,9 +406,32 @@ async fn process_one_file(
     dir: &Path,
     staging: &Arc<TempDir>,
     encoder: HardwareEncoder,
-    _upload_lock: &RwLock<()>,
+    upload_lock: &RwLock<()>,
     history_id: i64,
 ) -> Result<Option<MediaFile>, ProcessErrorKind> {
+    match process_one_file_outcome(
+        pack_state, pack_id, path, dir, staging, encoder, upload_lock, history_id,
+    )
+    .await?
+    {
+        AddOutcome::Added(file) => Ok(Some(file)),
+        // A bulk add treats a file the pack already has as a skip: the copy that's here is as
+        // good, and a second one would only be clutter.
+        AddOutcome::Duplicate(_) => Err(ProcessErrorKind::Skipped),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_one_file_outcome(
+    pack_state: &crate::PackState,
+    pack_id: Uuid,
+    path: &Path,
+    dir: &Path,
+    staging: &Arc<TempDir>,
+    encoder: HardwareEncoder,
+    _upload_lock: &RwLock<()>,
+    history_id: i64,
+) -> Result<AddOutcome, ProcessErrorKind> {
     let path_owned = path.to_path_buf();
     let hash = tokio::task::spawn_blocking(move || hash_file(&path_owned))
         .await
@@ -333,12 +444,12 @@ async fn process_one_file(
     {
         let lock = pack_state.lock().await;
         if let Some(pack) = lock.as_ref() {
-            if pack
-                .check_hash(&hash)
+            if let Some(existing) = pack
+                .file_with_hash(&hash)
                 .await
                 .map_err(ProcessErrorKind::Other)?
             {
-                return Err(ProcessErrorKind::Skipped);
+                return Ok(AddOutcome::Duplicate(existing));
             }
         }
     }
@@ -392,9 +503,8 @@ async fn process_one_file(
     match media {
         // The pre-check above already handles the common case; this only
         // fires when a race let a since-inserted duplicate through, and the
-        // DB's own uniqueness constraint caught it - treat it the same as
-        // the pre-check's skip.
-        Some(media) => Ok(Some(media)),
+        // DB's own uniqueness constraint caught it.
+        Some(outcome) => Ok(outcome),
         None => Err(ProcessErrorKind::Skipped),
     }
 }

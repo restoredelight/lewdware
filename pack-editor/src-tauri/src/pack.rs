@@ -24,9 +24,10 @@ use rusqlite::{
 };
 use serde::{Deserialize, Serialize};
 use shared::{
-    behaviour::Behaviour,
+    behaviour::{Behaviour, MediaSlot},
     encode::{FileInfo, FileInfoParts, FileType},
     read_pack::{Header, Metadata, HEADER_SIZE},
+    tags,
 };
 use tokio::{
     fs::{remove_file, File, OpenOptions},
@@ -68,7 +69,33 @@ pub struct ArtistSummary {
 enum AddFileResult {
     Inserted(u64),
     Restored(u64),
-    Duplicate,
+    Duplicate(u64),
+}
+
+/// What adding a file actually did.
+///
+/// A bulk import treats `Duplicate` as a skip, but the media slots need the file it collided
+/// with: "put this image in the wallpaper slot" is answered just as well by a copy the pack
+/// already has as by a fresh import, and importing it twice would be the wrong answer.
+pub enum AddOutcome {
+    Added(MediaFile),
+    /// The pack already held these bytes, as this file.
+    Duplicate(MediaFile),
+}
+
+impl AddOutcome {
+    pub fn file(&self) -> &MediaFile {
+        match self {
+            Self::Added(file) | Self::Duplicate(file) => file,
+        }
+    }
+
+    pub fn into_added(self) -> Option<MediaFile> {
+        match self {
+            Self::Added(file) => Some(file),
+            Self::Duplicate(_) => None,
+        }
+    }
 }
 
 fn read_behaviour(connection: &rusqlite::Connection) -> Result<Behaviour> {
@@ -1959,8 +1986,10 @@ impl MediaPack {
         path: &Path,
         hash: blake3::Hash,
     ) -> Result<Option<MediaFile>> {
-        self.add_file_to_import(encoded_file, path, hash, None)
-            .await
+        Ok(self
+            .add_file_to_import(encoded_file, path, hash, None)
+            .await?
+            .and_then(AddOutcome::into_added))
     }
 
     pub async fn begin_media_import(&self) -> Result<i64> {
@@ -1969,10 +1998,14 @@ impl MediaPack {
             .await
     }
 
-    pub async fn finish_media_import(&self, history_id: i64) -> Result<history::Status> {
+    pub async fn finish_media_import(
+        &self,
+        history_id: i64,
+        label: Option<String>,
+    ) -> Result<history::Status> {
         let _handle = self.saving.read().await;
         self.db_execute(move |mut connection| {
-            history::finish_media_import(&mut connection, history_id)
+            history::finish_media_import(&mut connection, history_id, label.as_deref())
         })
         .await
     }
@@ -1983,7 +2016,7 @@ impl MediaPack {
         path: &Path,
         hash: blake3::Hash,
         history_id: Option<i64>,
-    ) -> Result<Option<MediaFile>> {
+    ) -> Result<Option<AddOutcome>> {
         let handle = self.saving.read().await;
 
         let FileInfoParts {
@@ -2033,7 +2066,7 @@ impl MediaPack {
                     if let Some((id, deleted, existing_size)) = existing {
                         if !deleted {
                             tx.commit()?;
-                            return Ok(AddFileResult::Duplicate);
+                            return Ok(AddFileResult::Duplicate(id));
                         }
                         tx.execute("UPDATE media SET deleted = 0 WHERE id = ?", [id])?;
                         if let Some(history_id) = history_id {
@@ -2103,16 +2136,25 @@ impl MediaPack {
                     .await?
                     .into_iter()
                     .find(|file| file.id == id)
-                    .map(Some)
+                    .map(|file| Some(AddOutcome::Added(file)))
                     .ok_or_else(|| anyhow!("restored media {id} is not active"));
             }
-            AddFileResult::Duplicate => {
+            AddFileResult::Duplicate(existing) => {
                 match tokio::fs::remove_file(&encoded_path).await {
                     Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error.into()),
                 }
-                return Ok(None);
+                drop(handle);
+                // The bytes are already here under some other name. A bulk import treats that as
+                // a skip, but a media slot needs to know *which* file it was so it can point at
+                // it -- "add to the slot" and "the pack already has this" are the same answer.
+                return Ok(self
+                    .get_files()
+                    .await?
+                    .into_iter()
+                    .find(|file| file.id == existing)
+                    .map(AddOutcome::Duplicate));
             }
         };
         // Do this synchronously immediately after the database commit. Upload cancellation can
@@ -2122,7 +2164,7 @@ impl MediaPack {
             self.add_artists(id, encoded_file.artists.clone()).await?;
         }
 
-        Ok(Some(MediaFile {
+        Ok(Some(AddOutcome::Added(MediaFile {
             id,
             file_name,
             file_info,
@@ -2131,24 +2173,44 @@ impl MediaPack {
             artists: encoded_file.artists,
             source_url: encoded_file.source_url,
             size,
-        }))
+        })))
     }
 
-    pub async fn remove_files(&self, ids: Vec<u64>) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
+    pub async fn remove_files(&self, ids: Vec<u64>) -> Result<Behaviour> {
         let _handle = self.saving.read().await;
         let label = if ids.len() == 1 {
             "Remove media item".to_string()
         } else {
             format!("Remove {} media items", ids.len())
         };
-        self.db_execute(move |mut conn| {
-            history::record_media_visibility(&mut conn, &label, &ids, true)
-        })
-        .await?;
-        self.mark_unsaved().await
+        let behaviour = self
+            .db_execute(move |mut conn| {
+                if ids.is_empty() {
+                    return read_behaviour(&conn);
+                }
+                let names: Vec<String> = {
+                    let selected = media_id_array(&ids)?;
+                    let mut stmt = conn
+                        .prepare("SELECT file_name FROM media WHERE id IN (SELECT value FROM rarray(?))")?;
+                    let rows = stmt.query_map(params![&selected], |row| row.get::<_, String>(0))?;
+                    rows.collect::<rusqlite::Result<_>>()?
+                };
+                history::record_media_visibility(&mut conn, &label, &ids, true)?;
+                // Deleting a file has to take any slot pointing at it with it, or the slot is
+                // left naming something the pack no longer has.
+                conn_write_behaviour_if_changed(&mut conn, &label, |behaviour| {
+                    // Every name, not the first match: `any` would stop early and leave the
+                    // other slots pointing at files this same call deleted.
+                    let mut changed = false;
+                    for name in &names {
+                        changed |= behaviour.rewrite_media_name(name, None);
+                    }
+                    changed
+                })
+            })
+            .await?;
+        self.mark_unsaved().await?;
+        Ok(behaviour)
     }
 
     pub async fn history_status(&self) -> Result<history::Status> {
@@ -2301,12 +2363,19 @@ impl MediaPack {
         .await
     }
 
+    /// Every tag the author owns. Managed tags are filtered out here rather than at each of the
+    /// half-dozen pickers this feeds (the Tags tab, `TagPicker`, the content-group pickers), so
+    /// there is one place that decides what an author can see -- see `shared::tags`.
     pub async fn get_all_tags(&self) -> Result<Vec<String>> {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| {
             let mut stmt = conn.prepare("SELECT name FROM tags")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>("name"))?;
-            rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+            Ok(rows
+                .collect::<rusqlite::Result<Vec<String>>>()?
+                .into_iter()
+                .filter(|tag| !tags::is_managed(tag))
+                .collect())
         })
         .await
     }
@@ -2385,12 +2454,19 @@ impl MediaPack {
                     media_count: row.get(1)?,
                 })
             })?;
-            rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+            // Same filter as `get_all_tags`: the Tags tab never lists a tag the author can't edit.
+            Ok(rows
+                .collect::<rusqlite::Result<Vec<TagSummary>>>()?
+                .into_iter()
+                .filter(|summary| !tags::is_managed(&summary.name))
+                .collect())
         })
         .await
     }
 
     pub async fn rename_tag(&self, from: String, to: String) -> Result<Behaviour> {
+        reject_managed_tag(&from)?;
+        reject_managed_tag(&to)?;
         let _handle = self.saving.read().await;
         let behaviour = self
             .db_execute(move |mut conn| {
@@ -2424,6 +2500,8 @@ impl MediaPack {
     }
 
     pub async fn merge_tag(&self, from: String, to: String) -> Result<Behaviour> {
+        reject_managed_tag(&from)?;
+        reject_managed_tag(&to)?;
         let _handle = self.saving.read().await;
         let behaviour = self.db_execute(move |mut conn| {
             history::record_with_media_refs(&mut conn, "Merge tags", 0, |tx| {
@@ -2480,6 +2558,7 @@ impl MediaPack {
     }
 
     pub async fn add_tag(&self, id: u64, tag: String) -> Result<()> {
+        reject_managed_tag(&tag)?;
         let _handle = self.saving.read().await;
         self.db_execute(move |mut connection| {
             history::record(&mut connection, "Add media tag", 0, &[id], |tx| {
@@ -2499,6 +2578,7 @@ impl MediaPack {
     }
 
     pub async fn create_and_add_tag(&self, id: u64, tag: String) -> Result<()> {
+        reject_managed_tag(&tag)?;
         let _handle = self.saving.read().await;
         self.db_execute(move |mut connection| {
             history::record(
@@ -2644,6 +2724,7 @@ impl MediaPack {
     }
 
     pub async fn add_tag_to_files(&self, ids: Vec<u64>, tag: String) -> Result<()> {
+        reject_managed_tag(&tag)?;
         if ids.is_empty() {
             return Ok(());
         }
@@ -2905,6 +2986,32 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
+    /// The active file with these bytes, if the pack already has one. `check_hash`'s answer with
+    /// the identity attached, for the slot path -- which points at the existing file rather than
+    /// skipping.
+    pub async fn file_with_hash(&self, hash: &blake3::Hash) -> Result<Option<MediaFile>> {
+        let hash_bytes = *hash.as_bytes();
+        let existing: Option<u64> = self
+            .db_execute(move |conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT id FROM media WHERE hash = ? AND deleted = 0",
+                        params![hash_bytes],
+                        |row| row.get(0),
+                    )
+                    .optional()?)
+            })
+            .await?;
+        let Some(id) = existing else {
+            return Ok(None);
+        };
+        Ok(self
+            .get_files()
+            .await?
+            .into_iter()
+            .find(|file| file.id == id))
+    }
+
     pub async fn check_hash(&self, hash: &blake3::Hash) -> Result<bool> {
         let hash_bytes = *hash.as_bytes();
         self.db_execute(move |conn| {
@@ -2924,29 +3031,161 @@ impl MediaPack {
     /// file to a name they typed), so it's rejected with a clear error rather than silently
     /// adjusted -- auto-renaming would mean the name shown afterwards isn't the one they asked
     /// for, with no indication why.
-    pub async fn set_title(&self, id: u64, name: String) -> Result<()> {
+    pub async fn set_title(&self, id: u64, name: String) -> Result<Behaviour> {
         let _handle = self.saving.read().await;
         let name_clone = name.clone();
         let result = self
             .db_execute(move |mut connection| {
                 history::record(&mut connection, "Rename media item", 0, &[id], |tx| {
+                    let previous: String = tx.query_row(
+                        "SELECT file_name FROM media WHERE id = ?",
+                        params![id],
+                        |row| row.get(0),
+                    )?;
                     tx.execute(
                         "UPDATE media SET file_name = ? WHERE id = ?",
                         params![name_clone, id],
                     )?;
-                    Ok(())
+                    // A media slot references its file by name, so a rename has to move the
+                    // reference with it or the slot silently stops resolving.
+                    write_behaviour_if_changed(tx, |behaviour| {
+                        behaviour.rewrite_media_name(&previous, Some(&name_clone))
+                    })
                 })
             })
             .await;
 
-        match result {
-            Ok(()) => {}
+        let behaviour = match result {
+            Ok(behaviour) => behaviour,
             Err(err) if violates_unique_constraint(&err, "file_name") => {
                 bail!("A file named \"{name}\" already exists");
             }
             Err(err) => return Err(err),
-        }
+        };
 
+        self.mark_unsaved().await?;
+        Ok(behaviour)
+    }
+
+    /// Points a media slot at `media_id`, marking that file as scenery rather than popup content.
+    ///
+    /// The two halves are one operation because they mean one thing to the author ("this is the
+    /// wallpaper") and because a slot filled without the marker would put the desktop background
+    /// in a popup. One history entry, so undo takes both back together.
+    pub async fn fill_media_slot(&self, slot: MediaSlot, media_id: u64) -> Result<Behaviour> {
+        let _handle = self.saving.read().await;
+        let behaviour = self
+            .db_execute(move |mut conn| {
+                history::record(&mut conn, slot_label(&slot), 0, &[media_id], |tx| {
+                    fill_media_slot_tx(tx, &slot, media_id)
+                })
+            })
+            .await?;
+        self.mark_unsaved().await?;
+        Ok(behaviour)
+    }
+
+    /// `fill_media_slot` folded into a media import that is still open, so importing the file and
+    /// pointing the slot at it land as one undo step -- see `history::record_into_pending`. The
+    /// caller finishes the import afterwards, naming the entry for the whole action.
+    pub async fn fill_media_slot_during_import(
+        &self,
+        slot: MediaSlot,
+        media_id: u64,
+        history_id: i64,
+    ) -> Result<Behaviour> {
+        let _handle = self.saving.read().await;
+        let behaviour = self
+            .db_execute(move |mut conn| {
+                history::record_into_pending(&mut conn, history_id, |tx| {
+                    fill_media_slot_tx(tx, &slot, media_id)
+                })
+            })
+            .await?;
+        self.mark_unsaved().await?;
+        Ok(behaviour)
+    }
+
+    /// Empties a media slot, deleting the file it held if that file was only ever scenery.
+    ///
+    /// A file still carrying `__lewdware-non-popup` exists for this slot and nothing else, so
+    /// leaving it behind would litter the pack with images the author can't see in the media grid
+    /// as anything but clutter. One that has been un-marked ("show as popup") is real content and
+    /// stays. Either way it stays if another slot still references it -- a base wallpaper reused
+    /// by a timeline stage is Edgeware's ordinary case, and clearing the stage must not take the
+    /// pack's main wallpaper with it.
+    ///
+    /// Returns the updated behaviour and the id of the file it deleted, if any.
+    pub async fn clear_media_slot(&self, slot: MediaSlot) -> Result<(Behaviour, Option<u64>)> {
+        let _handle = self.saving.read().await;
+        let result = self
+            .db_execute(move |mut conn| {
+                history::record_with_media_refs(&mut conn, slot_label(&slot), 0, |tx| {
+                    let mut behaviour = read_behaviour(tx)?;
+                    let Some(name) = slot_value(&behaviour, &slot) else {
+                        return Ok(((behaviour, None), vec![]));
+                    };
+                    set_slot(&mut behaviour, &slot, None);
+
+                    let still_referenced = behaviour
+                        .referenced_media_names()
+                        .iter()
+                        .any(|other| *other == name);
+                    let scenery: Option<u64> = tx
+                        .query_row(
+                            "SELECT media.id FROM media
+                             JOIN media_tags ON media_tags.media_id = media.id
+                             JOIN tags ON tags.id = media_tags.tag_id
+                             WHERE media.file_name = ? AND media.deleted = 0 AND tags.name = ?",
+                            params![name, tags::NON_POPUP_TAG],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+
+                    let deleted = match scenery {
+                        Some(id) if !still_referenced => {
+                            tx.execute("UPDATE media SET deleted = 1 WHERE id = ?", params![id])?;
+                            Some(id)
+                        }
+                        _ => None,
+                    };
+                    write_behaviour(tx, &behaviour)?;
+                    let refs = deleted.map(|id| vec![id]).unwrap_or_default();
+                    Ok(((behaviour, deleted), refs))
+                })
+            })
+            .await?;
+        self.mark_unsaved().await?;
+        Ok(result)
+    }
+
+    /// Adds or removes `__lewdware-non-popup` on one file -- the "show as popup" toggle.
+    ///
+    /// Slot media carries the marker by default, and clearing it is how an author says "this is
+    /// also real content": the file stays the wallpaper and starts appearing in popups too. The
+    /// same toggle keeps any other file out of popups without involving a slot at all.
+    pub async fn set_shown_as_popup(&self, id: u64, shown: bool) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let label = if shown {
+                "Show media in popups"
+            } else {
+                "Hide media from popups"
+            };
+            history::record(&mut conn, label, 0, &[id], |tx| {
+                if shown {
+                    tx.execute(
+                        "DELETE FROM media_tags WHERE media_id = ? AND tag_id IN
+                         (SELECT id FROM tags WHERE name = ?)",
+                        params![id, tags::NON_POPUP_TAG],
+                    )?;
+                    Ok(())
+                } else {
+                    apply_tag(tx, id, tags::NON_POPUP_TAG)
+                }
+            })
+        })
+        .await?;
         self.mark_unsaved().await
     }
 }
@@ -3232,6 +3471,146 @@ fn violates_unique_constraint(err: &anyhow::Error, column: &str) -> bool {
     }
 }
 
+/// Points `slot` at `media_id` and marks that file as scenery. The body of `fill_media_slot`,
+/// separated so it can run either in its own history entry or folded into an open import.
+fn fill_media_slot_tx(
+    tx: &rusqlite::Transaction<'_>,
+    slot: &MediaSlot,
+    media_id: u64,
+) -> Result<Behaviour> {
+    let name: String = tx
+        .query_row(
+            "SELECT file_name FROM media WHERE id = ? AND deleted = 0",
+            params![media_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("That media file is no longer in the pack"))?;
+    apply_tag(tx, media_id, tags::NON_POPUP_TAG)?;
+
+    let mut behaviour = read_behaviour(tx)?;
+    // Set, not fill: replacing what a slot points at is the whole of "Replace".
+    if !set_slot(&mut behaviour, slot, Some(name)) {
+        bail!("That stage is no longer in the timeline");
+    }
+    write_behaviour(tx, &behaviour)?;
+    Ok(behaviour)
+}
+
+/// The history label a slot operation records under. Named for what the author did, not for the
+/// field: "Set wallpaper" is what they'll look for in the undo list.
+fn slot_label(slot: &MediaSlot) -> &'static str {
+    match slot {
+        MediaSlot::Wallpaper | MediaSlot::StageWallpaper { .. } => "Set wallpaper",
+        MediaSlot::Splash => "Set splash",
+    }
+}
+
+/// Reads what a slot currently points at.
+fn slot_value(behaviour: &Behaviour, slot: &MediaSlot) -> Option<String> {
+    match slot {
+        MediaSlot::Wallpaper => behaviour.content.wallpaper.clone(),
+        MediaSlot::Splash => behaviour.content.splash.clone(),
+        MediaSlot::StageWallpaper { stage } => behaviour
+            .experience
+            .as_ref()?
+            .timeline
+            .stages
+            .iter()
+            .find(|candidate| &candidate.id == stage)?
+            .content
+            .wallpaper
+            .clone(),
+    }
+}
+
+/// Writes a slot outright, unlike `Behaviour::fill_media_reference` (which won't overwrite): the
+/// author pointing a slot somewhere new is exactly the case that has to win. Returns false if the
+/// slot doesn't exist -- only possible for a stage deleted from under the editor.
+fn set_slot(behaviour: &mut Behaviour, slot: &MediaSlot, name: Option<String>) -> bool {
+    let target = match slot {
+        MediaSlot::Wallpaper => &mut behaviour.content.wallpaper,
+        MediaSlot::Splash => &mut behaviour.content.splash,
+        MediaSlot::StageWallpaper { stage } => {
+            let Some(target) = behaviour.experience.as_mut().and_then(|experience| {
+                experience
+                    .timeline
+                    .stages
+                    .iter_mut()
+                    .find(|candidate| &candidate.id == stage)
+            }) else {
+                return false;
+            };
+            &mut target.content.wallpaper
+        }
+    };
+    *target = name;
+    true
+}
+
+/// Get-or-create a tag and attach it to one media file. Used for the managed markers, which is
+/// why it doesn't go through the author-facing commands (those refuse the reserved namespace).
+fn apply_tag(tx: &rusqlite::Transaction<'_>, media_id: u64, tag: &str) -> Result<()> {
+    tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
+    let tag_id: u64 = tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
+        row.get(0)
+    })?;
+    tx.execute(
+        "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+        params![media_id, tag_id],
+    )?;
+    Ok(())
+}
+
+fn write_behaviour(tx: &rusqlite::Transaction<'_>, behaviour: &Behaviour) -> Result<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
+        params![behaviour.to_json_bytes()?],
+    )?;
+    Ok(())
+}
+
+/// Applies `edit` to the stored behaviour, persisting only if it reported a change. Returns the
+/// behaviour either way, since callers hand it back to the frontend to replace its copy.
+fn write_behaviour_if_changed(
+    tx: &rusqlite::Transaction<'_>,
+    edit: impl FnOnce(&mut Behaviour) -> bool,
+) -> Result<Behaviour> {
+    let mut behaviour = read_behaviour(tx)?;
+    if edit(&mut behaviour) {
+        write_behaviour(tx, &behaviour)?;
+    }
+    Ok(behaviour)
+}
+
+/// `write_behaviour_if_changed` for a caller that isn't already inside a transaction, recording
+/// its own history entry only when there is really something to record.
+fn conn_write_behaviour_if_changed(
+    conn: &mut rusqlite::Connection,
+    label: &str,
+    edit: impl FnOnce(&mut Behaviour) -> bool,
+) -> Result<Behaviour> {
+    let mut behaviour = read_behaviour(conn)?;
+    if !edit(&mut behaviour) {
+        return Ok(behaviour);
+    }
+    let updated = behaviour.clone();
+    history::record(conn, label, 0, &[], |tx| write_behaviour(tx, &updated))?;
+    Ok(behaviour)
+}
+
+/// Refuses a tag in the reserved namespace on every command an *author* can reach.
+///
+/// Guarding the writes rather than the UI is what makes the namespace an invariant: the editor
+/// applies these tags itself (through `add_tags`, which is deliberately not guarded -- it's how
+/// media import and the media slots write the marker), and nothing else can. See `shared::tags`.
+fn reject_managed_tag(tag: &str) -> Result<()> {
+    if tags::is_managed(tag) {
+        bail!("\"{tag}\" is reserved for Lewdware's own use. Pick a different name.");
+    }
+    Ok(())
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .unwrap_or(path.as_os_str())
@@ -3333,7 +3712,8 @@ fn next_candidate_name(name: &str) -> String {
     }
 }
 
-#[cfg(test)]
+/// Binds media ids for a `rarray(?)` subquery -- the only form of `IN (...)` that survives a set
+/// larger than SQLite's variable limit (see `bulk_remove_and_restore_exceeds_sqlite_variable_limit`).
 fn media_id_array(ids: &[u64]) -> Result<Array> {
     let values = ids
         .iter()
@@ -3629,7 +4009,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let status = pack.finish_media_import(history_id).await.unwrap();
+        let status = pack.finish_media_import(history_id, None).await.unwrap();
         assert!(status.can_undo);
 
         pack.undo().await.unwrap();
@@ -3637,11 +4017,11 @@ mod tests {
         assert!(staged.exists());
         pack.redo().await.unwrap();
         let restored = pack.get_files().await.unwrap();
-        assert_eq!(restored[0].id, media.id);
+        assert_eq!(restored[0].id, media.file().id);
         assert_eq!(
             pack.get_view()
                 .unwrap()
-                .get_file_data(media.id)
+                .get_file_data(media.file().id)
                 .await
                 .unwrap()
                 .0,
@@ -3679,8 +4059,8 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        pack.finish_media_import(first_history).await.unwrap();
-        pack.remove_files(vec![first.id]).await.unwrap();
+        pack.finish_media_import(first_history, None).await.unwrap();
+        pack.remove_files(vec![first.file().id]).await.unwrap();
 
         let redundant_path = pack.dir.join("media").join("second.opus");
         tokio::fs::write(&redundant_path, bytes).await.unwrap();
@@ -3701,14 +4081,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        pack.finish_media_import(second_history).await.unwrap();
+        pack.finish_media_import(second_history, None).await.unwrap();
 
-        assert_eq!(restored.id, first.id);
+        assert_eq!(restored.file().id, first.file().id);
         assert!(!redundant_path.exists());
         pack.undo().await.unwrap();
         assert!(pack.get_files().await.unwrap().is_empty());
         pack.redo().await.unwrap();
-        assert_eq!(pack.get_files().await.unwrap()[0].id, first.id);
+        assert_eq!(pack.get_files().await.unwrap()[0].id, first.file().id);
     }
 
     #[tokio::test]
@@ -3741,7 +4121,7 @@ mod tests {
             .await
             .unwrap();
         assert!(pending_exists);
-        pack.finish_media_import(history_id).await.unwrap();
+        pack.finish_media_import(history_id, None).await.unwrap();
     }
 
     #[tokio::test]
@@ -3772,7 +4152,7 @@ mod tests {
         )
         .await
         .unwrap();
-        pack.finish_media_import(history_id).await.unwrap();
+        pack.finish_media_import(history_id, None).await.unwrap();
         pack.undo().await.unwrap();
 
         pack.set_metadata(&Metadata {
@@ -4373,6 +4753,369 @@ mod tests {
         assert_eq!(pack.get_files().await.unwrap().len() as u64, COUNT);
     }
 
+    /// Creating a tag and attaching it in one step used to be un-undoable: inverting that
+    /// changeset deletes the `tags` row, which cascades to the `media_tags` row referencing it,
+    /// and the changeset's own delete for that row then found nothing -- reported as a conflict
+    /// and aborted, failing the whole undo. Our own cascade removing a row we were going to
+    /// remove anyway is not a disagreement about state (see `history::on_conflict`).
+    #[tokio::test]
+    async fn undo_survives_a_changeset_whose_own_cascade_beat_it_to_a_row() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack =
+            new_test_pack(&tmp.path().join("cascade.lwpack"), data_dir.path(), "Cascade").await;
+        let media = insert_staged_audio(&pack, b"tagged").await;
+
+        pack.create_and_add_tag(media, "fresh".to_string())
+            .await
+            .unwrap();
+        assert_eq!(pack.get_tags(media).await.unwrap(), vec!["fresh"]);
+
+        pack.undo().await.unwrap();
+        assert!(pack.get_tags(media).await.unwrap().is_empty());
+        assert!(pack.get_all_tags().await.unwrap().is_empty());
+
+        pack.redo().await.unwrap();
+        assert_eq!(pack.get_tags(media).await.unwrap(), vec!["fresh"]);
+    }
+
+    /// Importing a file into a slot is one action to the author, so it has to be one undo step --
+    /// not "import a file" followed by "set the wallpaper". The import half can't be a changeset
+    /// (undo soft-deletes the media so its bytes survive for redo), so the slot write rides on
+    /// the same entry instead; this checks both halves really do move together, in both
+    /// directions.
+    #[tokio::test]
+    async fn importing_into_a_slot_undoes_and_redoes_as_one_step() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("fold.lwpack"), data_dir.path(), "Fold").await;
+
+        let bytes = b"scenery bytes";
+        let staged = pack.dir.join("media").join("wallpaper.opus");
+        tokio::fs::write(&staged, bytes).await.unwrap();
+        let history_id = pack.begin_media_import().await.unwrap();
+        let media = pack
+            .add_file_to_import(
+                EncodedFile {
+                    info: FileInfo::Audio { duration: 1.0 },
+                    thumbnail: None,
+                    path: staged.clone(),
+                    artists: vec![],
+                    source_url: None,
+                },
+                Path::new("wallpaper.png"),
+                blake3::hash(bytes),
+                Some(history_id),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let id = media.file().id;
+        pack.fill_media_slot_during_import(MediaSlot::Wallpaper, id, history_id)
+            .await
+            .unwrap();
+        let status = pack
+            .finish_media_import(history_id, Some("Set wallpaper".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(status.undo_label.as_deref(), Some("Set wallpaper"));
+        assert!(status.can_undo);
+        let stored = || async {
+            match pack.get_pack_data("behaviour").await.unwrap() {
+                Some(bytes) => Behaviour::from_json_bytes(&bytes).unwrap(),
+                // Undoing past the first write removes the row, not just its contents.
+                None => Behaviour::default(),
+            }
+        };
+        assert_eq!(
+            stored().await.content.wallpaper.as_deref(),
+            Some("wallpaper.png")
+        );
+
+        // One undo takes the slot *and* the file -- and leaves the bytes on disk, so redo can
+        // bring them back (the reason the import half stays a visibility entry).
+        pack.undo().await.unwrap();
+        assert!(pack.get_files().await.unwrap().is_empty());
+        assert_eq!(stored().await.content.wallpaper, None);
+        assert!(staged.exists());
+        assert!(!pack.history_status().await.unwrap().can_undo);
+
+        pack.redo().await.unwrap();
+        assert_eq!(pack.get_files().await.unwrap()[0].id, id);
+        assert_eq!(
+            stored().await.content.wallpaper.as_deref(),
+            Some("wallpaper.png")
+        );
+        assert_eq!(pack.get_tags(id).await.unwrap(), vec![tags::NON_POPUP_TAG]);
+    }
+
+    /// The same fold when the file was already in the pack: nothing new to make visible, but the
+    /// slot write is still a real edit and must not be discarded as an empty import.
+    #[tokio::test]
+    async fn filling_a_slot_from_an_existing_file_is_still_one_undoable_step() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("dup.lwpack"), data_dir.path(), "Dup").await;
+        let existing = insert_staged_audio(&pack, b"already here").await;
+
+        let history_id = pack.begin_media_import().await.unwrap();
+        pack.fill_media_slot_during_import(MediaSlot::Splash, existing, history_id)
+            .await
+            .unwrap();
+        let status = pack
+            .finish_media_import(history_id, Some("Set splash".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(status.undo_label.as_deref(), Some("Set splash"));
+        let stored = || async {
+            match pack.get_pack_data("behaviour").await.unwrap() {
+                Some(bytes) => Behaviour::from_json_bytes(&bytes).unwrap(),
+                // Undoing past the first write removes the row, not just its contents.
+                None => Behaviour::default(),
+            }
+        };
+        assert!(stored().await.content.splash.is_some());
+
+        pack.undo().await.unwrap();
+        assert_eq!(stored().await.content.splash, None);
+        // The file was never this import's to remove -- it was already in the pack.
+        assert!(pack.get_files().await.unwrap().iter().any(|f| f.id == existing));
+
+        pack.redo().await.unwrap();
+        assert!(stored().await.content.splash.is_some());
+    }
+
+    /// The lifecycle rule: a file that exists only to be scenery leaves when its slot does, and a
+    /// file that is also real content doesn't.
+    #[tokio::test]
+    async fn clearing_a_slot_deletes_scenery_but_keeps_real_content() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("slots.lwpack"), data_dir.path(), "Slots").await;
+
+        // Filled from the slot, so it carries the marker: only ever scenery.
+        let scenery = insert_staged_audio(&pack, b"scenery").await;
+        let behaviour = pack
+            .fill_media_slot(MediaSlot::Wallpaper, scenery)
+            .await
+            .unwrap();
+        let scenery_name = behaviour.content.wallpaper.clone().unwrap();
+        assert!(pack.get_tags(scenery).await.unwrap() == vec![tags::NON_POPUP_TAG]);
+
+        let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
+        assert_eq!(behaviour.content.wallpaper, None);
+        assert_eq!(deleted, Some(scenery));
+        assert!(!pack.get_files().await.unwrap().iter().any(|f| f.id == scenery));
+
+        // Same again, but the author has said "show as popup": now it's real content and stays.
+        let content = insert_staged_audio(&pack, b"content").await;
+        pack.fill_media_slot(MediaSlot::Splash, content)
+            .await
+            .unwrap();
+        pack.set_shown_as_popup(content, true).await.unwrap();
+        assert!(pack.get_tags(content).await.unwrap().is_empty());
+
+        let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Splash).await.unwrap();
+        assert_eq!(behaviour.content.splash, None);
+        assert_eq!(deleted, None);
+        assert!(pack.get_files().await.unwrap().iter().any(|f| f.id == content));
+        assert_ne!(scenery_name, "");
+    }
+
+    /// A base wallpaper reused by a timeline stage is Edgeware's ordinary case, so clearing one
+    /// slot must not delete a file the other still points at.
+    #[tokio::test]
+    async fn clearing_a_slot_keeps_a_file_another_slot_still_references() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("shared.lwpack"), data_dir.path(), "Shared").await;
+        let shared = insert_staged_audio(&pack, b"shared").await;
+
+        let behaviour = Behaviour {
+            experience: Some(Experience {
+                timeline: Timeline {
+                    stages: vec![Stage {
+                        id: "stage-1".to_string(),
+                        label: "Stage 1".to_string(),
+                        end: None,
+                        content: ContentSelection::default(),
+                        events: Events::default(),
+                        movement: None,
+                        mitosis: None,
+                    }],
+                    transitions: vec![],
+                },
+                label: None,
+            }),
+            ..Behaviour::default()
+        };
+        pack.set_pack_data("behaviour", behaviour.to_json_bytes().unwrap())
+            .await
+            .unwrap();
+
+        pack.fill_media_slot(MediaSlot::Wallpaper, shared)
+            .await
+            .unwrap();
+        pack.fill_media_slot(
+            MediaSlot::StageWallpaper {
+                stage: "stage-1".to_string(),
+            },
+            shared,
+        )
+        .await
+        .unwrap();
+
+        let (behaviour, deleted) = pack
+            .clear_media_slot(MediaSlot::StageWallpaper {
+                stage: "stage-1".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(deleted, None, "the base wallpaper still points at it");
+        assert!(behaviour.content.wallpaper.is_some());
+        assert!(pack.get_files().await.unwrap().iter().any(|f| f.id == shared));
+
+        // With the last reference gone it is scenery again, and goes.
+        let (_, deleted) = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
+        assert_eq!(deleted, Some(shared));
+    }
+
+    /// A stage slot is addressed by stage id, not position, so it keeps pointing at the right
+    /// stage across the reordering the timeline editor does freely.
+    #[tokio::test]
+    async fn stage_wallpaper_slots_are_addressed_by_stage_id() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("stages.lwpack"), data_dir.path(), "Stages").await;
+        let first = insert_staged_audio(&pack, b"first").await;
+        let second = insert_staged_audio(&pack, b"second").await;
+
+        let stage = |id: &str| Stage {
+            id: id.to_string(),
+            label: id.to_string(),
+            end: None,
+            content: ContentSelection::default(),
+            events: Events::default(),
+            movement: None,
+            mitosis: None,
+        };
+        let behaviour = Behaviour {
+            experience: Some(Experience {
+                timeline: Timeline {
+                    stages: vec![stage("stage-1"), stage("stage-2")],
+                    transitions: vec![],
+                },
+                label: None,
+            }),
+            ..Behaviour::default()
+        };
+        pack.set_pack_data("behaviour", behaviour.to_json_bytes().unwrap())
+            .await
+            .unwrap();
+
+        let slot = |id: &str| MediaSlot::StageWallpaper {
+            stage: id.to_string(),
+        };
+        pack.fill_media_slot(slot("stage-2"), first).await.unwrap();
+        let behaviour = pack.fill_media_slot(slot("stage-1"), second).await.unwrap();
+
+        let stages = &behaviour.experience.as_ref().unwrap().timeline.stages;
+        assert!(stages[0].content.wallpaper.is_some());
+        assert_ne!(stages[0].content.wallpaper, stages[1].content.wallpaper);
+        assert_eq!(behaviour.content.wallpaper, None, "the pack slot is untouched");
+
+        // Naming a stage that isn't there is an error, not a silent no-op: the editor can delete a
+        // stage while a slot dialog is open.
+        assert!(pack.fill_media_slot(slot("gone"), first).await.is_err());
+    }
+
+    /// Media references are names, so the two operations that change or retire a name have to
+    /// carry the slots with them -- otherwise a rename silently breaks the wallpaper.
+    #[tokio::test]
+    async fn renaming_and_removing_media_moves_and_clears_the_slots_pointing_at_it() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("refs.lwpack"), data_dir.path(), "Refs").await;
+        let media = insert_staged_audio(&pack, b"wallpaper").await;
+        pack.fill_media_slot(MediaSlot::Wallpaper, media)
+            .await
+            .unwrap();
+
+        let behaviour = pack.set_title(media, "renamed.png".to_string()).await.unwrap();
+        assert_eq!(behaviour.content.wallpaper.as_deref(), Some("renamed.png"));
+
+        let behaviour = pack.remove_files(vec![media]).await.unwrap();
+        assert_eq!(behaviour.content.wallpaper, None);
+    }
+
+    /// The reserved namespace is an invariant of the *writes*, not of the UI: every command an
+    /// author can reach refuses it, so a managed tag can only ever have been put there by the
+    /// editor itself. `add_tags` is deliberately absent -- that's the path the editor uses.
+    #[tokio::test]
+    async fn managed_tags_are_rejected_on_every_author_reachable_command() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(
+            &tmp.path().join("reserved.lwpack"),
+            data_dir.path(),
+            "Reserved",
+        )
+        .await;
+        let media = insert_staged_audio(&pack, b"scenery").await;
+        pack.add_tags(media, vec![tags::NON_POPUP_TAG.to_string()])
+            .await
+            .unwrap();
+        pack.add_tags(media, vec!["ordinary".to_string()])
+            .await
+            .unwrap();
+
+        let reserved = tags::NON_POPUP_TAG.to_string();
+        assert!(pack.add_tag(media, reserved.clone()).await.is_err());
+        assert!(
+            pack.create_and_add_tag(media, "__lewdware-mine".to_string())
+                .await
+                .is_err()
+        );
+        assert!(
+            pack.add_tag_to_files(vec![media], reserved.clone())
+                .await
+                .is_err()
+        );
+        assert!(
+            pack.rename_tag(reserved.clone(), "scenery".to_string())
+                .await
+                .is_err()
+        );
+        assert!(
+            pack.rename_tag("ordinary".to_string(), reserved.clone())
+                .await
+                .is_err()
+        );
+        assert!(
+            pack.merge_tag("ordinary".to_string(), reserved.clone())
+                .await
+                .is_err()
+        );
+
+        // ...and it stays invisible to everything that offers or lists a tag.
+        assert_eq!(pack.get_all_tags().await.unwrap(), vec!["ordinary"]);
+        assert_eq!(
+            pack.get_tag_summaries()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|summary| summary.name)
+                .collect::<Vec<_>>(),
+            vec!["ordinary"]
+        );
+        // The file itself still carries it -- hidden from the author, not from the engine.
+        let mut media_tags = pack.get_tags(media).await.unwrap();
+        media_tags.sort();
+        assert_eq!(media_tags, vec![tags::NON_POPUP_TAG, "ordinary"]);
+    }
+
     #[tokio::test]
     async fn tag_management_updates_associations_and_behaviour_together() {
         let tmp = tempdir().unwrap();
@@ -4383,7 +5126,10 @@ mod tests {
         pack.add_tags(media, vec!["old".to_string()]).await.unwrap();
 
         let mut behaviour = Behaviour::default();
-        behaviour.content.wallpaper_tags = vec!["old".to_string()];
+        behaviour.content.captions = vec![TextItem {
+            text: "Obey.".to_string(),
+            tags: vec!["old".to_string()],
+        }];
         pack.set_pack_data("behaviour", behaviour.to_json_bytes().unwrap())
             .await
             .unwrap();
@@ -4393,14 +5139,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(pack.get_tags(media).await.unwrap(), vec!["new"]);
-        assert_eq!(behaviour.content.wallpaper_tags, vec!["new"]);
+        assert_eq!(behaviour.content.captions[0].tags, vec!["new"]);
         let stored =
             Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
                 .unwrap();
-        assert_eq!(stored.content.wallpaper_tags, vec!["new"]);
+        assert_eq!(stored.content.captions[0].tags, vec!["new"]);
 
         let behaviour = pack.delete_tag("new".to_string()).await.unwrap();
-        assert!(behaviour.content.wallpaper_tags.is_empty());
+        assert!(behaviour.content.captions[0].tags.is_empty());
         assert!(pack.get_tags(media).await.unwrap().is_empty());
         assert!(pack.get_tag_summaries().await.unwrap().is_empty());
     }
@@ -4508,7 +5254,10 @@ mod tests {
             .await
             .unwrap();
         let mut before = Behaviour::default();
-        before.content.wallpaper_tags = vec!["source".into()];
+        before.content.captions = vec![TextItem {
+            text: "Obey.".to_string(),
+            tags: vec!["source".into()],
+        }];
         pack.set_pack_data("behaviour", serde_json::to_vec_pretty(&before).unwrap())
             .await
             .unwrap();
@@ -4542,7 +5291,7 @@ mod tests {
         let stored =
             Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
                 .unwrap();
-        assert_eq!(stored.content.wallpaper_tags, vec!["source"]);
+        assert_eq!(stored.content.captions[0].tags, vec!["source"]);
     }
 
     #[tokio::test]
@@ -4560,7 +5309,10 @@ mod tests {
             .await
             .unwrap();
         let mut before = Behaviour::default();
-        before.content.splash_tags = vec!["restore-me".into()];
+        before.content.captions = vec![TextItem {
+            text: "Obey.".to_string(),
+            tags: vec!["restore-me".into()],
+        }];
         pack.set_pack_data("behaviour", serde_json::to_vec_pretty(&before).unwrap())
             .await
             .unwrap();
@@ -4570,7 +5322,7 @@ mod tests {
         let stored =
             Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
                 .unwrap();
-        assert_eq!(stored.content.splash_tags, vec!["restore-me"]);
+        assert_eq!(stored.content.captions[0].tags, vec!["restore-me"]);
     }
 
     #[tokio::test]
@@ -4650,7 +5402,7 @@ mod tests {
             args: vec!["edgeware packs".to_string()],
             tags: vec![],
         });
-        behaviour.content.wallpaper_tags = vec!["bg".to_string()];
+        behaviour.content.wallpaper = Some("bg.png".to_string());
         behaviour.experience = Some(Experience {
             timeline: Timeline {
                 stages: vec![
@@ -4680,7 +5432,7 @@ mod tests {
                         end: None,
                         content: ContentSelection {
                             tags: Some(vec!["kinky".to_string()]),
-                            wallpaper_tags: None,
+                            wallpaper: None,
                         },
                         events: Events {
                             popup: Some(EventSchedule {

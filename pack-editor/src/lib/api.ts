@@ -8,9 +8,12 @@ import type {
 	ImportResult,
 	MediaFile,
 	MediaServerInfo,
+	MediaSlot,
 	MetadataDto,
 	PackInfo,
 	RecentPack,
+	SlotCleared,
+	SlotFilled,
 	TagSummary
 } from './types.js';
 
@@ -64,8 +67,10 @@ export const api = {
 	redo: () => invoke<HistoryStatus>('redo'),
 
 	getFiles: () => invoke<MediaFile[]>('get_files'),
-	removeFiles: (ids: number[]) => invoke<void>('remove_files', { ids }),
-	setFileTitle: (id: number, name: string) => invoke<void>('set_file_title', { id, name }),
+	// Both return the behaviour: deleting or renaming a file moves any media slot pointing at it.
+	removeFiles: (ids: number[]) => invoke<Behaviour | null>('remove_files', { ids }),
+	setFileTitle: (id: number, name: string) =>
+		invoke<Behaviour | null>('set_file_title', { id, name }),
 	setFileSourceUrl: (id: number, url: string | null) =>
 		invoke<void>('set_file_source_url', { id, url }),
 	getModes: () => invoke<EmbeddedMode[]>('get_modes'),
@@ -114,6 +119,12 @@ export const api = {
 
 	getBehaviour: () => invoke<Behaviour>('get_behaviour'),
 	setBehaviour: (behaviour: Behaviour) => invoke<void>('set_behaviour', { behaviour }),
+
+	fillMediaSlotDialog: (slot: MediaSlot) =>
+		invoke<SlotFilled | null>('fill_media_slot_dialog', { slot }),
+	clearMediaSlot: (slot: MediaSlot) => invoke<SlotCleared | null>('clear_media_slot', { slot }),
+	setShownAsPopup: (id: number, shown: boolean) =>
+		invoke<void>('set_shown_as_popup', { id, shown }),
 
 	addFilesDialog: () => invoke<void>('add_files_dialog'),
 	addFolderDialog: () => invoke<void>('add_folder_dialog'),

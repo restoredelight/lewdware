@@ -1,5 +1,6 @@
 import { store } from './store.svelte.js';
 import { api } from './api.js';
+import { initializeBehaviourHistory } from './behaviourBaseline.svelte.js';
 import type { HistoryStatus } from './types.js';
 
 export interface HistoryRecord {
@@ -69,6 +70,10 @@ class BackendHistory {
 		store.packName = metadata.name;
 		const suspendedExperience = store.suspendedExperience;
 		store.behaviour = behaviour;
+		// This document came from the backend, so it *is* the persisted state -- an undo that
+		// reverted a behaviour change would otherwise leave the saver diffing against the version
+		// from before the undo, and re-record it on the user's next unrelated edit.
+		initializeBehaviourHistory(behaviour);
 		store.suspendedExperience = behaviour.experience ? null : suspendedExperience;
 		store.selectedIds = new Set(
 			[...store.selectedIds].filter((id) => files.some((file) => file.id === id))

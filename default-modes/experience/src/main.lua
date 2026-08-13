@@ -90,20 +90,16 @@ if config.audio_enabled then
 	spawn_audio()
 end
 
-wallpaper.apply_wallpaper(timeline.wallpaper_tags())
+wallpaper.apply_wallpaper(timeline.wallpaper())
 wallpaper.show_splash()
 
-local function tags_equal(a, b)
-	if a == nil and b == nil then return true end
-	if a == nil or b == nil or #a ~= #b then return false end
-	for i, value in ipairs(a) do if b[i] ~= value then return false end end
-	return true
-end
-
-local last_wallpaper_override = timeline.wallpaper_tags()
+-- Only reapply when the stage actually names a different file: a stage that repeats the previous
+-- one's wallpaper (Edgeware's ordinary case) shouldn't churn the desktop. One name compares by
+-- value, so the tag-list comparison this used to need is gone.
+local last_wallpaper_override = timeline.wallpaper()
 timeline.on_change(function()
-	local override = timeline.wallpaper_tags()
-	if not tags_equal(override, last_wallpaper_override) then
+	local override = timeline.wallpaper()
+	if override ~= last_wallpaper_override then
 		last_wallpaper_override = override
 		wallpaper.apply_wallpaper(override)
 	end

@@ -3,9 +3,9 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { api } from './api.js';
 	import { store } from './store.svelte.js';
-	import TagPicker from './TagPicker.svelte';
 	import TextPoolEditor from './TextPoolEditor.svelte';
 	import ContentGroupsEditor from './ContentGroupsEditor.svelte';
+	import MediaSlot from './MediaSlot.svelte';
 	import WebLinksEditor from './WebLinksEditor.svelte';
 	import Tabs from '$ui/Tabs.svelte';
 	import {
@@ -83,7 +83,8 @@
 		},
 		wallpaper: {
 			title: 'Wallpaper & Splash',
-			description: 'Choose which tagged media can be used as wallpaper or as the startup image.'
+			description:
+				'Pick the image Lewdware uses as the desktop wallpaper, and the one it shows when a session starts.'
 		}
 	};
 
@@ -166,41 +167,20 @@
 						<WebLinksEditor />
 					{:else if activeTab === 'wallpaper'}
 						<div class="flex flex-col gap-6">
-							<section class="flex flex-col gap-2">
-								<div>
-									<h3 class="text-text text-sm font-semibold">Wallpaper</h3>
-									<p class="text-muted text-xs">
-										Tags identifying wallpaper media. Leave empty to disable engine-managed
-										wallpaper.
-									</p>
-								</div>
-								<TagPicker
-									tags={store.behaviour!.content.wallpaper_tags}
-									id="wallpaper-tags"
-									onchange={(tags) => (store.behaviour!.content.wallpaper_tags = tags)}
-								/>{#if store.behaviour!.content.wallpaper_tags.length === 0}<p
-										class="text-muted text-xs italic"
-									>
-										No wallpaper tags selected. Lewdware will not change the wallpaper.
-									</p>{/if}
-							</section>
-							<section class="flex flex-col gap-2">
-								<div>
-									<h3 class="text-text text-sm font-semibold">Splash</h3>
-									<p class="text-muted text-xs">
-										Tags identifying a startup splash image. Leave empty to disable it.
-									</p>
-								</div>
-								<TagPicker
-									tags={store.behaviour!.content.splash_tags}
-									id="splash-tags"
-									onchange={(tags) => (store.behaviour!.content.splash_tags = tags)}
-								/>{#if store.behaviour!.content.splash_tags.length === 0}<p
-										class="text-muted text-xs italic"
-									>
-										No splash tags selected. No startup image will be shown.
-									</p>{/if}
-							</section>
+							<MediaSlot
+								slot={{ kind: 'wallpaper' }}
+								name={store.behaviour!.content.wallpaper}
+								title="Wallpaper"
+								description="The image Lewdware sets as the desktop wallpaper."
+								emptyNote="Lewdware will not change the wallpaper."
+							/>
+							<MediaSlot
+								slot={{ kind: 'splash' }}
+								name={store.behaviour!.content.splash}
+								title="Splash"
+								description="Shown once when a session starts. May be a video — an animated GIF is one."
+								emptyNote="No startup image will be shown."
+							/>
 						</div>
 					{/if}
 				</div>

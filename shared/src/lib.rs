@@ -13,6 +13,7 @@ pub mod monitor;
 mod once;
 pub mod read_pack;
 pub mod schedule;
+pub mod tags;
 pub mod theme;
 pub mod user_config;
 pub mod utils;

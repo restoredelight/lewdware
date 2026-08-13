@@ -72,10 +72,8 @@ behaviour:
         args: []
         tags:
           - vanilla
-    wallpaper_tags:
-      - wallpaper
-    splash_tags:
-      - splash
+    wallpaper: wallpaper.png
+    splash: loading_splash.png
   experience:
     timeline:
       stages:
@@ -143,11 +141,11 @@ media:
   - source_path: wallpaper.png
     suggested_name: wallpaper.png
     tags:
-      - wallpaper
+      - __lewdware-non-popup
   - source_path: loading_splash.png
     suggested_name: loading_splash.png
     tags:
-      - splash
+      - __lewdware-non-popup
 icon: ~
 warnings:
   - kind: UnsupportedFeatureDropped

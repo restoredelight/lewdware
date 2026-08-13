@@ -139,8 +139,20 @@ impl Snapshot {
 /// an image gives a [`Snapshot::FixedImage`] to restore to later (so wallpaper changes are
 /// allowed), and `None` gives [`Snapshot::Unsupported`] (so callers decline to change anything).
 /// See `user_config::WallpaperConfig::fallback_image`.
+///
+/// A wallpaper we set ourselves counts as unreadable, not as the user's -- see
+/// [`is_our_own_wallpaper`]. Without that, one episode that ended without restoring (a crash, a
+/// kill, a panic-key exit) poisons every episode after it: the next snapshot records our image as
+/// "the user's wallpaper", restores to it, and re-records it again next time.
 pub fn snapshot(fallback: Option<&Path>) -> Snapshot {
-    match platform::snapshot() {
+    let read = platform::snapshot().and_then(|snapshot| {
+        if is_our_own_wallpaper(&snapshot) {
+            bail!("the desktop is still showing a wallpaper Lewdware set, not the user's own");
+        }
+        Ok(snapshot)
+    });
+
+    match read {
         Ok(snapshot) => snapshot,
         // A fallback image answers "what do we put back", but not "can we put anything back".
         // A desktop with no wallpaper tool at all fails both, and no amount of configuration
@@ -184,6 +196,24 @@ pub fn set(path: &Path) -> Result<()> {
 }
 
 /// Puts the wallpaper back to a previously captured state.
+/// Whether `snapshot` describes a wallpaper pointing into [`crate::utils::temp_dir`] -- an image
+/// this or a previous session extracted from a pack, which is never a state to restore to.
+///
+/// Checked against the serialized form rather than by matching each variant: every backend stores
+/// paths in a different shape (per-containment config, raw GVariant strings, an argv, the text of
+/// `~/.fehbg`), and a new backend added later would silently escape a per-variant check.
+fn is_our_own_wallpaper(snapshot: &Snapshot) -> bool {
+    let Ok(encoded) = serde_json::to_string(snapshot) else {
+        return false;
+    };
+    // Serialized the same way as the haystack, so path escaping (Windows separators especially)
+    // matches rather than being compared raw against an escaped copy.
+    let Ok(needle) = serde_json::to_string(&crate::utils::temp_dir().to_string_lossy()) else {
+        return false;
+    };
+    encoded.contains(needle.trim_matches('"'))
+}
+
 pub fn restore(snapshot: &Snapshot) -> Result<()> {
     match snapshot {
         Snapshot::Unsupported => Ok(()),
@@ -261,6 +291,52 @@ fn run(command: &'static str, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An episode that ends without restoring -- a crash, a kill, the panic key -- leaves our own
+    /// image on the desktop. The next snapshot must not record that as the user's wallpaper, or
+    /// every episode after it restores to a file we extracted and then deleted, and re-records it
+    /// again on the way out. That is a state nothing recovers from on its own.
+    #[test]
+    fn a_wallpaper_we_set_ourselves_is_not_mistaken_for_the_users() {
+        let ours = crate::utils::temp_dir().join(".tmpAbC123.avif");
+        let ours = ours.to_string_lossy().into_owned();
+
+        assert!(is_our_own_wallpaper(&Snapshot::Kde {
+            desktops: vec![KdeDesktop {
+                id: 1,
+                plugin: "org.kde.image".to_owned(),
+                image: format!("file://{ours}"),
+                fill_mode: String::new(),
+            }],
+        }));
+        assert!(is_our_own_wallpaper(&Snapshot::Gsettings {
+            schema: "org.gnome.desktop.background".to_owned(),
+            entries: vec![("picture-uri".to_owned(), Some(format!("'file://{ours}'")))],
+        }));
+        // The argv of a swaybg we started, which is the same leftover wearing a different shape.
+        assert!(is_our_own_wallpaper(&Snapshot::Swaybg {
+            instances: vec![vec!["swaybg".to_owned(), "-i".to_owned(), ours]],
+        }));
+
+        // A real wallpaper of the user's, including one that merely lives somewhere temporary.
+        assert!(!is_our_own_wallpaper(&Snapshot::Kde {
+            desktops: vec![KdeDesktop {
+                id: 1,
+                plugin: "org.kde.image".to_owned(),
+                image: "file:///home/someone/Pictures/bg.png".to_owned(),
+                fill_mode: String::new(),
+            }],
+        }));
+        assert!(!is_our_own_wallpaper(&Snapshot::Gsettings {
+            schema: "org.gnome.desktop.background".to_owned(),
+            entries: vec![(
+                "picture-uri".to_owned(),
+                Some("'file:///tmp/holiday.jpg'".to_owned())
+            )],
+        }));
+        // "Never set one" has to stay restorable -- it is the stock-install case.
+        assert!(!is_our_own_wallpaper(&Snapshot::Unsupported));
+    }
 
     /// The supervisor persists snapshots to disk and reads them back after a crash, so a snapshot
     /// that doesn't survive a round-trip means a stranded wallpaper.

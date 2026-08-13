@@ -7,7 +7,7 @@ use std::{
 
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::OptionalExtension;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 // ─── Update check ─────────────────────────────────────────────────────────────
@@ -45,6 +45,7 @@ use serde_json::Value as JsonValue;
 use shared::{
     behaviour::{effective_options, Behaviour},
     db::migrate,
+    encode::FileType,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, ShowWhen, StoredValue},
     monitor::MonitorRegion,
     read_pack::{read_pack_metadata, RecommendedMode},
@@ -453,6 +454,12 @@ struct LoadedPack {
     /// only to synthesize the built-in default modes' content-group toggles (see
     /// `effective_entries_for_mode`); custom modes never consult this.
     behaviour: Behaviour,
+    /// The type of each media file `behaviour` references by name (wallpaper/splash slots), for
+    /// the `pack_has_*` facts -- see `shared::behaviour::MediaLookup`. Resolved once at load
+    /// time, while the pack's index db is open; a name that isn't in the pack is simply absent.
+    /// Config never needs the rest of the pack's media, so this stays keyed to what's referenced
+    /// rather than mirroring the whole media table.
+    referenced_media: HashMap<String, FileType>,
     /// Which mode the pack author suggests -- see `pick_pack`'s preselection and
     /// `build_mode_groups`'s "(recommended)" marker.
     recommended_mode: Option<RecommendedMode>,
@@ -507,13 +514,37 @@ fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
         .and_then(|bytes| Behaviour::from_json_bytes(&bytes).ok())
         .unwrap_or_default();
 
+    let mut referenced_media = HashMap::new();
+    let mut media_stmt = conn.prepare("SELECT file_type FROM media WHERE file_name = ?")?;
+    for name in behaviour.referenced_media_names() {
+        let file_type: Option<String> = media_stmt
+            .query_row(params![name], |row| row.get(0))
+            .optional()?;
+        // An unrecognized `file_type` reads the same as a missing file: whatever it is, the
+        // wallpaper/splash features can't use it.
+        if let Some(file_type) = file_type.as_deref().and_then(parse_file_type) {
+            referenced_media.insert(name.to_string(), file_type);
+        }
+    }
+    drop(media_stmt);
+
     Ok(LoadedPack {
         _db_file: db_file,
         id: header.id,
         modes,
         behaviour,
+        referenced_media,
         recommended_mode: metadata.recommended_mode,
     })
+}
+
+fn parse_file_type(value: &str) -> Option<FileType> {
+    match value {
+        "image" => Some(FileType::Image),
+        "video" => Some(FileType::Video),
+        "audio" => Some(FileType::Audio),
+        _ => None,
+    }
 }
 
 fn load_mode_file(path: PathBuf) -> anyhow::Result<UploadedModeEntry> {
@@ -661,14 +692,15 @@ fn effective_entries_for_mode(mode: &Mode, state: &AppState) -> Option<Effective
     let needs_permissions = mode_meta.needs_permissions.clone();
 
     if matches!(mode, Mode::Sandbox | Mode::Experience) {
-        let behaviour = state
+        let (behaviour, referenced_media) = state
             .pack
             .lock()
             .unwrap()
             .as_ref()
-            .map(|p| p.behaviour.clone())
+            .map(|p| (p.behaviour.clone(), p.referenced_media.clone()))
             .unwrap_or_default();
-        let schema = effective_options(&mode_meta, &behaviour);
+        let media = |name: &str| referenced_media.get(name).copied();
+        let schema = effective_options(&mode_meta, &behaviour, &media);
         Some(EffectiveEntries {
             entries: schema.entries,
             needs_permissions,
@@ -1950,12 +1982,122 @@ mod tests {
         }
     }
 
+    /// Writes a minimal `.lwpack` holding `behaviour` and one media file, so `load_pack` can be
+    /// exercised against a real file rather than a hand-built `LoadedPack`.
+    fn write_pack(dir: &std::path::Path, behaviour: &Behaviour, media: &[(&str, &str)]) -> PathBuf {
+        use std::io::Write;
+
+        let db_path = dir.join("index.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            migrate(&conn).unwrap();
+            for (name, file_type) in media {
+                conn.execute(
+                    "INSERT INTO media (file_name, file_type, offset, length, hash)
+                     VALUES (?, ?, 0, 0, x'00')",
+                    rusqlite::params![name, file_type],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO pack_data (name, blob) VALUES ('behaviour', ?)",
+                rusqlite::params![behaviour.to_json_bytes().unwrap()],
+            )
+            .unwrap();
+        }
+        let db_bytes = std::fs::read(&db_path).unwrap();
+
+        // `Metadata` in scope here is the *mode* one; the pack's is a different type.
+        let metadata = shared::read_pack::Metadata {
+            name: "Test pack".to_string(),
+            ..Default::default()
+        };
+        let metadata_bytes = metadata.to_buf().unwrap();
+        let mut header = shared::read_pack::Header::new();
+        header.metadata_offset = shared::read_pack::HEADER_SIZE as u64;
+        header.metadata_length = metadata_bytes.len() as u64;
+        header.index_offset = header.metadata_offset + header.metadata_length;
+        header.index_length = db_bytes.len() as u64;
+
+        let pack_path = dir.join("test.lwpack");
+        let mut file = std::fs::File::create(&pack_path).unwrap();
+        file.write_all(&header.to_buf().unwrap()).unwrap();
+        file.write_all(&metadata_bytes).unwrap();
+        file.write_all(&db_bytes).unwrap();
+        file.flush().unwrap();
+        pack_path
+    }
+
+    fn behaviour_with_wallpaper(name: &str) -> Behaviour {
+        Behaviour {
+            content: shared::behaviour::Content {
+                wallpaper: Some(name.to_string()),
+                ..Default::default()
+            },
+            ..Behaviour::new()
+        }
+    }
+
+    /// `pack_has_wallpaper` is the whole reason the wallpaper toggle is offered, and it is now
+    /// answered by looking the referenced file up in the pack rather than by trusting the
+    /// reference. That lookup runs at load time against the pack's own index, so it is only ever
+    /// as right as `load_pack`'s query -- exercised here end to end, from a real file.
+    #[test]
+    fn a_wallpaper_reference_that_resolves_shows_the_toggle() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_pack(
+            dir.path(),
+            &behaviour_with_wallpaper("bg.png"),
+            &[("bg.png", "image")],
+        );
+
+        let pack = load_pack(path).unwrap();
+        assert_eq!(pack.referenced_media.get("bg.png"), Some(&FileType::Image));
+
+        let state = test_state(Some(pack));
+        let config = AppConfig {
+            mode: Mode::Sandbox,
+            ..Default::default()
+        };
+        assert_eq!(
+            get_mode_options_for(&config, &state)
+                .pack_has
+                .get("pack_has_wallpaper"),
+            Some(&OptionValue::Boolean(true)),
+        );
+    }
+
+    /// The other half of the same fact: a reference the pack can't honour -- the file was never
+    /// imported, or is a video where an image is required -- must report false rather than offer a
+    /// toggle that does nothing.
+    #[test]
+    fn a_wallpaper_reference_that_does_not_resolve_hides_the_toggle() {
+        for media in [&[][..], &[("bg.png", "video")][..]] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = write_pack(dir.path(), &behaviour_with_wallpaper("bg.png"), media);
+
+            let state = test_state(Some(load_pack(path).unwrap()));
+            let config = AppConfig {
+                mode: Mode::Sandbox,
+                ..Default::default()
+            };
+            assert_eq!(
+                get_mode_options_for(&config, &state)
+                    .pack_has
+                    .get("pack_has_wallpaper"),
+                Some(&OptionValue::Boolean(false)),
+                "media {media:?} should not satisfy a wallpaper slot",
+            );
+        }
+    }
+
     fn loaded_pack(behaviour: Behaviour, modes: Vec<PackModeEntry>) -> LoadedPack {
         LoadedPack {
             _db_file: NamedTempFile::new().unwrap(),
             id: Uuid::new_v4(),
             modes,
             behaviour,
+            referenced_media: HashMap::new(),
             recommended_mode: None,
         }
     }

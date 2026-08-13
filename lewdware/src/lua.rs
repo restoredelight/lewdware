@@ -15,6 +15,7 @@ use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
     behaviour::{Behaviour, Content, Experience, effective_config, effective_options},
+    encode::FileType,
     mode::{
         Metadata, OptionValue, StoredValue, VERSION_MAJOR, read_mode_metadata, resolve_options,
     },
@@ -35,7 +36,7 @@ use crate::{
         request::RequestSender,
         window::Window,
     },
-    media::MediaManager,
+    media::{MediaManager, MediaTypes},
     monitor::Monitor,
     utils::report_fatal_startup_error,
     window::ChromeDefaults,
@@ -203,7 +204,22 @@ fn resolve_mode_config(
         );
     }
 
-    let schema = effective_options(metadata, &behaviour);
+    // `pack_has_wallpaper`/`pack_has_splash` ask what the behaviour's media references actually
+    // resolve to, so the schema needs a live look at the pack's media (see `MediaLookup`).
+    let media_lookup = |name: &str| {
+        media_manager
+            .get_media(name.to_string(), MediaTypes::ALL)
+            .inspect_err(|err| tracing::warn!("Failed to look up media \"{name}\": {err}"))
+            .ok()
+            .flatten()
+            .map(|media| match media.media_data {
+                MediaData::Image { .. } => FileType::Image,
+                MediaData::Video { .. } => FileType::Video,
+                MediaData::Audio { .. } => FileType::Audio,
+            })
+    };
+
+    let schema = effective_options(metadata, &behaviour, &media_lookup);
     let resolved = effective_config(&schema, &stored);
 
     (
@@ -793,68 +809,11 @@ mod tests {
         file
     }
 
-    /// Like `pack_fixture(true)`, but the single real image is tagged with the given tags instead
-    /// of the hardcoded "red"/"blue" -- for tests needing a real-bytes image tagged e.g.
-    /// "wallpaper" or "splash" (`get_image_file`/`wallpaper.set` need real offset/length data,
-    /// which `pack_fixture_with_data` below deliberately doesn't attach).
-    fn pack_fixture_with_tagged_image(tags: &[&str]) -> NamedTempFile {
-        const IMAGE_BYTES: &[u8] = b"not a real avif, just needs to be some bytes";
-
-        let db = rusqlite::Connection::open_in_memory().unwrap();
-        shared::db::migrate(&db).unwrap();
-
-        db.execute(
-            "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash) \
-             VALUES ('pic.avif', 'image', 0, 0, 64, 64, 0, x'00')",
-            [],
-        )
-        .unwrap();
-        for tag in tags {
-            db.execute("INSERT INTO tags (name) VALUES (?)", [*tag])
-                .unwrap();
-            let tag_id = db.last_insert_rowid();
-            db.execute(
-                "INSERT INTO media_tags (media_id, tag_id) VALUES (1, ?)",
-                [tag_id],
-            )
-            .unwrap();
-        }
-
-        let metadata = shared::read_pack::Metadata {
-            name: "test-pack".to_string(),
-            ..Default::default()
-        };
-        let metadata_bytes = metadata.to_buf().unwrap();
-
-        let mut header = shared::read_pack::Header::new();
-        header.metadata_offset = shared::read_pack::HEADER_SIZE as u64;
-        header.metadata_length = metadata_bytes.len() as u64;
-        header.index_offset = header.metadata_offset + header.metadata_length;
-
-        let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
-        header.index_length = db_bytes.len() as u64;
-        let image_offset = header.index_offset + header.index_length;
-
-        db.execute(
-            "UPDATE media SET offset = ?, length = ? WHERE file_name = 'pic.avif'",
-            rusqlite::params![image_offset, IMAGE_BYTES.len() as u64],
-        )
-        .unwrap();
-        let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
-
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(&header.to_buf().unwrap()).unwrap();
-        file.write_all(&metadata_bytes).unwrap();
-        file.write_all(&db_bytes).unwrap();
-        file.write_all(IMAGE_BYTES).unwrap();
-        file.flush().unwrap();
-        file
-    }
-
-    /// `pack_fixture_with_tagged_image`'s counterpart for a *video*. Needed because the media type
-    /// a pack ends up storing is not the one the author supplied: an animated GIF -- Edgeware's
-    /// usual `loading_splash` -- probes as `FileInfo::Video` (see `shared/src/encode.rs`), so a
-    /// splash-tagged video is the ordinary case, not an exotic one.
+    /// `pack_fixture(true)`'s counterpart for a *video*: one real-bytes `clip.webm`, optionally
+    /// tagged. Needed because the media type a pack ends up storing is not the one the author
+    /// supplied: an animated GIF -- Edgeware's usual `loading_splash` -- probes as
+    /// `FileInfo::Video` (see `shared/src/encode.rs`), so a video in the splash slot is the
+    /// ordinary case, not an exotic one.
     fn pack_fixture_with_tagged_video(tags: &[&str]) -> NamedTempFile {
         const VIDEO_BYTES: &[u8] = b"not a real webm, just needs to be some bytes";
 
@@ -2991,7 +2950,7 @@ mod tests {
         anchors: FrequencyAnchors,
         design: DesignValues,
         tags: Option<Vec<String>>,
-        wallpaper_tags: Option<Vec<String>>,
+        wallpaper: Option<String>,
     }
 
     #[derive(Default)]
@@ -3067,7 +3026,7 @@ mod tests {
                     end,
                     content: ContentSelection {
                         tags: level.tags.clone(),
-                        wallpaper_tags: level.wallpaper_tags.clone(),
+                        wallpaper: level.wallpaper.clone(),
                     },
                     events: Events {
                         popup: schedule(level.anchors.popup),
@@ -3112,7 +3071,7 @@ mod tests {
             anchors,
             design,
             tags: None,
-            wallpaper_tags: None,
+            wallpaper: None,
         }])
     }
 
@@ -4063,7 +4022,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    wallpaper_tags: vec!["wallpaper".to_string()],
+                    wallpaper: Some("pic.avif".to_string()),
                     ..Default::default()
                 };
 
@@ -4075,7 +4034,7 @@ mod tests {
 
                 let mut harness = Harness::with_pack(
                     &sources,
-                    pack_fixture_with_tagged_image(&["wallpaper"]),
+                    pack_fixture(true),
                     content,
                     config,
                     all_capabilities(),
@@ -4090,11 +4049,12 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn wallpaper_skips_silently_with_no_wallpaper_tagged_media() {
+    async fn wallpaper_skips_silently_when_the_reference_does_not_resolve() {
+        // Rule 5: a slot naming a file the pack no longer has is a skip, not an error.
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    wallpaper_tags: vec!["wallpaper".to_string()],
+                    wallpaper: Some("pic.avif".to_string()),
                     ..Default::default()
                 };
 
@@ -4120,8 +4080,8 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn wallpaper_not_applied_when_no_tags_declared() {
-        // Opt-in only: `wallpaper_tags` empty (the pack never declared any) means no wallpaper
+    async fn wallpaper_not_applied_when_no_slot_is_set() {
+        // Opt-in only: an unset `wallpaper` (the pack never filled the slot) means no wallpaper
         // feature at all, even if `wallpaper_enabled` is somehow true (defensive against a custom
         // mode reusing this library, or a stale stored option) and the fixture has real media.
         LocalSet::new()
@@ -4148,11 +4108,14 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn wallpaper_honors_a_custom_configured_tag() {
+    async fn wallpaper_skips_silently_when_the_reference_is_not_an_image() {
+        // `lewdware.wallpaper.set` takes an image. A slot pointing at a video takes rule 5's skip
+        // branch rather than erroring -- the same outcome `pack_has_wallpaper` reports up front,
+        // so the toggle is never offered for this pack in the first place.
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    wallpaper_tags: vec!["bg".to_string()],
+                    wallpaper: Some("clip.webm".to_string()),
                     ..Default::default()
                 };
 
@@ -4164,7 +4127,7 @@ mod tests {
 
                 let mut harness = Harness::with_pack(
                     &sources,
-                    pack_fixture_with_tagged_image(&["bg"]),
+                    pack_fixture_with_tagged_video(&[]),
                     content,
                     config,
                     all_capabilities(),
@@ -4172,8 +4135,7 @@ mod tests {
                 );
                 harness.run_entrypoint("main.lua").unwrap();
 
-                assert_eq!(harness.eval_number("SET_COUNT"), 1.0);
-                assert_eq!(harness.eval_string("SET_IMAGE_NAME"), "pic.avif");
+                assert_eq!(harness.eval_number("SET_COUNT"), 0.0);
             })
             .await;
     }
@@ -4183,7 +4145,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    wallpaper_tags: vec!["wallpaper".to_string()],
+                    wallpaper: Some("pic.avif".to_string()),
                     ..Default::default()
                 };
 
@@ -4204,7 +4166,7 @@ mod tests {
 
                 let mut harness = Harness::with_pack(
                     &sources,
-                    pack_fixture_with_tagged_image(&["wallpaper"]),
+                    pack_fixture(true),
                     content,
                     config,
                     all_capabilities(),
@@ -4232,7 +4194,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    splash_tags: vec!["splash".to_string()],
+                    splash: Some("pic.avif".to_string()),
                     ..Default::default()
                 };
 
@@ -4241,7 +4203,7 @@ mod tests {
 
                 let mut harness = Harness::with_pack(
                     &real_default_mode_sources(),
-                    pack_fixture_with_tagged_image(&["splash"]),
+                    pack_fixture(true),
                     content,
                     config,
                     all_capabilities(),
@@ -4282,15 +4244,17 @@ mod tests {
     /// The pack's wallpaper and its splash are scenery, not popup content: they were picked to sit
     /// behind everything and to open the session. Letting the ordinary spawn loop draw from them
     /// puts the desktop background in a popup and gives away that the splash was never special.
-    /// Media rows here are ids 1..=3 in fixture order, so the assertion names exactly which ones
-    /// were allowed through.
+    /// The marker the editor applies to slot media is what says so -- and it generalizes, so a
+    /// file an author simply doesn't want in popups is excluded by the same rule. Media rows here
+    /// are ids 1..=3 in fixture order, so the assertion names exactly which ones were allowed
+    /// through.
     #[tokio::test(start_paused = true)]
-    async fn ordinary_popups_never_draw_from_the_wallpaper_or_splash_pools() {
+    async fn ordinary_popups_never_draw_non_popup_media() {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    wallpaper_tags: vec!["wallpaper".to_string()],
-                    splash_tags: vec!["splash".to_string()],
+                    wallpaper: Some("bg.avif".to_string()),
+                    splash: Some("intro.avif".to_string()),
                     ..Default::default()
                 };
 
@@ -4306,8 +4270,8 @@ mod tests {
                     pack_fixture_with_data(
                         &[
                             ("ordinary.avif", &[]),
-                            ("bg.avif", &["wallpaper"]),
-                            ("intro.avif", &["splash"]),
+                            ("bg.avif", &[shared::tags::NON_POPUP_TAG]),
+                            ("intro.avif", &[shared::tags::NON_POPUP_TAG]),
                         ],
                         None,
                     ),
@@ -4354,7 +4318,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    splash_tags: vec!["splash".to_string()],
+                    splash: Some("clip.webm".to_string()),
                     ..Default::default()
                 };
 
@@ -4363,7 +4327,7 @@ mod tests {
 
                 let mut harness = Harness::with_pack(
                     &real_default_mode_sources(),
-                    pack_fixture_with_tagged_video(&["splash"]),
+                    pack_fixture_with_tagged_video(&[]),
                     content,
                     config,
                     all_capabilities(),
@@ -4412,7 +4376,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    splash_tags: vec!["splash".to_string()],
+                    splash: Some("pic.avif".to_string()),
                     ..Default::default()
                 };
 
@@ -4421,7 +4385,7 @@ mod tests {
 
                 let mut harness = Harness::with_pack(
                     &real_default_mode_sources(),
-                    pack_fixture_with_tagged_image(&["splash"]),
+                    pack_fixture(true),
                     content,
                     config,
                     all_capabilities(),
@@ -4435,11 +4399,11 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn splash_skips_silently_with_no_splash_tagged_media() {
+    async fn splash_skips_silently_when_the_reference_does_not_resolve() {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    splash_tags: vec!["splash".to_string()],
+                    splash: Some("pic.avif".to_string()),
                     ..Default::default()
                 };
 
@@ -5058,10 +5022,8 @@ mod tests {
                     ""
                 );
                 assert_eq!(
-                    harness.eval_string(
-                        "table.concat(require('timeline').wallpaper_tags() or {}, '|')"
-                    ),
-                    ""
+                    harness.eval_string("tostring(require('timeline').wallpaper())"),
+                    "nil"
                 );
             })
             .await;
@@ -5374,20 +5336,20 @@ mod tests {
     async fn experience_timeline_wallpaper_override_reapplies_only_when_changed() {
         LocalSet::new()
             .run_until(async {
-                fn level_at(at_seconds: f64, wallpaper_tags: Option<Vec<String>>) -> Level {
+                fn level_at(at_seconds: f64, wallpaper: Option<&str>) -> Level {
                     Level {
                         at_seconds,
-                        wallpaper_tags,
+                        wallpaper: wallpaper.map(str::to_string),
                         ..Default::default()
                     }
                 }
 
                 let experience = levels_to_experience(vec![
                             Level::default(), // baseline: no wallpaper override
-                            level_at(1.0, Some(vec!["special".to_string()])), // baseline -> special: applies
-                            level_at(2.0, None), // special -> baseline (empty): no-ops internally
-                            level_at(3.0, Some(vec!["special".to_string()])), // baseline -> special again: applies
-                            level_at(4.0, Some(vec!["special".to_string()])), // unchanged: must not reapply
+                            level_at(1.0, Some("pic.avif")), // baseline -> pic.avif: applies
+                            level_at(2.0, None), // pic.avif -> baseline (unset): no-ops internally
+                            level_at(3.0, Some("pic.avif")), // baseline -> pic.avif again: applies
+                            level_at(4.0, Some("pic.avif")), // unchanged: must not reapply
                         ]);
 
                 let owned = wrapped_experience_mode_sources(WALLPAPER_CAPTURE_WRAP);
@@ -5398,7 +5360,7 @@ mod tests {
 
                 let mut harness = Harness::with_pack_and_experience(
                     &sources,
-                    pack_fixture_with_tagged_image(&["special"]),
+                    pack_fixture(true),
                     Content::default(),
                     experience,
                     config,
@@ -5411,7 +5373,7 @@ mod tests {
                 assert_eq!(
                     harness.eval_number("SET_COUNT"),
                     2.0,
-                    "two genuine special-tag applications; the no-op-to-empty and repeat-same-value \
+                    "two genuine wallpaper changes; the no-op-to-unset and repeat-same-value \
                      transitions must not add to this"
                 );
             })

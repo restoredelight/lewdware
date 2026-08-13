@@ -44,7 +44,7 @@ pub struct FileInfoParts {
     pub audio: Option<bool>,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum FileType {
     Image,
     Video,

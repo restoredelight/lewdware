@@ -1,3 +1,4 @@
+import { withoutManagedTags } from './tags.js';
 import type {
 	Behaviour,
 	ConversionWarning,
@@ -334,10 +335,10 @@ class AppStore {
 
 	addFile(file: MediaFile, tracked = false) {
 		this.files.push(file);
-		if (file.tags.length > 0) {
-			const newTags = file.tags.filter((t) => !this.allTags.includes(t));
-			if (newTags.length > 0) this.allTags = [...this.allTags, ...newTags];
-		}
+		// `allTags` is the author-facing suggestion list, so a file arriving with a managed marker
+		// (slot media, imported subliminals) must not put that marker in it -- see ./tags.ts.
+		const newTags = withoutManagedTags(file.tags).filter((t) => !this.allTags.includes(t));
+		if (newTags.length > 0) this.allTags = [...this.allTags, ...newTags];
 		if (file.artists.length > 0) {
 			const newArtists = file.artists.filter((a) => !this.allArtists.includes(a));
 			if (newArtists.length > 0) this.allArtists = [...this.allArtists, ...newArtists];

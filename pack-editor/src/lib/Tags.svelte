@@ -9,6 +9,7 @@
 	import { flushBehaviourSave, initializeBehaviourHistory } from './behaviourSave.svelte.js';
 	import { store } from './store.svelte.js';
 	import { behaviourTags, tagUsage } from './tagReferences.js';
+	import { withoutManagedTags } from './tags.js';
 	import type { TagSummary } from './types.js';
 	import { history } from './history.svelte.js';
 	import EmptyState from '$ui/EmptyState.svelte';
@@ -56,13 +57,13 @@
 		const renamedSuggestions = store.allTags.flatMap((tag) =>
 			tag === from ? (to ? [to] : []) : [tag]
 		);
-		store.allTags = [
+		store.allTags = withoutManagedTags([
 			...new Set([
 				...renamedSuggestions,
 				...store.files.flatMap((file) => file.tags),
 				...(store.behaviour ? behaviourTags(store.behaviour) : [])
 			])
-		];
+		]);
 		if (!tracked) store.markLocallyBackedUp();
 	}
 

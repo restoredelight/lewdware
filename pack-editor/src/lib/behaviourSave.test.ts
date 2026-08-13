@@ -87,6 +87,51 @@ describe('behaviour save scheduler', () => {
 		expect(mocks.api.setBehaviour).toHaveBeenCalledOnce();
 	});
 
+	// The bug this guards: filling a wallpaper slot changed the pack, but nothing told the
+	// frontend, so `history.sync()` never ran and Save stayed disabled over real unsaved changes.
+	it('records history when adopting a behaviour the backend produced', async () => {
+		const save = await scheduler();
+		save.initializeBehaviourHistory(mocks.store.behaviour!);
+
+		save.adoptBehaviour(value(5), { label: 'Set wallpaper' });
+
+		expect(mocks.store.behaviour).toEqual(value(5));
+		expect(mocks.history.record).toHaveBeenCalledWith({ label: 'Set wallpaper' });
+	});
+
+	it('re-baselines an adopted behaviour so it is not re-recorded as the user\'s own edit', async () => {
+		const save = await scheduler();
+		save.initializeBehaviourHistory(mocks.store.behaviour!);
+
+		// The backend changed the document; a later local edit must report only itself.
+		save.adoptBehaviour(value(5), { label: 'Set wallpaper' });
+		mocks.history.record.mockClear();
+		save.scheduleBehaviourSave();
+		await save.flushBehaviourSave();
+
+		expect(mocks.api.setBehaviour).toHaveBeenCalledWith(value(5));
+		expect(mocks.history.record).not.toHaveBeenCalled();
+	});
+
+	// The baseline lives in its own module precisely so `history` can reset it after undo/redo
+	// re-fetches the document. Reverting a behaviour change must leave the saver diffing against
+	// the reverted version, not the one from before the undo.
+	it('treats a re-baselined document as persisted, wherever the reset came from', async () => {
+		const save = await scheduler();
+		const { initializeBehaviourHistory } = await import('./behaviourBaseline.svelte.js');
+		save.initializeBehaviourHistory(mocks.store.behaviour!);
+
+		// Stand in for undo: the backend hands back a different document, and `history` re-baselines.
+		mocks.store.behaviour = value(9);
+		initializeBehaviourHistory(mocks.store.behaviour);
+
+		save.scheduleBehaviourSave();
+		await save.flushBehaviourSave();
+
+		expect(mocks.api.setBehaviour).toHaveBeenCalledWith(value(9));
+		expect(mocks.history.record).not.toHaveBeenCalled();
+	});
+
 	it('reports failures and allows a later save to recover the promise chain', async () => {
 		mocks.api.setBehaviour.mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
 		const save = await scheduler();

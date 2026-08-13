@@ -245,7 +245,7 @@ pub fn report_fatal_startup_error(err: impl std::fmt::Display) {
 /// video/audio files, a pack's full SQLite index). Kept in its own subdirectory so leftovers
 /// from a previous run can be identified and swept away, see [`prepare_temp_dir`].
 pub fn temp_dir() -> PathBuf {
-    std::env::temp_dir().join("lewdware-tmp")
+    shared::utils::temp_dir()
 }
 
 /// Clears out [`temp_dir`] and recreates it. Only safe to call while holding the single-instance

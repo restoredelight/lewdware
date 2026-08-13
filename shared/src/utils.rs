@@ -1,3 +1,15 @@
+use std::path::PathBuf;
+
+/// Where the engine extracts pack media so anything outside it can open a file.
+///
+/// Lives here rather than in the engine because the wallpaper snapshot has to recognize this
+/// path: media extracted here is deleted when the session ends (and the directory is swept on the
+/// next start), so a desktop wallpaper pointing into it is Lewdware's own leftover, never
+/// something to restore to. See `wallpaper::snapshot`.
+pub fn temp_dir() -> PathBuf {
+    std::env::temp_dir().join("lewdware-tmp")
+}
+
 #[cfg(target_os = "linux")]
 pub fn sanitize_child_env(cmd: &mut std::process::Command) {
     let is_appimage = std::env::var("APPIMAGE").is_ok() || std::env::var("APPDIR").is_ok();

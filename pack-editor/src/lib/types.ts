@@ -125,8 +125,10 @@ export interface Content {
 	notifications: TextItem[];
 	subliminals: TextItem[];
 	web_links: WebLink[];
-	wallpaper_tags: string[];
-	splash_tags: string[];
+	/** Name of the media file used as the wallpaper; absent means the pack has no wallpaper. */
+	wallpaper?: string;
+	/** Name of the media file shown as the startup splash. May be a video (an animated GIF is). */
+	splash?: string;
 }
 
 export type Interval =
@@ -152,9 +154,29 @@ export interface Mitosis {
 	chance?: number;
 	count?: number;
 }
+/** One place in the behaviour that names a media file -- mirrors `shared::behaviour::MediaSlot`. */
+export type MediaSlot =
+	| { kind: 'wallpaper' }
+	| { kind: 'splash' }
+	| { kind: 'stage_wallpaper'; stage: string };
+
+export interface SlotFilled {
+	behaviour: Behaviour;
+	file: MediaFile;
+	/** False when the pack already had these bytes, so the grid already knows the file. */
+	added: boolean;
+}
+
+export interface SlotCleared {
+	behaviour: Behaviour;
+	/** Set when the file was only ever scenery and left with its slot. */
+	deleted_id: number | null;
+}
+
 export interface ContentSelection {
 	tags?: string[];
-	wallpaper_tags?: string[];
+	/** Name of the media file this stage sets as the wallpaper; absent keeps the previous one. */
+	wallpaper?: string;
 }
 export interface EventCountCondition {
 	event: 'popup' | 'web' | 'notification' | 'prompt' | 'subliminal';

@@ -49,6 +49,16 @@ pub struct LewdwareApp {
     requirement_owners: HashMap<RequirementId, ItemId>,
     next_requirement_id: u64,
     default_wallpaper: shared::wallpaper::Snapshot,
+    /// The image file the desktop wallpaper currently points at, held for exactly as long as it
+    /// is the wallpaper.
+    ///
+    /// Media inside a `.lwpack` has to be extracted before anything outside the engine can open
+    /// it, and that extraction is a `NamedTempFile` -- which deletes itself when dropped. Every
+    /// wallpaper backend stores a *path*, not the pixels, and reads it back later (Plasma on the
+    /// next repaint, GNOME from a settings key), so letting the temp file drop after `set` left
+    /// the desktop pointing at a file that no longer existed. Nothing failed and nothing was
+    /// logged; the wallpaper just never visibly changed.
+    wallpaper_file: Option<FileOrPath>,
     lua_request_rx: std::sync::mpsc::Receiver<lua::LuaRequest>,
     lua_event_tx: tokio::sync::mpsc::UnboundedSender<lua::Event>,
     _lua_thread_handle: LuaThreadHandle,
@@ -147,6 +157,7 @@ impl LewdwareApp {
             requirement_owners: HashMap::new(),
             next_requirement_id: 0,
             default_wallpaper: wallpaper,
+            wallpaper_file: None,
             lua_request_rx,
             lua_event_tx,
             _lua_thread_handle: lua_thread_handle,
@@ -537,13 +548,19 @@ impl LewdwareApp {
             return Ok(false);
         }
 
+        // Now that the desktop points at this file, take ownership of it -- and only now drop the
+        // one it pointed at before, which nothing is reading any more.
+        self.wallpaper_file = Some(file);
+
         Ok(true)
     }
 
-    fn reset_wallpaper(&self) {
+    fn reset_wallpaper(&mut self) {
         if let Err(err) = shared::wallpaper::restore(&self.default_wallpaper) {
             tracing::error!("Error setting wallpaper back to default: {err}");
         }
+        // Strictly after the restore: until it lands, the desktop is still reading this file.
+        self.wallpaper_file = None;
     }
 
     fn open_link(&self, url: String) -> Result<bool> {

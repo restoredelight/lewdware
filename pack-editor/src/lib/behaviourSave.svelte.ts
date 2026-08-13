@@ -1,8 +1,17 @@
 import { api } from './api.js';
 import { store } from './store.svelte.js';
-import { history } from './history.svelte.js';
+import { history, type HistoryRecord } from './history.svelte.js';
 import type { Behaviour } from './types.js';
 import { taskFeedback } from './taskFeedback.svelte.js';
+import {
+	behaviourBaseline,
+	cloneBehaviour,
+	initializeBehaviourHistory
+} from './behaviourBaseline.svelte.js';
+
+// Re-exported so callers have one import for "the behaviour document's save machinery"; it is
+// defined in its own module purely so `history` can reset it without importing this one back.
+export { initializeBehaviourHistory };
 
 // Shared across the Content and Experience tabs, which both edit different sections of the same
 // `store.behaviour` document: one debounce timer and one write-order-preserving promise chain, so
@@ -12,12 +21,26 @@ const DEBOUNCE_MS = 500;
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let saveChain: Promise<void> = Promise.resolve();
-let baseline: Behaviour | null = null;
 
-const clone = (value: Behaviour): Behaviour => structuredClone($state.snapshot(value));
-
-export function initializeBehaviourHistory(value: Behaviour) {
-	baseline = clone(value);
+/**
+ * Takes on a behaviour the backend just produced for us -- the media slots, tag rename/merge/
+ * delete, media rename and removal all edit the document server-side and hand it back.
+ *
+ * All three steps matter, and skipping any of them fails quietly:
+ *
+ * - **Re-baseline**, or the next unrelated edit compares against a document that predates the
+ *   backend's change and records it a second time as the user's own.
+ * - **Record**, or nothing calls `history.sync()`, `store.packSaved` stays `true`, and the Save
+ *   button sits disabled over a pack that really does have unsaved changes.
+ *
+ * Callers must still `await flushBehaviourSave()` *before* the command that returns the document:
+ * a pending debounced write holds the pre-command version and would otherwise land afterwards and
+ * undo it. That can't live here, because by the time we have the result it's too late.
+ */
+export function adoptBehaviour(value: Behaviour, record: HistoryRecord) {
+	store.behaviour = value;
+	initializeBehaviourHistory(value);
+	history.record(record);
 }
 
 function persist() {
@@ -28,15 +51,16 @@ function persist() {
 		.catch(() => {})
 		.then(async () => {
 			if (!store.behaviour) return;
-			const after = clone(store.behaviour);
-			const before = baseline ? clone(baseline) : clone(after);
+			const after = cloneBehaviour(store.behaviour);
+			const baseline = behaviourBaseline();
+			const before = baseline ? cloneBehaviour(baseline) : cloneBehaviour(after);
 			await api.setBehaviour(after);
 			if (JSON.stringify(before) !== JSON.stringify(after)) {
 				history.record({
 					label: 'Edit pack behaviour'
 				});
 			}
-			baseline = clone(after);
+			initializeBehaviourHistory(after);
 			store.markBackupComplete('behaviour');
 			taskFeedback.dismiss('behaviour-backup');
 		})

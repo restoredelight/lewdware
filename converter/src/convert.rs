@@ -1,4 +1,5 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashSet};
 
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -9,6 +10,7 @@ use shared::behaviour::{
 };
 use shared::behaviour::{Content, ContentGroup, PromptSettings, TextItem, WebLink};
 use shared::read_pack::{Metadata, RecommendedMode};
+use shared::tags::{self, NON_POPUP_TAG};
 
 /// An intermediate, cumulative-timeline-friendly shape the converter builds internally --
 /// mirrors the pre-Transitions "one flat, self-contained snapshot per level" schema, which is a
@@ -22,7 +24,7 @@ struct Level {
     anchors: FrequencyAnchors,
     design: DesignValues,
     tags: Option<Vec<String>>,
-    wallpaper_tags: Option<Vec<String>>,
+    wallpaper: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -94,7 +96,7 @@ fn levels_to_experience(levels: Vec<Level>) -> Experience {
                 end,
                 content: ContentSelection {
                     tags: level.tags.clone(),
-                    wallpaper_tags: level.wallpaper_tags.clone(),
+                    wallpaper: level.wallpaper.clone(),
                 },
                 events: Events {
                     popup: schedule(level.anchors.popup),
@@ -172,9 +174,17 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
     let mut warnings = Vec::new();
 
     let info = parse::load_info(source, &mut warnings);
-    let index = parse::load_edgeware_index(source, &mut warnings);
-    let corruption_levels = parse::corruption::load_corruption(source, &mut warnings);
+    let mut index = parse::load_edgeware_index(source, &mut warnings);
+    let mut corruption_levels = parse::corruption::load_corruption(source, &mut warnings);
     let config = parse::load_config(source, &mut warnings);
+
+    // Every mood name becomes a media tag verbatim, so an Edgeware pack that happens to have
+    // named one inside the reserved namespace would hand it mechanical meaning it never asked
+    // for (see `shared::tags`). Escaped here, at the one seam every downstream consumer of a
+    // mood name is on the far side of, rather than at each of them.
+    escape_managed_mood_names(&mut index, &mut corruption_levels);
+    let index = index;
+    let corruption_levels = corruption_levels;
 
     let mut used_ids = HashSet::new();
     let content_groups = build_content_groups(&index, &mut used_ids);
@@ -301,6 +311,30 @@ fn populate_captions(index: &EdgewareIndex, content: &mut Content) {
     }
 }
 
+/// Rewrites any mood name in the reserved tag namespace to an escaped one, everywhere a mood
+/// name lives: the mood list itself, the media -> mood map, and `corruption.json`'s per-level
+/// mood deltas (which are matched against those same names by `build_timeline`). See
+/// `shared::tags::escape`.
+fn escape_managed_mood_names(index: &mut EdgewareIndex, levels: &mut [CorruptionLevel]) {
+    for mood in &mut index.moods {
+        if let Cow::Owned(escaped) = tags::escape(&mood.name) {
+            mood.name = escaped;
+        }
+    }
+    for mood in index.media_moods.values_mut() {
+        if let Cow::Owned(escaped) = tags::escape(mood) {
+            *mood = escaped;
+        }
+    }
+    for level in levels {
+        for mood in level.added_moods.iter_mut().chain(&mut level.removed_moods) {
+            if let Cow::Owned(escaped) = tags::escape(mood) {
+                *mood = escaped;
+            }
+        }
+    }
+}
+
 fn populate_prompts(index: &EdgewareIndex, content: &mut Content) {
     content.prompts = text_items(&index.default.prompts, &index.moods, |base| &base.prompts);
     content.prompt_settings = PromptSettings {
@@ -410,13 +444,16 @@ fn discover_media(
         });
     }
 
+    // Wallpaper and splash fill their behaviour slots by name -- Edgeware has exactly one of
+    // each, so there was never a set for a tag to stand for. The only tag they carry is the
+    // marker keeping scenery out of the popup pool.
     if source.file_exists("wallpaper.png") {
         media.push(ConvertedMedia {
             source_path: "wallpaper.png".to_string(),
             suggested_name: "wallpaper.png".to_string(),
-            tags: vec!["wallpaper".to_string()],
+            tags: vec![NON_POPUP_TAG.to_string()],
         });
-        content.wallpaper_tags = vec!["wallpaper".to_string()];
+        content.wallpaper = Some("wallpaper.png".to_string());
     }
 
     if let Some(splash) = SPLASH_CANDIDATES
@@ -426,9 +463,9 @@ fn discover_media(
         media.push(ConvertedMedia {
             source_path: splash.to_string(),
             suggested_name: splash.to_string(),
-            tags: vec!["splash".to_string()],
+            tags: vec![NON_POPUP_TAG.to_string()],
         });
-        content.splash_tags = vec!["splash".to_string()];
+        content.splash = Some(splash.to_string());
     }
 }
 
@@ -741,8 +778,7 @@ fn build_timeline(
         active.insert(moodless_tag);
     }
 
-    let mut next_wallpaper_index: u32 = 1;
-    let mut wallpaper_tags_by_file: HashMap<String, String> = HashMap::new();
+    let mut imported_wallpapers: HashSet<String> = HashSet::new();
 
     levels
         .iter()
@@ -774,16 +810,8 @@ fn build_timeline(
                 ));
             }
 
-            let wallpaper_tags = level.wallpaper.as_ref().and_then(|file| {
-                resolve_wallpaper_tag(
-                    file,
-                    source,
-                    media,
-                    &mut next_wallpaper_index,
-                    &reserved,
-                    &mut wallpaper_tags_by_file,
-                    warnings,
-                )
+            let wallpaper = level.wallpaper.as_ref().and_then(|file| {
+                resolve_wallpaper(file, source, media, &mut imported_wallpapers, warnings)
             });
 
             Level {
@@ -808,38 +836,28 @@ fn build_timeline(
                 },
                 design: DesignValues::default(),
                 tags: Some(active.iter().cloned().collect()),
-                wallpaper_tags,
+                wallpaper,
             }
         })
         .collect()
 }
 
-/// Resolves one corruption level's wallpaper filename to a tag, adding a `ConvertedMedia` entry
-/// the first time a given filename is seen. `"wallpaper.png"` reuses the tag `discover_media`
-/// already assigned the pack's primary wallpaper (no duplicate media entry); any other filename
-/// mints a fresh `wallpaper-<n>` tag, numbering distinct override wallpapers `1`, `2`, ... in the
-/// order they're first referenced (skipping any index already taken by a real tag in `reserved`,
-/// so the synthetic tag never aliases a mood the pack itself named `wallpaper-<n>`). Returns `None`
-/// (no override -- the previous level's wallpaper, or `Content::wallpaper_tags`, stays in effect)
-/// if the referenced file doesn't actually exist, after warning.
-fn resolve_wallpaper_tag(
+/// Resolves one corruption level's wallpaper filename to the media name its stage references,
+/// adding a `ConvertedMedia` entry the first time a given filename is seen.
+///
+/// A stage's wallpaper is one file, so the filename *is* the reference -- no synthetic tag to
+/// mint, and nothing to garbage-collect when a stage is later deleted. Reusing the same
+/// wallpaper across levels is Edgeware's ordinary case (`"wallpaper.png"` especially, which
+/// `discover_media` already added as the pack's primary), so `seen` keeps that from importing
+/// the same file twice. Returns `None` -- no override, meaning the previous level's wallpaper or
+/// `Content::wallpaper` stays in effect -- if the referenced file doesn't exist, after warning.
+fn resolve_wallpaper(
     file: &str,
     source: &dyn PackSource,
     media: &mut Vec<ConvertedMedia>,
-    next_index: &mut u32,
-    reserved: &HashSet<String>,
-    known: &mut HashMap<String, String>,
+    seen: &mut HashSet<String>,
     warnings: &mut Vec<Warning>,
-) -> Option<Vec<String>> {
-    if let Some(tag) = known.get(file) {
-        return Some(vec![tag.clone()]);
-    }
-
-    if file == "wallpaper.png" {
-        known.insert(file.to_string(), "wallpaper".to_string());
-        return Some(vec!["wallpaper".to_string()]);
-    }
-
+) -> Option<String> {
     if !source.file_exists(file) {
         warnings.push(Warning::new(
             WarningKind::UnreadableMediaFile,
@@ -848,20 +866,16 @@ fn resolve_wallpaper_tag(
         return None;
     }
 
-    let tag = loop {
-        let candidate = format!("wallpaper-{next_index}");
-        *next_index += 1;
-        if !reserved.contains(&candidate) {
-            break candidate;
-        }
-    };
-    media.push(ConvertedMedia {
-        source_path: file.to_string(),
-        suggested_name: file.to_string(),
-        tags: vec![tag.clone()],
-    });
-    known.insert(file.to_string(), tag.clone());
-    Some(vec![tag])
+    // `"wallpaper.png"` is already in `media` -- `discover_media` added it as the pack's primary
+    // wallpaper before any level was looked at.
+    if file != "wallpaper.png" && seen.insert(file.to_string()) {
+        media.push(ConvertedMedia {
+            source_path: file.to_string(),
+            suggested_name: file.to_string(),
+            tags: vec![NON_POPUP_TAG.to_string()],
+        });
+    }
+    Some(file.to_string())
 }
 
 /// `corruption.json`/`config.json` -> `behaviour.experience`. `None` (not
@@ -941,7 +955,7 @@ fn build_experience(
             },
             design: DesignValues::default(),
             tags: None,
-            wallpaper_tags: None,
+            wallpaper: None,
         }]
     } else {
         let reserved = collect_reserved_tags(content, media);
@@ -959,14 +973,13 @@ fn build_experience(
     Some(levels_to_experience(levels))
 }
 
-/// Every tag already live in the converted pack's flat tag namespace: the raw Edgeware mood names
-/// (carried verbatim as media tags and content-group filter tags -- the slugified `ContentGroup.id`
-/// is only a key, never a filter) plus the built-in `wallpaper`/`splash`/`hypno` tags
-/// `discover_media` assigns. `build_timeline` mints its synthetic `corruption-moodless` and
-/// `wallpaper-<n>` tags into this same namespace, so it consults this set to guarantee they never
-/// alias a tag the pack itself uses -- otherwise a mood literally named `wallpaper-1` would pull
-/// its own media into a level's wallpaper slot, and one named `corruption-moodless` would let an
-/// unrelated mood change drop the mood-less media the tag exists to protect.
+/// Every tag already live in the converted pack's flat tag namespace: the Edgeware mood names
+/// (carried as media tags and content-group filter tags -- the slugified `ContentGroup.id` is
+/// only a key, never a filter) plus the built-in `hypno` tag and the managed marker
+/// `discover_media` assigns. `build_timeline` mints its synthetic `corruption-moodless` tag into
+/// this same namespace, so it consults this set to guarantee it never aliases a tag the pack
+/// itself uses -- otherwise a mood named `corruption-moodless` would let an unrelated mood change
+/// drop the mood-less media the tag exists to protect.
 fn collect_reserved_tags(content: &Content, media: &[ConvertedMedia]) -> HashSet<String> {
     let mut reserved = HashSet::new();
     for item in media {
@@ -1092,20 +1105,20 @@ mod tests {
     }
 
     #[test]
-    fn wallpaper_and_splash_tagged_and_reflected_in_content() {
+    fn wallpaper_and_splash_fill_their_slots_and_are_kept_out_of_popups() {
         let (_dir, source) = source_with(&[("wallpaper.png", "w"), ("loading_splash.gif", "s")]);
         let output = convert(&source);
         assert_eq!(
-            output.behaviour.content.wallpaper_tags,
-            vec!["wallpaper".to_string()]
+            output.behaviour.content.wallpaper,
+            Some("wallpaper.png".to_string())
         );
         assert_eq!(
-            output.behaviour.content.splash_tags,
-            vec!["splash".to_string()]
+            output.behaviour.content.splash,
+            Some("loading_splash.gif".to_string())
         );
         assert!(
             output.media.iter().any(
-                |m| m.source_path == "wallpaper.png" && m.tags == vec!["wallpaper".to_string()]
+                |m| m.source_path == "wallpaper.png" && m.tags == vec![NON_POPUP_TAG.to_string()]
             )
         );
         assert!(
@@ -1113,7 +1126,7 @@ mod tests {
                 .media
                 .iter()
                 .any(|m| m.source_path == "loading_splash.gif"
-                    && m.tags == vec!["splash".to_string()])
+                    && m.tags == vec![NON_POPUP_TAG.to_string()])
         );
     }
 
@@ -1491,7 +1504,7 @@ mod tests {
     }
 
     #[test]
-    fn level_wallpaper_reuses_the_primary_wallpaper_tag_without_duplicate_media() {
+    fn level_wallpaper_reuses_the_primary_wallpaper_without_duplicate_media() {
         let (_dir, source) = source_with(&[
             ("wallpaper.png", "w"),
             (
@@ -1502,8 +1515,8 @@ mod tests {
         let output = convert(&source);
         let timeline = output.behaviour.experience.unwrap().timeline;
         assert_eq!(
-            timeline.stages[0].content.wallpaper_tags,
-            Some(vec!["wallpaper".to_string()])
+            timeline.stages[0].content.wallpaper,
+            Some("wallpaper.png".to_string())
         );
         assert_eq!(
             output
@@ -1516,25 +1529,62 @@ mod tests {
     }
 
     #[test]
-    fn level_wallpaper_other_than_primary_gets_its_own_tag_and_media_entry() {
+    fn level_wallpaper_other_than_primary_gets_its_own_media_entry() {
         let (_dir, source) = source_with(&[
             ("wallpaper2.png", "w2"),
             (
                 "corruption.json",
-                r#"{"moods": {}, "wallpapers": {"1": "wallpaper2.png"}, "config": {}}"#,
+                r#"{"moods": {}, "wallpapers": {"1": "wallpaper2.png", "2": "wallpaper2.png"}, "config": {}}"#,
             ),
         ]);
         let output = convert(&source);
         let timeline = output.behaviour.experience.unwrap().timeline;
-        let tags = timeline.stages[0].content.wallpaper_tags.clone().unwrap();
-        assert_eq!(tags.len(), 1);
-        assert_ne!(tags[0], "wallpaper");
-        let entry = output
+        for stage in &timeline.stages {
+            assert_eq!(stage.content.wallpaper, Some("wallpaper2.png".to_string()));
+        }
+        // Two levels naming the same file is one import, not two.
+        let entries: Vec<_> = output
             .media
             .iter()
-            .find(|m| m.source_path == "wallpaper2.png")
-            .unwrap();
-        assert_eq!(entry.tags, tags);
+            .filter(|m| m.source_path == "wallpaper2.png")
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].tags, vec![NON_POPUP_TAG.to_string()]);
+    }
+
+    #[test]
+    fn no_synthetic_tags_are_minted_for_wallpapers() {
+        // The whole point of references: a pack's wallpapers land as plain names, and nothing
+        // resembling a mechanical `wallpaper`/`wallpaper-<n>` tag reaches the pack's namespace.
+        let (_dir, source) = source_with(&[
+            ("wallpaper.png", "w"),
+            ("loading_splash.gif", "s"),
+            ("wallpaper2.png", "w2"),
+            (
+                "corruption.json",
+                r#"{"moods": {}, "wallpapers": {"1": "wallpaper.png", "2": "wallpaper2.png"}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+
+        for item in &output.media {
+            for tag in &item.tags {
+                assert!(
+                    tag == NON_POPUP_TAG || !tag.starts_with("wallpaper") && tag != "splash",
+                    "unexpected mechanical tag {tag:?} on {}",
+                    item.source_path
+                );
+            }
+        }
+        let timeline = output.behaviour.experience.unwrap().timeline;
+        assert_eq!(
+            timeline.stages[0].content.wallpaper,
+            Some("wallpaper.png".to_string())
+        );
+        assert_eq!(
+            timeline.stages[1].content.wallpaper,
+            Some("wallpaper2.png".to_string())
+        );
     }
 
     #[test]
@@ -1551,7 +1601,7 @@ mod tests {
                 .any(|w| w.kind == WarningKind::UnreadableMediaFile)
         );
         let timeline = output.behaviour.experience.unwrap().timeline;
-        assert_eq!(timeline.stages[0].content.wallpaper_tags, None);
+        assert_eq!(timeline.stages[0].content.wallpaper, None);
     }
 
     #[test]
@@ -1640,43 +1690,45 @@ mod tests {
     }
 
     #[test]
-    fn level_wallpaper_tag_dodges_a_real_mood_of_the_same_name() {
-        // A pack whose own mood is literally named `wallpaper-1` (its media carries that tag). The
-        // minted override-wallpaper tag must not reuse it, or the level's wallpaper slot would pull
-        // from that mood's media.
+    fn a_mood_inside_the_reserved_namespace_is_escaped_everywhere_it_lands() {
+        // A pack whose own mood is literally named `__lewdware-non-popup`. Carried verbatim it
+        // would pull that mood's whole media set out of the popup pool -- mechanical meaning the
+        // author never asked for. Every place the name lands has to agree on the escaped form,
+        // or the level's mood delta stops matching its own media.
         let (_dir, source) = source_with(&[
             (
                 "index.json",
-                r#"{"moods": [{"mood": "wallpaper-1", "media": ["a.png"]}]}"#,
+                r#"{"moods": [{"mood": "__lewdware-non-popup", "media": ["a.png"]}]}"#,
             ),
             ("img/a.png", "a"),
-            ("wallpaper2.png", "w2"),
             (
                 "corruption.json",
-                r#"{"moods": {}, "wallpapers": {"1": "wallpaper2.png"}, "config": {}}"#,
+                r#"{"moods": {"1": {"add": ["__lewdware-non-popup"], "remove": []}}, "wallpapers": {}, "config": {}}"#,
             ),
         ]);
         let output = convert(&source);
 
-        let timeline = output.behaviour.experience.clone().unwrap().timeline;
-        assert_eq!(
-            timeline.stages[0].content.wallpaper_tags,
-            Some(vec!["wallpaper-2".to_string()]),
-            "the override wallpaper must skip the taken `wallpaper-1` and take `wallpaper-2`"
-        );
-        let entry = output
-            .media
-            .iter()
-            .find(|m| m.source_path == "wallpaper2.png")
-            .unwrap();
-        assert_eq!(entry.tags, vec!["wallpaper-2".to_string()]);
-        // The real mood's media keeps `wallpaper-1`, unshared with the wallpaper slot.
+        let escaped = "___lewdware-non-popup".to_string();
         let a = output
             .media
             .iter()
             .find(|m| m.suggested_name == "a.png")
             .unwrap();
-        assert_eq!(a.tags, vec!["wallpaper-1".to_string()]);
+        assert_eq!(a.tags, vec![escaped.clone()]);
+        assert_eq!(
+            output.behaviour.content.content_groups[0].tags,
+            vec![escaped.clone()]
+        );
+        let timeline = output.behaviour.experience.unwrap().timeline;
+        assert!(
+            timeline.stages[0]
+                .content
+                .tags
+                .as_ref()
+                .unwrap()
+                .contains(&escaped),
+            "the level's mood delta must name the escaped tag its media actually carries"
+        );
     }
 
     #[test]

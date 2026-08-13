@@ -518,6 +518,82 @@ mod tests {
         assert_eq!(name, "from-disk");
     }
 
+    /// A pack file holding one image, whose bytes really sit at the row's `offset`/`length` --
+    /// so `get_image_file` has something to extract. The `NamedTempFile` is returned because it
+    /// owns the pack file the `MediaPack` reads from.
+    fn pack_with_image_bytes(image: &[u8]) -> (NamedTempFile, MediaPack) {
+        let db = Connection::open_in_memory().unwrap();
+        migrate(&db).unwrap();
+        db.execute(
+            "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash)
+             VALUES ('pic.avif', 'image', 0, 0, 8, 8, 0, x'00')",
+            [],
+        )
+        .unwrap();
+
+        let metadata = Metadata {
+            name: "test-pack".to_string(),
+            ..Default::default()
+        };
+        let metadata_bytes = metadata.to_buf().unwrap();
+        let mut header = Header::new();
+        header.metadata_offset = HEADER_SIZE as u64;
+        header.metadata_length = metadata_bytes.len() as u64;
+        header.index_offset = header.metadata_offset + header.metadata_length;
+
+        // The index has to be sized before the image offset is known, and writing that offset
+        // back changes nothing about the index's size.
+        let db_bytes = db.serialize(MAIN_DB).unwrap();
+        header.index_length = db_bytes.len() as u64;
+        db.execute(
+            "UPDATE media SET offset = ?, length = ?",
+            params![
+                header.index_offset + header.index_length,
+                image.len() as u64
+            ],
+        )
+        .unwrap();
+        let db_bytes = db.serialize(MAIN_DB).unwrap();
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&header.to_buf().unwrap()).unwrap();
+        file.write_all(&metadata_bytes).unwrap();
+        file.write_all(&db_bytes).unwrap();
+        file.write_all(image).unwrap();
+        file.flush().unwrap();
+
+        let pack = MediaPack::open(file.path()).unwrap();
+        (file, pack)
+    }
+
+    /// Media lives inside the pack file, so handing it to anything outside the engine means
+    /// extracting it first -- and that extraction deletes itself when dropped.
+    ///
+    /// Every consumer that passes the *path* onwards rather than reading the bytes has to keep
+    /// the `FileOrPath` alive for as long as whatever it handed the path to will read it. The
+    /// wallpaper is the case that bites: each backend stores a path and reads it back later, so
+    /// dropping the temp file after setting it leaves the desktop pointing at nothing, with
+    /// nothing failing and nothing logged (see `LewdwareApp::wallpaper_file`).
+    #[tokio::test]
+    async fn an_extracted_image_file_only_exists_while_its_handle_does() {
+        let bytes = b"pretend avif";
+        let (_file, pack) = pack_with_image_bytes(bytes);
+
+        let path = {
+            let extracted = pack.get_image_file(1).await.unwrap();
+            let path = extracted.path().to_path_buf();
+            assert!(path.exists(), "the image should be readable while held");
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            path
+        };
+
+        assert!(
+            !path.exists(),
+            "dropping the handle must take the file with it -- callers that pass the path on \
+             have to outlive that drop"
+        );
+    }
+
     /// Builds a pack file on disk with a real (migrated) SQLite index, to check that
     /// `MediaPack::open`'s `deserialize_read_exact` round-trip actually produces a working,
     /// queryable database rather than just satisfying the type checker.

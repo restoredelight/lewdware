@@ -465,15 +465,22 @@ async fn import_edgeware_pack_dialog(
 
     let converter::ConversionOutput {
         metadata,
-        behaviour,
+        mut behaviour,
         media,
         icon: _,
         warnings,
     } = output;
 
-    // Written synchronously, before the pack is even stored in app state or the media pipeline
-    // spawned -- behaviour.json/metadata are keyed by tag, not by any specific media file's id, so
-    // they have no dependency on encoding having finished. This is what lets the pack editor's
+    // The wallpaper/splash slots are the one part that can't be written yet: they reference media
+    // by name, and a name isn't final until its file has been imported (a collision suffixes it,
+    // a duplicate or a failed encode means it never arrives at all). Held here and filled in by
+    // `run_import` once each file really exists, so the pack never carries a reference to
+    // something it doesn't have.
+    let media_references = behaviour.take_media_references();
+
+    // Everything else is written synchronously, before the pack is even stored in app state or
+    // the media pipeline spawned -- it's keyed by tag, not by any specific media file's id, so it
+    // has no dependency on encoding having finished. This is what lets the pack editor's
     // Content/Experience tabs show real converted data immediately, rather than only once a
     // (potentially large) media pipeline finishes streaming in.
     pack.set_pack_data(
@@ -509,6 +516,7 @@ async fn import_edgeware_pack_dialog(
         pack_state,
         Arc::from(source),
         media,
+        media_references,
         app,
         encoder,
         upload_lock,
@@ -808,12 +816,19 @@ async fn get_files(state: State<'_, AppState>) -> Result<Vec<MediaFile>, String>
 }
 
 #[tauri::command]
-async fn remove_files(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), String> {
+async fn remove_files(
+    state: State<'_, AppState>,
+    ids: Vec<u64>,
+) -> Result<Option<Behaviour>, String> {
     let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.remove_files(ids).await.map_err(|e| e.to_string())?;
+    match lock.as_ref() {
+        Some(pack) => pack
+            .remove_files(ids)
+            .await
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        None => Ok(None),
     }
-    Ok(())
 }
 
 // ── Embedded modes ──────────────────────────────────────────────────────────
@@ -891,13 +906,23 @@ async fn remove_mode(state: State<'_, AppState>, id: u64) -> Result<(), String> 
     Ok(())
 }
 
+/// Returns the behaviour because renaming a file moves any media slot pointing at it -- the
+/// frontend replaces its copy rather than re-fetching (same contract as the tag commands).
 #[tauri::command]
-async fn set_file_title(state: State<'_, AppState>, id: u64, name: String) -> Result<(), String> {
+async fn set_file_title(
+    state: State<'_, AppState>,
+    id: u64,
+    name: String,
+) -> Result<Option<Behaviour>, String> {
     let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        pack.set_title(id, name).await.map_err(|e| e.to_string())?;
+    match lock.as_ref() {
+        Some(pack) => pack
+            .set_title(id, name)
+            .await
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        None => Ok(None),
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -1249,6 +1274,120 @@ async fn set_behaviour(state: State<'_, AppState>, behaviour: Behaviour) -> Resu
     Ok(())
 }
 
+// ── Media slots ──────────────────────────────────────────────────────────────
+
+/// What filling a slot produced: the updated behaviour, plus the file the slot now points at so
+/// the media grid can show it without waiting for a refresh. `added` distinguishes a fresh
+/// import from a file the pack already had (see `AddOutcome`), which the grid already knows about.
+#[derive(Serialize)]
+struct SlotFilled {
+    behaviour: Behaviour,
+    file: MediaFile,
+    added: bool,
+}
+
+/// Picks one media file and puts it in `slot`. The picker is filtered to what the slot can
+/// actually use -- a wallpaper must be an image, a splash may also be a video -- since offering
+/// a file the feature would silently skip is the honesty problem `pack_has_*` exists to fix.
+#[tauri::command]
+async fn fill_media_slot_dialog(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    slot: shared::behaviour::MediaSlot,
+) -> Result<Option<SlotFilled>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (extensions, label): (&[&str], &str) = match slot {
+        shared::behaviour::MediaSlot::Splash => (
+            &["png", "jpg", "jpeg", "webp", "avif", "bmp", "gif", "mp4", "webm", "mkv", "mov"],
+            "Image or video",
+        ),
+        _ => (&["png", "jpg", "jpeg", "webp", "avif", "bmp"], "Image"),
+    };
+    let app_c = app.clone();
+    let picked = tokio::task::spawn_blocking(move || {
+        app_c
+            .dialog()
+            .file()
+            .set_title("Select a file")
+            .add_filter(label, extensions)
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let Some(handle) = picked else { return Ok(None) };
+    let path = handle.into_path().map_err(|e| e.to_string())?;
+
+    let encoder = state
+        .hardware_encoder
+        .get()
+        .cloned()
+        .unwrap_or(HardwareEncoder::SoftwareFallback);
+    let label = match slot {
+        shared::behaviour::MediaSlot::Splash => "Set splash",
+        _ => "Set wallpaper",
+    };
+    let (outcome, behaviour) = encode::process_file_into_slot(
+        &state.pack,
+        &path,
+        &app,
+        encoder,
+        &state.upload_lock,
+        slot,
+        label.to_string(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(Some(SlotFilled {
+        behaviour,
+        added: matches!(outcome, pack::AddOutcome::Added(_)),
+        file: outcome.file().clone(),
+    }))
+}
+
+/// What emptying a slot produced: the updated behaviour, and the file it deleted (if the file was
+/// only ever scenery -- see `MediaPack::clear_media_slot`) so the grid can drop it.
+#[derive(Serialize)]
+struct SlotCleared {
+    behaviour: Behaviour,
+    deleted_id: Option<u64>,
+}
+
+#[tauri::command]
+async fn clear_media_slot(
+    state: State<'_, AppState>,
+    slot: shared::behaviour::MediaSlot,
+) -> Result<Option<SlotCleared>, String> {
+    let lock = state.pack.lock().await;
+    let Some(pack) = lock.as_ref() else {
+        return Ok(None);
+    };
+    let (behaviour, deleted_id) = pack
+        .clear_media_slot(slot)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Some(SlotCleared {
+        behaviour,
+        deleted_id,
+    }))
+}
+
+#[tauri::command]
+async fn set_shown_as_popup(
+    state: State<'_, AppState>,
+    id: u64,
+    shown: bool,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.set_shown_as_popup(id, shown)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // ── Upload ───────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1539,6 +1678,9 @@ pub fn run() {
             mark_pack_unsaved,
             get_behaviour,
             set_behaviour,
+            fill_media_slot_dialog,
+            clear_media_slot,
+            set_shown_as_popup,
             add_files_dialog,
             add_folder_dialog,
             add_paths,
