@@ -181,22 +181,26 @@ async fn file_handler(
         },
     };
 
-    match view.get_file_range(id, range).await {
+    match view.open_file_range(id, range).await {
         Ok((dr, ft)) => {
-            let partial = requested_range || dr.end < dr.total_size;
+            // 206 only when the client asked for a range. A response to a range-less GET carries
+            // the whole file, so it is a 200 -- answering one with a 206 would be a client's cue
+            // to treat a partial body as everything there is.
             let mut builder = Response::builder()
-                .status(if partial { 206 } else { 200 })
+                .status(if requested_range { 206 } else { 200 })
                 .header("Content-Type", file_type_mime(ft))
                 .header("Accept-Ranges", "bytes")
-                .header("Content-Length", dr.data.len());
-            if partial {
+                .header("Content-Length", dr.len());
+            if requested_range {
                 // Successful ranges are always non-empty, so this subtraction is safe.
                 builder = builder.header(
                     "Content-Range",
                     format!("bytes {}-{}/{}", dr.start, dr.end - 1, dr.total_size),
                 );
             }
-            builder.body(axum::body::Body::from(dr.data)).unwrap()
+            builder
+                .body(axum::body::Body::from_stream(dr.into_stream()))
+                .unwrap()
         }
         Err(error) if error.is::<InvalidRange>() && requested_range => {
             (StatusCode::RANGE_NOT_SATISFIABLE, "Invalid range").into_response()

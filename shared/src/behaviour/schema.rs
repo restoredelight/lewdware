@@ -39,6 +39,24 @@ pub struct Content {
     pub splash: Option<String>,
 }
 
+impl Content {
+    /// Whether this document describes no content at all: no pools, no groups, and neither media
+    /// slot filled.
+    ///
+    /// `prompt_settings` is deliberately not consulted -- it configures how prompts are presented,
+    /// so it says nothing on its own about whether there are any.
+    pub fn is_empty(&self) -> bool {
+        self.content_groups.is_empty()
+            && self.captions.is_empty()
+            && self.prompts.is_empty()
+            && self.notifications.is_empty()
+            && self.subliminals.is_empty()
+            && self.web_links.is_empty()
+            && self.wallpaper.is_none()
+            && self.splash.is_none()
+    }
+}
+
 /// One place in a behaviour document that names a media file -- the address of a media slot,
 /// independent of what (if anything) currently fills it. See `Behaviour::take_media_references`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,7 +245,7 @@ impl Behaviour {
 
     /// Points `slot` at `name`, if that slot exists and is still empty.
     ///
-    /// Only-if-empty because filling a slot is the tail end of a long-running import, and the
+    /// Only-if-empty because a slot is filled part-way through a long-running import, and the
     /// Content tab is live throughout: a slot the author set themselves in the meantime is their
     /// answer, not one to overwrite. Returns whether it was filled.
     pub fn fill_media_reference(&mut self, slot: &MediaSlot, name: String) -> bool {

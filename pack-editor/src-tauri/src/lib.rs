@@ -1298,7 +1298,9 @@ async fn fill_media_slot_dialog(
     use tauri_plugin_dialog::DialogExt;
     let (extensions, label): (&[&str], &str) = match slot {
         shared::behaviour::MediaSlot::Splash => (
-            &["png", "jpg", "jpeg", "webp", "avif", "bmp", "gif", "mp4", "webm", "mkv", "mov"],
+            &[
+                "png", "jpg", "jpeg", "webp", "avif", "bmp", "gif", "mp4", "webm", "mkv", "mov",
+            ],
             "Image or video",
         ),
         _ => (&["png", "jpg", "jpeg", "webp", "avif", "bmp"], "Image"),
@@ -1315,7 +1317,9 @@ async fn fill_media_slot_dialog(
     .await
     .map_err(|e| e.to_string())?;
 
-    let Some(handle) = picked else { return Ok(None) };
+    let Some(handle) = picked else {
+        return Ok(None);
+    };
     let path = handle.into_path().map_err(|e| e.to_string())?;
 
     let encoder = state
@@ -1386,6 +1390,92 @@ async fn set_shown_as_popup(
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+// ── Subliminal pool ──────────────────────────────────────────────────────────
+
+/// Returns the ids it deleted -- media that was only ever a subliminal leaves with the pool (see
+/// `MediaPack::remove_from_subliminals`), and the grid has to drop those rows.
+#[tauri::command]
+async fn remove_from_subliminals(
+    state: State<'_, AppState>,
+    ids: Vec<u64>,
+) -> Result<Vec<u64>, String> {
+    let lock = state.pack.lock().await;
+    match lock.as_ref() {
+        Some(pack) => pack
+            .remove_from_subliminals(ids)
+            .await
+            .map_err(|e| e.to_string()),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Imports files straight into the subliminal pool -- the only way media joins it.
+///
+/// Unlike the media slots this takes several at once -- a pool is filled in handfuls -- so it
+/// reuses the same one-file-at-a-time pipeline in a loop rather than the bulk uploader, which
+/// reports through events and would leave us guessing which files landed. Files the pack already
+/// has come back as duplicates and join the pool without being imported twice.
+#[tauri::command]
+async fn add_subliminal_files_dialog(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Option<Vec<MediaFile>>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let app_c = app.clone();
+    let picked = tokio::task::spawn_blocking(move || {
+        app_c
+            .dialog()
+            .file()
+            .set_title("Select subliminals")
+            // Video first because that is what these are -- a hypno spiral is a loop. Stills are
+            // still accepted: a static overlay composites the same way.
+            .add_filter(
+                "Video or image",
+                &[
+                    "mp4", "webm", "mkv", "mov", "gif", "apng", "png", "jpg", "jpeg", "webp",
+                    "avif", "bmp",
+                ],
+            )
+            .blocking_pick_files()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let Some(handles) = picked else {
+        return Ok(None);
+    };
+    let paths: Vec<PathBuf> = handles
+        .into_iter()
+        .filter_map(|handle| handle.into_path().ok())
+        .collect();
+    if paths.is_empty() {
+        return Ok(None);
+    }
+
+    let encoder = state
+        .hardware_encoder
+        .get()
+        .cloned()
+        .unwrap_or(HardwareEncoder::SoftwareFallback);
+
+    let outcomes = encode::process_files_into_subliminals(
+        &state.pack,
+        &paths,
+        &app,
+        encoder,
+        &state.upload_lock,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(Some(
+        outcomes
+            .into_iter()
+            .map(|outcome| outcome.file().clone())
+            .collect(),
+    ))
 }
 
 // ── Upload ───────────────────────────────────────────────────────────────────
@@ -1678,6 +1768,8 @@ pub fn run() {
             mark_pack_unsaved,
             get_behaviour,
             set_behaviour,
+            remove_from_subliminals,
+            add_subliminal_files_dialog,
             fill_media_slot_dialog,
             clear_media_slot,
             set_shown_as_popup,

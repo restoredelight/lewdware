@@ -8,7 +8,7 @@
 	import Button from '$ui/Button.svelte';
 	import { api } from './api.js';
 	import { adoptBehaviour, flushBehaviourSave } from './behaviourSave.svelte.js';
-	import { openMediaPreview } from './mediaPreview.js';
+	import { openStandalonePreview } from './mediaPreview.js';
 	import { store } from './store.svelte.js';
 	import { taskFeedback } from './taskFeedback.svelte.js';
 	import type { MediaSlot } from './types.js';
@@ -83,7 +83,7 @@
 				type="button"
 				class="border-border bg-bg hover:border-[var(--color-border-strong)] flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-sm border transition-colors"
 				title="Preview"
-				onclick={() => openMediaPreview(file.id)}
+				onclick={() => openStandalonePreview(file.id)}
 			>
 				<img
 					src={store.mediaUrl(`/thumbnail/${file.id}`, file.hash)}

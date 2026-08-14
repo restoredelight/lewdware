@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -10,7 +10,7 @@ use shared::behaviour::{
 };
 use shared::behaviour::{Content, ContentGroup, PromptSettings, TextItem, WebLink};
 use shared::read_pack::{Metadata, RecommendedMode};
-use shared::tags::{self, NON_POPUP_TAG};
+use shared::tags::{self, NON_POPUP_TAG, SUBLIMINAL_TAG};
 
 /// An intermediate, cumulative-timeline-friendly shape the converter builds internally --
 /// mirrors the pre-Transitions "one flat, self-contained snapshot per level" schema, which is a
@@ -199,7 +199,7 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
     populate_web_links(&index, &mut content);
 
     let mut media = Vec::new();
-    discover_media(source, &index, &mut content, &mut media, &mut warnings);
+    discover_media(source, &index, &mut content, &mut media);
 
     let experience = build_experience(
         &corruption_levels,
@@ -209,6 +209,10 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
         &mut media,
         &mut warnings,
     );
+    // After `build_experience`, so a file the timeline's stages pull in counts as converted --
+    // see `warn_untagged_media_moods`.
+    warn_untagged_media_moods(&index, &media, &mut warnings);
+
     // More than just the baseline level means the pack actually designs an escalating arc, not
     // just a static config.json-derived pace -- see `build_experience`.
     let has_timeline = experience
@@ -224,17 +228,40 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
         .file_exists("icon.ico")
         .then(|| "icon.ico".to_string());
 
+    let behaviour = Behaviour {
+        content,
+        experience,
+        ..Behaviour::new()
+    };
+    prioritize_referenced_media(&behaviour, &mut media);
+
     ConversionOutput {
         metadata,
-        behaviour: Behaviour {
-            content,
-            experience,
-            ..Behaviour::new()
-        },
+        behaviour,
         media,
         icon,
         warnings,
     }
+}
+
+/// Moves the media the behaviour document names -- the wallpaper, the splash, each timeline
+/// stage's wallpaper -- to the front of the import order.
+///
+/// The front end imports `media` in order, so this decides what the author is waiting on. A pack's
+/// popups number in the thousands and none of them is referenced by name; the handful of files the
+/// Content and Timeline tabs point at are, and until one arrives its slot sits empty (see the pack
+/// editor's `fill_slots_for`, which fills each slot the moment its own file lands) while those
+/// tabs show an editable document referring to media the pack doesn't have yet. Importing them
+/// first shrinks that window from the length of the whole import to the length of one file.
+///
+/// Stable within each group: nothing else about the order is meaningful, and leaving it otherwise
+/// untouched keeps the golden fixtures readable as "the order they were discovered in".
+fn prioritize_referenced_media(behaviour: &Behaviour, media: &mut [ConvertedMedia]) {
+    let referenced: HashSet<&str> = behaviour.referenced_media_names().into_iter().collect();
+    if referenced.is_empty() {
+        return;
+    }
+    media.sort_by_key(|item| !referenced.contains(item.suggested_name.as_str()));
 }
 
 fn build_metadata(info: InfoJson, has_timeline: bool) -> Metadata {
@@ -378,31 +405,93 @@ fn populate_web_links(index: &EdgewareIndex, content: &mut Content) {
 }
 
 const MEDIA_DIRS: &[&str] = &["img", "vid", "aud"];
-const SPLASH_CANDIDATES: &[&str] = &[
-    "loading_splash.png",
-    "loading_splash.gif",
-    "loading_splash.jpg",
-    "loading_splash.jpeg",
-    "loading_splash.bmp",
-];
+/// Extensions Edgeware accepts for the startup splash, in its own preference order (see
+/// `EdgewarePlusPlus/edgeware/src/paths.py`). Unlike the wallpaper this one may be animated, so
+/// `gif` belongs here.
+const SPLASH_EXTENSIONS: &[&str] = &["png", "gif", "jpg", "jpeg", "bmp"];
+
+/// The only wallpaper filename Edgeware itself recognizes (see `edgeware/src/paths.py`:
+/// `self.wallpaper = self.root / "wallpaper.png"`), and so the one to prefer when a pack somehow
+/// ships several candidates.
+const PRIMARY_WALLPAPER: &str = "wallpaper.png";
+/// Extensions accepted for a wallpaper found by the case/extension-insensitive fallback below.
+/// Deliberately no `gif`: an animated one probes as a video once encoded, which would fill the
+/// slot with something `pack_has_wallpaper` then reports as absent (see
+/// `shared::behaviour::resolver`) -- a slot that silently does nothing is worse than no slot.
+const WALLPAPER_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "webp"];
+
+/// Finds the pack's wallpaper, tolerating the casing and extension real packs actually use.
+///
+/// Edgeware only ever looks for exactly `wallpaper.png`, so a pack shipping `Wallpaper.jpg` has no
+/// working wallpaper there at all. Matching it anyway is a deliberate improvement on the source
+/// behaviour rather than a fidelity break: the author plainly meant that file to be the wallpaper,
+/// and the alternative is dropping it silently.
+///
+/// Only the stem `wallpaper` counts -- the numbered spares packs like to leave in the root
+/// (`Wallpaper (2).jpg`) are extras, not the pick, and there is exactly one slot for them to fill.
+fn find_wallpaper(source: &dyn PackSource) -> Option<String> {
+    if source.file_exists(PRIMARY_WALLPAPER) {
+        return Some(PRIMARY_WALLPAPER.to_string());
+    }
+
+    // `list_dir` is sorted, so the first match is a stable pick when a pack ships more than one
+    // spelling (e.g. both `Wallpaper.jpg` and `wallpaper.webp`).
+    source.list_dir("").into_iter().find(|name| {
+        let Some((stem, extension)) = name.rsplit_once('.') else {
+            return false;
+        };
+        stem.eq_ignore_ascii_case("wallpaper")
+            && WALLPAPER_EXTENSIONS
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    })
+}
+
+/// Finds the pack's startup splash, tolerating casing the same way `find_wallpaper` does -- real
+/// packs ship `Loading_splash.png` as readily as `loading_splash.png`.
+fn find_splash(source: &dyn PackSource) -> Option<String> {
+    let entries = source.list_dir("");
+    SPLASH_EXTENSIONS.iter().find_map(|extension| {
+        let wanted = format!("loading_splash.{extension}");
+        entries
+            .iter()
+            .find(|name| name.eq_ignore_ascii_case(&wanted))
+            .cloned()
+    })
+}
+
+/// `media_moods`, keyed so a reference finds its file whatever either one's capitalization.
+///
+/// Same reason as `RootFiles`: packs are authored on Windows, so a `media.json` listing
+/// `Image1.PNG` alongside a file called `image1.png` is a disagreement nobody there can see. Read
+/// case-sensitively, that file silently loses its mood -- it converts, untagged, into no content
+/// group at all.
+///
+/// Built from the keys in sorted order so that a pack holding two entries differing only in case
+/// resolves the same way on every run (`media_moods` is a `HashMap`).
+fn media_moods_by_lowercase(index: &EdgewareIndex) -> HashMap<String, &String> {
+    let mut entries: Vec<(&String, &String)> = index.media_moods.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    let mut lookup = HashMap::new();
+    for (file, mood) in entries {
+        lookup.entry(file.to_ascii_lowercase()).or_insert(mood);
+    }
+    lookup
+}
 
 fn discover_media(
     source: &dyn PackSource,
     index: &EdgewareIndex,
     content: &mut Content,
     media: &mut Vec<ConvertedMedia>,
-    warnings: &mut Vec<Warning>,
 ) {
-    let mut discovered_files: HashSet<String> = HashSet::new();
+    let moods = media_moods_by_lowercase(index);
 
     for dir in MEDIA_DIRS {
         for file in source.list_dir(dir) {
-            discovered_files.insert(file.clone());
-            let tags = index
-                .media_moods
-                .get(&file)
-                .cloned()
-                .map(|mood| vec![mood])
+            let tags = moods
+                .get(&file.to_ascii_lowercase())
+                .map(|mood| vec![(*mood).clone()])
                 .unwrap_or_default();
             media.push(ConvertedMedia {
                 source_path: format!("{dir}/{file}"),
@@ -412,24 +501,19 @@ fn discover_media(
         }
     }
 
-    // A `media_moods` entry that names a file never actually found under img/vid/aud -- warn,
-    // sorted for deterministic output (`index.media_moods` is a HashMap).
-    let mut missing: Vec<(&String, &String)> = index
-        .media_moods
-        .iter()
-        .filter(|(file, _)| !discovered_files.contains(*file))
-        .collect();
-    missing.sort_by(|a, b| a.0.cmp(b.0));
-    for (file, mood) in missing {
-        warnings.push(Warning::new(
-            WarningKind::UnreadableMediaFile,
-            format!("\"{file}\" (tagged \"{mood}\") is referenced but wasn't found in img/vid/aud"),
-        ));
-    }
-
-    // `hypno/` (or the legacy `subliminals/` dir, if `hypno/` is empty or absent) -- every file
-    // tagged `"hypno"`, per the concept-mapping table in
-    // `behaviour-design/edgeware-compat.md`.
+    // `hypno/` (or the legacy `subliminals/` dir, if `hypno/` is empty or absent) -- the
+    // transparent overlays Edgeware draws over a popup at low opacity (`hypno_chance`/
+    // `hypno_opacity`, stored under the telling names `subliminalsChance`/`subliminalsAlpha`).
+    // That is the pack editor's subliminal pool, so these go straight into it rather than into
+    // the popup pool: a spiral was never popup content in Edgeware either, and importing one as
+    // an ordinary popup shows the author a window full of half-transparent spiral where the pack
+    // meant an overlay.
+    //
+    // Both managed tags, exactly what the editor writes when an author adds subliminals
+    // themselves (`add_to_pool_tx` in the pack editor's `pack.rs`) -- pool membership, plus the
+    // marker keeping scenery out of the popup pool. Nothing distinguishes a converted subliminal
+    // from a natively-added one, including the author's ability to un-mark one ("show in popups")
+    // and keep it a subliminal.
     let hypno = source.list_dir("hypno");
     let (hypno_dir, hypno_files) = if hypno.is_empty() {
         ("subliminals", source.list_dir("subliminals"))
@@ -440,32 +524,29 @@ fn discover_media(
         media.push(ConvertedMedia {
             source_path: format!("{hypno_dir}/{file}"),
             suggested_name: file,
-            tags: vec!["hypno".to_string()],
+            tags: vec![SUBLIMINAL_TAG.to_string(), NON_POPUP_TAG.to_string()],
         });
     }
 
     // Wallpaper and splash fill their behaviour slots by name -- Edgeware has exactly one of
     // each, so there was never a set for a tag to stand for. The only tag they carry is the
     // marker keeping scenery out of the popup pool.
-    if source.file_exists("wallpaper.png") {
+    if let Some(wallpaper) = find_wallpaper(source) {
         media.push(ConvertedMedia {
-            source_path: "wallpaper.png".to_string(),
-            suggested_name: "wallpaper.png".to_string(),
+            source_path: wallpaper.clone(),
+            suggested_name: wallpaper.clone(),
             tags: vec![NON_POPUP_TAG.to_string()],
         });
-        content.wallpaper = Some("wallpaper.png".to_string());
+        content.wallpaper = Some(wallpaper);
     }
 
-    if let Some(splash) = SPLASH_CANDIDATES
-        .iter()
-        .find(|name| source.file_exists(name))
-    {
+    if let Some(splash) = find_splash(source) {
         media.push(ConvertedMedia {
-            source_path: splash.to_string(),
-            suggested_name: splash.to_string(),
+            source_path: splash.clone(),
+            suggested_name: splash.clone(),
             tags: vec![NON_POPUP_TAG.to_string()],
         });
-        content.splash = Some(splash.to_string());
+        content.splash = Some(splash);
     }
 }
 
@@ -651,11 +732,14 @@ fn resolve_anchor_series(
 /// frequency either -- media type is a toggle, not a rate), and Edgeware's own real default for
 /// this pair is genuinely *on* (`assets/default_config.json`: `popupMod: 100, vidMod: 10`), unlike
 /// every other anchor key -- so when neither key appears anywhere, the "no signal -> fall back to
-/// content presence" branch checks `has_media` (any media at all) rather than a specific content
-/// pool, and assumes Edgeware's own real default pace rather than a made-up one.
+/// content presence" branch checks `has_popup_media` rather than a specific content pool, and
+/// assumes Edgeware's own real default pace rather than a made-up one.
+///
+/// *Popup* media, not any media: the wallpaper, the splash and the subliminal spirals are all
+/// marked non-popup by `discover_media`, and a pack holding nothing else has no popups to pace.
 fn resolve_popup_anchor_series(
     delay_ms: f64,
-    has_media: bool,
+    has_popup_media: bool,
     global_config: &Map<String, Value>,
     corruption_levels: &[CorruptionLevel],
 ) -> Vec<Option<f64>> {
@@ -668,7 +752,7 @@ fn resolve_popup_anchor_series(
     if !explicit_anywhere {
         let default_period =
             chance_to_period_seconds(delay_ms, DEFAULT_POPUP_MOD + DEFAULT_VID_MOD);
-        let value = has_media.then_some(default_period).flatten();
+        let value = has_popup_media.then_some(default_period).flatten();
         return vec![value; corruption_levels.len().max(1)];
     }
 
@@ -719,8 +803,8 @@ fn build_timeline(
     anchors: &AnchorSeries,
     config: &Map<String, Value>,
     source: &dyn PackSource,
+    content: &Content,
     media: &mut Vec<ConvertedMedia>,
-    reserved: &HashSet<String>,
     warnings: &mut Vec<Warning>,
 ) -> Vec<Level> {
     if levels.is_empty() {
@@ -730,7 +814,7 @@ fn build_timeline(
     // Corruption moods only ever named in `corruption.json`'s add/remove lists (a mood with no
     // media or text of its own, so absent from `collect_reserved_tags`' content/media scan) are
     // still part of the tag namespace the synthetic tags must dodge -- fold them in here.
-    let mut reserved = reserved.clone();
+    let mut reserved = collect_reserved_tags(content, media);
     for level in levels {
         reserved.extend(level.added_moods.iter().cloned());
         reserved.extend(level.removed_moods.iter().cloned());
@@ -778,7 +862,12 @@ fn build_timeline(
         active.insert(moodless_tag);
     }
 
-    let mut imported_wallpapers: HashSet<String> = HashSet::new();
+    let root = RootFiles::read(source);
+
+    // Seeded with the pack's primary wallpaper: `discover_media` already added it to `media`, and
+    // levels reusing it (Edgeware's ordinary case) must not import it a second time.
+    let mut imported_wallpapers: HashSet<String> =
+        content.wallpaper.iter().cloned().collect();
 
     levels
         .iter()
@@ -811,7 +900,7 @@ fn build_timeline(
             }
 
             let wallpaper = level.wallpaper.as_ref().and_then(|file| {
-                resolve_wallpaper(file, source, media, &mut imported_wallpapers, warnings)
+                resolve_wallpaper(file, &root, media, &mut imported_wallpapers, warnings)
             });
 
             Level {
@@ -842,40 +931,105 @@ fn build_timeline(
         .collect()
 }
 
+/// Warns about a `media_moods` entry naming a file the conversion never took in.
+///
+/// Deliberately checked against everything that ended up in `media`, at the end, rather than
+/// against the media directories while they're being scanned: a pack routinely tags files it
+/// keeps in the root, and those are picked up later as the wallpaper, the splash or a timeline
+/// stage's wallpaper. Warning during the scan reported them as lost when they had simply not been
+/// reached yet -- on a pack driving Edgeware's wallpaper rotation through a `"wallpapers"` mood,
+/// that was every one of its wallpapers, all of which converted fine.
+///
+/// What survives is the real case: a mood naming a file that isn't in the pack at all. The file
+/// keeps its mood in the pack's own JSON either way; there is simply nothing to attach it to.
+///
+/// Matched the way `media_moods_by_lowercase` matches, so that the warning and the tagging never
+/// disagree -- a reference resolved for one has to count as resolved for the other, or a file
+/// would lose its mood without anything saying so.
+fn warn_untagged_media_moods(
+    index: &EdgewareIndex,
+    media: &[ConvertedMedia],
+    warnings: &mut Vec<Warning>,
+) {
+    let converted: HashSet<String> = media
+        .iter()
+        .map(|item| item.suggested_name.to_ascii_lowercase())
+        .collect();
+    // Sorted for deterministic output -- `index.media_moods` is a HashMap.
+    let mut missing: Vec<(&String, &String)> = index
+        .media_moods
+        .iter()
+        .filter(|(file, _)| !converted.contains(&file.to_ascii_lowercase()))
+        .collect();
+    missing.sort_by(|a, b| a.0.cmp(b.0));
+    for (file, mood) in missing {
+        warnings.push(Warning::new(
+            WarningKind::UnreadableMediaFile,
+            format!("\"{file}\" (tagged \"{mood}\") is referenced but isn't in the pack"),
+        ));
+    }
+}
+
+/// The pack root's file names, for resolving a JSON reference whose spelling doesn't match the
+/// file's.
+///
+/// Packs are overwhelmingly authored on Windows, where the filesystem doesn't care: a
+/// `corruption.json` naming `wallpaper.png` finds `Wallpaper.png` and nobody ever notices the
+/// disagreement. On a case-sensitive filesystem -- or reading straight out of a zip, which is what
+/// the converter does -- the same pack loses every one of those references.
+struct RootFiles(Vec<String>);
+
+impl RootFiles {
+    fn read(source: &dyn PackSource) -> Self {
+        Self(source.list_dir(""))
+    }
+
+    /// The file `wanted` names, preferring an exact match so a root holding both spellings still
+    /// resolves each of them to itself.
+    fn resolve(&self, wanted: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|name| *name == wanted)
+            .or_else(|| self.0.iter().find(|name| name.eq_ignore_ascii_case(wanted)))
+            .map(String::as_str)
+    }
+}
+
 /// Resolves one corruption level's wallpaper filename to the media name its stage references,
-/// adding a `ConvertedMedia` entry the first time a given filename is seen.
+/// adding a `ConvertedMedia` entry the first time a given file is seen.
 ///
 /// A stage's wallpaper is one file, so the filename *is* the reference -- no synthetic tag to
 /// mint, and nothing to garbage-collect when a stage is later deleted. Reusing the same
-/// wallpaper across levels is Edgeware's ordinary case (`"wallpaper.png"` especially, which
-/// `discover_media` already added as the pack's primary), so `seen` keeps that from importing
-/// the same file twice. Returns `None` -- no override, meaning the previous level's wallpaper or
-/// `Content::wallpaper` stays in effect -- if the referenced file doesn't exist, after warning.
+/// wallpaper across levels is Edgeware's ordinary case (the pack's primary especially, which
+/// `discover_media` already added and `build_timeline` pre-seeds into `seen`), so `seen` keeps
+/// that from importing the same file twice -- and because both go through `RootFiles`, the two
+/// agree even when `corruption.json` and the file on disk disagree about capitalization.
+///
+/// Returns `None` -- no override, meaning the previous level's wallpaper or `Content::wallpaper`
+/// stays in effect -- if the referenced file doesn't exist, after warning.
 fn resolve_wallpaper(
     file: &str,
-    source: &dyn PackSource,
+    root: &RootFiles,
     media: &mut Vec<ConvertedMedia>,
     seen: &mut HashSet<String>,
     warnings: &mut Vec<Warning>,
 ) -> Option<String> {
-    if !source.file_exists(file) {
+    let Some(name) = root.resolve(file) else {
         warnings.push(Warning::new(
             WarningKind::UnreadableMediaFile,
             format!("corruption.json references wallpaper \"{file}\" which wasn't found"),
         ));
         return None;
-    }
+    };
 
-    // `"wallpaper.png"` is already in `media` -- `discover_media` added it as the pack's primary
-    // wallpaper before any level was looked at.
-    if file != "wallpaper.png" && seen.insert(file.to_string()) {
+    if seen.insert(name.to_string()) {
         media.push(ConvertedMedia {
-            source_path: file.to_string(),
-            suggested_name: file.to_string(),
+            source_path: name.to_string(),
+            suggested_name: name.to_string(),
             tags: vec![NON_POPUP_TAG.to_string()],
         });
     }
-    Some(file.to_string())
+    Some(name.to_string())
 }
 
 /// `corruption.json`/`config.json` -> `behaviour.experience`. `None` (not
@@ -896,8 +1050,12 @@ fn build_experience(
         .unwrap_or(DEFAULT_DELAY_MS)
         .max(1.0);
 
+    let has_popup_media = media
+        .iter()
+        .any(|item| !item.tags.iter().any(|tag| tag == NON_POPUP_TAG));
+
     let anchors = AnchorSeries {
-        popup: resolve_popup_anchor_series(delay_ms, !media.is_empty(), config, corruption_levels),
+        popup: resolve_popup_anchor_series(delay_ms, has_popup_media, config, corruption_levels),
         web: resolve_anchor_series(
             "webMod",
             delay_ms,
@@ -958,14 +1116,13 @@ fn build_experience(
             wallpaper: None,
         }]
     } else {
-        let reserved = collect_reserved_tags(content, media);
         build_timeline(
             corruption_levels,
             &anchors,
             config,
             source,
+            content,
             media,
-            &reserved,
             warnings,
         )
     };
@@ -975,8 +1132,8 @@ fn build_experience(
 
 /// Every tag already live in the converted pack's flat tag namespace: the Edgeware mood names
 /// (carried as media tags and content-group filter tags -- the slugified `ContentGroup.id` is
-/// only a key, never a filter) plus the built-in `hypno` tag and the managed marker
-/// `discover_media` assigns. `build_timeline` mints its synthetic `corruption-moodless` tag into
+/// only a key, never a filter) plus the managed markers `discover_media` assigns.
+/// `build_timeline` mints its synthetic `corruption-moodless` tag into
 /// this same namespace, so it consults this set to guarantee it never aliases a tag the pack
 /// itself uses -- otherwise a mood named `corruption-moodless` would let an unrelated mood change
 /// drop the mood-less media the tag exists to protect.
@@ -1104,6 +1261,85 @@ mod tests {
         );
     }
 
+    /// Packs drive Edgeware's wallpaper rotation by giving the wallpapers a mood of their own, so
+    /// the files a `media_moods` entry names are routinely in the pack root rather than under
+    /// `img/vid/aud`. They convert -- as the wallpaper slot and as the timeline's stage
+    /// wallpapers -- so reporting them as missing named every wallpaper in the pack as lost.
+    #[test]
+    fn a_mood_naming_media_converted_as_scenery_does_not_warn() {
+        let (_dir, source) = source_with(&[
+            ("img/a.png", "a"),
+            ("wallpaper.png", "w1"),
+            ("wallpaper2.png", "w2"),
+            ("loading_splash.png", "s"),
+            (
+                "media.json",
+                r#"{"wallpapers": ["wallpaper.png", "wallpaper2.png", "loading_splash.png"],
+                    "vanilla": ["a.png"]}"#,
+            ),
+            (
+                "corruption.json",
+                r#"{"moods": {}, "wallpapers": {"1": "wallpaper.png", "2": "wallpaper2.png"}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+
+        assert!(
+            !output
+                .warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::UnreadableMediaFile),
+            "{:#?}",
+            output.warnings
+        );
+    }
+
+    /// Windows again: a `media.json` naming `Image1.PNG` for a file called `image1.png` is a
+    /// disagreement its author cannot see. Read case-sensitively the file converts untagged, into
+    /// no content group at all, and nothing says so.
+    #[test]
+    fn a_mood_finds_its_media_across_a_casing_mismatch() {
+        let (_dir, source) = source_with(&[
+            ("img/image1.png", "a"),
+            ("media.json", r#"{"vanilla": ["Image1.PNG"]}"#),
+        ]);
+        let output = convert(&source);
+
+        let tagged = output
+            .media
+            .iter()
+            .find(|m| m.suggested_name == "image1.png")
+            .expect("the file converts");
+        assert_eq!(tagged.tags, vec!["vanilla".to_string()]);
+        assert!(
+            !output
+                .warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::UnreadableMediaFile),
+            "{:#?}",
+            output.warnings
+        );
+    }
+
+    /// ...but a mood naming a file that really is absent still does.
+    #[test]
+    fn a_mood_naming_media_that_is_nowhere_still_warns() {
+        let (_dir, source) = source_with(&[
+            ("img/a.png", "a"),
+            ("media.json", r#"{"vanilla": ["a.png", "gone.png"]}"#),
+        ]);
+        let output = convert(&source);
+
+        let messages: Vec<&str> = output
+            .warnings
+            .iter()
+            .filter(|w| w.kind == WarningKind::UnreadableMediaFile)
+            .map(|w| w.message.as_str())
+            .collect();
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(messages[0].contains("gone.png"), "{messages:?}");
+    }
+
     #[test]
     fn wallpaper_and_splash_fill_their_slots_and_are_kept_out_of_popups() {
         let (_dir, source) = source_with(&[("wallpaper.png", "w"), ("loading_splash.gif", "s")]);
@@ -1131,6 +1367,173 @@ mod tests {
     }
 
     #[test]
+    fn wallpaper_slot_tolerates_casing_and_extension() {
+        // A real pack (FeetWare V2) ships exactly this: capital W, `.jpg`, plus numbered spares.
+        let (_dir, source) = source_with(&[
+            ("Wallpaper.jpg", "w"),
+            ("Wallpaper (2).jpg", "spare"),
+            ("Wallpaper (3).png", "spare"),
+        ]);
+        let output = convert(&source);
+        assert_eq!(
+            output.behaviour.content.wallpaper,
+            Some("Wallpaper.jpg".to_string())
+        );
+        // The spares aren't the pick and aren't imported -- there is one slot.
+        assert!(
+            !output
+                .media
+                .iter()
+                .any(|m| m.source_path.starts_with("Wallpaper ("))
+        );
+    }
+
+    #[test]
+    fn wallpaper_slot_prefers_edgewares_own_filename() {
+        let (_dir, source) = source_with(&[("Wallpaper.jpg", "w"), ("wallpaper.png", "w")]);
+        let output = convert(&source);
+        assert_eq!(
+            output.behaviour.content.wallpaper,
+            Some("wallpaper.png".to_string())
+        );
+    }
+
+    #[test]
+    fn wallpaper_slot_ignores_non_image_extensions() {
+        let (_dir, source) = source_with(&[("wallpaper.mp4", "w"), ("wallpaper.gif", "w")]);
+        let output = convert(&source);
+        assert_eq!(output.behaviour.content.wallpaper, None);
+    }
+
+    #[test]
+    fn corruption_level_reusing_the_primary_wallpaper_imports_it_once() {
+        let (_dir, source) = source_with(&[
+            ("Wallpaper.jpg", "w"),
+            (
+                "corruption.json",
+                r#"{"moods": {}, "wallpapers": {"1": "Wallpaper.jpg"}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+        assert_eq!(
+            output
+                .media
+                .iter()
+                .filter(|m| m.source_path == "Wallpaper.jpg")
+                .count(),
+            1
+        );
+    }
+
+    /// Packs are authored on Windows, where `corruption.json` naming `wallpaper.png` finds
+    /// `Wallpaper.png` and the disagreement never surfaces. Dropping those levels' wallpapers on a
+    /// case-sensitive read would lose a feature Lewdware does support, over spelling.
+    #[test]
+    fn corruption_wallpapers_resolve_across_a_casing_mismatch() {
+        let (_dir, source) = source_with(&[
+            ("img/a.png", "a"),
+            ("Wallpaper.png", "w1"),
+            ("Wallpaper2.png", "w2"),
+            (
+                "corruption.json",
+                r#"{"moods": {}, "wallpapers": {"1": "wallpaper.png", "2": "wallpaper2.png"}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+
+        assert!(
+            !output
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("wasn't found")),
+            "{:#?}",
+            output.warnings
+        );
+        let stages = &output.behaviour.experience.as_ref().unwrap().timeline.stages;
+        assert_eq!(stages[0].content.wallpaper.as_deref(), Some("Wallpaper.png"));
+        assert_eq!(
+            stages[1].content.wallpaper.as_deref(),
+            Some("Wallpaper2.png")
+        );
+        // The stage reference and `discover_media`'s primary agree, so it is imported once.
+        assert_eq!(
+            output
+                .media
+                .iter()
+                .filter(|m| m.source_path == "Wallpaper.png")
+                .count(),
+            1
+        );
+    }
+
+    /// An exact match still wins, so a root holding both spellings resolves each to itself rather
+    /// than collapsing them onto whichever the listing happens to reach first.
+    #[test]
+    fn an_exactly_matching_wallpaper_wins_over_a_casing_variant() {
+        let (_dir, source) = source_with(&[
+            ("Wallpaper2.png", "upper"),
+            ("wallpaper2.png", "lower"),
+            (
+                "corruption.json",
+                r#"{"moods": {}, "wallpapers": {"1": "wallpaper2.png"}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+
+        let stages = &output.behaviour.experience.as_ref().unwrap().timeline.stages;
+        assert_eq!(
+            stages[0].content.wallpaper.as_deref(),
+            Some("wallpaper2.png")
+        );
+    }
+
+    /// Import order is what the author waits on: the few files the Content and Timeline tabs
+    /// name go first, ahead of a pack's thousands of popups.
+    #[test]
+    fn media_the_behaviour_names_is_imported_first() {
+        let (_dir, source) = source_with(&[
+            ("img/a.png", "a"),
+            ("img/b.png", "b"),
+            ("wallpaper.png", "w"),
+            ("loading_splash.gif", "s"),
+            ("level2.png", "l2"),
+            (
+                "corruption.json",
+                r#"{"moods": {}, "wallpapers": {"1": "wallpaper.png", "2": "level2.png"}, "config": {}}"#,
+            ),
+        ]);
+        let output = convert(&source);
+
+        // Deduplicated: one file may fill several slots, and the pack wallpaper reused by a stage
+        // is Edgeware's ordinary case.
+        let referenced: HashSet<&str> = output
+            .behaviour
+            .referenced_media_names()
+            .into_iter()
+            .collect();
+        let ordered: Vec<&str> = output
+            .media
+            .iter()
+            .map(|m| m.suggested_name.as_str())
+            .collect();
+        let first_popup = ordered
+            .iter()
+            .position(|name| !referenced.contains(name))
+            .expect("the fixture has popup media");
+
+        for name in &ordered[..first_popup] {
+            assert!(referenced.contains(name), "{name} is not referenced");
+        }
+        assert_eq!(
+            first_popup,
+            referenced.len(),
+            "every referenced file should come first, got {ordered:?}"
+        );
+        // Untouched within each group -- discovery order still reads as discovery order.
+        assert_eq!(&ordered[first_popup..], &["a.png", "b.png"]);
+    }
+
+    #[test]
     fn hypno_falls_back_to_legacy_subliminals_dir() {
         let (_dir, source) = source_with(&[("subliminals/x.gif", "x")]);
         let output = convert(&source);
@@ -1140,7 +1543,53 @@ mod tests {
             .find(|m| m.suggested_name == "x.gif")
             .unwrap();
         assert_eq!(entry.source_path, "subliminals/x.gif");
-        assert_eq!(entry.tags, vec!["hypno".to_string()]);
+    }
+
+    /// Both directories land in the subliminal pool rather than the popup pool -- the whole point
+    /// of an Edgeware hypno gif is that it's drawn *over* a popup.
+    #[test]
+    fn hypno_media_joins_the_subliminal_pool_and_stays_out_of_popups() {
+        for dir in ["hypno", "subliminals"] {
+            let (_dir, source) = source_with(&[
+                ("img/a.png", "a"),
+                (&format!("{dir}/spiral.gif"), "spiral"),
+            ]);
+            let output = convert(&source);
+            let entry = output
+                .media
+                .iter()
+                .find(|m| m.suggested_name == "spiral.gif")
+                .unwrap();
+            assert_eq!(
+                entry.tags,
+                vec![SUBLIMINAL_TAG.to_string(), NON_POPUP_TAG.to_string()],
+                "{dir}/ should convert into the subliminal pool"
+            );
+            // Ordinary popup media is untouched by any of this.
+            let popup = output
+                .media
+                .iter()
+                .find(|m| m.suggested_name == "a.png")
+                .unwrap();
+            assert!(popup.tags.is_empty());
+        }
+    }
+
+    /// Scenery and spirals aren't popups, so a pack made only of them has no popup pace to set --
+    /// otherwise the timeline promises popups the pack can't spawn.
+    #[test]
+    fn popup_anchor_ignores_non_popup_media() {
+        let (_dir, source) = source_with(&[("hypno/spiral.gif", "spiral"), ("wallpaper.png", "w")]);
+        let output = convert(&source);
+        let popup_anchor = output.behaviour.experience.as_ref().map(|experience| {
+            anchor_seconds(&experience.timeline.stages[0].events.popup).is_some()
+        });
+        assert_ne!(popup_anchor, Some(true));
+
+        let (_dir2, source2) = source_with(&[("hypno/spiral.gif", "spiral"), ("img/a.png", "a")]);
+        let output2 = convert(&source2);
+        let experience = output2.behaviour.experience.unwrap();
+        assert!(anchor_seconds(&experience.timeline.stages[0].events.popup).is_some());
     }
 
     #[test]

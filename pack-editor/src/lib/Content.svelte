@@ -6,6 +6,8 @@
 	import TextPoolEditor from './TextPoolEditor.svelte';
 	import ContentGroupsEditor from './ContentGroupsEditor.svelte';
 	import MediaSlot from './MediaSlot.svelte';
+	import SubliminalPool from './SubliminalPool.svelte';
+	import { SUBLIMINAL_TAG } from './tags.js';
 	import WebLinksEditor from './WebLinksEditor.svelte';
 	import Tabs from '$ui/Tabs.svelte';
 	import {
@@ -16,6 +18,12 @@
 
 	type Tab =
 		'groups' | 'captions' | 'prompts' | 'notifications' | 'subliminals' | 'web_links' | 'wallpaper';
+
+	// The subliminal pool is media, not a behaviour field: membership is the managed tag every
+	// file already carries in `store.files`, so the count is a filter rather than a query.
+	const subliminalCount = $derived(
+		store.files.filter((file) => file.tags.includes(SUBLIMINAL_TAG)).length
+	);
 
 	const tabs = $derived<{ id: Tab; label: string; group: string; badge?: number }[]>([
 		{
@@ -46,7 +54,7 @@
 			id: 'subliminals',
 			label: 'Subliminals',
 			group: 'Messages',
-			badge: store.behaviour?.content.subliminals.length
+			badge: subliminalCount
 		},
 		{
 			id: 'web_links',
@@ -75,7 +83,8 @@
 		},
 		subliminals: {
 			title: 'Subliminals',
-			description: 'Brief text overlays flashed during a session.'
+			description:
+				'Videos layered over popups at low opacity — hypno spirals and anything else meant to sit on top.'
 		},
 		web_links: {
 			title: 'Web Links',
@@ -162,7 +171,7 @@
 					{:else if activeTab === 'notifications'}
 						<TextPoolEditor title="Notifications" poolKey="notifications" idPrefix="notification" />
 					{:else if activeTab === 'subliminals'}
-						<TextPoolEditor title="Subliminals" poolKey="subliminals" idPrefix="subliminal" />
+						<SubliminalPool />
 					{:else if activeTab === 'web_links'}
 						<WebLinksEditor />
 					{:else if activeTab === 'wallpaper'}

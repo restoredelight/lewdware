@@ -103,6 +103,14 @@ behaviour:
                 seconds: 60
       transitions: []
 media:
+  - source_path: wallpaper.png
+    suggested_name: wallpaper.png
+    tags:
+      - __lewdware-non-popup
+  - source_path: loading_splash.png
+    suggested_name: loading_splash.png
+    tags:
+      - __lewdware-non-popup
   - source_path: img/kinky_a.jpg
     suggested_name: kinky_a.jpg
     tags:
@@ -137,14 +145,7 @@ media:
   - source_path: hypno/glimmer.gif
     suggested_name: glimmer.gif
     tags:
-      - hypno
-  - source_path: wallpaper.png
-    suggested_name: wallpaper.png
-    tags:
-      - __lewdware-non-popup
-  - source_path: loading_splash.png
-    suggested_name: loading_splash.png
-    tags:
+      - __lewdware-subliminal
       - __lewdware-non-popup
 icon: ~
 warnings:

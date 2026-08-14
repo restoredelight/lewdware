@@ -17,8 +17,11 @@
 //! The wallpaper/splash slots are the exception, because they reference media by *name* and a
 //! name isn't final until its file has arrived (a collision suffixes it; a duplicate or a failed
 //! encode means it never arrives at all). Those are left out of that first write and filled in by
-//! `fill_media_references` once the pipeline has finished, so the pack never carries a reference
-//! to a file it doesn't have.
+//! `fill_slots_for` the moment the file each one names lands -- per file, not once at the end, so
+//! a slot waits only on its own media rather than on the whole (potentially very long) pipeline.
+//! The pack still never carries a reference to a file it doesn't have: a name is only written
+//! once that exact file is in the pack. Whatever is still unclaimed when the pipeline ends named
+//! a file that never arrived, and stays empty.
 
 use std::{
     collections::HashMap,
@@ -28,7 +31,7 @@ use std::{
     thread::available_parallelism,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use converter::{convert, ConversionOutput, ConvertedMedia, DirSource, PackSource, ZipSource};
 use futures::{stream, StreamExt};
 use shared::behaviour::{Behaviour, MediaSlot};
@@ -40,6 +43,13 @@ use uuid::Uuid;
 
 use crate::encode::{wait_cancelled, DiscardOnDrop, UploadErrorPayload};
 use crate::pack::{AddOutcome, MediaFile};
+
+/// One slot `fill_slots_for` filled in, as the `import:slots-filled` payload carries it.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FilledSlot {
+    slot: MediaSlot,
+    name: String,
+}
 
 #[derive(Debug)]
 enum ImportErrorKind {
@@ -83,6 +93,19 @@ pub fn load(
         )
     };
     let output = convert(source.as_ref());
+
+    // Nothing recognizable was found. The converter has no way to distinguish "an Edgeware pack
+    // that happens to be empty" from "not an Edgeware pack" -- both simply produce nothing -- so
+    // this is where that judgement belongs, and it has to be a failure: succeeding leaves the
+    // author looking at a new, empty, untitled pack with no hint that their file was never read.
+    if output.media.is_empty() && output.behaviour.content.is_empty() {
+        bail!(
+            "{} doesn't contain an Edgeware pack -- no img/vid/aud media and no pack JSON was \
+             found in it",
+            source_path.display()
+        );
+    }
+
     Ok((source, output))
 }
 
@@ -153,10 +176,16 @@ pub async fn run_import(
 
     let limit = available_parallelism().map(|x| x.get()).ok();
 
-    // Source file name -> the name that file actually landed under, for the slot references held
-    // back from the behaviour write (see `fill_media_references`). A converted name missing from
-    // this at the end is one that never arrived.
-    let imported: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+    // The slot references held back from the behaviour write, keyed by the converted file name
+    // each one is waiting on (see `fill_slots_for`). Claimed and removed as files land -- one
+    // file can carry several slots (a stage wallpaper reusing the pack's primary), and whatever
+    // is still here at the end named a file that never arrived.
+    let pending = Arc::new(Mutex::new(group_media_references(media_references)));
+
+    // Serializes the behaviour document's read-modify-write across the concurrent import tasks:
+    // two referenced files landing at once would otherwise both read the document as it was
+    // before either fill, and the second write would drop the first one's slot.
+    let behaviour_write = Arc::new(tokio::sync::Mutex::new(()));
 
     let process_all = stream::iter(media).for_each_concurrent(limit, |item| {
         let pack_state = pack_state.clone();
@@ -166,7 +195,8 @@ pub async fn run_import(
         let upload_lock = upload_lock.clone();
         let source = source.clone();
         let staging = staging.clone();
-        let imported = imported.clone();
+        let pending = pending.clone();
+        let behaviour_write = behaviour_write.clone();
         async move {
             let source_path = item.source_path.clone();
             let suggested_name = item.suggested_name.clone();
@@ -184,11 +214,46 @@ pub async fn run_import(
             .await
             {
                 Ok(Some(media_file)) => {
-                    imported
+                    let slots = pending
                         .lock()
                         .unwrap()
-                        .insert(suggested_name, media_file.file_name.clone());
+                        .remove(&suggested_name)
+                        .unwrap_or_default();
+                    // Before the slot fill, so the front end has the file in hand by the time a
+                    // slot points at it -- a slot naming media the media grid hasn't heard of
+                    // renders as missing until the next refresh.
                     let _ = app.emit("upload:added", &media_file);
+                    if !slots.is_empty() {
+                        match fill_slots_for(
+                            &pack_state,
+                            pack_id,
+                            &behaviour_write,
+                            slots,
+                            &media_file.file_name,
+                        )
+                        .await
+                        {
+                            // The front end fetched this document at the start of the import (see
+                            // `Start.svelte`), so its copy predates this write and nothing else
+                            // would ever tell it -- the slot stayed empty in the editor until the
+                            // pack was reopened.
+                            Ok(filled) if !filled.is_empty() => {
+                                let _ = app.emit("import:slots-filled", &filled);
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                let _ = app.emit(
+                                    "upload:error",
+                                    UploadErrorPayload::new(
+                                        &dir,
+                                        format!(
+                                            "Could not fill in the pack's media slots: {error}"
+                                        ),
+                                    ),
+                                );
+                            }
+                        }
+                    }
                 }
                 Ok(None) => {}
                 Err(ImportErrorKind::Skipped) => {
@@ -213,18 +278,8 @@ pub async fn run_import(
     }
 
     {
-        let imported = std::mem::take(&mut *imported.lock().unwrap());
         let lock = pack_state.lock().await;
         if let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) {
-            if let Err(error) = fill_media_references(pack, media_references, &imported).await {
-                let _ = app.emit(
-                    "upload:error",
-                    UploadErrorPayload::new(
-                        &dir,
-                        format!("Could not fill in the pack's media slots: {error}"),
-                    ),
-                );
-            }
             if let Err(error) = pack.finish_media_import(history_id, None).await {
                 let _ = app.emit(
                     "upload:error",
@@ -240,38 +295,66 @@ pub async fn run_import(
     let _ = app.emit("upload:done", ());
 }
 
-/// Fills in the media slots (wallpaper/splash -- see `shared::behaviour::Content`) that
-/// `import_edgeware_pack_dialog` held back from its behaviour write, now that the files they
-/// name either exist under a known name or are known not to have arrived.
+/// The slot references `import_edgeware_pack_dialog` held back, indexed by the converted file
+/// name each one waits on, so an arriving file can claim its slots with one lookup.
 ///
-/// A slot whose file never arrived -- a duplicate, a failed encode, a cancelled import -- is
-/// simply left empty, which is the honest answer: `pack_has_wallpaper`/`pack_has_splash` then
-/// report the feature as absent rather than offering a toggle with nothing behind it.
-async fn fill_media_references(
-    pack: &crate::pack::MediaPack,
-    references: Vec<(MediaSlot, String)>,
-    imported: &HashMap<String, String>,
-) -> anyhow::Result<()> {
-    let resolved: Vec<(MediaSlot, String)> = references
-        .into_iter()
-        .filter_map(|(slot, wanted)| Some((slot, imported.get(&wanted)?.clone())))
-        .collect();
-    if resolved.is_empty() {
-        return Ok(());
+/// Several slots can name the same file -- Edgeware packs routinely reuse the pack's primary
+/// wallpaper as a corruption level's, and `resolve_wallpaper` imports it once -- so this is a
+/// name to *many* slots, not a name to one.
+fn group_media_references(references: Vec<(MediaSlot, String)>) -> HashMap<String, Vec<MediaSlot>> {
+    let mut grouped: HashMap<String, Vec<MediaSlot>> = HashMap::new();
+    for (slot, name) in references {
+        grouped.entry(name).or_default().push(slot);
     }
+    grouped
+}
+
+/// Points the media slots (wallpaper/splash -- see `shared::behaviour::Content`) waiting on a
+/// just-imported file at the name it actually landed under.
+///
+/// Called as each referenced file arrives rather than once at the end, so the Content and
+/// Experience tabs fill in a slot as soon as its own media is really in the pack, instead of
+/// showing an empty one until the last of the pack's (potentially thousands of) files has been
+/// encoded. `prioritize_referenced_media` puts these files first in the import order for exactly
+/// this reason.
+///
+/// A slot whose file never arrives -- a duplicate, a failed encode, a cancelled import -- is
+/// simply never filled, which is the honest answer: `pack_has_wallpaper`/`pack_has_splash` then
+/// report the feature as absent rather than offering a toggle with nothing behind it.
+///
+/// Returns the slots that were actually filled, so the caller can tell the front end about a
+/// write it has no other way to learn about.
+async fn fill_slots_for(
+    pack_state: &crate::PackState,
+    pack_id: Uuid,
+    behaviour_write: &tokio::sync::Mutex<()>,
+    slots: Vec<MediaSlot>,
+    name: &str,
+) -> anyhow::Result<Vec<FilledSlot>> {
+    let _write_guard = behaviour_write.lock().await;
+    let lock = pack_state.lock().await;
+    let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) else {
+        return Ok(Vec::new());
+    };
     let Some(bytes) = pack.get_pack_data("behaviour").await? else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let mut behaviour = Behaviour::from_json_bytes(&bytes)?;
-    let mut filled = false;
-    for (slot, name) in resolved {
-        filled |= behaviour.fill_media_reference(&slot, name);
+    let mut filled = Vec::new();
+    for slot in slots {
+        if behaviour.fill_media_reference(&slot, name.to_string()) {
+            filled.push(FilledSlot {
+                slot,
+                name: name.to_string(),
+            });
+        }
     }
-    if !filled {
-        return Ok(());
+    if filled.is_empty() {
+        return Ok(filled);
     }
     pack.set_pack_data("behaviour", behaviour.to_json_bytes()?)
-        .await
+        .await?;
+    Ok(filled)
 }
 
 // As in `encode::process_one_file`: one media item, plus the batch-wide context resolved once
@@ -399,4 +482,97 @@ async fn import_one_media(
     }
 
     Ok(Some(media_file))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source_dir(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (name, contents) in files {
+            let path = dir.path().join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create parent");
+            }
+            std::fs::write(path, contents).expect("write fixture");
+        }
+        dir
+    }
+
+    /// The bug this guards: a source that holds no pack converted to nothing *successfully*, so
+    /// the import went on to create a new, empty, untitled pack -- with nothing to tell the author
+    /// their file had never been read. A clone of Edgeware with the pack nested several levels in
+    /// looked exactly like this before `detect_root_prefix` learned to find it.
+    #[test]
+    fn a_source_holding_no_pack_fails_rather_than_importing_nothing() {
+        let dir = source_dir(&[
+            ("readme.txt", "not a pack"),
+            ("src/main.py", "print('hi')"),
+            ("assets/logo.png", "not media either, and not in img/"),
+        ]);
+
+        let error = match load(dir.path()) {
+            Err(error) => error,
+            Ok(_) => panic!("a source with no pack must not import"),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("doesn't contain an Edgeware pack"),
+            "unhelpful error: {error}"
+        );
+    }
+
+    /// The emptiness check must not tighten what counts as a pack: media alone, with no JSON of
+    /// any kind, is a perfectly ordinary Edgeware pack.
+    #[test]
+    fn a_pack_of_bare_media_still_imports() {
+        let dir = source_dir(&[("img/a.png", "image bytes"), ("aud/b.mp3", "audio bytes")]);
+
+        let (_source, output) =
+            load(dir.path()).unwrap_or_else(|e| panic!("bare media is a pack: {e}"));
+        assert_eq!(output.media.len(), 2);
+    }
+
+    /// A file arriving has to claim *every* slot waiting on it, not just the first: Edgeware packs
+    /// routinely point a corruption level at the pack's primary wallpaper, and that file is
+    /// imported once. Grouping by name is what lets one arrival fill them all in a single write.
+    #[test]
+    fn slot_references_group_by_the_file_they_wait_on() {
+        let grouped = group_media_references(vec![
+            (MediaSlot::Wallpaper, "wallpaper.png".to_string()),
+            (MediaSlot::Splash, "loading_splash.png".to_string()),
+            (
+                MediaSlot::StageWallpaper {
+                    stage: "stage-2".to_string(),
+                },
+                "wallpaper.png".to_string(),
+            ),
+        ]);
+
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(
+            grouped["wallpaper.png"],
+            vec![
+                MediaSlot::Wallpaper,
+                MediaSlot::StageWallpaper {
+                    stage: "stage-2".to_string()
+                }
+            ]
+        );
+        assert_eq!(grouped["loading_splash.png"], vec![MediaSlot::Splash]);
+    }
+
+    /// And neither must it reject a pack whose content is entirely text -- captions with no media
+    /// convert to a real behaviour document, even though nothing will be imported alongside it.
+    #[test]
+    fn a_pack_of_only_text_content_still_imports() {
+        let dir = source_dir(&[("captions.json", r#"{"default": ["a caption"]}"#)]);
+
+        let (_source, output) =
+            load(dir.path()).unwrap_or_else(|e| panic!("text-only content is a pack: {e}"));
+        assert!(output.media.is_empty());
+        assert!(!output.behaviour.content.is_empty());
+    }
 }

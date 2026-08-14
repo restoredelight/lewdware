@@ -102,6 +102,14 @@ behaviour:
                 seconds: 60
       transitions: []
 media:
+  - source_path: wallpaper.png
+    suggested_name: wallpaper.png
+    tags:
+      - __lewdware-non-popup
+  - source_path: loading_splash.gif
+    suggested_name: loading_splash.gif
+    tags:
+      - __lewdware-non-popup
   - source_path: img/untagged.png
     suggested_name: untagged.png
     tags: []
@@ -124,14 +132,7 @@ media:
   - source_path: subliminals/glimmer.gif
     suggested_name: glimmer.gif
     tags:
-      - hypno
-  - source_path: wallpaper.png
-    suggested_name: wallpaper.png
-    tags:
-      - __lewdware-non-popup
-  - source_path: loading_splash.gif
-    suggested_name: loading_splash.gif
-    tags:
+      - __lewdware-subliminal
       - __lewdware-non-popup
 icon: ~
 warnings:

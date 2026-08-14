@@ -455,7 +455,11 @@ fn apply_at_cursor(connection: &mut Connection, redo: bool) -> Result<Status> {
             // changeset too, and the two are one action -- they move together or the author gets
             // a slot pointing at media this same step just hid.
             if let Some(changeset) = if redo { forward } else { inverse } {
-                tx.apply_strm(&mut Cursor::new(changeset), None::<fn(&str) -> bool>, on_conflict)?;
+                tx.apply_strm(
+                    &mut Cursor::new(changeset),
+                    None::<fn(&str) -> bool>,
+                    on_conflict,
+                )?;
             }
         }
         _ => bail!("unsupported history entry kind {kind}"),

@@ -196,7 +196,7 @@
 
 	<div class="flex-1"></div>
 	<span class="file-count text-muted font-mono text-[11px] whitespace-nowrap"
-		>{store.files.length} file{store.files.length === 1 ? '' : 's'}</span
+		>{store.popupFiles.length} file{store.popupFiles.length === 1 ? '' : 's'}</span
 	>
 	<Popover align="end" label="Import media">
 		{#snippet trigger(toggle, open)}<Button

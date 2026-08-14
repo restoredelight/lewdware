@@ -123,6 +123,14 @@ behaviour:
           affected: []
     label: Corruption
 media:
+  - source_path: wallpaper.png
+    suggested_name: wallpaper.png
+    tags:
+      - __lewdware-non-popup
+  - source_path: wallpaper2.png
+    suggested_name: wallpaper2.png
+    tags:
+      - __lewdware-non-popup
   - source_path: img/kinky_a.png
     suggested_name: kinky_a.png
     tags:
@@ -135,14 +143,6 @@ media:
     suggested_name: vanilla_a.png
     tags:
       - vanilla
-  - source_path: wallpaper.png
-    suggested_name: wallpaper.png
-    tags:
-      - __lewdware-non-popup
-  - source_path: wallpaper2.png
-    suggested_name: wallpaper2.png
-    tags:
-      - __lewdware-non-popup
 icon: ~
 warnings:
   - kind: ConfigNotConverted

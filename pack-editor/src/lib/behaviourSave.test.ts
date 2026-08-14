@@ -99,7 +99,7 @@ describe('behaviour save scheduler', () => {
 		expect(mocks.history.record).toHaveBeenCalledWith({ label: 'Set wallpaper' });
 	});
 
-	it('re-baselines an adopted behaviour so it is not re-recorded as the user\'s own edit', async () => {
+	it("re-baselines an adopted behaviour so it is not re-recorded as the user's own edit", async () => {
 		const save = await scheduler();
 		save.initializeBehaviourHistory(mocks.store.behaviour!);
 
@@ -130,6 +130,88 @@ describe('behaviour save scheduler', () => {
 
 		expect(mocks.api.setBehaviour).toHaveBeenCalledWith(value(9));
 		expect(mocks.history.record).not.toHaveBeenCalled();
+	});
+
+	// The Edgeware importer fills the wallpaper/splash slots after the frontend has already fetched
+	// the document, and nothing else refreshes it -- the slots showed as empty until the pack was
+	// reopened.
+	describe('media slots filled by an import', () => {
+		const withSlots = (content: Record<string, unknown>, experience: unknown = null) =>
+			({ version: 1, content, experience }) as unknown as Behaviour;
+
+		it('takes on slots the backend filled after the document was fetched', async () => {
+			const save = await scheduler();
+			mocks.store.behaviour = withSlots({});
+			save.initializeBehaviourHistory(mocks.store.behaviour);
+
+			save.applyFilledMediaSlots([
+				{ slot: { kind: 'wallpaper' }, name: 'Wallpaper.jpg' },
+				{ slot: { kind: 'splash' }, name: 'loading_splash.gif' }
+			]);
+
+			expect(mocks.store.behaviour.content).toEqual({
+				wallpaper: 'Wallpaper.jpg',
+				splash: 'loading_splash.gif'
+			});
+		});
+
+		it('fills a stage wallpaper by stage id, ignoring an unknown stage', async () => {
+			const save = await scheduler();
+			mocks.store.behaviour = withSlots(
+				{},
+				{ timeline: { stages: [{ id: 'stage-2', content: {} }], transitions: [] } }
+			);
+			save.initializeBehaviourHistory(mocks.store.behaviour);
+
+			save.applyFilledMediaSlots([
+				{ slot: { kind: 'stage_wallpaper', stage: 'stage-2' }, name: 'level2.png' },
+				{ slot: { kind: 'stage_wallpaper', stage: 'gone' }, name: 'orphan.png' }
+			]);
+
+			const stages = (
+				mocks.store.behaviour as unknown as {
+					experience: { timeline: { stages: { content: { wallpaper?: string } }[] } };
+				}
+			).experience.timeline.stages;
+			expect(stages[0].content.wallpaper).toBe('level2.png');
+			expect(stages).toHaveLength(1);
+		});
+
+		// Mirrors `Behaviour::fill_media_reference`'s own only-if-empty rule: a slot the author set
+		// while the import was still running is their answer.
+		it('never overwrites a slot the author set during the import', async () => {
+			const save = await scheduler();
+			mocks.store.behaviour = withSlots({ wallpaper: 'author-picked.png' });
+			save.initializeBehaviourHistory(mocks.store.behaviour);
+
+			save.applyFilledMediaSlots([{ slot: { kind: 'wallpaper' }, name: 'Wallpaper.jpg' }]);
+
+			expect(mocks.store.behaviour.content).toEqual({ wallpaper: 'author-picked.png' });
+		});
+
+		// The backend has already written these, so a save would be pure noise -- and swapping the
+		// whole document in (rather than patching) would discard edits made during the import.
+		it('does not schedule a save of its own', async () => {
+			const save = await scheduler();
+			mocks.store.behaviour = withSlots({});
+			save.initializeBehaviourHistory(mocks.store.behaviour);
+
+			save.applyFilledMediaSlots([{ slot: { kind: 'splash' }, name: 'loading_splash.gif' }]);
+			await vi.advanceTimersByTimeAsync(1000);
+
+			expect(mocks.api.setBehaviour).not.toHaveBeenCalled();
+			expect(mocks.store.markBackupPending).not.toHaveBeenCalled();
+		});
+
+		it('is a no-op when no tab has fetched the document yet', async () => {
+			const save = await scheduler();
+			mocks.store.behaviour = null;
+
+			expect(() =>
+				save.applyFilledMediaSlots([{ slot: { kind: 'wallpaper' }, name: 'Wallpaper.jpg' }])
+			).not.toThrow();
+			expect(mocks.store.behaviour).toBeNull();
+		});
 	});
 
 	it('reports failures and allows a later save to recover the promise chain', async () => {

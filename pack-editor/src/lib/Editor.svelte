@@ -32,6 +32,7 @@
 	import Modes from './Modes.svelte';
 	import UploadProgress from './UploadProgress.svelte';
 	import MediaViewer from './MediaViewer.svelte';
+	import MediaPreview from './MediaPreview.svelte';
 	import ImportWarnings from './ImportWarnings.svelte';
 	import { mediaSlotUsage } from './tagReferences.js';
 
@@ -112,7 +113,12 @@
 		narrowQuery.addEventListener('change', updateNarrowWindow);
 		const handleShortcut = (event: KeyboardEvent) => {
 			if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey) return;
-			if (showClosePackDialog || store.pendingMediaRemoval.length > 0 || store.openedId !== null)
+			if (
+				showClosePackDialog ||
+				store.pendingMediaRemoval.length > 0 ||
+				store.openedId !== null ||
+				store.previewId !== null
+			)
 				return;
 			const key = event.key.toLowerCase();
 			if (key === 's') {
@@ -606,7 +612,7 @@
 					<MediaToolbar />
 					<div class="flex min-h-0 flex-1 max-[520px]:flex-col">
 						<div class="min-h-0 min-w-0 flex-1">
-							{#if store.filteredFiles.length === 0 && store.files.length === 0}
+							{#if store.filteredFiles.length === 0 && store.popupFiles.length === 0}
 								<div class="flex h-full items-center justify-center p-8">
 									<div class="w-full max-w-lg">
 										<EmptyState
@@ -716,6 +722,11 @@
 <!-- Media viewer overlay -->
 {#if store.openedId !== null}
 	<MediaViewer />
+{/if}
+
+<!-- Standalone preview overlay (a slot's media, a subliminal -- see MediaPreview) -->
+{#if store.previewId !== null}
+	<MediaPreview />
 {/if}
 
 <!-- Edgeware import warnings -->

@@ -3,9 +3,13 @@
 	import { listen } from '@tauri-apps/api/event';
 	import { store } from '$lib/store.svelte.js';
 	import { api } from '$lib/api.js';
-	import { cancelBehaviourSave, flushBehaviourSave } from '$lib/behaviourSave.svelte.js';
+	import {
+		applyFilledMediaSlots,
+		cancelBehaviourSave,
+		flushBehaviourSave
+	} from '$lib/behaviourSave.svelte.js';
 	import { cancelMetadataSave, flushMetadataSave } from '$lib/metadataSave.svelte.js';
-	import type { MediaFile, UploadError, SaveDone, SaveProgress } from '$lib/types.js';
+	import type { FilledSlot, MediaFile, UploadError, SaveDone, SaveProgress } from '$lib/types.js';
 	import Start from '$lib/Start.svelte';
 	import Editor from '$lib/Editor.svelte';
 	import Dialog from '$ui/Dialog.svelte';
@@ -120,6 +124,12 @@
 			listen('upload:done', () => {
 				store.onUploadDone();
 				if (store.uploadBatches === 0) finalizeImportHistory();
+			}),
+			// Emitted by an Edgeware import as each file a media slot names arrives, and only when
+			// it really filled a slot -- the one part of an imported behaviour written after the
+			// front end already has the document.
+			listen<FilledSlot[]>('import:slots-filled', (e) => {
+				applyFilledMediaSlots(e.payload);
 			}),
 			listen<SaveProgress>('save:progress', (e) => {
 				store.saveActive = true;

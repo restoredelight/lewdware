@@ -120,11 +120,14 @@ export const api = {
 	getBehaviour: () => invoke<Behaviour>('get_behaviour'),
 	setBehaviour: (behaviour: Behaviour) => invoke<void>('set_behaviour', { behaviour }),
 
+	/** Returns the ids it deleted: media that was only ever a subliminal leaves with the pool. */
+	removeFromSubliminals: (ids: number[]) => invoke<number[]>('remove_from_subliminals', { ids }),
+	addSubliminalFilesDialog: () =>
+		invoke<MediaFile[] | null>('add_subliminal_files_dialog'),
+
 	fillMediaSlotDialog: (slot: MediaSlot) =>
 		invoke<SlotFilled | null>('fill_media_slot_dialog', { slot }),
 	clearMediaSlot: (slot: MediaSlot) => invoke<SlotCleared | null>('clear_media_slot', { slot }),
-	setShownAsPopup: (id: number, shown: boolean) =>
-		invoke<void>('set_shown_as_popup', { id, shown }),
 
 	addFilesDialog: () => invoke<void>('add_files_dialog'),
 	addFolderDialog: () => invoke<void>('add_folder_dialog'),

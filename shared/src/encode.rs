@@ -652,6 +652,17 @@ fn encode_image(
     Ok((thumbnail, width, height, transparent))
 }
 
+/// Moves the MP4 `moov` atom in front of the media data, at the cost of a rewrite pass once the
+/// encode finishes.
+///
+/// Without it ffmpeg leaves `moov` at the end of the file, which makes the first bytes of a video
+/// useless on their own: nothing can be decoded until the tail arrives. The pack editor previews
+/// media over HTTP, where a player reads from the front and starts as soon as it can -- with
+/// `moov` last, WebKitGTK's decoder reported "no playable streams" rather than going back for the
+/// end of the file. With `moov` first, the opening bytes always carry the header and playback
+/// starts immediately, whatever the file's size.
+const FASTSTART: [&str; 2] = ["-movflags", "+faststart"];
+
 fn encode_video(
     input: &Path,
     output: &Path,
@@ -695,7 +706,9 @@ fn encode_video(
         cmd.arg("-an");
     }
 
-    cmd.args(encoder.ffmpeg_args()).args(["-f", "mp4"]);
+    cmd.args(encoder.ffmpeg_args())
+        .args(["-f", "mp4"])
+        .args(FASTSTART);
 
     if fixed_fps {
         cmd.arg("-r").arg("30");
@@ -806,16 +819,18 @@ fn encode_video_with_transparency(
         command.arg("-an");
     }
 
-    command.args([
-        "-c:v",
-        "libx264",
-        "-crf",
-        "23",
-        "-color_range",
-        "pc",
-        "-pix_fmt",
-        "yuv420p",
-    ]);
+    command
+        .args([
+            "-c:v",
+            "libx264",
+            "-crf",
+            "23",
+            "-color_range",
+            "pc",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .args(FASTSTART);
 
     if fixed_fps {
         command.arg("-r").arg("30");
@@ -1769,5 +1784,107 @@ mod sidecar {
         );
 
         assert!(probe(dir, "notmedia.txt").is_none(), "non-media accepted");
+    }
+
+    /// The offsets of an MP4's top-level atoms, in file order.
+    fn atom_order(path: &Path) -> Vec<String> {
+        let data = std::fs::read(path).expect("read encoded mp4");
+        let mut atoms = Vec::new();
+        let mut offset = 0usize;
+        while offset + 8 <= data.len() {
+            let size = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            atoms.push(String::from_utf8_lossy(&data[offset + 4..offset + 8]).into_owned());
+            let size = match size {
+                0 => break,
+                1 => u64::from_be_bytes(data[offset + 8..offset + 16].try_into().unwrap()) as usize,
+                size => size,
+            };
+            if size == 0 {
+                break;
+            }
+            offset += size;
+        }
+        atoms
+    }
+
+    /// Encoded video has to be playable from its opening bytes alone.
+    ///
+    /// ffmpeg's default leaves `moov` after the media data, which costs nothing on a local file
+    /// but makes the front of the file undecodable on its own. The pack editor serves previews
+    /// over HTTP, read front-first, so with `moov` last a video arrived as a stream with no header
+    /// and WebKitGTK refused it outright -- "no playable streams" -- rather than fetching the
+    /// tail. See `FASTSTART`.
+    #[test]
+    #[ignore]
+    fn encoded_video_carries_its_header_first() {
+        init();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+
+        // Long enough that `mdat` is not trivially small, and with audio, since the muxer lays
+        // out interleaved tracks differently.
+        ffmpeg(
+            dir,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=s=320x240:d=3",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=d=3",
+                "opaque.mp4",
+            ],
+        );
+
+        // RGBA, so this one takes the packed color-over-alpha path instead -- which is what the
+        // animated GIFs in an imported Edgeware pack go through, and a separate ffmpeg command.
+        ffmpeg(
+            dir,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=s=64x64:r=20:d=1",
+                "-vf",
+                "format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='clip(X*4,0,255)'",
+                "-f",
+                "apng",
+                "-plays",
+                "0",
+                "transparent.png",
+            ],
+        );
+
+        for (source, expect_transparent) in [("opaque.mp4", false), ("transparent.png", true)] {
+            let encoded = encode_file(
+                &dir.join(source),
+                &dir.join(format!("encoded-{source}")),
+                HardwareEncoder::SoftwareFallback,
+            )
+            .unwrap_or_else(|e| panic!("encoding {source}: {e}"))
+            .unwrap_or_else(|| panic!("{source} is media"));
+
+            // Guards the coverage this test claims: alpha detection is what routes a file to the
+            // second command, and it happens by inspecting the first encode's output, not the
+            // input's pixel format.
+            assert!(
+                matches!(
+                    encoded.info,
+                    FileInfo::Video { transparent, .. } if transparent == expect_transparent
+                ),
+                "{source} took the wrong encode path: {:?}",
+                encoded.info
+            );
+
+            let atoms = atom_order(&encoded.path);
+            let moov = atoms.iter().position(|atom| atom == "moov");
+            let mdat = atoms.iter().position(|atom| atom == "mdat");
+            assert!(
+                matches!((moov, mdat), (Some(moov), Some(mdat)) if moov < mdat),
+                "{source}: moov must precede mdat, got {atoms:?}"
+            );
+        }
     }
 }

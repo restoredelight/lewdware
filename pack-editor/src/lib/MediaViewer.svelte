@@ -1,7 +1,10 @@
 <script lang="ts">
+	// The Media tab's viewer: a position in the grid's current list, steppable with prev/next.
+	// Media the grid doesn't list gets `MediaPreview` instead -- it has no position to show.
 	import { onMount } from 'svelte';
 	import { store } from './store.svelte.js';
 	import { ChevronLeft, ChevronRight, Icon, XMark } from 'svelte-hero-icons';
+	import MediaDisplay from './MediaDisplay.svelte';
 	import { openMediaPreview } from './mediaPreview.js';
 
 	const file = $derived(store.openedFile);
@@ -129,50 +132,7 @@
 		class="pointer-events-none relative z-[1] flex flex-1 items-center justify-center px-14 py-16"
 	>
 		{#if file}
-			{#if file.file_info.type === 'image'}
-				<img
-					src={store.mediaUrl(`/display/${file.id}`, file.hash)}
-					alt={file.file_name}
-					draggable="false"
-					class="pointer-events-auto max-h-full max-w-full object-contain"
-					style="max-height: calc(100vh - 128px)"
-				/>
-			{:else if file.file_info.type === 'video' && file.file_info.transparent}
-				<!-- Transparent videos are encoded as a packed frame (color on top, alpha-as-luma on
-             the bottom) for lewdware's shader to composite. The browser has no way to render
-             that alpha channel, so just crop to the color half rather than showing the raw,
-             double-height packed frame with the alpha mask flickering underneath.
-             Overriding the intrinsic 2:1 aspect ratio + object-fit: cover + object-position: top
-             scales the packed frame 1:1 (since cover's scale factor is 1 here) and keeps only
-             the top half visible — no wrapper/absolute positioning needed. -->
-				<!-- svelte-ignore a11y_media_has_caption -->
-				<video
-					src={store.mediaUrl(`/file/${file.id}`, file.hash)}
-					draggable="false"
-					autoplay
-					loop
-					muted
-					playsinline
-					class="pointer-events-auto max-h-full max-w-full object-cover object-top"
-					style="aspect-ratio: {file.file_info.width} / {file.file_info
-						.height}; max-height: calc(100vh - 128px)"
-				></video>
-			{:else if file.file_info.type === 'video'}
-				<!-- svelte-ignore a11y_media_has_caption -->
-				<video
-					src={store.mediaUrl(`/file/${file.id}`, file.hash)}
-					draggable="false"
-					controls
-					class="pointer-events-auto max-h-full max-w-full"
-					style="max-height: calc(100vh - 128px)"
-				></video>
-			{:else if file.file_info.type === 'audio'}
-				<audio
-					src={store.mediaUrl(`/file/${file.id}`, file.hash)}
-					controls
-					class="pointer-events-auto w-80"
-				></audio>
-			{/if}
+			<MediaDisplay {file} />
 		{/if}
 	</div>
 </div>

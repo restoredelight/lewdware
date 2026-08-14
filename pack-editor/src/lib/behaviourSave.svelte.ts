@@ -1,7 +1,7 @@
 import { api } from './api.js';
 import { store } from './store.svelte.js';
 import { history, type HistoryRecord } from './history.svelte.js';
-import type { Behaviour } from './types.js';
+import type { Behaviour, FilledSlot } from './types.js';
 import { taskFeedback } from './taskFeedback.svelte.js';
 import {
 	behaviourBaseline,
@@ -41,6 +41,72 @@ export function adoptBehaviour(value: Behaviour, record: HistoryRecord) {
 	store.behaviour = value;
 	initializeBehaviourHistory(value);
 	history.record(record);
+}
+
+// Every slot the running import has filled so far, so a document fetched from the backend can be
+// caught up on the ones that landed while it was in flight -- see `reapplyFilledMediaSlots`.
+let filledDuringImport: FilledSlot[] = [];
+
+/**
+ * Forgets what an earlier import filled. Call before starting one: a slot filled for the previous
+ * pack names a file this one may not have, and `reapplyFilledMediaSlots` would write that name
+ * into the new pack's empty slot.
+ */
+export function resetFilledMediaSlots() {
+	filledDuringImport = [];
+}
+
+/**
+ * Takes on a wallpaper/splash slot an Edgeware import filled in as its media arrived
+ * (`import:slots-filled`).
+ *
+ * Those slots are the one part of an imported behaviour the backend writes *after* the front end
+ * has already fetched the document (see `import.rs`'s module comment on why they're held back),
+ * so without this the editor shows an empty slot over a pack that has one, until it's reopened.
+ *
+ * A narrow patch rather than `adoptBehaviour`, because nothing flushed the debounced saver before
+ * this write the way `MediaSlot`'s own handlers do: swapping the whole document in would discard
+ * whatever the author typed into the Content or Experience tab while the import ran. Filling only
+ * empty slots mirrors `Behaviour::fill_media_reference`'s own rule -- a slot the author set
+ * themselves in the meantime is their answer, not one to overwrite.
+ *
+ * Deliberately no `scheduleBehaviourSave()`: this only mirrors what the backend has already
+ * written, so there is nothing to save. The baseline is left alone for the same reason -- the next
+ * real edit records itself either way, and re-baselining here would swallow a pending one.
+ */
+export function applyFilledMediaSlots(filled: FilledSlot[]) {
+	filledDuringImport.push(...filled);
+	fillSlots(filled);
+}
+
+/**
+ * Re-applies every slot filled so far, for a caller that has just replaced `store.behaviour` with
+ * a document it fetched from the backend.
+ *
+ * The import's first files can land before that fetch resolves, and a document read a moment
+ * before a fill is written comes back without it -- assigning it would drop a slot this module had
+ * already applied (or applied to nothing, the fetch not having finished). Idempotent, since
+ * filling only ever touches an empty slot.
+ */
+export function reapplyFilledMediaSlots() {
+	fillSlots(filledDuringImport);
+}
+
+function fillSlots(filled: FilledSlot[]) {
+	const behaviour = store.behaviour;
+	// No tab has fetched the document yet; whoever does will read the filled one from the backend.
+	if (!behaviour) return;
+
+	for (const { slot, name } of filled) {
+		if (slot.kind === 'wallpaper') {
+			behaviour.content.wallpaper ??= name;
+		} else if (slot.kind === 'splash') {
+			behaviour.content.splash ??= name;
+		} else {
+			const stage = behaviour.experience?.timeline.stages.find((s) => s.id === slot.stage);
+			if (stage) stage.content.wallpaper ??= name;
+		}
+	}
 }
 
 function persist() {

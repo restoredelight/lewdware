@@ -156,9 +156,13 @@ export interface Mitosis {
 }
 /** One place in the behaviour that names a media file -- mirrors `shared::behaviour::MediaSlot`. */
 export type MediaSlot =
-	| { kind: 'wallpaper' }
-	| { kind: 'splash' }
-	| { kind: 'stage_wallpaper'; stage: string };
+	{ kind: 'wallpaper' } | { kind: 'splash' } | { kind: 'stage_wallpaper'; stage: string };
+
+/** One slot the Edgeware importer filled in as its media arrived (`import:slots-filled`). */
+export interface FilledSlot {
+	slot: MediaSlot;
+	name: string;
+}
 
 export interface SlotFilled {
 	behaviour: Behaviour;

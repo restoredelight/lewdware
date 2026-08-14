@@ -1,4 +1,4 @@
-import { withoutManagedTags } from './tags.js';
+import { NON_POPUP_TAG, withoutManagedTags } from './tags.js';
 import type {
 	Behaviour,
 	ConversionWarning,
@@ -105,8 +105,13 @@ class AppStore {
 	primaryId = $state<number | null>(null);
 	gridActiveId = $state<number | null>(null);
 
-	// Viewer
+	// Viewer: the Media tab's, which browses `filteredFiles` and steps through them.
 	openedId = $state<number | null>(null);
+	// Viewer: one file on its own, for media the grid doesn't list (a slot's wallpaper or splash, a
+	// subliminal). Separate state rather than a mode of the one above, because that one's whole
+	// shape -- prev/next, "3 of 57" -- is a position in the grid's list, and scenery has no
+	// position in it. See `openStandalonePreview`.
+	previewId = $state<number | null>(null);
 
 	// View routing
 	activeView = $state<
@@ -137,9 +142,11 @@ class AppStore {
 
 	// Edgeware import (the converter's warnings for the currently-open pack, if it was imported).
 	// behaviour.json/metadata are written synchronously by the import command itself, before it
-	// even returns -- so there's no window where an imported pack's `behaviour` is stale/empty,
-	// unlike media (which streams in afterwards via the same `upload:*` events a normal add-files
-	// uses).
+	// even returns -- so an imported pack's `behaviour` is never stale/empty, unlike media (which
+	// streams in afterwards via the same `upload:*` events a normal add-files uses). The one
+	// exception is the wallpaper/splash slots, which name files that don't exist yet at that point:
+	// each is filled as the file it names finishes importing and arrives via `import:slots-filled`
+	// (see `applyFilledMediaSlots`).
 	importWarnings = $state<ConversionWarning[]>([]);
 
 	// Content/Experience tab state: the pack's behaviour.json document, shared by both tabs (see
@@ -177,8 +184,20 @@ class AppStore {
 	// Options form state
 	metadata = $state<MetadataDto | null>(null);
 
+	/**
+	 * The Media tab's universe: the pack's media minus the files that exist only as scenery -- a
+	 * wallpaper, a splash, a subliminal.
+	 *
+	 * Those live in the slot or pool that owns them (Content tab), which is the only place they can
+	 * be added, previewed or removed. Listing them here as well made the author reason about a
+	 * distinction that is the editor's bookkeeping, not theirs: a grid row that looks like ordinary
+	 * media but whose removal would silently empty a slot. `files` itself stays complete -- the
+	 * slots and the subliminal pool resolve their own members out of it.
+	 */
+	popupFiles = $derived(this.files.filter((file) => !file.tags.includes(NON_POPUP_TAG)));
+
 	filteredFiles = $derived.by(() => {
-		const files = this.files;
+		const files = this.popupFiles;
 		const query = this.searchQuery.toLowerCase();
 		const typeFilter = this.mediaTypeFilter;
 		const tagFilter = this.tagFilter;
@@ -266,6 +285,12 @@ class AppStore {
 		return this.files.find((f) => f.id === id) ?? null;
 	});
 
+	previewedFile = $derived.by(() => {
+		const id = this.previewId;
+		if (id == null) return null;
+		return this.files.find((f) => f.id === id) ?? null;
+	});
+
 	openPack(
 		name: string,
 		files: MediaFile[],
@@ -291,6 +316,7 @@ class AppStore {
 		this.primaryId = null;
 		this.gridActiveId = null;
 		this.openedId = null;
+		this.previewId = null;
 		this.activeView = 'media';
 		this.searchQuery = '';
 		this.mediaTypeFilter = 'all';
@@ -316,6 +342,7 @@ class AppStore {
 		this.primaryId = null;
 		this.gridActiveId = null;
 		this.openedId = null;
+		this.previewId = null;
 		this.searchQuery = '';
 		this.mediaTypeFilter = 'all';
 		this.tagFilter = new Set();

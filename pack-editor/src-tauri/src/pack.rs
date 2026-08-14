@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs::{self, create_dir_all},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -81,6 +82,33 @@ pub enum AddOutcome {
     Added(MediaFile),
     /// The pack already held these bytes, as this file.
     Duplicate(MediaFile),
+}
+
+/// One file joining a media slot or the subliminal pool.
+///
+/// Carries `new_to_pack` because that is the whole of what decides `__lewdware-non-popup`, and it
+/// is not a fact the transaction can recover for itself: a file imported a second ago and one the
+/// author imported last week look identical in the database.
+#[derive(Debug, Clone, Copy)]
+pub struct MediaAddition {
+    pub id: u64,
+    /// Whether this operation is what brought the file into the pack.
+    ///
+    /// Only then is the file marked as scenery. A file the pack already held is ordinary media the
+    /// author put there on purpose: marking it would take it out of the media grid (which lists
+    /// only popup media) and, worse, hand it to the scenery lifecycle -- emptying the slot or the
+    /// pool deletes whatever is still marked, so a wallpaper picked from a file already in the
+    /// pack would take that file with it. See `clear_media_slot`/`remove_from_subliminals`.
+    pub new_to_pack: bool,
+}
+
+impl From<&AddOutcome> for MediaAddition {
+    fn from(outcome: &AddOutcome) -> Self {
+        Self {
+            id: outcome.file().id,
+            new_to_pack: matches!(outcome, AddOutcome::Added(_)),
+        }
+    }
 }
 
 impl AddOutcome {
@@ -344,11 +372,56 @@ pub enum FileData {
     Data(Vec<u8>),
 }
 
-pub struct DataRange {
-    pub data: Vec<u8>,
+/// A byte range of one media file, opened and positioned but not yet read -- the body of a
+/// preview response, handed over as a stream rather than a buffer.
+///
+/// Buffering was the old shape, and it forced a cap on how much of a file one response could
+/// carry (memory), which in turn made every response to an open-ended request a short one. Media
+/// clients do not treat a short response as an invitation to ask for the rest: GStreamer -- what
+/// WebKitGTK plays `<video>` through -- issues a range-less GET, reads the body to its end, and
+/// stops there. A capped response therefore *was* the whole video as far as the player was
+/// concerned: it would show the full duration (`+faststart` puts the header first) and stop dead
+/// part-way through. Streaming lets a response be as long as the range asked for while the memory
+/// it costs stays one chunk.
+pub struct FileRangeStream {
+    file: File,
     pub start: u64,
     pub end: u64,
     pub total_size: u64,
+}
+
+impl FileRangeStream {
+    pub fn len(&self) -> u64 {
+        self.end - self.start
+    }
+
+    /// The range's bytes, read a chunk at a time.
+    ///
+    /// The file is already positioned at `start` and is read from that point regardless of what
+    /// happens to the pack file underneath: an ordinary save writes a new generation and renames
+    /// it over the old one, which leaves this handle reading the generation the response began
+    /// with -- self-consistent, and no reason to make a save wait for a video someone is still
+    /// watching. (The in-place save fallback, which only runs when the disk is full, does rewrite
+    /// those bytes; a preview open across one can glitch, which is what the editor's "Saving pack
+    /// -- playback may pause briefly" banner is for.)
+    pub fn into_stream(self) -> impl futures::Stream<Item = io::Result<Vec<u8>>> + Send {
+        const CHUNK: u64 = 256 * 1024;
+        let length = self.len();
+        futures::stream::try_unfold((self.file, length), |(mut file, remaining)| async move {
+            if remaining == 0 {
+                return Ok(None);
+            }
+            let mut buffer = vec![0u8; remaining.min(CHUNK) as usize];
+            let read = file.read(&mut buffer).await?;
+            if read == 0 {
+                // Short of the length the range promised -- the file was replaced under us.
+                // Ending here beats spinning on a reader that will never produce again.
+                return Ok(None);
+            }
+            buffer.truncate(read);
+            Ok(Some((buffer, (file, remaining - read as u64))))
+        })
+    }
 }
 
 pub struct Range {
@@ -366,10 +439,6 @@ impl std::fmt::Display for InvalidRange {
 }
 
 impl std::error::Error for InvalidRange {}
-
-/// Keep individual HTTP responses small. Media clients are expected to request the
-/// next range when a file is larger than this chunk.
-const MAX_FILE_RANGE_BYTES: u64 = 4 * 1024 * 1024;
 
 fn draft_lock_path(data_dir: &Path, id: Uuid) -> PathBuf {
     data_dir
@@ -2190,8 +2259,9 @@ impl MediaPack {
                 }
                 let names: Vec<String> = {
                     let selected = media_id_array(&ids)?;
-                    let mut stmt = conn
-                        .prepare("SELECT file_name FROM media WHERE id IN (SELECT value FROM rarray(?))")?;
+                    let mut stmt = conn.prepare(
+                        "SELECT file_name FROM media WHERE id IN (SELECT value FROM rarray(?))",
+                    )?;
                     let rows = stmt.query_map(params![&selected], |row| row.get::<_, String>(0))?;
                     rows.collect::<rusqlite::Result<_>>()?
                 };
@@ -3067,17 +3137,23 @@ impl MediaPack {
         Ok(behaviour)
     }
 
-    /// Points a media slot at `media_id`, marking that file as scenery rather than popup content.
+    /// Points a media slot at `media_id`, marking that file as scenery rather than popup content
+    /// if `new_to_pack` (see [`MediaAddition::new_to_pack`]).
     ///
     /// The two halves are one operation because they mean one thing to the author ("this is the
     /// wallpaper") and because a slot filled without the marker would put the desktop background
     /// in a popup. One history entry, so undo takes both back together.
-    pub async fn fill_media_slot(&self, slot: MediaSlot, media_id: u64) -> Result<Behaviour> {
+    pub async fn fill_media_slot(
+        &self,
+        slot: MediaSlot,
+        media_id: u64,
+        new_to_pack: bool,
+    ) -> Result<Behaviour> {
         let _handle = self.saving.read().await;
         let behaviour = self
             .db_execute(move |mut conn| {
                 history::record(&mut conn, slot_label(&slot), 0, &[media_id], |tx| {
-                    fill_media_slot_tx(tx, &slot, media_id)
+                    fill_media_slot_tx(tx, &slot, media_id, new_to_pack)
                 })
             })
             .await?;
@@ -3093,12 +3169,13 @@ impl MediaPack {
         slot: MediaSlot,
         media_id: u64,
         history_id: i64,
+        new_to_pack: bool,
     ) -> Result<Behaviour> {
         let _handle = self.saving.read().await;
         let behaviour = self
             .db_execute(move |mut conn| {
                 history::record_into_pending(&mut conn, history_id, |tx| {
-                    fill_media_slot_tx(tx, &slot, media_id)
+                    fill_media_slot_tx(tx, &slot, media_id, new_to_pack)
                 })
             })
             .await?;
@@ -3157,6 +3234,115 @@ impl MediaPack {
             .await?;
         self.mark_unsaved().await?;
         Ok(result)
+    }
+
+    /// Puts media into the subliminal pool: membership plus the marker that keeps scenery out of
+    /// the ordinary popup pool.
+    ///
+    /// Both tags, because a subliminal is scenery by default -- an image chosen to flash for a
+    /// fifth of a second is rarely one you also want sitting in a window. The two stay
+    /// independent though: clearing the marker afterwards ("show in popups") leaves it a
+    /// subliminal that is *also* a popup, which a single "kind of media" field could not express.
+    pub async fn add_to_subliminals(&self, additions: Vec<MediaAddition>) -> Result<()> {
+        if additions.is_empty() {
+            return Ok(());
+        }
+        let _handle = self.saving.read().await;
+        let label = if additions.len() == 1 {
+            "Add subliminal".to_string()
+        } else {
+            format!("Add {} subliminals", additions.len())
+        };
+        let ids: Vec<u64> = additions.iter().map(|addition| addition.id).collect();
+        self.db_execute(move |mut conn| {
+            history::record(&mut conn, &label, 0, &ids, |tx| {
+                add_to_pool_tx(tx, &additions)
+            })
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    /// `add_to_subliminals` folded into a media import that is still open, so importing files and
+    /// putting them in the pool land as one undo step -- see `history::record_into_pending`.
+    pub async fn add_to_subliminals_during_import(
+        &self,
+        additions: Vec<MediaAddition>,
+        history_id: i64,
+    ) -> Result<()> {
+        if additions.is_empty() {
+            return Ok(());
+        }
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            history::record_into_pending(&mut conn, history_id, |tx| add_to_pool_tx(tx, &additions))
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    /// Takes media out of the subliminal pool, deleting whatever was only ever in it.
+    ///
+    /// Same rule as emptying a media slot: a file still carrying `__lewdware-non-popup` exists as
+    /// scenery and nothing else, so losing its last use loses the file -- otherwise a pack
+    /// accumulates images invisible everywhere except the media grid. One the author has marked
+    /// "show in popups" is real content and stays, as does one a slot still references.
+    ///
+    /// Returns the ids it deleted, so the media grid can drop them.
+    pub async fn remove_from_subliminals(&self, ids: Vec<u64>) -> Result<Vec<u64>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let _handle = self.saving.read().await;
+        let label = if ids.len() == 1 {
+            "Remove subliminal".to_string()
+        } else {
+            format!("Remove {} subliminals", ids.len())
+        };
+        let deleted = self
+            .db_execute(move |mut conn| {
+                history::record_with_media_refs(&mut conn, &label, 0, |tx| {
+                    let behaviour = read_behaviour(tx)?;
+                    let referenced: HashSet<String> = behaviour
+                        .referenced_media_names()
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect();
+
+                    let mut deleted = Vec::new();
+                    for id in &ids {
+                        let row: Option<(String, bool)> = tx
+                            .query_row(
+                                "SELECT m.file_name, EXISTS(
+                                     SELECT 1 FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
+                                     WHERE mt.media_id = m.id AND t.name = ?)
+                                 FROM media m WHERE m.id = ? AND m.deleted = 0",
+                                params![tags::NON_POPUP_TAG, id],
+                                |row| Ok((row.get(0)?, row.get(1)?)),
+                            )
+                            .optional()?;
+                        let Some((name, scenery)) = row else {
+                            continue;
+                        };
+
+                        tx.execute(
+                            "DELETE FROM media_tags WHERE media_id = ? AND tag_id IN
+                             (SELECT id FROM tags WHERE name = ?)",
+                            params![id, tags::SUBLIMINAL_TAG],
+                        )?;
+
+                        if scenery && !referenced.contains(&name) {
+                            tx.execute("UPDATE media SET deleted = 1 WHERE id = ?", params![id])?;
+                            deleted.push(*id);
+                        }
+                    }
+                    let refs = deleted.clone();
+                    Ok((deleted, refs))
+                })
+            })
+            .await?;
+        self.mark_unsaved().await?;
+        Ok(deleted)
     }
 
     /// Adds or removes `__lewdware-non-popup` on one file -- the "show as popup" toggle.
@@ -3295,7 +3481,18 @@ impl MediaPackView {
         Ok((data, file_type))
     }
 
-    pub async fn get_file_range(&self, id: u64, range: Range) -> Result<(DataRange, FileType)> {
+    /// Opens the requested byte range of a media file, ready to be streamed out.
+    ///
+    /// The archive lock is held only long enough to open and position the handle, not for the
+    /// life of the response: a video preview holds its response open for as long as it is being
+    /// watched, and making a save (which takes the same lock for writing, behind the editor-wide
+    /// mutation lock) wait on that would freeze the editor for the length of a video. See
+    /// [`FileRangeStream::into_stream`] for why an open handle is a safe thing to keep.
+    pub async fn open_file_range(
+        &self,
+        id: u64,
+        range: Range,
+    ) -> Result<(FileRangeStream, FileType)> {
         let _handle = self.archive_io.read().await;
 
         let (offset, length, path, file_type) = self
@@ -3325,10 +3522,8 @@ impl MediaPackView {
                 let mut file = self.open_read().await?;
                 let (start, end) = resolve_range(range, length)?;
                 file.seek(SeekFrom::Start(offset + start)).await?;
-                let mut buf = vec![0u8; (end - start) as usize];
-                file.read_exact(&mut buf).await?;
-                DataRange {
-                    data: buf,
+                FileRangeStream {
+                    file,
                     start,
                     end,
                     total_size: length,
@@ -3340,10 +3535,8 @@ impl MediaPackView {
                 let size = file.metadata().await?.len();
                 let (start, end) = resolve_range(range, size)?;
                 file.seek(SeekFrom::Start(start)).await?;
-                let mut buf = vec![0u8; (end - start) as usize];
-                file.read_exact(&mut buf).await?;
-                DataRange {
-                    data: buf,
+                FileRangeStream {
+                    file,
                     start,
                     end,
                     total_size: size,
@@ -3471,12 +3664,27 @@ fn violates_unique_constraint(err: &anyhow::Error, column: &str) -> bool {
     }
 }
 
-/// Points `slot` at `media_id` and marks that file as scenery. The body of `fill_media_slot`,
-/// separated so it can run either in its own history entry or folded into an open import.
+/// Marks media as a subliminal, and as scenery if the pool is what brought it into the pack. The
+/// body of `add_to_subliminals`, separated so it can run either in its own history entry or folded
+/// into an open import.
+fn add_to_pool_tx(tx: &rusqlite::Transaction<'_>, additions: &[MediaAddition]) -> Result<()> {
+    for addition in additions {
+        apply_tag(tx, addition.id, tags::SUBLIMINAL_TAG)?;
+        if addition.new_to_pack {
+            apply_tag(tx, addition.id, tags::NON_POPUP_TAG)?;
+        }
+    }
+    Ok(())
+}
+
+/// Points `slot` at `media_id`, marking that file as scenery if the slot is what brought it into
+/// the pack. The body of `fill_media_slot`, separated so it can run either in its own history
+/// entry or folded into an open import.
 fn fill_media_slot_tx(
     tx: &rusqlite::Transaction<'_>,
     slot: &MediaSlot,
     media_id: u64,
+    new_to_pack: bool,
 ) -> Result<Behaviour> {
     let name: String = tx
         .query_row(
@@ -3486,7 +3694,9 @@ fn fill_media_slot_tx(
         )
         .optional()?
         .ok_or_else(|| anyhow!("That media file is no longer in the pack"))?;
-    apply_tag(tx, media_id, tags::NON_POPUP_TAG)?;
+    if new_to_pack {
+        apply_tag(tx, media_id, tags::NON_POPUP_TAG)?;
+    }
 
     let mut behaviour = read_behaviour(tx)?;
     // Set, not fill: replacing what a slot points at is the whole of "Replace".
@@ -3795,25 +4005,24 @@ fn sqlite_connection_manager(path: &Path) -> SqliteConnectionManager {
     })
 }
 
+/// The half-open byte range a request resolves to, which is exactly what it asked for -- clamped
+/// to the file, never to a chunk size. A response carrying less than the range it was given is
+/// indistinguishable, to a media client, from a file that simply ends there (see
+/// [`FileRangeStream`]).
 fn resolve_range(range: Range, size: u64) -> Result<(u64, u64)> {
     if size == 0 {
         return Err(InvalidRange.into());
     }
 
-    let (start, requested_end) = match (range.start, range.end) {
+    let (start, end) = match (range.start, range.end) {
         (Some(start), Some(end)) if start <= end && start < size => {
             (start, end.saturating_add(1).min(size))
         }
         (Some(start), None) if start < size => (start, size),
         // RFC 9110 suffix-byte-range-spec: `bytes=-N` requests the final N bytes.
-        (None, Some(suffix)) if suffix > 0 => (
-            size.saturating_sub(suffix)
-                .max(size.saturating_sub(MAX_FILE_RANGE_BYTES)),
-            size,
-        ),
+        (None, Some(suffix)) if suffix > 0 => (size.saturating_sub(suffix), size),
         _ => return Err(InvalidRange.into()),
     };
-    let end = requested_end.min(start.saturating_add(MAX_FILE_RANGE_BYTES));
     if start >= end {
         return Err(InvalidRange.into());
     }
@@ -3876,9 +4085,16 @@ mod tests {
         .is_err());
     }
 
+    /// An open-ended range runs to the end of the file, however big that is.
+    ///
+    /// The bug this guards: responses used to be capped at a few MiB, and a media client does not
+    /// come back for the rest of an open-ended request -- GStreamer, which is what WebKitGTK
+    /// plays `<video>` through, sends a range-less GET, reads the body to its end and stops. Every
+    /// video past the cap played for as long as the cap was worth (~20s for a typical encode) and
+    /// then ended, while its header still advertised the full duration.
     #[test]
-    fn range_resolution_caps_large_responses() {
-        let size = MAX_FILE_RANGE_BYTES * 3;
+    fn an_open_ended_range_runs_to_the_end_of_the_file() {
+        let size = 64 * 1024 * 1024;
         assert_eq!(
             resolve_range(
                 Range {
@@ -3888,8 +4104,9 @@ mod tests {
                 size,
             )
             .unwrap(),
-            (10, 10 + MAX_FILE_RANGE_BYTES),
+            (10, size),
         );
+        // ...and a suffix range runs from where it asked for to the end, not from a chunk back.
         assert_eq!(
             resolve_range(
                 Range {
@@ -3899,7 +4116,7 @@ mod tests {
                 size,
             )
             .unwrap(),
-            (size - MAX_FILE_RANGE_BYTES, size),
+            (0, size),
         );
     }
 
@@ -4081,7 +4298,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        pack.finish_media_import(second_history, None).await.unwrap();
+        pack.finish_media_import(second_history, None)
+            .await
+            .unwrap();
 
         assert_eq!(restored.file().id, first.file().id);
         assert!(!redundant_path.exists());
@@ -4241,6 +4460,15 @@ mod tests {
         assert_eq!(recovered.id(), id);
         assert!(recovered.path().is_none());
         assert!(!recovered.is_saved().await);
+    }
+
+    /// A pool addition standing for a file this very operation imported -- the case that marks it
+    /// as scenery. See `MediaAddition::new_to_pack`.
+    fn new_to_pack(id: u64) -> MediaAddition {
+        MediaAddition {
+            id,
+            new_to_pack: true,
+        }
     }
 
     // Insert a minimal audio row backed by a staging file in dir/media/. Reuses the (already
@@ -4762,8 +4990,12 @@ mod tests {
     async fn undo_survives_a_changeset_whose_own_cascade_beat_it_to_a_row() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
-        let pack =
-            new_test_pack(&tmp.path().join("cascade.lwpack"), data_dir.path(), "Cascade").await;
+        let pack = new_test_pack(
+            &tmp.path().join("cascade.lwpack"),
+            data_dir.path(),
+            "Cascade",
+        )
+        .await;
         let media = insert_staged_audio(&pack, b"tagged").await;
 
         pack.create_and_add_tag(media, "fresh".to_string())
@@ -4811,7 +5043,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let id = media.file().id;
-        pack.fill_media_slot_during_import(MediaSlot::Wallpaper, id, history_id)
+        pack.fill_media_slot_during_import(MediaSlot::Wallpaper, id, history_id, true)
             .await
             .unwrap();
         let status = pack
@@ -4860,7 +5092,7 @@ mod tests {
         let existing = insert_staged_audio(&pack, b"already here").await;
 
         let history_id = pack.begin_media_import().await.unwrap();
-        pack.fill_media_slot_during_import(MediaSlot::Splash, existing, history_id)
+        pack.fill_media_slot_during_import(MediaSlot::Splash, existing, history_id, false)
             .await
             .unwrap();
         let status = pack
@@ -4881,10 +5113,117 @@ mod tests {
         pack.undo().await.unwrap();
         assert_eq!(stored().await.content.splash, None);
         // The file was never this import's to remove -- it was already in the pack.
-        assert!(pack.get_files().await.unwrap().iter().any(|f| f.id == existing));
+        assert!(pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == existing));
 
         pack.redo().await.unwrap();
         assert!(stored().await.content.splash.is_some());
+    }
+
+    /// The pool follows the same lifecycle rule as a slot -- scenery leaves with its last use --
+    /// but in bulk, which is where it matters most: a pack that accumulated forty un-poolable
+    /// images would show them nowhere except the media grid.
+    #[tokio::test]
+    async fn leaving_the_subliminal_pool_deletes_only_what_was_only_ever_a_subliminal() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("pool.lwpack"), data_dir.path(), "Pool").await;
+
+        let scenery = insert_staged_audio(&pack, b"scenery").await;
+        let also_popup = insert_staged_audio(&pack, b"also popup").await;
+        let wallpaper = insert_staged_audio(&pack, b"wallpaper too").await;
+        pack.add_to_subliminals(vec![
+            new_to_pack(scenery),
+            new_to_pack(also_popup),
+            new_to_pack(wallpaper),
+        ])
+        .await
+        .unwrap();
+
+        // Joining the pool marks a file as scenery as well as a member.
+        let mut tags = pack.get_tags(scenery).await.unwrap();
+        tags.sort();
+        assert_eq!(tags, vec![tags::NON_POPUP_TAG, tags::SUBLIMINAL_TAG]);
+
+        // ...which the author can undo per file, leaving it a subliminal that is also a popup.
+        pack.set_shown_as_popup(also_popup, true).await.unwrap();
+        assert_eq!(
+            pack.get_tags(also_popup).await.unwrap(),
+            vec![tags::SUBLIMINAL_TAG]
+        );
+        // A slot pointing at the third is another reason to keep it.
+        pack.fill_media_slot(MediaSlot::Wallpaper, wallpaper, false)
+            .await
+            .unwrap();
+
+        let deleted = pack
+            .remove_from_subliminals(vec![scenery, also_popup, wallpaper])
+            .await
+            .unwrap();
+
+        assert_eq!(deleted, vec![scenery], "only the pure scenery goes");
+        let remaining: Vec<u64> = pack
+            .get_files()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|file| file.id)
+            .collect();
+        assert!(!remaining.contains(&scenery));
+        assert!(remaining.contains(&also_popup));
+        assert!(remaining.contains(&wallpaper));
+        // Membership is gone from all three either way.
+        assert!(pack
+            .get_tags(also_popup)
+            .await
+            .unwrap()
+            .iter()
+            .all(|tag| tag != tags::SUBLIMINAL_TAG));
+    }
+
+    /// Filling the pool from disk is one action, so it undoes as one -- the imports and the pool
+    /// membership share a history entry (see `history::record_into_pending`).
+    #[tokio::test]
+    async fn importing_into_the_pool_undoes_as_one_step() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("poolh.lwpack"), data_dir.path(), "Pool").await;
+        let first = insert_staged_audio(&pack, b"one").await;
+        let second = insert_staged_audio(&pack, b"two").await;
+
+        let history_id = pack.begin_media_import().await.unwrap();
+        pack.add_to_subliminals_during_import(
+            vec![new_to_pack(first), new_to_pack(second)],
+            history_id,
+        )
+        .await
+        .unwrap();
+        let status = pack
+            .finish_media_import(history_id, Some("Add 2 subliminals".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(status.undo_label.as_deref(), Some("Add 2 subliminals"));
+        assert!(pack
+            .get_tags(first)
+            .await
+            .unwrap()
+            .contains(&tags::SUBLIMINAL_TAG.to_string()));
+
+        pack.undo().await.unwrap();
+        assert!(pack.get_tags(first).await.unwrap().is_empty());
+        assert!(pack.get_tags(second).await.unwrap().is_empty());
+
+        pack.redo().await.unwrap();
+        assert!(pack
+            .get_tags(second)
+            .await
+            .unwrap()
+            .contains(&tags::SUBLIMINAL_TAG.to_string()));
     }
 
     /// The lifecycle rule: a file that exists only to be scenery leaves when its slot does, and a
@@ -4898,7 +5237,7 @@ mod tests {
         // Filled from the slot, so it carries the marker: only ever scenery.
         let scenery = insert_staged_audio(&pack, b"scenery").await;
         let behaviour = pack
-            .fill_media_slot(MediaSlot::Wallpaper, scenery)
+            .fill_media_slot(MediaSlot::Wallpaper, scenery, true)
             .await
             .unwrap();
         let scenery_name = behaviour.content.wallpaper.clone().unwrap();
@@ -4907,11 +5246,16 @@ mod tests {
         let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
         assert_eq!(behaviour.content.wallpaper, None);
         assert_eq!(deleted, Some(scenery));
-        assert!(!pack.get_files().await.unwrap().iter().any(|f| f.id == scenery));
+        assert!(!pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == scenery));
 
         // Same again, but the author has said "show as popup": now it's real content and stays.
         let content = insert_staged_audio(&pack, b"content").await;
-        pack.fill_media_slot(MediaSlot::Splash, content)
+        pack.fill_media_slot(MediaSlot::Splash, content, true)
             .await
             .unwrap();
         pack.set_shown_as_popup(content, true).await.unwrap();
@@ -4920,8 +5264,76 @@ mod tests {
         let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Splash).await.unwrap();
         assert_eq!(behaviour.content.splash, None);
         assert_eq!(deleted, None);
-        assert!(pack.get_files().await.unwrap().iter().any(|f| f.id == content));
+        assert!(pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == content));
         assert_ne!(scenery_name, "");
+    }
+
+    /// The other half of the lifecycle rule: only the operation that *brought a file in* may call
+    /// it scenery.
+    ///
+    /// Picking a wallpaper whose bytes the pack already holds resolves to the existing file (see
+    /// `AddOutcome::Duplicate`). Marking that file would take ordinary media out of the media grid
+    /// and, when the slot was later emptied, delete it outright -- losing a file the author
+    /// imported on purpose, for the crime of also being the wallpaper.
+    #[tokio::test]
+    async fn filling_a_slot_from_media_already_in_the_pack_leaves_it_ordinary_content() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("dedup.lwpack"), data_dir.path(), "Dedup").await;
+        let existing = insert_staged_audio(&pack, b"already the author's").await;
+
+        pack.fill_media_slot(MediaSlot::Wallpaper, existing, false)
+            .await
+            .unwrap();
+        assert!(
+            pack.get_tags(existing).await.unwrap().is_empty(),
+            "a file the pack already had is not scenery"
+        );
+
+        let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
+        assert_eq!(behaviour.content.wallpaper, None);
+        assert_eq!(deleted, None, "emptying the slot must not delete the file");
+        assert!(pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == existing));
+    }
+
+    /// The same rule for the pool, whose removal path deletes on the same marker.
+    #[tokio::test]
+    async fn adding_media_already_in_the_pack_to_the_pool_leaves_it_ordinary_content() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("dedup2.lwpack"), data_dir.path(), "Dedup").await;
+        let existing = insert_staged_audio(&pack, b"already the author's").await;
+
+        pack.add_to_subliminals(vec![MediaAddition {
+            id: existing,
+            new_to_pack: false,
+        }])
+        .await
+        .unwrap();
+        assert_eq!(
+            pack.get_tags(existing).await.unwrap(),
+            vec![tags::SUBLIMINAL_TAG],
+            "a subliminal, but still ordinary popup media"
+        );
+
+        let deleted = pack.remove_from_subliminals(vec![existing]).await.unwrap();
+        assert!(deleted.is_empty());
+        assert!(pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == existing));
     }
 
     /// A base wallpaper reused by a timeline stage is Edgeware's ordinary case, so clearing one
@@ -4930,7 +5342,8 @@ mod tests {
     async fn clearing_a_slot_keeps_a_file_another_slot_still_references() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
-        let pack = new_test_pack(&tmp.path().join("shared.lwpack"), data_dir.path(), "Shared").await;
+        let pack =
+            new_test_pack(&tmp.path().join("shared.lwpack"), data_dir.path(), "Shared").await;
         let shared = insert_staged_audio(&pack, b"shared").await;
 
         let behaviour = Behaviour {
@@ -4955,7 +5368,7 @@ mod tests {
             .await
             .unwrap();
 
-        pack.fill_media_slot(MediaSlot::Wallpaper, shared)
+        pack.fill_media_slot(MediaSlot::Wallpaper, shared, true)
             .await
             .unwrap();
         pack.fill_media_slot(
@@ -4963,6 +5376,7 @@ mod tests {
                 stage: "stage-1".to_string(),
             },
             shared,
+            false,
         )
         .await
         .unwrap();
@@ -4975,7 +5389,12 @@ mod tests {
             .unwrap();
         assert_eq!(deleted, None, "the base wallpaper still points at it");
         assert!(behaviour.content.wallpaper.is_some());
-        assert!(pack.get_files().await.unwrap().iter().any(|f| f.id == shared));
+        assert!(pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == shared));
 
         // With the last reference gone it is scenery again, and goes.
         let (_, deleted) = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
@@ -4988,7 +5407,8 @@ mod tests {
     async fn stage_wallpaper_slots_are_addressed_by_stage_id() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
-        let pack = new_test_pack(&tmp.path().join("stages.lwpack"), data_dir.path(), "Stages").await;
+        let pack =
+            new_test_pack(&tmp.path().join("stages.lwpack"), data_dir.path(), "Stages").await;
         let first = insert_staged_audio(&pack, b"first").await;
         let second = insert_staged_audio(&pack, b"second").await;
 
@@ -5018,17 +5438,28 @@ mod tests {
         let slot = |id: &str| MediaSlot::StageWallpaper {
             stage: id.to_string(),
         };
-        pack.fill_media_slot(slot("stage-2"), first).await.unwrap();
-        let behaviour = pack.fill_media_slot(slot("stage-1"), second).await.unwrap();
+        pack.fill_media_slot(slot("stage-2"), first, true)
+            .await
+            .unwrap();
+        let behaviour = pack
+            .fill_media_slot(slot("stage-1"), second, true)
+            .await
+            .unwrap();
 
         let stages = &behaviour.experience.as_ref().unwrap().timeline.stages;
         assert!(stages[0].content.wallpaper.is_some());
         assert_ne!(stages[0].content.wallpaper, stages[1].content.wallpaper);
-        assert_eq!(behaviour.content.wallpaper, None, "the pack slot is untouched");
+        assert_eq!(
+            behaviour.content.wallpaper, None,
+            "the pack slot is untouched"
+        );
 
         // Naming a stage that isn't there is an error, not a silent no-op: the editor can delete a
         // stage while a slot dialog is open.
-        assert!(pack.fill_media_slot(slot("gone"), first).await.is_err());
+        assert!(pack
+            .fill_media_slot(slot("gone"), first, true)
+            .await
+            .is_err());
     }
 
     /// Media references are names, so the two operations that change or retire a name have to
@@ -5039,11 +5470,14 @@ mod tests {
         let data_dir = tempdir().unwrap();
         let pack = new_test_pack(&tmp.path().join("refs.lwpack"), data_dir.path(), "Refs").await;
         let media = insert_staged_audio(&pack, b"wallpaper").await;
-        pack.fill_media_slot(MediaSlot::Wallpaper, media)
+        pack.fill_media_slot(MediaSlot::Wallpaper, media, true)
             .await
             .unwrap();
 
-        let behaviour = pack.set_title(media, "renamed.png".to_string()).await.unwrap();
+        let behaviour = pack
+            .set_title(media, "renamed.png".to_string())
+            .await
+            .unwrap();
         assert_eq!(behaviour.content.wallpaper.as_deref(), Some("renamed.png"));
 
         let behaviour = pack.remove_files(vec![media]).await.unwrap();
@@ -5073,31 +5507,26 @@ mod tests {
 
         let reserved = tags::NON_POPUP_TAG.to_string();
         assert!(pack.add_tag(media, reserved.clone()).await.is_err());
-        assert!(
-            pack.create_and_add_tag(media, "__lewdware-mine".to_string())
-                .await
-                .is_err()
-        );
-        assert!(
-            pack.add_tag_to_files(vec![media], reserved.clone())
-                .await
-                .is_err()
-        );
-        assert!(
-            pack.rename_tag(reserved.clone(), "scenery".to_string())
-                .await
-                .is_err()
-        );
-        assert!(
-            pack.rename_tag("ordinary".to_string(), reserved.clone())
-                .await
-                .is_err()
-        );
-        assert!(
-            pack.merge_tag("ordinary".to_string(), reserved.clone())
-                .await
-                .is_err()
-        );
+        assert!(pack
+            .create_and_add_tag(media, "__lewdware-mine".to_string())
+            .await
+            .is_err());
+        assert!(pack
+            .add_tag_to_files(vec![media], reserved.clone())
+            .await
+            .is_err());
+        assert!(pack
+            .rename_tag(reserved.clone(), "scenery".to_string())
+            .await
+            .is_err());
+        assert!(pack
+            .rename_tag("ordinary".to_string(), reserved.clone())
+            .await
+            .is_err());
+        assert!(pack
+            .merge_tag("ordinary".to_string(), reserved.clone())
+            .await
+            .is_err());
 
         // ...and it stays invisible to everything that offers or lists a tag.
         assert_eq!(pack.get_all_tags().await.unwrap(), vec!["ordinary"]);

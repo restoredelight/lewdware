@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, BufReader, Read},
     path::{Path, PathBuf},
@@ -78,10 +78,8 @@ impl PackSource for DirSource {
     }
 }
 
-/// A zip archive backing a `PackSource`. Applies one bounded heuristic for real-world sloppy
-/// packs: if the archive's true root doesn't look like a pack (none of the recognizable
-/// JSON/media directory markers) but everything lives under exactly one top-level directory,
-/// that directory is treated as the root (one level only, not recursive).
+/// A zip archive backing a `PackSource`. Locates the pack inside it (see `detect_root_prefix`)
+/// rather than assuming the archive's own root is one.
 pub struct ZipSource {
     archive: Mutex<ZipArchive<BufReader<fs::File>>>,
     root_prefix: String,
@@ -176,10 +174,8 @@ impl PackSource for ZipSource {
     }
 }
 
-/// Recognizable top-level markers of an Edgeware pack root, used to decide whether a zip's true
-/// root already looks like a pack (in which case no unwrapping happens) -- checked against
-/// every entry's first path segment, so it works whether or not the zip contains explicit
-/// directory entries.
+/// Recognizable contents of an Edgeware pack root: the JSON files a pack is described by, and the
+/// directories its media lives in.
 const FILE_MARKERS: &[&str] = &[
     "index.json",
     "info.json",
@@ -191,45 +187,68 @@ const FILE_MARKERS: &[&str] = &[
     "corruption.json",
 ];
 const DIR_MARKERS: &[&str] = &["img", "vid", "aud", "hypno", "subliminals"];
+/// The one marker that is not evidence of a pack on its own.
+///
+/// Edgeware keeps the *application's* settings at `data/config.json`, so a distribution shipping
+/// a preconfigured install has a `config.json` in a directory that holds no pack at all. Every
+/// other marker only ever appears inside a pack.
+const WEAK_MARKER: &str = "config.json";
 
+/// The directory inside the archive that holds the pack, as a prefix to strip from every entry
+/// (`""` when that is the archive's own root).
+///
+/// Packs are distributed in more shapes than "the pack, zipped": inside one wrapping folder, and
+/// -- commonly enough to be worth handling -- inside a whole preconfigured copy of Edgeware, where
+/// the pack sits at `edgeware/resource/` among the application's own source, assets and settings.
+/// Guessing wrong is expensive in a way that is easy to miss: every lookup simply finds nothing,
+/// and the import quietly produces an empty pack.
+///
+/// So rather than unwrapping a fixed number of levels, this scores every directory in the archive
+/// by how much of a pack it directly contains and takes the best one. The archive's own root wins
+/// ties by being checked first: an archive that is already a pack is never rummaged through for a
+/// better one inside.
 fn detect_root_prefix(names: &[String]) -> String {
-    if looks_like_pack_root(names) {
-        return String::new();
-    }
-
-    let mut top_level_dirs = BTreeSet::new();
-    let mut has_top_level_file = false;
+    let mut markers: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     for name in names {
         let is_dir_entry = name.ends_with('/');
         let trimmed = name.trim_end_matches('/');
         if trimmed.is_empty() {
             continue;
         }
-        match trimmed.split_once('/') {
-            Some((first, _)) => {
-                top_level_dirs.insert(first.to_string());
+        let segments: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+        for (index, segment) in segments.iter().enumerate() {
+            let is_directory = is_dir_entry || index + 1 < segments.len();
+            let recognized = if is_directory {
+                DIR_MARKERS.contains(segment)
+            } else {
+                FILE_MARKERS.contains(segment)
+            };
+            if recognized {
+                let prefix = match index {
+                    0 => String::new(),
+                    _ => format!("{}/", segments[..index].join("/")),
+                };
+                markers.entry(prefix).or_default().insert(segment);
             }
-            None if is_dir_entry => {
-                top_level_dirs.insert(trimmed.to_string());
-            }
-            None => has_top_level_file = true,
         }
     }
 
-    if !has_top_level_file && top_level_dirs.len() == 1 {
-        let dir = top_level_dirs.into_iter().next().expect("len == 1");
-        return format!("{dir}/");
+    let qualifies = |found: &BTreeSet<&str>| found.iter().any(|marker| *marker != WEAK_MARKER);
+    if markers.get("").is_some_and(qualifies) {
+        return String::new();
     }
 
-    String::new()
-}
-
-fn looks_like_pack_root(names: &[String]) -> bool {
-    names.iter().any(|name| {
-        let trimmed = name.trim_end_matches('/');
-        let first_segment = trimmed.split('/').next().unwrap_or("");
-        FILE_MARKERS.contains(&trimmed) || DIR_MARKERS.contains(&first_segment)
-    })
+    markers
+        .into_iter()
+        .filter(|(_, found)| qualifies(found))
+        // Most pack-like wins; then the shallowest, then by name, so the choice never depends on
+        // the order the archive happens to list its entries in.
+        .max_by_key(|(prefix, found)| {
+            let depth = prefix.matches('/').count();
+            (found.len(), std::cmp::Reverse(depth), std::cmp::Reverse(prefix.clone()))
+        })
+        .map(|(prefix, _)| prefix)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -332,12 +351,66 @@ mod tests {
         assert_eq!(detect_root_prefix(&names), "");
     }
 
+    /// A readme sitting next to the pack folder is ordinary sloppiness, not a reason to give up
+    /// and import the archive root (which holds nothing).
     #[test]
-    fn detect_root_prefix_does_not_unwrap_top_level_file_alongside_dir() {
+    fn detect_root_prefix_unwraps_past_an_unrelated_top_level_file() {
         let names: Vec<String> = ["readme.txt", "MyPack/info.json"]
             .iter()
             .map(|s| s.to_string())
             .collect();
+        assert_eq!(detect_root_prefix(&names), "MyPack/");
+    }
+
+    /// The shape this exists for: a preconfigured copy of Edgeware, with the pack at
+    /// `edgeware/resource/` and the application's own `data/config.json` elsewhere in the tree.
+    /// The old one-level unwrap landed on `edgeware/` and found nothing at all.
+    #[test]
+    fn detect_root_prefix_finds_a_pack_inside_a_whole_edgeware_install() {
+        let names: Vec<String> = [
+            "edgeware/",
+            "edgeware/edgeware.pyw",
+            "edgeware/assets/default_config.json",
+            "edgeware/data/config.json",
+            "edgeware/data/moods/1234512345.json",
+            "edgeware/src/main.py",
+            "edgeware/resource/info.json",
+            "edgeware/resource/captions.json",
+            "edgeware/resource/img/a.png",
+            "edgeware/resource/vid/b.mp4",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(detect_root_prefix(&names), "edgeware/resource/");
+    }
+
+    /// `config.json` alone is the application's settings just as often as a pack's, so it never
+    /// wins a directory the title on its own -- otherwise `data/` beats the real pack whenever
+    /// the pack itself ships no config.
+    #[test]
+    fn detect_root_prefix_ignores_a_lone_config_json() {
+        let names: Vec<String> = ["app/data/config.json", "app/resource/img/a.png"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(detect_root_prefix(&names), "app/resource/");
+    }
+
+    /// An archive that is already a pack is never rummaged through for a better one inside, even
+    /// when something nested looks more pack-like.
+    #[test]
+    fn detect_root_prefix_prefers_a_root_that_is_itself_a_pack() {
+        let names: Vec<String> = [
+            "img/a.png",
+            "extras/spare/info.json",
+            "extras/spare/captions.json",
+            "extras/spare/img/b.png",
+            "extras/spare/vid/c.mp4",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         assert_eq!(detect_root_prefix(&names), "");
     }
 

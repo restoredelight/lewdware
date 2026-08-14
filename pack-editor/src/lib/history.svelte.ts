@@ -82,6 +82,8 @@ class BackendHistory {
 			store.primaryId = null;
 		if (store.openedId !== null && !files.some((file) => file.id === store.openedId))
 			store.openedId = null;
+		if (store.previewId !== null && !files.some((file) => file.id === store.previewId))
+			store.previewId = null;
 		store.historyRevision++;
 	}
 
