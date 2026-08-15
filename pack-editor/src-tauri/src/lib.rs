@@ -12,9 +12,9 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use pack::{ArtistSummary, MediaFile, MediaPack, TagSummary};
+use pack::{ArtistSummary, BehaviourEdit, MediaFile, MediaPack, TagSummary};
 use serde::{Deserialize, Serialize};
-use shared::behaviour::Behaviour;
+use shared::behaviour::{Behaviour, Patch};
 use shared::mode;
 
 // ─── Update check ─────────────────────────────────────────────────────────────
@@ -469,30 +469,27 @@ async fn import_edgeware_pack_dialog(
 
     let converter::ConversionOutput {
         metadata,
-        mut behaviour,
+        behaviour,
         media,
+        media_references,
         icon: _,
         warnings,
     } = output;
 
-    // The wallpaper/splash slots are the one part that can't be written yet: they reference media
-    // by name, and a name isn't final until its file has been imported (a collision suffixes it,
-    // a duplicate or a failed encode means it never arrives at all). Held here and filled in by
-    // `run_import` once each file really exists, so the pack never carries a reference to
-    // something it doesn't have.
-    let media_references = behaviour.take_media_references();
+    // The wallpaper/splash slots are the one part the converter can't fill: they reference media
+    // by id, and no file has one until it has been imported (a name collision suffixes it, a
+    // duplicate or a failed encode means it never arrives at all). The converter reports which
+    // file each slot is waiting on instead, and `run_import` fills them in as those files really
+    // land -- so the pack never carries a reference to something it doesn't have.
 
     // Everything else is written synchronously, before the pack is even stored in app state or
     // the media pipeline spawned -- it's keyed by tag, not by any specific media file's id, so it
     // has no dependency on encoding having finished. This is what lets the pack editor's
     // Content/Experience tabs show real converted data immediately, rather than only once a
     // (potentially large) media pipeline finishes streaming in.
-    pack.set_pack_data(
-        "behaviour",
-        behaviour.to_json_bytes().map_err(|e| e.to_string())?,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    pack.replace_behaviour(behaviour, "Import Edgeware pack".to_string())
+        .await
+        .map_err(|e| e.to_string())?;
     pack.set_metadata(&metadata)
         .await
         .map_err(|e| e.to_string())?;
@@ -914,22 +911,15 @@ async fn remove_mode(state: State<'_, AppState>, id: u64) -> Result<(), String> 
     Ok(())
 }
 
-/// Returns the behaviour because renaming a file moves any media slot pointing at it -- the
-/// frontend replaces its copy rather than re-fetching (same contract as the tag commands).
+/// Renames a media file. Nothing else moves with it: the behaviour document's media slots hold
+/// ids, so a rename cannot invalidate one — which is why this returns nothing where it once had
+/// to hand back a rewritten document (`design/behaviour-storage.md`, step 1).
 #[tauri::command]
-async fn set_file_title(
-    state: State<'_, AppState>,
-    id: u64,
-    name: String,
-) -> Result<Option<Behaviour>, String> {
+async fn set_file_title(state: State<'_, AppState>, id: u64, name: String) -> Result<(), String> {
     let lock = state.pack.lock().await;
     match lock.as_ref() {
-        Some(pack) => pack
-            .set_title(id, name)
-            .await
-            .map(Some)
-            .map_err(|e| e.to_string()),
-        None => Ok(None),
+        Some(pack) => pack.set_title(id, name).await.map_err(|e| e.to_string()),
+        None => Ok(()),
     }
 }
 
@@ -1256,30 +1246,30 @@ async fn mark_pack_unsaved(state: State<'_, AppState>) -> Result<(), String> {
 async fn get_behaviour(state: State<'_, AppState>) -> Result<Behaviour, String> {
     let lock = state.pack.lock().await;
     match lock.as_ref() {
-        Some(pack) => {
-            let blob = pack
-                .get_pack_data("behaviour")
-                .await
-                .map_err(|e| e.to_string())?;
-            match blob {
-                Some(bytes) => Behaviour::from_json_bytes(&bytes).map_err(|e| e.to_string()),
-                None => Ok(Behaviour::new()),
-            }
-        }
+        Some(pack) => pack.get_behaviour().await.map_err(|e| e.to_string()),
         None => Err("No pack open".to_string()),
     }
 }
 
+/// Applies one author action to the behaviour document and hands back the stored result.
+///
+/// Takes patches rather than a document: the backend is the only writer of behaviour, so the
+/// front end describes what it changed instead of sending the copy it holds. `retiring` names
+/// media the action deliberately lets go of, so that dropping a stage and dropping the wallpaper
+/// that existed only for it are one transaction and one undo entry. See
+/// [`MediaPack::edit_behaviour`].
 #[tauri::command]
-async fn set_behaviour(state: State<'_, AppState>, behaviour: Behaviour) -> Result<(), String> {
+async fn edit_behaviour(
+    state: State<'_, AppState>,
+    patches: Vec<Patch>,
+    label: String,
+    retiring: Vec<u64>,
+) -> Result<BehaviourEdit, String> {
     let lock = state.pack.lock().await;
-    if let Some(pack) = lock.as_ref() {
-        let bytes = behaviour.to_json_bytes().map_err(|e| e.to_string())?;
-        pack.set_pack_data("behaviour", bytes)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    let pack = lock.as_ref().ok_or_else(|| "No pack open".to_string())?;
+    pack.edit_behaviour(patches, label, retiring)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ── Media slots ──────────────────────────────────────────────────────────────
@@ -1794,7 +1784,7 @@ pub fn run() {
             save_pack_metadata,
             mark_pack_unsaved,
             get_behaviour,
-            set_behaviour,
+            edit_behaviour,
             remove_from_subliminals,
             add_subliminal_files_dialog,
             fill_media_slot_dialog,

@@ -11,16 +11,27 @@ use rusqlite::{
 use serde::Serialize;
 use uuid::Uuid;
 
-const TRACKED_TABLES: &[&str] = &[
-    "media",
-    "tags",
-    "media_tags",
-    "artists",
-    "media_artists",
-    "modes",
-    "pack_data",
-    "pack_metadata",
-];
+/// The tables whose changes an undo entry records. A table missing from here is a table undo
+/// silently cannot restore.
+///
+/// The behaviour tables are pulled in from `editor_db` rather than listed again, because that list
+/// already has to be exhaustive for the save/reopen copy to work -- and two exhaustive lists that
+/// have to agree is precisely the arrangement that stops agreeing.
+fn tracked_tables() -> impl Iterator<Item = &'static str> {
+    const CORE: &[&str] = &[
+        "media",
+        "tags",
+        "media_tags",
+        "artists",
+        "media_artists",
+        "modes",
+        "pack_data",
+        "pack_metadata",
+    ];
+    CORE.iter()
+        .copied()
+        .chain(crate::editor_db::BEHAVIOUR_TABLES.iter().copied())
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Status {
@@ -54,8 +65,8 @@ pub fn record_with_media_refs<T>(
 ) -> Result<T> {
     let mut session = Session::new(connection)?;
     session.set_enabled(false);
-    for table in TRACKED_TABLES {
-        session.attach(Some(*table))?;
+    for table in tracked_tables() {
+        session.attach(Some(table))?;
     }
 
     let tx = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
@@ -281,8 +292,8 @@ pub fn record_into_pending<T>(
     operation: impl FnOnce(&Transaction<'_>) -> Result<T>,
 ) -> Result<T> {
     let mut session = Session::new(connection)?;
-    for table in TRACKED_TABLES {
-        session.attach(Some(*table))?;
+    for table in tracked_tables() {
+        session.attach(Some(table))?;
     }
 
     let tx = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;

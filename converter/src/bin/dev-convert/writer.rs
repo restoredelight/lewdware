@@ -130,10 +130,11 @@ pub fn write_pack(
         written += 1;
     }
 
-    db.execute(
-        "INSERT INTO pack_data (name, blob) VALUES ('behaviour', ?)",
-        params![conversion.behaviour.to_json_bytes()?],
-    )?;
+    // Through the storage module: the document is rows now, so writing it is its business.
+    let mut db = db;
+    let tx = db.transaction()?;
+    shared::behaviour::storage::write(&tx, &conversion.behaviour)?;
+    tx.commit()?;
 
     // Forces a full checkpoint into the main db file -- without this, data written under a WAL
     // journal could still be sitting in a separate `-wal` file when we read `db_path`'s raw bytes

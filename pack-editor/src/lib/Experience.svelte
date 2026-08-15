@@ -3,9 +3,10 @@
 	import { store } from './store.svelte.js';
 	import TimelineEditor from './TimelineEditor.svelte';
 	import {
+		commitBehaviourEdit,
+		editBehaviourField,
 		ensureBehaviour,
-		flushBehaviourSave,
-		scheduleBehaviourSave
+		flushBehaviourSave
 	} from './behaviourSave.svelte.js';
 	import type { Experience, Stage } from './types.js';
 	import Toggle from '$ui/Toggle.svelte';
@@ -40,14 +41,14 @@
 				: null;
 			store.behaviour.experience = null;
 		}
-		scheduleBehaviourSave();
+		commitBehaviourEdit('experience', checked ? 'Enable timeline' : 'Disable timeline');
 	}
 
 	function setLabel(value: string) {
 		if (!store.behaviour?.experience) return;
 		// A blank name means "no override" -- the mode keeps its own name ("Sequence").
 		store.behaviour.experience.label = value.trim() === '' ? null : value;
-		scheduleBehaviourSave();
+		editBehaviourField('experience.label', 'Edit mode name');
 	}
 </script>
 

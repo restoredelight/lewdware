@@ -454,12 +454,12 @@ struct LoadedPack {
     /// only to synthesize the built-in default modes' content-group toggles (see
     /// `effective_entries_for_mode`); custom modes never consult this.
     behaviour: Behaviour,
-    /// The type of each media file `behaviour` references by name (wallpaper/splash slots), for
+    /// The type of each media file `behaviour` references by id (wallpaper/splash slots), for
     /// the `pack_has_*` facts -- see `shared::behaviour::MediaLookup`. Resolved once at load
-    /// time, while the pack's index db is open; a name that isn't in the pack is simply absent.
+    /// time, while the pack's index db is open; an id that isn't in the pack is simply absent.
     /// Config never needs the rest of the pack's media, so this stays keyed to what's referenced
     /// rather than mirroring the whole media table.
-    referenced_media: HashMap<String, FileType>,
+    referenced_media: HashMap<u64, FileType>,
     /// Which mode the pack author suggests -- see `pick_pack`'s preselection and
     /// `build_mode_groups`'s "(recommended)" marker.
     recommended_mode: Option<RecommendedMode>,
@@ -503,27 +503,23 @@ fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
         modes.push(PackModeEntry { id, metadata });
     }
 
-    let behaviour_bytes: Option<Vec<u8>> = conn
-        .query_row(
-            "SELECT blob FROM pack_data WHERE name = 'behaviour'",
-            [],
-            |row| row.get("blob"),
-        )
-        .optional()?;
-    let behaviour = behaviour_bytes
-        .and_then(|bytes| Behaviour::from_json_bytes(&bytes).ok())
+    // Assembled from the `behaviour_*` tables and what is left of the blob -- see
+    // `shared::behaviour::storage`. A pack whose document cannot be read at all still opens; it
+    // simply offers no behaviour-derived options, which is what an empty document means anyway.
+    let behaviour = shared::behaviour::storage::read(&conn)
+        .inspect_err(|error| tracing::warn!("Could not read the pack's behaviour: {error}"))
         .unwrap_or_default();
 
     let mut referenced_media = HashMap::new();
-    let mut media_stmt = conn.prepare("SELECT file_type FROM media WHERE file_name = ?")?;
-    for name in behaviour.referenced_media_names() {
+    let mut media_stmt = conn.prepare("SELECT file_type FROM media WHERE id = ?")?;
+    for id in behaviour.referenced_media_ids() {
         let file_type: Option<String> = media_stmt
-            .query_row(params![name], |row| row.get(0))
+            .query_row(params![id], |row| row.get(0))
             .optional()?;
         // An unrecognized `file_type` reads the same as a missing file: whatever it is, the
         // wallpaper/splash features can't use it.
         if let Some(file_type) = file_type.as_deref().and_then(parse_file_type) {
-            referenced_media.insert(name.to_string(), file_type);
+            referenced_media.insert(id, file_type);
         }
     }
     drop(media_stmt);
@@ -699,7 +695,7 @@ fn effective_entries_for_mode(mode: &Mode, state: &AppState) -> Option<Effective
             .as_ref()
             .map(|p| (p.behaviour.clone(), p.referenced_media.clone()))
             .unwrap_or_default();
-        let media = |name: &str| referenced_media.get(name).copied();
+        let media = |id: u64| referenced_media.get(&id).copied();
         let schema = effective_options(&mode_meta, &behaviour, &media);
         Some(EffectiveEntries {
             entries: schema.entries,
@@ -1341,7 +1337,12 @@ async fn upload_mode(
 
     // Note the guard is released before `build_mode_groups`, which locks `uploaded` itself --
     // holding it across the call self-deadlocks (`Mutex` is not reentrant) and hangs the UI.
-    let already_uploaded = state.uploaded.lock().unwrap().iter().any(|u| u.path == path);
+    let already_uploaded = state
+        .uploaded
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|u| u.path == path);
     if already_uploaded {
         return Ok(Some(UploadModeResult {
             mode_groups: build_mode_groups(&state),
@@ -1999,11 +2000,12 @@ mod tests {
                 )
                 .unwrap();
             }
-            conn.execute(
-                "INSERT INTO pack_data (name, blob) VALUES ('behaviour', ?)",
-                rusqlite::params![behaviour.to_json_bytes().unwrap()],
-            )
-            .unwrap();
+            // Through the real write path: the media slots live in `behaviour_content` now, so a
+            // hand-written blob would arrive with the wallpaper missing.
+            let mut conn = conn;
+            let tx = conn.transaction().unwrap();
+            shared::behaviour::storage::write(&tx, behaviour).unwrap();
+            tx.commit().unwrap();
         }
         let db_bytes = std::fs::read(&db_path).unwrap();
 
@@ -2028,10 +2030,12 @@ mod tests {
         pack_path
     }
 
-    fn behaviour_with_wallpaper(name: &str) -> Behaviour {
+    /// A behaviour whose wallpaper slot points at `media` -- `write_pack` inserts its media in
+    /// order, so the first file it is given is id 1.
+    fn behaviour_with_wallpaper(media: u64) -> Behaviour {
         Behaviour {
             content: shared::behaviour::Content {
-                wallpaper: Some(name.to_string()),
+                wallpaper: Some(media),
                 ..Default::default()
             },
             ..Behaviour::new()
@@ -2047,12 +2051,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = write_pack(
             dir.path(),
-            &behaviour_with_wallpaper("bg.png"),
+            &behaviour_with_wallpaper(1),
             &[("bg.png", "image")],
         );
 
         let pack = load_pack(path).unwrap();
-        assert_eq!(pack.referenced_media.get("bg.png"), Some(&FileType::Image));
+        assert_eq!(pack.referenced_media.get(&1), Some(&FileType::Image));
 
         let state = test_state(Some(pack));
         let config = AppConfig {
@@ -2067,14 +2071,22 @@ mod tests {
         );
     }
 
-    /// The other half of the same fact: a reference the pack can't honour -- the file was never
-    /// imported, or is a video where an image is required -- must report false rather than offer a
-    /// toggle that does nothing.
+    /// The other half of the same fact: a slot the pack can't honour must report false rather than
+    /// offer a toggle that does nothing.
+    ///
+    /// Only the wrong-media-type case is reachable now. A slot naming a file the pack does not
+    /// have used to be the other half of this test, and the foreign key on `behaviour_content`
+    /// has since made it unrepresentable -- deleting the file nulls the slot, and writing a slot
+    /// that points at nothing is refused (`shared::behaviour::storage`).
     #[test]
-    fn a_wallpaper_reference_that_does_not_resolve_hides_the_toggle() {
-        for media in [&[][..], &[("bg.png", "video")][..]] {
+    fn a_wallpaper_reference_of_the_wrong_type_hides_the_toggle() {
+        for file_type in ["video", "audio"] {
             let dir = tempfile::tempdir().unwrap();
-            let path = write_pack(dir.path(), &behaviour_with_wallpaper("bg.png"), media);
+            let path = write_pack(
+                dir.path(),
+                &behaviour_with_wallpaper(1),
+                &[("bg.png", file_type)],
+            );
 
             let state = test_state(Some(load_pack(path).unwrap()));
             let config = AppConfig {
@@ -2086,7 +2098,7 @@ mod tests {
                     .pack_has
                     .get("pack_has_wallpaper"),
                 Some(&OptionValue::Boolean(false)),
-                "media {media:?} should not satisfy a wallpaper slot",
+                "a {file_type} should not satisfy a wallpaper slot",
             );
         }
     }

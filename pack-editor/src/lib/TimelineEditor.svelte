@@ -9,10 +9,8 @@
 	import StageTabs from './StageTabs.svelte';
 	import TagPicker from './TagPicker.svelte';
 	import TransitionEditor from './TransitionEditor.svelte';
-	import { api } from './api.js';
-	import { flushBehaviourSave, scheduleBehaviourSave } from './behaviourSave.svelte.js';
+	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
 	import { store } from './store.svelte.js';
-	import { taskFeedback } from './taskFeedback.svelte.js';
 	import type { EventSchedule, Stage } from './types.js';
 	import {
 		duplicateStage as duplicateTimelineStage,
@@ -77,12 +75,17 @@
 		{ key: 'subliminal', label: 'Subliminals', interval: 60 }
 	] as const;
 	const clone = <T,>(value: T): T => structuredClone($state.snapshot(value)) as T;
+	// Adding, moving or removing a stage renumbers the rest and rewrites the transitions between
+	// them (`normalizeTimeline`), so those edits address the timeline whole. Editing one stage's
+	// own fields addresses just that stage.
+	const TIMELINE = 'experience.timeline';
+	const stagePath = $derived(`${TIMELINE}.stages.${activeIndex}`);
 	function id(prefix: string) {
 		return `${prefix}-${crypto.randomUUID()}`;
 	}
-	function changed() {
+	function changed(label: string) {
 		normalizeTimeline(store.behaviour!.experience!.timeline);
-		scheduleBehaviourSave();
+		commitBehaviourEdit(TIMELINE, label);
 	}
 	function addStage() {
 		// With a transition selected, insert between its two stages; otherwise after the active stage.
@@ -98,7 +101,7 @@
 		next.label = `Stage ${stages.length + 1}`;
 		stages.splice(insertIndex, 0, next);
 		activeId = next.id;
-		changed();
+		changed('Add stage');
 	}
 	function duplicate(index = activeIndex) {
 		const source = stages[index];
@@ -106,38 +109,29 @@
 		const snapshot = $state.snapshot(source) as Stage;
 		const next = duplicateTimelineStage(store.behaviour!.experience!.timeline, index, snapshot);
 		activeId = next.id;
-		scheduleBehaviourSave();
+		commitBehaviourEdit(TIMELINE, 'Duplicate stage');
 	}
 	function move(from: number, to: number) {
 		const selected = stages[from];
 		moveTimelineStage(store.behaviour!.experience!.timeline, from, to - from);
 		activeId = selected.id;
-		scheduleBehaviourSave();
+		commitBehaviourEdit(TIMELINE, 'Move stage');
 	}
-	async function confirmRemove() {
+	function confirmRemove() {
 		if (!removing || stages.length === 1) return;
 		const target = removing;
 		const index = stages.indexOf(target);
 		// A stage's wallpaper is a media slot, so retiring the stage retires the slot: a file that
 		// was only ever this stage's scenery leaves with it, exactly as the slot's own Remove does
-		// (see `MediaPack::clear_media_slot`). Cleared through the backend because only it knows
-		// whether the file is scenery and whether anything else still points at it. The stage is
-		// then removed locally and saved over the top, so both ends agree on the end state.
-		if (target.content.wallpaper) {
-			try {
-				await flushBehaviourSave();
-				const result = await api.clearMediaSlot({ kind: 'stage_wallpaper', stage: target.id });
-				if (result?.deleted_id != null) store.removeFilesById([result.deleted_id], true);
-			} catch (error) {
-				// The stage still goes; a wallpaper left behind is tidier than a stage that won't
-				// delete, and the file is still reachable from the Media tab.
-				taskFeedback.error('stage-wallpaper', `Could not clear the stage wallpaper: ${error}`);
-			}
-		}
+		// (see `MediaPack::clear_media_slot`). Handed to the backend as `retiring` rather than
+		// cleared through a command of its own, so that dropping the stage and dropping its
+		// wallpaper are one transaction -- and so one undo brings back both, instead of leaving a
+		// stage without the wallpaper it had.
+		const retiring = target.content.wallpaper;
 		removeTimelineStage(store.behaviour!.experience!.timeline, target);
 		activeId = stages[Math.min(index, stages.length - 1)].id;
 		removing = null;
-		scheduleBehaviourSave();
+		commitBehaviourEdit(TIMELINE, 'Remove stage', retiring != null ? [retiring] : []);
 	}
 	function eventValue(key: keyof Stage['events']): EventSchedule | undefined {
 		return stage?.events[key];
@@ -146,7 +140,7 @@
 		if (!stage) return;
 		if (value) stage.events[key] = value;
 		else delete stage.events[key];
-		scheduleBehaviourSave();
+		commitBehaviourEdit(`${stagePath}.events`, 'Change stage events');
 	}
 	function transitionSummary() {
 		if (!outgoing || outgoing.duration_seconds === 0) return 'Immediately';
@@ -182,7 +176,7 @@
 							class="stage-name"
 							aria-label="Stage name"
 							bind:value={stage.label}
-							oninput={scheduleBehaviourSave}
+							oninput={() => editBehaviourField(`${stagePath}.label`, 'Rename stage')}
 						/>
 					</div>
 				</header>
@@ -208,18 +202,19 @@
 							onchange={(on) => {
 								if (on) stage.content.tags = [];
 								else delete stage.content.tags;
-								scheduleBehaviourSave();
+								commitBehaviourEdit(`${stagePath}.content`, 'Change stage content');
 							}}
 						/>
 					</div>
 					{#if stage.content.tags}<TagPicker
 							tags={stage.content.tags}
 							id={`stage-content-${stage.id}`}
+							path={`${stagePath}.content.tags`}
 							onchange={(tags) => (stage.content.tags = tags)}
 						/>{/if}
 					<MediaSlot
 						slot={{ kind: 'stage_wallpaper', stage: stage.id }}
-						name={stage.content.wallpaper}
+						mediaId={stage.content.wallpaper}
 						title="Wallpaper"
 						description="The wallpaper this stage sets. Every stage writes it outright, so leaving it empty is what keeps the one already in effect."
 						emptyNote={inheritedWallpaper
@@ -258,7 +253,7 @@
 							onchange={(on) => {
 								if (on) stage.movement = { minimum_speed: 50, maximum_speed: 150 };
 								else delete stage.movement;
-								scheduleBehaviourSave();
+								commitBehaviourEdit(`${stagePath}.movement`, 'Toggle window movement');
 							}}
 						/>
 					</div>
@@ -267,13 +262,21 @@
 								>Minimum speed<input
 									type="number"
 									bind:value={stage.movement.minimum_speed}
-									oninput={scheduleBehaviourSave}
+									oninput={() =>
+										editBehaviourField(
+											`${stagePath}.movement.minimum_speed`,
+											'Edit movement speed'
+										)}
 								/><small>Previous: {previous?.movement?.minimum_speed ?? 'Off'}</small></label
 							><label
 								>Maximum speed<input
 									type="number"
 									bind:value={stage.movement.maximum_speed}
-									oninput={scheduleBehaviourSave}
+									oninput={() =>
+										editBehaviourField(
+											`${stagePath}.movement.maximum_speed`,
+											'Edit movement speed'
+										)}
 								/><small>Previous: {previous?.movement?.maximum_speed ?? 'Off'}</small></label
 							>
 						</div>{/if}
@@ -291,7 +294,7 @@
 							onchange={(on) => {
 								if (on) stage.mitosis = { chance: 0.5, count: 2 };
 								else delete stage.mitosis;
-								scheduleBehaviourSave();
+								commitBehaviourEdit(`${stagePath}.mitosis`, 'Toggle mitosis');
 							}}
 						/>
 					</div>
@@ -303,7 +306,7 @@
 									max="1"
 									step=".05"
 									bind:value={stage.mitosis.chance}
-									oninput={scheduleBehaviourSave}
+									oninput={() => editBehaviourField(`${stagePath}.mitosis.chance`, 'Edit mitosis')}
 								/><small>Previous: {previous?.mitosis?.chance ?? 'Off'}</small></label
 							><label
 								>Copies<input
@@ -311,7 +314,7 @@
 									min="1"
 									step="1"
 									bind:value={stage.mitosis.count}
-									oninput={scheduleBehaviourSave}
+									oninput={() => editBehaviourField(`${stagePath}.mitosis.count`, 'Edit mitosis')}
 								/><small>Previous: {previous?.mitosis?.count ?? 'Off'}</small></label
 							>
 						</div>{/if}
@@ -338,7 +341,10 @@
 										const n = e.currentTarget.valueAsNumber;
 										if (Number.isFinite(n)) {
 											stage.end!.duration_seconds = n * 60;
-											scheduleBehaviourSave();
+											editBehaviourField(
+												`${stagePath}.end.duration_seconds`,
+												'Edit stage duration'
+											);
 										}
 									}}
 								/>{#if stage.end.duration_seconds === 0}<small
@@ -354,14 +360,18 @@
 								onchange={(v) => {
 									if (v === 'none') delete stage.end!.event_count;
 									else stage.end!.event_count = { event: v as any, count: 10, scope: 'stage' };
-									scheduleBehaviourSave();
+									commitBehaviourEdit(`${stagePath}.end`, 'Change stage end condition');
 								}}
 							/>{#if stage.end.event_count}<label
 									>Event count<input
 										type="number"
 										min="1"
 										bind:value={stage.end.event_count.count}
-										oninput={scheduleBehaviourSave}
+										oninput={() =>
+											editBehaviourField(
+												`${stagePath}.end.event_count.count`,
+												'Edit stage end condition'
+											)}
 									/></label
 								><Select
 									label="Advance when"
@@ -372,7 +382,7 @@
 									]}
 									onchange={(v) => {
 										stage.end!.strategy = v as 'any' | 'all';
-										scheduleBehaviourSave();
+										commitBehaviourEdit(`${stagePath}.end.strategy`, 'Change stage end condition');
 									}}
 								/>{/if}
 						</div>

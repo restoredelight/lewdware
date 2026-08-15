@@ -3,7 +3,7 @@
 	import Select from '$ui/Select.svelte';
 	import { store } from './store.svelte.js';
 	import TagPicker from './TagPicker.svelte';
-	import { scheduleBehaviourSave } from './behaviourSave.svelte.js';
+	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
 	import Button from '$ui/Button.svelte';
 	import Card from '$ui/Card.svelte';
 	import EmptyState from '$ui/EmptyState.svelte';
@@ -11,6 +11,9 @@
 	import { Icon, Plus } from 'svelte-hero-icons';
 
 	const groups = $derived(store.behaviour!.content.content_groups);
+	// Adding or removing a group moves every later index, so those edits replace the array whole
+	// rather than addressing one entry.
+	const GROUPS = 'content.content_groups';
 
 	let quickCreateTag = $state('');
 	let removing = $state<(typeof groups)[number] | null>(null);
@@ -27,7 +30,7 @@
 			tags: [],
 			enabled_by_default: true
 		});
-		scheduleBehaviourSave();
+		commitBehaviourEdit(GROUPS, 'Add content group');
 	}
 
 	function quickCreateFromTag() {
@@ -41,7 +44,7 @@
 			enabled_by_default: true
 		});
 		quickCreateTag = '';
-		scheduleBehaviourSave();
+		commitBehaviourEdit(GROUPS, 'Add content group');
 	}
 
 	function removeGroup(index: number) {
@@ -51,7 +54,7 @@
 			return;
 		}
 		groups.splice(index, 1);
-		scheduleBehaviourSave();
+		commitBehaviourEdit(GROUPS, 'Remove content group');
 	}
 
 	function confirmRemove() {
@@ -59,7 +62,7 @@
 		const index = groups.indexOf(removing);
 		if (index >= 0) groups.splice(index, 1);
 		removing = null;
-		scheduleBehaviourSave();
+		commitBehaviourEdit(GROUPS, 'Remove content group');
 	}
 </script>
 
@@ -92,7 +95,7 @@
 						<input
 							id={`group-name-${index}`}
 							bind:value={group.label}
-							oninput={scheduleBehaviourSave}
+							oninput={() => editBehaviourField(`${GROUPS}.${index}.label`, 'Edit group name')}
 							placeholder="Label"
 							class="border-border bg-bg text-text rounded border px-2 py-1 text-xs
 "
@@ -103,7 +106,8 @@
 						<input
 							id={`group-description-${index}`}
 							bind:value={group.description}
-							oninput={scheduleBehaviourSave}
+							oninput={() =>
+								editBehaviourField(`${GROUPS}.${index}.description`, 'Edit group description')}
 							placeholder="Explain what this group contains"
 							class="border-border bg-bg text-text rounded border px-2 py-1 text-xs
 "
@@ -113,6 +117,7 @@
 				<TagPicker
 					tags={group.tags}
 					id={`content-group-${index}`}
+					path={`${GROUPS}.${index}.tags`}
 					onchange={(tags) => (group.tags = tags)}
 				/>
 				<label class="flex items-center gap-2">
@@ -121,7 +126,7 @@
 						ariaLabel="Enabled by default"
 						onchange={(checked) => {
 							group.enabled_by_default = checked;
-							scheduleBehaviourSave();
+							commitBehaviourEdit(`${GROUPS}.${index}.enabled_by_default`, 'Change group default');
 						}}
 					/>
 					<span class="text-text text-xs">Enabled by default</span>

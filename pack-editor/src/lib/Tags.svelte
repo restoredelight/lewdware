@@ -6,11 +6,7 @@
 	import Field from '$ui/Field.svelte';
 	import Select from '$ui/Select.svelte';
 	import { api } from './api.js';
-	import {
-		ensureBehaviour,
-		flushBehaviourSave,
-		initializeBehaviourHistory
-	} from './behaviourSave.svelte.js';
+	import { adoptBehaviour, ensureBehaviour } from './behaviourSave.svelte.js';
 	import { store } from './store.svelte.js';
 	import { behaviourTags, tagUsage } from './tagReferences.js';
 	import { withoutManagedTags } from './tags.js';
@@ -82,20 +78,15 @@
 		busy = true;
 		error = null;
 		try {
-			await flushBehaviourSave();
 			const source = editing;
 			const editMode = mode;
 			const after =
 				editMode === 'rename'
 					? await api.renameTag(source, target)
 					: await api.mergeTag(source, target);
-			store.behaviour = after;
-			initializeBehaviourHistory(after);
-			updateLocal(source, target, true);
 			const operation = editMode === 'rename' ? 'Rename' : 'Merge';
-			history.record({
-				label: `${operation} tag “${source}”`
-			});
+			adoptBehaviour(after, { label: `${operation} tag “${source}”` });
+			updateLocal(source, target, true);
 			summaries = await api.getTagSummaries();
 			editing = null;
 		} catch (err) {
@@ -112,14 +103,9 @@
 		busy = true;
 		error = null;
 		try {
-			await flushBehaviourSave();
 			const after = await api.deleteTag(tag);
-			store.behaviour = after;
-			initializeBehaviourHistory(after);
+			adoptBehaviour(after, { label: `Delete tag “${tag}”` });
 			updateLocal(tag, null, true);
-			history.record({
-				label: `Delete tag “${tag}”`
-			});
 			summaries = await api.getTagSummaries();
 		} catch (err) {
 			error = String(err);

@@ -153,6 +153,14 @@ impl MediaManager {
         })?
     }
 
+    /// One file by its media id, for the behaviour document's wallpaper/splash slots.
+    pub fn get_media_by_id(&self, id: u64) -> Result<Option<Media>> {
+        self.send(|tx| MediaRequest::GetMediaById {
+            id,
+            response_tx: tx,
+        })?
+    }
+
     pub fn random_media(
         &self,
         types: MediaTypes,
@@ -208,11 +216,10 @@ impl MediaManager {
 
     /// Reads a named blob from the pack's `pack_data` table (e.g. `"behaviour"` for
     /// behaviour.json). `None` if the pack doesn't carry an entry with this name.
-    pub fn get_pack_data(&self, name: String) -> anyhow::Result<Option<Vec<u8>>> {
-        self.send(|tx| MediaRequest::GetPackData {
-            name,
-            response_tx: tx,
-        })?
+    /// The pack's behaviour document. See `MediaPack::get_behaviour`.
+    pub fn get_behaviour(&self) -> anyhow::Result<shared::behaviour::Behaviour> {
+        self.send(|tx| MediaRequest::GetBehaviour { response_tx: tx })
+            .map_err(anyhow::Error::from)?
     }
 }
 
@@ -288,6 +295,9 @@ async fn handle_request<T: EventPoster>(
             name,
             response_tx,
         } => response_tx.send(pack.get_media(name, types)).is_ok(),
+        MediaRequest::GetMediaById { id, response_tx } => {
+            response_tx.send(pack.get_media_by_id(id)).is_ok()
+        }
         MediaRequest::RandomMedia {
             types,
             tags,
@@ -362,8 +372,8 @@ async fn handle_request<T: EventPoster>(
         MediaRequest::GetModeData { id, response_tx } => {
             response_tx.send(pack.get_mode(id)).is_ok()
         }
-        MediaRequest::GetPackData { name, response_tx } => {
-            response_tx.send(pack.get_pack_data(&name)).is_ok()
+        MediaRequest::GetBehaviour { response_tx } => {
+            response_tx.send(pack.get_behaviour()).is_ok()
         }
     } {
         // Either the requester's oneshot receiver was dropped, or (for the `*Resolved` events)
@@ -460,6 +470,10 @@ enum MediaRequest {
         name: String,
         response_tx: std_mpsc::Sender<Result<Option<Media>>>,
     },
+    GetMediaById {
+        id: u64,
+        response_tx: std_mpsc::Sender<Result<Option<Media>>>,
+    },
     RandomMedia {
         types: MediaTypes,
         tags: Option<TagFilter>,
@@ -486,9 +500,8 @@ enum MediaRequest {
         id: u64,
         response_tx: std_mpsc::Sender<anyhow::Result<Vec<u8>>>,
     },
-    GetPackData {
-        name: String,
-        response_tx: std_mpsc::Sender<anyhow::Result<Option<Vec<u8>>>>,
+    GetBehaviour {
+        response_tx: std_mpsc::Sender<anyhow::Result<shared::behaviour::Behaviour>>,
     },
 }
 

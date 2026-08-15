@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Checkbox from '$ui/Checkbox.svelte';
 	import Select from '$ui/Select.svelte';
-	import { scheduleBehaviourSave } from './behaviourSave.svelte.js';
+	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
 	import { store } from './store.svelte.js';
 	import type { Stage, Transition, TransitionValue } from './types.js';
 
@@ -11,6 +11,13 @@
 	// transition, and mutating an unbound prop trips Svelte's ownership warning.
 	const transition = $derived(
 		store.behaviour!.experience!.timeline.transitions.find((item) => item.id === transitionId)!
+	);
+	// A patch addresses a transition by position, while everything else here addresses it by id --
+	// the ids are what survive the timeline being edited, but the document is a list.
+	const path = $derived(
+		`experience.timeline.transitions.${store.behaviour!.experience!.timeline.transitions.findIndex(
+			(item) => item.id === transitionId
+		)}`
 	);
 	let rootEl = $state<HTMLElement>();
 	// WebKitGTK doesn't reliably clamp scrollTop when the panel's content shrinks,
@@ -64,7 +71,9 @@
 		}
 		if (checked && !transition.affected.includes(key)) transition.affected.push(key);
 		if (!checked) transition.affected = transition.affected.filter((item) => item !== key);
-		scheduleBehaviourSave();
+		// Named for the section it lives in ("Gradual changes"), so the undo entry points at
+		// something the author can see rather than describing the field.
+		commitBehaviourEdit(`${path}.affected`, 'Edit gradual changes');
 	}
 </script>
 
@@ -99,7 +108,7 @@
 							const value = event.currentTarget.valueAsNumber;
 							if (Number.isFinite(value)) {
 								transition.duration_seconds = value;
-								scheduleBehaviourSave();
+								editBehaviourField(`${path}.duration_seconds`, 'Edit transition duration');
 							}
 						}}
 					/></label
@@ -116,7 +125,7 @@
 					]}
 					onchange={(value) => {
 						transition.easing = value as Transition['easing'];
-						scheduleBehaviourSave();
+						commitBehaviourEdit(`${path}.easing`, 'Change transition easing');
 					}}
 				/>
 			</div>

@@ -30,10 +30,12 @@ use crate::{
 pub struct ApiOptions {
     pub pack_info: Option<crate::lua::PackInfo>,
     pub config: HashMap<String, OptionValue>,
-    /// Content options for `Mode::Sandbox` and `Mode::Experience`
-    pub content: shared::behaviour::Content,
-    /// Options for `Mode::Experience`.
-    pub experience: shared::behaviour::Experience,
+    /// The behaviour `content` section for `Mode::Sandbox` and `Mode::Experience`, already
+    /// resolved for Lua by `lua::lua_view` -- media slots carry file names here, not the ids the
+    /// document stores.
+    pub content: serde_json::Value,
+    /// The behaviour `experience` section for `Mode::Experience`, resolved the same way.
+    pub experience: serde_json::Value,
     /// The user's own window look, applied to any window the mode does not theme itself.
     pub chrome: ChromeDefaults,
     pub gpu_available: bool,
@@ -61,28 +63,28 @@ pub fn create_api<T: EventPoster>(
 
     let api_table = lua.create_table()?;
 
+    // Nothing empty may reach Lua as mlua's `Value::NULL` sentinel (a lightuserdata, distinct from
+    // Lua `nil`, for JSON-style null-vs-absent round-tripping): that sentinel is *truthy*, so the
+    // idiomatic `field or default` fallback used throughout `default-modes/shared/lib/*.lua` (e.g.
+    // `PromptSettings.submit_label`) would silently never fall back. This is an internal
+    // engine-to-Lua channel, not a JSON API needing that distinction, so plain `nil` is correct.
+    //
+    // Both options, not just `serialize_none_to_null`: these sections arrive as `serde_json::Value`
+    // (already resolved for Lua by `lua::lua_view`), and a `Value::Null` serializes through
+    // `serialize_unit`, not `serialize_none`.
+    let for_lua = SerializeOptions::new()
+        .serialize_none_to_null(false)
+        .serialize_unit_to_null(false);
+
     // Private channel to the default-modes library code (never under the public `lewdware`
     // table, so it stays out of api.lua/the docs site): the whole behaviour.json `content`
     // section, empty for custom modes. See `ApiOptions::content`'s doc comment.
-    //
-    // `serialize_none_to_null(false)`: mlua's serde bridge defaults to representing `Option::None`
-    // as a `Value::NULL` sentinel (a lightuserdata, distinct from Lua `nil`, for JSON-style
-    // null-vs-absent round-tripping) -- but that sentinel is truthy in Lua, so the idiomatic
-    // `field or default` fallback (used throughout `default-modes/shared/lib/*.lua`, e.g.
-    // `PromptSettings.submit_label`) would silently never fall back. This is an internal
-    // engine-to-Lua channel, not a JSON API needing that distinction, so plain `nil` is correct.
-    let content_value = lua.to_value_with(
-        &content,
-        SerializeOptions::new().serialize_none_to_null(false),
-    )?;
+    let content_value = lua.to_value_with(&content, for_lua)?;
     lua.globals().set("__lewdware_content", content_value)?;
 
     // Mirrors `__lewdware_content` for the `experience` section -- only
     // `default-modes/experience/src/main.lua` reads this (empty for Sandbox/custom modes).
-    let experience_value = lua.to_value_with(
-        &experience,
-        SerializeOptions::new().serialize_none_to_null(false),
-    )?;
+    let experience_value = lua.to_value_with(&experience, for_lua)?;
     lua.globals()
         .set("__lewdware_experience", experience_value)?;
 

@@ -34,7 +34,7 @@ use std::{
 use anyhow::{anyhow, bail, Context};
 use converter::{convert, ConversionOutput, ConvertedMedia, DirSource, PackSource, ZipSource};
 use futures::{stream, StreamExt};
-use shared::behaviour::{Behaviour, MediaSlot};
+use shared::behaviour::MediaSlot;
 use shared::encode::{encode_file, hash_file, HardwareEncoder};
 use tauri::Emitter;
 use tempfile::TempDir;
@@ -48,7 +48,7 @@ use crate::pack::{AddOutcome, MediaFile};
 #[derive(Debug, Clone, serde::Serialize)]
 struct FilledSlot {
     slot: MediaSlot,
-    name: String,
+    media_id: u64,
 }
 
 #[derive(Debug)]
@@ -229,7 +229,7 @@ pub async fn run_import(
                             pack_id,
                             &behaviour_write,
                             slots,
-                            &media_file.file_name,
+                            media_file.id,
                         )
                         .await
                         {
@@ -310,7 +310,7 @@ fn group_media_references(references: Vec<(MediaSlot, String)>) -> HashMap<Strin
 }
 
 /// Points the media slots (wallpaper/splash -- see `shared::behaviour::Content`) waiting on a
-/// just-imported file at the name it actually landed under.
+/// just-imported file at the id it actually landed under.
 ///
 /// Called as each referenced file arrives rather than once at the end, so the Content and
 /// Experience tabs fill in a slot as soon as its own media is really in the pack, instead of
@@ -329,30 +329,24 @@ async fn fill_slots_for(
     pack_id: Uuid,
     behaviour_write: &tokio::sync::Mutex<()>,
     slots: Vec<MediaSlot>,
-    name: &str,
+    media_id: u64,
 ) -> anyhow::Result<Vec<FilledSlot>> {
     let _write_guard = behaviour_write.lock().await;
     let lock = pack_state.lock().await;
     let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) else {
         return Ok(Vec::new());
     };
-    let Some(bytes) = pack.get_pack_data("behaviour").await? else {
-        return Ok(Vec::new());
-    };
-    let mut behaviour = Behaviour::from_json_bytes(&bytes)?;
+    let mut behaviour = pack.get_behaviour().await?;
     let mut filled = Vec::new();
     for slot in slots {
-        if behaviour.fill_media_reference(&slot, name.to_string()) {
-            filled.push(FilledSlot {
-                slot,
-                name: name.to_string(),
-            });
+        if behaviour.fill_media_reference(&slot, media_id) {
+            filled.push(FilledSlot { slot, media_id });
         }
     }
     if filled.is_empty() {
         return Ok(filled);
     }
-    pack.set_pack_data("behaviour", behaviour.to_json_bytes()?)
+    pack.replace_behaviour(behaviour, "Set media slot".to_string())
         .await?;
     Ok(filled)
 }

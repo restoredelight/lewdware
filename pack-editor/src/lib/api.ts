@@ -3,6 +3,8 @@ import { listen } from '@tauri-apps/api/event';
 import type {
 	ArtistSummary,
 	Behaviour,
+	BehaviourEdit,
+	BehaviourPatch,
 	EmbeddedMode,
 	HistoryStatus,
 	ImportResult,
@@ -67,10 +69,10 @@ export const api = {
 	redo: () => invoke<HistoryStatus>('redo'),
 
 	getFiles: () => invoke<MediaFile[]>('get_files'),
-	// Both return the behaviour: deleting or renaming a file moves any media slot pointing at it.
+	// Deleting a file clears any slot pointing at it, so this returns the behaviour. Renaming does
+	// not: slots hold media ids, which a rename leaves alone.
 	removeFiles: (ids: number[]) => invoke<Behaviour | null>('remove_files', { ids }),
-	setFileTitle: (id: number, name: string) =>
-		invoke<Behaviour | null>('set_file_title', { id, name }),
+	setFileTitle: (id: number, name: string) => invoke<void>('set_file_title', { id, name }),
 	setFileSourceUrl: (id: number, url: string | null) =>
 		invoke<void>('set_file_source_url', { id, url }),
 	getModes: () => invoke<EmbeddedMode[]>('get_modes'),
@@ -118,7 +120,12 @@ export const api = {
 	markPackUnsaved: () => invoke<void>('mark_pack_unsaved'),
 
 	getBehaviour: () => invoke<Behaviour>('get_behaviour'),
-	setBehaviour: (behaviour: Behaviour) => invoke<void>('set_behaviour', { behaviour }),
+	// Patches rather than a document: the backend is the only writer of behaviour, so an edit
+	// describes what changed instead of replacing what the backend has (see behaviourSave.ts).
+	// `retiring` names media the action deliberately lets go of, so that dropping a stage and
+	// dropping the wallpaper that existed only for it are one transaction and one undo entry.
+	editBehaviour: (patches: BehaviourPatch[], label: string, retiring: number[]) =>
+		invoke<BehaviourEdit>('edit_behaviour', { patches, label, retiring }),
 
 	/** Returns the ids it deleted: media that was only ever a subliminal leaves with the pool. */
 	removeFromSubliminals: (ids: number[]) => invoke<number[]>('remove_from_subliminals', { ids }),

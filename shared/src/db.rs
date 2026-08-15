@@ -66,7 +66,11 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-const MIGRATIONS: [&str; 1] = [include_str!("migrations/0001_init_schema.sql")];
+const MIGRATIONS: [&str; 3] = [
+    include_str!("migrations/0001_init_schema.sql"),
+    include_str!("migrations/0002_behaviour_timeline.sql"),
+    include_str!("migrations/0003_behaviour_content.sql"),
+];
 
 #[cfg(test)]
 mod tests {
@@ -97,11 +101,13 @@ mod tests {
                 .iter()
                 .any(|(name, not_null)| name == "length" && *not_null)
         );
+        // Against the ledger's own length rather than a literal, so adding a migration doesn't
+        // need this test edited to keep passing.
         assert_eq!(
             db.query_row("SELECT migration_index FROM migrations", [], |row| row
-                .get::<_, u64>(0))
+                .get::<_, usize>(0))
                 .unwrap(),
-            1
+            MIGRATIONS.len()
         );
         assert!(
             db.pragma_query_value(None, "foreign_keys", |row| row.get::<_, bool>(0))

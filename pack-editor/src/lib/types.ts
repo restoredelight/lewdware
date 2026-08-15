@@ -126,10 +126,10 @@ export interface Content {
 	notifications: TextItem[];
 	subliminals: TextItem[];
 	web_links: WebLink[];
-	/** Name of the media file used as the wallpaper; absent means the pack has no wallpaper. */
-	wallpaper?: string;
-	/** Name of the media file shown as the startup splash. May be a video (an animated GIF is). */
-	splash?: string;
+	/** Id of the media file used as the wallpaper; absent means the pack has no wallpaper. */
+	wallpaper?: number;
+	/** Id of the media file shown as the startup splash. May be a video (an animated GIF is). */
+	splash?: number;
 }
 
 export type Interval =
@@ -155,14 +155,14 @@ export interface Mitosis {
 	chance?: number;
 	count?: number;
 }
-/** One place in the behaviour that names a media file -- mirrors `shared::behaviour::MediaSlot`. */
+/** One place in the behaviour that points at a media file -- mirrors `shared::behaviour::MediaSlot`. */
 export type MediaSlot =
 	{ kind: 'wallpaper' } | { kind: 'splash' } | { kind: 'stage_wallpaper'; stage: string };
 
 /** One slot the Edgeware importer filled in as its media arrived (`import:slots-filled`). */
 export interface FilledSlot {
 	slot: MediaSlot;
-	name: string;
+	media_id: number;
 }
 
 export interface SlotFilled {
@@ -182,8 +182,8 @@ export interface SlotCleared {
 
 export interface ContentSelection {
 	tags?: string[];
-	/** Name of the media file this stage sets as the wallpaper; absent keeps the previous one. */
-	wallpaper?: string;
+	/** Id of the media file this stage sets as the wallpaper; absent keeps the previous one. */
+	wallpaper?: number;
 }
 export interface EventCountCondition {
 	event: 'popup' | 'web' | 'notification' | 'prompt' | 'subliminal';
@@ -243,6 +243,29 @@ export interface Behaviour {
 	content: Content;
 	experience: Experience | null;
 }
+
+/**
+ * One edit to the behaviour document: the value at `path` becomes `value`.
+ *
+ * `path` is dot-separated, with a numeric segment indexing an array --
+ * `content.prompt_settings.submit_label`, `experience.timeline.stages.2.label`. Structural
+ * changes (adding a caption, removing a stage, reordering) address the whole array and carry its
+ * new contents; see `shared/src/behaviour/patch.rs`, which applies these.
+ */
+export interface BehaviourPatch {
+	path: string;
+	value: unknown;
+}
+/** What one behaviour edit produced -- mirrors `pack::BehaviourEdit`. */
+export interface BehaviourEdit {
+	behaviour: Behaviour;
+	/**
+	 * Media the edit retired that turned out to be scenery nothing else referenced, so it left the
+	 * pack with the edit. Dropped from the media grid by `behaviourSave`.
+	 */
+	deleted_ids: number[];
+}
+
 export interface HistoryStatus {
 	can_undo: boolean;
 	can_redo: boolean;

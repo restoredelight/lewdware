@@ -9,8 +9,64 @@ const ARCHIVE_GENERATION_KEY: &str = "__pack_editor_archive_generation";
 const ARCHIVE_STATE_KEY: &str = "__pack_editor_archive_state";
 
 const MIGRATION_1: &str = include_str!("migrations/0001_init_schema.sql");
+// Reached across into `shared` on purpose: the behaviour tables are identical in the runtime pack
+// and the editor's working copy, and two hand-kept copies of this schema drifting apart would be
+// a silent corruption rather than a compile error.
+const MIGRATION_2: &str =
+    include_str!("../../../shared/src/migrations/0002_behaviour_timeline.sql");
 
-const MIGRATIONS: &[&str] = &[MIGRATION_1];
+const MIGRATION_3: &str = include_str!("../../../shared/src/migrations/0003_behaviour_content.sql");
+
+const MIGRATIONS: &[&str] = &[MIGRATION_1, MIGRATION_2, MIGRATION_3];
+
+/// The behaviour document's structural half (see `shared::behaviour::storage`), in an order that
+/// satisfies its foreign keys: parents before children, stages before the transitions between them.
+///
+/// One list rather than three hand-written copies, because a table present in the export but
+/// missing from an import is a pack that loses its timeline on reopen -- and that is exactly the
+/// kind of thing three parallel SQL blocks drift into.
+pub const BEHAVIOUR_TABLES: &[&str] = &[
+    "behaviour_content",
+    "behaviour_settings",
+    "behaviour_experience",
+    "behaviour_stage",
+    "behaviour_stage_tag",
+    "behaviour_stage_end",
+    "behaviour_stage_movement",
+    "behaviour_stage_mitosis",
+    "behaviour_stage_event",
+    "behaviour_transition",
+    "behaviour_transition_category",
+    "behaviour_text_item",
+    "behaviour_text_item_tag",
+    "behaviour_web_link",
+    "behaviour_web_link_arg",
+    "behaviour_web_link_tag",
+    "behaviour_content_group",
+    "behaviour_content_group_tag",
+];
+
+/// Copies every behaviour table across from the attached database `source`.
+///
+/// `behaviour_content` is a singleton the migration seeds, so it is replaced rather than inserted.
+fn copy_behaviour_tables(tx: &rusqlite::Transaction<'_>, source: &str) -> Result<()> {
+    for table in BEHAVIOUR_TABLES {
+        tx.execute(
+            &format!("INSERT OR REPLACE INTO {table} SELECT * FROM {source}.{table}"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Empties every behaviour table, for a copy that replaces the whole database.
+fn clear_behaviour_tables(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    // Reverse order: children before the parents they cascade from, so nothing is deleted twice.
+    for table in BEHAVIOUR_TABLES.iter().rev() {
+        tx.execute(&format!("DELETE FROM {table}"), [])?;
+    }
+    Ok(())
+}
 
 fn configure_connection(connection: &Connection) -> Result<()> {
     connection.pragma_update(None, "foreign_keys", true)?;
@@ -159,6 +215,7 @@ pub fn import_runtime(
         )?;
         tx.execute("INSERT INTO modes SELECT * FROM runtime.modes", [])?;
         tx.execute("INSERT INTO pack_data SELECT * FROM runtime.pack_data", [])?;
+        copy_behaviour_tables(&tx, "runtime")?;
         tx.commit()?;
         Ok(())
     })();
@@ -190,6 +247,7 @@ pub fn replace_from_runtime(
              DELETE FROM modes;
              DELETE FROM pack_data;",
         )?;
+        clear_behaviour_tables(&tx)?;
         tx.execute(
             "UPDATE editor_state SET archive_generation = ?, current_state_id = ?,
              saved_state_id = ? WHERE singleton = 1",
@@ -224,6 +282,7 @@ pub fn replace_from_runtime(
         )?;
         tx.execute("INSERT INTO modes SELECT * FROM runtime.modes", [])?;
         tx.execute("INSERT INTO pack_data SELECT * FROM runtime.pack_data", [])?;
+        copy_behaviour_tables(&tx, "runtime")?;
         tx.commit()?;
         Ok(())
     })();
@@ -271,6 +330,7 @@ pub fn export_runtime(editor: &Connection, runtime_path: &Path) -> Result<()> {
              WHERE name NOT IN (?, ?)",
             params![ARCHIVE_GENERATION_KEY, ARCHIVE_STATE_KEY],
         )?;
+        copy_behaviour_tables(&tx, "editor")?;
         let (generation, state): (Option<String>, String) = tx.query_row(
             "SELECT archive_generation, current_state_id FROM editor.editor_state
              WHERE singleton = 1",

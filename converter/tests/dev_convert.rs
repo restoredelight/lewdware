@@ -17,7 +17,7 @@ use std::{
 };
 
 use rusqlite::Connection;
-use shared::{behaviour::Behaviour, read_pack::read_pack_metadata};
+use shared::read_pack::read_pack_metadata;
 
 fn tool_available(name: &str) -> bool {
     Command::new(name)
@@ -111,14 +111,7 @@ fn dev_convert_produces_a_loadable_pack() {
         .unwrap();
     assert_eq!(tagged_count, 1, "only the image was tagged \"test\"");
 
-    let behaviour_blob: Vec<u8> = db
-        .query_row(
-            "SELECT blob FROM pack_data WHERE name = 'behaviour'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let behaviour = Behaviour::from_json_bytes(&behaviour_blob).unwrap();
+    let behaviour = shared::behaviour::storage::read(&db).unwrap();
     assert_eq!(behaviour.content.content_groups.len(), 1);
     assert_eq!(behaviour.content.content_groups[0].id, "test");
     assert_eq!(behaviour.content.captions.len(), 1);

@@ -25,7 +25,7 @@ use rusqlite::{
 };
 use serde::{Deserialize, Serialize};
 use shared::{
-    behaviour::{Behaviour, MediaSlot},
+    behaviour::{storage as behaviour_storage, Behaviour, MediaSlot, Patch},
     encode::{FileInfo, FileInfoParts, FileType},
     read_pack::{Header, Metadata, HEADER_SIZE},
     tags,
@@ -53,6 +53,24 @@ pub struct MediaFile {
     pub artists: Vec<String>,
     pub source_url: Option<String>,
     pub size: u64,
+}
+
+/// Every table where a behaviour document references a tag. Merging a tag re-points each of them;
+/// deleting one relies on their `ON DELETE CASCADE` instead.
+const TAG_JOIN_TABLES: &[(&str, &str)] = &[
+    ("behaviour_stage_tag", "stage_id"),
+    ("behaviour_text_item_tag", "item_id"),
+    ("behaviour_web_link_tag", "link_id"),
+    ("behaviour_content_group_tag", "group_id"),
+];
+
+/// What one behaviour edit produced -- see [`MediaPack::edit_behaviour`].
+#[derive(Serialize, Clone, Debug)]
+pub struct BehaviourEdit {
+    pub behaviour: Behaviour,
+    /// Media the edit retired that turned out to be scenery nothing else referenced, so it left
+    /// the pack with the edit. The front end drops these from its media grid.
+    pub deleted_ids: Vec<u64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -126,19 +144,11 @@ impl AddOutcome {
     }
 }
 
+/// The stored behaviour document, assembled from the `behaviour_*` tables and what is left of the
+/// blob. See `shared::behaviour::storage` -- the split is entirely that module's business, and
+/// everything here goes on working with whole `Behaviour` values.
 fn read_behaviour(connection: &rusqlite::Connection) -> Result<Behaviour> {
-    let blob = connection
-        .query_row(
-            "SELECT blob FROM pack_data WHERE name = 'behaviour'",
-            [],
-            |row| row.get::<_, Vec<u8>>(0),
-        )
-        .optional()?;
-    blob.as_deref()
-        .map(Behaviour::from_json_bytes)
-        .transpose()
-        .map(|behaviour| behaviour.unwrap_or_default())
-        .map_err(Into::into)
+    behaviour_storage::read(connection)
 }
 
 fn tag_media_ids(tx: &rusqlite::Transaction<'_>, tag: &str) -> Result<Vec<u64>> {
@@ -2257,23 +2267,16 @@ impl MediaPack {
                 if ids.is_empty() {
                     return read_behaviour(&conn);
                 }
-                let names: Vec<String> = {
-                    let selected = media_id_array(&ids)?;
-                    let mut stmt = conn.prepare(
-                        "SELECT file_name FROM media WHERE id IN (SELECT value FROM rarray(?))",
-                    )?;
-                    let rows = stmt.query_map(params![&selected], |row| row.get::<_, String>(0))?;
-                    rows.collect::<rusqlite::Result<_>>()?
-                };
                 history::record_media_visibility(&mut conn, &label, &ids, true)?;
                 // Deleting a file has to take any slot pointing at it with it, or the slot is
-                // left naming something the pack no longer has.
+                // left pointing at media the pack no longer has. Deletion is the only thing that
+                // can do this now that slots hold ids -- a rename leaves them alone.
                 conn_write_behaviour_if_changed(&mut conn, &label, |behaviour| {
-                    // Every name, not the first match: `any` would stop early and leave the
-                    // other slots pointing at files this same call deleted.
+                    // Every id, not the first match: `any` would stop early and leave the other
+                    // slots pointing at files this same call deleted.
                     let mut changed = false;
-                    for name in &names {
-                        changed |= behaviour.rewrite_media_name(name, None);
+                    for id in &ids {
+                        changed |= behaviour.clear_media_reference(*id);
                     }
                     changed
                 })
@@ -2534,6 +2537,12 @@ impl MediaPack {
         .await
     }
 
+    /// Renames a tag. The behaviour document follows on its own: every tag list in it is a join
+    /// to `tags`, so the rows that mention this tag hold its *id* and nothing about them changes.
+    ///
+    /// This used to walk the whole document rewriting strings (`Behaviour::rewrite_tag`) and write
+    /// it back. Returns the document anyway so the front end can refresh the copy it renders --
+    /// but it is now read back rather than computed here.
     pub async fn rename_tag(&self, from: String, to: String) -> Result<Behaviour> {
         reject_managed_tag(&from)?;
         reject_managed_tag(&to)?;
@@ -2550,18 +2559,8 @@ impl MediaPack {
                     if target_exists {
                         bail!("A tag named \"{to}\" already exists. Merge the tags instead.");
                     }
-                    let changed =
-                        tx.execute("UPDATE tags SET name = ? WHERE name = ?", params![to, from])?;
-                    if changed == 0 {
-                        tx.execute("INSERT INTO tags (name) VALUES (?)", params![to])?;
-                    }
-                    let mut behaviour = read_behaviour(tx)?;
-                    behaviour.rewrite_tag(&from, Some(&to));
-                    tx.execute(
-                        "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
-                        params![behaviour.to_json_bytes()?],
-                    )?;
-                    Ok((behaviour, media_ids))
+                    tx.execute("UPDATE tags SET name = ? WHERE name = ?", params![to, from])?;
+                    Ok((read_behaviour(tx)?, media_ids))
                 })
             })
             .await?;
@@ -2569,45 +2568,68 @@ impl MediaPack {
         Ok(behaviour)
     }
 
+    /// Folds one tag into another, everywhere it appears -- on media and throughout the behaviour
+    /// document alike.
+    ///
+    /// Each join table is re-pointed with `UPDATE OR IGNORE`, which skips the rows where the
+    /// target tag is already present (that pair is the primary key), and the leftovers are then
+    /// deleted. That is the deduplication `rewrite_tag` did by hand with a `HashSet`.
     pub async fn merge_tag(&self, from: String, to: String) -> Result<Behaviour> {
         reject_managed_tag(&from)?;
         reject_managed_tag(&to)?;
         let _handle = self.saving.read().await;
-        let behaviour = self.db_execute(move |mut conn| {
-            history::record_with_media_refs(&mut conn, "Merge tags", 0, |tx| {
-            let media_ids = tag_media_ids(tx, &from)?;
-            tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![to])?;
-            tx.execute("INSERT OR IGNORE INTO media_tags (media_id, tag_id) SELECT media_tags.media_id, target.id FROM media_tags JOIN tags source ON source.id = media_tags.tag_id JOIN tags target ON target.name = ? WHERE source.name = ?", params![to, from])?;
-            tx.execute("DELETE FROM media_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ?)", params![from])?;
-            tx.execute("DELETE FROM tags WHERE name = ?", params![from])?;
-            let mut behaviour = read_behaviour(tx)?;
-            behaviour.rewrite_tag(&from, Some(&to));
-            tx.execute("INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)", params![behaviour.to_json_bytes()?])?;
-            Ok((behaviour, media_ids))
+        let behaviour = self
+            .db_execute(move |mut conn| {
+                history::record_with_media_refs(&mut conn, "Merge tags", 0, |tx| {
+                    let media_ids = tag_media_ids(tx, &from)?;
+                    tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![to])?;
+                    let source: Option<u64> = tx
+                        .query_row("SELECT id FROM tags WHERE name = ?", params![from], |row| {
+                            row.get(0)
+                        })
+                        .optional()?;
+                    let Some(source) = source else {
+                        return Ok((read_behaviour(tx)?, media_ids));
+                    };
+                    let target: u64 =
+                        tx.query_row("SELECT id FROM tags WHERE name = ?", params![to], |row| {
+                            row.get(0)
+                        })?;
+                    for (table, key) in TAG_JOIN_TABLES {
+                        tx.execute(
+                            &format!("UPDATE OR IGNORE {table} SET tag_id = ?1 WHERE tag_id = ?2"),
+                            params![target, source],
+                        )?;
+                        let _ = key;
+                    }
+                    // Whatever the re-point skipped as a duplicate, plus the tag itself. Dropping
+                    // the row would cascade the survivors away, so it goes last.
+                    tx.execute(
+                        "UPDATE OR IGNORE media_tags SET tag_id = ?1 WHERE tag_id = ?2",
+                        params![target, source],
+                    )?;
+                    tx.execute("DELETE FROM tags WHERE id = ?", params![source])?;
+                    Ok((read_behaviour(tx)?, media_ids))
+                })
             })
-        }).await?;
+            .await?;
         self.mark_unsaved().await?;
         Ok(behaviour)
     }
 
+    /// Deletes a tag from the pack entirely.
+    ///
+    /// One statement: every table that references a tag does so with `ON DELETE CASCADE`, so the
+    /// media associations and every mention in the behaviour document go with the row. This used
+    /// to be three statements and a document rewrite.
     pub async fn delete_tag(&self, tag: String) -> Result<Behaviour> {
         let _handle = self.saving.read().await;
         let behaviour = self
             .db_execute(move |mut conn| {
                 history::record_with_media_refs(&mut conn, "Delete tag", 0, |tx| {
                     let media_ids = tag_media_ids(tx, &tag)?;
-                    tx.execute(
-                    "DELETE FROM media_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ?)",
-                    params![tag],
-                )?;
                     tx.execute("DELETE FROM tags WHERE name = ?", params![tag])?;
-                    let mut behaviour = read_behaviour(tx)?;
-                    behaviour.rewrite_tag(&tag, None);
-                    tx.execute(
-                        "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
-                        params![behaviour.to_json_bytes()?],
-                    )?;
-                    Ok((behaviour, media_ids))
+                    Ok((read_behaviour(tx)?, media_ids))
                 })
             })
             .await?;
@@ -2741,11 +2763,7 @@ impl MediaPack {
     pub async fn set_pack_data(&self, name: &str, blob: Vec<u8>) -> Result<()> {
         let _handle = self.saving.read().await;
         let name = name.to_string();
-        let label = if name == "behaviour" {
-            "Edit pack behaviour".to_string()
-        } else {
-            format!("Edit pack data “{name}”")
-        };
+        let label = format!("Edit pack data “{name}”");
         self.db_execute(move |mut connection| {
             history::record(&mut connection, &label, 0, &[], |tx| {
                 tx.execute(
@@ -2776,6 +2794,104 @@ impl MediaPack {
             .map_err(Into::into)
         })
         .await
+    }
+
+    /// Applies one author action to the behaviour document, described as [`Patch`]es rather than
+    /// sent as a replacement document.
+    ///
+    /// This is the only way the editor's front end writes behaviour, and the reason is that a
+    /// whole-document write cannot be applied without overwriting. The document is also edited
+    /// here in the backend -- media slots, tag renames, file removal -- so a front end that sent
+    /// the version it happened to be holding would silently undo whichever of those landed while
+    /// it was typing. Patching against the stored document means the two cannot collide, and the
+    /// call sites no longer have to flush a pending write before every such command. See
+    /// `design/behaviour-storage.md`.
+    ///
+    /// `label` names the entry in the undo list, so it is the author's action ("Edit caption")
+    /// rather than the storage ("Edit pack behaviour"). Returns the stored document either way:
+    /// the caller reconciles its optimistic copy against it.
+    /// The stored behaviour document.
+    pub async fn get_behaviour(&self) -> Result<Behaviour> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |conn| read_behaviour(&conn)).await
+    }
+
+    /// Replaces the whole document in one history entry.
+    ///
+    /// For a writer that really does produce a document rather than edit one: the Edgeware
+    /// importer's converted output, and the slot fills it makes as its media lands. Author edits
+    /// go through [`MediaPack::edit_behaviour`] instead, which describes what changed.
+    pub async fn replace_behaviour(&self, behaviour: Behaviour, label: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut connection| {
+            history::record(&mut connection, &label, 0, &[], |tx| {
+                write_behaviour(tx, &behaviour)
+            })
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    /// What one behaviour edit produced: the stored document, and any scenery that left with it.
+    ///
+    /// `retiring` names media the edit *deliberately* lets go of — a timeline stage's wallpaper
+    /// when the stage itself is being removed. Each one is dropped from the pack if it was only
+    /// ever that slot's scenery and the patched document no longer refers to it, by exactly the
+    /// rule `clear_media_slot` uses.
+    ///
+    /// Deliberate, rather than inferred from what the document stopped referencing, because the
+    /// two are not the same thing and the difference is destructive: disabling the Experience
+    /// section drops every stage on purpose *without* retiring their wallpapers, and a cleanup
+    /// driven by "which references went away?" would delete all of them on toggle-off. See
+    /// `design/behaviour-storage.md`, "Invariants to preserve".
+    pub async fn edit_behaviour(
+        &self,
+        patches: Vec<Patch>,
+        label: String,
+        retiring: Vec<u64>,
+    ) -> Result<BehaviourEdit> {
+        let _handle = self.saving.read().await;
+        let (edit, changed) = self
+            .db_execute(move |mut connection| {
+                history::record_with_media_refs(&mut connection, &label, 0, |tx| {
+                    let stored = read_behaviour(tx)?;
+                    let patched = stored.patched(&patches)?;
+
+                    // Against the *patched* document, so "still referenced" means after the edit
+                    // -- a wallpaper the retired stage shared with another stage stays.
+                    let mut deleted_ids = Vec::new();
+                    for media in &retiring {
+                        if let Some(id) = delete_unreferenced_scenery(tx, &patched, *media)? {
+                            deleted_ids.push(id);
+                        }
+                    }
+
+                    // A patch that lands on the value already there is an `oninput` that changed
+                    // nothing, not an edit. Writing it would cost an undo entry out of the
+                    // hundred history keeps, evicting a real one off the bottom of the list.
+                    if patched == stored && deleted_ids.is_empty() {
+                        let edit = BehaviourEdit {
+                            behaviour: patched,
+                            deleted_ids,
+                        };
+                        return Ok(((edit, false), vec![]));
+                    }
+                    write_behaviour(tx, &patched)?;
+                    // The retired file's bytes have to outlive the entry that dropped it, or undo
+                    // would restore a slot pointing at media the collector has taken away.
+                    let refs = deleted_ids.clone();
+                    let edit = BehaviourEdit {
+                        behaviour: patched,
+                        deleted_ids,
+                    };
+                    Ok(((edit, true), refs))
+                })
+            })
+            .await?;
+        if changed {
+            self.mark_unsaved().await?;
+        }
+        Ok(edit)
     }
 
     pub async fn remove_tag(&self, id: u64, tag: String) -> Result<()> {
@@ -3101,40 +3217,35 @@ impl MediaPack {
     /// file to a name they typed), so it's rejected with a clear error rather than silently
     /// adjusted -- auto-renaming would mean the name shown afterwards isn't the one they asked
     /// for, with no indication why.
-    pub async fn set_title(&self, id: u64, name: String) -> Result<Behaviour> {
+    /// The behaviour document is deliberately untouched: its media slots hold ids, so a rename
+    /// cannot invalidate one. This used to have to rewrite every slot naming the old name and
+    /// hand the document back for the front end to adopt -- the round trip that referencing by
+    /// id exists to remove (`design/behaviour-storage.md`, step 1).
+    pub async fn set_title(&self, id: u64, name: String) -> Result<()> {
         let _handle = self.saving.read().await;
         let name_clone = name.clone();
         let result = self
             .db_execute(move |mut connection| {
                 history::record(&mut connection, "Rename media item", 0, &[id], |tx| {
-                    let previous: String = tx.query_row(
-                        "SELECT file_name FROM media WHERE id = ?",
-                        params![id],
-                        |row| row.get(0),
-                    )?;
                     tx.execute(
                         "UPDATE media SET file_name = ? WHERE id = ?",
                         params![name_clone, id],
                     )?;
-                    // A media slot references its file by name, so a rename has to move the
-                    // reference with it or the slot silently stops resolving.
-                    write_behaviour_if_changed(tx, |behaviour| {
-                        behaviour.rewrite_media_name(&previous, Some(&name_clone))
-                    })
+                    Ok(())
                 })
             })
             .await;
 
-        let behaviour = match result {
-            Ok(behaviour) => behaviour,
+        match result {
+            Ok(()) => {}
             Err(err) if violates_unique_constraint(&err, "file_name") => {
                 bail!("A file named \"{name}\" already exists");
             }
             Err(err) => return Err(err),
-        };
+        }
 
         self.mark_unsaved().await?;
-        Ok(behaviour)
+        Ok(())
     }
 
     /// Points a media slot at `media_id`, marking that file as scenery rather than popup content
@@ -3212,11 +3323,11 @@ impl MediaPack {
             .db_execute(move |mut conn| {
                 history::record_with_media_refs(&mut conn, slot_label(&slot), 0, |tx| {
                     let mut behaviour = read_behaviour(tx)?;
-                    let Some(name) = slot_value(&behaviour, &slot) else {
+                    let Some(media) = slot_value(&behaviour, &slot) else {
                         return Ok(((behaviour, None), vec![]));
                     };
                     set_slot(&mut behaviour, &slot, None);
-                    let deleted = delete_unreferenced_scenery(tx, &behaviour, &name)?;
+                    let deleted = delete_unreferenced_scenery(tx, &behaviour, media)?;
                     write_behaviour(tx, &behaviour)?;
                     let refs = deleted.map(|id| vec![id]).unwrap_or_default();
                     Ok(((behaviour, deleted), refs))
@@ -3294,25 +3405,22 @@ impl MediaPack {
             .db_execute(move |mut conn| {
                 history::record_with_media_refs(&mut conn, &label, 0, |tx| {
                     let behaviour = read_behaviour(tx)?;
-                    let referenced: HashSet<String> = behaviour
-                        .referenced_media_names()
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect();
+                    let referenced: HashSet<u64> =
+                        behaviour.referenced_media_ids().into_iter().collect();
 
                     let mut deleted = Vec::new();
                     for id in &ids {
-                        let row: Option<(String, bool)> = tx
+                        let scenery: Option<bool> = tx
                             .query_row(
-                                "SELECT m.file_name, EXISTS(
+                                "SELECT EXISTS(
                                      SELECT 1 FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
                                      WHERE mt.media_id = m.id AND t.name = ?)
                                  FROM media m WHERE m.id = ? AND m.deleted = 0",
                                 params![tags::NON_POPUP_TAG, id],
-                                |row| Ok((row.get(0)?, row.get(1)?)),
+                                |row| row.get(0),
                             )
                             .optional()?;
-                        let Some((name, scenery)) = row else {
+                        let Some(scenery) = scenery else {
                             continue;
                         };
 
@@ -3322,7 +3430,7 @@ impl MediaPack {
                             params![id, tags::SUBLIMINAL_TAG],
                         )?;
 
-                        if scenery && !referenced.contains(&name) {
+                        if scenery && !referenced.contains(id) {
                             tx.execute("UPDATE media SET deleted = 1 WHERE id = ?", params![id])?;
                             deleted.push(*id);
                         }
@@ -3709,9 +3817,8 @@ fn add_to_pool_tx(tx: &rusqlite::Transaction<'_>, additions: &[MediaAddition]) -
     Ok(())
 }
 
-/// Deletes the media named `name` if it exists only as scenery that `behaviour` no longer refers
-/// to -- the rule behind both ways a slot can stop pointing at a file, being cleared and being
-/// replaced.
+/// Deletes `media` if it exists only as scenery that `behaviour` no longer refers to -- the rule
+/// behind both ways a slot can stop pointing at a file, being cleared and being replaced.
 ///
 /// A file still carrying `__lewdware-non-popup` was brought in for a slot and nothing else, so a
 /// slot letting go of it leaves a file the author cannot see anywhere: not in Popups, which
@@ -3723,13 +3830,9 @@ fn add_to_pool_tx(tx: &rusqlite::Transaction<'_>, additions: &[MediaAddition]) -
 fn delete_unreferenced_scenery(
     tx: &rusqlite::Transaction<'_>,
     behaviour: &Behaviour,
-    name: &str,
+    media: u64,
 ) -> Result<Option<u64>> {
-    if behaviour
-        .referenced_media_names()
-        .iter()
-        .any(|other| *other == name)
-    {
+    if behaviour.referenced_media_ids().contains(&media) {
         return Ok(None);
     }
     let scenery: Option<u64> = tx
@@ -3737,8 +3840,8 @@ fn delete_unreferenced_scenery(
             "SELECT media.id FROM media
              JOIN media_tags ON media_tags.media_id = media.id
              JOIN tags ON tags.id = media_tags.tag_id
-             WHERE media.file_name = ? AND media.deleted = 0 AND tags.name = ?",
-            params![name, tags::NON_POPUP_TAG],
+             WHERE media.id = ? AND media.deleted = 0 AND tags.name = ?",
+            params![media, tags::NON_POPUP_TAG],
             |row| row.get(0),
         )
         .optional()?;
@@ -3760,14 +3863,19 @@ fn fill_media_slot_tx(
     media_id: u64,
     new_to_pack: bool,
 ) -> Result<(Behaviour, Option<u64>)> {
-    let name: String = tx
+    // The row still has to exist: a slot may only point at media the pack really has, and the
+    // picker's answer can be stale by the time it gets here.
+    let exists = tx
         .query_row(
-            "SELECT file_name FROM media WHERE id = ? AND deleted = 0",
+            "SELECT 1 FROM media WHERE id = ? AND deleted = 0",
             params![media_id],
-            |row| row.get(0),
+            |_| Ok(()),
         )
         .optional()?
-        .ok_or_else(|| anyhow!("That media file is no longer in the pack"))?;
+        .is_some();
+    if !exists {
+        bail!("That media file is no longer in the pack");
+    }
     if new_to_pack {
         apply_tag(tx, media_id, tags::NON_POPUP_TAG)?;
     }
@@ -3775,15 +3883,15 @@ fn fill_media_slot_tx(
     let mut behaviour = read_behaviour(tx)?;
     let displaced = slot_value(&behaviour, slot);
     // Set, not fill: replacing what a slot points at is the whole of "Replace".
-    if !set_slot(&mut behaviour, slot, Some(name.clone())) {
+    if !set_slot(&mut behaviour, slot, Some(media_id)) {
         bail!("That stage is no longer in the timeline");
     }
     // Replacing a slot's file is the other way it stops being used, and it has to clean up after
     // itself exactly as clearing does -- otherwise every Replace leaves the old wallpaper in the
     // pack as a file marked out of popups and referenced by nothing.
     let deleted = match displaced {
-        Some(previous) if previous != name => {
-            delete_unreferenced_scenery(tx, &behaviour, &previous)?
+        Some(previous) if previous != media_id => {
+            delete_unreferenced_scenery(tx, &behaviour, previous)?
         }
         _ => None,
     };
@@ -3801,27 +3909,28 @@ fn slot_label(slot: &MediaSlot) -> &'static str {
 }
 
 /// Reads what a slot currently points at.
-fn slot_value(behaviour: &Behaviour, slot: &MediaSlot) -> Option<String> {
+fn slot_value(behaviour: &Behaviour, slot: &MediaSlot) -> Option<u64> {
     match slot {
-        MediaSlot::Wallpaper => behaviour.content.wallpaper.clone(),
-        MediaSlot::Splash => behaviour.content.splash.clone(),
-        MediaSlot::StageWallpaper { stage } => behaviour
-            .experience
-            .as_ref()?
-            .timeline
-            .stages
-            .iter()
-            .find(|candidate| &candidate.id == stage)?
-            .content
-            .wallpaper
-            .clone(),
+        MediaSlot::Wallpaper => behaviour.content.wallpaper,
+        MediaSlot::Splash => behaviour.content.splash,
+        MediaSlot::StageWallpaper { stage } => {
+            behaviour
+                .experience
+                .as_ref()?
+                .timeline
+                .stages
+                .iter()
+                .find(|candidate| &candidate.id == stage)?
+                .content
+                .wallpaper
+        }
     }
 }
 
 /// Writes a slot outright, unlike `Behaviour::fill_media_reference` (which won't overwrite): the
 /// author pointing a slot somewhere new is exactly the case that has to win. Returns false if the
 /// slot doesn't exist -- only possible for a stage deleted from under the editor.
-fn set_slot(behaviour: &mut Behaviour, slot: &MediaSlot, name: Option<String>) -> bool {
+fn set_slot(behaviour: &mut Behaviour, slot: &MediaSlot, media: Option<u64>) -> bool {
     let target = match slot {
         MediaSlot::Wallpaper => &mut behaviour.content.wallpaper,
         MediaSlot::Splash => &mut behaviour.content.splash,
@@ -3838,7 +3947,7 @@ fn set_slot(behaviour: &mut Behaviour, slot: &MediaSlot, name: Option<String>) -
             &mut target.content.wallpaper
         }
     };
-    *target = name;
+    *target = media;
     true
 }
 
@@ -3857,28 +3966,12 @@ fn apply_tag(tx: &rusqlite::Transaction<'_>, media_id: u64, tag: &str) -> Result
 }
 
 fn write_behaviour(tx: &rusqlite::Transaction<'_>, behaviour: &Behaviour) -> Result<()> {
-    tx.execute(
-        "INSERT OR REPLACE INTO pack_data (name, blob) VALUES ('behaviour', ?)",
-        params![behaviour.to_json_bytes()?],
-    )?;
-    Ok(())
+    behaviour_storage::write(tx, behaviour)
 }
 
-/// Applies `edit` to the stored behaviour, persisting only if it reported a change. Returns the
-/// behaviour either way, since callers hand it back to the frontend to replace its copy.
-fn write_behaviour_if_changed(
-    tx: &rusqlite::Transaction<'_>,
-    edit: impl FnOnce(&mut Behaviour) -> bool,
-) -> Result<Behaviour> {
-    let mut behaviour = read_behaviour(tx)?;
-    if edit(&mut behaviour) {
-        write_behaviour(tx, &behaviour)?;
-    }
-    Ok(behaviour)
-}
-
-/// `write_behaviour_if_changed` for a caller that isn't already inside a transaction, recording
-/// its own history entry only when there is really something to record.
+/// Applies `edit` to the stored behaviour, recording its own history entry only when the edit
+/// reported a change. Returns the behaviour either way, since callers hand it back to the front
+/// end to replace its copy.
 fn conn_write_behaviour_if_changed(
     conn: &mut rusqlite::Connection,
     label: &str,
@@ -4008,6 +4101,7 @@ fn next_candidate_name(name: &str) -> String {
 
 /// Binds media ids for a `rarray(?)` subquery -- the only form of `IN (...)` that survives a set
 /// larger than SQLite's variable limit (see `bulk_remove_and_restore_exceeds_sqlite_variable_limit`).
+#[cfg(test)]
 fn media_id_array(ids: &[u64]) -> Result<Array> {
     let values = ids
         .iter()
@@ -5137,17 +5231,8 @@ mod tests {
 
         assert_eq!(status.undo_label.as_deref(), Some("Set wallpaper"));
         assert!(status.can_undo);
-        let stored = || async {
-            match pack.get_pack_data("behaviour").await.unwrap() {
-                Some(bytes) => Behaviour::from_json_bytes(&bytes).unwrap(),
-                // Undoing past the first write removes the row, not just its contents.
-                None => Behaviour::default(),
-            }
-        };
-        assert_eq!(
-            stored().await.content.wallpaper.as_deref(),
-            Some("wallpaper.png")
-        );
+        let stored = || async { pack.get_behaviour().await.unwrap() };
+        assert_eq!(stored().await.content.wallpaper, Some(id));
 
         // One undo takes the slot *and* the file -- and leaves the bytes on disk, so redo can
         // bring them back (the reason the import half stays a visibility entry).
@@ -5159,10 +5244,7 @@ mod tests {
 
         pack.redo().await.unwrap();
         assert_eq!(pack.get_files().await.unwrap()[0].id, id);
-        assert_eq!(
-            stored().await.content.wallpaper.as_deref(),
-            Some("wallpaper.png")
-        );
+        assert_eq!(stored().await.content.wallpaper, Some(id));
         assert_eq!(pack.get_tags(id).await.unwrap(), vec![tags::NON_POPUP_TAG]);
     }
 
@@ -5185,13 +5267,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(status.undo_label.as_deref(), Some("Set splash"));
-        let stored = || async {
-            match pack.get_pack_data("behaviour").await.unwrap() {
-                Some(bytes) => Behaviour::from_json_bytes(&bytes).unwrap(),
-                // Undoing past the first write removes the row, not just its contents.
-                None => Behaviour::default(),
-            }
-        };
+        let stored = || async { pack.get_behaviour().await.unwrap() };
         assert!(stored().await.content.splash.is_some());
 
         pack.undo().await.unwrap();
@@ -5324,7 +5400,7 @@ mod tests {
             .fill_media_slot(MediaSlot::Wallpaper, scenery, true)
             .await
             .unwrap();
-        let scenery_name = behaviour.content.wallpaper.clone().unwrap();
+        let slot_media = behaviour.content.wallpaper.unwrap();
         assert!(pack.get_tags(scenery).await.unwrap() == vec![tags::NON_POPUP_TAG]);
 
         let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
@@ -5354,7 +5430,7 @@ mod tests {
             .unwrap()
             .iter()
             .any(|f| f.id == content));
-        assert_ne!(scenery_name, "");
+        assert_eq!(slot_media, scenery);
     }
 
     /// The same rule for the other way a slot lets go of a file. Replacing a wallpaper is far more
@@ -5586,7 +5662,7 @@ mod tests {
             }),
             ..Behaviour::default()
         };
-        pack.set_pack_data("behaviour", behaviour.to_json_bytes().unwrap())
+        pack.replace_behaviour(behaviour.clone(), "Seed behaviour".to_string())
             .await
             .unwrap();
 
@@ -5623,6 +5699,418 @@ mod tests {
         assert_eq!(deleted, Some(shared));
     }
 
+    /// The reason behaviour is edited by patch and not by replacement document.
+    ///
+    /// The front end holds a copy and edits it as the author types. If it saved by sending that
+    /// copy, a slot the backend filled in between -- an import finishing, a wallpaper chosen on
+    /// another tab -- would be gone the moment the debounce fired, because the copy predates it.
+    /// A patch names only what the author touched, so the two edits compose.
+    #[tokio::test]
+    async fn an_edit_cannot_undo_a_backend_change_it_never_saw() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("race.lwpack"), data_dir.path(), "Race").await;
+        let file = insert_staged_audio(&pack, b"wallpaper").await;
+
+        // What the front end is holding: a document with no wallpaper.
+        let held = read_pack_behaviour(&pack).await;
+        assert_eq!(held.content.wallpaper, None);
+
+        pack.fill_media_slot(MediaSlot::Wallpaper, file, true)
+            .await
+            .unwrap();
+
+        // The author was typing a caption throughout, and the debounce fires now.
+        let patched = pack
+            .edit_behaviour(
+                vec![Patch::new(
+                    "content.captions",
+                    serde_json::json!([{ "text": "typed", "tags": [] }]),
+                )],
+                "Edit caption".to_string(),
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(patched.behaviour.content.captions[0].text, "typed");
+        assert!(
+            patched.behaviour.content.wallpaper.is_some(),
+            "the slot filled while the author was typing has to survive the caption edit"
+        );
+    }
+
+    /// An `oninput` that fires without changing anything is not an edit. Recording it would spend
+    /// one of the hundred entries history keeps and push a real one off the bottom of the list.
+    #[tokio::test]
+    async fn an_edit_that_changes_nothing_records_no_history_entry() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("noop.lwpack"), data_dir.path(), "Noop").await;
+
+        pack.edit_behaviour(
+            vec![Patch::new(
+                "content.prompt_settings.submit_label",
+                "Go".into(),
+            )],
+            "Edit submit label".to_string(),
+            vec![],
+        )
+        .await
+        .unwrap();
+        let after_real_edit = pack.history_status().await.unwrap();
+        assert_eq!(
+            after_real_edit.undo_label.as_deref(),
+            Some("Edit submit label")
+        );
+
+        pack.edit_behaviour(
+            vec![Patch::new(
+                "content.prompt_settings.submit_label",
+                "Go".into(),
+            )],
+            "Edit submit label".to_string(),
+            vec![],
+        )
+        .await
+        .unwrap();
+        let after_noop = pack.history_status().await.unwrap();
+        assert_eq!(
+            after_noop.undo_label, after_real_edit.undo_label,
+            "the second write set the same value, so there is nothing to undo past the first"
+        );
+
+        // One entry, not two: undoing once returns to the original document.
+        pack.undo().await.unwrap();
+        let behaviour = read_pack_behaviour(&pack).await;
+        assert_eq!(behaviour.content.prompt_settings.submit_label, None);
+    }
+
+    /// A patch the document can't take leaves it exactly as it was -- the editor keeps showing
+    /// what is really stored rather than a half-applied edit.
+    #[tokio::test]
+    async fn a_rejected_patch_leaves_the_document_untouched() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("bad.lwpack"), data_dir.path(), "Bad").await;
+
+        pack.edit_behaviour(
+            vec![Patch::new(
+                "content.captions",
+                serde_json::json!([{ "text": "kept", "tags": [] }]),
+            )],
+            "Add caption".to_string(),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        let error = pack
+            .edit_behaviour(
+                // Both patches are one author action, so the good one must not land on its own.
+                vec![
+                    Patch::new("content.captions.0.text", "changed".into()),
+                    Patch::new("content.captions.9.text", "no such entry".into()),
+                ],
+                "Edit caption".to_string(),
+                vec![],
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("index 9"),
+            "unexpected error: {error}"
+        );
+
+        let behaviour = read_pack_behaviour(&pack).await;
+        assert_eq!(behaviour.content.captions[0].text, "kept");
+    }
+
+    /// Two stages, one wallpaper each. Removing a stage is one author action, so it has to be one
+    /// undo entry -- the stage *and* the wallpaper that existed only for it going together, and
+    /// coming back together.
+    ///
+    /// It used to be two: the front end cleared the slot through `clear_media_slot` and then wrote
+    /// the shortened timeline, so a single undo gave back a stage with its wallpaper missing --
+    /// a state the author never created. See `design/behaviour-storage.md`.
+    #[tokio::test]
+    async fn removing_a_stage_retires_its_wallpaper_in_one_undo_entry() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("stage.lwpack"), data_dir.path(), "Stage").await;
+        let scenery = insert_staged_audio(&pack, b"stage wallpaper").await;
+
+        let stage = |id: &str| Stage {
+            id: id.to_string(),
+            label: id.to_string(),
+            end: None,
+            content: ContentSelection::default(),
+            events: Events::default(),
+            movement: None,
+            mitosis: None,
+        };
+        let behaviour = Behaviour {
+            experience: Some(Experience {
+                timeline: Timeline {
+                    stages: vec![stage("stage-1"), stage("stage-2")],
+                    transitions: vec![],
+                },
+                label: None,
+            }),
+            ..Behaviour::default()
+        };
+        pack.replace_behaviour(behaviour.clone(), "Seed behaviour".to_string())
+            .await
+            .unwrap();
+        pack.fill_media_slot(
+            MediaSlot::StageWallpaper {
+                stage: "stage-2".to_string(),
+            },
+            scenery,
+            true,
+        )
+        .await
+        .unwrap();
+
+        // What the editor sends: the shortened timeline, plus the wallpaper it deliberately let go.
+        let edit = pack
+            .edit_behaviour(
+                vec![Patch::new(
+                    "experience.timeline",
+                    serde_json::json!({
+                        "stages": [{
+                            "id": "stage-1", "label": "stage-1",
+                            "content": {}, "events": {}
+                        }],
+                        "transitions": []
+                    }),
+                )],
+                "Remove stage".to_string(),
+                vec![scenery],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(edit.deleted_ids, vec![scenery]);
+        assert_eq!(edit.behaviour.experience.unwrap().timeline.stages.len(), 1);
+        assert!(!pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == scenery));
+
+        // One entry, not two: undoing once puts the stage *and* its wallpaper back.
+        let status = pack.history_status().await.unwrap();
+        assert_eq!(status.undo_label.as_deref(), Some("Remove stage"));
+        pack.undo().await.unwrap();
+
+        let behaviour = read_pack_behaviour(&pack).await;
+        let stages = behaviour.experience.unwrap().timeline.stages;
+        assert_eq!(stages.len(), 2);
+        assert_eq!(
+            stages[1].content.wallpaper,
+            Some(scenery),
+            "the stage came back with the wallpaper it had"
+        );
+        assert!(pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == scenery));
+    }
+
+    /// Retiring is a request, not an instruction: the file stays if the patched document still
+    /// points at it from somewhere else. A base wallpaper reused by a stage is Edgeware's ordinary
+    /// case, so removing that stage must not take the pack's own wallpaper with it.
+    #[tokio::test]
+    async fn retiring_media_another_slot_still_uses_keeps_it() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(
+            &tmp.path().join("shared2.lwpack"),
+            data_dir.path(),
+            "Shared",
+        )
+        .await;
+        let shared = insert_staged_audio(&pack, b"shared").await;
+
+        pack.fill_media_slot(MediaSlot::Wallpaper, shared, true)
+            .await
+            .unwrap();
+
+        let edit = pack
+            .edit_behaviour(vec![], "Remove stage".to_string(), vec![shared])
+            .await
+            .unwrap();
+
+        assert!(edit.deleted_ids.is_empty());
+        assert_eq!(edit.behaviour.content.wallpaper, Some(shared));
+        assert!(pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == shared));
+    }
+
+    /// The invariant that makes retirement explicit rather than inferred: suspending the Experience
+    /// section drops every stage on purpose, and a cleanup driven by "which references went away?"
+    /// would delete every stage wallpaper the moment the author toggled the timeline off.
+    #[tokio::test]
+    async fn suspending_the_timeline_retires_nothing() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("suspend.lwpack"), data_dir.path(), "Sus").await;
+        let scenery = insert_staged_audio(&pack, b"stage wallpaper").await;
+
+        let behaviour = Behaviour {
+            experience: Some(Experience {
+                timeline: Timeline {
+                    stages: vec![Stage {
+                        id: "stage-1".to_string(),
+                        label: "Stage 1".to_string(),
+                        end: None,
+                        content: ContentSelection::default(),
+                        events: Events::default(),
+                        movement: None,
+                        mitosis: None,
+                    }],
+                    transitions: vec![],
+                },
+                label: None,
+            }),
+            ..Behaviour::default()
+        };
+        pack.replace_behaviour(behaviour.clone(), "Seed behaviour".to_string())
+            .await
+            .unwrap();
+        pack.fill_media_slot(
+            MediaSlot::StageWallpaper {
+                stage: "stage-1".to_string(),
+            },
+            scenery,
+            true,
+        )
+        .await
+        .unwrap();
+
+        // Toggling the timeline off: the stages go, but nothing is retired.
+        let edit = pack
+            .edit_behaviour(
+                vec![Patch::new("experience", serde_json::Value::Null)],
+                "Disable timeline".to_string(),
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert!(edit.behaviour.experience.is_none());
+        assert!(edit.deleted_ids.is_empty());
+        assert!(
+            pack.get_files()
+                .await
+                .unwrap()
+                .iter()
+                .any(|f| f.id == scenery),
+            "the stage wallpaper has to survive so re-enabling the timeline restores a working one"
+        );
+    }
+
+    /// The point of moving the timeline out of the blob: an undo entry is a changeset, so editing
+    /// one stage's label should record that stage and nothing else.
+    ///
+    /// While the whole document was one `pack_data` row, every entry carried the entire document
+    /// twice (forward and inverse) whatever the author had touched -- so a minute of typing pushed
+    /// real work off the bottom of the hundred entries history keeps.
+    #[tokio::test]
+    async fn editing_one_stage_records_a_changeset_the_size_of_that_stage() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("size.lwpack"), data_dir.path(), "Size").await;
+
+        let stage = |id: &str| Stage {
+            id: id.to_string(),
+            label: id.to_string(),
+            end: None,
+            content: ContentSelection::default(),
+            events: Events::default(),
+            movement: None,
+            mitosis: None,
+        };
+        // Enough captions that the blob is comfortably larger than one stage row, so a
+        // whole-document write would be unmistakable in the numbers below.
+        let behaviour = Behaviour {
+            content: shared::behaviour::Content {
+                captions: (0..200)
+                    .map(|index| TextItem {
+                        text: format!("Caption number {index}, padded out to have some length."),
+                        tags: vec![],
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            experience: Some(Experience {
+                timeline: Timeline {
+                    stages: (0..20)
+                        .map(|index| stage(&format!("stage-{index}")))
+                        .collect(),
+                    transitions: vec![],
+                },
+                label: None,
+            }),
+        };
+        pack.replace_behaviour(behaviour, "Seed behaviour".to_string())
+            .await
+            .unwrap();
+
+        pack.edit_behaviour(
+            vec![Patch::new(
+                "experience.timeline.stages.7.label",
+                "Renamed".into(),
+            )],
+            "Rename stage".to_string(),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        let bytes: i64 = pack
+            .db_execute(|conn| {
+                conn.query_row(
+                    "SELECT LENGTH(forward_changeset) + LENGTH(inverse_changeset)
+                     FROM history_entries ORDER BY sequence DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+
+        // Around 120 bytes in practice, against a document of roughly eleven kilobytes -- which
+        // is what every entry used to cost, twice over, whatever the author had touched.
+        assert!(
+            bytes < 1024,
+            "renaming one stage recorded {bytes} bytes of changeset, which is the whole document"
+        );
+        assert_eq!(
+            read_pack_behaviour(&pack)
+                .await
+                .experience
+                .unwrap()
+                .timeline
+                .stages[7]
+                .label,
+            "Renamed"
+        );
+    }
+
+    async fn read_pack_behaviour(pack: &MediaPack) -> Behaviour {
+        pack.get_behaviour().await.unwrap()
+    }
+
     /// A stage slot is addressed by stage id, not position, so it keeps pointing at the right
     /// stage across the reordering the timeline editor does freely.
     #[tokio::test]
@@ -5653,7 +6141,7 @@ mod tests {
             }),
             ..Behaviour::default()
         };
-        pack.set_pack_data("behaviour", behaviour.to_json_bytes().unwrap())
+        pack.replace_behaviour(behaviour.clone(), "Seed behaviour".to_string())
             .await
             .unwrap();
 
@@ -5684,10 +6172,10 @@ mod tests {
             .is_err());
     }
 
-    /// Media references are names, so the two operations that change or retire a name have to
-    /// carry the slots with them -- otherwise a rename silently breaks the wallpaper.
+    /// Media references are ids, so only *deletion* can invalidate one. A rename is invisible to
+    /// the document -- the round trip that referencing by id exists to remove.
     #[tokio::test]
-    async fn renaming_and_removing_media_moves_and_clears_the_slots_pointing_at_it() {
+    async fn renaming_media_leaves_the_slots_pointing_at_it_alone() {
         let tmp = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
         let pack = new_test_pack(&tmp.path().join("refs.lwpack"), data_dir.path(), "Refs").await;
@@ -5696,12 +6184,20 @@ mod tests {
             .await
             .unwrap();
 
-        let behaviour = pack
-            .set_title(media, "renamed.png".to_string())
+        pack.set_title(media, "renamed.png".to_string())
             .await
             .unwrap();
-        assert_eq!(behaviour.content.wallpaper.as_deref(), Some("renamed.png"));
 
+        let behaviour = read_pack_behaviour(&pack).await;
+        assert_eq!(behaviour.content.wallpaper, Some(media));
+        assert_eq!(
+            pack.get_files().await.unwrap()[0].file_name,
+            "renamed.png",
+            "the rename itself still happened"
+        );
+
+        // Deleting it is the one thing that does have to clear the slot, or it is left pointing
+        // at media the pack no longer has.
         let behaviour = pack.remove_files(vec![media]).await.unwrap();
         assert_eq!(behaviour.content.wallpaper, None);
     }
@@ -5767,6 +6263,161 @@ mod tests {
         assert_eq!(media_tags, vec![tags::NON_POPUP_TAG, "ordinary"]);
     }
 
+    /// Merging a tag into one an entry already carries must leave one mention, not two. The old
+    /// document rewrite deduplicated by hand with a `HashSet`; the join table's primary key does
+    /// it now, and `UPDATE OR IGNORE` is what defers to it.
+    #[tokio::test]
+    async fn merging_a_tag_into_one_an_entry_already_has_leaves_a_single_mention() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("merge.lwpack"), data_dir.path(), "Merge").await;
+
+        let behaviour = Behaviour {
+            content: shared::behaviour::Content {
+                captions: vec![TextItem {
+                    text: "Obey.".to_string(),
+                    tags: vec!["source".to_string(), "target".to_string()],
+                }],
+                ..Default::default()
+            },
+            ..Behaviour::new()
+        };
+        pack.replace_behaviour(behaviour, "Seed behaviour".to_string())
+            .await
+            .unwrap();
+
+        let after = pack
+            .merge_tag("source".to_string(), "target".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(after.content.captions[0].tags, vec!["target".to_string()]);
+    }
+
+    /// Renaming a tag is now `UPDATE tags SET name` and nothing else: the document holds tag ids,
+    /// so every mention follows without being rewritten. The returned document is read back rather
+    /// than computed, which is what the test is really pinning down.
+    #[tokio::test]
+    async fn renaming_a_tag_carries_every_mention_in_the_document() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack =
+            new_test_pack(&tmp.path().join("rename.lwpack"), data_dir.path(), "Rename").await;
+
+        let behaviour = Behaviour {
+            content: shared::behaviour::Content {
+                content_groups: vec![ContentGroup {
+                    id: "g".to_string(),
+                    label: "Group".to_string(),
+                    description: None,
+                    tags: vec!["old".to_string()],
+                    enabled_by_default: true,
+                }],
+                captions: vec![TextItem {
+                    text: "Obey.".to_string(),
+                    tags: vec!["old".to_string()],
+                }],
+                web_links: vec![WebLink {
+                    url: "https://example.com".to_string(),
+                    args: vec![],
+                    tags: vec!["old".to_string()],
+                }],
+                ..Default::default()
+            },
+            experience: Some(Experience {
+                timeline: Timeline {
+                    stages: vec![Stage {
+                        id: "stage-1".to_string(),
+                        label: "Stage 1".to_string(),
+                        end: None,
+                        content: ContentSelection {
+                            tags: Some(vec!["old".to_string()]),
+                            wallpaper: None,
+                        },
+                        events: Events::default(),
+                        movement: None,
+                        mitosis: None,
+                    }],
+                    transitions: vec![],
+                },
+                label: None,
+            }),
+        };
+        pack.replace_behaviour(behaviour, "Seed behaviour".to_string())
+            .await
+            .unwrap();
+
+        let after = pack
+            .rename_tag("old".to_string(), "new".to_string())
+            .await
+            .unwrap();
+
+        let expected = vec!["new".to_string()];
+        assert_eq!(after.content.content_groups[0].tags, expected);
+        assert_eq!(after.content.captions[0].tags, expected);
+        assert_eq!(after.content.web_links[0].tags, expected);
+        assert_eq!(
+            after.experience.unwrap().timeline.stages[0].content.tags,
+            Some(expected)
+        );
+    }
+
+    /// The other half of the changeset win, and the one the design doc promised loudest: typing in
+    /// a text pool is the commonest debounced edit there is, and it used to store the whole
+    /// document twice per pause.
+    #[tokio::test]
+    async fn editing_one_caption_records_a_changeset_the_size_of_that_caption() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("caption.lwpack"), data_dir.path(), "Cap").await;
+
+        let behaviour = Behaviour {
+            content: shared::behaviour::Content {
+                captions: (0..200)
+                    .map(|index| TextItem {
+                        text: format!("Caption number {index}, padded out to have some length."),
+                        tags: vec![],
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            ..Behaviour::new()
+        };
+        pack.replace_behaviour(behaviour, "Seed behaviour".to_string())
+            .await
+            .unwrap();
+
+        pack.edit_behaviour(
+            vec![Patch::new("content.captions.99.text", "Edited.".into())],
+            "Edit caption".to_string(),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        let bytes: i64 = pack
+            .db_execute(|conn| {
+                conn.query_row(
+                    "SELECT LENGTH(forward_changeset) + LENGTH(inverse_changeset)
+                     FROM history_entries ORDER BY sequence DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            bytes < 1024,
+            "editing one caption recorded {bytes} bytes of changeset, which is the whole document"
+        );
+        assert_eq!(
+            read_pack_behaviour(&pack).await.content.captions[99].text,
+            "Edited."
+        );
+    }
+
     #[tokio::test]
     async fn tag_management_updates_associations_and_behaviour_together() {
         let tmp = tempdir().unwrap();
@@ -5781,7 +6432,7 @@ mod tests {
             text: "Obey.".to_string(),
             tags: vec!["old".to_string()],
         }];
-        pack.set_pack_data("behaviour", behaviour.to_json_bytes().unwrap())
+        pack.replace_behaviour(behaviour.clone(), "Seed behaviour".to_string())
             .await
             .unwrap();
         let behaviour = pack
@@ -5791,9 +6442,7 @@ mod tests {
 
         assert_eq!(pack.get_tags(media).await.unwrap(), vec!["new"]);
         assert_eq!(behaviour.content.captions[0].tags, vec!["new"]);
-        let stored =
-            Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
-                .unwrap();
+        let stored = pack.get_behaviour().await.unwrap();
         assert_eq!(stored.content.captions[0].tags, vec!["new"]);
 
         let behaviour = pack.delete_tag("new".to_string()).await.unwrap();
@@ -5909,7 +6558,7 @@ mod tests {
             text: "Obey.".to_string(),
             tags: vec!["source".into()],
         }];
-        pack.set_pack_data("behaviour", serde_json::to_vec_pretty(&before).unwrap())
+        pack.replace_behaviour(before.clone(), "Seed behaviour".to_string())
             .await
             .unwrap();
 
@@ -5939,9 +6588,7 @@ mod tests {
         let mut both_tags = pack.get_tags(both).await.unwrap();
         both_tags.sort();
         assert_eq!(both_tags, vec!["source", "target"]);
-        let stored =
-            Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
-                .unwrap();
+        let stored = pack.get_behaviour().await.unwrap();
         assert_eq!(stored.content.captions[0].tags, vec!["source"]);
     }
 
@@ -5964,15 +6611,13 @@ mod tests {
             text: "Obey.".to_string(),
             tags: vec!["restore-me".into()],
         }];
-        pack.set_pack_data("behaviour", serde_json::to_vec_pretty(&before).unwrap())
+        pack.replace_behaviour(before.clone(), "Seed behaviour".to_string())
             .await
             .unwrap();
         pack.delete_tag("restore-me".into()).await.unwrap();
         pack.undo().await.unwrap();
         assert_eq!(pack.get_tags(media).await.unwrap(), vec!["restore-me"]);
-        let stored =
-            Behaviour::from_json_bytes(&pack.get_pack_data("behaviour").await.unwrap().unwrap())
-                .unwrap();
+        let stored = pack.get_behaviour().await.unwrap();
         assert_eq!(stored.content.captions[0].tags, vec!["restore-me"]);
     }
 
@@ -6002,18 +6647,18 @@ mod tests {
         let pack_path = tmp.path().join("test.lwpack");
 
         let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
-        pack.set_pack_data("behaviour", b"first".to_vec())
+        pack.set_pack_data("custom", b"first".to_vec())
             .await
             .unwrap();
         // A repeat write for the same name replaces it, rather than erroring or duplicating.
-        pack.set_pack_data("behaviour", b"second".to_vec())
+        pack.set_pack_data("custom", b"second".to_vec())
             .await
             .unwrap();
 
         let blob: Vec<u8> = pack
             .db_execute(|conn| {
                 conn.query_row(
-                    "SELECT blob FROM pack_data WHERE name = 'behaviour'",
+                    "SELECT blob FROM pack_data WHERE name = 'custom'",
                     [],
                     |row| row.get(0),
                 )
@@ -6053,7 +6698,7 @@ mod tests {
             args: vec!["edgeware packs".to_string()],
             tags: vec![],
         });
-        behaviour.content.wallpaper = Some("bg.png".to_string());
+        behaviour.content.wallpaper = Some(1);
         behaviour.experience = Some(Experience {
             timeline: Timeline {
                 stages: vec![
@@ -6110,19 +6755,22 @@ mod tests {
         });
 
         let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
-        assert_eq!(pack.get_pack_data("behaviour").await.unwrap(), None);
+        assert_eq!(pack.get_behaviour().await.unwrap(), Behaviour::new());
+        // The wallpaper slot is a foreign key now, so the file it names has to be real.
+        behaviour.content.wallpaper = Some(insert_staged_audio(&pack, b"wallpaper").await);
 
-        pack.set_pack_data("behaviour", behaviour.to_json_bytes().unwrap())
+        pack.replace_behaviour(behaviour.clone(), "Seed behaviour".to_string())
             .await
             .unwrap();
         assert!(!pack.is_saved().await);
         pack.save(|_, _| {}).await.unwrap();
         drop(pack);
 
+        // The whole round trip: the editor's tables out through `export_runtime` into the
+        // `.lwpack`, and back in through `import_runtime` on reopen. A behaviour table missing
+        // from either copy list shows up here as a timeline that did not survive the save.
         let pack2 = MediaPack::open(pack_path, data_dir.path()).await.unwrap();
-        let blob = pack2.get_pack_data("behaviour").await.unwrap().unwrap();
-        let decoded = Behaviour::from_json_bytes(&blob).unwrap();
-        assert_eq!(decoded, behaviour);
+        assert_eq!(pack2.get_behaviour().await.unwrap(), behaviour);
     }
 
     #[tokio::test]
@@ -6132,13 +6780,13 @@ mod tests {
         let pack_path = tmp.path().join("test.lwpack");
 
         let pack = new_test_pack(&pack_path, data_dir.path(), "Test").await;
-        assert_eq!(pack.get_pack_data("behaviour").await.unwrap(), None);
+        assert_eq!(pack.get_pack_data("custom").await.unwrap(), None);
 
-        pack.set_pack_data("behaviour", b"the-blob".to_vec())
+        pack.set_pack_data("custom", b"the-blob".to_vec())
             .await
             .unwrap();
         assert_eq!(
-            pack.get_pack_data("behaviour").await.unwrap(),
+            pack.get_pack_data("custom").await.unwrap(),
             Some(b"the-blob".to_vec())
         );
     }

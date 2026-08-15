@@ -14,7 +14,7 @@ use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, syn
 use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
-    behaviour::{Behaviour, Content, Experience, effective_config, effective_options},
+    behaviour::{Content, Experience, effective_config, effective_options},
     encode::FileType,
     mode::{
         Metadata, OptionValue, StoredValue, VERSION_MAJOR, read_mode_metadata, resolve_options,
@@ -36,7 +36,7 @@ use crate::{
         request::RequestSender,
         window::Window,
     },
-    media::{MediaManager, MediaTypes},
+    media::MediaManager,
     monitor::Monitor,
     utils::report_fatal_startup_error,
     window::ChromeDefaults,
@@ -163,8 +163,11 @@ fn resolve_mode_config(
     experience_options: &HashMap<Uuid, HashMap<String, StoredValue>>,
     pack_id: Uuid,
     media_manager: &MediaManager,
-    dev_mode: bool,
-) -> (HashMap<String, OptionValue>, Content, Experience) {
+) -> (
+    HashMap<String, OptionValue>,
+    serde_json::Value,
+    serde_json::Value,
+) {
     let stored = if matches!(mode, shared::user_config::Mode::Experience) {
         experience_options
             .get(&pack_id)
@@ -180,53 +183,106 @@ fn resolve_mode_config(
     ) {
         let mode_config = resolve_options(&metadata.entries, &stored);
 
-        return (mode_config, Content::default(), Experience::default());
+        return (
+            mode_config,
+            lua_view(&Content::default(), |_| None),
+            lua_view(&Experience::default(), |_| None),
+        );
     }
 
     // Mode::Sandbox and Mode::Experience require custom options/data resolution
     let behaviour = media_manager
-        .get_pack_data("behaviour".to_string())
-        .inspect_err(|err| tracing::warn!("Failed to read pack behaviour data: {err}"))
-        .ok()
-        .flatten()
-        .and_then(|bytes| {
-            Behaviour::from_json_bytes(&bytes)
-                .inspect_err(|err| tracing::warn!("Failed to parse pack behaviour.json: {err}"))
-                .ok()
-        })
+        .get_behaviour()
+        .inspect_err(|err| tracing::warn!("Failed to read the pack's behaviour document: {err}"))
         .unwrap_or_default();
 
-    if dev_mode && behaviour.is_from_newer_engine() {
-        tracing::warn!(
-            "This pack's behaviour.json (v{}) is newer than this engine understands (v{})",
-            behaviour.version,
-            shared::behaviour::VERSION
-        );
-    }
-
-    // `pack_has_wallpaper`/`pack_has_splash` ask what the behaviour's media references actually
-    // resolve to, so the schema needs a live look at the pack's media (see `MediaLookup`).
-    let media_lookup = |name: &str| {
+    // The behaviour document addresses media by id, so every lookup here is one query away from
+    // the row itself -- used both for `pack_has_wallpaper`/`pack_has_splash` (which ask what a
+    // slot actually resolves to; see `MediaLookup`) and for the file names the modes are given.
+    let media_of = |id: u64| {
         media_manager
-            .get_media(name.to_string(), MediaTypes::ALL)
-            .inspect_err(|err| tracing::warn!("Failed to look up media \"{name}\": {err}"))
+            .get_media_by_id(id)
+            .inspect_err(|err| tracing::warn!("Failed to look up media #{id}: {err}"))
             .ok()
             .flatten()
-            .map(|media| match media.media_data {
-                MediaData::Image { .. } => FileType::Image,
-                MediaData::Video { .. } => FileType::Video,
-                MediaData::Audio { .. } => FileType::Audio,
-            })
     };
+    let media_lookup = |id: u64| {
+        media_of(id).map(|media| match media.media_data {
+            MediaData::Image { .. } => FileType::Image,
+            MediaData::Video { .. } => FileType::Video,
+            MediaData::Audio { .. } => FileType::Audio,
+        })
+    };
+    let name_of = |id: u64| media_of(id).map(|media| media.name);
 
     let schema = effective_options(metadata, &behaviour, &media_lookup);
     let resolved = effective_config(&schema, &stored);
 
     (
         resolved,
-        behaviour.content,
-        behaviour.experience.unwrap_or_default(),
+        lua_view(&behaviour.content, name_of),
+        lua_view(&behaviour.experience.unwrap_or_default(), name_of),
     )
+}
+
+/// A behaviour section as the modes see it: every media slot resolved from the id it stores back
+/// to that file's name.
+///
+/// Slots hold ids so that renaming a file cannot break them (`design/behaviour-storage.md`, step
+/// 1), but the modes ask the media API for a *name* --
+/// `lewdware.media.get_image(content().wallpaper)` in `default-modes/shared/lib/wallpaper.lua`.
+/// Resolving on the way out keeps the private `__lewdware_content`/`__lewdware_experience`
+/// channels, the public Lua API and every mode exactly as they were when slots held names.
+///
+/// A slot pointing at media the pack no longer has loses its key entirely, which reads to a mode
+/// as "no wallpaper set" -- the same answer `pack_has_wallpaper` gives for it, and the same shape
+/// an unfilled slot has always had.
+fn lua_view<T: serde::Serialize>(
+    section: &T,
+    name_of: impl Fn(u64) -> Option<String>,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(section)
+        .expect("behaviour sections always serialize: every field is a plain data type");
+
+    // The slots, by where they live rather than by walking for a key called "wallpaper" -- a
+    // content group or a caption is free to grow a field of that name without becoming a slot.
+    if let Some(content) = value.as_object_mut() {
+        resolve_slot(content, "wallpaper", &name_of);
+        resolve_slot(content, "splash", &name_of);
+    }
+    if let Some(stages) = value
+        .get_mut("timeline")
+        .and_then(|timeline| timeline.get_mut("stages"))
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for stage in stages {
+            if let Some(content) = stage
+                .get_mut("content")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                resolve_slot(content, "wallpaper", &name_of);
+            }
+        }
+    }
+    value
+}
+
+fn resolve_slot(
+    section: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    name_of: impl Fn(u64) -> Option<String>,
+) {
+    let Some(id) = section.get(key).and_then(serde_json::Value::as_u64) else {
+        return;
+    };
+    match name_of(id) {
+        Some(name) => {
+            section.insert(key.to_string(), serde_json::Value::String(name));
+        }
+        None => {
+            section.remove(key);
+        }
+    }
 }
 
 /// Starts the Lua thread using the given `media_manager` — already opened by the caller (see
@@ -323,7 +379,6 @@ pub fn start_lua_thread<T: EventPoster>(
             &config.experience_options,
             pack_info.id,
             &media_manager,
-            dev_mode,
         );
 
         let mode = Mode::new(file, metadata.files);
@@ -721,6 +776,7 @@ mod tests {
         time::Duration,
     };
 
+    use shared::behaviour::Behaviour;
     use shared::user_config::{Capabilities, Volume};
     use tempfile::NamedTempFile;
     use tokio::sync::mpsc::UnboundedSender;
@@ -749,6 +805,11 @@ mod tests {
     /// appended to the file (content doesn't matter — `get_image_file` is a raw byte copy, never
     /// decoded here), so `get_image_file`/`wallpaper.set` have real data to read rather than
     /// erroring on a null offset.
+    /// The id of the single media row every fixture inserts first (`pic.avif`, `clip.webm`, or
+    /// the first entry handed to `pack_fixture_with_data`). Behaviour media slots address media by
+    /// id, so a fixture that wants a slot filled names this.
+    const FIXTURE_MEDIA: u64 = 1;
+
     fn pack_fixture(with_image: bool) -> NamedTempFile {
         const IMAGE_BYTES: &[u8] = b"not a real avif, just needs to be some bytes";
 
@@ -873,9 +934,9 @@ mod tests {
     /// ranges because `list`/`random` queries never read their bytes (see `MediaPack::parse_media`).
     fn pack_fixture_with_data(
         media: &[(&str, &[&str])],
-        behaviour_bytes: Option<&[u8]>,
+        behaviour: Option<&Behaviour>,
     ) -> NamedTempFile {
-        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
         shared::db::migrate(&db).unwrap();
 
         let mut tag_ids: HashMap<&str, i64> = HashMap::new();
@@ -911,12 +972,10 @@ mod tests {
             }
         }
 
-        if let Some(bytes) = behaviour_bytes {
-            db.execute(
-                "INSERT INTO pack_data (name, blob) VALUES ('behaviour', ?)",
-                rusqlite::params![bytes],
-            )
-            .unwrap();
+        if let Some(behaviour) = behaviour {
+            let tx = db.transaction().unwrap();
+            shared::behaviour::storage::write(&tx, behaviour).unwrap();
+            tx.commit().unwrap();
         }
 
         let metadata = shared::read_pack::Metadata {
@@ -1250,6 +1309,16 @@ mod tests {
 
             let (media_manager, _metadata, _pack_id) =
                 MediaManager::open(pack_file.path(), event_poster.clone(), None).unwrap();
+            let name_of = {
+                let media_manager = media_manager.clone();
+                move |id: u64| {
+                    media_manager
+                        .get_media_by_id(id)
+                        .ok()
+                        .flatten()
+                        .map(|media| media.name)
+                }
+            };
 
             let (request_tx, request_rx) = std::sync::mpsc::sync_channel(20);
             let request_sender = RequestSender::new(request_tx, event_poster);
@@ -1276,9 +1345,11 @@ mod tests {
                     storage,
                     api::ApiOptions {
                         pack_info: None,
+                        // Resolved against the fixture's own media, exactly as the real engine
+                        // does -- a slot holds an id, and the modes are handed a file name.
                         config: mode_config,
-                        content,
-                        experience,
+                        content: lua_view(&content, &name_of),
+                        experience: lua_view(&experience, &name_of),
                         chrome: ChromeDefaults::default(),
                         gpu_available: false,
                         dev_mode: false,
@@ -1726,8 +1797,8 @@ mod tests {
                     api::ApiOptions {
                         pack_info: Some(pack_info),
                         config: HashMap::new(),
-                        content: Content::default(),
-                        experience: Experience::default(),
+                        content: lua_view(&Content::default(), |_| None),
+                        experience: lua_view(&Experience::default(), |_| None),
                         chrome: ChromeDefaults::default(),
                         gpu_available: false,
                         dev_mode: false,
@@ -1796,8 +1867,8 @@ mod tests {
                     api::ApiOptions {
                         pack_info: None,
                         config: HashMap::new(),
-                        content: Content::default(),
-                        experience: Experience::default(),
+                        content: lua_view(&Content::default(), |_| None),
+                        experience: lua_view(&Experience::default(), |_| None),
                         chrome: ChromeDefaults::default(),
                         gpu_available: false,
                         dev_mode: true,
@@ -2470,25 +2541,29 @@ mod tests {
             .await;
     }
 
+    /// The engine reads the document through the media manager, and the document is assembled
+    /// from tables plus what is left of the blob -- so this covers the read path end to end from
+    /// a real pack file rather than the blob alone.
     #[test]
-    fn media_manager_get_pack_data_round_trips_a_named_blob() {
-        let pack_file = pack_fixture_with_data(&[], Some(b"hello behaviour"));
+    fn media_manager_reads_the_assembled_behaviour_document() {
+        let behaviour = behaviour_with_one_content_group();
+        let pack_file = pack_fixture_with_data(&[], Some(&behaviour));
         let event_poster = EmptyPoster();
         let (media_manager, _metadata, _pack_id) =
             MediaManager::open(pack_file.path(), event_poster, None).unwrap();
 
-        assert_eq!(
-            media_manager
-                .get_pack_data("behaviour".to_string())
-                .unwrap(),
-            Some(b"hello behaviour".to_vec())
-        );
-        assert_eq!(
-            media_manager
-                .get_pack_data("nonexistent".to_string())
-                .unwrap(),
-            None
-        );
+        assert_eq!(media_manager.get_behaviour().unwrap(), behaviour);
+    }
+
+    /// A pack that has never had a behaviour document written reads as an empty one, not an error.
+    #[test]
+    fn media_manager_reads_a_default_document_when_the_pack_has_none() {
+        let pack_file = pack_fixture_with_data(&[], None);
+        let event_poster = EmptyPoster();
+        let (media_manager, _metadata, _pack_id) =
+            MediaManager::open(pack_file.path(), event_poster, None).unwrap();
+
+        assert_eq!(media_manager.get_behaviour().unwrap(), Behaviour::new());
     }
 
     fn empty_default_mode_metadata() -> Metadata {
@@ -2526,8 +2601,7 @@ mod tests {
     #[test]
     fn resolve_mode_config_synthesizes_content_group_toggle_for_sandbox_mode() {
         let behaviour = behaviour_with_one_content_group();
-        let behaviour_bytes = behaviour.to_json_bytes().unwrap();
-        let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
+        let pack_file = pack_fixture_with_data(&[], Some(&behaviour));
 
         let event_poster = EmptyPoster();
         let (media_manager, _metadata, pack_id) =
@@ -2544,11 +2618,11 @@ mod tests {
             &HashMap::new(),
             pack_id,
             &media_manager,
-            false,
         );
         assert_eq!(config.get(&key), Some(&OptionValue::Boolean(true)));
-        assert_eq!(content.content_groups.len(), 1);
-        assert_eq!(content.content_groups[0].tags, vec!["kinky".to_string()]);
+        let groups = content["content_groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["tags"], serde_json::json!(["kinky"]));
 
         // A stored override wins over the default.
         let mut stored = HashMap::new();
@@ -2563,7 +2637,6 @@ mod tests {
             &HashMap::new(),
             pack_id,
             &media_manager,
-            false,
         );
         assert_eq!(config.get(&key), Some(&OptionValue::Boolean(false)));
     }
@@ -2575,8 +2648,7 @@ mod tests {
     #[test]
     fn resolve_mode_config_hides_content_groups_from_custom_modes() {
         let behaviour = behaviour_with_one_content_group();
-        let behaviour_bytes = behaviour.to_json_bytes().unwrap();
-        let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
+        let pack_file = pack_fixture_with_data(&[], Some(&behaviour));
 
         let event_poster = EmptyPoster();
         let (media_manager, _metadata, pack_id) =
@@ -2598,11 +2670,10 @@ mod tests {
                 &HashMap::new(),
                 pack_id,
                 &media_manager,
-                false,
             );
 
             assert_eq!(config.get(&key), None);
-            assert_eq!(content, Content::default());
+            assert_eq!(content, lua_view(&Content::default(), |_| None));
         }
     }
 
@@ -2625,11 +2696,10 @@ mod tests {
             &HashMap::new(),
             pack_id,
             &media_manager,
-            false,
         );
 
         assert!(config.is_empty());
-        assert_eq!(content, Content::default());
+        assert_eq!(content, lua_view(&Content::default(), |_| None));
     }
 
     /// Integration-style: exercises the *shipped* `default-modes/src/lib/media.lua` file (not a
@@ -3045,7 +3115,7 @@ mod tests {
         anchors: FrequencyAnchors,
         design: DesignValues,
         tags: Option<Vec<String>>,
-        wallpaper: Option<String>,
+        wallpaper: Option<u64>,
     }
 
     #[derive(Default)]
@@ -3121,7 +3191,7 @@ mod tests {
                     end,
                     content: ContentSelection {
                         tags: level.tags.clone(),
-                        wallpaper: level.wallpaper.clone(),
+                        wallpaper: level.wallpaper,
                     },
                     events: Events {
                         popup: schedule(level.anchors.popup),
@@ -4117,7 +4187,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    wallpaper: Some("pic.avif".to_string()),
+                    wallpaper: Some(FIXTURE_MEDIA),
                     ..Default::default()
                 };
 
@@ -4149,7 +4219,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    wallpaper: Some("pic.avif".to_string()),
+                    wallpaper: Some(FIXTURE_MEDIA),
                     ..Default::default()
                 };
 
@@ -4210,7 +4280,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    wallpaper: Some("clip.webm".to_string()),
+                    wallpaper: Some(FIXTURE_MEDIA),
                     ..Default::default()
                 };
 
@@ -4240,7 +4310,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    wallpaper: Some("pic.avif".to_string()),
+                    wallpaper: Some(FIXTURE_MEDIA),
                     ..Default::default()
                 };
 
@@ -4289,7 +4359,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    splash: Some("pic.avif".to_string()),
+                    splash: Some(FIXTURE_MEDIA),
                     ..Default::default()
                 };
 
@@ -4347,9 +4417,10 @@ mod tests {
     async fn ordinary_popups_never_draw_non_popup_media() {
         LocalSet::new()
             .run_until(async {
+                // Ids 2 and 3 in the fixture order below: `bg.avif` and `intro.avif`.
                 let content = Content {
-                    wallpaper: Some("bg.avif".to_string()),
-                    splash: Some("intro.avif".to_string()),
+                    wallpaper: Some(2),
+                    splash: Some(3),
                     ..Default::default()
                 };
 
@@ -4413,7 +4484,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    splash: Some("clip.webm".to_string()),
+                    splash: Some(FIXTURE_MEDIA),
                     ..Default::default()
                 };
 
@@ -4471,7 +4542,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    splash: Some("pic.avif".to_string()),
+                    splash: Some(FIXTURE_MEDIA),
                     ..Default::default()
                 };
 
@@ -4498,7 +4569,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
-                    splash: Some("pic.avif".to_string()),
+                    splash: Some(FIXTURE_MEDIA),
                     ..Default::default()
                 };
 
@@ -5530,21 +5601,21 @@ mod tests {
     async fn experience_timeline_wallpaper_override_reapplies_only_when_changed() {
         LocalSet::new()
             .run_until(async {
-                fn level_at(at_seconds: f64, wallpaper: Option<&str>) -> Level {
+                fn level_at(at_seconds: f64, wallpaper: Option<u64>) -> Level {
                     Level {
                         at_seconds,
-                        wallpaper: wallpaper.map(str::to_string),
+                        wallpaper,
                         ..Default::default()
                     }
                 }
 
                 let experience = levels_to_experience(vec![
-                            Level::default(), // baseline: no wallpaper override
-                            level_at(1.0, Some("pic.avif")), // baseline -> pic.avif: applies
-                            level_at(2.0, None), // pic.avif -> baseline (unset): no-ops internally
-                            level_at(3.0, Some("pic.avif")), // baseline -> pic.avif again: applies
-                            level_at(4.0, Some("pic.avif")), // unchanged: must not reapply
-                        ]);
+                    Level::default(),                   // baseline: no wallpaper override
+                    level_at(1.0, Some(FIXTURE_MEDIA)), // baseline -> pic.avif: applies
+                    level_at(2.0, None), // pic.avif -> baseline (unset): no-ops internally
+                    level_at(3.0, Some(FIXTURE_MEDIA)), // baseline -> pic.avif again: applies
+                    level_at(4.0, Some(FIXTURE_MEDIA)), // unchanged: must not reapply
+                ]);
 
                 let owned = wrapped_experience_mode_sources(WALLPAPER_CAPTURE_WRAP);
                 let sources = as_str_sources(&owned);
@@ -5769,7 +5840,6 @@ mod tests {
             &experience_options,
             pack_id,
             &media_manager,
-            false,
         );
 
         assert_eq!(config.get("pace"), Some(&OptionValue::Number(2.0)));
@@ -5781,8 +5851,7 @@ mod tests {
     #[test]
     fn resolve_mode_config_experience_mode_synthesizes_content_group_toggle() {
         let behaviour = behaviour_with_one_content_group();
-        let behaviour_bytes = behaviour.to_json_bytes().unwrap();
-        let pack_file = pack_fixture_with_data(&[], Some(&behaviour_bytes));
+        let pack_file = pack_fixture_with_data(&[], Some(&behaviour));
 
         let event_poster = EmptyPoster();
         let (media_manager, _metadata, pack_id) =
@@ -5798,9 +5867,8 @@ mod tests {
             &HashMap::new(),
             pack_id,
             &media_manager,
-            false,
         );
         assert_eq!(config.get(&key), Some(&OptionValue::Boolean(true)));
-        assert_eq!(content.content_groups.len(), 1);
+        assert_eq!(content["content_groups"].as_array().unwrap().len(), 1);
     }
 }

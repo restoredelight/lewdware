@@ -245,7 +245,11 @@ fn detect_root_prefix(names: &[String]) -> String {
         // the order the archive happens to list its entries in.
         .max_by_key(|(prefix, found)| {
             let depth = prefix.matches('/').count();
-            (found.len(), std::cmp::Reverse(depth), std::cmp::Reverse(prefix.clone()))
+            (
+                found.len(),
+                std::cmp::Reverse(depth),
+                std::cmp::Reverse(prefix.clone()),
+            )
         })
         .map(|(prefix, _)| prefix)
         .unwrap_or_default()

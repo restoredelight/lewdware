@@ -1,5 +1,6 @@
 ---
 source: converter/tests/golden.rs
+assertion_line: 46
 expression: output
 ---
 metadata:
@@ -9,7 +10,6 @@ metadata:
   version: "1.0"
   recommended_mode: Experience
 behaviour:
-  version: 3
   content:
     content_groups:
       - id: vanilla
@@ -45,7 +45,6 @@ behaviour:
     notifications: []
     subliminals: []
     web_links: []
-    wallpaper: wallpaper.png
   experience:
     timeline:
       stages:
@@ -62,7 +61,6 @@ behaviour:
             tags:
               - corruption-moodless
               - vanilla
-            wallpaper: wallpaper.png
           events:
             popup:
               interval:
@@ -98,7 +96,6 @@ behaviour:
               - corrupted
               - corruption-moodless
               - kinky
-            wallpaper: wallpaper2.png
           events:
             popup:
               interval:
@@ -143,6 +140,15 @@ media:
     suggested_name: vanilla_a.png
     tags:
       - vanilla
+media_references:
+  - - kind: wallpaper
+    - wallpaper.png
+  - - kind: stage_wallpaper
+      stage: stage-1
+    - wallpaper.png
+  - - kind: stage_wallpaper
+      stage: stage-3
+    - wallpaper2.png
 icon: ~
 warnings:
   - kind: ConfigNotConverted

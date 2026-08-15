@@ -10,9 +10,9 @@
 	import WebLinksEditor from './WebLinksEditor.svelte';
 	import Tabs from '$ui/Tabs.svelte';
 	import {
+		editBehaviourField,
 		ensureBehaviour,
-		flushBehaviourSave,
-		scheduleBehaviourSave
+		flushBehaviourSave
 	} from './behaviourSave.svelte.js';
 
 	type Tab =
@@ -170,7 +170,11 @@
 							<label class="flex flex-col gap-[5px]"
 								><span class="text-text text-xs font-semibold">Submit button label</span><input
 									bind:value={store.behaviour!.content.prompt_settings.submit_label}
-									oninput={scheduleBehaviourSave}
+									oninput={() =>
+										editBehaviourField(
+											'content.prompt_settings.submit_label',
+											'Edit submit button label'
+										)}
 									placeholder="Submit"
 									class="border-border bg-surface text-text w-48 rounded-sm border px-2.5 py-2 text-sm transition-colors hover:border-[var(--ui-border-strong)]"
 								/></label
@@ -191,7 +195,7 @@
 						<div class="flex flex-col gap-6">
 							<MediaSlot
 								slot={{ kind: 'wallpaper' }}
-								name={store.behaviour!.content.wallpaper}
+								mediaId={store.behaviour!.content.wallpaper}
 								title="Wallpaper"
 								description="The image Lewdware sets as the desktop wallpaper."
 								emptyNote="Lewdware will not change the wallpaper."
@@ -201,7 +205,7 @@
 							/>
 							<MediaSlot
 								slot={{ kind: 'splash' }}
-								name={store.behaviour!.content.splash}
+								mediaId={store.behaviour!.content.splash}
 								title="Splash"
 								description="Shown once when a session starts. May be a video — an animated GIF is one."
 								emptyNote="No startup image will be shown."

@@ -7,7 +7,7 @@
 	// import fills in live as its file arrives.
 	import Button from '$ui/Button.svelte';
 	import { api } from './api.js';
-	import { adoptBehaviour, flushBehaviourSave } from './behaviourSave.svelte.js';
+	import { adoptBehaviour } from './behaviourSave.svelte.js';
 	import { openStandalonePreview } from './mediaPreview.js';
 	import { store } from './store.svelte.js';
 	import { taskFeedback } from './taskFeedback.svelte.js';
@@ -15,8 +15,8 @@
 
 	type Props = {
 		slot: MediaSlot;
-		/** What the behaviour currently says is in this slot. */
-		name?: string;
+		/** The media id the behaviour currently says is in this slot. */
+		mediaId?: number;
 		title: string;
 		description: string;
 		/** Copy for the empty state -- what the pack loses by leaving this unset. */
@@ -25,7 +25,15 @@
 		onrevealed?: () => void;
 	};
 
-	let { slot, name, title, description, emptyNote, reveal = false, onrevealed }: Props = $props();
+	let {
+		slot,
+		mediaId,
+		title,
+		description,
+		emptyNote,
+		reveal = false,
+		onrevealed
+	}: Props = $props();
 
 	let busy = $state(false);
 	let section = $state<HTMLElement>();
@@ -39,18 +47,20 @@
 		});
 	});
 
-	const file = $derived(name ? (store.files.find((f) => f.file_name === name) ?? null) : null);
-	// A slot naming a file the pack doesn't have: the import that would have brought it in was
-	// cancelled, or it's still encoding. Say so rather than showing an empty frame.
-	const missing = $derived(name != null && file == null);
+	const file = $derived(
+		mediaId != null ? (store.files.find((f) => f.id === mediaId) ?? null) : null
+	);
+	// A slot pointing at a file the pack doesn't have: the import that would have brought it in
+	// was cancelled, or it's still encoding. Say so rather than showing an empty frame.
+	const missing = $derived(mediaId != null && file == null);
 
-	// The backend fills the slot itself, so both handlers flush any pending debounced write first
-	// -- it holds a pre-slot document and would otherwise land afterwards and wipe the slot -- and
-	// then hand the result to `adoptBehaviour`.
+	// The backend fills the slot itself, so both handlers hand its result to `adoptBehaviour`.
+	// Nothing has to be flushed first: an edit the author is still typing on another tab is
+	// re-applied over the document that comes back, and would not have overwritten this slot in
+	// any case -- it is sent as a patch naming only the field it touched.
 	async function fill() {
 		busy = true;
 		try {
-			await flushBehaviourSave();
 			const result = await api.fillMediaSlotDialog(slot);
 			if (!result) return;
 			// A replacement drops the file it displaced when that file was only ever this slot's --
@@ -73,7 +83,6 @@
 	async function clear() {
 		busy = true;
 		try {
-			await flushBehaviourSave();
 			const result = await api.clearMediaSlot(slot);
 			if (!result) return;
 			if (result.deleted_id != null) store.removeFilesById([result.deleted_id], true);
@@ -119,7 +128,7 @@
 			</div>
 			<p class="text-muted min-w-0 text-xs italic">
 				{#if missing}
-					“{name}” isn’t in this pack.
+					That file isn’t in this pack any more.
 				{:else}
 					{emptyNote}
 				{/if}
@@ -128,9 +137,9 @@
 
 		<div class="ml-auto flex shrink-0 gap-2">
 			<Button size="compact" disabled={busy} onclick={fill}>
-				{name ? 'Replace…' : 'Add…'}
+				{mediaId != null ? 'Replace…' : 'Add…'}
 			</Button>
-			{#if name}
+			{#if mediaId != null}
 				<Button variant="destructive" size="compact" disabled={busy} onclick={clear}>Remove</Button>
 			{/if}
 		</div>

@@ -48,10 +48,10 @@
 	import Tags from './Tags.svelte';
 	import Artists from './Artists.svelte';
 	import {
+		adoptBehaviour,
 		cancelBehaviourSave,
 		ensureBehaviour,
-		flushBehaviourSave,
-		initializeBehaviourHistory
+		flushBehaviourSave
 	} from './behaviourSave.svelte.js';
 	import {
 		cancelMetadataSave,
@@ -234,7 +234,7 @@
 		try {
 			taskFeedback.progress(
 				'history',
-				history.undoLabel ? `Undoing ${history.undoLabel}…` : 'Undoing change…'
+				history.undoLabel ? `Undoing “${history.undoLabel}”…` : 'Undoing change…'
 			);
 			await flushMetadataSave();
 			await flushBehaviourSave();
@@ -251,7 +251,7 @@
 		try {
 			taskFeedback.progress(
 				'history',
-				history.redoLabel ? `Redoing ${history.redoLabel}…` : 'Redoing change…'
+				history.redoLabel ? `Redoing “${history.redoLabel}”…` : 'Redoing change…'
 			);
 			await flushMetadataSave();
 			await flushBehaviourSave();
@@ -347,7 +347,6 @@
 			store.behaviour = behaviour;
 			store.suspendedExperience = null;
 			initializeMetadataHistory(meta);
-			initializeBehaviourHistory(behaviour);
 			history.reset(true);
 			taskFeedback.success('pack-action', 'Changes discarded');
 		} catch (err) {
@@ -459,23 +458,20 @@
 			`Removing ${ids.length} media item${ids.length === 1 ? '' : 's'}…`
 		);
 		try {
-			// Deleting a file clears any slot that named it -- see `MediaPack::remove_files`. Flush
-			// first, or a pending debounced write lands afterwards and restores the dead reference.
-			await flushBehaviourSave();
+			// Deleting a file clears any slot that named it -- see `MediaPack::remove_files`. Null
+			// when no slot named one, which is the only case with nothing to adopt.
 			const behaviour = await api.removeFiles(ids);
-			if (behaviour) {
-				store.behaviour = behaviour;
-				initializeBehaviourHistory(behaviour);
-			}
 			store.cancelMediaRemoval();
 			store.removeFilesById(ids, true);
-			history.record({
+			const record = {
 				label:
 					removed.length === 1
 						? `Remove “${removed[0].file_name}”`
 						: `Remove ${removed.length} media items`,
 				storageBytes: removed.reduce((total, file) => total + file.size, 0)
-			});
+			};
+			if (behaviour) adoptBehaviour(behaviour, record);
+			else history.record(record);
 			const remaining = store.filteredFiles;
 			if (remaining.length > 0) {
 				const next = remaining[Math.min(Math.max(activeIndex, 0), remaining.length - 1)];
@@ -536,7 +532,9 @@
 				label={history.undoLabel ? `Undo ${history.undoLabel}` : 'Undo'}
 				disabled={!history.canUndo}
 				onclick={undo}
-				title={`Undo (${modifierLabel}+Z)`}
+				title={history.undoLabel
+					? `Undo “${history.undoLabel}” (${modifierLabel}+Z)`
+					: `Undo (${modifierLabel}+Z)`}
 			>
 				<span class="h-4 w-4"><Icon src={ArrowUturnLeft} mini /></span>
 			</IconButton>
@@ -544,7 +542,9 @@
 				label={history.redoLabel ? `Redo ${history.redoLabel}` : 'Redo'}
 				disabled={!history.canRedo}
 				onclick={redo}
-				title={`Redo (${modifierLabel}+Shift+Z)`}
+				title={history.redoLabel
+					? `Redo “${history.redoLabel}” (${modifierLabel}+Shift+Z)`
+					: `Redo (${modifierLabel}+Shift+Z)`}
 			>
 				<span class="h-4 w-4"><Icon src={ArrowUturnRight} mini /></span>
 			</IconButton>
@@ -746,7 +746,7 @@
 				...new Set(
 					store.files
 						.filter((file) => store.pendingMediaRemoval.includes(file.id))
-						.flatMap((file) => mediaSlotUsage(store.behaviour!, file.file_name))
+						.flatMap((file) => mediaSlotUsage(store.behaviour!, file.id))
 				)
 			]
 		: []}

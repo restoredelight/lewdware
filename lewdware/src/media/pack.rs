@@ -6,7 +6,7 @@ use std::{
 };
 
 use image::{ImageFormat, ImageReader};
-use rusqlite::{Connection, MAIN_DB, OptionalExtension, Row, params, params_from_iter};
+use rusqlite::{Connection, MAIN_DB, Row, params, params_from_iter};
 use shared::{
     db::migrate,
     read_pack::{Header, Metadata, read_pack_metadata},
@@ -50,6 +50,7 @@ pub struct MediaPack {
 
 struct MediaOpts {
     name: Option<String>,
+    id: Option<u64>,
     types: MediaTypes,
     tags: Option<TagFilter>,
     random: bool,
@@ -114,6 +115,11 @@ impl MediaPack {
         if let Some(name) = &opts.name {
             where_queries.push("file_name = ?".to_string());
             params.push(Box::new(name.clone()));
+        }
+
+        if let Some(id) = opts.id {
+            where_queries.push("id = ?".to_string());
+            params.push(Box::new(id));
         }
 
         if let Some(query) = self.build_media_types_query(&opts.types) {
@@ -204,7 +210,28 @@ impl MediaPack {
     pub fn get_media(&self, name: String, types: MediaTypes) -> Result<Option<Media>> {
         let (sql, params) = self.build_sql(MediaOpts {
             name: Some(name),
+            id: None,
             types,
+            tags: None,
+            random: false,
+            single: true,
+        });
+
+        let mut stmt = self.db.prepare(&sql)?;
+
+        stmt.query_and_then(params_from_iter(params), parse_media)?
+            .next()
+            .transpose()
+    }
+
+    /// One file by its media id -- how the behaviour document's wallpaper/splash slots address
+    /// media (see `shared::behaviour::Content`). `None` means the pack no longer has it, which
+    /// for an id means it was deleted rather than merely renamed.
+    pub fn get_media_by_id(&self, id: u64) -> Result<Option<Media>> {
+        let (sql, params) = self.build_sql(MediaOpts {
+            name: None,
+            id: Some(id),
+            types: MediaTypes::ALL,
             tags: None,
             random: false,
             single: true,
@@ -224,6 +251,7 @@ impl MediaPack {
     ) -> Result<Option<Media>> {
         let (sql, params) = self.build_sql(MediaOpts {
             name: None,
+            id: None,
             types,
             tags,
             random: true,
@@ -240,6 +268,7 @@ impl MediaPack {
     pub fn list_media(&self, types: MediaTypes, tags: Option<TagFilter>) -> Result<Vec<Media>> {
         let (sql, params) = self.build_sql(MediaOpts {
             name: None,
+            id: None,
             types,
             tags,
             random: false,
@@ -348,14 +377,11 @@ impl MediaPack {
     /// Reads a named blob from the pack's `pack_data` table (e.g. behaviour.json). `None` if the
     /// pack doesn't carry an entry with this name -- packs predating a given key, or not written
     /// by a tool that populates it, are expected, not an error.
-    pub fn get_pack_data(&self, name: &str) -> anyhow::Result<Option<Vec<u8>>> {
-        let mut stmt = self
-            .db
-            .prepare("SELECT blob FROM pack_data WHERE name = ?")?;
-
-        stmt.query_row(params![name], |row| row.get("blob"))
-            .optional()
-            .map_err(|err| err.into())
+    /// The pack's behaviour document, assembled from the `behaviour_*` tables and what is left of
+    /// the `pack_data` blob -- see `shared::behaviour::storage`. The engine sees one `Behaviour`
+    /// either way; where each part is stored is that module's business.
+    pub fn get_behaviour(&self) -> anyhow::Result<shared::behaviour::Behaviour> {
+        shared::behaviour::storage::read(&self.db)
     }
 
     /// The pack's full tag vocabulary, sorted for a stable order -- not a query, so (unlike
@@ -765,16 +791,11 @@ mod tests {
     /// back `None` rather than erroring, alongside the `recommended_mode` metadata hint that
     /// ships in the same format batch.
     #[test]
-    fn get_pack_data_reads_a_named_blob_and_the_recommended_mode_hint() {
+    fn a_real_pack_file_yields_its_behaviour_and_the_recommended_mode_hint() {
         use shared::read_pack::RecommendedMode;
 
         let db = Connection::open_in_memory().unwrap();
         migrate(&db).unwrap();
-        db.execute(
-            "INSERT INTO pack_data (name, blob) VALUES ('behaviour', x'deadbeef')",
-            [],
-        )
-        .unwrap();
 
         let db_bytes = db.serialize(MAIN_DB).unwrap();
 
@@ -800,10 +821,9 @@ mod tests {
         let pack = MediaPack::open(file.path()).unwrap();
 
         assert_eq!(
-            pack.get_pack_data("behaviour").unwrap(),
-            Some(vec![0xde, 0xad, 0xbe, 0xef])
+            pack.get_behaviour().unwrap(),
+            shared::behaviour::Behaviour::new()
         );
-        assert_eq!(pack.get_pack_data("nonexistent").unwrap(), None);
         assert_eq!(
             pack.metadata().recommended_mode,
             Some(RecommendedMode::Experience)

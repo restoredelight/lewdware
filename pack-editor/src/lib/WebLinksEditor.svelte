@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { store } from './store.svelte.js';
 	import TagPicker from './TagPicker.svelte';
-	import { scheduleBehaviourSave } from './behaviourSave.svelte.js';
+	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
 	import Button from '$ui/Button.svelte';
 	import Card from '$ui/Card.svelte';
 	import EmptyState from '$ui/EmptyState.svelte';
@@ -9,13 +9,16 @@
 	import { Icon, Plus, XMark } from 'svelte-hero-icons';
 
 	const links = $derived(store.behaviour!.content.web_links);
+	// Adding or removing a link moves every later index, so those edits replace the array whole
+	// rather than addressing one entry.
+	const LINKS = 'content.web_links';
 
 	let newArgByLink = $state<Record<number, string>>({});
 	let removing = $state<(typeof links)[number] | null>(null);
 
 	function addLink() {
 		links.push({ url: '', args: [], tags: [] });
-		scheduleBehaviourSave();
+		commitBehaviourEdit(LINKS, 'Add web link');
 	}
 
 	function removeLink(index: number) {
@@ -25,7 +28,7 @@
 			return;
 		}
 		links.splice(index, 1);
-		scheduleBehaviourSave();
+		commitBehaviourEdit(LINKS, 'Remove web link');
 	}
 
 	function confirmRemove() {
@@ -33,7 +36,7 @@
 		const index = links.indexOf(removing);
 		if (index >= 0) links.splice(index, 1);
 		removing = null;
-		scheduleBehaviourSave();
+		commitBehaviourEdit(LINKS, 'Remove web link');
 	}
 
 	function addArg(index: number) {
@@ -41,12 +44,12 @@
 		if (!value) return;
 		links[index].args.push(value);
 		newArgByLink[index] = '';
-		scheduleBehaviourSave();
+		commitBehaviourEdit(`${LINKS}.${index}.args`, 'Add URL suffix');
 	}
 
 	function removeArg(linkIndex: number, argIndex: number) {
 		links[linkIndex].args.splice(argIndex, 1);
-		scheduleBehaviourSave();
+		commitBehaviourEdit(`${LINKS}.${linkIndex}.args`, 'Remove URL suffix');
 	}
 </script>
 
@@ -81,7 +84,7 @@
 					<input
 						id={`web-link-url-${index}`}
 						bind:value={link.url}
-						oninput={scheduleBehaviourSave}
+						oninput={() => editBehaviourField(`${LINKS}.${index}.url`, 'Edit web link')}
 						placeholder="https://…"
 						class="border-border bg-bg text-text flex-1 rounded border px-2 py-1 text-xs
 "
@@ -125,6 +128,7 @@
 				<TagPicker
 					tags={link.tags}
 					id={`web-link-${index}`}
+					path={`${LINKS}.${index}.tags`}
 					onchange={(tags) => (link.tags = tags)}
 				/>
 			</Card>

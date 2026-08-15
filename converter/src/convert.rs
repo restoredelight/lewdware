@@ -5,8 +5,8 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use shared::behaviour::{
     Behaviour, ContentSelection, CountScope, Easing, EndStrategy, EventCountCondition, EventKind,
-    EventSchedule, Events, Experience, Interval, Mitosis, Movement, Stage, StageEnd, Timeline,
-    Transition,
+    EventSchedule, Events, Experience, Interval, MediaSlot, Mitosis, Movement, Stage, StageEnd,
+    Timeline, Transition,
 };
 use shared::behaviour::{Content, ContentGroup, PromptSettings, TextItem, WebLink};
 use shared::read_pack::{Metadata, RecommendedMode};
@@ -75,7 +75,7 @@ fn mitosis(design: &DesignValues) -> Option<Mitosis> {
 /// the last level never gets an `end`, since there's nothing after it to transition to. One
 /// zero-duration, linear, unaffected `Transition` is synthesized per adjacent stage pair, since
 /// a cumulative level's values always apply instantly, never interpolated.
-fn levels_to_experience(levels: Vec<Level>) -> Experience {
+fn levels_to_experience(levels: Vec<Level>) -> (Experience, Vec<(MediaSlot, String)>) {
     let stages = levels
         .iter()
         .enumerate()
@@ -96,7 +96,8 @@ fn levels_to_experience(levels: Vec<Level>) -> Experience {
                 end,
                 content: ContentSelection {
                     tags: level.tags.clone(),
-                    wallpaper: level.wallpaper.clone(),
+                    // Filled in by the importer once the file has an id -- see the return value.
+                    wallpaper: None,
                 },
                 events: Events {
                     popup: schedule(level.anchors.popup),
@@ -110,6 +111,22 @@ fn levels_to_experience(levels: Vec<Level>) -> Experience {
             }
         })
         .collect::<Vec<_>>();
+    // Paired back up by position: a stage is built from the level at the same index, so this is
+    // the only place that knows which file each stage's slot is waiting on.
+    let wallpapers = stages
+        .iter()
+        .zip(&levels)
+        .filter_map(|(stage, level)| {
+            level.wallpaper.clone().map(|name| {
+                (
+                    MediaSlot::StageWallpaper {
+                        stage: stage.id.clone(),
+                    },
+                    name,
+                )
+            })
+        })
+        .collect();
     let transitions = stages
         .windows(2)
         .enumerate()
@@ -126,13 +143,16 @@ fn levels_to_experience(levels: Vec<Level>) -> Experience {
     // mode under that label keeps converted packs legible to the users they came from. A
     // single-stage timeline has no progression, so it keeps the mode's own name.
     let label = (stages.len() > 1).then(|| "Corruption".to_string());
-    Experience {
-        timeline: Timeline {
-            stages,
-            transitions,
+    (
+        Experience {
+            timeline: Timeline {
+                stages,
+                transitions,
+            },
+            label,
         },
-        label,
-    }
+        wallpapers,
+    )
 }
 
 use crate::model::{CorruptionLevel, EdgewareIndex, EdgewareMood, Warning, WarningKind};
@@ -155,6 +175,15 @@ pub struct ConversionOutput {
     pub metadata: Metadata,
     pub behaviour: Behaviour,
     pub media: Vec<ConvertedMedia>,
+    /// The media slots the converted pack wants filled, and the `suggested_name` each is waiting
+    /// on.
+    ///
+    /// Kept out of `behaviour` because a slot holds a media *id*, and the converter never sees
+    /// one: it only knows which source file belongs in which slot. The importer fills each slot
+    /// with [`shared::behaviour::Behaviour::fill_media_reference`] as that file's media really
+    /// arrives -- and a file that never arrives (a duplicate, a failed encode, a cancelled
+    /// import) simply leaves its slot empty, which is the honest answer.
+    pub media_references: Vec<(MediaSlot, String)>,
     /// `icon.ico`'s path, if present -- a thumbnail candidate. The converter doesn't decode or
     /// convert it; that's front-end encoding work.
     pub icon: Option<String>,
@@ -199,16 +228,24 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
     populate_web_links(&index, &mut content);
 
     let mut media = Vec::new();
-    discover_media(source, &index, &mut content, &mut media);
+    // Every slot the converted pack wants filled, and the file each one is waiting on. Held apart
+    // from the document because a slot holds a media id and none of these files has one yet --
+    // `run_import` fills them as their media really lands.
+    let mut media_references = Vec::new();
+    discover_media(source, &index, &mut media_references, &mut media);
 
-    let experience = build_experience(
+    let (experience, stage_wallpapers) = match build_experience(
         &corruption_levels,
         &content,
         &config,
         source,
         &mut media,
         &mut warnings,
-    );
+    ) {
+        Some((experience, wallpapers)) => (Some(experience), wallpapers),
+        None => (None, Vec::new()),
+    };
+    media_references.extend(stage_wallpapers);
     // After `build_experience`, so a file the timeline's stages pull in counts as converted --
     // see `warn_untagged_media_moods`.
     warn_untagged_media_moods(&index, &media, &mut warnings);
@@ -231,20 +268,20 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
     let behaviour = Behaviour {
         content,
         experience,
-        ..Behaviour::new()
     };
-    prioritize_referenced_media(&behaviour, &mut media);
+    prioritize_referenced_media(&media_references, &mut media);
 
     ConversionOutput {
         metadata,
         behaviour,
         media,
+        media_references,
         icon,
         warnings,
     }
 }
 
-/// Moves the media the behaviour document names -- the wallpaper, the splash, each timeline
+/// Moves the media the pack's slots are waiting on -- the wallpaper, the splash, each timeline
 /// stage's wallpaper -- to the front of the import order.
 ///
 /// The front end imports `media` in order, so this decides what the author is waiting on. A pack's
@@ -256,8 +293,8 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
 ///
 /// Stable within each group: nothing else about the order is meaningful, and leaving it otherwise
 /// untouched keeps the golden fixtures readable as "the order they were discovered in".
-fn prioritize_referenced_media(behaviour: &Behaviour, media: &mut [ConvertedMedia]) {
-    let referenced: HashSet<&str> = behaviour.referenced_media_names().into_iter().collect();
+fn prioritize_referenced_media(references: &[(MediaSlot, String)], media: &mut [ConvertedMedia]) {
+    let referenced: HashSet<&str> = references.iter().map(|(_, name)| name.as_str()).collect();
     if referenced.is_empty() {
         return;
     }
@@ -482,7 +519,7 @@ fn media_moods_by_lowercase(index: &EdgewareIndex) -> HashMap<String, &String> {
 fn discover_media(
     source: &dyn PackSource,
     index: &EdgewareIndex,
-    content: &mut Content,
+    references: &mut Vec<(MediaSlot, String)>,
     media: &mut Vec<ConvertedMedia>,
 ) {
     let moods = media_moods_by_lowercase(index);
@@ -528,16 +565,20 @@ fn discover_media(
         });
     }
 
-    // Wallpaper and splash fill their behaviour slots by name -- Edgeware has exactly one of
+    // Wallpaper and splash fill their behaviour slots directly -- Edgeware has exactly one of
     // each, so there was never a set for a tag to stand for. The only tag they carry is the
     // marker keeping scenery out of the popup pool.
+    //
+    // Reported rather than written: a slot holds a media id, and no file has one until it has
+    // been imported (a name collision suffixes it, a duplicate or a failed encode means it never
+    // arrives at all). See `ConversionOutput::media_references`.
     if let Some(wallpaper) = find_wallpaper(source) {
         media.push(ConvertedMedia {
             source_path: wallpaper.clone(),
             suggested_name: wallpaper.clone(),
             tags: vec![NON_POPUP_TAG.to_string()],
         });
-        content.wallpaper = Some(wallpaper);
+        references.push((MediaSlot::Wallpaper, wallpaper));
     }
 
     if let Some(splash) = find_splash(source) {
@@ -546,7 +587,7 @@ fn discover_media(
             suggested_name: splash.clone(),
             tags: vec![NON_POPUP_TAG.to_string()],
         });
-        content.splash = Some(splash);
+        references.push((MediaSlot::Splash, splash));
     }
 }
 
@@ -865,9 +906,10 @@ fn build_timeline(
     let root = RootFiles::read(source);
 
     // Seeded with the pack's primary wallpaper: `discover_media` already added it to `media`, and
-    // levels reusing it (Edgeware's ordinary case) must not import it a second time.
-    let mut imported_wallpapers: HashSet<String> =
-        content.wallpaper.iter().cloned().collect();
+    // levels reusing it (Edgeware's ordinary case) must not import it a second time. Asked of the
+    // source rather than read off `content.wallpaper`, which holds a media id the converter never
+    // sees -- `find_wallpaper` is the same answer `discover_media` itself used.
+    let mut imported_wallpapers: HashSet<String> = find_wallpaper(source).into_iter().collect();
 
     levels
         .iter()
@@ -1045,7 +1087,7 @@ fn build_experience(
     source: &dyn PackSource,
     media: &mut Vec<ConvertedMedia>,
     warnings: &mut Vec<Warning>,
-) -> Option<Experience> {
+) -> Option<(Experience, Vec<(MediaSlot, String)>)> {
     let delay_ms = config_number(config, "delay")
         .unwrap_or(DEFAULT_DELAY_MS)
         .max(1.0);
@@ -1169,6 +1211,29 @@ fn free_tag(base: &str, reserved: &HashSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use crate::source::DirSource;
+
+    /// The source file the converter wants in `slot`.
+    ///
+    /// Slots hold media ids, which only exist once a file has been imported, so the converter
+    /// reports what each one is waiting on rather than filling it -- see
+    /// `ConversionOutput::media_references`.
+    fn slot_source(output: &ConversionOutput, slot: MediaSlot) -> Option<&str> {
+        output
+            .media_references
+            .iter()
+            .find(|(candidate, _)| *candidate == slot)
+            .map(|(_, name)| name.as_str())
+    }
+
+    fn stage_slot_source(output: &ConversionOutput, index: usize) -> Option<&str> {
+        let stages = &output.behaviour.experience.as_ref()?.timeline.stages;
+        slot_source(
+            output,
+            MediaSlot::StageWallpaper {
+                stage: stages.get(index)?.id.clone(),
+            },
+        )
+    }
 
     use super::*;
 
@@ -1345,17 +1410,19 @@ mod tests {
         let (_dir, source) = source_with(&[("wallpaper.png", "w"), ("loading_splash.gif", "s")]);
         let output = convert(&source);
         assert_eq!(
-            output.behaviour.content.wallpaper,
-            Some("wallpaper.png".to_string())
+            slot_source(&output, MediaSlot::Wallpaper),
+            Some("wallpaper.png")
         );
         assert_eq!(
-            output.behaviour.content.splash,
-            Some("loading_splash.gif".to_string())
+            slot_source(&output, MediaSlot::Splash),
+            Some("loading_splash.gif")
         );
         assert!(
-            output.media.iter().any(
-                |m| m.source_path == "wallpaper.png" && m.tags == vec![NON_POPUP_TAG.to_string()]
-            )
+            output
+                .media
+                .iter()
+                .any(|m| m.source_path == "wallpaper.png"
+                    && m.tags == vec![NON_POPUP_TAG.to_string()])
         );
         assert!(
             output
@@ -1376,8 +1443,8 @@ mod tests {
         ]);
         let output = convert(&source);
         assert_eq!(
-            output.behaviour.content.wallpaper,
-            Some("Wallpaper.jpg".to_string())
+            slot_source(&output, MediaSlot::Wallpaper),
+            Some("Wallpaper.jpg")
         );
         // The spares aren't the pick and aren't imported -- there is one slot.
         assert!(
@@ -1393,8 +1460,8 @@ mod tests {
         let (_dir, source) = source_with(&[("Wallpaper.jpg", "w"), ("wallpaper.png", "w")]);
         let output = convert(&source);
         assert_eq!(
-            output.behaviour.content.wallpaper,
-            Some("wallpaper.png".to_string())
+            slot_source(&output, MediaSlot::Wallpaper),
+            Some("wallpaper.png")
         );
     }
 
@@ -1449,12 +1516,8 @@ mod tests {
             "{:#?}",
             output.warnings
         );
-        let stages = &output.behaviour.experience.as_ref().unwrap().timeline.stages;
-        assert_eq!(stages[0].content.wallpaper.as_deref(), Some("Wallpaper.png"));
-        assert_eq!(
-            stages[1].content.wallpaper.as_deref(),
-            Some("Wallpaper2.png")
-        );
+        assert_eq!(stage_slot_source(&output, 0), Some("Wallpaper.png"));
+        assert_eq!(stage_slot_source(&output, 1), Some("Wallpaper2.png"));
         // The stage reference and `discover_media`'s primary agree, so it is imported once.
         assert_eq!(
             output
@@ -1480,17 +1543,13 @@ mod tests {
         ]);
         let output = convert(&source);
 
-        let stages = &output.behaviour.experience.as_ref().unwrap().timeline.stages;
-        assert_eq!(
-            stages[0].content.wallpaper.as_deref(),
-            Some("wallpaper2.png")
-        );
+        assert_eq!(stage_slot_source(&output, 0), Some("wallpaper2.png"));
     }
 
     /// Import order is what the author waits on: the few files the Content and Timeline tabs
     /// name go first, ahead of a pack's thousands of popups.
     #[test]
-    fn media_the_behaviour_names_is_imported_first() {
+    fn media_the_slots_are_waiting_on_is_imported_first() {
         let (_dir, source) = source_with(&[
             ("img/a.png", "a"),
             ("img/b.png", "b"),
@@ -1507,9 +1566,9 @@ mod tests {
         // Deduplicated: one file may fill several slots, and the pack wallpaper reused by a stage
         // is Edgeware's ordinary case.
         let referenced: HashSet<&str> = output
-            .behaviour
-            .referenced_media_names()
-            .into_iter()
+            .media_references
+            .iter()
+            .map(|(_, name)| name.as_str())
             .collect();
         let ordered: Vec<&str> = output
             .media
@@ -1550,10 +1609,8 @@ mod tests {
     #[test]
     fn hypno_media_joins_the_subliminal_pool_and_stays_out_of_popups() {
         for dir in ["hypno", "subliminals"] {
-            let (_dir, source) = source_with(&[
-                ("img/a.png", "a"),
-                (&format!("{dir}/spiral.gif"), "spiral"),
-            ]);
+            let (_dir, source) =
+                source_with(&[("img/a.png", "a"), (&format!("{dir}/spiral.gif"), "spiral")]);
             let output = convert(&source);
             let entry = output
                 .media
@@ -1962,11 +2019,7 @@ mod tests {
             ),
         ]);
         let output = convert(&source);
-        let timeline = output.behaviour.experience.unwrap().timeline;
-        assert_eq!(
-            timeline.stages[0].content.wallpaper,
-            Some("wallpaper.png".to_string())
-        );
+        assert_eq!(stage_slot_source(&output, 0), Some("wallpaper.png"));
         assert_eq!(
             output
                 .media
@@ -1987,9 +2040,16 @@ mod tests {
             ),
         ]);
         let output = convert(&source);
-        let timeline = output.behaviour.experience.unwrap().timeline;
-        for stage in &timeline.stages {
-            assert_eq!(stage.content.wallpaper, Some("wallpaper2.png".to_string()));
+        let stage_count = output
+            .behaviour
+            .experience
+            .as_ref()
+            .unwrap()
+            .timeline
+            .stages
+            .len();
+        for index in 0..stage_count {
+            assert_eq!(stage_slot_source(&output, index), Some("wallpaper2.png"));
         }
         // Two levels naming the same file is one import, not two.
         let entries: Vec<_> = output
@@ -2025,15 +2085,8 @@ mod tests {
                 );
             }
         }
-        let timeline = output.behaviour.experience.unwrap().timeline;
-        assert_eq!(
-            timeline.stages[0].content.wallpaper,
-            Some("wallpaper.png".to_string())
-        );
-        assert_eq!(
-            timeline.stages[1].content.wallpaper,
-            Some("wallpaper2.png".to_string())
-        );
+        assert_eq!(stage_slot_source(&output, 0), Some("wallpaper.png"));
+        assert_eq!(stage_slot_source(&output, 1), Some("wallpaper2.png"));
     }
 
     #[test]

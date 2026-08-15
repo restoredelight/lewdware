@@ -4,7 +4,6 @@
 	import type { FileInfo } from './types.js';
 	import TagInput from '$ui/TagInput.svelte';
 	import { NON_POPUP_TAG, SUBLIMINAL_TAG, withoutManagedTags } from './tags.js';
-	import { flushBehaviourSave, initializeBehaviourHistory } from './behaviourSave.svelte.js';
 	import Button from '$ui/Button.svelte';
 	import { api } from './api.js';
 	import { onMount } from 'svelte';
@@ -82,18 +81,18 @@
 				label: 'Subliminal',
 				target: { kind: 'content', tab: 'subliminals', fileId: primary.id }
 			});
-		if (store.behaviour?.content.wallpaper === primary.file_name)
+		if (store.behaviour?.content.wallpaper === primary.id)
 			uses.push({
 				label: 'Wallpaper',
 				target: { kind: 'content', tab: 'wallpaper', slot: 'wallpaper' }
 			});
-		if (store.behaviour?.content.splash === primary.file_name)
+		if (store.behaviour?.content.splash === primary.id)
 			uses.push({
 				label: 'Splash',
 				target: { kind: 'content', tab: 'wallpaper', slot: 'splash' }
 			});
 		for (const stage of store.behaviour?.experience?.timeline.stages ?? [])
-			if (stage.content.wallpaper === primary.file_name)
+			if (stage.content.wallpaper === primary.id)
 				uses.push({
 					label: `Wallpaper for “${stage.label}”`,
 					target: { kind: 'experience', stageId: stage.id }
@@ -283,18 +282,11 @@
 		const before = primary.file_name;
 		const after = titleValue.trim();
 		try {
-			// A slot referencing this file follows the rename, so this returns the behaviour. Flush
-			// first: a pending debounced write still holds the old name and would land afterwards.
-			await flushBehaviourSave();
-			const behaviour = await api.setFileTitle(id, after);
-			if (behaviour) {
-				store.behaviour = behaviour;
-				initializeBehaviourHistory(behaviour);
-			}
+			// The behaviour document is untouched: its media slots hold ids, so a rename cannot
+			// move or break one.
+			await api.setFileTitle(id, after);
 			store.updateFileName(id, after, true);
-			history.record({
-				label: `Rename “${before}”`
-			});
+			history.record({ label: `Rename “${before}”` });
 		} catch (error) {
 			titleError = String(error);
 			titleValue = primary.file_name;

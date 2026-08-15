@@ -1,5 +1,6 @@
 ---
 source: converter/tests/golden.rs
+assertion_line: 20
 expression: output
 ---
 metadata:
@@ -9,7 +10,6 @@ metadata:
   version: "1.0"
   recommended_mode: Sandbox
 behaviour:
-  version: 3
   content:
     content_groups:
       - id: vanilla
@@ -72,8 +72,6 @@ behaviour:
         args: []
         tags:
           - vanilla
-    wallpaper: wallpaper.png
-    splash: loading_splash.png
   experience:
     timeline:
       stages:
@@ -147,6 +145,11 @@ media:
     tags:
       - __lewdware-subliminal
       - __lewdware-non-popup
+media_references:
+  - - kind: wallpaper
+    - wallpaper.png
+  - - kind: splash
+    - loading_splash.png
 icon: ~
 warnings:
   - kind: UnsupportedFeatureDropped

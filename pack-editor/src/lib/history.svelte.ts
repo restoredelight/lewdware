@@ -1,6 +1,6 @@
 import { store } from './store.svelte.js';
 import { api } from './api.js';
-import { initializeBehaviourHistory } from './behaviourBaseline.svelte.js';
+import { cancelBehaviourSave } from './behaviourSave.svelte.js';
 import type { HistoryStatus } from './types.js';
 
 export interface HistoryRecord {
@@ -56,6 +56,11 @@ class BackendHistory {
 	}
 
 	private async reloadEditor() {
+		// Undo and redo flush first (so the edit being undone is a real entry to undo), which
+		// leaves nothing pending by the time this runs. This covers the rest: an edit typed
+		// *during* the round trip belongs to the state being replaced, and sending it afterwards
+		// would write it back over the one the author reverted to.
+		cancelBehaviourSave();
 		const [files, tags, artists, metadata, behaviour] = await Promise.all([
 			api.getFiles(),
 			api.getAllTags(),
@@ -70,10 +75,6 @@ class BackendHistory {
 		store.packName = metadata.name;
 		const suspendedExperience = store.suspendedExperience;
 		store.behaviour = behaviour;
-		// This document came from the backend, so it *is* the persisted state -- an undo that
-		// reverted a behaviour change would otherwise leave the saver diffing against the version
-		// from before the undo, and re-record it on the user's next unrelated edit.
-		initializeBehaviourHistory(behaviour);
 		store.suspendedExperience = behaviour.experience ? null : suspendedExperience;
 		store.mediaTab.selectedIds = new Set(
 			[...store.mediaTab.selectedIds].filter((id) => files.some((file) => file.id === id))

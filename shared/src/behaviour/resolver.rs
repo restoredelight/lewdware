@@ -29,26 +29,26 @@ pub struct EffectiveSchema {
     pub pack_has: IndexMap<String, OptionValue>,
 }
 
-/// Resolves a media file name against the pack's own media, for the `pack_has_*` facts that ask
-/// about a file rather than a list (`pack_has_wallpaper`/`pack_has_splash`). `None` means the
-/// pack has no file by that name.
+/// Resolves a media id against the pack's own media, for the `pack_has_*` facts that ask about a
+/// file rather than a list (`pack_has_wallpaper`/`pack_has_splash`). `None` means the pack has no
+/// such file -- which, now that slots hold ids, means it was deleted rather than merely renamed.
 ///
 /// A function rather than a concrete index because the two callers reach the pack's media very
 /// differently: the engine has a live `MediaManager`, while `config` only holds the pack's
 /// extracted index db. See `no_media` for the "no pack loaded at all" case.
 pub trait MediaLookup {
-    fn file_type(&self, name: &str) -> Option<FileType>;
+    fn file_type(&self, media: u64) -> Option<FileType>;
 }
 
-impl<F: Fn(&str) -> Option<FileType>> MediaLookup for F {
-    fn file_type(&self, name: &str) -> Option<FileType> {
-        self(name)
+impl<F: Fn(u64) -> Option<FileType>> MediaLookup for F {
+    fn file_type(&self, media: u64) -> Option<FileType> {
+        self(media)
     }
 }
 
-/// A `MediaLookup` for "there is no pack": every name resolves to nothing, so every
-/// media-dependent `pack_has_*` fact is false.
-pub fn no_media(_name: &str) -> Option<FileType> {
+/// A `MediaLookup` for "there is no pack": every id resolves to nothing, so every media-dependent
+/// `pack_has_*` fact is false.
+pub fn no_media(_media: u64) -> Option<FileType> {
     None
 }
 
@@ -106,7 +106,7 @@ pub fn effective_options(
 ///
 /// The list-backed ones are "the pack declares any", but wallpaper and splash are single media
 /// references, and a reference is only a promise. These two ask whether the referenced file is
-/// really there and really usable: a `wallpaper` naming a file that was since deleted, or naming
+/// really there and really usable: a `wallpaper` pointing at a file that was since deleted, or at
 /// a video (`lewdware.wallpaper.set` takes an image), would otherwise show the user a toggle
 /// that cannot do anything. Splash accepts video too -- Edgeware's `loading_splash` is very
 /// often an animated GIF, which probes as a video once encoded.
@@ -144,19 +144,18 @@ fn pack_has_constants(
         "pack_has_experience".to_string(),
         OptionValue::Boolean(has_experience),
     );
-    let resolves_to = |slot: &Option<String>, accepted: &[FileType]| {
-        slot.as_deref()
-            .and_then(|name| media.file_type(name))
+    let resolves_to = |slot: Option<u64>, accepted: &[FileType]| {
+        slot.and_then(|media_id| media.file_type(media_id))
             .is_some_and(|file_type| accepted.contains(&file_type))
     };
     map.insert(
         "pack_has_wallpaper".to_string(),
-        OptionValue::Boolean(resolves_to(&content.wallpaper, &[FileType::Image])),
+        OptionValue::Boolean(resolves_to(content.wallpaper, &[FileType::Image])),
     );
     map.insert(
         "pack_has_splash".to_string(),
         OptionValue::Boolean(resolves_to(
-            &content.splash,
+            content.splash,
             &[FileType::Image, FileType::Video],
         )),
     );
@@ -350,20 +349,20 @@ mod tests {
         );
     }
 
-    /// A `MediaLookup` over a fixed name -> type table.
-    fn media_with<'a>(files: &'a [(&'a str, FileType)]) -> impl MediaLookup + 'a {
-        move |name: &str| {
+    /// A `MediaLookup` over a fixed id -> type table.
+    fn media_with<'a>(files: &'a [(u64, FileType)]) -> impl MediaLookup + 'a {
+        move |media: u64| {
             files
                 .iter()
-                .find(|(candidate, _)| *candidate == name)
+                .find(|(candidate, _)| *candidate == media)
                 .map(|&(_, file_type)| file_type)
         }
     }
 
-    fn behaviour_with_slots(wallpaper: Option<&str>, splash: Option<&str>) -> Behaviour {
+    fn behaviour_with_slots(wallpaper: Option<u64>, splash: Option<u64>) -> Behaviour {
         let mut behaviour = Behaviour::new();
-        behaviour.content.wallpaper = wallpaper.map(str::to_string);
-        behaviour.content.splash = splash.map(str::to_string);
+        behaviour.content.wallpaper = wallpaper;
+        behaviour.content.splash = splash;
         behaviour
     }
 
@@ -380,50 +379,47 @@ mod tests {
     fn pack_has_wallpaper_and_splash_false_when_no_slot_is_set() {
         // Opt-in only: a pack that never fills either slot gets both facts false, even if it
         // happens to ship a file called "wallpaper.png" -- see `Content`'s doc comment.
-        let media = media_with(&[("wallpaper.png", FileType::Image)]);
+        let media = media_with(&[(1, FileType::Image)]);
         assert_eq!(slot_facts(&Behaviour::new(), &media), (false, false));
     }
 
     #[test]
     fn pack_has_wallpaper_and_splash_true_when_the_slots_resolve() {
         let media = media_with(&[
-            ("bg.png", FileType::Image),
-            ("intro.png", FileType::Image),
-            ("intro.gif", FileType::Video),
+            (1, FileType::Image),
+            (2, FileType::Image),
+            (3, FileType::Video),
         ]);
 
         assert_eq!(
-            slot_facts(&behaviour_with_slots(Some("bg.png"), Some("intro.png")), &media),
+            slot_facts(&behaviour_with_slots(Some(1), Some(2)), &media),
             (true, true)
         );
         // An animated splash is a *video* once encoded, and still a splash.
         assert_eq!(
-            slot_facts(&behaviour_with_slots(None, Some("intro.gif")), &media),
+            slot_facts(&behaviour_with_slots(None, Some(3)), &media),
             (false, true)
         );
     }
 
     #[test]
     fn pack_has_wallpaper_and_splash_false_when_the_reference_does_not_resolve() {
-        // The honesty fix: a reference is only a promise. A slot naming a file that isn't in the
-        // pack (deleted since, or never imported), or naming media of a type the feature can't
+        // The honesty fix: a reference is only a promise. A slot pointing at a file that isn't in
+        // the pack (deleted since, or never imported), or at media of a type the feature can't
         // use, must not offer the user a toggle that can't do anything. `wallpaper.set` takes an
         // image; splash takes an image or a video; audio is neither.
-        let media = media_with(&[
-            ("clip.mp4", FileType::Video),
-            ("hum.opus", FileType::Audio),
-        ]);
+        let media = media_with(&[(1, FileType::Video), (2, FileType::Audio)]);
 
         assert_eq!(
-            slot_facts(&behaviour_with_slots(Some("gone.png"), Some("gone.png")), &media),
+            slot_facts(&behaviour_with_slots(Some(404), Some(404)), &media),
             (false, false)
         );
         assert_eq!(
-            slot_facts(&behaviour_with_slots(Some("clip.mp4"), None), &media),
+            slot_facts(&behaviour_with_slots(Some(1), None), &media),
             (false, false)
         );
         assert_eq!(
-            slot_facts(&behaviour_with_slots(None, Some("hum.opus")), &media),
+            slot_facts(&behaviour_with_slots(None, Some(2)), &media),
             (false, false)
         );
     }

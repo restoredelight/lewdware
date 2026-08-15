@@ -790,9 +790,10 @@ mod tests {
         assert_eq!(shorthand, EnumValue::new("Constant"));
         assert_eq!(shorthand.description, None);
 
-        let detailed: EnumValue =
-            serde_json::from_str(r#"{"label": "Passes through", "description": "Clicks reach what's behind."}"#)
-                .unwrap();
+        let detailed: EnumValue = serde_json::from_str(
+            r#"{"label": "Passes through", "description": "Clicks reach what's behind."}"#,
+        )
+        .unwrap();
         assert_eq!(
             detailed,
             EnumValue::described("Passes through", "Clicks reach what's behind.")

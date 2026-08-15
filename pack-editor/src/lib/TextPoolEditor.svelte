@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { TextItem } from './types.js';
 	import TagPicker from './TagPicker.svelte';
-	import { scheduleBehaviourSave } from './behaviourSave.svelte.js';
+	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
 	import { store } from './store.svelte.js';
 	import Button from '$ui/Button.svelte';
 	import Card from '$ui/Card.svelte';
@@ -20,11 +20,16 @@
 
 	let { title, description, poolKey, idPrefix }: Props = $props();
 	const pool = $derived(store.behaviour!.content[poolKey]);
+	// The pool's address in the behaviour document. Adding and removing entries move every later
+	// index, so those edits replace the array whole rather than addressing one entry.
+	const poolPath = $derived(`content.${poolKey}`);
+	// "Caption", "Prompt" -- what the undo list should call one of these.
+	const noun = $derived(title.replace(/s$/, ''));
 	let removing = $state<TextItem | null>(null);
 
 	function addItem() {
 		pool.push({ text: '', tags: [] });
-		scheduleBehaviourSave();
+		commitBehaviourEdit(poolPath, `Add ${noun.toLowerCase()}`);
 	}
 
 	function removeItem(index: number) {
@@ -33,7 +38,7 @@
 			return;
 		}
 		pool.splice(index, 1);
-		scheduleBehaviourSave();
+		commitBehaviourEdit(poolPath, `Remove ${noun.toLowerCase()}`);
 	}
 
 	function confirmRemove() {
@@ -41,7 +46,7 @@
 		const index = pool.indexOf(removing);
 		if (index >= 0) pool.splice(index, 1);
 		removing = null;
-		scheduleBehaviourSave();
+		commitBehaviourEdit(poolPath, `Remove ${noun.toLowerCase()}`);
 	}
 </script>
 
@@ -78,7 +83,8 @@
 					<textarea
 						id={`${idPrefix}-text-${index}`}
 						bind:value={item.text}
-						oninput={scheduleBehaviourSave}
+						oninput={() =>
+							editBehaviourField(`${poolPath}.${index}.text`, `Edit ${noun.toLowerCase()}`)}
 						rows={2}
 						placeholder="Text"
 						class="border-border bg-bg text-text flex-1 resize-none rounded border px-2 py-1 text-xs
@@ -87,6 +93,7 @@
 				<TagPicker
 					tags={item.tags}
 					id={`${idPrefix}-${index}`}
+					path={`${poolPath}.${index}.tags`}
 					onchange={(tags) => (item.tags = tags)}
 				/>
 			</Card>

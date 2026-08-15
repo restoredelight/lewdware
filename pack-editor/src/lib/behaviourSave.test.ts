@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Behaviour } from './types.js';
 
 const mocks = vi.hoisted(() => ({
-	api: { setBehaviour: vi.fn(), getBehaviour: vi.fn() },
+	api: { editBehaviour: vi.fn(), getBehaviour: vi.fn() },
 	store: {
 		behaviour: null as Behaviour | null,
 		packId: 'pack-1',
 		markBackupComplete: vi.fn(),
 		markBackupFailed: vi.fn(),
-		markBackupPending: vi.fn()
+		markBackupPending: vi.fn(),
+		removeFilesById: vi.fn()
 	},
 	history: { record: vi.fn() },
 	feedback: { error: vi.fn(), dismiss: vi.fn() }
@@ -21,6 +22,27 @@ vi.mock('./taskFeedback.svelte.js', () => ({ taskFeedback: mocks.feedback }));
 
 const value = (number: number) => ({ testValue: number }) as unknown as Behaviour;
 
+/** A document with enough real shape for a path to address something in it. */
+const document = (caption = 'first'): Behaviour =>
+	({
+		version: 3,
+		content: {
+			content_groups: [],
+			captions: [{ text: caption, tags: [] }],
+			prompts: [],
+			prompt_settings: { submit_label: null },
+			notifications: [],
+			subliminals: [],
+			web_links: []
+		},
+		experience: null
+	}) as unknown as Behaviour;
+
+/** What `edit_behaviour` hands back. */
+const edit = (behaviour: Behaviour, deleted_ids: number[] = []) => ({ behaviour, deleted_ids });
+
+const CAPTION = 'content.captions.0.text';
+
 async function scheduler() {
 	return import('./behaviourSave.svelte.js');
 }
@@ -29,8 +51,8 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	vi.resetModules();
 	vi.clearAllMocks();
-	mocks.api.setBehaviour.mockResolvedValue(undefined);
-	mocks.store.behaviour = value(0);
+	mocks.api.editBehaviour.mockResolvedValue(edit(document()));
+	mocks.store.behaviour = document();
 	mocks.store.packId = 'pack-1';
 });
 
@@ -114,66 +136,148 @@ describe('loading the behaviour document', () => {
 	});
 });
 
-describe('behaviour save scheduler', () => {
-	it('debounces and coalesces edits into one snapshot command', async () => {
+describe('editing the behaviour document', () => {
+	/** Types `text` into the first caption the way a surface would: mutate, then declare the edit. */
+	function typeCaption(save: Awaited<ReturnType<typeof scheduler>>, text: string) {
+		mocks.store.behaviour!.content.captions[0].text = text;
+		save.editBehaviourField(CAPTION, 'Edit caption');
+	}
+
+	it('coalesces repeated edits to one field into a single patch', async () => {
 		const save = await scheduler();
-		save.initializeBehaviourHistory(mocks.store.behaviour!);
-		mocks.store.behaviour = value(1);
-		save.scheduleBehaviourSave();
+		typeCaption(save, 'ty');
 		await vi.advanceTimersByTimeAsync(300);
-		mocks.store.behaviour = value(2);
-		save.scheduleBehaviourSave();
+		typeCaption(save, 'typed');
 		await vi.advanceTimersByTimeAsync(499);
-		expect(mocks.api.setBehaviour).not.toHaveBeenCalled();
+		expect(mocks.api.editBehaviour).not.toHaveBeenCalled();
 		await vi.advanceTimersByTimeAsync(1);
 
-		expect(mocks.api.setBehaviour).toHaveBeenCalledOnce();
-		expect(mocks.api.setBehaviour).toHaveBeenCalledWith(value(2));
-		expect(mocks.history.record).toHaveBeenCalledOnce();
+		expect(mocks.api.editBehaviour).toHaveBeenCalledOnce();
+		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(
+			[{ path: CAPTION, value: 'typed' }],
+			'Edit caption',
+			[]
+		);
+		expect(mocks.history.record).toHaveBeenCalledWith({ label: 'Edit caption' });
 		expect(mocks.store.markBackupPending).toHaveBeenCalledTimes(2);
 		expect(mocks.store.markBackupComplete).toHaveBeenCalledWith('behaviour');
 	});
 
-	it('flushes immediately and waits for persistence', async () => {
-		let release!: () => void;
-		mocks.api.setBehaviour.mockReturnValue(
-			new Promise<void>((resolve) => {
+	// A batch is one undo entry, so it has to be one action: moving on to a different field under a
+	// different label sends what came before rather than folding the two together.
+	it('sends the open batch when the author moves on to another action', async () => {
+		const save = await scheduler();
+		typeCaption(save, 'typed');
+		mocks.store.behaviour!.content.prompt_settings.submit_label = 'Go';
+		save.editBehaviourField('content.prompt_settings.submit_label', 'Edit submit button label');
+
+		await vi.advanceTimersByTimeAsync(0);
+		expect(mocks.api.editBehaviour).toHaveBeenCalledOnce();
+		expect(mocks.api.editBehaviour).toHaveBeenLastCalledWith(
+			[{ path: CAPTION, value: 'typed' }],
+			'Edit caption',
+			[]
+		);
+
+		await vi.advanceTimersByTimeAsync(500);
+		expect(mocks.api.editBehaviour).toHaveBeenLastCalledWith(
+			[{ path: 'content.prompt_settings.submit_label', value: 'Go' }],
+			'Edit submit button label',
+			[]
+		);
+	});
+
+	// A click is complete when it happens; waiting out a debounce would only leave a window in
+	// which the action is on screen but not stored.
+	it('sends a committed edit immediately', async () => {
+		const save = await scheduler();
+		mocks.store.behaviour!.content.captions.push({ text: '', tags: [] });
+		save.commitBehaviourEdit('content.captions', 'Add caption');
+
+		// No 500ms wait, only the microtask the write chain runs on.
+		await vi.advanceTimersByTimeAsync(0);
+		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(
+			[{ path: 'content.captions', value: mocks.store.behaviour!.content.captions }],
+			'Add caption',
+			[]
+		);
+	});
+
+	// Removing a stage retires the wallpaper that existed only for it. Both halves ride in one
+	// command so they are one transaction and one undo entry -- see `MediaPack::edit_behaviour`.
+	it('sends the media an action retires, and drops what came back deleted', async () => {
+		mocks.api.editBehaviour.mockResolvedValue(edit(document(), [12]));
+		const save = await scheduler();
+
+		save.commitBehaviourEdit('experience.timeline', 'Remove stage', [12]);
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(
+			[{ path: 'experience.timeline', value: null }],
+			'Remove stage',
+			[12]
+		);
+		expect(mocks.store.removeFilesById).toHaveBeenCalledWith([12], true);
+	});
+
+	// The backend keeps a retired file that something else still points at, and says so by
+	// returning no deleted ids. Dropping it from the grid anyway would hide a file the pack has.
+	it('leaves the grid alone when a retired file was kept', async () => {
+		const save = await scheduler();
+
+		save.commitBehaviourEdit('experience.timeline', 'Remove stage', [12]);
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(mocks.store.removeFilesById).not.toHaveBeenCalled();
+	});
+
+	// An ordinary edit retires nothing: the list is empty rather than absent, so the backend's
+	// scenery cleanup has nothing to consider.
+	it('retires nothing for an edit that only changes a field', async () => {
+		const save = await scheduler();
+		typeCaption(save, 'typed');
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(expect.anything(), 'Edit caption', []);
+	});
+
+	it('flushes immediately and waits for the write to land', async () => {
+		let release!: (result: ReturnType<typeof edit>) => void;
+		mocks.api.editBehaviour.mockReturnValue(
+			new Promise<ReturnType<typeof edit>>((resolve) => {
 				release = resolve;
 			})
 		);
 		const save = await scheduler();
-		save.initializeBehaviourHistory(mocks.store.behaviour!);
-		mocks.store.behaviour = value(1);
-		save.scheduleBehaviourSave();
+		typeCaption(save, 'typed');
 		const flushed = save.flushBehaviourSave();
 		await vi.advanceTimersByTimeAsync(0);
-		expect(mocks.api.setBehaviour).toHaveBeenCalledOnce();
+		expect(mocks.api.editBehaviour).toHaveBeenCalledOnce();
 		let finished = false;
 		void flushed.then(() => {
 			finished = true;
 		});
 		await Promise.resolve();
 		expect(finished).toBe(false);
-		release();
+		release(edit(document()));
 		await flushed;
 		expect(finished).toBe(true);
 	});
 
-	it('records the persisted edit in backend history', async () => {
+	it('drops a cancelled edit instead of sending it later', async () => {
 		const save = await scheduler();
-		save.initializeBehaviourHistory(mocks.store.behaviour!);
-		mocks.store.behaviour = value(7);
-		save.scheduleBehaviourSave();
+		typeCaption(save, 'typed');
+		save.cancelBehaviourSave();
+		await vi.advanceTimersByTimeAsync(1000);
 		await save.flushBehaviourSave();
-		expect(mocks.history.record).toHaveBeenCalledWith({ label: 'Edit pack behaviour' });
-		expect(mocks.api.setBehaviour).toHaveBeenCalledOnce();
+
+		expect(mocks.api.editBehaviour).not.toHaveBeenCalled();
 	});
 
 	// The bug this guards: filling a wallpaper slot changed the pack, but nothing told the
 	// frontend, so `history.sync()` never ran and Save stayed disabled over real unsaved changes.
 	it('records history when adopting a behaviour the backend produced', async () => {
 		const save = await scheduler();
-		save.initializeBehaviourHistory(mocks.store.behaviour!);
 
 		save.adoptBehaviour(value(5), { label: 'Set wallpaper' });
 
@@ -181,37 +285,91 @@ describe('behaviour save scheduler', () => {
 		expect(mocks.history.record).toHaveBeenCalledWith({ label: 'Set wallpaper' });
 	});
 
-	it("re-baselines an adopted behaviour so it is not re-recorded as the user's own edit", async () => {
+	// The whole reason edits are patches. Every command that returns a document used to have to be
+	// preceded by a flush, because a pending whole-document write held the pre-command version and
+	// would land afterwards and undo it. Now the two compose: the command's result is taken on,
+	// the edit still being typed is put back over it, and the patch that follows names only the
+	// field it touched.
+	it('adopts a backend document without losing an edit still being typed', async () => {
 		const save = await scheduler();
-		save.initializeBehaviourHistory(mocks.store.behaviour!);
+		typeCaption(save, 'typed');
 
-		// The backend changed the document; a later local edit must report only itself.
-		save.adoptBehaviour(value(5), { label: 'Set wallpaper' });
-		mocks.history.record.mockClear();
-		save.scheduleBehaviourSave();
-		await save.flushBehaviourSave();
+		const fromBackend = document();
+		fromBackend.content.wallpaper = 7;
+		save.adoptBehaviour(fromBackend, { label: 'Set wallpaper' });
 
-		expect(mocks.api.setBehaviour).toHaveBeenCalledWith(value(5));
-		expect(mocks.history.record).not.toHaveBeenCalled();
+		expect(mocks.store.behaviour!.content.wallpaper).toBe(7);
+		expect(mocks.store.behaviour!.content.captions[0].text).toBe('typed');
+
+		await vi.advanceTimersByTimeAsync(500);
+		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(
+			[{ path: CAPTION, value: 'typed' }],
+			'Edit caption',
+			[]
+		);
 	});
 
-	// The baseline lives in its own module precisely so `history` can reset it after undo/redo
-	// re-fetches the document. Reverting a behaviour change must leave the saver diffing against
-	// the reverted version, not the one from before the undo.
-	it('treats a re-baselined document as persisted, wherever the reset came from', async () => {
+	// The rest of the same window: the command can have read the document a moment before our
+	// write reached the backend, so its reply comes back without an edit that is on its way.
+	it('adopts a backend document without losing an edit already in flight', async () => {
+		let release!: (result: ReturnType<typeof edit>) => void;
+		mocks.api.editBehaviour.mockReturnValue(
+			new Promise<ReturnType<typeof edit>>((resolve) => {
+				release = resolve;
+			})
+		);
 		const save = await scheduler();
-		const { initializeBehaviourHistory } = await import('./behaviourBaseline.svelte.js');
-		save.initializeBehaviourHistory(mocks.store.behaviour!);
+		typeCaption(save, 'typed');
+		await vi.advanceTimersByTimeAsync(500);
+		expect(mocks.api.editBehaviour).toHaveBeenCalledOnce();
 
-		// Stand in for undo: the backend hands back a different document, and `history` re-baselines.
-		mocks.store.behaviour = value(9);
-		initializeBehaviourHistory(mocks.store.behaviour);
+		// The reply the command read before our write landed.
+		save.adoptBehaviour(document(), { label: 'Set wallpaper' });
+		expect(mocks.store.behaviour!.content.captions[0].text).toBe('typed');
 
-		save.scheduleBehaviourSave();
-		await save.flushBehaviourSave();
+		release(edit(document('typed')));
+		await vi.advanceTimersByTimeAsync(0);
+	});
 
-		expect(mocks.api.setBehaviour).toHaveBeenCalledWith(value(9));
-		expect(mocks.history.record).not.toHaveBeenCalled();
+	it('stops re-applying an edit once its write has been acknowledged', async () => {
+		const save = await scheduler();
+		typeCaption(save, 'typed');
+		await vi.advanceTimersByTimeAsync(500);
+
+		// A later undo really did revert the caption; nothing local should put it back.
+		save.adoptBehaviour(document('reverted'), { label: 'Undo' });
+		expect(mocks.store.behaviour!.content.captions[0].text).toBe('reverted');
+	});
+
+	// The adopted document may no longer have a place for the edit -- the command whose result we
+	// are taking on can be the one that deleted the stage it belonged to.
+	it('drops a pending edit whose place the adopted document no longer has', async () => {
+		const save = await scheduler();
+		typeCaption(save, 'typed');
+
+		const fromBackend = document();
+		fromBackend.content.captions = [];
+		expect(() => save.adoptBehaviour(fromBackend, { label: 'Undo' })).not.toThrow();
+		expect(mocks.store.behaviour!.content.captions).toEqual([]);
+	});
+
+	it('reports failures and allows a later edit to recover the promise chain', async () => {
+		mocks.api.editBehaviour
+			.mockRejectedValueOnce(new Error('offline'))
+			.mockResolvedValue(edit(document()));
+		const save = await scheduler();
+		typeCaption(save, 'one');
+		await expect(save.flushBehaviourSave()).rejects.toThrow('offline');
+		expect(mocks.store.markBackupFailed).toHaveBeenCalledWith('behaviour', expect.any(Error));
+		expect(mocks.feedback.error).toHaveBeenCalledWith(
+			'behaviour-backup',
+			expect.stringContaining('offline')
+		);
+
+		typeCaption(save, 'two');
+		await expect(save.flushBehaviourSave()).resolves.toBeUndefined();
+		expect(mocks.api.editBehaviour).toHaveBeenCalledTimes(2);
+		expect(mocks.feedback.dismiss).toHaveBeenCalledWith('behaviour-backup');
 	});
 
 	// The Edgeware importer fills the wallpaper/splash slots after the frontend has already fetched
@@ -224,17 +382,13 @@ describe('behaviour save scheduler', () => {
 		it('takes on slots the backend filled after the document was fetched', async () => {
 			const save = await scheduler();
 			mocks.store.behaviour = withSlots({});
-			save.initializeBehaviourHistory(mocks.store.behaviour);
 
 			save.applyFilledMediaSlots([
-				{ slot: { kind: 'wallpaper' }, name: 'Wallpaper.jpg' },
-				{ slot: { kind: 'splash' }, name: 'loading_splash.gif' }
+				{ slot: { kind: 'wallpaper' }, media_id: 1 },
+				{ slot: { kind: 'splash' }, media_id: 2 }
 			]);
 
-			expect(mocks.store.behaviour.content).toEqual({
-				wallpaper: 'Wallpaper.jpg',
-				splash: 'loading_splash.gif'
-			});
+			expect(mocks.store.behaviour.content).toEqual({ wallpaper: 1, splash: 2 });
 		});
 
 		it('fills a stage wallpaper by stage id, ignoring an unknown stage', async () => {
@@ -243,19 +397,18 @@ describe('behaviour save scheduler', () => {
 				{},
 				{ timeline: { stages: [{ id: 'stage-2', content: {} }], transitions: [] } }
 			);
-			save.initializeBehaviourHistory(mocks.store.behaviour);
 
 			save.applyFilledMediaSlots([
-				{ slot: { kind: 'stage_wallpaper', stage: 'stage-2' }, name: 'level2.png' },
-				{ slot: { kind: 'stage_wallpaper', stage: 'gone' }, name: 'orphan.png' }
+				{ slot: { kind: 'stage_wallpaper', stage: 'stage-2' }, media_id: 5 },
+				{ slot: { kind: 'stage_wallpaper', stage: 'gone' }, media_id: 6 }
 			]);
 
 			const stages = (
 				mocks.store.behaviour as unknown as {
-					experience: { timeline: { stages: { content: { wallpaper?: string } }[] } };
+					experience: { timeline: { stages: { content: { wallpaper?: number } }[] } };
 				}
 			).experience.timeline.stages;
-			expect(stages[0].content.wallpaper).toBe('level2.png');
+			expect(stages[0].content.wallpaper).toBe(5);
 			expect(stages).toHaveLength(1);
 		});
 
@@ -263,25 +416,22 @@ describe('behaviour save scheduler', () => {
 		// while the import was still running is their answer.
 		it('never overwrites a slot the author set during the import', async () => {
 			const save = await scheduler();
-			mocks.store.behaviour = withSlots({ wallpaper: 'author-picked.png' });
-			save.initializeBehaviourHistory(mocks.store.behaviour);
+			mocks.store.behaviour = withSlots({ wallpaper: 42 });
 
-			save.applyFilledMediaSlots([{ slot: { kind: 'wallpaper' }, name: 'Wallpaper.jpg' }]);
+			save.applyFilledMediaSlots([{ slot: { kind: 'wallpaper' }, media_id: 1 }]);
 
-			expect(mocks.store.behaviour.content).toEqual({ wallpaper: 'author-picked.png' });
+			expect(mocks.store.behaviour.content).toEqual({ wallpaper: 42 });
 		});
 
-		// The backend has already written these, so a save would be pure noise -- and swapping the
-		// whole document in (rather than patching) would discard edits made during the import.
+		// The backend has already written these, so a save would be pure noise.
 		it('does not schedule a save of its own', async () => {
 			const save = await scheduler();
 			mocks.store.behaviour = withSlots({});
-			save.initializeBehaviourHistory(mocks.store.behaviour);
 
-			save.applyFilledMediaSlots([{ slot: { kind: 'splash' }, name: 'loading_splash.gif' }]);
+			save.applyFilledMediaSlots([{ slot: { kind: 'splash' }, media_id: 2 }]);
 			await vi.advanceTimersByTimeAsync(1000);
 
-			expect(mocks.api.setBehaviour).not.toHaveBeenCalled();
+			expect(mocks.api.editBehaviour).not.toHaveBeenCalled();
 			expect(mocks.store.markBackupPending).not.toHaveBeenCalled();
 		});
 
@@ -290,29 +440,9 @@ describe('behaviour save scheduler', () => {
 			mocks.store.behaviour = null;
 
 			expect(() =>
-				save.applyFilledMediaSlots([{ slot: { kind: 'wallpaper' }, name: 'Wallpaper.jpg' }])
+				save.applyFilledMediaSlots([{ slot: { kind: 'wallpaper' }, media_id: 1 }])
 			).not.toThrow();
 			expect(mocks.store.behaviour).toBeNull();
 		});
-	});
-
-	it('reports failures and allows a later save to recover the promise chain', async () => {
-		mocks.api.setBehaviour.mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
-		const save = await scheduler();
-		save.initializeBehaviourHistory(mocks.store.behaviour!);
-		mocks.store.behaviour = value(1);
-		save.scheduleBehaviourSave();
-		await expect(save.flushBehaviourSave()).rejects.toThrow('offline');
-		expect(mocks.store.markBackupFailed).toHaveBeenCalledWith('behaviour', expect.any(Error));
-		expect(mocks.feedback.error).toHaveBeenCalledWith(
-			'behaviour-backup',
-			expect.stringContaining('offline')
-		);
-
-		mocks.store.behaviour = value(2);
-		save.scheduleBehaviourSave();
-		await expect(save.flushBehaviourSave()).resolves.toBeUndefined();
-		expect(mocks.api.setBehaviour).toHaveBeenCalledTimes(2);
-		expect(mocks.feedback.dismiss).toHaveBeenCalledWith('behaviour-backup');
 	});
 });
