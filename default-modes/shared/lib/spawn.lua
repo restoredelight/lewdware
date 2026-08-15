@@ -102,6 +102,8 @@ end
 ---   caller's images_enabled/videos_enabled (both modes' own class-1 options).
 --- @field max_popups integer|nil Hard cap (both modes' own option); nil/false means unlimited.
 --- @field captions_enabled boolean
+--- @field popup_audio_enabled boolean Whether role-assigned audio plays when a popup spawns. One
+---   sound at a time, whatever the spawn rate -- see the spawn hook.
 --- @field movement_enabled boolean
 --- @field movement_speed_min number|(fun(): number|nil) Sandbox: a fixed user option. Experience:
 ---   a getter re-reading the current timeline level's design value fresh at each spawn (see
@@ -151,6 +153,8 @@ end
 ---@return fun(spawn_opts?: table, close_trigger?: boolean)
 function M.make_spawner(opts)
 	local popup_count = 0
+	-- Whether a popup sound is still going; see the spawn hook below for why only one runs at once.
+	local popup_audio_playing = false
 
 	local function should_spawn()
 		local max_popups = resolve(opts.max_popups)
@@ -198,6 +202,25 @@ function M.make_spawner(opts)
 		if opts.captions_enabled then
 			local caption = content.pick_caption(item.tags)
 			if caption then window:set_title(caption.text) end
+		end
+
+		-- One popup sound at a time. Popups arrive in bursts -- acceleration, mitosis, a spawn
+		-- interval shorter than the sounds themselves -- and one-shots layered over each other stop
+		-- reading as individual sounds. The one already playing keeps the slot rather than being
+		-- cut off by the newcomer: replacing it would leave a fast spawner playing nothing but the
+		-- first fraction of each sound over and over. Popups that spawn meanwhile go without.
+		if opts.popup_audio_enabled and not popup_audio_playing then
+			window:on_spawn(function()
+				if popup_audio_playing then return end
+				local audio = media.random_popup_audio(item.tags)
+				if not audio then return end
+				popup_audio_playing = true
+				-- Fires on the track ending, on decoding turning out to be impossible, and on an
+				-- explicit stop (see `AudioHandle::on_finish`), so nothing can hold the slot for a
+				-- sound that never plays. The sound is not tied to the popup that started it: a
+				-- window closed early leaves it to finish.
+				lewdware.play_audio(audio):on_finish(function() popup_audio_playing = false end)
+			end)
 		end
 
 		popup_count = popup_count + 1

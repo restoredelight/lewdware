@@ -25,7 +25,13 @@
 >
 	{#each tabs as tab, index}
 		{#if orientation === 'vertical' && tab.group && (index === 0 || tabs[index - 1].group !== tab.group)}
-			<span class="group-label">{tab.group}</span>
+			{#if collapsed}
+				<!-- No room for the heading, but the grouping is most of what makes a column of icons
+				     readable, so it becomes a seam. Not before the first group: nothing to separate. -->
+				{#if index > 0}<span class="group-seam" aria-hidden="true"></span>{/if}
+			{:else}
+				<span class="group-label">{tab.group}</span>
+			{/if}
 		{/if}
 		<button
 			type="button"
@@ -165,7 +171,10 @@
 	.vertical .group-label:first-child {
 		padding-top: 4px;
 	}
-	.vertical.collapsed .group-label {
-		display: none;
+	.group-seam {
+		height: 1px;
+		margin: 5px 6px;
+		flex: none;
+		background: var(--color-border);
 	}
 </style>

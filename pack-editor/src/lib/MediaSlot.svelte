@@ -21,11 +21,23 @@
 		description: string;
 		/** Copy for the empty state -- what the pack loses by leaving this unset. */
 		emptyNote: string;
+		reveal?: boolean;
+		onrevealed?: () => void;
 	};
 
-	let { slot, name, title, description, emptyNote }: Props = $props();
+	let { slot, name, title, description, emptyNote, reveal = false, onrevealed }: Props = $props();
 
 	let busy = $state(false);
+	let section = $state<HTMLElement>();
+
+	$effect(() => {
+		if (!reveal || !section) return;
+		queueMicrotask(() => {
+			section?.scrollIntoView({ block: 'center' });
+			section?.querySelector<HTMLElement>('button')?.focus();
+			onrevealed?.();
+		});
+	});
 
 	const file = $derived(name ? (store.files.find((f) => f.file_name === name) ?? null) : null);
 	// A slot naming a file the pack doesn't have: the import that would have brought it in was
@@ -41,6 +53,9 @@
 			await flushBehaviourSave();
 			const result = await api.fillMediaSlotDialog(slot);
 			if (!result) return;
+			// A replacement drops the file it displaced when that file was only ever this slot's --
+			// the same rule, and the same bookkeeping, as clearing the slot.
+			if (result.deleted_id != null) store.removeFilesById([result.deleted_id], true);
 			adoptBehaviour(result.behaviour, {
 				label: `Set ${title.toLowerCase()}`,
 				storageBytes: result.file.size
@@ -71,7 +86,7 @@
 	}
 </script>
 
-<section class="flex flex-col gap-2">
+<section class="flex flex-col gap-2" bind:this={section}>
 	<div>
 		<h3 class="ui-section-title">{title}</h3>
 		<p class="text-muted text-xs">{description}</p>
@@ -81,7 +96,7 @@
 		{#if file}
 			<button
 				type="button"
-				class="border-border bg-bg hover:border-[var(--color-border-strong)] flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-sm border transition-colors"
+				class="border-border bg-bg flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-sm border transition-colors hover:border-[var(--color-border-strong)]"
 				title="Preview"
 				onclick={() => openStandalonePreview(file.id)}
 			>
@@ -116,9 +131,7 @@
 				{name ? 'Replace…' : 'Add…'}
 			</Button>
 			{#if name}
-				<Button variant="destructive" size="compact" disabled={busy} onclick={clear}>
-					Remove
-				</Button>
+				<Button variant="destructive" size="compact" disabled={busy} onclick={clear}>Remove</Button>
 			{/if}
 		</div>
 	</div>

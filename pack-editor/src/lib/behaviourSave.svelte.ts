@@ -13,6 +13,53 @@ import {
 // defined in its own module purely so `history` can reset it without importing this one back.
 export { initializeBehaviourHistory };
 
+// The load in flight, and the pack it belongs to. Cleared as soon as it settles: the document it
+// fetched lives in `store.behaviour` from then on, and a failure has to be retryable.
+let loading: { packId: string; document: Promise<Behaviour> } | null = null;
+
+/**
+ * The pack's behaviour document, loaded at most once.
+ *
+ * Every surface that reads the document needs it to exist before it can render, and any of them
+ * can be the first one opened -- so each used to fetch it itself behind `if (store.behaviour ===
+ * null)`. That guard only holds while nothing else is doing the same, which stopped being true
+ * once the media tabs needed the document too (the inspector's "Used as", and naming the slots a
+ * removal would clear). Two loads starting within a millisecond of each other -- the editor
+ * opening on a media tab, then Content clicked before the reply lands -- both saw null, both
+ * fetched, and the slower reply overwrote whatever had been typed in between, re-baselining the
+ * edit away with it so it was not even recorded as one. Sharing the promise makes the second
+ * caller wait for the first, and adopting the result only once makes a late reply harmless.
+ *
+ * Returns null if the load failed (reported to the user) or the pack changed while it was in
+ * flight; either way the caller has nothing to show, and whatever replaced the pack loads its own.
+ *
+ * Not for a *re*-load: undo, discard and the Edgeware import each replace a document they already
+ * know to be stale, and re-baseline it themselves.
+ */
+export async function ensureBehaviour(): Promise<Behaviour | null> {
+	if (store.behaviour) return store.behaviour;
+	const packId = store.packId;
+	if (loading?.packId !== packId) loading = { packId, document: api.getBehaviour() };
+	const load = loading;
+	try {
+		const behaviour = await load.document;
+		// A pack that closed or changed while this was in flight would otherwise be handed the
+		// previous one's document.
+		if (store.packId !== packId) return null;
+		// Whoever gets here first adopts it; everyone else was only waiting for it to exist.
+		if (!store.behaviour) {
+			store.behaviour = behaviour;
+			initializeBehaviourHistory(behaviour);
+		}
+		return store.behaviour;
+	} catch (error) {
+		taskFeedback.error('behaviour-load', `Could not load pack behaviour: ${String(error)}`);
+		return null;
+	} finally {
+		if (loading === load) loading = null;
+	}
+}
+
 // Shared across the Content and Experience tabs, which both edit different sections of the same
 // `store.behaviour` document: one debounce timer and one write-order-preserving promise chain, so
 // switching tabs mid-edit can never lose an update the way independent per-tab schedulers could.

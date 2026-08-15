@@ -110,6 +110,7 @@
         },
         "audio_enabled": {
           "label": "Audio",
+          "description": "Background music, and the sounds the pack marks as popup audio",
           "type": "boolean",
           "default": true
         }

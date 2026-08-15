@@ -24,10 +24,26 @@
 	import { NON_POPUP_TAG, SUBLIMINAL_TAG } from './tags.js';
 	import { taskFeedback } from './taskFeedback.svelte.js';
 
+	type Props = { revealId?: number | null; onrevealed?: () => void };
+	let { revealId = null, onrevealed }: Props = $props();
+	let poolElement = $state<HTMLDivElement>();
+
 	const pool = $derived(store.files.filter((file) => file.tags.includes(SUBLIMINAL_TAG)));
 
 	let removing = $state<number[] | null>(null);
 	let busy = $state(false);
+
+	$effect(() => {
+		if (revealId == null || !poolElement || !pool.some((file) => file.id === revealId)) return;
+		queueMicrotask(() => {
+			const button = poolElement?.querySelector<HTMLButtonElement>(
+				`[data-subliminal-id="${revealId}"]`
+			);
+			button?.focus();
+			button?.scrollIntoView({ block: 'center' });
+			onrevealed?.();
+		});
+	});
 
 	// What leaves with the pool: a file still marked non-popup exists only to be scenery, so
 	// dropping its last use drops the file too (the same rule the media slots follow). One that
@@ -95,13 +111,14 @@
 			onclick={addFiles}
 		/>
 	{:else}
-		<div class="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-2">
+		<div class="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-2" bind:this={poolElement}>
 			{#each pool as file (file.id)}
 				{@const alsoPopup = !file.tags.includes(NON_POPUP_TAG)}
 				<div class="tile">
 					<button
 						type="button"
 						class="thumb"
+						data-subliminal-id={file.id}
 						title={`Preview ${file.file_name}`}
 						onclick={() => openStandalonePreview(file.id)}
 					>

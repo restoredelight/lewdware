@@ -15,7 +15,7 @@ function previewable(): boolean {
 	return true;
 }
 
-/** The Media tab's viewer: opens `id` as a position in the grid, steppable with prev/next. */
+/** The active media tab's viewer: opens `id` as a position in its list, steppable with prev/next. */
 export function openMediaPreview(id: number): boolean {
 	if (!previewable()) return false;
 	store.openedId = id;
@@ -25,9 +25,8 @@ export function openMediaPreview(id: number): boolean {
 /**
  * The standalone viewer: opens `id` on its own, with nothing to step to.
  *
- * For media the grid doesn't list -- a slot's wallpaper or splash, a subliminal. Those have no
- * position in `filteredFiles`, so the grid viewer would open them as "0 of 57" with dead
- * navigation, or refuse to render them at all.
+ * Used by a slot or pool, where the preview has no meaningful position in the active media tab's
+ * filtered list even though the same file is available under All media.
  */
 export function openStandalonePreview(id: number): boolean {
 	if (!previewable()) return false;

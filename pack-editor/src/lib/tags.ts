@@ -15,6 +15,9 @@ export const NON_POPUP_TAG = '__lewdware-non-popup';
  * also shown in popups keeps this and loses that. */
 export const SUBLIMINAL_TAG = '__lewdware-subliminal';
 
+/** Audio without this marker is background audio; marked audio plays when a popup spawns. */
+export const POPUP_AUDIO_TAG = '__lewdware-audio-popup';
+
 export function isManagedTag(tag: string): boolean {
 	return tag.startsWith(MANAGED_TAG_PREFIX);
 }

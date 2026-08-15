@@ -50,6 +50,7 @@ export interface MetadataDto {
 }
 
 export interface PackInfo {
+	id: string;
 	name: string;
 	has_unsaved_changes: boolean;
 	has_destination: boolean;
@@ -169,6 +170,8 @@ export interface SlotFilled {
 	file: MediaFile;
 	/** False when the pack already had these bytes, so the grid already knows the file. */
 	added: boolean;
+	/** Set when the file this replaced was only ever the slot's scenery and left with it. */
+	deleted_id: number | null;
 }
 
 export interface SlotCleared {

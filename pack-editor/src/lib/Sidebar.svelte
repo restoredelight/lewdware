@@ -3,7 +3,7 @@
 	import { store } from './store.svelte.js';
 	import type { FileInfo } from './types.js';
 	import TagInput from '$ui/TagInput.svelte';
-	import { withoutManagedTags } from './tags.js';
+	import { NON_POPUP_TAG, SUBLIMINAL_TAG, withoutManagedTags } from './tags.js';
 	import { flushBehaviourSave, initializeBehaviourHistory } from './behaviourSave.svelte.js';
 	import Button from '$ui/Button.svelte';
 	import { api } from './api.js';
@@ -13,26 +13,10 @@
 	import IconButton from '$ui/IconButton.svelte';
 	import { copyFileName } from './clipboard.js';
 	import { openMediaPreview } from './mediaPreview.js';
-
-	function formatDuration(s: number): string {
-		const h = Math.floor(s / 3600);
-		const m = Math.floor((s % 3600) / 60);
-		const sec = Math.floor(s % 60);
-		if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-		return `${m}:${String(sec).padStart(2, '0')}`;
-	}
-
-	function formatFileSize(bytes: number): string {
-		if (bytes < 1024) return `${bytes} B`;
-		const units = ['KB', 'MB', 'GB'];
-		let value = bytes;
-		let unit = -1;
-		do {
-			value /= 1024;
-			unit++;
-		} while (value >= 1024 && unit < units.length - 1);
-		return `${value.toFixed(value < 10 ? 2 : 1)} ${units[unit]}`;
-	}
+	import RadioGroup from '$ui/RadioGroup.svelte';
+	import { audioRole, setAudioRole, type AudioRole } from './audioRoles.js';
+	import { taskFeedback } from './taskFeedback.svelte.js';
+	import { formatDuration, formatFileSize } from './format.js';
 
 	function infoRows(info: FileInfo, size: number): { label: string; value: string }[] {
 		const rows =
@@ -56,17 +40,74 @@
 		return rows;
 	}
 
-	const selCount = $derived(store.selectedIds.size);
+	const selCount = $derived(store.mediaTab.selectedIds.size);
 	const primary = $derived(store.primaryFile);
 	const selected = $derived(store.selectedFiles);
+	// Only in the tab that owns the role. All media is an inventory surface -- it lists every file
+	// the pack has, for a custom mode's sake as much as anyone's, and a control that only the
+	// built-in modes read has no business being offered there. What it does say about the role is
+	// "Used as", which reports rather than sets, and links to the tab that does the setting.
+	const selectedAudio = $derived(
+		store.activeView === 'audio' &&
+			selected.length > 0 &&
+			selected.every((file) => file.file_info.type === 'audio')
+	);
+	const selectedAudioRole = $derived.by((): AudioRole | null => {
+		if (!selectedAudio) return null;
+		const roles = new Set(selected.map((file) => audioRole(file.tags)));
+		return roles.size === 1 ? ([...roles][0] ?? null) : null;
+	});
+	const showPreview = $derived(
+		!(store.activeView === 'audio' && primary?.file_info.type === 'audio')
+	);
+	const usedAs = $derived.by(() => {
+		if (!primary || selCount !== 1) return [];
+		const uses: {
+			label: string;
+			target:
+				| { kind: 'media'; view: 'popups' | 'audio' }
+				| { kind: 'content'; tab: 'subliminals'; fileId: number }
+				| { kind: 'content'; tab: 'wallpaper'; slot: 'wallpaper' | 'splash' }
+				| { kind: 'experience'; stageId: string };
+		}[] = [];
+		if (primary.file_info.type === 'audio')
+			uses.push({
+				label: `${audioRole(primary.tags) === 'popup' ? 'Popup' : 'Background'} audio`,
+				target: { kind: 'media', view: 'audio' }
+			});
+		else if (!primary.tags.includes(NON_POPUP_TAG))
+			uses.push({ label: 'Popup', target: { kind: 'media', view: 'popups' } });
+		if (primary.tags.includes(SUBLIMINAL_TAG))
+			uses.push({
+				label: 'Subliminal',
+				target: { kind: 'content', tab: 'subliminals', fileId: primary.id }
+			});
+		if (store.behaviour?.content.wallpaper === primary.file_name)
+			uses.push({
+				label: 'Wallpaper',
+				target: { kind: 'content', tab: 'wallpaper', slot: 'wallpaper' }
+			});
+		if (store.behaviour?.content.splash === primary.file_name)
+			uses.push({
+				label: 'Splash',
+				target: { kind: 'content', tab: 'wallpaper', slot: 'splash' }
+			});
+		for (const stage of store.behaviour?.experience?.timeline.stages ?? [])
+			if (stage.content.wallpaper === primary.file_name)
+				uses.push({
+					label: `Wallpaper for “${stage.label}”`,
+					target: { kind: 'experience', stageId: stage.id }
+				});
+		return uses;
+	});
+	const showUsedAs = $derived(store.activeView === 'all-media' && usedAs.length > 0);
 	// Managed tags are the editor's, not the author's: they're applied and cleared by the media
 	// slots and the subliminal pool, and they'd be undeletable clutter in this list (the backend
 	// refuses to remove one through a tag command). See ./tags.ts.
 	const tagCounts = $derived.by(() => {
 		const counts = new Map<string, number>();
 		for (const file of selected)
-			for (const tag of withoutManagedTags(file.tags))
-				counts.set(tag, (counts.get(tag) ?? 0) + 1);
+			for (const tag of withoutManagedTags(file.tags)) counts.set(tag, (counts.get(tag) ?? 0) + 1);
 		return counts;
 	});
 
@@ -106,6 +147,7 @@
 	let inspectorBody = $state<HTMLDivElement>();
 	let inspectorWidth = $state(256);
 	let resizing = $state(false);
+	let audioRoleBusy = $state(false);
 
 	const MIN_WIDTH = 220;
 	const MAX_WIDTH = 420;
@@ -262,6 +304,27 @@
 		const ids = selected.map((file) => file.id);
 		if (ids.length) store.requestMediaRemoval(ids);
 	}
+
+	async function changeAudioRole(role: AudioRole) {
+		audioRoleBusy = true;
+		try {
+			await setAudioRole(
+				selected.map((file) => file.id),
+				role
+			);
+		} catch (error) {
+			taskFeedback.error('audio-role', `Could not change audio type: ${String(error)}`);
+		} finally {
+			audioRoleBusy = false;
+		}
+	}
+
+	function navigateToUse(target: (typeof usedAs)[number]['target']) {
+		if (target.kind === 'media') {
+			if (primary) store.revealMedia(target.view, primary.id);
+		} else if (target.kind === 'content') store.revealContent(target);
+		else store.revealExperienceStage(target.stageId);
+	}
 </script>
 
 <aside
@@ -290,32 +353,69 @@
 		onkeydown={resizeWithKeyboard}
 	></div>
 	{#if primary}
-		<!-- Preview -->
-		<button
-			class="preview bg-bg flex shrink-0 items-center justify-center"
-			style="height: 160px"
-			onclick={() => openMediaPreview(primary.id)}
-			aria-label={`Preview ${primary.file_name}`}
-		>
-			{#if primary.file_info.type === 'audio'}
-				<span class="text-muted h-12 w-12"><Icon src={MusicalNote} /></span>
-			{:else}
-				<img
-					src={store.mediaUrl(
-						`/${store.saveBlocksPreviews ? 'thumbnail' : 'preview'}/${primary.id}`,
-						primary.hash
-					)}
-					alt={primary.file_name}
-					draggable="false"
-					class="max-h-full max-w-full object-contain"
-					style="max-height: 160px"
-				/>
-			{/if}
-			<span class="preview-hint"><Icon src={Eye} mini /> Preview</span>
-		</button>
+		{#if showPreview}
+			<!-- Audio already has an inline player in its dedicated list. All media keeps this
+			     preview because its grid tile has no playback control. -->
+			<button
+				class="preview bg-bg flex shrink-0 items-center justify-center"
+				style="height: 160px"
+				onclick={() => openMediaPreview(primary.id)}
+				aria-label={`Preview ${primary.file_name}`}
+			>
+				{#if primary.file_info.type === 'audio'}
+					<span class="text-muted h-12 w-12"><Icon src={MusicalNote} /></span>
+				{:else}
+					<img
+						src={store.mediaUrl(
+							`/${store.saveBlocksPreviews ? 'thumbnail' : 'preview'}/${primary.id}`,
+							primary.hash
+						)}
+						alt={primary.file_name}
+						draggable="false"
+						class="max-h-full max-w-full object-contain"
+						style="max-height: 160px"
+					/>
+				{/if}
+				<span class="preview-hint"><Icon src={Eye} mini /> Preview</span>
+			</button>
+		{/if}
 
 		<!-- Info -->
 		<div class="inspector-body" bind:this={inspectorBody}>
+			{#if showUsedAs}
+				<section>
+					<div class="section-heading"><h2>Used as</h2></div>
+					<div class="used-as">
+						{#each usedAs as use, index (`${use.label}-${index}`)}
+							<button type="button" onclick={() => navigateToUse(use.target)}>{use.label}</button>
+						{/each}
+					</div>
+				</section>
+			{/if}
+
+			{#if selectedAudio}
+				<section>
+					<div class="section-heading">
+						<h2>Audio type</h2>
+						{#if selectedAudioRole === null}<span>Mixed</span>{/if}
+					</div>
+					<RadioGroup
+						ariaLabel="Audio type"
+						value={selectedAudioRole}
+						disabled={audioRoleBusy}
+						options={[
+							{
+								value: 'background',
+								label: 'Background',
+								description: 'Plays continuously during the session.'
+							},
+							{ value: 'popup', label: 'Popup', description: 'Plays when a popup appears.' }
+						]}
+						onchange={(value) => changeAudioRole(value as AudioRole)}
+					/>
+				</section>
+			{/if}
+
 			<section>
 				<div class="section-heading">
 					<h2>{selCount === 1 ? 'Media' : `${selCount} items selected`}</h2>
@@ -701,6 +801,29 @@
 		border-top: 1px solid var(--ui-border);
 		color: var(--ui-muted);
 		font-size: 11px;
+	}
+	.used-as {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 5px;
+	}
+	.used-as button {
+		margin: 0;
+		padding: 3px 6px;
+		border: 1px solid var(--ui-border);
+		border-radius: var(--ui-radius-sm);
+		background: var(--ui-bg);
+		color: var(--ui-text);
+		font-size: 11px;
+		line-height: 1.45;
+		cursor: pointer;
+	}
+	.used-as button:hover {
+		border-color: var(--ui-border-strong);
+	}
+	.used-as button:focus-visible {
+		outline: 2px solid var(--ui-focus);
+		outline-offset: -2px;
 	}
 	.actions {
 		padding-top: 12px;

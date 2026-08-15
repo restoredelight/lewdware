@@ -7,20 +7,38 @@
 	import { api } from './api.js';
 	import { store } from './store.svelte.js';
 	import { ArrowUpTray, Icon } from 'svelte-hero-icons';
+	import type { MediaView } from './store.svelte.js';
 
-	const sortValue = $derived(`${store.sortBy}:${store.sortDir}`);
-	const filtersActive = $derived(
-		store.searchQuery !== '' ||
-			store.mediaTypeFilter !== 'all' ||
-			store.tagFilter.size > 0 ||
-			store.artistFilter.size > 0
-	);
+	type Props = { view: MediaView };
+	let { view }: Props = $props();
 
-	const typeOptions = [
+	const sortValue = $derived(`${store.mediaTab.sortBy}:${store.mediaTab.sortDir}`);
+	const filtersActive = $derived(store.mediaFiltersActive);
+	const searchPlaceholder = $derived(view === 'audio' ? 'Search audio…' : 'Search media…');
+	const fileCount = $derived.by(() => {
+		const total = store.mediaScopeFiles.length;
+		const visible = store.filteredFiles.length;
+		const noun = total === 1 ? 'file' : 'files';
+		return filtersActive && visible !== total
+			? `${visible} of ${total} ${noun}`
+			: `${total} ${noun}`;
+	});
+
+	const allTypeOptions = [
 		{ value: 'all', label: 'All types' },
 		{ value: 'image', label: 'Images' },
 		{ value: 'video', label: 'Videos' },
 		{ value: 'audio', label: 'Audio' }
+	];
+	const typeOptions = $derived(
+		view === 'popups' ? allTypeOptions.filter((option) => option.value !== 'audio') : allTypeOptions
+	);
+	// The Audio tab's version of the same control: every file there is one type, and the distinction
+	// worth narrowing by is the role. Its list is flat, so this is how one role is read on its own.
+	const roleOptions = [
+		{ value: 'all', label: 'All roles' },
+		{ value: 'background', label: 'Background' },
+		{ value: 'popup', label: 'Popup' }
 	];
 	const sortOptions = [
 		{ value: 'created:desc', label: 'Newest first' },
@@ -33,14 +51,8 @@
 
 	function setSort(value: string) {
 		const [sortBy, sortDir] = value.split(':');
-		store.sortBy = sortBy as typeof store.sortBy;
-		store.sortDir = sortDir as typeof store.sortDir;
-	}
-	function clearFilters() {
-		store.searchQuery = '';
-		store.mediaTypeFilter = 'all';
-		store.tagFilter = new Set();
-		store.artistFilter = new Set();
+		store.mediaTab.sortBy = sortBy as typeof store.mediaTab.sortBy;
+		store.mediaTab.sortDir = sortDir as typeof store.mediaTab.sortDir;
 	}
 </script>
 
@@ -53,19 +65,33 @@
 		hideLabel
 		label="Search media"
 		type="search"
-		value={store.searchQuery}
-		placeholder="Search media…"
-		oninput={(value) => (store.searchQuery = value)}
+		value={store.mediaTab.searchQuery}
+		placeholder={searchPlaceholder}
+		oninput={(value) => (store.mediaTab.searchQuery = value)}
 	/>
-	<Select
-		class="w-28"
-		size="compact"
-		hideLabel
-		label="Media type"
-		value={store.mediaTypeFilter}
-		options={typeOptions}
-		onchange={(value) => (store.mediaTypeFilter = value as typeof store.mediaTypeFilter)}
-	/>
+	{#if view === 'audio'}
+		<Select
+			class="w-28"
+			size="compact"
+			hideLabel
+			label="Audio role"
+			value={store.mediaTab.audioRoleFilter}
+			options={roleOptions}
+			onchange={(value) =>
+				(store.mediaTab.audioRoleFilter = value as typeof store.mediaTab.audioRoleFilter)}
+		/>
+	{:else}
+		<Select
+			class="w-28"
+			size="compact"
+			hideLabel
+			label="Media type"
+			value={store.mediaTab.mediaTypeFilter}
+			options={typeOptions}
+			onchange={(value) =>
+				(store.mediaTab.mediaTypeFilter = value as typeof store.mediaTab.mediaTypeFilter)}
+		/>
+	{/if}
 
 	<Popover label="Filter by tags">
 		{#snippet trigger(toggle, open)}
@@ -74,14 +100,14 @@
 				aria-haspopup="menu"
 				aria-expanded={open}
 				class="flex h-8 items-center gap-1.5 rounded border px-2.5 text-xs font-medium transition-colors {store
-					.tagFilter.size
+					.mediaTab.tagFilter.size
 					? 'border-accent text-accent-foreground bg-accent/10'
 					: 'border-border text-text bg-surface hover:bg-surface-2'}"
 			>
 				Tags
-				{#if store.tagFilter.size}<span
+				{#if store.mediaTab.tagFilter.size}<span
 						class="bg-accent grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] text-white"
-						>{store.tagFilter.size}</span
+						>{store.mediaTab.tagFilter.size}</span
 					>{/if}
 			</button>
 		{/snippet}
@@ -93,25 +119,25 @@
 					{#each store.allTags as tag (tag)}
 						<label class="hover:bg-bg flex cursor-pointer items-center gap-2 px-3 py-2 text-xs">
 							<Checkbox
-								checked={store.tagFilter.has(tag)}
+								checked={store.mediaTab.tagFilter.has(tag)}
 								ariaLabel={tag}
 								onchange={(checked) => {
-									const next = new Set(store.tagFilter);
+									const next = new Set(store.mediaTab.tagFilter);
 									if (checked) next.add(tag);
 									else next.delete(tag);
-									store.tagFilter = next;
+									store.mediaTab.tagFilter = next;
 								}}
 							/>
 							{tag}
 						</label>
 					{/each}
 				{/if}
-				{#if store.tagFilter.size}
+				{#if store.mediaTab.tagFilter.size}
 					<div class="border-border mt-1 border-t px-3 pt-1">
 						<button
 							role="menuitem"
 							onclick={() => {
-								store.tagFilter = new Set();
+								store.mediaTab.tagFilter = new Set();
 								close();
 							}}
 							class="text-muted hover:text-text py-1 text-xs">Clear tags</button
@@ -129,14 +155,14 @@
 				aria-haspopup="menu"
 				aria-expanded={open}
 				class="flex h-8 items-center gap-1.5 rounded border px-2.5 text-xs font-medium transition-colors {store
-					.artistFilter.size
+					.mediaTab.artistFilter.size
 					? 'border-accent text-accent-foreground bg-accent/10'
 					: 'border-border text-text bg-surface hover:bg-surface-2'}"
 			>
 				Artists
-				{#if store.artistFilter.size}<span
+				{#if store.mediaTab.artistFilter.size}<span
 						class="bg-accent grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] text-white"
-						>{store.artistFilter.size}</span
+						>{store.mediaTab.artistFilter.size}</span
 					>{/if}
 			</button>
 		{/snippet}
@@ -148,25 +174,25 @@
 					{#each store.allArtists as artist (artist)}
 						<label class="hover:bg-bg flex cursor-pointer items-center gap-2 px-3 py-2 text-xs">
 							<Checkbox
-								checked={store.artistFilter.has(artist)}
+								checked={store.mediaTab.artistFilter.has(artist)}
 								ariaLabel={artist}
 								onchange={(checked) => {
-									const next = new Set(store.artistFilter);
+									const next = new Set(store.mediaTab.artistFilter);
 									if (checked) next.add(artist);
 									else next.delete(artist);
-									store.artistFilter = next;
+									store.mediaTab.artistFilter = next;
 								}}
 							/>
 							{artist}
 						</label>
 					{/each}
 				{/if}
-				{#if store.artistFilter.size}
+				{#if store.mediaTab.artistFilter.size}
 					<div class="border-border mt-1 border-t px-3 pt-1">
 						<button
 							role="menuitem"
 							onclick={() => {
-								store.artistFilter = new Set();
+								store.mediaTab.artistFilter = new Set();
 								close();
 							}}
 							class="text-muted hover:text-text py-1 text-xs">Clear artists</button
@@ -191,13 +217,11 @@
 		variant="quiet"
 		class={filtersActive ? '' : 'pointer-events-none invisible'}
 		disabled={!filtersActive}
-		onclick={clearFilters}>Clear filters</Button
+		onclick={() => store.clearMediaFilters()}>Clear filters</Button
 	>
 
 	<div class="flex-1"></div>
-	<span class="file-count text-muted font-mono text-[11px] whitespace-nowrap"
-		>{store.popupFiles.length} file{store.popupFiles.length === 1 ? '' : 's'}</span
-	>
+	<span class="file-count text-muted font-mono text-[11px] whitespace-nowrap">{fileCount}</span>
 	<Popover align="end" label="Import media">
 		{#snippet trigger(toggle, open)}<Button
 				size="compact"

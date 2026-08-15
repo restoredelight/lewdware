@@ -881,10 +881,15 @@ mod tests {
         let mut tag_ids: HashMap<&str, i64> = HashMap::new();
         for (index, (file_name, tags)) in media.iter().enumerate() {
             let hash = vec![index as u8];
+            let file_type = if file_name.ends_with(".ogg") {
+                "audio"
+            } else {
+                "image"
+            };
             db.execute(
-                "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash) \
-                 VALUES (?, 'image', 0, 0, 64, 64, 0, ?)",
-                rusqlite::params![file_name, hash],
+                "INSERT INTO media (file_name, file_type, offset, length, width, height, duration, transparent, hash) \
+                 VALUES (?, ?, 0, 0, 64, 64, 1.0, 0, ?)",
+                rusqlite::params![file_name, file_type, hash],
             )
             .unwrap();
             let media_id = db.last_insert_rowid();
@@ -2709,6 +2714,96 @@ mod tests {
             .await;
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn shared_media_query_layer_separates_background_and_popup_audio() {
+        LocalSet::new()
+            .run_until(async {
+                let sources: &[(&str, &str)] = &[
+                    (
+                        "main.lua",
+                        r#"
+							local media = require("lib.media")
+							local background = media.random_background_audio()
+							assert(background and background.name == "music.ogg")
+							local effect = media.random_popup_audio({ "kinky" })
+							assert(effect and effect.name == "effect.ogg")
+							assert(media.random_popup_audio({ "vanilla" }) == nil)
+						"#,
+                    ),
+                    (
+                        "lib/media.lua",
+                        include_str!("../../default-modes/shared/lib/media.lua"),
+                    ),
+                ];
+                let media: &[(&str, &[&str])] = &[
+                    ("music.ogg", &[]),
+                    ("effect.ogg", &[shared::tags::POPUP_AUDIO_TAG, "kinky"]),
+                ];
+                let mut harness = Harness::with_pack(
+                    sources,
+                    pack_fixture_with_data(media, None),
+                    Content::default(),
+                    HashMap::new(),
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    /// The popup-audio pool is asked for once and indexed, not re-listed and re-derived on every
+    /// spawn -- nothing it is built from can change while a session runs, and this is the spawn
+    /// path. The counting wrapper stands in for what the engine would otherwise be asked to do.
+    #[tokio::test(start_paused = true)]
+    async fn popup_audio_pool_is_listed_once_and_shared_by_every_spawn() {
+        LocalSet::new()
+            .run_until(async {
+                let sources: &[(&str, &str)] = &[
+                    (
+                        "main.lua",
+                        r#"
+							local media = require("lib.media")
+							local queries = 0
+							local list = lewdware.media.list
+							lewdware.media.list = function(opts)
+								queries = queries + 1
+								return list(opts)
+							end
+
+							-- Audio with no tags of its own suits any popup, including one with no tags;
+							-- audio that names tags suits only a popup sharing one.
+							assert(media.random_popup_audio({ "vanilla" }).name == "ambient.ogg")
+							assert(media.random_popup_audio({}).name == "ambient.ogg")
+							local shared_tag = media.random_popup_audio({ "kinky" }).name
+							assert(shared_tag == "effect.ogg" or shared_tag == "ambient.ogg")
+
+							assert(queries == 1, "expected one pool query, got " .. queries)
+						"#,
+                    ),
+                    (
+                        "lib/media.lua",
+                        include_str!("../../default-modes/shared/lib/media.lua"),
+                    ),
+                ];
+                let media: &[(&str, &[&str])] = &[
+                    ("music.ogg", &[]),
+                    ("ambient.ogg", &[shared::tags::POPUP_AUDIO_TAG]),
+                    ("effect.ogg", &[shared::tags::POPUP_AUDIO_TAG, "kinky"]),
+                ];
+                let mut harness = Harness::with_pack(
+                    sources,
+                    pack_fixture_with_data(media, None),
+                    Content::default(),
+                    HashMap::new(),
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
     /// Builds the `(sources, Content)` pair shared by `lib/content.lua`'s own tests: no media
     /// pack fixture needed beyond the media-less-by-default default (the picker never touches
     /// `lewdware.media.*`), so every test below runs `main.lua` against `pack_fixture(false)`.
@@ -4458,6 +4553,105 @@ mod tests {
                         Recorded::SetTitle {
                             id: ItemId(0),
                             title: Some("Obey.".to_string()),
+                        },
+                    ]
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn popup_audio_plays_when_a_popup_spawns() {
+        LocalSet::new()
+            .run_until(async {
+                let mut config = base_default_mode_config();
+                config.insert("audio_enabled".to_string(), OptionValue::Boolean(true));
+                let media: &[(&str, &[&str])] = &[
+                    ("popup.avif", &[]),
+                    ("effect.ogg", &[shared::tags::POPUP_AUDIO_TAG]),
+                ];
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture_with_data(media, None),
+                    Content::default(),
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+                harness.send_event(Event::WindowSpawned { id: ItemId(0) });
+                harness.pump_events();
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnImage { media_id: 1 },
+                        Recorded::SpawnAudio {
+                            media_id: 2,
+                            volume: 1.0,
+                        },
+                    ]
+                );
+            })
+            .await;
+    }
+
+    /// One popup sound at a time: popups arrive faster than their sounds finish, and layering
+    /// one-shots stops them reading as individual sounds. The one playing keeps the slot, and the
+    /// popups spawned meanwhile go without rather than cutting it off.
+    #[tokio::test(start_paused = true)]
+    async fn a_popup_sound_still_playing_is_not_stacked_on_by_the_next_popup() {
+        LocalSet::new()
+            .run_until(async {
+                let mut config = base_default_mode_config();
+                config.insert("audio_enabled".to_string(), OptionValue::Boolean(true));
+                let media: &[(&str, &[&str])] = &[
+                    ("popup.avif", &[]),
+                    ("effect.ogg", &[shared::tags::POPUP_AUDIO_TAG]),
+                ];
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture_with_data(media, None),
+                    Content::default(),
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                // Windows and audio draw on one id sequence, so the first popup is 0 and the sound
+                // it starts is 1.
+                harness.advance(Duration::from_millis(1100)).await;
+                harness.send_event(Event::WindowSpawned { id: ItemId(0) });
+                harness.pump_events();
+
+                // A second popup while that sound is still going gets none of its own.
+                harness.advance(Duration::from_millis(1000)).await;
+                harness.send_event(Event::WindowSpawned { id: ItemId(2) });
+                harness.pump_events();
+
+                // Once it ends, the next popup sounds again. This half is what keeps the assertion
+                // above honest: were these ids wrong, no sound would play here either.
+                harness.send_event(Event::AudioFinish { id: ItemId(1) });
+                harness.pump_events();
+                harness.advance(Duration::from_millis(1000)).await;
+                harness.send_event(Event::WindowSpawned { id: ItemId(3) });
+                harness.pump_events();
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnImage { media_id: 1 },
+                        Recorded::SpawnAudio {
+                            media_id: 2,
+                            volume: 1.0,
+                        },
+                        Recorded::SpawnImage { media_id: 1 },
+                        Recorded::SpawnImage { media_id: 1 },
+                        Recorded::SpawnAudio {
+                            media_id: 2,
+                            volume: 1.0,
                         },
                     ]
                 );

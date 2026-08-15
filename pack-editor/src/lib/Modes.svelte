@@ -6,6 +6,7 @@
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Select from '$ui/Select.svelte';
 	import { api } from './api.js';
+	import { ensureBehaviour } from './behaviourSave.svelte.js';
 	import { history } from './history.svelte.js';
 	import {
 		flushMetadataSave,
@@ -51,7 +52,7 @@
 			modes = loadedModes;
 			store.metadata = metadata;
 			initializeMetadataHistory(metadata);
-			if (!store.behaviour) store.behaviour = await api.getBehaviour();
+			await ensureBehaviour();
 		} catch (cause) {
 			error = String(cause);
 		} finally {

@@ -122,12 +122,12 @@ export const api = {
 
 	/** Returns the ids it deleted: media that was only ever a subliminal leaves with the pool. */
 	removeFromSubliminals: (ids: number[]) => invoke<number[]>('remove_from_subliminals', { ids }),
-	addSubliminalFilesDialog: () =>
-		invoke<MediaFile[] | null>('add_subliminal_files_dialog'),
+	addSubliminalFilesDialog: () => invoke<MediaFile[] | null>('add_subliminal_files_dialog'),
 
 	fillMediaSlotDialog: (slot: MediaSlot) =>
 		invoke<SlotFilled | null>('fill_media_slot_dialog', { slot }),
 	clearMediaSlot: (slot: MediaSlot) => invoke<SlotCleared | null>('clear_media_slot', { slot }),
+	setPopupAudio: (ids: number[], popup: boolean) => invoke<void>('set_popup_audio', { ids, popup }),
 
 	addFilesDialog: () => invoke<void>('add_files_dialog'),
 	addFolderDialog: () => invoke<void>('add_folder_dialog'),

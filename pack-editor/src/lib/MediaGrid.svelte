@@ -28,9 +28,33 @@
 
 	const files = $derived(store.filteredFiles);
 	$effect(() => {
-		if (store.gridActiveId !== null && !files.some((file) => file.id === store.gridActiveId)) {
-			store.gridActiveId = files[0]?.id ?? null;
+		if (
+			store.mediaTab.gridActiveId !== null &&
+			!files.some((file) => file.id === store.mediaTab.gridActiveId)
+		) {
+			store.mediaTab.gridActiveId = files[0]?.id ?? null;
 		}
+	});
+	$effect(() => {
+		const revealId = store.mediaRevealId;
+		// Reading the measured dimensions makes this rerun after the newly-mounted grid is ready to
+		// calculate the virtual row's position.
+		const ready = viewW > 0 && viewH > 0;
+		if (revealId == null || !ready) return;
+		const index = files.findIndex((file) => file.id === revealId);
+		// Not here to be shown: removed since the link was followed, or hidden by a filter the jump
+		// didn't clear. Consume the request anyway -- left pending, it would be answered by the next
+		// unrelated change to this list, scrolling and stealing focus for a jump made long before.
+		if (index < 0) {
+			store.mediaRevealId = null;
+			return;
+		}
+		queueMicrotask(() => {
+			scrollToIndex(index);
+			container?.focus();
+			announcement = `${files[index].file_name} selected`;
+			store.mediaRevealId = null;
+		});
 	});
 	const cols = $derived(Math.max(1, Math.floor((viewW + GAP) / (ITEM_W + GAP))));
 	const rows = $derived(Math.ceil(files.length / cols));
@@ -79,14 +103,14 @@
 			announcement = 'Selection cleared';
 			return;
 		}
-		if (e.key === 'Enter' && store.gridActiveId != null) {
-			openMediaPreview(store.gridActiveId);
+		if (e.key === 'Enter' && store.mediaTab.gridActiveId != null) {
+			openMediaPreview(store.mediaTab.gridActiveId);
 			return;
 		}
-		if (e.key === ' ' && store.gridActiveId != null) {
+		if (e.key === ' ' && store.mediaTab.gridActiveId != null) {
 			e.preventDefault();
-			store.toggleSelection(store.gridActiveId);
-			anchorId ??= store.gridActiveId;
+			store.toggleSelection(store.mediaTab.gridActiveId);
+			anchorId ??= store.mediaTab.gridActiveId;
 			announceSelection();
 			return;
 		}
@@ -96,7 +120,7 @@
 			announceSelection();
 			return;
 		}
-		if (e.key === 'Delete' && store.selectedIds.size > 0) {
+		if (e.key === 'Delete' && store.mediaTab.selectedIds.size > 0) {
 			e.preventDefault();
 			deleteSelected();
 			return;
@@ -119,7 +143,7 @@
 	function navigateGrid(key: string, extend: boolean, preserveSelection: boolean) {
 		const list = files;
 		if (list.length === 0) return;
-		const cur = store.gridActiveId;
+		const cur = store.mediaTab.gridActiveId;
 		let idx = cur != null ? list.findIndex((f) => f.id === cur) : -1;
 		if (idx === -1) idx = 0;
 
@@ -131,7 +155,7 @@
 
 		if (cur == null || next !== idx) {
 			const nextId = list[next].id;
-			store.gridActiveId = nextId;
+			store.mediaTab.gridActiveId = nextId;
 			if (extend) {
 				anchorId ??= cur ?? nextId;
 				store.selectRange(anchorId, nextId);
@@ -145,7 +169,7 @@
 	}
 
 	function announceSelection() {
-		const count = store.selectedIds.size;
+		const count = store.mediaTab.selectedIds.size;
 		announcement =
 			count === 0 ? 'No media selected' : `${count} media item${count === 1 ? '' : 's'} selected`;
 	}
@@ -167,12 +191,12 @@
 		e.preventDefault();
 		e.stopPropagation();
 
-		if (clickedFile && !store.selectedIds.has(clickedFile.id)) {
+		if (clickedFile && !store.mediaTab.selectedIds.has(clickedFile.id)) {
 			store.selectSingle(clickedFile.id);
 			anchorId = clickedFile.id;
 		}
 
-		const selCount = store.selectedIds.size;
+		const selCount = store.mediaTab.selectedIds.size;
 		const items: (MenuItem | PredefinedMenuItem)[] = [];
 
 		if (clickedFile) {
@@ -224,7 +248,9 @@
 	role="grid"
 	aria-label="Media files"
 	aria-multiselectable="true"
-	aria-activedescendant={store.gridActiveId === null ? undefined : `media-${store.gridActiveId}`}
+	aria-activedescendant={store.mediaTab.gridActiveId === null
+		? undefined
+		: `media-${store.mediaTab.gridActiveId}`}
 	aria-rowcount={rows}
 	aria-colcount={cols}
 	tabindex="0"
@@ -240,7 +266,7 @@
 	use:clampScroll
 	onclick={() => {
 		store.clearSelection();
-		store.gridActiveId = null;
+		store.mediaTab.gridActiveId = null;
 		anchorId = null;
 		announcement = 'Selection cleared';
 	}}
@@ -256,7 +282,7 @@
 			>
 				{#each items as file, column}
 					{#if file != null}
-						{@const selected = store.selectedIds.has(file.id)}
+						{@const selected = store.mediaTab.selectedIds.has(file.id)}
 						<!-- Fixed virtualization slot; clicks beside/below the tile fall through to "clear selection". -->
 						<div style="width: {ITEM_W}px;" class="shrink-0" role="presentation">
 							<div
@@ -271,7 +297,7 @@
 								onkeydown={() => {}}
 								class="group flex cursor-pointer flex-col rounded p-1 transition-colors duration-75 select-none
                   {selected ? 'bg-accent/15 hover:bg-accent/25' : 'hover:bg-surface-2'}
-                  {store.gridActiveId === file.id && gridFocused
+                  {store.mediaTab.gridActiveId === file.id && gridFocused
 									? 'ring-2 ring-[var(--ui-focus)]'
 									: selected
 										? 'ring-accent ring-1'

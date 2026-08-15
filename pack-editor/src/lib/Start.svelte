@@ -51,6 +51,7 @@
 			api.getAllArtists()
 		]);
 		store.openPack(
+			info.id,
 			info.name,
 			files,
 			tags,
@@ -154,7 +155,7 @@
 		try {
 			const result = await api.importEdgewarePackDialog(() => (working = 'import'));
 			if (!result) return;
-			store.openPack(result.info.name, [], [], [], false, false);
+			store.openPack(result.info.id, result.info.name, [], [], [], false, false);
 			history.reset(false);
 			store.importWarnings = result.warnings;
 			// behaviour.json/metadata are already written by the time this command returns (see

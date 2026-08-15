@@ -75,11 +75,14 @@ class BackendHistory {
 		// from before the undo, and re-record it on the user's next unrelated edit.
 		initializeBehaviourHistory(behaviour);
 		store.suspendedExperience = behaviour.experience ? null : suspendedExperience;
-		store.selectedIds = new Set(
-			[...store.selectedIds].filter((id) => files.some((file) => file.id === id))
+		store.mediaTab.selectedIds = new Set(
+			[...store.mediaTab.selectedIds].filter((id) => files.some((file) => file.id === id))
 		);
-		if (store.primaryId !== null && !files.some((file) => file.id === store.primaryId))
-			store.primaryId = null;
+		if (
+			store.mediaTab.primaryId !== null &&
+			!files.some((file) => file.id === store.mediaTab.primaryId)
+		)
+			store.mediaTab.primaryId = null;
 		if (store.openedId !== null && !files.some((file) => file.id === store.openedId))
 			store.openedId = null;
 		if (store.previewId !== null && !files.some((file) => file.id === store.previewId))

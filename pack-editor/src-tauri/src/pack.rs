@@ -3148,17 +3148,22 @@ impl MediaPack {
         slot: MediaSlot,
         media_id: u64,
         new_to_pack: bool,
-    ) -> Result<Behaviour> {
+    ) -> Result<(Behaviour, Option<u64>)> {
         let _handle = self.saving.read().await;
-        let behaviour = self
+        let result = self
             .db_execute(move |mut conn| {
-                history::record(&mut conn, slot_label(&slot), 0, &[media_id], |tx| {
-                    fill_media_slot_tx(tx, &slot, media_id, new_to_pack)
+                history::record_with_media_refs(&mut conn, slot_label(&slot), 0, |tx| {
+                    let (behaviour, deleted) =
+                        fill_media_slot_tx(tx, &slot, media_id, new_to_pack)?;
+                    // The displaced file's bytes have to outlive the entry that dropped it, or undo
+                    // would restore a slot pointing at media the collector has taken away.
+                    let refs = [Some(media_id), deleted].into_iter().flatten().collect();
+                    Ok(((behaviour, deleted), refs))
                 })
             })
             .await?;
         self.mark_unsaved().await?;
-        Ok(behaviour)
+        Ok(result)
     }
 
     /// `fill_media_slot` folded into a media import that is still open, so importing the file and
@@ -3170,17 +3175,25 @@ impl MediaPack {
         media_id: u64,
         history_id: i64,
         new_to_pack: bool,
-    ) -> Result<Behaviour> {
+    ) -> Result<(Behaviour, Option<u64>)> {
         let _handle = self.saving.read().await;
-        let behaviour = self
+        let result = self
             .db_execute(move |mut conn| {
                 history::record_into_pending(&mut conn, history_id, |tx| {
-                    fill_media_slot_tx(tx, &slot, media_id, new_to_pack)
+                    let (behaviour, deleted) =
+                        fill_media_slot_tx(tx, &slot, media_id, new_to_pack)?;
+                    // The soft delete itself rides in the entry's changeset, but the collector only
+                    // spares media some entry names -- and this one is displaced, not imported, so
+                    // `add_imported_media` never sees it.
+                    if let Some(id) = deleted {
+                        history::add_media_ref(tx, history_id, id)?;
+                    }
+                    Ok((behaviour, deleted))
                 })
             })
             .await?;
         self.mark_unsaved().await?;
-        Ok(behaviour)
+        Ok(result)
     }
 
     /// Empties a media slot, deleting the file it held if that file was only ever scenery.
@@ -3203,29 +3216,7 @@ impl MediaPack {
                         return Ok(((behaviour, None), vec![]));
                     };
                     set_slot(&mut behaviour, &slot, None);
-
-                    let still_referenced = behaviour
-                        .referenced_media_names()
-                        .iter()
-                        .any(|other| *other == name);
-                    let scenery: Option<u64> = tx
-                        .query_row(
-                            "SELECT media.id FROM media
-                             JOIN media_tags ON media_tags.media_id = media.id
-                             JOIN tags ON tags.id = media_tags.tag_id
-                             WHERE media.file_name = ? AND media.deleted = 0 AND tags.name = ?",
-                            params![name, tags::NON_POPUP_TAG],
-                            |row| row.get(0),
-                        )
-                        .optional()?;
-
-                    let deleted = match scenery {
-                        Some(id) if !still_referenced => {
-                            tx.execute("UPDATE media SET deleted = 1 WHERE id = ?", params![id])?;
-                            Some(id)
-                        }
-                        _ => None,
-                    };
+                    let deleted = delete_unreferenced_scenery(tx, &behaviour, &name)?;
                     write_behaviour(tx, &behaviour)?;
                     let refs = deleted.map(|id| vec![id]).unwrap_or_default();
                     Ok(((behaviour, deleted), refs))
@@ -3369,6 +3360,47 @@ impl MediaPack {
                 } else {
                     apply_tag(tx, id, tags::NON_POPUP_TAG)
                 }
+            })
+        })
+        .await?;
+        self.mark_unsaved().await
+    }
+
+    /// Moves audio between the mutually-exclusive background (unmarked) and popup roles.
+    pub async fn set_popup_audio(&self, ids: Vec<u64>, popup: bool) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let _handle = self.saving.read().await;
+        self.db_execute(move |mut conn| {
+            let label = if popup {
+                "Move audio to Popup"
+            } else {
+                "Move audio to Background"
+            };
+            history::record(&mut conn, label, 0, &ids, |tx| {
+                for id in &ids {
+                    let file_type: Option<String> = tx
+                        .query_row(
+                            "SELECT file_type FROM media WHERE id = ? AND deleted = 0",
+                            params![id],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    if file_type.as_deref() != Some("audio") {
+                        bail!("Only audio files can be assigned an audio role");
+                    }
+                    if popup {
+                        apply_tag(tx, *id, tags::POPUP_AUDIO_TAG)?;
+                    } else {
+                        tx.execute(
+                            "DELETE FROM media_tags WHERE media_id = ? AND tag_id IN
+                             (SELECT id FROM tags WHERE name = ?)",
+                            params![id, tags::POPUP_AUDIO_TAG],
+                        )?;
+                    }
+                }
+                Ok(())
             })
         })
         .await?;
@@ -3677,15 +3709,57 @@ fn add_to_pool_tx(tx: &rusqlite::Transaction<'_>, additions: &[MediaAddition]) -
     Ok(())
 }
 
+/// Deletes the media named `name` if it exists only as scenery that `behaviour` no longer refers
+/// to -- the rule behind both ways a slot can stop pointing at a file, being cleared and being
+/// replaced.
+///
+/// A file still carrying `__lewdware-non-popup` was brought in for a slot and nothing else, so a
+/// slot letting go of it leaves a file the author cannot see anywhere: not in Popups, which
+/// excludes the marker, and not in any slot or pool. One that has been un-marked ("show as popup")
+/// is real content and stays, and so does one another slot still references -- a base wallpaper
+/// reused by a timeline stage is Edgeware's ordinary case.
+///
+/// Call with the *updated* behaviour, so "still referenced" means after the change, not before.
+fn delete_unreferenced_scenery(
+    tx: &rusqlite::Transaction<'_>,
+    behaviour: &Behaviour,
+    name: &str,
+) -> Result<Option<u64>> {
+    if behaviour
+        .referenced_media_names()
+        .iter()
+        .any(|other| *other == name)
+    {
+        return Ok(None);
+    }
+    let scenery: Option<u64> = tx
+        .query_row(
+            "SELECT media.id FROM media
+             JOIN media_tags ON media_tags.media_id = media.id
+             JOIN tags ON tags.id = media_tags.tag_id
+             WHERE media.file_name = ? AND media.deleted = 0 AND tags.name = ?",
+            params![name, tags::NON_POPUP_TAG],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(id) = scenery {
+        tx.execute("UPDATE media SET deleted = 1 WHERE id = ?", params![id])?;
+    }
+    Ok(scenery)
+}
+
 /// Points `slot` at `media_id`, marking that file as scenery if the slot is what brought it into
-/// the pack. The body of `fill_media_slot`, separated so it can run either in its own history
-/// entry or folded into an open import.
+/// the pack, and dropping the file it displaced if that file was only ever this slot's. The body
+/// of `fill_media_slot`, separated so it can run either in its own history entry or folded into an
+/// open import.
+///
+/// Returns the updated behaviour and the id of the displaced file, if it deleted one.
 fn fill_media_slot_tx(
     tx: &rusqlite::Transaction<'_>,
     slot: &MediaSlot,
     media_id: u64,
     new_to_pack: bool,
-) -> Result<Behaviour> {
+) -> Result<(Behaviour, Option<u64>)> {
     let name: String = tx
         .query_row(
             "SELECT file_name FROM media WHERE id = ? AND deleted = 0",
@@ -3699,12 +3773,22 @@ fn fill_media_slot_tx(
     }
 
     let mut behaviour = read_behaviour(tx)?;
+    let displaced = slot_value(&behaviour, slot);
     // Set, not fill: replacing what a slot points at is the whole of "Replace".
-    if !set_slot(&mut behaviour, slot, Some(name)) {
+    if !set_slot(&mut behaviour, slot, Some(name.clone())) {
         bail!("That stage is no longer in the timeline");
     }
+    // Replacing a slot's file is the other way it stops being used, and it has to clean up after
+    // itself exactly as clearing does -- otherwise every Replace leaves the old wallpaper in the
+    // pack as a file marked out of popups and referenced by nothing.
+    let deleted = match displaced {
+        Some(previous) if previous != name => {
+            delete_unreferenced_scenery(tx, &behaviour, &previous)?
+        }
+        _ => None,
+    };
     write_behaviour(tx, &behaviour)?;
-    Ok(behaviour)
+    Ok((behaviour, deleted))
 }
 
 /// The history label a slot operation records under. Named for what the author did, not for the
@@ -5236,7 +5320,7 @@ mod tests {
 
         // Filled from the slot, so it carries the marker: only ever scenery.
         let scenery = insert_staged_audio(&pack, b"scenery").await;
-        let behaviour = pack
+        let (behaviour, _) = pack
             .fill_media_slot(MediaSlot::Wallpaper, scenery, true)
             .await
             .unwrap();
@@ -5273,6 +5357,102 @@ mod tests {
         assert_ne!(scenery_name, "");
     }
 
+    /// The same rule for the other way a slot lets go of a file. Replacing a wallpaper is far more
+    /// common than clearing one, and leaving the old file behind would put it in the pack marked
+    /// out of popups and referenced by nothing -- invisible in Popups, absent from every slot and
+    /// pool, and explicable only in All media.
+    #[tokio::test]
+    async fn replacing_a_slot_deletes_the_scenery_it_displaced() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(
+            &tmp.path().join("replace.lwpack"),
+            data_dir.path(),
+            "Replace",
+        )
+        .await;
+
+        let first = insert_staged_audio(&pack, b"first wallpaper").await;
+        pack.fill_media_slot(MediaSlot::Wallpaper, first, true)
+            .await
+            .unwrap();
+
+        let second = insert_staged_audio(&pack, b"second wallpaper").await;
+        let (behaviour, deleted) = pack
+            .fill_media_slot(MediaSlot::Wallpaper, second, true)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            deleted,
+            Some(first),
+            "the displaced scenery left with the slot"
+        );
+        assert!(behaviour.content.wallpaper.is_some());
+        let files = pack.get_files().await.unwrap();
+        assert!(!files.iter().any(|f| f.id == first));
+        assert!(files.iter().any(|f| f.id == second));
+
+        // Undo puts both halves back: the slot points at the first file again, and the file is
+        // there to point at.
+        pack.undo().await.unwrap();
+        let restored = pack.get_files().await.unwrap();
+        assert!(restored.iter().any(|f| f.id == first));
+    }
+
+    /// ...but only when the displaced file was this slot's alone. A file another slot still names,
+    /// or one the author has un-marked as real content, is theirs and stays.
+    #[tokio::test]
+    async fn replacing_a_slot_keeps_a_file_something_else_still_wants() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(&tmp.path().join("keep.lwpack"), data_dir.path(), "Keep").await;
+
+        // Wallpaper and splash both point at it; replacing one leaves the other's.
+        let shared_file = insert_staged_audio(&pack, b"used twice").await;
+        pack.fill_media_slot(MediaSlot::Wallpaper, shared_file, true)
+            .await
+            .unwrap();
+        pack.fill_media_slot(MediaSlot::Splash, shared_file, false)
+            .await
+            .unwrap();
+
+        let replacement = insert_staged_audio(&pack, b"new wallpaper").await;
+        let (_, deleted) = pack
+            .fill_media_slot(MediaSlot::Wallpaper, replacement, true)
+            .await
+            .unwrap();
+        assert_eq!(deleted, None, "the splash still names it");
+        assert!(pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == shared_file));
+
+        // Un-marked media is real content, whatever displaced it.
+        let ordinary = insert_staged_audio(&pack, b"real content").await;
+        pack.fill_media_slot(MediaSlot::Splash, ordinary, true)
+            .await
+            .unwrap();
+        pack.set_shown_as_popup(ordinary, true).await.unwrap();
+        let last = insert_staged_audio(&pack, b"final splash").await;
+        let (_, deleted) = pack
+            .fill_media_slot(MediaSlot::Splash, last, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            deleted, None,
+            "un-marked media is the author's, not the slot's"
+        );
+        assert!(pack
+            .get_files()
+            .await
+            .unwrap()
+            .iter()
+            .any(|f| f.id == ordinary));
+    }
+
     /// The other half of the lifecycle rule: only the operation that *brought a file in* may call
     /// it scenery.
     ///
@@ -5304,6 +5484,48 @@ mod tests {
             .unwrap()
             .iter()
             .any(|f| f.id == existing));
+    }
+
+    #[tokio::test]
+    async fn audio_role_is_an_undoable_popup_marker() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(
+            &tmp.path().join("audio-role.lwpack"),
+            data_dir.path(),
+            "Audio",
+        )
+        .await;
+        let first = insert_staged_audio(&pack, b"first audio").await;
+        let second = insert_staged_audio(&pack, b"second audio").await;
+
+        pack.set_popup_audio(vec![first, second], true)
+            .await
+            .unwrap();
+        assert_eq!(
+            pack.get_tags(first).await.unwrap(),
+            vec![tags::POPUP_AUDIO_TAG]
+        );
+        assert_eq!(
+            pack.get_tags(second).await.unwrap(),
+            vec![tags::POPUP_AUDIO_TAG]
+        );
+        assert_eq!(
+            pack.history_status().await.unwrap().undo_label.as_deref(),
+            Some("Move audio to Popup")
+        );
+
+        pack.undo().await.unwrap();
+        assert!(pack.get_tags(first).await.unwrap().is_empty());
+        assert!(pack.get_tags(second).await.unwrap().is_empty());
+
+        pack.redo().await.unwrap();
+        pack.set_popup_audio(vec![first], false).await.unwrap();
+        assert!(pack.get_tags(first).await.unwrap().is_empty());
+        assert_eq!(
+            pack.get_tags(second).await.unwrap(),
+            vec![tags::POPUP_AUDIO_TAG]
+        );
     }
 
     /// The same rule for the pool, whose removal path deletes on the same marker.
@@ -5441,7 +5663,7 @@ mod tests {
         pack.fill_media_slot(slot("stage-2"), first, true)
             .await
             .unwrap();
-        let behaviour = pack
+        let (behaviour, _) = pack
             .fill_media_slot(slot("stage-1"), second, true)
             .await
             .unwrap();

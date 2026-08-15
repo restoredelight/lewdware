@@ -102,8 +102,7 @@
 	}
 
 	function showMedia(artist: string) {
-		store.artistFilter = new Set([artist]);
-		store.activeView = 'media';
+		store.showMediaFor({ artist });
 	}
 </script>
 
@@ -131,8 +130,8 @@
 			description={query
 				? 'No artists match this search. Clear it to see every artist in the pack.'
 				: 'Artists are created when you tag media with attribution in the inspector.'}
-			actionLabel={query ? 'Clear search' : 'Go to Media'}
-			onclick={() => (query ? (query = '') : (store.activeView = 'media'))}
+			actionLabel={query ? 'Clear search' : 'Go to All media'}
+			onclick={() => (query ? (query = '') : store.setActiveView('all-media'))}
 		/>
 	{:else}
 		<div class="table" aria-label="Pack artists">

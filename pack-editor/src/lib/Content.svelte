@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { clampScroll } from '$ui/scroll';
 	import { onDestroy, onMount } from 'svelte';
-	import { api } from './api.js';
 	import { store } from './store.svelte.js';
 	import TextPoolEditor from './TextPoolEditor.svelte';
 	import ContentGroupsEditor from './ContentGroupsEditor.svelte';
@@ -11,8 +10,8 @@
 	import WebLinksEditor from './WebLinksEditor.svelte';
 	import Tabs from '$ui/Tabs.svelte';
 	import {
+		ensureBehaviour,
 		flushBehaviourSave,
-		initializeBehaviourHistory,
 		scheduleBehaviourSave
 	} from './behaviourSave.svelte.js';
 
@@ -98,6 +97,10 @@
 	};
 
 	let activeTab = $state<Tab>('groups');
+	$effect(() => {
+		if (store.contentTarget === null) return;
+		activeTab = store.contentTarget.tab;
+	});
 	let narrowWindow = $state(false);
 	let panel = $state<HTMLDivElement>();
 
@@ -116,9 +119,8 @@
 		return () => query.removeEventListener('change', update);
 	});
 
-	onMount(async () => {
-		if (store.behaviour === null) store.behaviour = await api.getBehaviour();
-		initializeBehaviourHistory(store.behaviour);
+	onMount(() => {
+		void ensureBehaviour();
 	});
 
 	onDestroy(() => {
@@ -138,7 +140,10 @@
 					{tabs}
 					active={activeTab}
 					orientation={narrowWindow ? 'horizontal' : 'vertical'}
-					onselect={(id) => (activeTab = id as Tab)}
+					onselect={(id) => {
+						store.contentTarget = null;
+						activeTab = id as Tab;
+					}}
 				/>
 			</aside>
 
@@ -148,6 +153,9 @@
 				use:clampScroll
 			>
 				<div class="mx-auto w-full max-w-[800px]">
+					<p class="text-muted mb-4 text-xs">
+						Read by the built-in modes (Sandbox and Sequence). A custom mode reads none of this.
+					</p>
 					<div class="mb-5 max-w-2xl">
 						<h2 class="ui-page-title">{sectionInfo[activeTab].title}</h2>
 						<p class="text-muted mt-1 text-sm">{sectionInfo[activeTab].description}</p>
@@ -171,7 +179,12 @@
 					{:else if activeTab === 'notifications'}
 						<TextPoolEditor title="Notifications" poolKey="notifications" idPrefix="notification" />
 					{:else if activeTab === 'subliminals'}
-						<SubliminalPool />
+						<SubliminalPool
+							revealId={store.contentTarget?.tab === 'subliminals'
+								? store.contentTarget.fileId
+								: null}
+							onrevealed={() => (store.contentTarget = null)}
+						/>
 					{:else if activeTab === 'web_links'}
 						<WebLinksEditor />
 					{:else if activeTab === 'wallpaper'}
@@ -182,6 +195,9 @@
 								title="Wallpaper"
 								description="The image Lewdware sets as the desktop wallpaper."
 								emptyNote="Lewdware will not change the wallpaper."
+								reveal={store.contentTarget?.tab === 'wallpaper' &&
+									store.contentTarget.slot === 'wallpaper'}
+								onrevealed={() => (store.contentTarget = null)}
 							/>
 							<MediaSlot
 								slot={{ kind: 'splash' }}
@@ -189,6 +205,9 @@
 								title="Splash"
 								description="Shown once when a session starts. May be a video — an animated GIF is one."
 								emptyNote="No startup image will be shown."
+								reveal={store.contentTarget?.tab === 'wallpaper' &&
+									store.contentTarget.slot === 'splash'}
+								onrevealed={() => (store.contentTarget = null)}
 							/>
 						</div>
 					{/if}

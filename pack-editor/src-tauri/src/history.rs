@@ -239,16 +239,24 @@ pub fn record_media_visibility(
     Ok(())
 }
 
+/// Records that `history_id` touches `media_id`, so `collect_garbage` keeps that media's bytes for
+/// as long as the entry can still be undone. For media an entry *removed* rather than imported --
+/// which has no storage of its own to account for; see `add_imported_media` for that.
+pub fn add_media_ref(tx: &Transaction<'_>, history_id: i64, media_id: u64) -> Result<()> {
+    tx.execute(
+        "INSERT OR IGNORE INTO history_media_refs(history_id, media_id) VALUES (?, ?)",
+        params![history_id, media_id],
+    )?;
+    Ok(())
+}
+
 pub fn add_imported_media(
     tx: &Transaction<'_>,
     history_id: i64,
     media_id: u64,
     storage_bytes: u64,
 ) -> Result<()> {
-    tx.execute(
-        "INSERT OR IGNORE INTO history_media_refs(history_id, media_id) VALUES (?, ?)",
-        params![history_id, media_id],
-    )?;
+    add_media_ref(tx, history_id, media_id)?;
     tx.execute(
         "UPDATE history_entries SET storage_bytes = storage_bytes + ? WHERE id = ? AND status = 'pending'",
         params![storage_bytes, history_id],

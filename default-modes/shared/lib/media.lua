@@ -41,6 +41,10 @@ M.disabled_tags = disabled_tags
 -- has to be inferred from which tags the wallpaper/splash features happen to name -- and it now
 -- covers any file an author wants kept out of popups, not just the mechanical slots.
 local NON_POPUP_TAG = "__lewdware-non-popup"
+local POPUP_AUDIO_TAG = "__lewdware-audio-popup"
+-- The reserved namespace both of the above sit in (`shared/src/tags.rs`). A pack author's own tags
+-- never start with it, which is what lets popup audio be matched on its ordinary tags alone.
+local MANAGED_TAG_PREFIX = "__lewdware-"
 
 -- Normalizes the shorthand array form (`tags = { "a", "b" }`, meaning "any of these" -- see
 -- `lewdware.media.*`'s documented shorthand) to the object form, so `merge_tags` always has
@@ -92,6 +96,92 @@ end
 
 function M.random_audio(opts)
 	return lewdware.media.random_audio(merge_tags(opts))
+end
+
+-- Adds one more exclusion to a caller's opts without disturbing what they already asked for.
+-- Separate from `merge_tags` because that one's exclusions are the mode's own policy, applied to
+-- every query; this one is a single call site narrowing its own.
+local function exclude_tag(opts, tag)
+	opts = opts or {}
+	local tags = normalize_tags(opts.tags)
+	local merged = {}
+	for k, v in pairs(opts) do merged[k] = v end
+	local none = {}
+	for _, value in ipairs(tags.none or {}) do table.insert(none, value) end
+	table.insert(none, tag)
+	merged.tags = { any = tags.any, all = tags.all, none = none }
+	return merged
+end
+
+--- Background is the default audio role: anything not explicitly marked as popup audio.
+function M.random_background_audio(opts)
+	return lewdware.media.random_audio(merge_tags(exclude_tag(opts, POPUP_AUDIO_TAG)))
+end
+
+-- Built on first use and then kept, because nothing it is built from can change while a session
+-- runs: the pack's media is read-only, and the exclusions `merge_tags` folds in come from
+-- `lewdware.config`, which the engine injects once when it creates the API (`create_api` in
+-- `lewdware/src/lua/api.rs`). Worth keeping because this sits on the spawn path -- every popup used
+-- to ask the engine for the whole popup-audio pool and re-derive each file's ordinary tags before
+-- picking one of them.
+local popup_audio_index = nil
+
+--- Splits the popup-audio pool into files that suit any popup and files that name their own tags.
+---@return { universal: table[], by_tag: table<string, table[]> }
+local function popup_audio()
+	if popup_audio_index then return popup_audio_index end
+	local index = { universal = {}, by_tag = {} }
+	local pool = lewdware.media.list(merge_tags({
+		type = "audio",
+		tags = { all = { POPUP_AUDIO_TAG } },
+	}))
+	for _, item in ipairs(pool) do
+		local tagged = false
+		for _, tag in ipairs(item.tags) do
+			if string.sub(tag, 1, #MANAGED_TAG_PREFIX) ~= MANAGED_TAG_PREFIX then
+				tagged = true
+				local bucket = index.by_tag[tag]
+				if not bucket then
+					bucket = {}
+					index.by_tag[tag] = bucket
+				end
+				table.insert(bucket, item)
+			end
+		end
+		-- Nothing of its own to match on, so it suits every popup.
+		if not tagged then table.insert(index.universal, item) end
+	end
+	popup_audio_index = index
+	return index
+end
+
+--- Picks popup audio whose ordinary tags are empty (universal) or intersect the popup's tags.
+---
+--- Every eligible file is equally likely: a file carrying two of the popup's tags is in two of the
+--- index's buckets, so it is deduplicated rather than being drawn twice as often. The universal
+--- files are counted rather than copied alongside the matches for the same reason the index exists
+--- at all -- there is no need to build a list of the whole pool to pick one item out of it.
+---@param popup_tags string[]
+---@return table|nil
+function M.random_popup_audio(popup_tags)
+	local index = popup_audio()
+	local matched = {}
+	local seen = {}
+	for _, tag in ipairs(popup_tags) do
+		for _, item in ipairs(index.by_tag[tag] or {}) do
+			if not seen[item] then
+				seen[item] = true
+				table.insert(matched, item)
+			end
+		end
+	end
+
+	local universal = #index.universal
+	local total = universal + #matched
+	if total == 0 then return nil end
+	local pick = math.random(total)
+	if pick <= universal then return index.universal[pick] end
+	return matched[pick - universal]
 end
 
 function M.list(opts)

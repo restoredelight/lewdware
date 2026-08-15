@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Behaviour } from './types.js';
 
 const mocks = vi.hoisted(() => ({
-	api: { setBehaviour: vi.fn() },
+	api: { setBehaviour: vi.fn(), getBehaviour: vi.fn() },
 	store: {
 		behaviour: null as Behaviour | null,
+		packId: 'pack-1',
 		markBackupComplete: vi.fn(),
 		markBackupFailed: vi.fn(),
 		markBackupPending: vi.fn()
@@ -30,6 +31,87 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.api.setBehaviour.mockResolvedValue(undefined);
 	mocks.store.behaviour = value(0);
+	mocks.store.packId = 'pack-1';
+});
+
+// The document is loaded lazily by whichever surface needs it first, and more than one can be
+// first: the editor opens on a media tab that wants it for the inspector, and the author can click
+// Content before the reply lands. See `ensureBehaviour`.
+describe('loading the behaviour document', () => {
+	/** A fetch the test decides when to answer, for pinning down what happens in between. */
+	function deferredFetch() {
+		let release!: (document: Behaviour) => void;
+		mocks.api.getBehaviour.mockReturnValue(
+			new Promise<Behaviour>((resolve) => {
+				release = resolve;
+			})
+		);
+		return (document: Behaviour) => release(document);
+	}
+
+	beforeEach(() => {
+		mocks.store.behaviour = null;
+	});
+
+	it('serves callers that arrive together from a single fetch', async () => {
+		const save = await scheduler();
+		mocks.api.getBehaviour.mockResolvedValue(value(1));
+
+		const both = await Promise.all([save.ensureBehaviour(), save.ensureBehaviour()]);
+
+		expect(mocks.api.getBehaviour).toHaveBeenCalledOnce();
+		expect(both).toEqual([value(1), value(1)]);
+		expect(mocks.store.behaviour).toEqual(value(1));
+	});
+
+	it('does not fetch again once the document is loaded', async () => {
+		const save = await scheduler();
+		mocks.store.behaviour = value(3);
+
+		expect(await save.ensureBehaviour()).toEqual(value(3));
+		expect(mocks.api.getBehaviour).not.toHaveBeenCalled();
+	});
+
+	// The reason the guard exists: an undo, a discard or an import can replace the document while a
+	// lazy load is still in flight, and the reply it was waiting for is by then the older one.
+	it('yields to a document that landed while it was loading', async () => {
+		const save = await scheduler();
+		const release = deferredFetch();
+		const pending = save.ensureBehaviour();
+
+		mocks.store.behaviour = value(9);
+		release(value(1));
+
+		expect(await pending).toEqual(value(9));
+		expect(mocks.store.behaviour).toEqual(value(9));
+	});
+
+	it('drops a reply for a pack that is no longer open', async () => {
+		const save = await scheduler();
+		const release = deferredFetch();
+		const pending = save.ensureBehaviour();
+
+		mocks.store.packId = 'pack-2';
+		release(value(1));
+
+		expect(await pending).toBeNull();
+		expect(mocks.store.behaviour).toBeNull();
+	});
+
+	it('reports a failure and lets the next caller retry', async () => {
+		const save = await scheduler();
+		mocks.api.getBehaviour.mockRejectedValueOnce(new Error('offline'));
+
+		expect(await save.ensureBehaviour()).toBeNull();
+		expect(mocks.feedback.error).toHaveBeenCalledWith(
+			'behaviour-load',
+			expect.stringContaining('offline')
+		);
+
+		mocks.api.getBehaviour.mockResolvedValue(value(2));
+		expect(await save.ensureBehaviour()).toEqual(value(2));
+		expect(mocks.api.getBehaviour).toHaveBeenCalledTimes(2);
+	});
 });
 
 describe('behaviour save scheduler', () => {

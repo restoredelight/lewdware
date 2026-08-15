@@ -1,5 +1,5 @@
 <script lang="ts">
-	// The media element itself, at viewer size -- shared by the Media tab's viewer and the
+	// The media element itself, at viewer size -- shared by the media-tab viewer and the
 	// standalone one so the awkward cases (a transparent video's packed frame, audio having no
 	// picture at all) are handled once rather than drifting apart in two overlays.
 	import { store } from './store.svelte.js';

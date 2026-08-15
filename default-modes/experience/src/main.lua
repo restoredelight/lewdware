@@ -26,6 +26,7 @@ local open_popup = spawn.make_spawner({
 	popup_types = popup_types,
 	max_popups = popup_limit,
 	captions_enabled = config.captions_enabled,
+	popup_audio_enabled = config.audio_enabled,
 	movement_enabled = config.movement_enabled,
 	movement_speed_min = function() return timeline.movement() and timeline.movement().minimum_speed end,
 	movement_speed_max = function() return timeline.movement() and timeline.movement().maximum_speed end,
@@ -82,7 +83,7 @@ schedule_event("prompt", config.prompts_enabled, function() return require("lib.
 
 if config.audio_enabled then
 	local function spawn_audio()
-		local audio = media.random_audio()
+		local audio = media.random_background_audio()
 		if not audio then return end
 		local handle = lewdware.play_audio(audio)
 		handle:on_finish(spawn_audio)

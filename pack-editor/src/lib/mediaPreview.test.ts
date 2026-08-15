@@ -44,8 +44,8 @@ describe('openMediaPreview', () => {
 	});
 });
 
-// Scenery (a slot's wallpaper or splash, a subliminal) isn't in the grid's list at all, so it
-// opens in its own viewer rather than as a position in one it doesn't appear in.
+// A role surface does not establish a position in the active media tab's list, so it opens in its
+// own viewer even though the same file can be found under All media.
 describe('openStandalonePreview', () => {
 	beforeEach(() => {
 		store.saveActive = false;

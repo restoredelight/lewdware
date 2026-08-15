@@ -27,6 +27,9 @@ pub const NON_POPUP_TAG: &str = "__lewdware-non-popup";
 /// implied exclusion, "put this back in popups" would have no way to say itself.
 pub const SUBLIMINAL_TAG: &str = "__lewdware-subliminal";
 
+/// Marks audio that plays when a popup spawns. Audio without this marker is background audio.
+pub const POPUP_AUDIO_TAG: &str = "__lewdware-audio-popup";
+
 /// Whether `tag` is in the reserved namespace -- the one check every tag-writing command and
 /// every tag-listing query needs.
 pub fn is_managed(tag: &str) -> bool {
@@ -56,6 +59,7 @@ mod tests {
     fn only_the_prefix_is_managed() {
         assert!(is_managed(NON_POPUP_TAG));
         assert!(is_managed(SUBLIMINAL_TAG));
+        assert!(is_managed(POPUP_AUDIO_TAG));
         assert!(is_managed("__lewdware-something-later"));
         assert!(!is_managed("wallpaper"));
         assert!(!is_managed("__lewdware_content"));

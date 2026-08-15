@@ -1,19 +1,17 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import { api } from './api.js';
 	import { store } from './store.svelte.js';
 	import TimelineEditor from './TimelineEditor.svelte';
 	import {
+		ensureBehaviour,
 		flushBehaviourSave,
-		initializeBehaviourHistory,
 		scheduleBehaviourSave
 	} from './behaviourSave.svelte.js';
 	import type { Experience, Stage } from './types.js';
 	import Toggle from '$ui/Toggle.svelte';
 
-	onMount(async () => {
-		if (store.behaviour === null) store.behaviour = await api.getBehaviour();
-		initializeBehaviourHistory(store.behaviour);
+	onMount(() => {
+		void ensureBehaviour();
 	});
 
 	onDestroy(() => {
@@ -70,6 +68,9 @@
 			</div>
 		{/if}
 	</header>
+	<p class="border-border text-muted border-b px-3 py-2 text-xs sm:px-4">
+		Read by the built-in modes (Sandbox and Sequence). A custom mode reads none of this.
+	</p>
 
 	{#if store.behaviour === null}
 		<p class="text-muted p-6 text-sm">Loading…</p>

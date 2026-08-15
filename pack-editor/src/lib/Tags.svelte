@@ -6,7 +6,11 @@
 	import Field from '$ui/Field.svelte';
 	import Select from '$ui/Select.svelte';
 	import { api } from './api.js';
-	import { flushBehaviourSave, initializeBehaviourHistory } from './behaviourSave.svelte.js';
+	import {
+		ensureBehaviour,
+		flushBehaviourSave,
+		initializeBehaviourHistory
+	} from './behaviourSave.svelte.js';
 	import { store } from './store.svelte.js';
 	import { behaviourTags, tagUsage } from './tagReferences.js';
 	import { withoutManagedTags } from './tags.js';
@@ -37,7 +41,7 @@
 	);
 
 	onMount(async () => {
-		if (!store.behaviour) store.behaviour = await api.getBehaviour();
+		await ensureBehaviour();
 		summaries = await api.getTagSummaries();
 		summariesLoaded = true;
 	});
@@ -125,8 +129,7 @@
 	}
 
 	function showMedia(tag: string) {
-		store.tagFilter = new Set([tag]);
-		store.activeView = 'media';
+		store.showMediaFor({ tag });
 	}
 </script>
 
@@ -154,8 +157,8 @@
 			description={query
 				? 'No tags match this search. Clear it to see every tag in the pack.'
 				: 'Tags are created when you tag media or use them in Content and Experience settings.'}
-			actionLabel={query ? 'Clear search' : 'Go to Media'}
-			onclick={() => (query ? (query = '') : (store.activeView = 'media'))}
+			actionLabel={query ? 'Clear search' : 'Go to All media'}
+			onclick={() => (query ? (query = '') : store.setActiveView('all-media'))}
 		/>
 	{:else}
 		<div class="table" aria-label="Pack tags">

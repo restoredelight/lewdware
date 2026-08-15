@@ -1,6 +1,6 @@
 <script lang="ts">
-	// The Media tab's viewer: a position in the grid's current list, steppable with prev/next.
-	// Media the grid doesn't list gets `MediaPreview` instead -- it has no position to show.
+	// The active media tab's viewer: a position in its current list, steppable with prev/next.
+	// A preview launched from a role slot/pool gets `MediaPreview` instead.
 	import { onMount } from 'svelte';
 	import { store } from './store.svelte.js';
 	import { ChevronLeft, ChevronRight, Icon, XMark } from 'svelte-hero-icons';

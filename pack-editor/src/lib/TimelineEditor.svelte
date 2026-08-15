@@ -33,6 +33,10 @@
 		mainEl?.scrollTo(0, 0);
 	});
 	$effect(() => {
+		const target = store.experienceTargetStageId;
+		if (target && stages.some((item) => item.id === target)) activeId = target;
+	});
+	$effect(() => {
 		if (
 			(!activeId || ![...stages, ...transitions].some((item) => item.id === activeId)) &&
 			stages[0]
@@ -221,6 +225,8 @@
 						emptyNote={inheritedWallpaper
 							? `Keeps “${inheritedWallpaper}”.`
 							: 'Keeps whatever wallpaper is already in effect.'}
+						reveal={store.experienceTargetStageId === stage.id}
+						onrevealed={() => (store.experienceTargetStageId = null)}
 					/>
 				</section>
 

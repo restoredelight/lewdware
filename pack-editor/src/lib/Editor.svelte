@@ -16,7 +16,9 @@
 		DocumentText,
 		EllipsisVertical,
 		Icon,
+		MusicalNote,
 		PaintBrush,
+		Photo,
 		Squares2x2,
 		Tag
 	} from 'svelte-hero-icons';
@@ -33,6 +35,7 @@
 	import UploadProgress from './UploadProgress.svelte';
 	import MediaViewer from './MediaViewer.svelte';
 	import MediaPreview from './MediaPreview.svelte';
+	import AudioList from './AudioList.svelte';
 	import ImportWarnings from './ImportWarnings.svelte';
 	import { mediaSlotUsage } from './tagReferences.js';
 
@@ -46,6 +49,7 @@
 	import Artists from './Artists.svelte';
 	import {
 		cancelBehaviourSave,
+		ensureBehaviour,
 		flushBehaviourSave,
 		initializeBehaviourHistory
 	} from './behaviourSave.svelte.js';
@@ -61,6 +65,11 @@
 	import type { MediaFile } from './types.js';
 	import EmptyState from '$ui/EmptyState.svelte';
 
+	// Which of the three media tabs to open in. One key for the editor, not one per pack: it records
+	// a habit of the person using it, the way the nav's collapsed state and the inspector's width
+	// beside it do, and a key per pack would accrue one for every pack ever opened.
+	const LAST_MEDIA_VIEW_KEY = 'pack-editor:last-media-view';
+
 	let saveError = $state<string | null>(null);
 	let navCollapsed = $state(false);
 	let narrowWindow = $state(false);
@@ -71,15 +80,18 @@
 	let modifierLabel = $state('Ctrl');
 	let packTitle = $state(store.packName);
 	let packTitleInput = $state<HTMLInputElement>();
+	let mediaViewRestored = $state(false);
 
 	const navigationTabs = [
-		{ id: 'media', label: 'Media', icon: Squares2x2 },
-		{ id: 'tags', label: 'Tags', icon: Tag },
-		{ id: 'artists', label: 'Artists', icon: PaintBrush },
-		{ id: 'content', label: 'Content', icon: DocumentText },
-		{ id: 'experience', label: 'Timeline', icon: Clock },
-		{ id: 'modes', label: 'Modes', icon: CodeBracketSquare },
-		{ id: 'options', label: 'Pack Metadata', icon: Cog6Tooth }
+		{ id: 'popups', label: 'Popups', icon: Photo, group: 'Media' },
+		{ id: 'audio', label: 'Audio', icon: MusicalNote, group: 'Media' },
+		{ id: 'all-media', label: 'All media', icon: Squares2x2, group: 'Media' },
+		{ id: 'tags', label: 'Tags', icon: Tag, group: 'Organization' },
+		{ id: 'artists', label: 'Artists', icon: PaintBrush, group: 'Organization' },
+		{ id: 'content', label: 'Content', icon: DocumentText, group: 'Behaviour' },
+		{ id: 'experience', label: 'Timeline', icon: Clock, group: 'Behaviour' },
+		{ id: 'modes', label: 'Modes', icon: CodeBracketSquare, group: 'Pack' },
+		{ id: 'options', label: 'Metadata', icon: Cog6Tooth, group: 'Pack' }
 	];
 	const navigationCollapsed = $derived(navCollapsed || narrowWindow);
 
@@ -99,6 +111,13 @@
 		if (!store.saveActive) saveDestinationChosen = false;
 	});
 
+	// The only writer of the remembered media tab: every route into one goes through
+	// `store.lastMediaView`, including the deep links from the inspector's "Used as". Waits for the
+	// restore, which would otherwise be overwritten by the default it is about to replace.
+	$effect(() => {
+		if (mediaViewRestored) localStorage.setItem(LAST_MEDIA_VIEW_KEY, store.lastMediaView);
+	});
+
 	function onSaveDestinationChosen() {
 		saveDestinationChosen = true;
 		taskFeedback.progress('save', 'Saving pack…');
@@ -107,6 +126,15 @@
 	onMount(() => {
 		modifierLabel = navigator.platform.includes('Mac') ? '⌘' : 'Ctrl';
 		navCollapsed = localStorage.getItem('pack-editor:navigation-collapsed') === 'true';
+		const rememberedMediaView = localStorage.getItem(LAST_MEDIA_VIEW_KEY);
+		if (
+			rememberedMediaView === 'popups' ||
+			rememberedMediaView === 'audio' ||
+			rememberedMediaView === 'all-media'
+		) {
+			store.setActiveView(rememberedMediaView);
+		}
+		mediaViewRestored = true;
 		const narrowQuery = window.matchMedia('(max-width: 760px)');
 		const updateNarrowWindow = () => (narrowWindow = narrowQuery.matches);
 		updateNarrowWindow();
@@ -153,6 +181,10 @@
 	});
 
 	onMount(async () => {
+		// The media tabs are where the editor opens, and they read the behaviour document without
+		// owning it: the inspector's "Used as" line, and naming the slots a removal would clear. So
+		// it is loaded with the pack rather than by whichever tab happens to want it first.
+		void ensureBehaviour();
 		try {
 			const metadata = await api.getPackMetadata();
 			store.metadata = metadata;
@@ -244,6 +276,7 @@
 			await flushBehaviourSave();
 			const info = await api.savePack(onSaveDestinationChosen);
 			if (info) {
+				store.packId = info.id;
 				store.packName = info.name;
 				store.packHasDestination = info.has_destination;
 			} else {
@@ -269,6 +302,7 @@
 			await flushBehaviourSave();
 			const info = await api.savePackAsDialog(onSaveDestinationChosen);
 			if (info) {
+				store.packId = info.id;
 				store.packName = info.name;
 				store.packHasDestination = true;
 			} else {
@@ -417,9 +451,9 @@
 			.filter((file) => idSet.has(file.id))
 			.map((file) => $state.snapshot(file) as MediaFile);
 		const activeIndex =
-			store.gridActiveId == null
+			store.mediaTab.gridActiveId == null
 				? -1
-				: store.filteredFiles.findIndex((file) => file.id === store.gridActiveId);
+				: store.filteredFiles.findIndex((file) => file.id === store.mediaTab.gridActiveId);
 		taskFeedback.progress(
 			'media-removal',
 			`Removing ${ids.length} media item${ids.length === 1 ? '' : 's'}…`
@@ -594,13 +628,16 @@
 						>
 					</IconButton>{/if}
 			</div>
-			<nav class="p-2 {navigationCollapsed ? '' : 'w-44'}">
+			<nav
+				class="min-h-0 flex-1 overflow-y-auto p-2 {navigationCollapsed ? '' : 'w-44'}"
+				use:clampScroll
+			>
 				<Tabs
 					tabs={navigationTabs}
 					active={store.activeView}
 					orientation="vertical"
 					collapsed={navigationCollapsed}
-					onselect={(id) => (store.activeView = id as typeof store.activeView)}
+					onselect={(id) => store.setActiveView(id as typeof store.activeView)}
 				/>
 			</nav>
 		</aside>
@@ -608,11 +645,19 @@
 		<!-- Main content -->
 		<div class="flex min-w-0 flex-1 flex-col">
 			{#key store.historyRevision}
-				{#if store.activeView === 'media'}
-					<MediaToolbar />
+				{#if store.activeView === 'popups' || store.activeView === 'all-media'}
+					{#if store.activeView === 'all-media'}
+						<div class="border-border bg-surface border-b px-3 py-2">
+							<p class="text-muted text-xs">
+								Everything in the pack, including wallpapers, splashes and subliminals. Custom modes
+								can draw from all of it.
+							</p>
+						</div>
+					{/if}
+					<MediaToolbar view={store.activeView} />
 					<div class="flex min-h-0 flex-1 max-[520px]:flex-col">
 						<div class="min-h-0 min-w-0 flex-1">
-							{#if store.filteredFiles.length === 0 && store.popupFiles.length === 0}
+							{#if store.filteredFiles.length === 0 && store.mediaScopeFiles.length === 0}
 								<div class="flex h-full items-center justify-center p-8">
 									<div class="w-full max-w-lg">
 										<EmptyState
@@ -632,12 +677,7 @@
 											title="No matching media"
 											description="No media matches the current search, type, or tag filters."
 											actionLabel="Clear filters"
-											onclick={() => {
-												store.searchQuery = '';
-												store.mediaTypeFilter = 'all';
-												store.tagFilter = new Set();
-												store.artistFilter = new Set();
-											}}
+											onclick={() => store.clearMediaFilters()}
 										/>
 									</div>
 								</div>
@@ -645,6 +685,12 @@
 								<MediaGrid />
 							{/if}
 						</div>
+						<Sidebar />
+					</div>
+				{:else if store.activeView === 'audio'}
+					<MediaToolbar view="audio" />
+					<div class="flex min-h-0 flex-1 max-[520px]:flex-col">
+						<div class="min-h-0 min-w-0 flex-1"><AudioList /></div>
 						<Sidebar />
 					</div>
 				{:else if store.activeView === 'content'}
@@ -695,13 +741,26 @@
 		removalCount === 1
 			? store.files.find((file) => file.id === store.pendingMediaRemoval[0])
 			: null}
+	{@const removalUsage = store.behaviour
+		? [
+				...new Set(
+					store.files
+						.filter((file) => store.pendingMediaRemoval.includes(file.id))
+						.flatMap((file) => mediaSlotUsage(store.behaviour!, file.file_name))
+				)
+			]
+		: []}
 	<Dialog
 		title={removalCount === 1
 			? 'Remove media from pack?'
 			: `Remove ${removalCount} items from pack?`}
-		description={removalCount === 1
-			? `“${removalFile?.file_name ?? 'This item'}” will be removed from this pack. The original file on your computer will not be deleted.`
-			: `These ${removalCount} media items will be removed from this pack. The original files on your computer will not be deleted.`}
+		description={`${
+			removalCount === 1
+				? `“${removalFile?.file_name ?? 'This item'}” will be removed from this pack.`
+				: `These ${removalCount} media items will be removed from this pack.`
+		}${
+			removalUsage.length > 0 ? ` This also clears ${formatList(removalUsage)}.` : ''
+		} The original file${removalCount === 1 ? '' : 's'} on your computer will not be deleted.`}
 		buttons={[
 			{ label: 'Cancel', disabled: removingMedia, onclick: () => store.cancelMediaRemoval() },
 			{
@@ -724,7 +783,7 @@
 	<MediaViewer />
 {/if}
 
-<!-- Standalone preview overlay (a slot's media, a subliminal -- see MediaPreview) -->
+<!-- Standalone preview overlay for previews launched from a role slot or pool. -->
 {#if store.previewId !== null}
 	<MediaPreview />
 {/if}

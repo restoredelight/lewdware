@@ -106,6 +106,7 @@ local open_popup = spawn.make_spawner({
 	-- says so plainly rather than the mode overriding the choice.
 	auto_close_ms = config.auto_close_after and secs(config.auto_close_after),
 	captions_enabled = config.captions_enabled,
+	popup_audio_enabled = config.audio_enabled,
 	movement_enabled = config.movement_enabled,
 	movement_speed_min = config.movement_speed_min,
 	movement_speed_max = config.movement_speed_max,
@@ -155,7 +156,7 @@ local spawn_audio -- forward declared so enter_dormant can reference it
 spawn_audio = function()
 	if not audio_active then return end
 
-	local audio = media.random_audio()
+	local audio = media.random_background_audio()
 	if not audio then return end
 
 	-- No pcall needed: play_audio() always returns a handle immediately. If playback turns out

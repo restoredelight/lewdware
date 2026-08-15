@@ -9,7 +9,10 @@ const stage = (id: string, label: string, wallpaper?: string): Stage => ({
 	events: {}
 });
 
-const behaviour = (overrides: Partial<Behaviour['content']> = {}, stages: Stage[] = []): Behaviour =>
+const behaviour = (
+	overrides: Partial<Behaviour['content']> = {},
+	stages: Stage[] = []
+): Behaviour =>
 	({
 		version: 3,
 		content: {

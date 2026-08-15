@@ -89,6 +89,7 @@ pub struct MediaServerInfo {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PackInfo {
+    pub id: String,
     pub name: String,
     pub has_unsaved_changes: bool,
     pub has_destination: bool,
@@ -313,6 +314,7 @@ async fn new_pack(state: State<'_, AppState>) -> Result<PackInfo, String> {
         .await
         .map_err(|e| e.to_string())?;
     let info = PackInfo {
+        id: pack.id().to_string(),
         name: pack.name(),
         has_unsaved_changes: true,
         has_destination: false,
@@ -351,6 +353,7 @@ async fn open_pack_dialog(
         .map_err(|e| e.to_string())?;
     let has_unsaved_changes = !pack.is_saved().await;
     let info = PackInfo {
+        id: pack.id().to_string(),
         name: pack.name(),
         has_unsaved_changes,
         has_destination: true,
@@ -379,6 +382,7 @@ async fn open_recent_pack(
             .map_err(|e| e.to_string())?
     };
     let info = PackInfo {
+        id: pack.id().to_string(),
         name: pack.name(),
         has_unsaved_changes: !pack.is_saved().await,
         has_destination: pack.path().is_some(),
@@ -495,6 +499,7 @@ async fn import_edgeware_pack_dialog(
     pack.save_metadata().await.map_err(|e| e.to_string())?;
 
     let info = PackInfo {
+        id: pack.id().to_string(),
         name: pack.name(),
         has_unsaved_changes: !pack.is_saved().await,
         has_destination: false,
@@ -573,6 +578,7 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
             .map_err(|e| e.to_string())?
         {
             let info = PackInfo {
+                id: new_pack.id().to_string(),
                 name: new_pack.name(),
                 has_unsaved_changes: false,
                 has_destination: true,
@@ -622,6 +628,7 @@ async fn save_pack(state: State<'_, AppState>, app: AppHandle) -> Result<Option<
             serde_json::json!({ "has_unsaved_changes": has_unsaved_changes }),
         );
         return Ok(Some(PackInfo {
+            id: pack.id().to_string(),
             name: pack.name(),
             has_unsaved_changes,
             has_destination: true,
@@ -671,6 +678,7 @@ async fn save_pack_as_dialog(
 
         if let Some(new_pack) = new_pack {
             let info = PackInfo {
+                id: new_pack.id().to_string(),
                 name: new_pack.name(),
                 has_unsaved_changes: false,
                 has_destination: true,
@@ -1284,6 +1292,9 @@ struct SlotFilled {
     behaviour: Behaviour,
     file: MediaFile,
     added: bool,
+    /// The file this replaced, when it was only ever this slot's scenery and left with the slot --
+    /// the same rule and the same purpose as `SlotCleared::deleted_id`.
+    deleted_id: Option<u64>,
 }
 
 /// Picks one media file and puts it in `slot`. The picker is filtered to what the slot can
@@ -1331,7 +1342,7 @@ async fn fill_media_slot_dialog(
         shared::behaviour::MediaSlot::Splash => "Set splash",
         _ => "Set wallpaper",
     };
-    let (outcome, behaviour) = encode::process_file_into_slot(
+    let (outcome, behaviour, deleted_id) = encode::process_file_into_slot(
         &state.pack,
         &path,
         &app,
@@ -1347,6 +1358,7 @@ async fn fill_media_slot_dialog(
         behaviour,
         added: matches!(outcome, pack::AddOutcome::Added(_)),
         file: outcome.file().clone(),
+        deleted_id,
     }))
 }
 
@@ -1386,6 +1398,21 @@ async fn set_shown_as_popup(
     let lock = state.pack.lock().await;
     if let Some(pack) = lock.as_ref() {
         pack.set_shown_as_popup(id, shown)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_popup_audio(
+    state: State<'_, AppState>,
+    ids: Vec<u64>,
+    popup: bool,
+) -> Result<(), String> {
+    let lock = state.pack.lock().await;
+    if let Some(pack) = lock.as_ref() {
+        pack.set_popup_audio(ids, popup)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -1773,6 +1800,7 @@ pub fn run() {
             fill_media_slot_dialog,
             clear_media_slot,
             set_shown_as_popup,
+            set_popup_audio,
             add_files_dialog,
             add_folder_dialog,
             add_paths,
