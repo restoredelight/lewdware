@@ -30,15 +30,37 @@ pub fn sanitize_child_env(_cmd: &mut std::process::Command) {}
 pub fn apply_wayland_preload_safeguards() {
     let is_appimage = std::env::var("APPIMAGE").is_ok() || std::env::var("APPDIR").is_ok();
 
-    // 1. Disable DMA-BUF and Compositing Mode rendering paths on Wayland/AppImage
-    if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
-        unsafe {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    // 1. Disable DMA-BUF and Compositing Mode rendering paths -- in the AppImage only, which is
+    //    what they were added for: there the bundled libraries can disagree with the host's
+    //    GL/Wayland stack badly enough to leave a blank window, and these fall back to a path that
+    //    at least draws.
+    //
+    //    They must not be set anywhere else, because they break `<video>`. With either one on,
+    //    WebKitGTK decodes but never renders past the first few frames: the pipeline runs on (the
+    //    decoder drops frames for being late) while the element sits at `readyState =
+    //    HAVE_CURRENT_DATA` with its position frozen around 0.12s, until a pause/play knocks it
+    //    loose. That is the pack editor's video preview freezing, and it reproduces exactly --
+    //    same file, same page, plays through clean without these and stalls every time with
+    //    either of them.
+    //
+    //    Which is why this is still gated on the AppImage rather than deleted: the pack editor no
+    //    longer ships one (the Flatpak and the tarball replaced it in August 2026, precisely
+    //    because of the above), but the *config* app still does -- it goes into the main suite's
+    //    tarball as `bin/lewdware`, see `deploy/linux/build_installer_a.sh` -- and it needs the
+    //    fallback to draw at all. It has no `<video>` to lose.
+    //
+    //    Left overridable either way: someone whose desktop needs the fallback can still set it
+    //    themselves, with `MediaDisplay.svelte`'s nudge covering the stall that then causes.
+    if is_appimage {
+        if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
+            unsafe {
+                std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            }
         }
-    }
-    if std::env::var("WEBKIT_DISABLE_COMPOSITING_MODE").is_err() {
-        unsafe {
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        if std::env::var("WEBKIT_DISABLE_COMPOSITING_MODE").is_err() {
+            unsafe {
+                std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+            }
         }
     }
 

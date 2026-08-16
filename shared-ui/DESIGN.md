@@ -131,10 +131,23 @@ distinct from carmine so keyboard focus never reads as "selected/primary."
 
 ## Typography
 
-- **Sans (`system-ui`)** for all normal prose, labels, body copy, headings.
+- **Sans (bundled Inter, `--ui-font-sans`)** for all normal prose, labels, body copy,
+  headings.
 - **Mono (bundled JetBrains Mono, `--ui-font-mono`)** for the _readout_ layer only —
-  the machine talking. Fonts are bundled in `shared-ui/fonts/` so they render
-  identically everywhere; never rely on a system mono.
+  the machine talking.
+
+Both are bundled in `shared-ui/fonts/` so they render identically everywhere; never
+rely on a system font for either. Use the tokens, not the family names.
+
+The sans was `system-ui` until August 2026. That looked like "match the desktop" and
+wasn't: WebKitGTK resolves `system-ui` to a family hardcoded in its Adwaita theme and
+ignores the desktop's real UI font even when the settings portal offers it — measured
+as Cantarell under the host's WebKit and Adwaita Sans under the Flatpak runtime's, on
+a desktop set to Noto Sans. So it never rendered native on Linux, and the same build
+changed appearance depending on which WebKit it ran against. Inter is bundled as a
+variable face (100–900) because the scale uses weight 650, which no static file can
+supply. It is also the face the engine already ships for pack text, so the editor and
+its output now agree.
 
 Shared type classes live in `base.css`:
 

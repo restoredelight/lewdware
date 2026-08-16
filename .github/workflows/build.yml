@@ -97,6 +97,19 @@ jobs:
       - name: Build Installer B (Pack Editor)
         run: ./deploy/linux/build_installer_b.sh
 
+      # Kept separate from Installer B because it is the one Linux artifact that needs a toolchain
+      # the runner does not ship, and a ~2 GB runtime download. It repacks the .deb that step just
+      # produced, so it has to follow it.
+      - name: Install Flatpak toolchain
+        run: |
+          sudo apt-get install -y flatpak flatpak-builder
+          # --user, to match the --user install flatpak-builder does for the runtime; a
+          # system remote would leave --install-deps-from=flathub with nothing to resolve.
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Build Flatpak (Pack Editor)
+        run: ./deploy/linux/build_flatpak.sh
+
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -346,10 +359,12 @@ jobs:
                 'macos-x64': f'{base}/lewdware-pack-editor_{version}_x86_64.dmg',
                 'linux-x64-deb': f'{base}/lewdware-pack-editor_{version}_x86_64.deb',
                 'linux-x64-rpm': f'{base}/lewdware-pack-editor_{version}_x86_64.rpm',
-                'linux-x64-appimage': f'{base}/lewdware-pack-editor_{version}_x86_64.AppImage',
+                'linux-x64-flatpak': f'{base}/lewdware-pack-editor_{version}_x86_64.flatpak',
+                'linux-x64-tar': f'{base}/lewdware-pack-editor_{version}_x86_64.tar.gz',
                 'linux-arm64-deb': f'{base}/lewdware-pack-editor_{version}_arm64.deb',
                 'linux-arm64-rpm': f'{base}/lewdware-pack-editor_{version}_arm64.rpm',
-                'linux-arm64-appimage': f'{base}/lewdware-pack-editor_{version}_arm64.AppImage',
+                'linux-arm64-flatpak': f'{base}/lewdware-pack-editor_{version}_arm64.flatpak',
+                'linux-arm64-tar': f'{base}/lewdware-pack-editor_{version}_arm64.tar.gz',
               },
             }, f, indent=2)
             f.write('\n')

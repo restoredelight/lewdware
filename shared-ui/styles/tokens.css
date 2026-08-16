@@ -1,3 +1,35 @@
+/* Inter, variable across the whole 100-900 axis in one file per subset.
+
+   Variable rather than a set of static weights because the type scale asks for 650 (see
+   `.ui-page-title`), which no static face can supply -- it would round to 700 and flatten the
+   step between a page title and a section title. One axis covers 400/500/600/650/700 in 47 KB.
+
+   Split by unicode-range so the 83 KB of Latin Extended only loads for a pack whose text needs
+   it; anything outside both ranges (Cyrillic, CJK) falls through to the system stack per glyph,
+   which is what the `sans-serif` tail of `--ui-font-sans` is for. */
+@font-face {
+	font-family: 'Inter';
+	src: url('../fonts/Inter-Variable-latin.woff2') format('woff2');
+	font-weight: 100 900;
+	font-style: normal;
+	font-display: swap;
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+		U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Inter';
+	src: url('../fonts/Inter-Variable-latin-ext.woff2') format('woff2');
+	font-weight: 100 900;
+	font-style: normal;
+	font-display: swap;
+	unicode-range:
+		U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+		U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+		U+A720-A7FF;
+}
+
 @font-face {
 	font-family: 'JetBrains Mono';
 	src: url('../fonts/JetBrainsMono-Regular.woff2') format('woff2');
@@ -45,6 +77,12 @@
 	--ui-radius-md: 3px;
 	--ui-radius-lg: 4px;
 
+	/* Bundled, for the same reason the mono is: `system-ui` does not mean what it looks like it
+	   means. WebKitGTK resolves it to a font hardcoded in its Adwaita theme -- Cantarell in older
+	   builds, Adwaita Sans in newer -- and ignores the desktop's actual UI font even when the
+	   settings portal hands it over. So it never rendered "native" on Linux, and it drifted
+	   between the .deb and the Flatpak because their WebKit versions disagree. */
+	--ui-font-sans: 'Inter', system-ui, -apple-system, sans-serif;
 	--ui-font-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
 	--ui-shadow-pop: 6px 6px 0 rgb(0 0 0 / 0.55);
 }

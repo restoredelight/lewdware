@@ -31,16 +31,24 @@ installer entry.
   macosArm64Url={latest.assets['macos-arm64']}
   macosX64Url={latest.assets['macos-x64']}
   macosExt="pkg"
-  linuxX64={{
-    deb: latest.assets['linux-x64-deb'],
-    rpm: latest.assets['linux-x64-rpm'],
-    other: latest.assets['linux-x64-tar'],
-    otherLabel: '.tar.gz',
-  }}
-  linuxArm64={{
-    deb: latest.assets['linux-arm64-deb'],
-    rpm: latest.assets['linux-arm64-rpm'],
-    other: latest.assets['linux-arm64-tar'],
-    otherLabel: '.tar.gz',
-  }}
+  linuxFormats={[
+    {
+      label: '.deb',
+      desc: 'Debian, Ubuntu, and derivatives',
+      x64: latest.assets['linux-x64-deb'],
+      arm64: latest.assets['linux-arm64-deb'],
+    },
+    {
+      label: '.rpm',
+      desc: 'Fedora, RHEL, openSUSE, and derivatives',
+      x64: latest.assets['linux-x64-rpm'],
+      arm64: latest.assets['linux-arm64-rpm'],
+    },
+    {
+      label: '.tar.gz',
+      desc: 'Portable, any distribution',
+      x64: latest.assets['linux-x64-tar'],
+      arm64: latest.assets['linux-arm64-tar'],
+    },
+  ]}
 />

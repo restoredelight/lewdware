@@ -105,9 +105,12 @@ pub fn init_with_session(component: &str, session_id: Option<String>) -> WorkerG
     let file_appender = tracing_appender::rolling::daily(&dir, format!("{component}.jsonl"));
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
 
+    // `media_trace` is a free-standing target rather than a module path (see the pack editor's
+    // `MEDIA_TRACE`), so the per-crate directives below don't cover it and it has to be named to
+    // reach stderr during development.
     let stderr_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(if cfg!(debug_assertions) {
-            "warn,lewdware=debug,shared=debug,lewdware_config=debug,lewdware_config_lib=debug,lewdware_pack_editor=debug,lewdware_pack_editor_lib=debug"
+            "warn,media_trace=debug,lewdware=debug,shared=debug,lewdware_config=debug,lewdware_config_lib=debug,lewdware_pack_editor=debug,lewdware_pack_editor_lib=debug"
         } else {
             "warn"
         })

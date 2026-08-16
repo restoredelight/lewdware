@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppStream metadata for the Flatpak build. Software centres read this, and `appstream-util
+  validate` runs over it in the Flatpak build, so a malformed file fails the package rather than
+  shipping a listing with no name.
+
+  The content rating is not boilerplate: this edits packs of adult media, and declaring that
+  honestly is what lets a software centre (and Flathub, if it is ever submitted) age-gate it
+  rather than discover the mismatch later.
+-->
+<component type="desktop-application">
+  <id>com.lewdware.pack-editor</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Lewdware Pack Editor</name>
+  <summary>Create and edit Lewdware packs</summary>
+
+  <description>
+    <p>
+      The Lewdware Pack Editor builds and edits packs: the collections of images, videos and audio,
+      together with the captions, prompts and behaviour, that drive a Lewdware session.
+    </p>
+    <p>
+      It imports existing Edgeware packs, compresses media on the way in, and gives every pack a
+      Content and Experience tab for the text pools, media slots and timeline that decide what a
+      session actually does.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">com.lewdware.pack-editor.desktop</launchable>
+
+  <url type="homepage">https://lewdware.net</url>
+
+  <developer id="net.lewdware">
+    <name>restoredelight</name>
+  </developer>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="sex-nudity">intense</content_attribute>
+    <content_attribute id="sex-themes">intense</content_attribute>
+  </content_rating>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Utility</category>
+  </categories>
+
+  <releases>
+    <release version="0.0.2" date="2026-08-14"/>
+  </releases>
+</component>

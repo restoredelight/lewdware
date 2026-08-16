@@ -398,6 +398,13 @@ pub struct FileRangeStream {
     pub start: u64,
     pub end: u64,
     pub total_size: u64,
+    /// The media's content hash, hex-encoded, for the response's `ETag`.
+    ///
+    /// A client that has part of a resource and asks for the rest needs a validator to know the
+    /// partial response belongs to the same entity it already holds (RFC 9110 §8.8). Without one,
+    /// a range response is unverifiable -- and this server hands out exactly that pattern: a full
+    /// `200` for the first read, then `206`s as the player seeks around.
+    pub entity_tag: String,
 }
 
 impl FileRangeStream {
@@ -3605,12 +3612,6 @@ impl MediaPackView {
             .await
     }
 
-    pub async fn get_display(&self, id: u64) -> Result<Vec<u8>> {
-        let _handle = self.archive_io.read().await;
-        let (file_data, _, _) = self.get_raw_file(id).await?;
-        crate::thumbnail::generate_display_image(file_data).await
-    }
-
     pub async fn get_file_data(&self, id: u64) -> Result<(Vec<u8>, FileType)> {
         let _handle = self.archive_io.read().await;
         let (file_data, file_type, _) = self.get_raw_file(id).await?;
@@ -3635,11 +3636,11 @@ impl MediaPackView {
     ) -> Result<(FileRangeStream, FileType)> {
         let _handle = self.archive_io.read().await;
 
-        let (offset, length, path, file_type) = self
+        let (offset, length, path, file_type, hash) = self
             .db_execute(move |conn| {
                 conn.query_row_and_then(
                     "SELECT p.\"offset\", COALESCE(p.length, l.length) AS length,
-                            l.path, m.file_type
+                            l.path, m.file_type, m.hash
                      FROM media m
                      LEFT JOIN pack_media p ON p.media_id = m.id
                      LEFT JOIN loose_media l ON l.media_id = m.id
@@ -3651,11 +3652,15 @@ impl MediaPackView {
                             row.get::<_, Option<u64>>("length")?,
                             row.get::<_, Option<String>>("path")?,
                             row.get::<_, String>("file_type")?.parse()?,
+                            row.get::<_, Vec<u8>>("hash")?,
                         ))
                     },
                 )
             })
             .await?;
+        // The content hash doubles as the entity tag: a media file's bytes never change under a
+        // given id (an edit imports a new row), so it is as strong a validator as they come.
+        let entity_tag = hash.iter().map(|byte| format!("{byte:02x}")).collect();
 
         let data_range = match (offset, length, path) {
             (Some(offset), Some(length), _) => {
@@ -3667,6 +3672,7 @@ impl MediaPackView {
                     start,
                     end,
                     total_size: length,
+                    entity_tag,
                 }
             }
             (_, _, Some(path)) => {
@@ -3680,6 +3686,7 @@ impl MediaPackView {
                     start,
                     end,
                     total_size: size,
+                    entity_tag,
                 }
             }
             _ => bail!("No offset, length or path"),

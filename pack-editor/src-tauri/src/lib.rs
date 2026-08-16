@@ -1646,6 +1646,17 @@ fn get_media_server(state: State<'_, AppState>) -> Result<MediaServerInfo, Strin
     })
 }
 
+/// Puts what the player did (see `MediaDisplay.svelte`) into the same log as the media server's
+/// requests, so a stall reads as one ordered story: what the player did, and what -- if anything
+/// -- it asked the server for at that moment.
+///
+/// `info`, unlike the per-request server trail: the front end only calls this when it has had to
+/// work around a stalled player, which is rare and worth keeping a record of.
+#[tauri::command]
+fn trace_media_event(event: String) {
+    tracing::info!(target: crate::media_server::MEDIA_TRACE, "player: {event}");
+}
+
 // ── Entry point ──────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1796,6 +1807,7 @@ pub fn run() {
             add_paths,
             cancel_upload,
             get_media_server,
+            trace_media_event,
             check_for_update,
         ])
         .run(tauri::generate_context!())

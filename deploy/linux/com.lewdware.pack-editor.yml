@@ -1,0 +1,79 @@
+# Flatpak manifest for the Lewdware Pack Editor.
+#
+# Why this exists alongside the .deb and .rpm: those two cover Debian/Ubuntu and Fedora/RHEL, and
+# the AppImage covered everything else -- badly. An AppImage bundles its own WebKitGTK and GL
+# stack, which then disagrees with the host's, and the workarounds that follows (see
+# `shared/src/utils.rs`) break `<video>` in the editor's media preview outright. A Flatpak bundles
+# no such thing: it runs against the GNOME runtime's WebKitGTK, which is built to work with host
+# drivers through the `org.freedesktop.Platform.GL` extension. Same reason a dev build has never
+# had the problem -- a WebKit that matches its graphics stack.
+#
+# Built from the .deb rather than from source, as Tauri's own Flatpak guide recommends
+# (https://v2.tauri.app/distribute/flatpak/): the bundler has already staged the binary, the
+# sidecars, the icons and the desktop entry in there, so extracting it keeps this manifest from
+# drifting away from what the other Linux packages ship.
+id: com.lewdware.pack-editor
+
+# 49 rather than the 47 Tauri's guide names: 47 is retired, and the runtime's WebKitGTK version is
+# the whole point of choosing Flatpak here -- it has to be new enough to decode AVIF (the pack
+# format's image codec) and to render video without the fallbacks the AppImage needs.
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+
+command: lewdware-pack-editor
+
+finish-args:
+  # Windowing and GPU. `--device=dri` is what lets the runtime's WebKit use the host's driver
+  # through the GL extension, which is the difference between this and the AppImage.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # Deliberately no `LIBVA_DRIVERS_PATH` here. The runtime's libva is already built with a search
+  # path that covers every place a driver can land: `.../dri` and its `intel-vaapi-driver` /
+  # `nvidia-vaapi-driver` subdirectories, plus `.../GL/lib/dri`, which is where Flatpak aggregates
+  # whichever GL extensions the host actually resolved (mesa's `radeonsi_drv_video.so` for AMD, an
+  # `org.freedesktop.Platform.GL.nvidia-*` extension for Nvidia). Setting the variable would
+  # *replace* that path with a snapshot of one runtime's layout, so it would break on exactly the
+  # hosts it was meant to help. Verified: `h264_vaapi` encodes in a stock runtime with the variable
+  # unset, and libva's own trace lists the four directories above.
+  #
+  # The editor previews media over an HTTP server bound to 127.0.0.1 (see `media_server.rs`) and
+  # checks for updates over the network.
+  - --share=network
+  # Sound, for previewing a pack's audio and the audio track of its videos.
+  - --socket=pulseaudio
+  # Packs are the user's own files, opened and saved from wherever they keep them.
+  - --filesystem=home
+
+modules:
+  - name: lewdware-pack-editor
+    buildsystem: simple
+    build-commands:
+      - mkdir -p deb-extract
+      - ar -x *.deb --output deb-extract
+      - tar -C deb-extract -xf deb-extract/data.tar.gz
+      # The binary, plus the ffmpeg/ffprobe/avifenc sidecars and licence files that Tauri stages
+      # beside it. `cp -a` keeps the executable bits the sidecars need.
+      - install -Dm755 deb-extract/usr/bin/lewdware-pack-editor /app/bin/lewdware-pack-editor
+      - |
+        if [ -d "deb-extract/usr/lib/Lewdware Pack Editor" ]; then
+          mkdir -p "/app/lib/Lewdware Pack Editor"
+          cp -a "deb-extract/usr/lib/Lewdware Pack Editor/." "/app/lib/Lewdware Pack Editor/"
+        fi
+      # Desktop entry and icons, renamed to the app id as Flatpak requires.
+      - install -Dm644 deb-extract/usr/share/applications/*.desktop /app/share/applications/com.lewdware.pack-editor.desktop
+      - desktop-file-edit --set-key=Icon --set-value=com.lewdware.pack-editor /app/share/applications/com.lewdware.pack-editor.desktop
+      - |
+        for size in 32x32 128x128 256x256@2; do
+          src=$(ls deb-extract/usr/share/icons/hicolor/$size/apps/*.png 2>/dev/null | head -1)
+          [ -n "$src" ] && install -Dm644 "$src" \
+            "/app/share/icons/hicolor/$size/apps/com.lewdware.pack-editor.png"
+        done
+      - install -Dm644 com.lewdware.pack-editor.metainfo.xml /app/share/metainfo/com.lewdware.pack-editor.metainfo.xml
+    sources:
+      - type: file
+        path: ../../dist/lewdware-pack-editor.deb
+      - type: file
+        path: com.lewdware.pack-editor.metainfo.xml

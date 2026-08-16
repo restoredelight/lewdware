@@ -184,18 +184,47 @@ pub struct EncodedFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HardwareEncoder {
     Nvidia,
+    /// Windows only: AMD's own encoder, which needs their proprietary driver stack. On Linux
+    /// `Vaapi` covers AMD instead -- `h264_amf` there requires AMDGPU-PRO's `amfrt` runtime, which
+    /// neither the distro packages nor a Flatpak runtime provide, so this variant only ever fell
+    /// through to software on Linux.
     Amd,
+    /// Windows only: Quick Sync. Same story as `Amd` -- on Linux `h264_qsv` needs Intel's oneVPL
+    /// runtime, which no Flatpak runtime ships, so `Vaapi` covers Intel there.
     Intel,
     Apple,
+    /// Linux, non-Nvidia: the driver-independent kernel interface, served by mesa for AMD and by
+    /// `intel-media-driver` for Intel. One path for both vendors, and the only hardware encoder
+    /// that works inside the Flatpak sandbox.
+    ///
+    /// Not used for Nvidia even though `nvidia-vaapi-driver` exists: that driver is decode-only,
+    /// and NVENC is the better encoder there anyway.
+    ///
+    /// Carries the DRM render node to encode on, because on a multi-GPU machine the encoder and
+    /// the device are one choice, not two: `detect_and_test` settles them together.
+    Vaapi(PathBuf),
     SoftwareFallback,
 }
 
 impl HardwareEncoder {
+    /// Picks the encoder this machine can really use: the first candidate that encodes a frame.
+    ///
+    /// Naming the GPU only narrows the field, so nothing here is trusted until it has run. A
+    /// candidate can fail for reasons no amount of inspection would reveal -- a driver package
+    /// that is not installed, a render node belonging to a device with no encode engine at all
+    /// (`vgem` and `vkms` both create one), a sandbox that cannot reach the hardware -- and on a
+    /// machine with more than one GPU the answer differs *between* devices, which is why the VAAPI
+    /// candidates are per render node rather than one guess at which node is the right one.
     pub fn detect_and_test() -> Self {
-        Self::detect().test()
+        Self::candidates()
+            .into_iter()
+            .map(Self::test)
+            .find(|tested| *tested != Self::SoftwareFallback)
+            .unwrap_or(Self::SoftwareFallback)
     }
 
-    fn detect() -> Self {
+    /// Every encoder worth trying here, best first.
+    fn candidates() -> Vec<Self> {
         #[cfg(target_os = "windows")]
         {
             if let Ok(output) = new_command("powershell")
@@ -204,40 +233,73 @@ impl HardwareEncoder {
             {
                 let gpu_name = String::from_utf8_lossy(&output.stdout).to_lowercase();
                 if gpu_name.contains("nvidia") {
-                    return Self::Nvidia;
+                    return vec![Self::Nvidia];
                 }
                 if gpu_name.contains("amd") || gpu_name.contains("radeon") {
-                    return Self::Amd;
+                    return vec![Self::Amd];
                 }
                 if gpu_name.contains("intel") {
-                    return Self::Intel;
+                    return vec![Self::Intel];
                 }
             }
         }
 
         #[cfg(target_os = "macos")]
         {
-            return Self::Apple;
+            return vec![Self::Apple];
         }
 
+        // Nvidia is the only vendor worth naming on Linux: NVENC beats VAAPI there, and
+        // `nvidia-vaapi-driver` cannot encode at all. Everything else -- Intel, AMD, and the
+        // virtualised GPUs that answer to neither name -- goes through VAAPI.
+        //
+        // The two are tried in turn rather than either/or, because a machine can offer both. On a
+        // hybrid laptop `lspci` reports the Nvidia chip whether or not its proprietary driver is
+        // installed; without it NVENC fails, and falling through to the Intel iGPU's VAAPI beats
+        // dropping all the way to software.
         #[cfg(target_os = "linux")]
         {
-            if let Ok(output) = new_command("lspci").output() {
-                let pci_info = String::from_utf8_lossy(&output.stdout).to_lowercase();
-                if pci_info.contains("nvidia") {
-                    return Self::Nvidia;
-                }
-                if pci_info.contains("amd") || pci_info.contains("radeon") {
-                    return Self::Amd;
-                }
-                if pci_info.contains("intel") {
-                    return Self::Intel;
-                }
+            let mut candidates = Vec::new();
+            if let Ok(output) = new_command("lspci").output()
+                && String::from_utf8_lossy(&output.stdout)
+                    .to_lowercase()
+                    .contains("nvidia")
+            {
+                candidates.push(Self::Nvidia);
             }
+            candidates.extend(vaapi_render_nodes().into_iter().map(Self::Vaapi));
+            return candidates;
         }
 
         // If all checks fail, fallback to safe CPU encoding
-        Self::SoftwareFallback
+        #[allow(unreachable_code)]
+        Vec::new()
+    }
+
+    /// Global options that have to precede the input, because they set up the hardware device the
+    /// filter graph and the encoder then refer to by name.
+    pub fn init_args(&self) -> Vec<String> {
+        match self {
+            Self::Vaapi(node) => vec![
+                "-init_hw_device".into(),
+                format!("vaapi=va:{}", node.display()),
+                "-filter_hw_device".into(),
+                "va".into(),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    /// How the encoder wants its frames handed over: the tail of the filter chain feeding it.
+    ///
+    /// Every encoder but VAAPI takes ordinary software frames, so this is just the pixel format.
+    /// VAAPI encodes from a surface in GPU memory, so the chain has to convert to the format the
+    /// hardware accepts and then `hwupload` it onto the device `init_args` opened.
+    pub fn input_filter(&self) -> &'static str {
+        match self {
+            Self::Vaapi(_) => "format=nv12,hwupload",
+            _ => "format=yuv420p",
+        }
     }
 
     pub fn ffmpeg_args(&self) -> &[&'static str] {
@@ -258,31 +320,68 @@ impl HardwareEncoder {
                 "-c:v", "h264_amf", "-quality", "quality", "-rc", "cqp", "-qp_i", "23", "-qp_p",
                 "23", "-qp_b", "23",
             ],
+            Self::Vaapi(_) => &["-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "23"],
             Self::SoftwareFallback => &["-c:v", "libx264", "-crf", "23"],
         }
     }
 
+    /// Encodes one black frame to find out whether this machine can really do what `detect()`
+    /// guessed from the hardware it named. A present GPU is not a working encoder: the driver can
+    /// be missing (`h264_qsv` without oneVPL), the runtime unavailable (`h264_amf` outside
+    /// AMDGPU-PRO), or the device unreachable from a sandbox.
+    ///
+    /// Built the same way `encode_video` builds the real thing -- device setup, input filter,
+    /// codec -- so that a pass here means that command shape works, not merely that the codec
+    /// exists.
     pub fn test(self) -> Self {
-        if self != Self::SoftwareFallback
-            && new_command(get_ffmpeg_path())
-                .args([
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "color=c=black:s=128x128",
-                    "-vframes",
-                    "1",
-                ])
-                .args(self.ffmpeg_args())
-                .args(["-f", "null", "-"])
-                .status()
-                .is_ok_and(|status| status.success())
-        {
+        if self == Self::SoftwareFallback {
             return self;
         }
 
-        Self::SoftwareFallback
+        let ok = new_command(get_ffmpeg_path())
+            .args(self.init_args())
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=128x128",
+                "-vframes",
+                "1",
+            ])
+            .args(["-vf", self.input_filter()])
+            .args(self.ffmpeg_args())
+            .args(["-f", "null", "-"])
+            .status()
+            .is_ok_and(|status| status.success());
+
+        if ok { self } else { Self::SoftwareFallback }
     }
+}
+
+/// Every DRM render node on this machine, lowest-numbered first.
+///
+/// Render nodes are the unprivileged half of a DRM device -- no display access, just compute and
+/// media -- so any user can open one, and a Flatpak gets them from `--device=dri`. They are
+/// numbered from `renderD128` upwards; the numbering follows driver load order, so it says nothing
+/// about which device can encode, or even whether a node belongs to real hardware. Hence all of
+/// them, for `detect_and_test` to try in turn.
+#[cfg(target_os = "linux")]
+fn vaapi_render_nodes() -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir("/dev/dri") else {
+        return Vec::new();
+    };
+    let mut nodes: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("renderD"))
+        })
+        .collect();
+    // Fixed-width names in a fixed range, so ordering them as text orders them as numbers.
+    nodes.sort();
+    nodes
 }
 
 static FFMPEG_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -679,14 +778,19 @@ fn encode_video(
     let thumb_path = thumb_temp.path();
 
     // See `ProbedMedia` for why these address one specific stream rather than using `0:v`.
+    //
+    // Only `[main]` is handed to the encoder, so only it takes the encoder's input filter; the
+    // thumbnail and the alpha probe stay in software, where the rest of this function reads them.
+    let main_input = encoder.input_filter();
     let filter = format!(
-        "[0:{video}]scale=w='{width}':h='{height}',format=yuv420p[main]; \
+        "[0:{video}]scale=w='{width}':h='{height}',{main_input}[main]; \
          [0:{video}]scale='min(iw,100)':'min(ih,100)':force_original_aspect_ratio=decrease[thumb]; \
          [0:{video}]format=rgba,alphaextract,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YMIN[alpha]"
     );
 
     let mut cmd = new_command(get_ffmpeg_path());
     cmd.arg("-y")
+        .args(encoder.init_args())
         .arg("-i")
         .arg(input)
         .arg("-filter_complex")
