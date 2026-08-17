@@ -104,6 +104,11 @@ impl<T: EventPoster> UserData for VideoWindow<T> {
         });
 
         methods.add_method("set_volume", |lua, this, volume: f32| {
+            this.inner_window
+                .state
+                .try_borrow_mut()
+                .into_lua_err()?
+                .volume_fade_callback = None;
             let result = this
                 .inner_window
                 .request_sender
@@ -113,6 +118,31 @@ impl<T: EventPoster> UserData for VideoWindow<T> {
                 .inner_window
                 .report_noop(lua, "VideoWindow:set_volume()", result))
         });
+
+        methods.add_method(
+            "fade_volume",
+            |lua,
+             this,
+             (opts, cb): (Option<crate::lua::VolumeFadeOpts>, Option<mlua::Function>)| {
+                let id = {
+                    let mut state = this.inner_window.state.try_borrow_mut().into_lua_err()?;
+                    let id = state.current_volume_fade_id;
+                    state.current_volume_fade_id += 1;
+                    state.volume_fade_callback = opts
+                        .as_ref()
+                        .and_then(|_| cb.map(|callback| (id, callback)));
+                    id
+                };
+                let result = this
+                    .inner_window
+                    .request_sender
+                    .fade_video_volume(id, opts)
+                    .into_lua_err()?;
+                Ok(this
+                    .inner_window
+                    .report_noop(lua, "VideoWindow:fade_volume()", result))
+            },
+        );
 
         methods.add_method("set_loop", |lua, this, loop_video: bool| {
             let result = this
@@ -355,6 +385,8 @@ struct InnerWindowState {
     current_move_id: u64,
     fade_callback: Option<(u64, mlua::Function)>,
     current_fade_id: u64,
+    volume_fade_callback: Option<(u64, mlua::Function)>,
+    current_volume_fade_id: u64,
 }
 
 trait HasInnerWindow<T: EventPoster> {
@@ -707,6 +739,30 @@ impl<T: EventPoster> InnerWindow<T> {
 
         Ok(())
     }
+
+    pub fn on_volume_fade_finished(&self, fade_id: u64) -> anyhow::Result<()> {
+        let callback = {
+            let mut state = self.state.try_borrow_mut()?;
+            if state
+                .volume_fade_callback
+                .as_ref()
+                .is_some_and(|(id, _)| *id == fade_id)
+            {
+                state
+                    .volume_fade_callback
+                    .take()
+                    .map(|(_, callback)| callback)
+            } else {
+                None
+            }
+        };
+        if let Some(callback) = callback
+            && let Err(err) = callback.call::<()>(())
+        {
+            tracing::error!("{err}");
+        }
+        Ok(())
+    }
 }
 
 impl InnerWindowState {
@@ -723,6 +779,8 @@ impl InnerWindowState {
             current_move_id: 0,
             fade_callback: None,
             current_fade_id: 0,
+            volume_fade_callback: None,
+            current_volume_fade_id: 0,
         }
     }
 }

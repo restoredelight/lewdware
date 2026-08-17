@@ -139,6 +139,8 @@ export const api = {
 
 	fillMediaSlotDialog: (slot: MediaSlot) =>
 		invoke<SlotFilled | null>('fill_media_slot_dialog', { slot }),
+	setMediaSlot: (slot: MediaSlot, mediaId: number) =>
+		invoke<SlotCleared | null>('set_media_slot', { slot, mediaId }),
 	clearMediaSlot: (slot: MediaSlot) => invoke<SlotCleared | null>('clear_media_slot', { slot }),
 	setPopupAudio: (ids: number[], popup: boolean) => invoke<void>('set_popup_audio', { ids, popup }),
 

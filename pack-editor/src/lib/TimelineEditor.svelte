@@ -2,6 +2,7 @@
 	import { Icon, Plus } from 'svelte-hero-icons';
 	import Button from '$ui/Button.svelte';
 	import Dialog from '$ui/Dialog.svelte';
+	import Field from '$ui/Field.svelte';
 	import Select from '$ui/Select.svelte';
 	import Toggle from '$ui/Toggle.svelte';
 	import EventScheduleEditor from './EventScheduleEditor.svelte';
@@ -25,6 +26,7 @@
 	let activeId = $state('');
 	let removing = $state<Stage | null>(null);
 	let mainEl = $state<HTMLElement>();
+	let audioPickerStage = $state<string | null>(null);
 	// WebKitGTK doesn't reliably clamp scrollTop when the panel's content shrinks,
 	// leaving a shorter stage blank and unscrollable.
 	$effect(() => {
@@ -61,13 +63,6 @@
 			if (name) return name;
 		}
 		return store.behaviour?.content.wallpaper;
-	});
-	const inheritedAudio = $derived.by(() => {
-		for (let index = activeIndex - 1; index >= 0; index--) {
-			const media = stages[index].content.audio;
-			if (media) return media;
-		}
-		return undefined;
 	});
 	const next = $derived(activeIndex >= 0 ? stages[activeIndex + 1] : undefined);
 	const outgoing = $derived(
@@ -229,9 +224,13 @@
 		// cleared through a command of its own, so that dropping the stage and dropping its
 		// wallpaper are one transaction -- and so one undo brings back both, instead of leaving a
 		// stage without the wallpaper it had.
-		const retiring = [target.content.wallpaper, target.content.audio].filter(
-			(value): value is number => value != null
-		);
+		const retiring = [
+			target.content.wallpaper,
+			target.content.audio,
+			target.on_enter?.splash,
+			target.on_enter?.sound,
+			target.prompt?.sound
+		].filter((value): value is number => value != null);
 		// And the same for the tag the stage owns, for the same reason and in the same transaction.
 		// Unconditional removal only where the author asked for it having been told what it is on;
 		// otherwise the backend drops it if — and only if — nothing turns out to claim it.
@@ -257,19 +256,33 @@
 		else delete stage.events[key];
 		commitBehaviourEdit(`${stagePath}.events`, 'Change stage events');
 	}
-	function setEntryEffect(key: 'splash' | 'sound' | 'notification', on: boolean) {
+	function setAudioMode(mode: string) {
+		if (!stage) return;
+		const retiring = stage.content.audio != null ? [stage.content.audio] : [];
+		delete stage.content.audio;
+		if (mode === 'random') stage.content.audio_random = true;
+		else delete stage.content.audio_random;
+		audioPickerStage = mode === 'specific' ? stage.id : null;
+		commitBehaviourEdit(`${stagePath}.content`, 'Change stage audio', retiring);
+	}
+	function ensurePromptSettings() {
+		if (!stage) return null;
+		stage.prompt ??= { timeouts_enabled: true, timeout_multiplier: 1 };
+		return stage.prompt;
+	}
+	function setPromptPopups(enabled: boolean) {
+		const prompt = ensurePromptSettings();
+		if (!prompt) return;
+		if (enabled) prompt.popup_burst ??= 5;
+		else delete prompt.popup_burst;
+		commitBehaviourEdit(`${stagePath}.prompt`, 'Toggle prompt popups');
+	}
+	function setEntryPopups(enabled: boolean) {
 		if (!stage) return;
 		stage.on_enter ??= {};
-		if (on) stage.on_enter[key] = true;
-		else delete stage.on_enter[key];
-		if (
-			!stage.on_enter.splash &&
-			!stage.on_enter.sound &&
-			!stage.on_enter.notification &&
-			!stage.on_enter.popup_burst
-		)
-			delete stage.on_enter;
-		commitBehaviourEdit(`${stagePath}.on_enter`, 'Change stage entry effects');
+		if (enabled) stage.on_enter.popup_burst ??= 5;
+		else delete stage.on_enter.popup_burst;
+		commitBehaviourEdit(`${stagePath}.on_enter`, 'Toggle stage entry popups');
 	}
 	function transitionSummary() {
 		if (!outgoing || outgoing.duration_seconds === 0) return 'Immediately';
@@ -353,15 +366,32 @@
 						reveal={store.experienceTargetStageId === stage.id}
 						onrevealed={() => (store.experienceTargetStageId = null)}
 					/>
-					<MediaSlot
-						slot={{ kind: 'stage_audio', stage: stage.id }}
-						mediaId={stage.content.audio}
-						title="Background audio"
-						description="The track this stage starts. Leaving it empty keeps the current track playing, without restarting it."
-						emptyNote={inheritedAudio
-							? 'Keeps the track selected by an earlier stage.'
-							: 'Keeps the background rotation already playing.'}
-					/>
+					<div class="audio-choice">
+						<Select
+							label="Background audio"
+							value={stage.content.audio != null || audioPickerStage === stage.id
+								? 'specific'
+								: stage.content.audio_random
+									? 'random'
+									: 'keep'}
+							options={[
+								{ value: 'keep', label: 'Continue current audio' },
+								{ value: 'random', label: 'Switch to a random track using active tags' },
+								{ value: 'specific', label: 'Switch to a specific track' }
+							]}
+							onchange={setAudioMode}
+						/>
+						{#if stage.content.audio != null || audioPickerStage === stage.id}
+							<MediaSlot
+								slot={{ kind: 'stage_audio', stage: stage.id }}
+								mediaId={stage.content.audio}
+								title="Specific track"
+								description="Choose the exact track this stage starts."
+								emptyNote="Choose a track."
+								showHeader={false}
+							/>
+						{/if}
+					</div>
 				</section>
 
 				<section class="card">
@@ -372,57 +402,60 @@
 						</div>
 					</div>
 					<div class="entry-effects">
-						<div class="toggle-row">
-							<div><strong>Show splash</strong><small>Uses the pack's splash.</small></div>
-							<Toggle
-								ariaLabel="Show splash on entry"
-								checked={!!stage.on_enter?.splash}
-								onchange={(on) => setEntryEffect('splash', on)}
-							/>
-						</div>
-						<div class="toggle-row">
-							<div><strong>Play sound</strong><small>Plays a popup-audio sting.</small></div>
-							<Toggle
-								ariaLabel="Play sound on entry"
-								checked={!!stage.on_enter?.sound}
-								onchange={(on) => setEntryEffect('sound', on)}
-							/>
-						</div>
-						<div class="toggle-row">
-							<div>
-								<strong>Show notification</strong><small
-									>Picks from the active notification pool.</small
-								>
-							</div>
-							<Toggle
-								ariaLabel="Show notification on entry"
-								checked={!!stage.on_enter?.notification}
-								onchange={(on) => setEntryEffect('notification', on)}
-							/>
-						</div>
+						<MediaSlot
+							slot={{ kind: 'stage_entry_splash', stage: stage.id }}
+							mediaId={stage.on_enter?.splash}
+							title="Splash"
+							description="A specific image or video shown on entry."
+							emptyNote="No splash is shown on entry."
+						/>
+						<MediaSlot
+							slot={{ kind: 'stage_entry_sound', stage: stage.id }}
+							mediaId={stage.on_enter?.sound}
+							title="Sound"
+							description="A specific sound played on entry."
+							emptyNote="No sound is played on entry."
+						/>
 						<label
-							>Popup burst<input
-								type="number"
-								min="0"
-								step="1"
-								value={stage.on_enter?.popup_burst ?? 0}
+							>Notification<textarea
+								rows="2"
+								value={stage.on_enter?.notification ?? ''}
+								placeholder="No notification"
 								oninput={(event) => {
-									const count = event.currentTarget.valueAsNumber;
-									if (!Number.isFinite(count) || !stage) return;
 									stage.on_enter ??= {};
-									if (count > 0) stage.on_enter.popup_burst = Math.floor(count);
-									else delete stage.on_enter.popup_burst;
-									if (
-										!stage.on_enter.splash &&
-										!stage.on_enter.sound &&
-										!stage.on_enter.notification &&
-										!stage.on_enter.popup_burst
-									)
-										delete stage.on_enter;
-									editBehaviourField(`${stagePath}.on_enter`, 'Change stage entry effects');
-								}}
-							/><small>Zero disables the burst. The user's popup limit still applies.</small></label
+									const value = event.currentTarget.value;
+									if (value) stage.on_enter.notification = value;
+									else delete stage.on_enter.notification;
+									editBehaviourField(`${stagePath}.on_enter`, 'Edit stage notification');
+								}}></textarea><small>Custom text sent as a desktop notification.</small></label
 						>
+						<div class="optional-effect">
+							<div class="toggle-row">
+								<div>
+									<strong>Spawn popups</strong><small>Runs once when this stage begins.</small>
+								</div>
+								<Toggle
+									ariaLabel="Spawn popups on stage entry"
+									checked={stage.on_enter?.popup_burst != null}
+									onchange={setEntryPopups}
+								/>
+							</div>
+							{#if stage.on_enter?.popup_burst != null}<Field
+									label="Number of popups"
+									description="The user's popup limit still applies."
+									type="number"
+									min={1}
+									step={1}
+									value={stage.on_enter.popup_burst}
+									oninput={(value) => {
+										const count = Number(value);
+										if (Number.isFinite(count) && stage.on_enter) {
+											stage.on_enter.popup_burst = Math.max(1, Math.floor(count));
+											editBehaviourField(`${stagePath}.on_enter`, 'Edit stage entry popups');
+										}
+									}}
+								/>{/if}
+						</div>
 					</div>
 				</section>
 
@@ -439,7 +472,81 @@
 							previous={previous?.events[def.key]}
 							defaultInterval={def.interval}
 							onchange={(value) => setEvent(def.key, value)}
-						/>{/each}
+						>
+							{#if def.key === 'prompt'}<div class="prompt-settings">
+									<div class="toggle-row">
+										<div>
+											<strong>Enforce prompt deadlines</strong><small
+												>Turn off to let prompts wait indefinitely.</small
+											>
+										</div>
+										<Toggle
+											ariaLabel="Enforce prompt deadlines"
+											checked={stage.prompt?.timeouts_enabled !== false}
+											onchange={(on) => {
+												const prompt = ensurePromptSettings();
+												if (!prompt) return;
+												prompt.timeouts_enabled = on;
+												commitBehaviourEdit(`${stagePath}.prompt`, 'Change prompt deadlines');
+											}}
+										/>
+									</div>
+									{#if stage.prompt?.timeouts_enabled !== false}<Field
+											label="Time allowance"
+											description="Multiplies every prompt's explicit or automatic time limit."
+											type="number"
+											min={0.1}
+											step={0.1}
+											suffix="×"
+											value={stage.prompt?.timeout_multiplier ?? 1}
+											oninput={(value) => {
+												const multiplier = Number(value);
+												const prompt = ensurePromptSettings();
+												if (prompt && Number.isFinite(multiplier)) {
+													prompt.timeout_multiplier = Math.max(0.1, multiplier);
+													editBehaviourField(`${stagePath}.prompt`, 'Edit prompt time allowance');
+												}
+											}}
+										/>{/if}
+									<div class="optional-effect">
+										<div class="toggle-row">
+											<div>
+												<strong>Spawn popups</strong><small
+													>Applied to wrong answers and expired prompts.</small
+												>
+											</div>
+											<Toggle
+												ariaLabel="Spawn popups for an incorrect prompt"
+												checked={stage.prompt?.popup_burst != null}
+												onchange={setPromptPopups}
+											/>
+										</div>
+										{#if stage.prompt?.popup_burst != null}<Field
+												label="Number of popups"
+												description="The user's popup limit still applies."
+												type="number"
+												min={1}
+												step={1}
+												value={stage.prompt.popup_burst}
+												oninput={(value) => {
+													const count = Number(value);
+													const prompt = ensurePromptSettings();
+													if (prompt && Number.isFinite(count)) {
+														prompt.popup_burst = Math.max(1, Math.floor(count));
+														editBehaviourField(`${stagePath}.prompt`, 'Edit prompt popups');
+													}
+												}}
+											/>{/if}
+									</div>
+									<MediaSlot
+										slot={{ kind: 'stage_prompt_sound', stage: stage.id }}
+										mediaId={stage.prompt?.sound}
+										title="Sound"
+										description="A specific sound played for a wrong answer or timeout."
+										emptyNote="No sound consequence."
+									/>
+								</div>{/if}
+						</EventScheduleEditor>{/each}
 				</section>
 
 				<section class="card">
@@ -746,6 +853,22 @@
 		align-items: start;
 		gap: 12px;
 	}
+	.audio-choice,
+	.prompt-settings,
+	.optional-effect {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		gap: 12px;
+	}
+	.prompt-settings {
+		margin-top: 14px;
+		padding: 0 0 2px 16px;
+	}
+	.prompt-settings > .toggle-row:first-child {
+		padding-top: 0;
+		border-top: 0;
+	}
 	.fields label {
 		display: flex;
 		min-width: 0;
@@ -767,14 +890,20 @@
 		font-size: 12px;
 		font-weight: 600;
 	}
-	.entry-effects input {
+	.entry-effects textarea {
 		width: 100%;
-		height: 36px;
 		padding: 0 9px;
 		border: 1px solid var(--ui-border);
 		border-radius: var(--ui-radius-sm);
 		background: var(--ui-bg);
 		color: var(--ui-text);
+		font: inherit;
+		font-weight: 400;
+	}
+	.entry-effects textarea {
+		min-height: 68px;
+		padding-block: 8px;
+		resize: vertical;
 	}
 	.entry-effects label small {
 		color: var(--ui-muted);

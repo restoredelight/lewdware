@@ -46,6 +46,7 @@ pub use api::{
     Color, Coord, DEFAULT_TEXT_POPUP_FONT_SIZE, DialogButton, DialogElement, DialogElementUpdate,
     FontSize, Notification, PopupSpawnOpts, TextAlign, TextFont, TextStyle,
 };
+pub use audio::VolumeFadeOpts;
 pub use media::{Media, MediaData, MediaType};
 pub use request::{AudioAction, ItemAction, LuaRequest, WindowAction};
 pub use window::{Easing, FadeOpts, MoveOpts};
@@ -80,6 +81,10 @@ pub enum Event {
         values: HashMap<String, String>,
     },
     FadeFinish {
+        id: ItemId,
+        fade_id: u64,
+    },
+    VolumeFadeFinish {
         id: ItemId,
         fade_id: u64,
     },
@@ -262,6 +267,19 @@ fn lua_view<T: serde::Serialize>(
             {
                 resolve_slot(content, "wallpaper", &name_of);
                 resolve_slot(content, "audio", &name_of);
+            }
+            if let Some(entry) = stage
+                .get_mut("on_enter")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                resolve_slot(entry, "splash", &name_of);
+                resolve_slot(entry, "sound", &name_of);
+            }
+            if let Some(prompt) = stage
+                .get_mut("prompt")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                resolve_slot(prompt, "sound", &name_of);
             }
         }
     }
@@ -595,6 +613,13 @@ impl<T: EventPoster> LuaRuntime<T> {
             Event::FadeFinish { id, fade_id } => {
                 if let Some(window) = self.get_window(id)? {
                     window.inner_window().on_fade_finished(fade_id)?;
+                }
+            }
+            Event::VolumeFadeFinish { id, fade_id } => {
+                if let Some(audio) = self.get_audio_handle(id)? {
+                    audio.on_volume_fade_finished(fade_id)?;
+                } else if let Some(window) = self.get_window(id)? {
+                    window.inner_window().on_volume_fade_finished(fade_id)?;
                 }
             }
             Event::AudioFinish { id } => {
@@ -1027,15 +1052,43 @@ mod tests {
     /// A simplified, assertable summary of a `LuaRequest` seen by the fake handler.
     #[derive(Debug, Clone, PartialEq)]
     enum Recorded {
-        SpawnImage { media_id: u64 },
-        SpawnVideo { media_id: u64, volume: f32 },
-        SpawnAudio { media_id: u64, volume: f32 },
-        SetAudioVolume { id: ItemId, volume: f32 },
+        SpawnImage {
+            media_id: u64,
+        },
+        SpawnVideo {
+            media_id: u64,
+            volume: f32,
+        },
+        SpawnAudio {
+            media_id: u64,
+            volume: f32,
+        },
+        SetAudioVolume {
+            id: ItemId,
+            volume: f32,
+        },
+        FadeAudioVolume {
+            id: ItemId,
+            volume: f32,
+            duration: u64,
+        },
+        FadeVideoVolume {
+            id: ItemId,
+            volume: f32,
+            duration: u64,
+        },
         SpawnDialog,
         SpawnText,
-        CloseWindow { id: ItemId },
-        OpenLink { url: String },
-        SetTitle { id: ItemId, title: Option<String> },
+        CloseWindow {
+            id: ItemId,
+        },
+        OpenLink {
+            url: String,
+        },
+        SetTitle {
+            id: ItemId,
+            title: Option<String>,
+        },
         Exit,
     }
 
@@ -1210,6 +1263,23 @@ mod tests {
                         WindowAction::SetVideoVolume { tx, .. } => {
                             let _ = tx.send(Ok(()));
                         }
+                        WindowAction::FadeVideoVolume {
+                            tx,
+                            id: fade_id,
+                            opts,
+                        } => {
+                            if let Some(opts) = opts {
+                                recorded.lock().unwrap().push(Recorded::FadeVideoVolume {
+                                    id,
+                                    volume: opts.volume,
+                                    duration: opts.duration,
+                                });
+                            }
+                            let _ = tx.send(Ok(()));
+                            if opts.is_some() {
+                                let _ = event_tx.send(Event::VolumeFadeFinish { id, fade_id });
+                            }
+                        }
                         WindowAction::SetVideoLoop { tx, .. } => {
                             let _ = tx.send(Ok(()));
                         }
@@ -1270,6 +1340,21 @@ mod tests {
                             .lock()
                             .unwrap()
                             .push(Recorded::SetAudioVolume { id, volume });
+                        let _ = tx.send(());
+                    }
+                    AudioAction::FadeVolume {
+                        tx,
+                        id: fade_id,
+                        opts,
+                    } => {
+                        if let Some(opts) = opts {
+                            recorded.lock().unwrap().push(Recorded::FadeAudioVolume {
+                                id,
+                                volume: opts.volume,
+                                duration: opts.duration,
+                            });
+                            let _ = event_tx.send(Event::VolumeFadeFinish { id, fade_id });
+                        }
                         let _ = tx.send(());
                     }
                     AudioAction::Stop { tx } => {
@@ -2169,6 +2254,40 @@ mod tests {
                 );
 
                 harness.run_entrypoint("main.lua").unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn video_window_fade_volume_sends_an_engine_timed_fade() {
+        LocalSet::new()
+            .run_until(async {
+                let mut harness = Harness::new(
+                    &[(
+                        "main.lua",
+                        r#"
+                            local video = {
+                                id = 0,
+                                name = "test",
+                                type = "video",
+                                width = 64,
+                                height = 64,
+                                duration = 1.0,
+                                transparent = false,
+                            }
+                            local window = lewdware.popup.video(video)
+                            assert(window:fade_volume({ volume=0.25, duration=750 }) == true)
+                        "#,
+                    )],
+                    false,
+                );
+
+                harness.run_entrypoint("main.lua").unwrap();
+                assert!(harness.recorded().iter().any(|entry| matches!(
+                    entry,
+                    Recorded::FadeVideoVolume { volume, duration: 750, .. }
+                        if (*volume - 0.25).abs() < f32::EPSILON
+                )));
             })
             .await;
     }
@@ -3229,6 +3348,7 @@ mod tests {
                         owned_tag: None,
                         wallpaper: level.wallpaper,
                         audio: None,
+                        audio_random: false,
                     },
                     events: Events {
                         popup: schedule(level.anchors.popup),
@@ -3240,7 +3360,8 @@ mod tests {
                     },
                     movement: movement(&level.design),
                     mitosis: mitosis(&level.design),
-                    on_enter: None,
+                    on_enter: Default::default(),
+                    prompt: Default::default(),
                 }
             })
             .collect::<Vec<_>>();
@@ -3303,6 +3424,7 @@ mod tests {
                     notifications: vec![shared::behaviour::TextItem {
                         text: "hi".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -3377,6 +3499,7 @@ mod tests {
                     notifications: vec![shared::behaviour::TextItem {
                         text: "hi".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -3418,6 +3541,7 @@ mod tests {
                     notifications: vec![shared::behaviour::TextItem {
                         text: "hi".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -3635,6 +3759,7 @@ mod tests {
                     subliminals: vec![shared::behaviour::TextItem {
                         text: "Obey".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -3677,6 +3802,7 @@ mod tests {
                     subliminals: vec![shared::behaviour::TextItem {
                         text: "Obey".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -3744,6 +3870,7 @@ mod tests {
                     subliminals: vec![shared::behaviour::TextItem {
                         text: "Obey".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -3783,11 +3910,13 @@ mod tests {
 
     const DIALOG_ELEMENT_CAPTURE_WRAP: &str = r#"
         DIALOG_TEXT = nil
+        DIALOG_COUNTDOWN = nil
         DIALOG_LABEL = nil
         local real = lewdware.popup.dialog
         lewdware.popup.dialog = function(opts)
             for _, el in ipairs(opts.elements) do
-                if el.type == "text" then DIALOG_TEXT = el.text end
+                if el.type == "text" and el.bold then DIALOG_TEXT = el.text end
+                if el.id == "countdown" then DIALOG_COUNTDOWN = el.text end
                 if el.type == "buttons" then DIALOG_LABEL = el.options[1].label end
             end
             return real(opts)
@@ -3891,6 +4020,7 @@ mod tests {
                     prompts: vec![shared::behaviour::TextItem {
                         text: "Well?".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -3971,6 +4101,7 @@ mod tests {
                     prompts: vec![shared::behaviour::TextItem {
                         text: "Well?".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     prompt_settings: shared::behaviour::PromptSettings {
                         submit_label: Some("Confirm".to_string()),
@@ -3999,6 +4130,10 @@ mod tests {
 
                 assert_eq!(harness.recorded(), vec![Recorded::SpawnDialog]);
                 assert_eq!(harness.eval_string("DIALOG_TEXT"), "Well?");
+                assert_eq!(
+                    harness.eval_string("DIALOG_COUNTDOWN"),
+                    "Time remaining: 15 seconds"
+                );
                 assert_eq!(harness.eval_string("DIALOG_LABEL"), "Confirm");
             })
             .await;
@@ -4012,6 +4147,7 @@ mod tests {
                     prompts: vec![shared::behaviour::TextItem {
                         text: "Well?".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -4047,11 +4183,8 @@ mod tests {
                     prompts: vec![shared::behaviour::TextItem {
                         text: "Well?".into(),
                         tags: vec![],
-                    }],
-                    prompt_settings: shared::behaviour::PromptSettings {
                         timeout_seconds: Some(0.2),
-                        ..Default::default()
-                    },
+                    }],
                     ..Default::default()
                 };
                 let experience = experience_with_baseline(
@@ -4088,6 +4221,159 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn experience_scales_an_automatic_prompt_timeout() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    prompts: vec![shared::behaviour::TextItem {
+                        text: "Well?".into(),
+                        tags: vec![],
+                        timeout_seconds: None,
+                    }],
+                    ..Default::default()
+                };
+                let mut experience = experience_with_baseline(
+                    FrequencyAnchors {
+                        prompt: Some(10.0),
+                        ..Default::default()
+                    },
+                    DesignValues::default(),
+                );
+                // A short prompt's automatic 15-second floor becomes 1.5 seconds at 0.1×.
+                experience.timeline.stages[0].prompt.timeout_multiplier = 0.1;
+                let mut config = isolated_experience_process_config();
+                config.insert("prompts_enabled".into(), OptionValue::Boolean(true));
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(10_100)).await;
+                assert_eq!(harness.recorded(), vec![Recorded::SpawnDialog]);
+                harness.advance(Duration::from_millis(1_500)).await;
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnDialog,
+                        Recorded::CloseWindow { id: ItemId(0) },
+                    ]
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn experience_can_disable_per_prompt_timeouts_for_a_stage() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    prompts: vec![shared::behaviour::TextItem {
+                        text: "Well?".into(),
+                        tags: vec![],
+                        timeout_seconds: Some(0.2),
+                    }],
+                    ..Default::default()
+                };
+                let mut experience = experience_with_baseline(
+                    FrequencyAnchors {
+                        prompt: Some(10.0),
+                        ..Default::default()
+                    },
+                    DesignValues::default(),
+                );
+                experience.timeline.stages[0].prompt.timeouts_enabled = false;
+                let mut config = isolated_experience_process_config();
+                config.insert("prompts_enabled".into(), OptionValue::Boolean(true));
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                assert_eq!(
+                    harness.eval_number("require('timeline').prompt().timeouts_enabled and 1 or 0"),
+                    0.0
+                );
+                harness.advance(Duration::from_millis(10_500)).await;
+
+                assert_eq!(harness.recorded(), vec![Recorded::SpawnDialog]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn experience_prompt_timeout_combines_popup_and_sound_consequences() {
+        LocalSet::new()
+            .run_until(async {
+                const MEDIA: &[(&str, &[&str])] = &[("popup.avif", &[]), ("wrong.ogg", &[])];
+                let content = Content {
+                    prompts: vec![shared::behaviour::TextItem {
+                        text: "Well?".into(),
+                        tags: vec![],
+                        timeout_seconds: Some(0.2),
+                    }],
+                    ..Default::default()
+                };
+                let mut experience = experience_with_baseline(
+                    FrequencyAnchors {
+                        prompt: Some(10.0),
+                        ..Default::default()
+                    },
+                    DesignValues::default(),
+                );
+                experience.timeline.stages[0].prompt.popup_burst = Some(2);
+                experience.timeline.stages[0].prompt.sound = Some(2);
+                let mut config = isolated_experience_process_config();
+                config.insert("prompts_enabled".into(), OptionValue::Boolean(true));
+                config.insert("popup_audio_enabled".into(), OptionValue::Boolean(true));
+                config.insert("images_enabled".into(), OptionValue::Boolean(true));
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture_with_data(MEDIA, None),
+                    content,
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(10_300)).await;
+
+                assert_eq!(
+                    harness
+                        .recorded()
+                        .iter()
+                        .filter(|entry| matches!(entry, Recorded::SpawnImage { media_id: 1 }))
+                        .count(),
+                    2
+                );
+                assert!(
+                    harness
+                        .recorded()
+                        .iter()
+                        .any(|entry| matches!(entry, Recorded::SpawnAudio { media_id: 2, .. }))
+                );
+                assert!(
+                    harness
+                        .recorded()
+                        .iter()
+                        .any(|entry| matches!(entry, Recorded::CloseWindow { id: ItemId(0) }))
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn wrong_answer_popup_effect_is_a_noop_when_popups_are_disabled() {
         LocalSet::new()
             .run_until(async {
@@ -4095,6 +4381,7 @@ mod tests {
                     prompts: vec![shared::behaviour::TextItem {
                         text: "Well?".into(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -4137,6 +4424,7 @@ mod tests {
                 prompts: vec![shared::behaviour::TextItem {
                     text: "Well?".to_string(),
                     tags: vec![],
+                    timeout_seconds: None,
                 }],
                 ..Default::default()
             };
@@ -4260,6 +4548,7 @@ mod tests {
                     prompts: vec![shared::behaviour::TextItem {
                         text: "Well?".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -4727,6 +5016,7 @@ mod tests {
                     captions: vec![shared::behaviour::TextItem {
                         text: "Obey.".to_string(),
                         tags: vec!["red".to_string()],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -4975,6 +5265,7 @@ mod tests {
                         captions: vec![shared::behaviour::TextItem {
                             text: "Obey.".to_string(),
                             tags: vec!["nonexistent".to_string()],
+                            timeout_seconds: None,
                         }],
                         ..Default::default()
                     },
@@ -5008,6 +5299,7 @@ mod tests {
                     captions: vec![shared::behaviour::TextItem {
                         text: "Obey.".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -5046,6 +5338,7 @@ mod tests {
                     captions: vec![shared::behaviour::TextItem {
                         text: "kinky".to_string(),
                         tags: vec!["kinky".to_string()],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -5085,10 +5378,12 @@ mod tests {
                         shared::behaviour::TextItem {
                             text: "untagged".to_string(),
                             tags: vec![],
+                            timeout_seconds: None,
                         },
                         shared::behaviour::TextItem {
                             text: "kinky".to_string(),
                             tags: vec!["kinky".to_string()],
+                            timeout_seconds: None,
                         },
                     ],
                     ..Default::default()
@@ -5161,10 +5456,12 @@ mod tests {
                         shared::behaviour::TextItem {
                             text: "vanilla".to_string(),
                             tags: vec![],
+                            timeout_seconds: None,
                         },
                         shared::behaviour::TextItem {
                             text: "kinky".to_string(),
                             tags: vec!["kinky".to_string()],
+                            timeout_seconds: None,
                         },
                     ],
                     ..Default::default()
@@ -5208,6 +5505,7 @@ mod tests {
                     subliminals: vec![shared::behaviour::TextItem {
                         text: "obey".to_string(),
                         tags: vec!["hypno".to_string()],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -5377,6 +5675,7 @@ mod tests {
                     notifications: vec![shared::behaviour::TextItem {
                         text: "hi".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -5422,6 +5721,7 @@ mod tests {
                     notifications: vec![shared::behaviour::TextItem {
                         text: "hi".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     }],
                     ..Default::default()
                 };
@@ -5607,7 +5907,8 @@ mod tests {
                     },
                     movement: None,
                     mitosis: None,
-                    on_enter: None,
+                    on_enter: Default::default(),
+                    prompt: Default::default(),
                 };
                 let second = Stage {
                     id: "second".into(),
@@ -5620,7 +5921,8 @@ mod tests {
                     },
                     movement: None,
                     mitosis: None,
-                    on_enter: None,
+                    on_enter: Default::default(),
+                    prompt: Default::default(),
                 };
                 let experience = Experience {
                     timeline: Timeline {
@@ -6633,10 +6935,21 @@ mod tests {
                     })
                     .collect();
                 assert_eq!(audio, vec![1, 2]);
-                assert!(harness.recorded().iter().any(|entry| matches!(
-                    entry,
-                    Recorded::SetAudioVolume { volume, .. } if *volume > 0.0 && *volume < 1.0
-                )));
+                assert_eq!(
+                    harness
+                        .recorded()
+                        .iter()
+                        .filter_map(|entry| match entry {
+                            Recorded::FadeAudioVolume {
+                                volume, duration, ..
+                            } => {
+                                Some((*volume, *duration))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                    vec![(0.0, 1000), (1.0, 1000)]
+                );
                 assert_eq!(
                     harness.eval_string("require('timeline').phase()"),
                     "transition"

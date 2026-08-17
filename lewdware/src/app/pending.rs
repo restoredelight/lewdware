@@ -6,7 +6,7 @@ use std::{
 use crate::{
     audio::AudioPlayer,
     error::{LewdwareError, Result},
-    lua::{DialogElement, FadeOpts, MoveOpts, TextStyle},
+    lua::{DialogElement, FadeOpts, MoveOpts, TextStyle, VolumeFadeOpts},
     media::{ImageData, MediaRequirement, RequirementId, ResolvedMedia},
     video::VideoDecoder,
     window::WindowOpts,
@@ -90,6 +90,7 @@ pub(super) enum PendingItemOpts {
         loop_video: Arc<AtomicBool>,
         paused: bool,
         volume: f32,
+        pending_volume_fade: Option<(u64, VolumeFadeOpts)>,
     },
     Dialog {
         window: PendingWindowOpts,
@@ -104,6 +105,7 @@ pub(super) enum PendingItemOpts {
         audio: RequirementId,
         paused: bool,
         volume: f32,
+        pending_volume_fade: Option<(u64, VolumeFadeOpts)>,
     },
 }
 
@@ -193,6 +195,7 @@ mod tests {
                 paused: false,
                 volume: 1.0,
                 audio: RequirementId(99),
+                pending_volume_fade: None,
             },
             requirements,
         }

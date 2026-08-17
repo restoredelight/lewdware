@@ -4074,8 +4074,8 @@ fn delete_unreferenced_scenery(
             "SELECT media.id FROM media
              JOIN media_tags ON media_tags.media_id = media.id
              JOIN tags ON tags.id = media_tags.tag_id
-             WHERE media.id = ? AND media.deleted = 0 AND tags.name = ?",
-            params![media, tags::NON_POPUP_TAG],
+             WHERE media.id = ? AND media.deleted = 0 AND tags.name IN (?, ?)",
+            params![media, tags::NON_POPUP_TAG, tags::EXPLICIT_ONLY_TAG],
             |row| row.get(0),
         )
         .optional()?;
@@ -4111,7 +4111,7 @@ fn fill_media_slot_tx(
         bail!("That media file is no longer in the pack");
     }
     if new_to_pack {
-        apply_tag(tx, media_id, tags::NON_POPUP_TAG)?;
+        apply_tag(tx, media_id, tags::EXPLICIT_ONLY_TAG)?;
     }
 
     let mut behaviour = read_behaviour(tx)?;
@@ -4140,6 +4140,8 @@ fn slot_label(slot: &MediaSlot) -> &'static str {
         MediaSlot::Wallpaper | MediaSlot::StageWallpaper { .. } => "Set wallpaper",
         MediaSlot::Splash => "Set splash",
         MediaSlot::StageAudio { .. } => "Set stage audio",
+        MediaSlot::StageEntrySplash { .. } => "Set stage splash",
+        MediaSlot::StageEntrySound { .. } | MediaSlot::StagePromptSound { .. } => "Set stage sound",
     }
 }
 
@@ -4169,6 +4171,39 @@ fn slot_value(behaviour: &Behaviour, slot: &MediaSlot) -> Option<u64> {
                 .find(|candidate| &candidate.id == stage)?
                 .content
                 .audio
+        }
+        MediaSlot::StageEntrySplash { stage } => {
+            behaviour
+                .experience
+                .as_ref()?
+                .timeline
+                .stages
+                .iter()
+                .find(|candidate| &candidate.id == stage)?
+                .on_enter
+                .splash
+        }
+        MediaSlot::StageEntrySound { stage } => {
+            behaviour
+                .experience
+                .as_ref()?
+                .timeline
+                .stages
+                .iter()
+                .find(|candidate| &candidate.id == stage)?
+                .on_enter
+                .sound
+        }
+        MediaSlot::StagePromptSound { stage } => {
+            behaviour
+                .experience
+                .as_ref()?
+                .timeline
+                .stages
+                .iter()
+                .find(|candidate| &candidate.id == stage)?
+                .prompt
+                .sound
         }
     }
 }
@@ -4202,7 +4237,44 @@ fn set_slot(behaviour: &mut Behaviour, slot: &MediaSlot, media: Option<u64>) -> 
             }) else {
                 return false;
             };
+            target.content.audio_random = false;
             &mut target.content.audio
+        }
+        MediaSlot::StageEntrySplash { stage } => {
+            let Some(target) = behaviour.experience.as_mut().and_then(|experience| {
+                experience
+                    .timeline
+                    .stages
+                    .iter_mut()
+                    .find(|candidate| &candidate.id == stage)
+            }) else {
+                return false;
+            };
+            &mut target.on_enter.splash
+        }
+        MediaSlot::StageEntrySound { stage } => {
+            let Some(target) = behaviour.experience.as_mut().and_then(|experience| {
+                experience
+                    .timeline
+                    .stages
+                    .iter_mut()
+                    .find(|candidate| &candidate.id == stage)
+            }) else {
+                return false;
+            };
+            &mut target.on_enter.sound
+        }
+        MediaSlot::StagePromptSound { stage } => {
+            let Some(target) = behaviour.experience.as_mut().and_then(|experience| {
+                experience
+                    .timeline
+                    .stages
+                    .iter_mut()
+                    .find(|candidate| &candidate.id == stage)
+            }) else {
+                return false;
+            };
+            &mut target.prompt.sound
         }
     };
     *target = media;
@@ -5503,7 +5575,10 @@ mod tests {
         pack.redo().await.unwrap();
         assert_eq!(pack.get_files().await.unwrap()[0].id, id);
         assert_eq!(stored().await.content.wallpaper, Some(id));
-        assert_eq!(pack.get_tags(id).await.unwrap(), vec![tags::NON_POPUP_TAG]);
+        assert_eq!(
+            pack.get_tags(id).await.unwrap(),
+            vec![tags::EXPLICIT_ONLY_TAG]
+        );
     }
 
     /// The same fold when the file was already in the pack: nothing new to make visible, but the
@@ -5659,7 +5734,7 @@ mod tests {
             .await
             .unwrap();
         let slot_media = behaviour.content.wallpaper.unwrap();
-        assert!(pack.get_tags(scenery).await.unwrap() == vec![tags::NON_POPUP_TAG]);
+        assert!(pack.get_tags(scenery).await.unwrap() == vec![tags::EXPLICIT_ONLY_TAG]);
 
         let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
         assert_eq!(behaviour.content.wallpaper, None);
@@ -5671,12 +5746,12 @@ mod tests {
             .iter()
             .any(|f| f.id == scenery));
 
-        // Same again, but the author has said "show as popup": now it's real content and stays.
+        // Same again with media that already belonged to the pack: selecting it explicitly does
+        // not change its pool membership, so it remains real content when the slot is cleared.
         let content = insert_staged_audio(&pack, b"content").await;
-        pack.fill_media_slot(MediaSlot::Splash, content, true)
+        pack.fill_media_slot(MediaSlot::Splash, content, false)
             .await
             .unwrap();
-        pack.set_shown_as_popup(content, true).await.unwrap();
         assert!(pack.get_tags(content).await.unwrap().is_empty());
 
         let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Splash).await.unwrap();
@@ -5766,10 +5841,9 @@ mod tests {
 
         // Un-marked media is real content, whatever displaced it.
         let ordinary = insert_staged_audio(&pack, b"real content").await;
-        pack.fill_media_slot(MediaSlot::Splash, ordinary, true)
+        pack.fill_media_slot(MediaSlot::Splash, ordinary, false)
             .await
             .unwrap();
-        pack.set_shown_as_popup(ordinary, true).await.unwrap();
         let last = insert_staged_audio(&pack, b"final splash").await;
         let (_, deleted) = pack
             .fill_media_slot(MediaSlot::Splash, last, true)
@@ -5913,7 +5987,8 @@ mod tests {
                         events: Events::default(),
                         movement: None,
                         mitosis: None,
-                        on_enter: None,
+                        on_enter: Default::default(),
+                        prompt: Default::default(),
                     }],
                     transitions: vec![],
                 },
@@ -6076,11 +6151,13 @@ mod tests {
                 owned_tag: None,
                 wallpaper: None,
                 audio: None,
+                audio_random: false,
             },
             events: Events::default(),
             movement: None,
             mitosis: None,
-            on_enter: None,
+            on_enter: Default::default(),
+            prompt: Default::default(),
         };
         pack.replace_behaviour(
             Behaviour {
@@ -6215,7 +6292,8 @@ mod tests {
             events: Events::default(),
             movement: None,
             mitosis: None,
-            on_enter: None,
+            on_enter: Default::default(),
+            prompt: Default::default(),
         };
         let behaviour = Behaviour {
             experience: Some(Experience {
@@ -6345,7 +6423,8 @@ mod tests {
                         events: Events::default(),
                         movement: None,
                         mitosis: None,
-                        on_enter: None,
+                        on_enter: Default::default(),
+                        prompt: Default::default(),
                     }],
                     transitions: vec![],
                 },
@@ -6409,7 +6488,8 @@ mod tests {
             events: Events::default(),
             movement: None,
             mitosis: None,
-            on_enter: None,
+            on_enter: Default::default(),
+            prompt: Default::default(),
         };
         // Enough captions that the blob is comfortably larger than one stage row, so a
         // whole-document write would be unmistakable in the numbers below.
@@ -6419,6 +6499,7 @@ mod tests {
                     .map(|index| TextItem {
                         text: format!("Caption number {index}, padded out to have some length."),
                         tags: vec![],
+                        timeout_seconds: None,
                     })
                     .collect(),
                 ..Default::default()
@@ -6503,7 +6584,8 @@ mod tests {
             events: Events::default(),
             movement: None,
             mitosis: None,
-            on_enter: None,
+            on_enter: Default::default(),
+            prompt: Default::default(),
         };
         let behaviour = Behaviour {
             experience: Some(Experience {
@@ -6651,6 +6733,7 @@ mod tests {
                 captions: vec![TextItem {
                     text: "Obey.".to_string(),
                     tags: vec!["source".to_string(), "target".to_string()],
+                    timeout_seconds: None,
                 }],
                 ..Default::default()
             },
@@ -6690,6 +6773,7 @@ mod tests {
                 captions: vec![TextItem {
                     text: "Obey.".to_string(),
                     tags: vec!["old".to_string()],
+                    timeout_seconds: None,
                 }],
                 web_links: vec![WebLink {
                     url: "https://example.com".to_string(),
@@ -6709,11 +6793,13 @@ mod tests {
                             owned_tag: None,
                             wallpaper: None,
                             audio: None,
+                            audio_random: false,
                         },
                         events: Events::default(),
                         movement: None,
                         mitosis: None,
-                        on_enter: None,
+                        on_enter: Default::default(),
+                        prompt: Default::default(),
                     }],
                     transitions: vec![],
                 },
@@ -6754,6 +6840,7 @@ mod tests {
                     .map(|index| TextItem {
                         text: format!("Caption number {index}, padded out to have some length."),
                         tags: vec![],
+                        timeout_seconds: None,
                     })
                     .collect(),
                 ..Default::default()
@@ -6809,6 +6896,7 @@ mod tests {
         behaviour.content.captions = vec![TextItem {
             text: "Obey.".to_string(),
             tags: vec!["old".to_string()],
+            timeout_seconds: None,
         }];
         pack.replace_behaviour(behaviour.clone(), "Seed behaviour".to_string())
             .await
@@ -6935,6 +7023,7 @@ mod tests {
         before.content.captions = vec![TextItem {
             text: "Obey.".to_string(),
             tags: vec!["source".into()],
+            timeout_seconds: None,
         }];
         pack.replace_behaviour(before.clone(), "Seed behaviour".to_string())
             .await
@@ -6988,6 +7077,7 @@ mod tests {
         before.content.captions = vec![TextItem {
             text: "Obey.".to_string(),
             tags: vec!["restore-me".into()],
+            timeout_seconds: None,
         }];
         pack.replace_behaviour(before.clone(), "Seed behaviour".to_string())
             .await
@@ -7070,6 +7160,7 @@ mod tests {
         behaviour.content.captions.push(TextItem {
             text: "Obey.".to_string(),
             tags: vec!["kinky".to_string()],
+            timeout_seconds: None,
         });
         behaviour.content.web_links.push(WebLink {
             url: "https://duckduckgo.com/?q=".to_string(),
@@ -7099,7 +7190,8 @@ mod tests {
                         },
                         movement: None,
                         mitosis: None,
-                        on_enter: None,
+                        on_enter: Default::default(),
+                        prompt: Default::default(),
                     },
                     Stage {
                         id: "stage-2".to_string(),
@@ -7110,6 +7202,7 @@ mod tests {
                             owned_tag: None,
                             wallpaper: None,
                             audio: None,
+                            audio_random: false,
                         },
                         events: Events {
                             popup: Some(EventSchedule {
@@ -7121,7 +7214,8 @@ mod tests {
                         },
                         movement: None,
                         mitosis: None,
-                        on_enter: None,
+                        on_enter: Default::default(),
+                        prompt: Default::default(),
                     },
                 ],
                 transitions: vec![Transition {

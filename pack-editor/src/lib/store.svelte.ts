@@ -1,5 +1,5 @@
 import { behaviourTags } from './tagReferences.js';
-import { NON_POPUP_TAG, POPUP_AUDIO_TAG, withoutManagedTags } from './tags.js';
+import { EXPLICIT_ONLY_TAG, NON_POPUP_TAG, POPUP_AUDIO_TAG, withoutManagedTags } from './tags.js';
 import type {
 	Behaviour,
 	ConversionWarning,
@@ -219,10 +219,13 @@ class AppStore {
 		const belongs =
 			file != null &&
 			(view === 'all-media' ||
-				(view === 'audio' && file.file_info.type === 'audio') ||
+				(view === 'audio' &&
+					file.file_info.type === 'audio' &&
+					!file.tags.includes(EXPLICIT_ONLY_TAG)) ||
 				(view === 'popups' &&
 					file.file_info.type !== 'audio' &&
-					!file.tags.includes(NON_POPUP_TAG)));
+					!file.tags.includes(NON_POPUP_TAG) &&
+					!file.tags.includes(EXPLICIT_ONLY_TAG)));
 		if (!belongs) return false;
 
 		this.setActiveView(view);
@@ -357,11 +360,18 @@ class AppStore {
 	 */
 	popupFiles = $derived(
 		this.files.filter(
-			(file) => file.file_info.type !== 'audio' && !file.tags.includes(NON_POPUP_TAG)
+			(file) =>
+				file.file_info.type !== 'audio' &&
+				!file.tags.includes(NON_POPUP_TAG) &&
+				!file.tags.includes(EXPLICIT_ONLY_TAG)
 		)
 	);
 	/** The Audio tab's universe. Both roles: the sections split it, the tab owns all of it. */
-	audioFiles = $derived(this.files.filter((file) => file.file_info.type === 'audio'));
+	audioFiles = $derived(
+		this.files.filter(
+			(file) => file.file_info.type === 'audio' && !file.tags.includes(EXPLICIT_ONLY_TAG)
+		)
+	);
 	/** Whichever of the three the active media tab lists, before its own filters and sort. */
 	mediaScopeFiles = $derived.by(() => {
 		if (this.mediaView === 'popups') return this.popupFiles;
@@ -585,7 +595,9 @@ class AppStore {
 	}
 
 	addFile(file: MediaFile, tracked = false) {
-		this.files.push(file);
+		const existing = this.files.findIndex((item) => item.id === file.id);
+		if (existing === -1) this.files.push(file);
+		else this.files[existing] = file;
 		// `allTags` is the author-facing suggestion list, so a file arriving with a managed marker
 		// (slot media, imported subliminals) must not put that marker in it -- see ./tags.ts.
 		const newTags = withoutManagedTags(file.tags).filter((t) => !this.allTags.includes(t));

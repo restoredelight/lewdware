@@ -272,12 +272,34 @@ impl Popup {
         true
     }
 
-    pub fn set_volume(&self, volume: f32) -> bool {
-        let Layer::Video(layer) = &self.layer else {
+    pub fn set_volume(&mut self, volume: f32) -> bool {
+        let Layer::Video(layer) = &mut self.layer else {
             return false;
         };
         layer.set_volume(volume);
         true
+    }
+
+    pub fn start_volume_fade(&mut self, id: u64, opts: Option<crate::lua::VolumeFadeOpts>) -> bool {
+        let Layer::Video(layer) = &mut self.layer else {
+            return false;
+        };
+        layer.start_volume_fade(id, opts);
+        true
+    }
+
+    pub fn update_volume_fade(&mut self) -> Option<u64> {
+        let Layer::Video(layer) = &mut self.layer else {
+            return None;
+        };
+        layer.update_volume_fade()
+    }
+
+    pub fn is_fading_volume(&self) -> bool {
+        let Layer::Video(layer) = &self.layer else {
+            return false;
+        };
+        layer.is_fading_volume()
     }
 
     pub fn set_loop(&self, loop_video: bool) -> bool {

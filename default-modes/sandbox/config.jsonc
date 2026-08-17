@@ -416,35 +416,40 @@
           "step": 1,
           "show_when": { "prompts_enabled": true }
         },
-        "prompt_timeout": {
-          "label": "Close prompt after (seconds)",
-          "description": "Leave off to keep prompts open until the text is typed correctly",
-          "type": "number",
-          "optional": true,
-          "enabled_by_default": false,
-          "default": 60,
-          "min": 1,
-          "step": 1,
+        "prompt_timeouts_enabled": {
+          "label": "Enforce prompt deadlines",
+          "description": "Require each prompt to be completed within its explicit or automatic time limit",
+          "type": "boolean",
+          "default": true,
           "show_when": { "prompts_enabled": true }
         },
+        "prompt_timeout_multiplier": {
+          "label": "Time allowance",
+          "description": "Multiplies every prompt's explicit or automatic time limit",
+          "type": "number",
+          "default": 1,
+          "min": 0.1,
+          "max": 3,
+          "step": 0.1,
+          "slider": true,
+          "show_when": { "prompts_enabled": true, "prompt_timeouts_enabled": true }
+        },
         "prompt_wrong_answer": {
-          "label": "On a wrong answer",
+          "label": "On a wrong answer or timeout",
           "type": "enum",
           "default": "none",
           "values": {
             "none": { "label": "Clear the answer" },
-            "popup_burst": { "label": "Spawn a popup burst" },
-            "add_time": { "label": "Add time" },
-            "sound": { "label": "Play a popup sound" }
+            "popup_burst": { "label": "Spawn popups" }
           },
           "show_when": { "prompts_enabled": true }
         },
         "prompt_wrong_answer_value": {
-          "label": "Burst count / seconds added",
+          "label": "Number of popups",
           "type": "integer",
           "default": 5,
           "min": 1,
-          "show_when": { "prompts_enabled": true }
+          "show_when": { "prompts_enabled": true, "prompt_wrong_answer": "popup_burst" }
         }
       }
     },

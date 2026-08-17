@@ -447,10 +447,26 @@ impl VideoDecoder {
         self.paused = false;
     }
 
-    pub fn set_volume(&self, volume: f32) {
-        if let Some(audio_player) = &self.audio_player {
+    pub fn set_volume(&mut self, volume: f32) {
+        if let Some(audio_player) = &mut self.audio_player {
             audio_player.set_volume(volume);
         }
+    }
+
+    pub fn start_volume_fade(&mut self, id: u64, opts: Option<crate::lua::VolumeFadeOpts>) {
+        if let Some(audio_player) = &mut self.audio_player {
+            audio_player.start_volume_fade(id, opts);
+        }
+    }
+
+    pub fn update_volume_fade(&mut self) -> Option<u64> {
+        self.audio_player.as_mut()?.update_volume_fade()
+    }
+
+    pub fn is_fading_volume(&self) -> bool {
+        self.audio_player
+            .as_ref()
+            .is_some_and(|player| player.is_fading_volume())
     }
 
     pub fn set_loop(&self, loop_video: bool) {

@@ -53,10 +53,10 @@ function M.reset_wallpaper()
 	lewdware.wallpaper.reset()
 end
 
-function M.show_splash()
+function M.show_splash(name_override)
 	if not lewdware.config.splash_enabled then return end
 
-	local name = content().splash
+	local name = name_override or content().splash
 	if not name then return end -- opt-in only: no splash set, no feature
 
 	-- Videos count as splashes, not just stills. Edgeware's `loading_splash` is very often an

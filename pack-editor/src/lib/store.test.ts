@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { store } from './store.svelte.js';
-import { NON_POPUP_TAG, POPUP_AUDIO_TAG, SUBLIMINAL_TAG } from './tags.js';
+import { EXPLICIT_ONLY_TAG, NON_POPUP_TAG, POPUP_AUDIO_TAG, SUBLIMINAL_TAG } from './tags.js';
 import type { Behaviour, MediaFile } from './types.js';
 
 const file = (id: number, file_name: string, tags: string[] = []): MediaFile =>
@@ -45,6 +45,15 @@ describe('the media tabs’ file lists', () => {
 		expect(store.files.map((f) => f.id)).toEqual([1, 2]);
 	});
 
+	it('reconciles a file when an import result follows its added event', () => {
+		store.addFile(file(1, 'spiral.gif'));
+		store.addFile(file(1, 'spiral.gif', [SUBLIMINAL_TAG, NON_POPUP_TAG]), true);
+
+		expect(store.files).toHaveLength(1);
+		expect(store.files[0].tags).toEqual([SUBLIMINAL_TAG, NON_POPUP_TAG]);
+		expect(store.popupFiles).toEqual([]);
+	});
+
 	it('still applies the tab’s own filters on top', () => {
 		store.files = [
 			file(1, 'alpha.png'),
@@ -67,6 +76,21 @@ describe('the media tabs’ file lists', () => {
 		expect(store.filteredFiles.map((f) => f.id)).toEqual([1]);
 		store.setActiveView('audio');
 		expect(store.filteredFiles.map((f) => f.id)).toEqual([3, 4]);
+		store.setActiveView('all-media');
+		expect(store.filteredFiles.map((f) => f.id)).toEqual([1, 2, 3, 4]);
+	});
+
+	it('shows explicit-only media in All media but not the role tabs', () => {
+		store.files = [
+			file(1, 'popup.png'),
+			file(2, 'stage-splash.png', [EXPLICIT_ONLY_TAG]),
+			audio(3, 'music.ogg'),
+			audio(4, 'stage-cue.ogg', [EXPLICIT_ONLY_TAG])
+		];
+
+		expect(store.filteredFiles.map((f) => f.id)).toEqual([1]);
+		store.setActiveView('audio');
+		expect(store.filteredFiles.map((f) => f.id)).toEqual([3]);
 		store.setActiveView('all-media');
 		expect(store.filteredFiles.map((f) => f.id)).toEqual([1, 2, 3, 4]);
 	});

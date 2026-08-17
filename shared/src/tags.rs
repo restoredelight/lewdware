@@ -30,6 +30,11 @@ pub const SUBLIMINAL_TAG: &str = "__lewdware-subliminal";
 /// Marks audio that plays when a popup spawns. Audio without this marker is background audio.
 pub const POPUP_AUDIO_TAG: &str = "__lewdware-audio-popup";
 
+/// Media imported through an explicit-reference input rather than into a random pool. These files
+/// remain visible in All media and in explicit pickers, but the built-in modes never draw them at
+/// random and the role-oriented Popups/Audio tabs do not present them as pool members.
+pub const EXPLICIT_ONLY_TAG: &str = "__lewdware-explicit-only";
+
 /// Whether `tag` is in the reserved namespace -- the one check every tag-writing command and
 /// every tag-listing query needs.
 pub fn is_managed(tag: &str) -> bool {
@@ -60,6 +65,7 @@ mod tests {
         assert!(is_managed(NON_POPUP_TAG));
         assert!(is_managed(SUBLIMINAL_TAG));
         assert!(is_managed(POPUP_AUDIO_TAG));
+        assert!(is_managed(EXPLICIT_ONLY_TAG));
         assert!(is_managed("__lewdware-something-later"));
         assert!(!is_managed("wallpaper"));
         assert!(!is_managed("__lewdware_content"));

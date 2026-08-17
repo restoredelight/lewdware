@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { TextItem } from './types.js';
+	import type { Snippet } from 'svelte';
+	import { tick } from 'svelte';
 	import TagPicker from './TagPicker.svelte';
 	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
 	import { store } from './store.svelte.js';
@@ -8,17 +10,20 @@
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import { Icon, Plus } from 'svelte-hero-icons';
+	import Field from '$ui/Field.svelte';
+	import { automaticPromptTimeout } from './promptTimeout.js';
 
 	type Props = {
 		title: string;
 		description?: string;
+		settings?: Snippet;
 		// A key into behaviour content rather than the array itself: this editor mutates the
 		// pool, and mutating an unbound prop trips Svelte's ownership warning.
 		poolKey: 'captions' | 'prompts' | 'notifications' | 'subliminals';
 		idPrefix: string;
 	};
 
-	let { title, description, poolKey, idPrefix }: Props = $props();
+	let { title, description, settings, poolKey, idPrefix }: Props = $props();
 	const pool = $derived(store.behaviour!.content[poolKey]);
 	// The pool's address in the behaviour document. Adding and removing entries move every later
 	// index, so those edits replace the array whole rather than addressing one entry.
@@ -26,10 +31,15 @@
 	// "Caption", "Prompt" -- what the undo list should call one of these.
 	const noun = $derived(title.replace(/s$/, ''));
 	let removing = $state<TextItem | null>(null);
+	let listElement = $state<HTMLDivElement>();
 
-	function addItem() {
+	async function addItem() {
 		pool.push({ text: '', tags: [] });
 		commitBehaviourEdit(poolPath, `Add ${noun.toLowerCase()}`);
+		await tick();
+		const item = listElement?.lastElementChild;
+		item?.scrollIntoView({ block: 'center' });
+		item?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
 	}
 
 	function removeItem(index: number) {
@@ -55,7 +65,25 @@
 		<p class="text-muted text-xs">{description}</p>
 	{/if}
 
-	<div class="flex flex-col gap-2">
+	{#if pool.length > 0}
+		<div
+			class="border-border bg-bg sticky top-0 z-10 flex items-center justify-between gap-3 border-y py-2"
+		>
+			<span class="ui-metadata">{pool.length} {pool.length === 1 ? 'item' : 'items'}</span>
+			<Button size="compact" onclick={addItem}
+				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add {noun.toLowerCase()}</Button
+			>
+		</div>
+	{/if}
+
+	{#if settings}
+		<Card class="flex flex-col gap-3 p-3">
+			<h3 class="ui-section-title">Settings</h3>
+			{@render settings()}
+		</Card>
+	{/if}
+
+	<div class="flex flex-col gap-2" bind:this={listElement}>
 		{#if pool.length === 0}
 			<EmptyState
 				title={`No ${title.toLowerCase()} yet`}
@@ -96,6 +124,26 @@
 					path={`${poolPath}.${index}.tags`}
 					onchange={(tags) => (item.tags = tags)}
 				/>
+				{#if poolKey === 'prompts'}
+					<Field
+						label="Time limit"
+						description={item.timeout_seconds == null
+							? `Automatic: ${automaticPromptTimeout(item.text)} seconds based on this prompt's length.`
+							: 'Clear this value to use the automatic limit based on prompt length.'}
+						type="number"
+						placeholder="Automatic"
+						suffix="s"
+						min={1}
+						step={1}
+						value={item.timeout_seconds ?? ''}
+						oninput={(value) => {
+							const seconds = Number(value);
+							if (value && Number.isFinite(seconds)) item.timeout_seconds = seconds;
+							else delete item.timeout_seconds;
+							editBehaviourField(`${poolPath}.${index}.timeout_seconds`, 'Edit prompt time limit');
+						}}
+					/>
+				{/if}
 			</Card>
 		{/each}
 	</div>

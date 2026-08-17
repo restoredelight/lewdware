@@ -60,6 +60,9 @@
 		try {
 			const added = await api.addSubliminalFilesDialog();
 			if (added === null || added.length === 0) return;
+			// New imports also arrive through `upload:added`, while files that were already in the
+			// pack do not. Reconcile both paths with the post-tagging values returned by the command.
+			for (const file of added) store.addFile(file, true);
 			history.record({
 				label: added.length === 1 ? 'Add subliminal' : `Add ${added.length} subliminals`,
 				storageBytes: added.reduce((total, file) => total + file.size, 0)

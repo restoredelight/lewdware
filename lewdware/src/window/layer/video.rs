@@ -166,8 +166,19 @@ impl VideoLayer {
         self.decoder.play();
     }
 
-    pub fn set_volume(&self, volume: f32) {
+    pub fn set_volume(&mut self, volume: f32) {
         self.decoder.set_volume(volume);
+    }
+
+    pub fn start_volume_fade(&mut self, id: u64, opts: Option<crate::lua::VolumeFadeOpts>) {
+        self.decoder.start_volume_fade(id, opts);
+    }
+
+    pub fn update_volume_fade(&mut self) -> Option<u64> {
+        self.decoder.update_volume_fade()
+    }
+    pub fn is_fading_volume(&self) -> bool {
+        self.decoder.is_fading_volume()
     }
 
     pub fn set_loop(&self, loop_video: bool) {

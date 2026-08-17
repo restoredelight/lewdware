@@ -387,6 +387,14 @@ function VideoWindow:set_loop(loop) end
 ---@return boolean
 function VideoWindow:set_volume(volume) end
 
+---Fade the video's audio track to a new volume. Engine-timed and cancellable, with the same
+---contract as [AudioHandle:fade_volume()](lua://AudioHandle.fade_volume). This affects audio only;
+---[Window:fade()](lua://Window.fade) changes the window's visual opacity.
+---@param opts? VolumeFadeOpts
+---@param cb? fun() Called only when the fade completes.
+---@return boolean
+function VideoWindow:fade_volume(opts, cb) end
+
 ---@class DialogWindow : Window
 ---@field type "'dialog'"
 DialogWindow = {}
@@ -836,6 +844,20 @@ function AudioHandle:stop() end
 ---@param volume number Between 0 (muted) and 1 (full volume).
 ---@return boolean
 function AudioHandle:set_volume(volume) end
+
+---@class VolumeFadeOpts
+---@field volume number The target volume, between 0 (muted) and 1 (full volume).
+---@field duration? number How long the transition takes, in milliseconds. Defaults to zero.
+---@field easing? Easing How the volume is animated.
+
+---Fade this audio handle to a new volume. The fade is timed by the engine and returns immediately.
+---Calling this again, or calling `set_volume()`, cancels the fade already in progress; a cancelled
+---fade does not run its completion callback. Call with no options to cancel without changing the
+---current volume.
+---@param opts? VolumeFadeOpts
+---@param cb? fun() Called only when the fade completes.
+---@return boolean
+function AudioHandle:fade_volume(opts, cb) end
 
 -- ─── Wallpaper ───────────────────────────────────────────────────────────────
 

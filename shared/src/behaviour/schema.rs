@@ -88,9 +88,22 @@ pub enum MediaSlot {
     Splash,
     /// The wallpaper a timeline stage sets, addressed by stage id rather than by position: a
     /// slot may be filled long after it was read, and ids are what survive editing in between.
-    StageWallpaper { stage: String },
+    StageWallpaper {
+        stage: String,
+    },
     /// The background track a timeline stage selects. `None` retains the current track.
-    StageAudio { stage: String },
+    StageAudio {
+        stage: String,
+    },
+    StageEntrySplash {
+        stage: String,
+    },
+    StageEntrySound {
+        stage: String,
+    },
+    StagePromptSound {
+        stage: String,
+    },
 }
 
 /// What a pack author says about one file used as popup content.
@@ -274,6 +287,10 @@ pub struct TextItem {
     /// (subsumes Edgeware's separate `default` bucket).
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Only prompts use this. Absent means the default mode derives a deadline from the prompt's
+    /// character count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -293,21 +310,6 @@ pub struct PromptSettings {
     /// Submit-button label override, rendered via `popup.dialog`.
     #[serde(default)]
     pub submit_label: Option<String>,
-    /// Closes the prompt after this many seconds. Absent preserves the unbounded behaviour.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_seconds: Option<f64>,
-    /// What a rejected submission does. Every feature-producing variant remains gated by the
-    /// user's corresponding presence switch in the mode.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wrong_answer: Option<PromptWrongAnswer>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PromptWrongAnswer {
-    PopupBurst { count: u32 },
-    AddTime { seconds: f64 },
-    Sound,
 }
 
 /// A named, described, user-toggleable set of tags. See `behaviour-design/default-mode.md`
@@ -398,6 +400,8 @@ impl Behaviour {
             .iter_mut()
             .flat_map(|experience| experience.timeline.stages.iter_mut())
             .flat_map(|stage| {
+                let entry = &mut stage.on_enter;
+                let StageEntry { splash, sound, .. } = entry;
                 [
                     (
                         MediaSlot::StageWallpaper {
@@ -410,6 +414,24 @@ impl Behaviour {
                             stage: stage.id.clone(),
                         },
                         &mut stage.content.audio,
+                    ),
+                    (
+                        MediaSlot::StageEntrySplash {
+                            stage: stage.id.clone(),
+                        },
+                        splash,
+                    ),
+                    (
+                        MediaSlot::StageEntrySound {
+                            stage: stage.id.clone(),
+                        },
+                        sound,
+                    ),
+                    (
+                        MediaSlot::StagePromptSound {
+                            stage: stage.id.clone(),
+                        },
+                        &mut stage.prompt.sound,
                     ),
                 ]
             });
@@ -444,6 +466,27 @@ impl Behaviour {
                     .stages
                     .iter()
                     .filter_map(|stage| stage.content.audio),
+            );
+            ids.extend(
+                experience
+                    .timeline
+                    .stages
+                    .iter()
+                    .filter_map(|stage| stage.on_enter.splash),
+            );
+            ids.extend(
+                experience
+                    .timeline
+                    .stages
+                    .iter()
+                    .filter_map(|stage| stage.on_enter.sound),
+            );
+            ids.extend(
+                experience
+                    .timeline
+                    .stages
+                    .iter()
+                    .filter_map(|stage| stage.prompt.sound),
             );
         }
         ids
@@ -539,21 +582,70 @@ pub struct Stage {
     pub movement: Option<Movement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mitosis: Option<Mitosis>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub on_enter: Option<StageEntry>,
+    #[serde(default, skip_serializing_if = "StageEntry::is_default")]
+    pub on_enter: StageEntry,
+    #[serde(default, skip_serializing_if = "StagePrompt::is_default")]
+    pub prompt: StagePrompt,
 }
 
 /// Declarative punctuation fired once after a stage transition has completed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct StageEntry {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub splash: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub sound: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub splash: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub popup_burst: Option<u32>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub notification: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification: Option<String>,
+}
+
+impl StageEntry {
+    pub(crate) fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StagePrompt {
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub timeouts_enabled: bool,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub timeout_multiplier: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub popup_burst: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<u64>,
+}
+
+impl Default for StagePrompt {
+    fn default() -> Self {
+        Self {
+            timeouts_enabled: true,
+            timeout_multiplier: 1.0,
+            popup_burst: None,
+            sound: None,
+        }
+    }
+}
+
+impl StagePrompt {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+fn default_one() -> f64 {
+    1.0
+}
+
+fn is_one(value: &f64) -> bool {
+    *value == 1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -578,6 +670,10 @@ pub struct ContentSelection {
     /// Background track selected on entry. `None` retains whatever is already playing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<u64>,
+    /// Select a fresh background track from the stage's active tags on entry. Mutually exclusive
+    /// with `audio`; absence of both retains what is currently playing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audio_random: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -774,11 +870,13 @@ mod tests {
                         owned_tag: None,
                         wallpaper: Some(stage_wallpaper),
                         audio: None,
+                        audio_random: false,
                     },
                     events: Events::default(),
                     movement: None,
                     mitosis: None,
-                    on_enter: None,
+                    on_enter: Default::default(),
+                    prompt: Default::default(),
                 }],
                 transitions: vec![],
             },
@@ -881,7 +979,8 @@ mod tests {
                     events: Default::default(),
                     movement: None,
                     mitosis: None,
-                    on_enter: None,
+                    on_enter: Default::default(),
+                    prompt: Default::default(),
                 }],
                 transitions: vec![],
             },

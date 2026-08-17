@@ -130,10 +130,29 @@ local function run_transition()
 	if duration_ms == 0 then enter_stage(stage_index + 1); return end
 
 	local source = stages[stage_index]
-	local target_audio = (next_stage.content or {}).audio
+	local next_content = next_stage.content or {}
+	local target_audio = next_content.audio
+	local random_audio = next_content.audio_random == true
+	if random_audio then
+		local media = require("lib.media")
+		local tags = next_content.tags
+		local picked = nil
+		if not tags or #tags > 0 then
+			picked = (tags and media.random_background_audio({ tags=tags }))
+				or media.random_background_audio()
+		end
+		target_audio = picked and picked.name or nil
+	end
 	if target_audio and target_audio ~= (source.content or {}).audio
 		and selected(transition, "crossfade") then
-		audio_crossfade = { audio=target_audio, progress=0 }
+		audio_crossfade = {
+			audio=target_audio,
+			random=random_audio,
+			target_index=stage_index + 1,
+			progress=0,
+			duration=duration_ms,
+			easing=transition.easing,
+		}
 		notify()
 	end
 	local elapsed = 0
@@ -192,6 +211,8 @@ function M.mitosis() return current.mitosis end
 function M.tags() return (current.content or {}).tags end
 function M.wallpaper() return (current.content or {}).wallpaper end
 function M.audio() return (current.content or {}).audio end
+function M.audio_random() return (current.content or {}).audio_random == true end
+function M.prompt() return current.prompt or { timeouts_enabled=true } end
 function M.crossfade() return audio_crossfade end
 function M.entry() return current.on_enter or {} end
 function M.phase() return phase end

@@ -411,6 +411,7 @@ impl LewdwareApp {
                 loop_video: loop_video.clone(),
                 paused: false,
                 volume,
+                pending_volume_fade: None,
                 video: requirement.id,
             },
             vec![requirement],
@@ -521,6 +522,7 @@ impl LewdwareApp {
                 paused: false,
                 volume,
                 audio: requirement.id,
+                pending_volume_fade: None,
             },
             vec![requirement],
             event_loop,
@@ -743,11 +745,38 @@ impl LewdwareApp {
                                     opts:
                                         PendingItemOpts::Video {
                                             volume: pending_volume,
+                                            pending_volume_fade,
                                             ..
                                         },
                                     ..
                                 }) => {
                                     *pending_volume = volume;
+                                    *pending_volume_fade = None;
+                                    Ok(())
+                                }
+                                _ => Err(LewdwareError::Internal("Invalid window type")),
+                            })
+                            .is_ok()
+                        }
+                        WindowAction::FadeVideoVolume { tx, id, opts } => {
+                            let opts = opts.map(|mut opts| {
+                                opts.volume *= self.config.volume.video;
+                                opts
+                            });
+                            tx.send(match entry.get_mut() {
+                                ItemSlot::Window(popup) => popup
+                                    .start_volume_fade(id, opts)
+                                    .then_some(())
+                                    .ok_or(LewdwareError::Internal("Invalid window type")),
+                                ItemSlot::Pending(PendingItem {
+                                    opts:
+                                        PendingItemOpts::Video {
+                                            pending_volume_fade,
+                                            ..
+                                        },
+                                    ..
+                                }) => {
+                                    *pending_volume_fade = opts.map(|opts| (id, opts));
                                     Ok(())
                                 }
                                 _ => Err(LewdwareError::Internal("Invalid window type")),
@@ -951,10 +980,33 @@ impl LewdwareApp {
                                     opts:
                                         PendingItemOpts::Audio {
                                             volume: pending_volume,
+                                            pending_volume_fade,
                                             ..
                                         },
                                     ..
-                                }) => *pending_volume = volume,
+                                }) => {
+                                    *pending_volume = volume;
+                                    *pending_volume_fade = None;
+                                }
+                                _ => {}
+                            }
+                            tx.send(()).is_ok()
+                        }
+                        AudioAction::FadeVolume { tx, id, opts } => {
+                            let opts = opts.map(|mut opts| {
+                                opts.volume *= self.config.volume.audio;
+                                opts
+                            });
+                            match entry.get_mut() {
+                                ItemSlot::Audio(player) => player.start_volume_fade(id, opts),
+                                ItemSlot::Pending(PendingItem {
+                                    opts:
+                                        PendingItemOpts::Audio {
+                                            pending_volume_fade,
+                                            ..
+                                        },
+                                    ..
+                                }) => *pending_volume_fade = opts.map(|opts| (id, opts)),
                                 _ => {}
                             }
                             tx.send(()).is_ok()
@@ -1080,9 +1132,13 @@ impl LewdwareApp {
                 paused,
                 volume,
                 audio,
+                pending_volume_fade,
             } => {
-                let player = requirements.take_audio(audio)?;
+                let mut player = requirements.take_audio(audio)?;
                 player.set_volume(volume);
+                if let Some((id, opts)) = pending_volume_fade {
+                    player.start_volume_fade(id, Some(opts));
+                }
                 if !paused {
                     player.play();
                 }
@@ -1133,7 +1189,8 @@ impl LewdwareApp {
                 video,
                 paused,
                 volume,
-                ..
+                pending_volume_fade,
+                loop_video: _,
             } => {
                 let (state, target) = self.create_window(id, window, event_loop)?;
                 let decoder = requirements.take_video(video)?;
@@ -1150,6 +1207,9 @@ impl LewdwareApp {
                     popup.pause();
                 }
                 popup.set_volume(volume);
+                if let Some((fade_id, opts)) = pending_volume_fade {
+                    popup.start_volume_fade(fade_id, Some(opts));
+                }
                 if let Err(err) = popup.target.pre_show() {
                     tracing::warn!("video pre-show failed: {err}");
                 }
@@ -1351,8 +1411,19 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let mut poll = false;
         let mut finished_videos = Vec::new();
+        let mut finished_audio_fades = Vec::new();
+        let mut finished_video_fades = Vec::new();
 
         for (id, item) in self.items.iter_mut() {
+            if let ItemSlot::Audio(player) = item {
+                if player.is_fading_volume() {
+                    if let Some(fade_id) = player.update_volume_fade() {
+                        finished_audio_fades.push((*id, fade_id));
+                    }
+                    poll = true;
+                }
+                continue;
+            }
             let ItemSlot::Window(popup) = item else {
                 continue;
             };
@@ -1360,6 +1431,11 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
             if popup.is_video() {
                 popup.state.request_redraw();
                 poll = true;
+                if popup.is_fading_volume()
+                    && let Some(fade_id) = popup.update_volume_fade()
+                {
+                    finished_video_fades.push((*id, fade_id));
+                }
             }
 
             let redraw_requested = popup.state.take_redraw_requested();
@@ -1387,6 +1463,23 @@ impl ApplicationHandler<UserEvent> for LewdwareApp {
 
         for id in finished_videos {
             self.remove_item(id);
+        }
+
+        for (id, fade_id) in finished_audio_fades {
+            if let Err(err) = self
+                .lua_event_tx
+                .send(lua::Event::VolumeFadeFinish { id, fade_id })
+            {
+                tracing::error!("{err}");
+            }
+        }
+        for (id, fade_id) in finished_video_fades {
+            if let Err(err) = self
+                .lua_event_tx
+                .send(lua::Event::VolumeFadeFinish { id, fade_id })
+            {
+                tracing::error!("{err}");
+            }
         }
 
         if poll {

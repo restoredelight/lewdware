@@ -18,7 +18,10 @@ use walkdir::WalkDir;
 
 use tauri::Emitter;
 
-use shared::behaviour::{Behaviour, MediaSlot};
+use shared::{
+    behaviour::{Behaviour, MediaSlot},
+    tags,
+};
 
 use crate::pack::{AddOutcome, MediaFile};
 
@@ -455,9 +458,6 @@ pub async fn process_files_into_subliminals(
         .await
         {
             Ok(outcome) => {
-                if let AddOutcome::Added(file) = &outcome {
-                    let _ = app.emit("upload:added", file);
-                }
                 outcomes.push(outcome);
             }
             // One unreadable file shouldn't cost the author the rest of the batch; it is reported
@@ -497,6 +497,27 @@ pub async fn process_files_into_subliminals(
         }
     }
     tagged?;
+
+    // `process_one_file_outcome` returns the file as it looked immediately after import. Pool
+    // membership is applied afterwards, so publishing that stale value makes the front end put a
+    // new subliminal in Popups and omit it from Subliminals until the pack is reopened. Reflect
+    // the transaction above in both the command result (which also includes duplicates) and the
+    // event used to insert genuinely new files into the store.
+    for outcome in &mut outcomes {
+        let new_to_pack = matches!(outcome, AddOutcome::Added(_));
+        let file = match outcome {
+            AddOutcome::Added(file) | AddOutcome::Duplicate(file) => file,
+        };
+        if !file.tags.iter().any(|tag| tag == tags::SUBLIMINAL_TAG) {
+            file.tags.push(tags::SUBLIMINAL_TAG.to_string());
+        }
+        if new_to_pack && !file.tags.iter().any(|tag| tag == tags::NON_POPUP_TAG) {
+            file.tags.push(tags::NON_POPUP_TAG.to_string());
+        }
+        if new_to_pack {
+            let _ = app.emit("upload:added", &*file);
+        }
+    }
 
     match failure {
         Some(err) if outcomes.is_empty() => Err(anyhow!("{err}")),

@@ -9,6 +9,7 @@
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import { Icon, Plus } from 'svelte-hero-icons';
+	import { tick } from 'svelte';
 
 	const groups = $derived(store.behaviour!.content.content_groups);
 	// Adding or removing a group moves every later index, so those edits replace the array whole
@@ -17,12 +18,20 @@
 
 	let quickCreateTag = $state('');
 	let removing = $state<(typeof groups)[number] | null>(null);
+	let listElement = $state<HTMLDivElement>();
 
 	function capitalize(s: string): string {
 		return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
 	}
 
-	function addGroup() {
+	async function revealNewGroup() {
+		await tick();
+		const group = listElement?.lastElementChild;
+		group?.scrollIntoView({ block: 'center' });
+		group?.querySelector<HTMLInputElement>('input')?.focus();
+	}
+
+	async function addGroup() {
 		groups.push({
 			id: `group-${Date.now()}`,
 			label: 'New group',
@@ -31,9 +40,10 @@
 			enabled_by_default: true
 		});
 		commitBehaviourEdit(GROUPS, 'Add content group');
+		await revealNewGroup();
 	}
 
-	function quickCreateFromTag() {
+	async function quickCreateFromTag() {
 		const tag = quickCreateTag;
 		if (!tag) return;
 		groups.push({
@@ -45,6 +55,7 @@
 		});
 		quickCreateTag = '';
 		commitBehaviourEdit(GROUPS, 'Add content group');
+		await revealNewGroup();
 	}
 
 	function removeGroup(index: number) {
@@ -67,7 +78,18 @@
 </script>
 
 <section class="flex flex-col gap-3" aria-label="Content groups">
-	<div class="flex flex-col gap-2">
+	{#if groups.length > 0}
+		<div
+			class="border-border bg-bg sticky top-0 z-10 flex items-center justify-between gap-3 border-y py-2"
+		>
+			<span class="ui-metadata">{groups.length} {groups.length === 1 ? 'item' : 'items'}</span>
+			<Button size="compact" onclick={addGroup}
+				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add group</Button
+			>
+		</div>
+	{/if}
+
+	<div class="flex flex-col gap-2" bind:this={listElement}>
 		{#if groups.length === 0}
 			<EmptyState
 				title="No content groups yet"

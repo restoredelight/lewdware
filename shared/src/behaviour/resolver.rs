@@ -352,6 +352,7 @@ mod tests {
         behaviour.content.captions = vec![TextItem {
             text: "hi".to_string(),
             tags: vec![],
+            timeout_seconds: None,
         }];
         behaviour.content.content_groups = vec![ContentGroup {
             id: "kinky".to_string(),
@@ -554,7 +555,8 @@ mod tests {
             events: Default::default(),
             movement: None,
             mitosis: None,
-            on_enter: None,
+            on_enter: Default::default(),
+            prompt: Default::default(),
         }
     }
 
@@ -705,7 +707,8 @@ mod shipped_mode_tests {
                 maximum_speed: Some(90.0),
             }),
             mitosis: None,
-            on_enter: None,
+            on_enter: Default::default(),
+            prompt: Default::default(),
         };
         let with_movement = Behaviour {
             experience: Some(Experience {

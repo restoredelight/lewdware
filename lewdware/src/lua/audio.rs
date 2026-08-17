@@ -1,11 +1,27 @@
 use std::cell::RefCell;
 
-use mlua::{ExternalResult, Lua, UserData, UserDataFields, UserDataMethods};
+use mlua::{ExternalResult, FromLua, Lua, LuaSerdeExt, UserData, UserDataFields, UserDataMethods};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     app::EventPoster,
-    lua::{ItemId, Media, dev_log::log_noop, request::AudioRequestSender},
+    lua::{ItemId, Media, dev_log::log_noop, request::AudioRequestSender, window::Easing},
 };
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy)]
+pub struct VolumeFadeOpts {
+    pub volume: f32,
+    #[serde(default)]
+    pub duration: u64,
+    #[serde(default)]
+    pub easing: Easing,
+}
+
+impl FromLua for VolumeFadeOpts {
+    fn from_lua(value: mlua::Value, lua: &Lua) -> mlua::Result<Self> {
+        lua.from_value(value)
+    }
+}
 
 pub struct AudioHandle<T: EventPoster> {
     id: ItemId,
@@ -18,6 +34,8 @@ pub struct AudioHandle<T: EventPoster> {
 struct AudioState {
     finished: bool,
     finish_callbacks: Vec<mlua::Function>,
+    current_volume_fade_id: u64,
+    volume_fade_callback: Option<(u64, mlua::Function)>,
 }
 
 impl AudioState {
@@ -25,6 +43,8 @@ impl AudioState {
         Self {
             finished: false,
             finish_callbacks: Vec::new(),
+            current_volume_fade_id: 0,
+            volume_fade_callback: None,
         }
     }
 }
@@ -63,9 +83,31 @@ impl<T: EventPoster> UserData for AudioHandle<T> {
 
         methods.add_method("set_volume", |lua, this, volume: f32| {
             this.guarded(lua, "AudioHandle:set_volume()", || {
+                this.state
+                    .try_borrow_mut()
+                    .into_lua_err()?
+                    .volume_fade_callback = None;
                 this.request_sender.set_volume(volume).into_lua_err()
             })
         });
+
+        methods.add_method(
+            "fade_volume",
+            |lua, this, (opts, cb): (Option<VolumeFadeOpts>, Option<mlua::Function>)| {
+                this.guarded(lua, "AudioHandle:fade_volume()", || {
+                    let id = {
+                        let mut state = this.state.try_borrow_mut().into_lua_err()?;
+                        let id = state.current_volume_fade_id;
+                        state.current_volume_fade_id += 1;
+                        state.volume_fade_callback = opts
+                            .as_ref()
+                            .and_then(|_| cb.map(|callback| (id, callback)));
+                        id
+                    };
+                    this.request_sender.fade_volume(id, opts).into_lua_err()
+                })
+            },
+        );
 
         methods.add_method("stop", |lua, this, _: ()| {
             this.guarded(lua, "AudioHandle:stop()", || {
@@ -127,6 +169,31 @@ impl<T: EventPoster> AudioHandle<T> {
             }
         }
 
+        Ok(())
+    }
+
+    pub fn on_volume_fade_finished(&self, fade_id: u64) -> anyhow::Result<()> {
+        let callback = {
+            let mut state = self.state.try_borrow_mut()?;
+            if state
+                .volume_fade_callback
+                .as_ref()
+                .is_some_and(|(id, _)| *id == fade_id)
+            {
+                state
+                    .volume_fade_callback
+                    .take()
+                    .map(|(_, callback)| callback)
+            } else {
+                None
+            }
+        };
+
+        if let Some(callback) = callback
+            && let Err(err) = callback.call::<()>(())
+        {
+            tracing::error!("{err}");
+        }
         Ok(())
     }
 }

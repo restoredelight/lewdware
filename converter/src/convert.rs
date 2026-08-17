@@ -102,6 +102,7 @@ fn levels_to_experience(levels: Vec<Level>) -> (Experience, Vec<(MediaSlot, Stri
                     // Filled in by the importer once the file has an id -- see the return value.
                     wallpaper: None,
                     audio: None,
+                    audio_random: false,
                 },
                 events: Events {
                     popup: schedule(level.anchors.popup),
@@ -113,7 +114,8 @@ fn levels_to_experience(levels: Vec<Level>) -> (Experience, Vec<(MediaSlot, Stri
                 },
                 movement: movement(&level.design),
                 mitosis: mitosis(&level.design),
-                on_enter: None,
+                on_enter: Default::default(),
+                prompt: Default::default(),
             }
         })
         .collect::<Vec<_>>();
@@ -355,6 +357,7 @@ fn text_items(
         .map(|text| TextItem {
             text: text.clone(),
             tags: vec![],
+            timeout_seconds: None,
         })
         .collect();
     for mood in moods {
@@ -362,6 +365,7 @@ fn text_items(
             items.push(TextItem {
                 text: text.clone(),
                 tags: vec![mood.name.clone()],
+                timeout_seconds: None,
             });
         }
     }
@@ -377,6 +381,7 @@ fn populate_captions(index: &EdgewareIndex, content: &mut Content) {
         content.captions.push(TextItem {
             text: popup_close.clone(),
             tags: vec![],
+            timeout_seconds: None,
         });
     }
 }
@@ -409,8 +414,6 @@ fn populate_prompts(index: &EdgewareIndex, content: &mut Content) {
     content.prompts = text_items(&index.default.prompts, &index.moods, |base| &base.prompts);
     content.prompt_settings = PromptSettings {
         submit_label: index.default_extra.prompt_submit.clone(),
-        timeout_seconds: None,
-        wrong_answer: None,
     };
 }
 

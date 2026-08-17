@@ -24,6 +24,10 @@ const MIGRATION_5: &str =
 
 const MIGRATION_6: &str = include_str!("../../../shared/src/migrations/0006_timeline_effects.sql");
 const MIGRATION_7: &str = include_str!("../../../shared/src/migrations/0007_sound_events.sql");
+const MIGRATION_8: &str =
+    include_str!("../../../shared/src/migrations/0008_explicit_timeline_media.sql");
+const MIGRATION_9: &str =
+    include_str!("../../../shared/src/migrations/0009_prompt_timeout_multiplier.sql");
 
 const MIGRATIONS: &[&str] = &[
     MIGRATION_1,
@@ -33,6 +37,8 @@ const MIGRATIONS: &[&str] = &[
     MIGRATION_5,
     MIGRATION_6,
     MIGRATION_7,
+    MIGRATION_8,
+    MIGRATION_9,
 ];
 
 /// The behaviour document's structural half (see `shared::behaviour::storage`), in an order that
@@ -51,6 +57,7 @@ pub const BEHAVIOUR_TABLES: &[&str] = &[
     "behaviour_stage_movement",
     "behaviour_stage_mitosis",
     "behaviour_stage_entry",
+    "behaviour_stage_prompt",
     "behaviour_stage_event",
     "behaviour_transition",
     "behaviour_transition_category",

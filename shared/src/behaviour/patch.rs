@@ -174,7 +174,7 @@ fn set_at_path(document: &mut Value, path: &str, value: Value) -> Result<(), Pat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::behaviour::{ContentGroup, TextItem};
+    use crate::behaviour::{ContentGroup, Stage, TextItem};
 
     fn behaviour() -> Behaviour {
         let mut behaviour = Behaviour::new();
@@ -182,10 +182,12 @@ mod tests {
             TextItem {
                 text: "first".to_string(),
                 tags: vec![],
+                timeout_seconds: None,
             },
             TextItem {
                 text: "second".to_string(),
                 tags: vec!["a".to_string()],
+                timeout_seconds: None,
             },
         ];
         behaviour.content.content_groups = vec![ContentGroup {
@@ -232,6 +234,42 @@ mod tests {
         );
         let patched = patch("content.wallpaper", 12.into()).unwrap();
         assert_eq!(patched.content.wallpaper, Some(12));
+    }
+
+    #[test]
+    fn writes_a_whole_stage_prompt_when_its_default_serializes_away() {
+        let mut behaviour = behaviour();
+        behaviour.experience = Some(Default::default());
+        behaviour
+            .experience
+            .as_mut()
+            .unwrap()
+            .timeline
+            .stages
+            .push(Stage {
+                id: "first".to_string(),
+                label: "First".to_string(),
+                end: None,
+                content: Default::default(),
+                events: Default::default(),
+                movement: None,
+                mitosis: None,
+                on_enter: Default::default(),
+                prompt: Default::default(),
+            });
+
+        let patched = behaviour
+            .patched(&[Patch::new(
+                "experience.timeline.stages.0.prompt",
+                serde_json::json!({ "timeouts_enabled": false }),
+            )])
+            .unwrap();
+
+        assert!(
+            !patched.experience.unwrap().timeline.stages[0]
+                .prompt
+                .timeouts_enabled
+        );
     }
 
     #[test]

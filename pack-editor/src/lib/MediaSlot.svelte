@@ -5,10 +5,9 @@
 	// The lookup is derived from `store.files` rather than fetched: the grid already carries every
 	// file with its tags, and `upload:added` appends to it, so a slot filled during an Edgeware
 	// import fills in live as its file arrives.
-	import Button from '$ui/Button.svelte';
 	import { api } from './api.js';
 	import { adoptBehaviour } from './behaviourSave.svelte.js';
-	import { openStandalonePreview } from './mediaPreview.js';
+	import ExplicitMediaPicker from './ExplicitMediaPicker.svelte';
 	import { store } from './store.svelte.js';
 	import { taskFeedback } from './taskFeedback.svelte.js';
 	import type { MediaSlot } from './types.js';
@@ -23,6 +22,7 @@
 		emptyNote: string;
 		reveal?: boolean;
 		onrevealed?: () => void;
+		showHeader?: boolean;
 	};
 
 	let {
@@ -32,7 +32,8 @@
 		description,
 		emptyNote,
 		reveal = false,
-		onrevealed
+		onrevealed,
+		showHeader = true
 	}: Props = $props();
 
 	let busy = $state(false);
@@ -46,13 +47,6 @@
 			onrevealed?.();
 		});
 	});
-
-	const file = $derived(
-		mediaId != null ? (store.files.find((f) => f.id === mediaId) ?? null) : null
-	);
-	// A slot pointing at a file the pack doesn't have: the import that would have brought it in
-	// was cancelled, or it's still encoding. Say so rather than showing an empty frame.
-	const missing = $derived(mediaId != null && file == null);
 
 	// The backend fills the slot itself, so both handlers hand its result to `adoptBehaviour`.
 	// Nothing has to be flushed first: an edit the author is still typing on another tab is
@@ -93,55 +87,47 @@
 			busy = false;
 		}
 	}
+
+	async function selectExisting(mediaId: number) {
+		busy = true;
+		try {
+			const result = await api.setMediaSlot(slot, mediaId);
+			if (!result) return;
+			if (result.deleted_id != null) store.removeFilesById([result.deleted_id], true);
+			adoptBehaviour(result.behaviour, { label: `Set ${title.toLowerCase()}` });
+		} catch (error) {
+			taskFeedback.error('slot', String(error));
+		} finally {
+			busy = false;
+		}
+	}
+
+	const kind = $derived<'image' | 'visual' | 'audio'>(
+		slot.kind === 'stage_audio' ||
+			slot.kind === 'stage_entry_sound' ||
+			slot.kind === 'stage_prompt_sound'
+			? 'audio'
+			: slot.kind === 'splash' || slot.kind === 'stage_entry_splash'
+				? 'visual'
+				: 'image'
+	);
 </script>
 
 <section class="flex flex-col gap-2" bind:this={section}>
-	<div>
-		<h3 class="ui-section-title">{title}</h3>
-		<p class="text-muted text-xs">{description}</p>
-	</div>
-
-	<div class="border-border bg-surface flex items-center gap-3 rounded-sm border p-2">
-		{#if file}
-			<button
-				type="button"
-				class="border-border bg-bg flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-sm border transition-colors hover:border-[var(--color-border-strong)]"
-				title="Preview"
-				onclick={() => openStandalonePreview(file.id)}
-			>
-				<img
-					src={store.mediaUrl(`/thumbnail/${file.id}`, file.hash)}
-					alt={file.file_name}
-					draggable="false"
-					class="max-h-full max-w-full object-contain"
-				/>
-			</button>
-			<div class="flex min-w-0 flex-col gap-0.5">
-				<span class="text-text truncate text-sm">{file.file_name}</span>
-				<span class="ui-metadata">{file.file_info.type}</span>
-			</div>
-		{:else}
-			<div
-				class="border-border text-muted flex h-16 w-16 shrink-0 items-center justify-center rounded-sm border border-dashed text-xs"
-			>
-				Empty
-			</div>
-			<p class="text-muted min-w-0 text-xs italic">
-				{#if missing}
-					That file isn’t in this pack any more.
-				{:else}
-					{emptyNote}
-				{/if}
-			</p>
-		{/if}
-
-		<div class="ml-auto flex shrink-0 gap-2">
-			<Button size="compact" disabled={busy} onclick={fill}>
-				{mediaId != null ? 'Replace…' : 'Add…'}
-			</Button>
-			{#if mediaId != null}
-				<Button variant="destructive" size="compact" disabled={busy} onclick={clear}>Remove</Button>
-			{/if}
+	{#if showHeader}
+		<div>
+			<h3 class="ui-section-title">{title}</h3>
+			<p class="text-muted text-xs">{description}</p>
 		</div>
-	</div>
+	{/if}
+
+	<ExplicitMediaPicker
+		{kind}
+		{mediaId}
+		{emptyNote}
+		{busy}
+		onselect={selectExisting}
+		onimport={fill}
+		onclear={clear}
+	/>
 </section>

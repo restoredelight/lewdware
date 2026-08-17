@@ -18,6 +18,9 @@ export const SUBLIMINAL_TAG = '__lewdware-subliminal';
 /** Audio without this marker is background audio; marked audio plays when a popup spawns. */
 export const POPUP_AUDIO_TAG = '__lewdware-audio-popup';
 
+/** Imported for a specific behaviour reference, not membership of a random media pool. */
+export const EXPLICIT_ONLY_TAG = '__lewdware-explicit-only';
+
 export function isManagedTag(tag: string): boolean {
 	return tag.startsWith(MANAGED_TAG_PREFIX);
 }

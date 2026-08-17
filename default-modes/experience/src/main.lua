@@ -91,14 +91,23 @@ end
 
 schedule_event("sound", config.popup_audio_enabled, play_sting)
 
-local function prompt_wrong(effect)
-	if effect.kind == "popup_burst" and #popup_types > 0 then
-		for _ = 1, (effect.count or 1) do open_popup() end
-	elseif effect.kind == "sound" then play_sting() end
+local function prompt_wrong()
+	local effect = timeline.prompt()
+	if effect.popup_burst and #popup_types > 0 then
+		for _ = 1, effect.popup_burst do open_popup() end
+	end
+	if effect.sound and config.popup_audio_enabled then
+		local audio = lewdware.media.get_audio(effect.sound)
+		if audio then lewdware.play_audio(audio, media.background_options(audio, config.popup_volume)) end
+	end
 end
 
 schedule_event("prompt", config.prompts_enabled, function()
-	return require("lib.prompts").fire(timeline.tags, { on_wrong = prompt_wrong })
+	return require("lib.prompts").fire(timeline.tags, {
+		timeouts_enabled=timeline.prompt().timeouts_enabled ~= false,
+		timeout_multiplier=timeline.prompt().timeout_multiplier or 1,
+		on_wrong=prompt_wrong,
+	})
 end)
 
 -- Background audio follows the active stage's tag set, like every other consumer in this file.
@@ -113,6 +122,7 @@ if config.background_audio_enabled then
 	local selected_name = nil
 	local primary = nil
 	local secondary = nil
+	local crossfaded_random_stage = nil
 
 	local function stage_background_audio()
 		local tags = timeline.tags()
@@ -165,9 +175,10 @@ if config.background_audio_enabled then
 			if not secondary or secondary.name ~= fade.audio then
 				if secondary then secondary.handle:stop() end
 				secondary = start_track(fade.audio, 0)
+				local easing = ({ ease_in="ease-in", ease_out="ease-out", ease_in_out="ease-in-out" })[fade.easing] or "linear"
+				if primary then primary.handle:fade_volume({ volume=0, duration=fade.duration, easing=easing }) end
+				if secondary then secondary.handle:fade_volume({ volume=secondary.volume, duration=fade.duration, easing=easing }) end
 			end
-			if primary then primary.handle:set_volume(primary.volume * (1 - fade.progress)) end
-			if secondary then secondary.handle:set_volume(secondary.volume * fade.progress) end
 			if fade.progress >= 1 and secondary then
 				local old = primary
 				primary = secondary
@@ -175,6 +186,10 @@ if config.background_audio_enabled then
 				handle = primary.handle
 				playing = true
 				selected_name = fade.audio
+				if fade.random then
+					selected_name = nil
+					crossfaded_random_stage = fade.target_index
+				end
 				if old then old.handle:stop() end
 			end
 		end
@@ -182,9 +197,26 @@ if config.background_audio_enabled then
 		if stage == last_stage then return end
 		last_stage = stage
 		local requested = timeline.audio()
-		if requested and requested ~= selected_name then
-			selected_name = requested
-			if handle and playing then handle:stop() else spawn_audio(requested) end
+		if timeline.audio_random() then
+			if crossfaded_random_stage == stage then
+				crossfaded_random_stage = nil
+			elseif handle and playing then
+				local old = primary
+				primary = nil
+				handle = nil
+				playing = false
+				if old then old.handle:stop() end
+				spawn_audio(nil)
+			else spawn_audio(nil) end
+		elseif requested and requested ~= selected_name then
+			if handle and playing then
+				local old = primary
+				primary = nil
+				handle = nil
+				playing = false
+				if old then old.handle:stop() end
+			end
+			spawn_audio(requested)
 		elseif not playing then spawn_audio(requested) end
 	end)
 
@@ -192,9 +224,12 @@ if config.background_audio_enabled then
 end
 
 timeline.on_enter(function(entry)
-	if entry.splash and config.splash_enabled then wallpaper.show_splash() end
-	if entry.sound then play_sting() end
-	if entry.notification and config.notifications_enabled then require("lib.notifications").fire(timeline.tags) end
+	if entry.splash and config.splash_enabled then wallpaper.show_splash(entry.splash) end
+	if entry.sound and config.popup_audio_enabled then
+		local audio = lewdware.media.get_audio(entry.sound)
+		if audio then lewdware.play_audio(audio, media.background_options(audio, config.popup_volume)) end
+	end
+	if entry.notification and config.notifications_enabled then lewdware.show_notification({ body=entry.notification }) end
 	if entry.popup_burst and #popup_types > 0 then
 		for _ = 1, entry.popup_burst do open_popup() end
 	end

@@ -13,7 +13,7 @@ use std::{
         mpsc,
     },
     thread::{self},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use rodio::{
@@ -24,15 +24,27 @@ use rodio::{
     source::UniformSourceIterator,
 };
 
+use crate::lua::{Easing, VolumeFadeOpts};
 use crate::{
     app::{EventPoster, UserEvent},
     lua::ItemId,
     media::{MediaSource, bounded_input::BoundedInput},
 };
 
+struct VolumeFade {
+    id: u64,
+    from: f32,
+    to: f32,
+    duration: Duration,
+    start: Instant,
+    easing: Easing,
+}
+
 pub struct AudioPlayer {
     _stream: MixerDeviceSink,
     sink: Arc<Player>,
+    volume: f32,
+    volume_fade: Option<VolumeFade>,
 }
 
 impl AudioPlayer {
@@ -60,6 +72,8 @@ impl AudioPlayer {
         Ok(Some(Self {
             _stream: stream,
             sink,
+            volume,
+            volume_fade: None,
         }))
     }
 
@@ -71,8 +85,53 @@ impl AudioPlayer {
         self.sink.play();
     }
 
-    pub fn set_volume(&self, volume: f32) {
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume_fade = None;
+        self.volume = volume;
         self.sink.set_volume(volume);
+    }
+
+    pub fn start_volume_fade(&mut self, id: u64, opts: Option<VolumeFadeOpts>) {
+        let Some(opts) = opts else {
+            self.volume_fade = None;
+            return;
+        };
+        self.volume_fade = Some(VolumeFade {
+            id,
+            from: self.volume,
+            to: opts.volume,
+            duration: Duration::from_millis(opts.duration),
+            start: Instant::now(),
+            easing: opts.easing,
+        });
+    }
+
+    /// Advances an engine-timed volume fade. Returns the completed fade id, if any.
+    pub fn update_volume_fade(&mut self) -> Option<u64> {
+        let fade = self.volume_fade.as_ref()?;
+        let percent = if fade.duration.is_zero() {
+            1.0
+        } else {
+            fade.start
+                .elapsed()
+                .div_duration_f64(fade.duration)
+                .min(1.0)
+        };
+        let volume = fade.from + ((fade.to - fade.from) as f64 * fade.easing.apply(percent)) as f32;
+        let finished = percent >= 1.0;
+        let id = fade.id;
+        self.volume = volume;
+        self.sink.set_volume(volume);
+        if finished {
+            self.volume_fade = None;
+            Some(id)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_fading_volume(&self) -> bool {
+        self.volume_fade.is_some()
     }
 
     pub fn stop(&self) {

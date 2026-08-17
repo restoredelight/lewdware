@@ -7,6 +7,7 @@
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import { Icon, Plus, XMark } from 'svelte-hero-icons';
+	import { tick } from 'svelte';
 
 	const links = $derived(store.behaviour!.content.web_links);
 	// Adding or removing a link moves every later index, so those edits replace the array whole
@@ -15,10 +16,15 @@
 
 	let newArgByLink = $state<Record<number, string>>({});
 	let removing = $state<(typeof links)[number] | null>(null);
+	let listElement = $state<HTMLDivElement>();
 
-	function addLink() {
+	async function addLink() {
 		links.push({ url: '', args: [], tags: [] });
 		commitBehaviourEdit(LINKS, 'Add web link');
+		await tick();
+		const link = listElement?.lastElementChild;
+		link?.scrollIntoView({ block: 'center' });
+		link?.querySelector<HTMLInputElement>('input')?.focus();
 	}
 
 	function removeLink(index: number) {
@@ -59,7 +65,18 @@
 		terms. Leave them empty to always open the URL unchanged.
 	</p>
 
-	<div class="flex flex-col gap-2">
+	{#if links.length > 0}
+		<div
+			class="border-border bg-bg sticky top-0 z-10 flex items-center justify-between gap-3 border-y py-2"
+		>
+			<span class="ui-metadata">{links.length} {links.length === 1 ? 'item' : 'items'}</span>
+			<Button size="compact" onclick={addLink}
+				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add web link</Button
+			>
+		</div>
+	{/if}
+
+	<div class="flex flex-col gap-2" bind:this={listElement}>
 		{#if links.length === 0}
 			<EmptyState
 				title="No web links yet"

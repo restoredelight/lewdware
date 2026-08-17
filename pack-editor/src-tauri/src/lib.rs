@@ -1299,11 +1299,14 @@ async fn fill_media_slot_dialog(
 ) -> Result<Option<SlotFilled>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (extensions, label): (&[&str], &str) = match slot {
-        shared::behaviour::MediaSlot::StageAudio { .. } => (
+        shared::behaviour::MediaSlot::StageAudio { .. }
+        | shared::behaviour::MediaSlot::StageEntrySound { .. }
+        | shared::behaviour::MediaSlot::StagePromptSound { .. } => (
             &["mp3", "ogg", "wav", "flac", "m4a", "aac", "opus"],
             "Audio",
         ),
-        shared::behaviour::MediaSlot::Splash => (
+        shared::behaviour::MediaSlot::Splash
+        | shared::behaviour::MediaSlot::StageEntrySplash { .. } => (
             &[
                 "png", "jpg", "jpeg", "webp", "avif", "bmp", "gif", "mp4", "webm", "mkv", "mov",
             ],
@@ -1335,7 +1338,10 @@ async fn fill_media_slot_dialog(
         .unwrap_or(HardwareEncoder::SoftwareFallback);
     let label = match slot {
         shared::behaviour::MediaSlot::Splash => "Set splash",
+        shared::behaviour::MediaSlot::StageEntrySplash { .. } => "Set stage splash",
         shared::behaviour::MediaSlot::StageAudio { .. } => "Set stage audio",
+        shared::behaviour::MediaSlot::StageEntrySound { .. }
+        | shared::behaviour::MediaSlot::StagePromptSound { .. } => "Set stage sound",
         _ => "Set wallpaper",
     };
     let (outcome, behaviour, deleted_id) = encode::process_file_into_slot(
@@ -1377,6 +1383,29 @@ async fn clear_media_slot(
     };
     let (behaviour, deleted_id) = pack
         .clear_media_slot(slot)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Some(SlotCleared {
+        behaviour,
+        deleted_id,
+    }))
+}
+
+/// Points a slot at media which is already in the pack. Unlike the import command this never
+/// changes the file's pool membership: choosing an existing popup or background track explicitly
+/// must not silently remove it from the role the author already gave it.
+#[tauri::command]
+async fn set_media_slot(
+    state: State<'_, AppState>,
+    slot: shared::behaviour::MediaSlot,
+    media_id: u64,
+) -> Result<Option<SlotCleared>, String> {
+    let lock = state.pack.lock().await;
+    let Some(pack) = lock.as_ref() else {
+        return Ok(None);
+    };
+    let (behaviour, deleted_id) = pack
+        .fill_media_slot(slot, media_id, false)
         .await
         .map_err(|e| e.to_string())?;
     Ok(Some(SlotCleared {
@@ -1805,6 +1834,7 @@ pub fn run() {
             remove_from_subliminals,
             add_subliminal_files_dialog,
             fill_media_slot_dialog,
+            set_media_slot,
             clear_media_slot,
             set_shown_as_popup,
             set_popup_audio,

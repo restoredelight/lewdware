@@ -23,6 +23,16 @@ local function secs(s)
 	return math.floor(s * 1000)
 end
 
+-- Gives short prompts enough time to read and refocus, then grows at a deliberately conservative
+-- 2.5 characters per second. Rounded to five seconds so the displayed deadline feels authored,
+-- not like a stopwatch derived from hidden arithmetic.
+local function automatic_timeout(text)
+	local characters = utf8.len(text) or #text
+	return math.ceil(math.max(15, 10 + characters / 2.5) / 5) * 5
+end
+
+M.automatic_timeout = automatic_timeout
+
 --- Whether `typed` counts as having typed `required`. Surrounding whitespace is forgiven (it is
 --- invisible, so holding someone to it would read as the dialog being broken); everything else,
 --- case included, has to match.
@@ -39,26 +49,33 @@ function M.fire(active_tags, overrides)
 	if not prompt then return false end
 	local settings = content.prompt_settings()
 	overrides = overrides or {}
-	local timeout_seconds = overrides.timeout_seconds
-	if timeout_seconds == nil and not overrides.ignore_settings then timeout_seconds = settings.timeout_seconds end
-	local wrong_answer = overrides.wrong_answer
-	if wrong_answer == nil and not overrides.ignore_settings then wrong_answer = settings.wrong_answer end
+	local timeout_seconds = prompt.timeout_seconds
+	if not timeout_seconds or timeout_seconds <= 0 then
+		timeout_seconds = automatic_timeout(prompt.text)
+	end
+	if overrides.timeouts_enabled == false then timeout_seconds = nil end
+	if timeout_seconds then
+		timeout_seconds = timeout_seconds * math.max(0.1, overrides.timeout_multiplier or 1)
+	end
 	local on_wrong = overrides.on_wrong
 	local closed = false
 	local timeout
+	local countdown
 	-- The dialog has to say what it wants before the user can do it: the title states the task,
 	-- the text is the thing to copy (bold, so it reads as the subject rather than as instructions
 	-- about it), and the placeholder repeats the instruction where the answer is actually typed.
 	-- Without all three, a prompt is a bare sentence over an empty box with no way to tell that
 	-- anything is being asked.
+	local elements = { { type = "text", text = prompt.text, bold = true } }
+	if timeout_seconds and timeout_seconds > 0 then
+		table.insert(elements, { type = "text", id = "countdown", text = string.format("Time remaining: %d seconds", math.ceil(timeout_seconds)) })
+	end
+	table.insert(elements, { type = "input", id = "response", placeholder = PLACEHOLDER })
+	table.insert(elements, { type = "buttons", options = {{ id = "submit", label = settings.submit_label or DEFAULT_SUBMIT_LABEL, default = true }} })
 	local dialog = lewdware.popup.dialog({
 		closeable = false,
 		title = TITLE,
-		elements = {
-			{ type = "text", text = prompt.text, bold = true },
-			{ type = "input", id = "response", placeholder = PLACEHOLDER },
-			{ type = "buttons", options = {{ id = "submit", label = settings.submit_label or DEFAULT_SUBMIT_LABEL, default = true }} },
-		},
+		elements = elements,
 	})
 
 	-- `values` is the snapshot taken when the user submitted; `dialog:value()` covers a caller
@@ -68,19 +85,12 @@ function M.fire(active_tags, overrides)
 		if matches(typed, prompt.text) then
 			closed = true
 			if timeout then timeout:stop() end
+			if countdown then countdown:stop() end
 			dialog:close()
 		else
 			-- Wrong: clear the box so it is obvious the attempt was rejected rather than lost.
 			dialog:update("response", { value = "" })
-			if wrong_answer and wrong_answer.kind == "add_time" and timeout_seconds then
-				if timeout then timeout:stop() end
-				timeout_seconds = timeout_seconds + (wrong_answer.seconds or 0)
-				timeout = lewdware.after(secs(timeout_seconds), function()
-					if not closed then closed = true; dialog:close() end
-				end)
-			elseif wrong_answer and on_wrong then
-				on_wrong(wrong_answer)
-			end
+			if on_wrong then on_wrong() end
 		end
 	end
 
@@ -88,7 +98,17 @@ function M.fire(active_tags, overrides)
 	dialog:on_submit(function(_, values) answer(values) end)
 	if timeout_seconds and timeout_seconds > 0 then
 		timeout = lewdware.after(secs(timeout_seconds), function()
-			if not closed then closed = true; dialog:close() end
+			if not closed then
+				closed = true
+				if countdown then countdown:stop() end
+				if on_wrong then on_wrong() end
+				dialog:close()
+			end
+		end)
+		local remaining = math.ceil(timeout_seconds)
+		countdown = lewdware.every(1000, function()
+			remaining = math.max(0, remaining - 1)
+			dialog:update("countdown", { text=string.format("Time remaining: %d seconds", remaining) })
 		end)
 	end
 	return true

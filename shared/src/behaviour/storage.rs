@@ -28,7 +28,7 @@ use crate::behaviour::SpawnRegion;
 use super::schema::{
     AudioMedia, Behaviour, Content, ContentGroup, ContentSelection, EventCountCondition,
     EventSchedule, Events, Experience, Interval, Mitosis, Movement, PopupMedia, PromptSettings,
-    PromptWrongAnswer, Stage, StageEnd, StageEntry, TextItem, Timeline, Transition, WebLink,
+    Stage, StageEnd, StageEntry, StagePrompt, TextItem, Timeline, Transition, WebLink,
 };
 
 /// The `pack_data` key the document used to live under.
@@ -50,29 +50,12 @@ pub fn read(conn: &Connection) -> Result<Behaviour> {
         .unwrap_or((None, None));
     let prompt_settings = conn
         .query_row(
-            "SELECT prompt_submit_label, prompt_timeout_seconds, prompt_wrong_answer_kind,
-                    prompt_wrong_answer_value FROM behaviour_settings WHERE singleton = 1",
+            "SELECT prompt_submit_label FROM behaviour_settings WHERE singleton = 1",
             [],
-            |row| {
-                Ok((
-                    row.get::<_, Option<String>>(0)?,
-                    row.get::<_, Option<f64>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<f64>>(3)?,
-                ))
-            },
+            |row| row.get::<_, Option<String>>(0),
         )
         .optional()?
-        .unwrap_or((None, None, None, None));
-    let wrong_answer = match (prompt_settings.2.as_deref(), prompt_settings.3) {
-        (Some("popup_burst"), Some(value)) => Some(PromptWrongAnswer::PopupBurst {
-            count: value.max(0.0) as u32,
-        }),
-        (Some("add_time"), Some(seconds)) => Some(PromptWrongAnswer::AddTime { seconds }),
-        (Some("sound"), _) => Some(PromptWrongAnswer::Sound),
-        (None, _) => None,
-        (Some(other), _) => bail!("unknown prompt wrong-answer effect {other:?}"),
-    };
+        .flatten();
 
     Ok(Behaviour {
         content: Content {
@@ -82,9 +65,7 @@ pub fn read(conn: &Connection) -> Result<Behaviour> {
             captions: read_text_pool(conn, "caption")?,
             prompts: read_text_pool(conn, "prompt")?,
             prompt_settings: PromptSettings {
-                submit_label: prompt_settings.0,
-                timeout_seconds: prompt_settings.1,
-                wrong_answer,
+                submit_label: prompt_settings,
             },
             notifications: read_text_pool(conn, "notification")?,
             subliminals: read_text_pool(conn, "subliminal")?,
@@ -99,12 +80,6 @@ pub fn read(conn: &Connection) -> Result<Behaviour> {
 /// Replaces the stored document with `behaviour`, touching only the rows that actually differ.
 pub fn write(tx: &Transaction<'_>, behaviour: &Behaviour) -> Result<()> {
     let content = &behaviour.content;
-    let (wrong_kind, wrong_value) = match &content.prompt_settings.wrong_answer {
-        Some(PromptWrongAnswer::PopupBurst { count }) => (Some("popup_burst"), Some(*count as f64)),
-        Some(PromptWrongAnswer::AddTime { seconds }) => (Some("add_time"), Some(*seconds)),
-        Some(PromptWrongAnswer::Sound) => (Some("sound"), None),
-        None => (None, None),
-    };
     tx.execute(
         "INSERT INTO behaviour_content (singleton, wallpaper, splash) VALUES (1, ?, ?)
          ON CONFLICT(singleton) DO UPDATE SET wallpaper = excluded.wallpaper,
@@ -112,21 +87,9 @@ pub fn write(tx: &Transaction<'_>, behaviour: &Behaviour) -> Result<()> {
         params![content.wallpaper, content.splash],
     )?;
     tx.execute(
-        "INSERT INTO behaviour_settings
-             (singleton, prompt_submit_label, prompt_timeout_seconds,
-              prompt_wrong_answer_kind, prompt_wrong_answer_value)
-         VALUES (1, ?, ?, ?, ?)
-         ON CONFLICT(singleton) DO UPDATE SET
-             prompt_submit_label = excluded.prompt_submit_label,
-             prompt_timeout_seconds = excluded.prompt_timeout_seconds,
-             prompt_wrong_answer_kind = excluded.prompt_wrong_answer_kind,
-             prompt_wrong_answer_value = excluded.prompt_wrong_answer_value",
-        params![
-            content.prompt_settings.submit_label,
-            content.prompt_settings.timeout_seconds,
-            wrong_kind,
-            wrong_value
-        ],
+        "INSERT INTO behaviour_settings (singleton, prompt_submit_label) VALUES (1, ?)
+         ON CONFLICT(singleton) DO UPDATE SET prompt_submit_label = excluded.prompt_submit_label",
+        params![content.prompt_settings.submit_label],
     )?;
     write_popup_media(tx, &content.popups)?;
     write_audio_media(tx, &content.audio)?;
@@ -352,16 +315,20 @@ fn write_audio_media(tx: &Transaction<'_>, audio: &BTreeMap<u64, AudioMedia>) ->
 // ── The content pools ────────────────────────────────────────────────────────
 
 fn read_text_pool(conn: &Connection, kind: &str) -> Result<Vec<TextItem>> {
-    let mut statement =
-        conn.prepare("SELECT id, text FROM behaviour_text_item WHERE kind = ? ORDER BY position")?;
-    let rows: Vec<(i64, String)> = statement
-        .query_map(params![kind], |row| Ok((row.get(0)?, row.get(1)?)))?
+    let mut statement = conn.prepare(
+        "SELECT id, text, timeout_seconds FROM behaviour_text_item WHERE kind = ? ORDER BY position",
+    )?;
+    let rows: Vec<(i64, String, Option<f64>)> = statement
+        .query_map(params![kind], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
         .collect::<rusqlite::Result<_>>()?;
     rows.into_iter()
-        .map(|(id, text)| {
+        .map(|(id, text, timeout_seconds)| {
             Ok(TextItem {
                 text,
                 tags: read_tags(conn, "behaviour_text_item_tag", "item_id", &id)?,
+                timeout_seconds,
             })
         })
         .collect()
@@ -376,10 +343,11 @@ fn write_text_pool(tx: &Transaction<'_>, kind: &str, items: &[TextItem]) -> Resu
     )?;
     for (position, item) in items.iter().enumerate() {
         let id: i64 = tx.query_row(
-            "INSERT INTO behaviour_text_item (kind, position, text) VALUES (?1, ?2, ?3)
-             ON CONFLICT(kind, position) DO UPDATE SET text = excluded.text
+            "INSERT INTO behaviour_text_item (kind, position, text, timeout_seconds) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(kind, position) DO UPDATE SET text = excluded.text,
+                                                       timeout_seconds = excluded.timeout_seconds
              RETURNING id",
-            params![kind, position as i64, item.text],
+            params![kind, position as i64, item.text, item.timeout_seconds],
             |row| row.get(0),
         )?;
         write_tags(tx, "behaviour_text_item_tag", "item_id", &id, &item.tags)?;
@@ -591,9 +559,9 @@ fn read_experience(conn: &Connection) -> Result<Option<Experience>> {
 
 fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
     let mut statement = conn.prepare(
-        "SELECT id, label, restricts_content, wallpaper, audio FROM behaviour_stage ORDER BY position",
+        "SELECT id, label, restricts_content, wallpaper, audio, audio_random FROM behaviour_stage ORDER BY position",
     )?;
-    let rows: Vec<(String, String, bool, Option<u64>, Option<u64>)> = statement
+    let rows: Vec<(String, String, bool, Option<u64>, Option<u64>, bool)> = statement
         .query_map([], |row| {
             Ok((
                 row.get(0)?,
@@ -601,39 +569,52 @@ fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
                 row.get(2)?,
                 row.get(3)?,
                 row.get(4)?,
+                row.get(5)?,
             ))
         })?
         .collect::<rusqlite::Result<_>>()?;
 
     rows.into_iter()
-        .map(|(id, label, restricts_content, wallpaper, audio)| {
-            Ok(Stage {
-                content: ContentSelection {
-                    tags: restricts_content
-                        .then(|| read_tags(conn, "behaviour_stage_tag", "stage_id", &id))
-                        .transpose()?,
-                    owned_tag: read_owned_stage_tag(conn, &id)?,
-                    wallpaper,
-                    audio,
-                },
-                end: read_stage_end(conn, &id)?,
-                events: read_stage_events(conn, &id)?,
-                movement: read_stage_movement(conn, &id)?,
-                mitosis: read_stage_mitosis(conn, &id)?,
-                on_enter: read_stage_entry(conn, &id)?,
-                id,
-                label,
-            })
-        })
+        .map(
+            |(id, label, restricts_content, wallpaper, audio, audio_random)| {
+                Ok(Stage {
+                    content: ContentSelection {
+                        tags: restricts_content
+                            .then(|| read_tags(conn, "behaviour_stage_tag", "stage_id", &id))
+                            .transpose()?,
+                        owned_tag: read_owned_stage_tag(conn, &id)?,
+                        wallpaper,
+                        audio,
+                        audio_random,
+                    },
+                    end: read_stage_end(conn, &id)?,
+                    events: read_stage_events(conn, &id)?,
+                    movement: read_stage_movement(conn, &id)?,
+                    mitosis: read_stage_mitosis(conn, &id)?,
+                    on_enter: read_stage_entry(conn, &id)?.unwrap_or_default(),
+                    prompt: read_stage_prompt(conn, &id)?,
+                    id,
+                    label,
+                })
+            },
+        )
         .collect()
 }
 
 fn read_stage_entry(conn: &Connection, stage: &str) -> Result<Option<StageEntry>> {
     Ok(conn.query_row(
-        "SELECT splash, sound, popup_burst, notification FROM behaviour_stage_entry WHERE stage_id = ?",
+        "SELECT splash_media, sound_media, popup_burst, notification_text FROM behaviour_stage_entry WHERE stage_id = ?",
         params![stage],
         |row| Ok(StageEntry { splash: row.get(0)?, sound: row.get(1)?, popup_burst: row.get(2)?, notification: row.get(3)? }),
     ).optional()?)
+}
+
+fn read_stage_prompt(conn: &Connection, stage: &str) -> Result<StagePrompt> {
+    Ok(conn.query_row(
+        "SELECT timeouts_enabled, timeout_multiplier, popup_burst, sound_media FROM behaviour_stage_prompt WHERE stage_id = ?",
+        params![stage],
+        |row| Ok(StagePrompt { timeouts_enabled: row.get(0)?, timeout_multiplier: row.get(1)?, popup_burst: row.get(2)?, sound: row.get(3)? }),
+    ).optional()?.unwrap_or_default())
 }
 
 /// The tag this stage owns, if it has one.
@@ -877,13 +858,14 @@ fn write_stages(tx: &Transaction<'_>, stages: &[Stage]) -> Result<()> {
     )?;
     for (position, stage) in stages.iter().enumerate() {
         tx.execute(
-            "INSERT INTO behaviour_stage (id, position, label, restricts_content, wallpaper, audio)
-             VALUES (?, ?, ?, ?, ?, ?)
+            "INSERT INTO behaviour_stage (id, position, label, restricts_content, wallpaper, audio, audio_random)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET position = excluded.position,
                                            label = excluded.label,
                                            restricts_content = excluded.restricts_content,
                                            wallpaper = excluded.wallpaper,
-                                           audio = excluded.audio",
+                                           audio = excluded.audio,
+                                           audio_random = excluded.audio_random",
             params![
                 stage.id,
                 position as i64,
@@ -891,6 +873,7 @@ fn write_stages(tx: &Transaction<'_>, stages: &[Stage]) -> Result<()> {
                 stage.content.tags.is_some(),
                 stage.content.wallpaper,
                 stage.content.audio,
+                stage.content.audio_random,
             ],
         )?;
         write_tags(
@@ -904,7 +887,12 @@ fn write_stages(tx: &Transaction<'_>, stages: &[Stage]) -> Result<()> {
         write_stage_end(tx, &stage.id, stage.end.as_ref())?;
         write_stage_movement(tx, &stage.id, stage.movement.as_ref())?;
         write_stage_mitosis(tx, &stage.id, stage.mitosis.as_ref())?;
-        write_stage_entry(tx, &stage.id, stage.on_enter.as_ref())?;
+        write_stage_entry(
+            tx,
+            &stage.id,
+            (!stage.on_enter.is_default()).then_some(&stage.on_enter),
+        )?;
+        write_stage_prompt(tx, &stage.id, &stage.prompt)?;
         write_stage_events(tx, &stage.id, &stage.events)?;
     }
     Ok(())
@@ -919,16 +907,43 @@ fn write_stage_entry(tx: &Transaction<'_>, stage: &str, entry: Option<&StageEntr
         return Ok(());
     };
     tx.execute(
-        "INSERT INTO behaviour_stage_entry (stage_id, splash, sound, popup_burst, notification)
+        "INSERT INTO behaviour_stage_entry (stage_id, splash_media, sound_media, popup_burst, notification_text)
          VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(stage_id) DO UPDATE SET splash = excluded.splash, sound = excluded.sound,
-             popup_burst = excluded.popup_burst, notification = excluded.notification",
+         ON CONFLICT(stage_id) DO UPDATE SET splash_media = excluded.splash_media,
+             sound_media = excluded.sound_media, popup_burst = excluded.popup_burst,
+             notification_text = excluded.notification_text",
         params![
             stage,
             entry.splash,
             entry.sound,
             entry.popup_burst,
             entry.notification
+        ],
+    )?;
+    Ok(())
+}
+
+fn write_stage_prompt(tx: &Transaction<'_>, stage: &str, prompt: &StagePrompt) -> Result<()> {
+    if prompt == &StagePrompt::default() {
+        tx.execute(
+            "DELETE FROM behaviour_stage_prompt WHERE stage_id = ?",
+            params![stage],
+        )?;
+        return Ok(());
+    }
+    tx.execute(
+        "INSERT INTO behaviour_stage_prompt
+             (stage_id, timeouts_enabled, timeout_multiplier, popup_burst, sound_media)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(stage_id) DO UPDATE SET timeouts_enabled = excluded.timeouts_enabled,
+             timeout_multiplier = excluded.timeout_multiplier,
+             popup_burst = excluded.popup_burst, sound_media = excluded.sound_media",
+        params![
+            stage,
+            prompt.timeouts_enabled,
+            prompt.timeout_multiplier,
+            prompt.popup_burst,
+            prompt.sound
         ],
     )?;
     Ok(())
@@ -1193,7 +1208,8 @@ mod tests {
             events: Events::default(),
             movement: None,
             mitosis: None,
-            on_enter: None,
+            on_enter: Default::default(),
+            prompt: Default::default(),
         }
     }
 
@@ -1205,12 +1221,12 @@ mod tests {
         first.content.tags = Some(vec!["kinky".to_string(), "soft".to_string()]);
         first.content.wallpaper = Some(1);
         first.content.audio = Some(3);
-        first.on_enter = Some(StageEntry {
-            splash: true,
-            sound: true,
+        first.on_enter = StageEntry {
+            splash: Some(1),
+            sound: Some(3),
             popup_burst: Some(4),
-            notification: true,
-        });
+            notification: Some("Enter".to_string()),
+        };
         first.end = Some(StageEnd {
             duration_seconds: Some(300.0),
             event_count: Some(EventCountCondition {
@@ -1228,6 +1244,8 @@ mod tests {
             chance: Some(0.5),
             count: Some(2),
         });
+        first.prompt.timeout_multiplier = 1.5;
+        first.prompt.popup_burst = Some(5);
         first.events.popup = Some(EventSchedule {
             interval: Interval::Fixed { seconds: 30.0 },
             initial_delay_seconds: Some(5.0),
@@ -1289,28 +1307,31 @@ mod tests {
                     TextItem {
                         text: "Obey.".to_string(),
                         tags: vec!["kinky".to_string()],
+                        timeout_seconds: None,
                     },
                     TextItem {
                         text: "Good.".to_string(),
                         tags: vec![],
+                        timeout_seconds: None,
                     },
                 ],
                 prompts: vec![TextItem {
                     text: "Type this.".to_string(),
                     tags: vec![],
+                    timeout_seconds: Some(30.0),
                 }],
                 prompt_settings: PromptSettings {
                     submit_label: Some("Obey".to_string()),
-                    timeout_seconds: Some(45.0),
-                    wrong_answer: Some(PromptWrongAnswer::PopupBurst { count: 3 }),
                 },
                 notifications: vec![TextItem {
                     text: "Ping.".to_string(),
                     tags: vec!["soft".to_string()],
+                    timeout_seconds: None,
                 }],
                 subliminals: vec![TextItem {
                     text: "Deeper.".to_string(),
                     tags: vec![],
+                    timeout_seconds: None,
                 }],
                 web_links: vec![WebLink {
                     url: "https://duckduckgo.com/?q=".to_string(),
@@ -1733,6 +1754,7 @@ mod tests {
                 captions: vec![TextItem {
                     text: "Obey.".to_string(),
                     tags: vec!["fresh".to_string()],
+                    timeout_seconds: None,
                 }],
                 ..Default::default()
             },
@@ -1788,6 +1810,7 @@ mod tests {
                 captions: vec![TextItem {
                     text: "Obey.".to_string(),
                     tags: vec!["kinky".to_string()],
+                    timeout_seconds: None,
                 }],
                 wallpaper: Some(1),
                 ..Default::default()

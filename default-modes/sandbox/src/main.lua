@@ -45,8 +45,9 @@ local spawn = require("lib.spawn")
 ---    subliminal_opacity: number,
 ---    prompts_enabled: boolean,
 ---    prompt_frequency: number,
----    prompt_timeout: number | nil,
----    prompt_wrong_answer: "none" | "popup_burst" | "add_time" | "sound",
+---    prompt_timeouts_enabled: boolean,
+---    prompt_timeout_multiplier: number,
+---    prompt_wrong_answer: "none" | "popup_burst",
 ---    prompt_wrong_answer_value: number,
 ---    wallpaper_enabled: boolean,
 ---    splash_enabled: boolean,
@@ -224,24 +225,14 @@ end
 require("lib.notifications").start(is_dormant, config.notifications_enabled, config.notification_frequency)
 require("lib.web").start(is_dormant, config.web_opening_enabled, config.web_frequency)
 require("lib.subliminals").start(is_dormant, config.subliminals_enabled, config.subliminal_frequency)
-local function prompt_wrong(effect)
-	if effect.kind == "popup_burst" and #popup_types > 0 then
-		for _ = 1, (effect.count or 1) do open_popup() end
-	elseif effect.kind == "sound" and config.popup_audio_enabled then
-		local audio = media.random_popup_sting()
-		if audio then lewdware.play_audio(audio, media.background_options(audio, config.popup_volume)) end
+local function prompt_wrong()
+	if config.prompt_wrong_answer == "popup_burst" and #popup_types > 0 then
+		for _ = 1, config.prompt_wrong_answer_value do open_popup() end
 	end
 end
-local wrong_answer = nil
-if config.prompt_wrong_answer == "popup_burst" then
-	wrong_answer = { kind="popup_burst", count=config.prompt_wrong_answer_value }
-elseif config.prompt_wrong_answer == "add_time" then
-	wrong_answer = { kind="add_time", seconds=config.prompt_wrong_answer_value }
-elseif config.prompt_wrong_answer == "sound" then wrong_answer = { kind="sound" } end
 require("lib.prompts").start(is_dormant, config.prompts_enabled, config.prompt_frequency, nil, nil, {
-	ignore_settings=true,
-	timeout_seconds=config.prompt_timeout,
-	wrong_answer=wrong_answer,
+	timeouts_enabled=config.prompt_timeouts_enabled,
+	timeout_multiplier=config.prompt_timeout_multiplier,
 	on_wrong=prompt_wrong,
 })
 

@@ -12,6 +12,7 @@ use crate::{
     lua::{
         ItemId, WindowProps,
         api::{DialogElement, DialogElementUpdate, Notification, PopupSpawnOpts, TextStyle},
+        audio::VolumeFadeOpts,
         window::{FadeOpts, MoveOpts},
     },
     media::FileOrPath,
@@ -262,6 +263,13 @@ impl<T: EventPoster> WindowRequestSender<T> {
         )
     }
 
+    pub fn fade_video_volume(&self, id: u64, opts: Option<VolumeFadeOpts>) -> Result<bool> {
+        window_found(
+            self.send(|tx| WindowAction::FadeVideoVolume { tx, id, opts })
+                .flatten(),
+        )
+    }
+
     pub fn set_video_loop(&self, loop_video: bool) -> Result<bool> {
         window_found(
             self.send(|tx| WindowAction::SetVideoLoop { tx, loop_video })
@@ -340,6 +348,10 @@ impl<T: EventPoster> AudioRequestSender<T> {
 
     pub fn set_volume(&self, volume: f32) -> Result<()> {
         self.send(|tx| AudioAction::SetVolume { tx, volume })
+    }
+
+    pub fn fade_volume(&self, id: u64, opts: Option<VolumeFadeOpts>) -> Result<()> {
+        self.send(|tx| AudioAction::FadeVolume { tx, id, opts })
     }
 
     pub fn stop(&self) -> Result<()> {
@@ -434,6 +446,11 @@ pub enum WindowAction {
         tx: mpsc::Sender<Result<()>>,
         volume: f32,
     },
+    FadeVideoVolume {
+        tx: mpsc::Sender<Result<()>>,
+        id: u64,
+        opts: Option<VolumeFadeOpts>,
+    },
     SetVideoLoop {
         tx: mpsc::Sender<Result<()>>,
         loop_video: bool,
@@ -476,8 +493,22 @@ pub enum WindowAction {
 
 #[derive(Debug)]
 pub enum AudioAction {
-    Pause { tx: mpsc::Sender<()> },
-    Play { tx: mpsc::Sender<()> },
-    SetVolume { tx: mpsc::Sender<()>, volume: f32 },
-    Stop { tx: mpsc::Sender<()> },
+    Pause {
+        tx: mpsc::Sender<()>,
+    },
+    Play {
+        tx: mpsc::Sender<()>,
+    },
+    SetVolume {
+        tx: mpsc::Sender<()>,
+        volume: f32,
+    },
+    FadeVolume {
+        tx: mpsc::Sender<()>,
+        id: u64,
+        opts: Option<VolumeFadeOpts>,
+    },
+    Stop {
+        tx: mpsc::Sender<()>,
+    },
 }

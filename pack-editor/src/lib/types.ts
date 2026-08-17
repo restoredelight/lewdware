@@ -98,6 +98,7 @@ export interface MediaServerInfo {
 export interface TextItem {
 	text: string;
 	tags: string[];
+	timeout_seconds?: number;
 }
 
 export interface WebLink {
@@ -108,11 +109,6 @@ export interface WebLink {
 
 export interface PromptSettings {
 	submit_label: string | null;
-	timeout_seconds?: number;
-	wrong_answer?:
-		| { kind: 'popup_burst'; count: number }
-		| { kind: 'add_time'; seconds: number }
-		| { kind: 'sound' };
 }
 
 export interface ContentGroup {
@@ -226,7 +222,10 @@ export type MediaSlot =
 	| { kind: 'wallpaper' }
 	| { kind: 'splash' }
 	| { kind: 'stage_wallpaper'; stage: string }
-	| { kind: 'stage_audio'; stage: string };
+	| { kind: 'stage_audio'; stage: string }
+	| { kind: 'stage_entry_splash'; stage: string }
+	| { kind: 'stage_entry_sound'; stage: string }
+	| { kind: 'stage_prompt_sound'; stage: string };
 
 /** One slot the Edgeware importer filled in as its media arrived (`import:slots-filled`). */
 export interface FilledSlot {
@@ -261,6 +260,8 @@ export interface ContentSelection {
 	wallpaper?: number;
 	/** Background track selected on entry; absent keeps the current track playing. */
 	audio?: number;
+	/** Select a fresh background track from active tags on entry. */
+	audio_random?: boolean;
 }
 export interface EventCountCondition {
 	event: 'popup' | 'web' | 'notification' | 'prompt' | 'subliminal' | 'sound';
@@ -281,12 +282,19 @@ export interface Stage {
 	movement?: Movement;
 	mitosis?: Mitosis;
 	on_enter?: StageEntry;
+	prompt?: StagePrompt;
 }
 export interface StageEntry {
-	splash?: boolean;
-	sound?: boolean;
+	splash?: number;
+	sound?: number;
 	popup_burst?: number;
-	notification?: boolean;
+	notification?: string;
+}
+export interface StagePrompt {
+	timeouts_enabled: boolean;
+	timeout_multiplier: number;
+	popup_burst?: number;
+	sound?: number;
 }
 export type TransitionValue =
 	// Broad values remain readable for behaviour documents created by early v3 editor builds.

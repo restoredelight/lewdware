@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import Toggle from '$ui/Toggle.svelte';
 	import Select from '$ui/Select.svelte';
 	import type { EventSchedule } from './types.js';
@@ -8,8 +9,9 @@
 		previous?: EventSchedule;
 		defaultInterval: number;
 		onchange: (value?: EventSchedule) => void;
+		children?: Snippet;
 	};
-	let { label, value, previous, defaultInterval, onchange }: Props = $props();
+	let { label, value, previous, defaultInterval, onchange, children }: Props = $props();
 	const seconds = (schedule?: EventSchedule) =>
 		schedule
 			? schedule.interval.kind === 'fixed'
@@ -124,7 +126,8 @@
 					}}
 				/></label
 			>
-		</div>{/if}
+		</div>
+		{@render children?.()}{/if}
 </div>
 
 <style>
@@ -156,6 +159,7 @@
 	.controls {
 		display: flex;
 		margin-top: 9px;
+		padding-left: 16px;
 		align-items: end;
 		gap: 10px;
 		flex-wrap: wrap;

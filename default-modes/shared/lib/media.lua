@@ -86,6 +86,7 @@ M.disabled_tags = disabled_tags
 -- covers any file an author wants kept out of popups, not just the mechanical slots.
 local NON_POPUP_TAG = "__lewdware-non-popup"
 local POPUP_AUDIO_TAG = "__lewdware-audio-popup"
+local EXPLICIT_ONLY_TAG = "__lewdware-explicit-only"
 -- The reserved namespace both of the above sit in (`shared/src/tags.rs`). A pack author's own tags
 -- never start with it, which is what lets popup audio be matched on its ordinary tags alone.
 local MANAGED_TAG_PREFIX = "__lewdware-"
@@ -147,6 +148,7 @@ local function merge_tags(opts)
 
 	local excluded = disabled_tags()
 	if not requested[NON_POPUP_TAG] then table.insert(excluded, NON_POPUP_TAG) end
+	if not requested[EXPLICIT_ONLY_TAG] then table.insert(excluded, EXPLICIT_ONLY_TAG) end
 	if #excluded == 0 then return opts end
 
 	local none = {}
