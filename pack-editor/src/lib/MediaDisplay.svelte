@@ -11,9 +11,19 @@
 		file: MediaFile;
 		/** CSS length capping the element's height; both viewers reserve room for their chrome. */
 		maxHeight?: string;
+		/**
+		 * CSS length capping the element's width.
+		 *
+		 * `100%` is right wherever the containing block has a width of its own, and wrong wherever
+		 * it does not: inside a shrink-to-fit wrapper the percentage resolves against a width
+		 * derived from this element, which is circular, and the engine drops it on the first pass
+		 * and applies it on the second — a video that renders too wide and then snaps in. A caller
+		 * whose wrapper hugs its content passes a real length instead. See `MediaViewer`.
+		 */
+		maxWidth?: string;
 	};
 
-	let { file, maxHeight = 'calc(100vh - 128px)' }: Props = $props();
+	let { file, maxHeight = 'calc(100vh - 128px)', maxWidth = '100%' }: Props = $props();
 
 	// Works around a WebKitGTK stall: a moment after playback starts, the player drops to
 	// `readyState = HAVE_CURRENT_DATA` and `networkState = NETWORK_LOADING` and stops advancing
@@ -40,6 +50,27 @@
 				? `dim=${info.width}x${info.height} transparent=${info.transparent} audio=${info.audio}`
 				: `kind=${info.type}`)
 		);
+	}
+
+	/**
+	 * The size the element will settle at, written before the browser knows the media's own.
+	 *
+	 * A `<video>` with no dimensions has a natural size of 300×150 until its metadata arrives, so
+	 * it lays out at that and then snaps to the real size a moment later. `aspect-ratio` alone does
+	 * not fix it — with both axes auto the used width is still the natural one, so the ratio is
+	 * right and the size is not.
+	 *
+	 * The fitted width is knowable in advance, though: it is whichever of the media's own width,
+	 * the container, and the height cap binds first, and CSS can say all three. `min()` of the
+	 * three with `height: auto` and the ratio reproduces exactly what `width: auto; max-width:
+	 * 100%; max-height: …` settles on — from the first frame instead of the second.
+	 *
+	 * Only as long as every term resolves on that first frame, which is what `maxWidth` is for:
+	 * a percentage against a containing block that sizes to this element is circular, and a term
+	 * the engine cannot resolve yet is a term it ignores.
+	 */
+	function fittedWidth(width: number, height: number): string {
+		return `min(${width}px, ${maxWidth}, calc(${maxHeight} * ${width} / ${height}))`;
 	}
 
 	function recoverFromStalls(node: HTMLMediaElement, file: MediaFile) {
@@ -112,18 +143,25 @@
 		loop
 		muted
 		playsinline
-		class="pointer-events-auto max-h-full max-w-full object-cover object-top"
-		style="aspect-ratio: {file.file_info.width} / {file.file_info.height}; max-height: {maxHeight}"
+		class="pointer-events-auto object-cover object-top"
+		style="width: {fittedWidth(file.file_info.width, file.file_info.height)}; height: auto;
+		       max-width: {maxWidth};
+		       aspect-ratio: {file.file_info.width} / {file.file_info.height}; max-height: {maxHeight}"
 	></video>
 {:else if file.file_info.type === 'video'}
+	<!-- Sized from the pack's own metadata rather than from the player's: see `fittedWidth`. This
+	     is the branch the snap was visible in, the transparent one having had a ratio (though not
+	     a width) all along. -->
 	<!-- svelte-ignore a11y_media_has_caption -->
 	<video
 		use:recoverFromStalls={file}
 		src={store.mediaUrl(`/file/${file.id}`, file.hash)}
 		draggable="false"
 		controls
-		class="pointer-events-auto max-h-full max-w-full"
-		style="max-height: {maxHeight}"
+		class="pointer-events-auto"
+		style="width: {fittedWidth(file.file_info.width, file.file_info.height)}; height: auto;
+		       max-width: {maxWidth};
+		       aspect-ratio: {file.file_info.width} / {file.file_info.height}; max-height: {maxHeight}"
 	></video>
 {:else if file.file_info.type === 'audio'}
 	<audio

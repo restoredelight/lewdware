@@ -1,0 +1,24 @@
+-- Which of a stage's tags the editor created for it, and therefore maintains the name of. See
+-- `behaviour-design/default-mode-v2.md`, "Stage tags: created, owned, renamed and retired with the
+-- stage".
+--
+-- The flag is what licenses the editor to rename a tag when its stage is renamed. A tag the author
+-- added by hand -- `imp`, `succubus`, everything the Edgeware converter produces -- means something
+-- outside the timeline, and rewriting one to tidy a stage name would be much worse than the tidiness
+-- it buys. Without the distinction there is no way to tell the two apart, because an owned tag is an
+-- ordinary tag in every other respect: it shows in the Tags tab, it goes on media, and an author may
+-- adopt it deliberately.
+--
+-- On `behaviour_stage_tag` rather than on `behaviour_stage`, so that "the stage owns this tag"
+-- cannot be recorded for a tag the stage does not actually select by: the row *is* the association.
+-- An unrestricted stage has no rows and so owns nothing, which is right -- there is no selection for
+-- a tag to be part of.
+--
+-- Nothing cleans this up. It cascades with the stage (and with the tag), and an orphaned tag is
+-- simply unowned: a later stage named "Intro" gets `stage-intro-2` rather than silently adopting a
+-- tag with forty-seven files on it.
+--
+-- Included by both migration ledgers from this one file, for the reason given in
+-- `0002_behaviour_timeline.sql`.
+ALTER TABLE behaviour_stage_tag
+    ADD COLUMN owned INTEGER NOT NULL DEFAULT 0 CHECK (owned IN (0, 1));

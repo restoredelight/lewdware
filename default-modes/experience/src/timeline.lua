@@ -13,11 +13,13 @@ local transitions = timeline.transitions or {}
 local stage_index = 1
 local phase = "stage"
 local generation = 0 -- invalidates timers left behind by an event-count advance
-local session_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0 }
-local stage_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0 }
+local session_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0, sound=0 }
+local stage_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0, sound=0 }
 local listeners = {}
+local enter_listeners = {}
 local current = stages[1] or { content={}, events={} }
 local duration_reached = false
+local audio_crossfade = nil
 
 local function milliseconds(seconds)
 	return math.max(0, math.floor((seconds or 0) * 1000))
@@ -76,6 +78,7 @@ end
 local event_values = {
 	popup="popup_interval", web="web_interval", notification="notification_interval",
 	prompt="prompt_interval", subliminal="subliminal_interval",
+	sound="sound_interval",
 }
 
 local function interpolate(from, to, transition, progress)
@@ -127,12 +130,19 @@ local function run_transition()
 	if duration_ms == 0 then enter_stage(stage_index + 1); return end
 
 	local source = stages[stage_index]
+	local target_audio = (next_stage.content or {}).audio
+	if target_audio and target_audio ~= (source.content or {}).audio
+		and selected(transition, "crossfade") then
+		audio_crossfade = { audio=target_audio, progress=0 }
+		notify()
+	end
 	local elapsed = 0
 	local tick_ms = math.min(50, duration_ms)
 	local function tick()
 		if token ~= generation then return end
 		elapsed = math.min(duration_ms, elapsed + tick_ms)
 		current = interpolate(source, next_stage, transition, ease(transition.easing, elapsed / duration_ms))
+		if audio_crossfade then audio_crossfade.progress = ease(transition.easing, elapsed / duration_ms) end
 		notify()
 		if elapsed >= duration_ms then enter_stage(stage_index + 1)
 		else lewdware.after(math.min(tick_ms, duration_ms - elapsed), tick) end
@@ -159,10 +169,12 @@ enter_stage = function(index)
 	local token = generation
 	stage_index = index
 	phase = "stage"
+	audio_crossfade = nil
 	duration_reached = false
-	stage_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0 }
+	stage_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0, sound=0 }
 	current = stages[index] or { content={}, events={} }
 	notify()
+	for _, listener in ipairs(enter_listeners) do listener(current.on_enter or {}) end
 	local ending = current["end"]
 	if not ending then return end
 	if ending.duration_seconds ~= nil then
@@ -179,6 +191,9 @@ function M.movement() return current.movement end
 function M.mitosis() return current.mitosis end
 function M.tags() return (current.content or {}).tags end
 function M.wallpaper() return (current.content or {}).wallpaper end
+function M.audio() return (current.content or {}).audio end
+function M.crossfade() return audio_crossfade end
+function M.entry() return current.on_enter or {} end
 function M.phase() return phase end
 function M.stage_index() return stage_index end
 
@@ -188,6 +203,7 @@ function M.any_stage(predicate)
 end
 
 function M.on_change(listener) table.insert(listeners, listener) end
+function M.on_enter(listener) table.insert(enter_listeners, listener) end
 
 function M.on_event(kind)
 	if session_counts[kind] == nil then return end

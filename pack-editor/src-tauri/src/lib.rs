@@ -12,7 +12,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use pack::{ArtistSummary, BehaviourEdit, MediaFile, MediaPack, TagSummary};
+use pack::{ArtistSummary, BehaviourEdit, MediaFile, MediaPack, TagAction, TagSummary};
 use serde::{Deserialize, Serialize};
 use shared::behaviour::{Behaviour, Patch};
 use shared::mode;
@@ -1255,19 +1255,20 @@ async fn get_behaviour(state: State<'_, AppState>) -> Result<Behaviour, String> 
 ///
 /// Takes patches rather than a document: the backend is the only writer of behaviour, so the
 /// front end describes what it changed instead of sending the copy it holds. `retiring` names
-/// media the action deliberately lets go of, so that dropping a stage and dropping the wallpaper
-/// that existed only for it are one transaction and one undo entry. See
-/// [`MediaPack::edit_behaviour`].
+/// media the action deliberately lets go of, and `tag_actions` the tag edits that belong to the
+/// same author action, so that dropping a stage and dropping the wallpaper and the tag that
+/// existed only for it are one transaction and one undo entry. See [`MediaPack::edit_behaviour`].
 #[tauri::command]
 async fn edit_behaviour(
     state: State<'_, AppState>,
     patches: Vec<Patch>,
     label: String,
     retiring: Vec<u64>,
+    tag_actions: Vec<TagAction>,
 ) -> Result<BehaviourEdit, String> {
     let lock = state.pack.lock().await;
     let pack = lock.as_ref().ok_or_else(|| "No pack open".to_string())?;
-    pack.edit_behaviour(patches, label, retiring)
+    pack.edit_behaviour(patches, label, retiring, tag_actions)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1298,6 +1299,10 @@ async fn fill_media_slot_dialog(
 ) -> Result<Option<SlotFilled>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (extensions, label): (&[&str], &str) = match slot {
+        shared::behaviour::MediaSlot::StageAudio { .. } => (
+            &["mp3", "ogg", "wav", "flac", "m4a", "aac", "opus"],
+            "Audio",
+        ),
         shared::behaviour::MediaSlot::Splash => (
             &[
                 "png", "jpg", "jpeg", "webp", "avif", "bmp", "gif", "mp4", "webm", "mkv", "mov",
@@ -1330,6 +1335,7 @@ async fn fill_media_slot_dialog(
         .unwrap_or(HardwareEncoder::SoftwareFallback);
     let label = match slot {
         shared::behaviour::MediaSlot::Splash => "Set splash",
+        shared::behaviour::MediaSlot::StageAudio { .. } => "Set stage audio",
         _ => "Set wallpaper",
     };
     let (outcome, behaviour, deleted_id) = encode::process_file_into_slot(

@@ -19,6 +19,24 @@ function previewable(): boolean {
 export function openMediaPreview(id: number): boolean {
 	if (!previewable()) return false;
 	store.openedId = id;
+	store.openedSelection = false;
+	return true;
+}
+
+/**
+ * The same viewer, scoped to the current selection: prev/next walk it, and every popup control
+ * inside writes to all of it.
+ *
+ * This is how bulk editing reaches an overlay that is a one-file surface by construction. Opening
+ * on the first selected file rather than on the one that was right-clicked, so the position
+ * indicator ("1 of 12") starts where the walk does.
+ */
+export function openSelectionEditor(): boolean {
+	if (!previewable()) return false;
+	const first = store.filteredFiles.find((file) => store.mediaTab.selectedIds.has(file.id));
+	if (!first) return false;
+	store.openedId = first.id;
+	store.openedSelection = true;
 	return true;
 }
 

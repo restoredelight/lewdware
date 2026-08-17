@@ -107,12 +107,55 @@
           "label": "Videos",
           "type": "boolean",
           "default": true
-        },
-        "audio_enabled": {
-          "label": "Audio",
-          "description": "Background music, and the sounds the pack marks as popup audio",
+        }
+      }
+    },
+    // The pack distinguishes background audio from popup audio (the Audio tab's role control), so
+    // the options do too -- one toggle over both would mean "turn the music off" and "stop the
+    // popups making noise" were the same request. Deliberately not in "Media types" above: that
+    // group is about what a *popup* contains.
+    "audio": {
+      "type": "group",
+      "label": "Audio",
+      "options": {
+        "background_audio_enabled": {
+          "label": "Background audio",
+          "description": "Plays continuously through the session",
           "type": "boolean",
           "default": true
+        },
+        "background_volume": {
+          "label": "Background volume",
+          "type": "number",
+          "default": 1,
+          "min": 0,
+          "max": 1,
+          "step": 0.05,
+          "slider": true,
+          "show_when": { "background_audio_enabled": true }
+        },
+        "popup_audio_enabled": {
+          "label": "Popup sounds",
+          "description": "The sounds the pack marks as popup audio, and the audio track of video popups",
+          "type": "boolean",
+          "default": true
+        },
+        "popup_volume": {
+          "label": "Popup volume",
+          "type": "number",
+          "default": 1,
+          "min": 0,
+          "max": 1,
+          "step": 0.05,
+          "slider": true,
+          "show_when": { "popup_audio_enabled": true }
+        },
+        "popup_audio_layered": {
+          "label": "Let popup sounds overlap",
+          "description": "Off by default: popups arrive in bursts, and one-shots layered over each other stop reading as individual sounds",
+          "type": "boolean",
+          "default": false,
+          "show_when": { "popup_audio_enabled": true }
         }
       }
     },
@@ -371,6 +414,36 @@
           "default": 90,
           "min": 1,
           "step": 1,
+          "show_when": { "prompts_enabled": true }
+        },
+        "prompt_timeout": {
+          "label": "Close prompt after (seconds)",
+          "description": "Leave off to keep prompts open until the text is typed correctly",
+          "type": "number",
+          "optional": true,
+          "enabled_by_default": false,
+          "default": 60,
+          "min": 1,
+          "step": 1,
+          "show_when": { "prompts_enabled": true }
+        },
+        "prompt_wrong_answer": {
+          "label": "On a wrong answer",
+          "type": "enum",
+          "default": "none",
+          "values": {
+            "none": { "label": "Clear the answer" },
+            "popup_burst": { "label": "Spawn a popup burst" },
+            "add_time": { "label": "Add time" },
+            "sound": { "label": "Play a popup sound" }
+          },
+          "show_when": { "prompts_enabled": true }
+        },
+        "prompt_wrong_answer_value": {
+          "label": "Burst count / seconds added",
+          "type": "integer",
+          "default": 5,
+          "min": 1,
           "show_when": { "prompts_enabled": true }
         }
       }

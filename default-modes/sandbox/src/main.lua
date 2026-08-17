@@ -8,7 +8,11 @@ local spawn = require("lib.spawn")
 ---    max_popups: number,
 ---    images_enabled: boolean,
 ---    videos_enabled: boolean,
----    audio_enabled: boolean,
+---    background_audio_enabled: boolean,
+---    background_volume: number,
+---    popup_audio_enabled: boolean,
+---    popup_volume: number,
+---    popup_audio_layered: boolean,
 ---    spawn_mode: "constant" | "accelerating" | "random",
 ---    start_frequency: number,
 ---    acceleration_factor: number,
@@ -41,6 +45,9 @@ local spawn = require("lib.spawn")
 ---    subliminal_opacity: number,
 ---    prompts_enabled: boolean,
 ---    prompt_frequency: number,
+---    prompt_timeout: number | nil,
+---    prompt_wrong_answer: "none" | "popup_burst" | "add_time" | "sound",
+---    prompt_wrong_answer_value: number,
 ---    wallpaper_enabled: boolean,
 ---    splash_enabled: boolean,
 ---}
@@ -106,7 +113,9 @@ local open_popup = spawn.make_spawner({
 	-- says so plainly rather than the mode overriding the choice.
 	auto_close_ms = config.auto_close_after and secs(config.auto_close_after),
 	captions_enabled = config.captions_enabled,
-	popup_audio_enabled = config.audio_enabled,
+	popup_audio_enabled = config.popup_audio_enabled,
+	popup_audio_volume = config.popup_volume,
+	popup_audio_layered = config.popup_audio_layered,
 	movement_enabled = config.movement_enabled,
 	movement_speed_min = config.movement_speed_min,
 	movement_speed_max = config.movement_speed_max,
@@ -162,7 +171,7 @@ spawn_audio = function()
 	-- No pcall needed: play_audio() always returns a handle immediately. If playback turns out
 	-- to be impossible, the handle becomes finished shortly after and on_finish still fires,
 	-- naturally continuing this loop.
-	local handle = lewdware.play_audio(audio)
+	local handle = lewdware.play_audio(audio, media.background_options(audio, config.background_volume))
 	handle:on_finish(spawn_audio)
 end
 
@@ -187,7 +196,7 @@ local function schedule_dormancy()
 			dormant = false
 			reset_interval()
 			schedule_spawning()
-			if config.audio_enabled then
+			if config.background_audio_enabled then
 				audio_active = true
 				spawn_audio()
 			end
@@ -203,7 +212,7 @@ if #popup_types > 0 then
 	schedule_spawning()
 end
 
-if config.audio_enabled then
+if config.background_audio_enabled then
 	audio_active = true
 	spawn_audio()
 end
@@ -215,7 +224,26 @@ end
 require("lib.notifications").start(is_dormant, config.notifications_enabled, config.notification_frequency)
 require("lib.web").start(is_dormant, config.web_opening_enabled, config.web_frequency)
 require("lib.subliminals").start(is_dormant, config.subliminals_enabled, config.subliminal_frequency)
-require("lib.prompts").start(is_dormant, config.prompts_enabled, config.prompt_frequency)
+local function prompt_wrong(effect)
+	if effect.kind == "popup_burst" and #popup_types > 0 then
+		for _ = 1, (effect.count or 1) do open_popup() end
+	elseif effect.kind == "sound" and config.popup_audio_enabled then
+		local audio = media.random_popup_sting()
+		if audio then lewdware.play_audio(audio, media.background_options(audio, config.popup_volume)) end
+	end
+end
+local wrong_answer = nil
+if config.prompt_wrong_answer == "popup_burst" then
+	wrong_answer = { kind="popup_burst", count=config.prompt_wrong_answer_value }
+elseif config.prompt_wrong_answer == "add_time" then
+	wrong_answer = { kind="add_time", seconds=config.prompt_wrong_answer_value }
+elseif config.prompt_wrong_answer == "sound" then wrong_answer = { kind="sound" } end
+require("lib.prompts").start(is_dormant, config.prompts_enabled, config.prompt_frequency, nil, nil, {
+	ignore_settings=true,
+	timeout_seconds=config.prompt_timeout,
+	wrong_answer=wrong_answer,
+	on_wrong=prompt_wrong,
+})
 
 wallpaper.apply_wallpaper()
 wallpaper.show_splash()

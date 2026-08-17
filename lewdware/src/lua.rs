@@ -261,6 +261,7 @@ fn lua_view<T: serde::Serialize>(
                 .and_then(serde_json::Value::as_object_mut)
             {
                 resolve_slot(content, "wallpaper", &name_of);
+                resolve_slot(content, "audio", &name_of);
             }
         }
     }
@@ -1029,6 +1030,7 @@ mod tests {
         SpawnImage { media_id: u64 },
         SpawnVideo { media_id: u64, volume: f32 },
         SpawnAudio { media_id: u64, volume: f32 },
+        SetAudioVolume { id: ItemId, volume: f32 },
         SpawnDialog,
         SpawnText,
         CloseWindow { id: ItemId },
@@ -1263,7 +1265,11 @@ mod tests {
                     AudioAction::Play { tx } => {
                         let _ = tx.send(());
                     }
-                    AudioAction::SetVolume { tx, .. } => {
+                    AudioAction::SetVolume { tx, volume } => {
+                        recorded
+                            .lock()
+                            .unwrap()
+                            .push(Recorded::SetAudioVolume { id, volume });
                         let _ = tx.send(());
                     }
                     AudioAction::Stop { tx } => {
@@ -2795,9 +2801,12 @@ mod tests {
 							local media = require("lib.media")
 							local background = media.random_background_audio()
 							assert(background and background.name == "music.ogg")
-							local effect = media.random_popup_audio({ "kinky" })
+							-- An item, not a bare tag list: the picker reads `id` for explicit
+							-- pairings and falls back to `tags`. Id 0 matches no file, so this
+							-- exercises the tag path.
+							local effect = media.random_popup_audio({ id = 0, tags = { "kinky" } })
 							assert(effect and effect.name == "effect.ogg")
-							assert(media.random_popup_audio({ "vanilla" }) == nil)
+							assert(media.random_popup_audio({ id = 0, tags = { "vanilla" } }) == nil)
 						"#,
                     ),
                     (
@@ -2843,11 +2852,14 @@ mod tests {
 
 							-- Audio with no tags of its own suits any popup, including one with no tags;
 							-- audio that names tags suits only a popup sharing one.
-							assert(media.random_popup_audio({ "vanilla" }).name == "ambient.ogg")
-							assert(media.random_popup_audio({}).name == "ambient.ogg")
-							local shared_tag = media.random_popup_audio({ "kinky" }).name
+							assert(media.random_popup_audio({ id = 0, tags = { "vanilla" } }).name == "ambient.ogg")
+							assert(media.random_popup_audio({ id = 0, tags = {} }).name == "ambient.ogg")
+							local shared_tag = media.random_popup_audio({ id = 0, tags = { "kinky" } }).name
 							assert(shared_tag == "effect.ogg" or shared_tag == "ambient.ogg")
 
+							-- Still one: the by-id index the explicit pairings need is only built
+							-- when a popup actually has one, so a pack without pairings pays for
+							-- nothing.
 							assert(queries == 1, "expected one pool query, got " .. queries)
 						"#,
                     ),
@@ -3023,12 +3035,35 @@ mod tests {
         sources
     }
 
-    /// Baseline `mode_config` covering every key `default-modes/src/main.lua` reads unconditionally
-    /// at startup -- image-only, constant-interval spawning at 1 popup/second, every optional
-    /// feature off. The harness hands Lua `lewdware.config` exactly as given (unlike the real app,
-    /// which resolves defaults first via `resolve_mode_config`), so a test running the real
-    /// `main.lua` must supply every key it reads; tests extend/override individual keys via
-    /// `.insert(...)` on the returned map.
+    /// The audio group both modes share (`audio` in either `config.jsonc`): both roles off, so a
+    /// test that wants sound turns on the one role it is about. The volumes are still supplied --
+    /// the modes read them whether or not the toggle is on, and the harness materialises no
+    /// defaults.
+    fn base_audio_config() -> HashMap<String, OptionValue> {
+        HashMap::from([
+            (
+                "background_audio_enabled".to_string(),
+                OptionValue::Boolean(false),
+            ),
+            ("background_volume".to_string(), OptionValue::Number(1.0)),
+            (
+                "popup_audio_enabled".to_string(),
+                OptionValue::Boolean(false),
+            ),
+            ("popup_volume".to_string(), OptionValue::Number(1.0)),
+            (
+                "popup_audio_layered".to_string(),
+                OptionValue::Boolean(false),
+            ),
+        ])
+    }
+
+    /// Baseline `mode_config` covering every key `default-modes/sandbox/src/main.lua` reads
+    /// unconditionally at startup -- image-only, constant-interval spawning at 1 popup/second,
+    /// every optional feature off. The harness hands Lua `lewdware.config` exactly as given
+    /// (unlike the real app, which resolves defaults first via `resolve_mode_config`), so a test
+    /// running the real `main.lua` must supply every key it reads; tests extend/override
+    /// individual keys via `.insert(...)` on the returned map.
     fn base_default_mode_config() -> HashMap<String, OptionValue> {
         let mut config = HashMap::new();
         config.insert(
@@ -3039,7 +3074,7 @@ mod tests {
         config.insert("max_popups".to_string(), OptionValue::Integer(5));
         config.insert("images_enabled".to_string(), OptionValue::Boolean(true));
         config.insert("videos_enabled".to_string(), OptionValue::Boolean(false));
-        config.insert("audio_enabled".to_string(), OptionValue::Boolean(false));
+        config.extend(base_audio_config());
         config.insert("dormancy_enabled".to_string(), OptionValue::Boolean(false));
         config.insert(
             "close_trigger_enabled".to_string(),
@@ -3070,7 +3105,7 @@ mod tests {
         config.insert("max_popups".to_string(), OptionValue::Integer(5));
         config.insert("images_enabled".to_string(), OptionValue::Boolean(true));
         config.insert("videos_enabled".to_string(), OptionValue::Boolean(false));
-        config.insert("audio_enabled".to_string(), OptionValue::Boolean(false));
+        config.extend(base_audio_config());
         config.insert(
             "close_trigger_enabled".to_string(),
             OptionValue::Boolean(false),
@@ -3191,7 +3226,9 @@ mod tests {
                     end,
                     content: ContentSelection {
                         tags: level.tags.clone(),
+                        owned_tag: None,
                         wallpaper: level.wallpaper,
+                        audio: None,
                     },
                     events: Events {
                         popup: schedule(level.anchors.popup),
@@ -3199,9 +3236,11 @@ mod tests {
                         notification: schedule(level.anchors.notification),
                         prompt: schedule(level.anchors.prompt),
                         subliminal: schedule(level.anchors.subliminal),
+                        sound: None,
                     },
                     movement: movement(&level.design),
                     mitosis: mitosis(&level.design),
+                    on_enter: None,
                 }
             })
             .collect::<Vec<_>>();
@@ -3935,6 +3974,7 @@ mod tests {
                     }],
                     prompt_settings: shared::behaviour::PromptSettings {
                         submit_label: Some("Confirm".to_string()),
+                        ..Default::default()
                     },
                     ..Default::default()
                 };
@@ -3995,6 +4035,94 @@ mod tests {
                 harness.advance(Duration::from_millis(1100)).await;
 
                 assert_eq!(harness.eval_string("DIALOG_LABEL"), "Submit");
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn experience_prompt_timeout_closes_the_dialog() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    prompts: vec![shared::behaviour::TextItem {
+                        text: "Well?".into(),
+                        tags: vec![],
+                    }],
+                    prompt_settings: shared::behaviour::PromptSettings {
+                        timeout_seconds: Some(0.2),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let experience = experience_with_baseline(
+                    FrequencyAnchors {
+                        prompt: Some(10.0),
+                        ..Default::default()
+                    },
+                    DesignValues::default(),
+                );
+                let mut config = isolated_experience_process_config();
+                config.insert("prompts_enabled".into(), OptionValue::Boolean(true));
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(10_100)).await;
+                assert_eq!(harness.recorded(), vec![Recorded::SpawnDialog]);
+                harness.advance(Duration::from_millis(200)).await;
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnDialog,
+                        Recorded::CloseWindow { id: ItemId(0) },
+                    ]
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wrong_answer_popup_effect_is_a_noop_when_popups_are_disabled() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    prompts: vec![shared::behaviour::TextItem {
+                        text: "Well?".into(),
+                        tags: vec![],
+                    }],
+                    ..Default::default()
+                };
+                let mut config = isolated_process_config();
+                config.insert("prompts_enabled".into(), OptionValue::Boolean(true));
+                config.insert("prompt_frequency".into(), OptionValue::Number(1.0));
+                config.insert(
+                    "prompt_wrong_answer".into(),
+                    OptionValue::Enum("popup_burst".into()),
+                );
+                config.insert("prompt_wrong_answer_value".into(), OptionValue::Integer(5));
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture(false),
+                    content,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1_100)).await;
+                harness.send_event(Event::DialogSelect {
+                    id: ItemId(0),
+                    button_id: "submit".into(),
+                    values: HashMap::from([("response".into(), "wrong".into())]),
+                });
+                harness.pump_events();
+                assert_eq!(harness.recorded(), vec![Recorded::SpawnDialog]);
             })
             .await;
     }
@@ -4636,7 +4764,10 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let mut config = base_default_mode_config();
-                config.insert("audio_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert(
+                    "popup_audio_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
                 let media: &[(&str, &[&str])] = &[
                     ("popup.avif", &[]),
                     ("effect.ogg", &[shared::tags::POPUP_AUDIO_TAG]),
@@ -4676,7 +4807,10 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let mut config = base_default_mode_config();
-                config.insert("audio_enabled".to_string(), OptionValue::Boolean(true));
+                config.insert(
+                    "popup_audio_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
                 let media: &[(&str, &[&str])] = &[
                     ("popup.avif", &[]),
                     ("effect.ogg", &[shared::tags::POPUP_AUDIO_TAG]),
@@ -4725,6 +4859,107 @@ mod tests {
                             volume: 1.0,
                         },
                     ]
+                );
+            })
+            .await;
+    }
+
+    /// The other half of the switch above: a pack of short stings under a slow spawner is a
+    /// legitimate thing to want layered, and the user is the one who can hear which it is. With
+    /// layering on, the sound still playing does not block the next popup's -- and no slot is held,
+    /// so no `AudioFinish` is needed to release one.
+    #[tokio::test(start_paused = true)]
+    async fn layered_popup_sounds_stack_instead_of_holding_one_slot() {
+        LocalSet::new()
+            .run_until(async {
+                let mut config = base_default_mode_config();
+                config.insert(
+                    "popup_audio_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert(
+                    "popup_audio_layered".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                let media: &[(&str, &[&str])] = &[
+                    ("popup.avif", &[]),
+                    ("effect.ogg", &[shared::tags::POPUP_AUDIO_TAG]),
+                ];
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture_with_data(media, None),
+                    Content::default(),
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                harness.advance(Duration::from_millis(1100)).await;
+                harness.send_event(Event::WindowSpawned { id: ItemId(0) });
+                harness.pump_events();
+                harness.advance(Duration::from_millis(1000)).await;
+                harness.send_event(Event::WindowSpawned { id: ItemId(2) });
+                harness.pump_events();
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![
+                        Recorded::SpawnImage { media_id: 1 },
+                        Recorded::SpawnAudio {
+                            media_id: 2,
+                            volume: 1.0,
+                        },
+                        Recorded::SpawnImage { media_id: 1 },
+                        Recorded::SpawnAudio {
+                            media_id: 2,
+                            volume: 1.0,
+                        },
+                    ]
+                );
+            })
+            .await;
+    }
+
+    /// Popup sounds carry the user's popup volume, not the engine default -- the one magnitude
+    /// the user owns here (comfort, not pacing; see `behaviour-design/default-mode-v2.md`).
+    #[tokio::test(start_paused = true)]
+    async fn popup_sounds_play_at_the_users_popup_volume() {
+        LocalSet::new()
+            .run_until(async {
+                let mut config = base_default_mode_config();
+                config.insert(
+                    "popup_audio_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert("popup_volume".to_string(), OptionValue::Number(0.25));
+                let media: &[(&str, &[&str])] = &[
+                    ("popup.avif", &[]),
+                    ("effect.ogg", &[shared::tags::POPUP_AUDIO_TAG]),
+                ];
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture_with_data(media, None),
+                    Content::default(),
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+                harness.send_event(Event::WindowSpawned { id: ItemId(0) });
+                harness.pump_events();
+
+                assert!(
+                    harness.recorded().iter().any(|recorded| matches!(
+                        recorded,
+                        Recorded::SpawnAudio {
+                            media_id: 2,
+                            volume
+                        } if (*volume - 0.25).abs() < f32::EPSILON
+                    )),
+                    "expected the popup sound at the user's 0.25, got {:?}",
+                    harness.recorded()
                 );
             })
             .await;
@@ -5372,6 +5607,7 @@ mod tests {
                     },
                     movement: None,
                     mitosis: None,
+                    on_enter: None,
                 };
                 let second = Stage {
                     id: "second".into(),
@@ -5384,6 +5620,7 @@ mod tests {
                     },
                     movement: None,
                     mitosis: None,
+                    on_enter: None,
                 };
                 let experience = Experience {
                     timeline: Timeline {
@@ -5704,6 +5941,278 @@ mod tests {
     /// before/after time window (which races against exactly which spawn decisions happen to fall
     /// in the gap around the level's boundary instant, per rule 2). Checking the invariant at each
     /// decision point directly is deterministic regardless of that timing.
+    /// Captures the options the mode hands `popup.image`, so a test can assert what a per-item
+    /// attribute actually produced. The recorded `SpawnImage` carries only the media id, and
+    /// these are options rather than requests -- the engine resolves them into a size the fake
+    /// handler never sees.
+    const POPUP_OPTS_CAPTURE_WRAP: &str = r#"
+        CAPTURED_SCALE = -1
+        CAPTURED_REGION = ""
+        CAPTURED_MONITOR = -1
+        local real = lewdware.popup.image
+        lewdware.popup.image = function(item, opts)
+            CAPTURED_SCALE = opts.scale or -1
+            CAPTURED_REGION = opts.region and string.format(
+                "%g,%g,%g,%g",
+                opts.region.x, opts.region.y, opts.region.width, opts.region.height
+            ) or ""
+            CAPTURED_MONITOR = opts.monitor and opts.monitor.id or -1
+            return real(item, opts)
+        end
+    "#;
+
+    /// Per-item popup attributes reach the spawn call, and only where the author set them.
+    #[tokio::test(start_paused = true)]
+    async fn per_item_popup_attributes_are_applied_to_the_popup() {
+        LocalSet::new()
+            .run_until(async {
+                let media: &[(&str, &[&str])] = &[("popup.avif", &[])];
+                let mut content = Content::default();
+                content.popups.insert(
+                    1,
+                    shared::behaviour::PopupMedia {
+                        scale: Some(2.5),
+                        // A zero-size region at the far corner: the placement an anchor used to
+                        // name, now expressed as the degenerate case of the rectangle.
+                        region: Some(shared::behaviour::SpawnRegion {
+                            x: 1.0,
+                            y: 1.0,
+                            width: 0.0,
+                            height: 0.0,
+                        }),
+                        caption: Some("Pinned.".to_string()),
+                        ..Default::default()
+                    },
+                );
+
+                let owned = wrapped_default_mode_sources(POPUP_OPTS_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture_with_data(media, None),
+                    content,
+                    base_default_mode_config(),
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(harness.eval_number("CAPTURED_SCALE"), 2.5);
+                // The region reaches the engine as-is rather than being turned into coordinates
+                // here: only the engine knows the size it settled on after its own caps, and
+                // "inside this rectangle" is a statement about the whole window.
+                assert_eq!(harness.eval_string("CAPTURED_REGION"), "1,1,0,0");
+                // Said nothing about a monitor, so the mode names none and the engine picks.
+                assert_eq!(harness.eval_number("CAPTURED_MONITOR"), -1.0);
+                // The caption goes through `set_title`, which the harness records directly --
+                // the window is userdata, so a Lua wrapper cannot intercept the method.
+                assert!(
+                    harness.recorded().iter().any(|recorded| matches!(
+                        recorded,
+                        Recorded::SetTitle { title: Some(title), .. } if title == "Pinned."
+                    )),
+                    "a caption pinned to the file wins over the tag-matched pool, got {:?}",
+                    harness.recorded(),
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn per_item_weights_control_the_default_modes_popup_draw() {
+        LocalSet::new()
+            .run_until(async {
+                let media: &[(&str, &[&str])] = &[("ordinary.avif", &[]), ("hero.avif", &[])];
+                let mut content = Content::default();
+                content.popups.insert(
+                    1,
+                    shared::behaviour::PopupMedia {
+                        weight: Some(1e-300),
+                        ..Default::default()
+                    },
+                );
+                content.popups.insert(
+                    2,
+                    shared::behaviour::PopupMedia {
+                        weight: Some(1e300),
+                        ..Default::default()
+                    },
+                );
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture_with_data(media, None),
+                    content,
+                    base_default_mode_config(),
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert!(
+                    harness
+                        .recorded()
+                        .iter()
+                        .any(|recorded| matches!(recorded, Recorded::SpawnImage { media_id: 2 }))
+                );
+                assert!(
+                    !harness
+                        .recorded()
+                        .iter()
+                        .any(|recorded| matches!(recorded, Recorded::SpawnImage { media_id: 1 }))
+                );
+            })
+            .await;
+    }
+
+    /// A file asking for the primary monitor gets it named on the spawn call. The mode has to
+    /// resolve this itself -- `PopupOpts.monitor` is a `Monitor`, not a preference -- which is
+    /// also what lets it fall back silently when the user has switched that screen off.
+    #[tokio::test(start_paused = true)]
+    async fn a_file_can_ask_for_the_primary_monitor() {
+        LocalSet::new()
+            .run_until(async {
+                let media: &[(&str, &[&str])] = &[("popup.avif", &[])];
+                let mut content = Content::default();
+                content.popups.insert(
+                    1,
+                    shared::behaviour::PopupMedia {
+                        monitor: Some(shared::behaviour::MonitorPreference::Primary),
+                        ..Default::default()
+                    },
+                );
+
+                let owned = wrapped_default_mode_sources(POPUP_OPTS_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture_with_data(media, None),
+                    content,
+                    base_default_mode_config(),
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(harness.eval_number("CAPTURED_MONITOR"), 0.0);
+                // And it did not also acquire a region: the two are independent fields, and a
+                // monitor preference says nothing about where on that monitor the popup goes.
+                assert_eq!(harness.eval_string("CAPTURED_REGION"), "");
+            })
+            .await;
+    }
+
+    /// The other half: a file the author said nothing about is spawned exactly as before. An
+    /// attribute defaulted here rather than left absent would silently restyle every pack.
+    #[tokio::test(start_paused = true)]
+    async fn a_file_with_no_attributes_spawns_unchanged() {
+        LocalSet::new()
+            .run_until(async {
+                let media: &[(&str, &[&str])] = &[("popup.avif", &[])];
+                let owned = wrapped_default_mode_sources(POPUP_OPTS_CAPTURE_WRAP);
+                let sources = as_str_sources(&owned);
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture_with_data(media, None),
+                    Content::default(),
+                    base_default_mode_config(),
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(harness.eval_number("CAPTURED_SCALE"), -1.0, "no scale set");
+                assert_eq!(
+                    harness.eval_string("CAPTURED_REGION"),
+                    "",
+                    "placement left to the engine, not narrowed to a full-screen region"
+                );
+                assert_eq!(
+                    harness.eval_number("CAPTURED_MONITOR"),
+                    -1.0,
+                    "monitor left to the engine"
+                );
+                assert!(
+                    !harness
+                        .recorded()
+                        .iter()
+                        .any(|recorded| matches!(recorded, Recorded::SetTitle { .. })),
+                    "and no caption, since the pack has neither a pinned one nor a pool",
+                );
+            })
+            .await;
+    }
+
+    /// An explicit pairing is the author naming the sound for this popup, so it replaces tag
+    /// matching rather than being pooled with it -- otherwise naming one sound would leave the
+    /// popup mostly still playing the others.
+    #[tokio::test(start_paused = true)]
+    async fn an_explicit_pairing_replaces_tag_matching() {
+        LocalSet::new()
+            .run_until(async {
+                let media: &[(&str, &[&str])] = &[
+                    ("popup.avif", &[]),
+                    ("tagged.ogg", &[shared::tags::POPUP_AUDIO_TAG]),
+                    ("paired.ogg", &[shared::tags::POPUP_AUDIO_TAG]),
+                ];
+                let mut content = Content::default();
+                content.popups.insert(
+                    1,
+                    shared::behaviour::PopupMedia {
+                        audio: vec![3],
+                        ..Default::default()
+                    },
+                );
+                // Half volume on the paired file, to check the author's level composes with the
+                // user's rather than replacing it.
+                content
+                    .audio
+                    .insert(3, shared::behaviour::AudioMedia { volume: Some(0.5) });
+
+                let mut config = base_default_mode_config();
+                config.insert(
+                    "popup_audio_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert("popup_volume".to_string(), OptionValue::Number(0.5));
+
+                let mut harness = Harness::with_pack(
+                    &real_default_mode_sources(),
+                    pack_fixture_with_data(media, None),
+                    content,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+                harness.send_event(Event::WindowSpawned { id: ItemId(0) });
+                harness.pump_events();
+
+                let recorded = harness.recorded();
+                let sounds: Vec<&Recorded> = recorded
+                    .iter()
+                    .filter(|recorded| matches!(recorded, Recorded::SpawnAudio { .. }))
+                    .collect();
+                assert_eq!(sounds.len(), 1);
+                match sounds[0] {
+                    Recorded::SpawnAudio { media_id, volume } => {
+                        assert_eq!(*media_id, 3, "the paired sound, never the tag-matched one");
+                        assert!(
+                            (*volume - 0.25).abs() < f32::EPSILON,
+                            "0.5 user x 0.5 author, got {volume}",
+                        );
+                    }
+                    other => panic!("expected a sound, got {other:?}"),
+                }
+            })
+            .await;
+    }
+
     const SPAWN_NAME_CAPTURE_WRAP: &str = r#"
         KINKY_COUNT = 0
         VANILLA_WHILE_RESTRICTED = 0
@@ -5777,6 +6286,406 @@ mod tests {
                 assert!(
                     harness.eval_number("KINKY_COUNT") > 10.0,
                     "kinky spawns should still be happening at the full baseline rate"
+                );
+            })
+            .await;
+    }
+
+    /// `ContentSelection::tags` has three states, and the third one used to be lost in transit.
+    /// `None` is "no restriction"; `Some([])` is "deliberately no content" -- the distinction the
+    /// pack database keeps a `restricts_content` column for. The engine documents empty tag lists
+    /// as imposing no constraint (right for a query API), so an empty set arrived as `{ any = {} }`
+    /// and the clause was skipped: a stage selecting *no* content spawned from the *whole* pack.
+    /// `lib/media.lua` now absorbs the mismatch, which is what that layer exists for.
+    #[tokio::test(start_paused = true)]
+    async fn experience_stage_selecting_no_content_spawns_nothing() {
+        LocalSet::new()
+            .run_until(async {
+                const MEDIA: &[(&str, &[&str])] =
+                    &[("kinky.avif", &["kinky"]), ("untagged.avif", &[])];
+
+                let experience = levels_to_experience(vec![Level {
+                    anchors: FrequencyAnchors {
+                        popup: Some(0.05),
+                        ..Default::default()
+                    },
+                    // Deliberately no content -- not "no restriction", which is `None`.
+                    tags: Some(vec![]),
+                    ..Default::default()
+                }]);
+
+                let mut config = base_experience_mode_config();
+                config.insert("max_popups".to_string(), OptionValue::Integer(1_000));
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture_with_data(MEDIA, None),
+                    Content::default(),
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2900)).await;
+
+                let spawns = harness
+                    .recorded()
+                    .iter()
+                    .filter(|recorded| matches!(recorded, Recorded::SpawnImage { .. }))
+                    .count();
+                assert_eq!(
+                    spawns, 0,
+                    "a stage that selects no content must spawn nothing -- untagged media \
+                     included, since it is the pack-wide pool that was leaking through"
+                );
+            })
+            .await;
+    }
+
+    /// The other half: `None` must keep meaning "no restriction". A fix that made an absent tag
+    /// set select nothing would be the same bug with the sign flipped.
+    #[tokio::test(start_paused = true)]
+    async fn experience_stage_with_no_tag_restriction_still_spawns_everything() {
+        LocalSet::new()
+            .run_until(async {
+                const MEDIA: &[(&str, &[&str])] =
+                    &[("kinky.avif", &["kinky"]), ("untagged.avif", &[])];
+
+                let experience = levels_to_experience(vec![Level {
+                    anchors: FrequencyAnchors {
+                        popup: Some(0.05),
+                        ..Default::default()
+                    },
+                    tags: None,
+                    ..Default::default()
+                }]);
+
+                let mut config = base_experience_mode_config();
+                config.insert("max_popups".to_string(), OptionValue::Integer(1_000));
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture_with_data(MEDIA, None),
+                    Content::default(),
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(2900)).await;
+
+                let spawns = harness
+                    .recorded()
+                    .iter()
+                    .filter(|recorded| matches!(recorded, Recorded::SpawnImage { .. }))
+                    .count();
+                assert!(
+                    spawns > 10,
+                    "an unrestricted stage should spawn at the full rate, got {spawns}"
+                );
+            })
+            .await;
+    }
+
+    /// The same distinction on the audio path, which reaches it by a different route (the
+    /// stage-tag narrowing has a fallback to the whole background pool, and "no content" must not
+    /// be mistaken for "nothing matched").
+    #[tokio::test(start_paused = true)]
+    async fn experience_stage_selecting_no_content_is_silent() {
+        LocalSet::new()
+            .run_until(async {
+                const MEDIA: &[(&str, &[&str])] = &[("music.ogg", &[])];
+
+                let experience = levels_to_experience(vec![Level {
+                    tags: Some(vec![]),
+                    ..Default::default()
+                }]);
+
+                let mut config = isolated_experience_process_config();
+                config.insert(
+                    "background_audio_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture_with_data(MEDIA, None),
+                    Content::default(),
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![],
+                    "the stage selects no content, so the fallback to the whole background pool \
+                     must not fire"
+                );
+            })
+            .await;
+    }
+
+    /// The hole this closes: a stage's tag set already reached popups, captions, notifications,
+    /// web links, subliminals and prompts, but not the background music -- so "this stage is
+    /// about X" meant everything about it except what you could hear.
+    #[tokio::test(start_paused = true)]
+    async fn experience_background_audio_follows_the_stages_tag_set() {
+        LocalSet::new()
+            .run_until(async {
+                const MEDIA: &[(&str, &[&str])] =
+                    &[("calm.ogg", &["calm"]), ("harsh.ogg", &["harsh"])];
+
+                let experience = levels_to_experience(vec![Level {
+                    tags: Some(vec!["harsh".to_string()]),
+                    ..Default::default()
+                }]);
+
+                let mut config = isolated_experience_process_config();
+                config.insert(
+                    "background_audio_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture_with_data(MEDIA, None),
+                    Content::default(),
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![Recorded::SpawnAudio {
+                        media_id: 2,
+                        volume: 1.0,
+                    }],
+                    "the stage restricts content to `harsh`, so harsh.ogg is the only background \
+                     track eligible -- calm.ogg must not be picked"
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn experience_stage_audio_switches_once_and_none_retains_it() {
+        LocalSet::new()
+            .run_until(async {
+                const MEDIA: &[(&str, &[&str])] = &[("first.ogg", &[]), ("second.ogg", &[])];
+                let mut experience = levels_to_experience(vec![
+                    Level::default(),
+                    Level {
+                        at_seconds: 0.1,
+                        ..Default::default()
+                    },
+                    Level {
+                        at_seconds: 0.2,
+                        ..Default::default()
+                    },
+                ]);
+                experience.timeline.stages[0].content.audio = Some(1);
+                experience.timeline.stages[1].content.audio = Some(2);
+                // Third remains None: it must retain second. Repeating the second id would likewise
+                // compare equal and avoid a restart.
+                let mut config = isolated_experience_process_config();
+                config.insert(
+                    "background_audio_enabled".into(),
+                    OptionValue::Boolean(true),
+                );
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture_with_data(MEDIA, None),
+                    Content::default(),
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(300)).await;
+                let audio: Vec<_> = harness
+                    .recorded()
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        Recorded::SpawnAudio { media_id, .. } => Some(*media_id),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(audio, vec![1, 2]);
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn experience_scheduled_sounds_count_towards_stage_end() {
+        LocalSet::new()
+            .run_until(async {
+                use shared::behaviour::{
+                    CountScope, EndStrategy, EventCountCondition, EventKind, EventSchedule,
+                    Interval,
+                };
+
+                const MEDIA: &[(&str, &[&str])] =
+                    &[("sting.ogg", &[shared::tags::POPUP_AUDIO_TAG])];
+                let mut experience = levels_to_experience(vec![
+                    Level::default(),
+                    Level {
+                        at_seconds: 100.0,
+                        ..Default::default()
+                    },
+                ]);
+                let first = &mut experience.timeline.stages[0];
+                first.events.sound = Some(EventSchedule {
+                    interval: Interval::Fixed { seconds: 0.05 },
+                    initial_delay_seconds: Some(0.01),
+                    max_concurrent: None,
+                });
+                first.end = Some(shared::behaviour::StageEnd {
+                    duration_seconds: None,
+                    event_count: Some(EventCountCondition {
+                        event: EventKind::Sound,
+                        count: 2,
+                        scope: CountScope::Stage,
+                    }),
+                    strategy: EndStrategy::Any,
+                });
+
+                let mut config = isolated_experience_process_config();
+                config.insert("popup_audio_enabled".into(), OptionValue::Boolean(true));
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture_with_data(MEDIA, None),
+                    Content::default(),
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(150)).await;
+
+                assert_eq!(
+                    harness
+                        .recorded()
+                        .iter()
+                        .filter(|entry| matches!(entry, Recorded::SpawnAudio { media_id: 1, .. }))
+                        .count(),
+                    2
+                );
+                assert_eq!(
+                    harness.eval_number("require('timeline').stage_index()"),
+                    2.0
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn experience_crossfade_starts_the_next_track_before_the_transition_ends() {
+        LocalSet::new()
+            .run_until(async {
+                use shared::behaviour::TransitionCategory;
+
+                const MEDIA: &[(&str, &[&str])] = &[("first.ogg", &[]), ("second.ogg", &[])];
+                let mut experience = levels_to_experience(vec![
+                    Level::default(),
+                    Level {
+                        at_seconds: 0.1,
+                        ..Default::default()
+                    },
+                ]);
+                experience.timeline.stages[0].content.audio = Some(1);
+                experience.timeline.stages[1].content.audio = Some(2);
+                experience.timeline.transitions[0].duration_seconds = 1.0;
+                experience.timeline.transitions[0].affected = vec![TransitionCategory::Crossfade];
+
+                let mut config = isolated_experience_process_config();
+                config.insert(
+                    "background_audio_enabled".into(),
+                    OptionValue::Boolean(true),
+                );
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture_with_data(MEDIA, None),
+                    Content::default(),
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(200)).await;
+
+                let audio: Vec<_> = harness
+                    .recorded()
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        Recorded::SpawnAudio { media_id, .. } => Some(*media_id),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(audio, vec![1, 2]);
+                assert!(harness.recorded().iter().any(|entry| matches!(
+                    entry,
+                    Recorded::SetAudioVolume { volume, .. } if *volume > 0.0 && *volume < 1.0
+                )));
+                assert_eq!(
+                    harness.eval_string("require('timeline').phase()"),
+                    "transition"
+                );
+            })
+            .await;
+    }
+
+    /// The fallback that keeps converted packs audible. Edgeware moods tag the images, not the
+    /// soundtrack, so narrowing the background pool by the stage's tags would leave every
+    /// restricted stage silent. An empty narrowed pool falls back to the whole background pool --
+    /// interaction rule 5 (empty pools are skip-and-continue), applied to a loop that would
+    /// otherwise have no way to restart itself.
+    #[tokio::test(start_paused = true)]
+    async fn experience_background_audio_falls_back_when_no_track_carries_the_stages_tags() {
+        LocalSet::new()
+            .run_until(async {
+                const MEDIA: &[(&str, &[&str])] = &[("art.avif", &["kinky"]), ("music.ogg", &[])];
+
+                let experience = levels_to_experience(vec![Level {
+                    tags: Some(vec!["kinky".to_string()]),
+                    ..Default::default()
+                }]);
+
+                let mut config = isolated_experience_process_config();
+                config.insert(
+                    "background_audio_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+
+                let mut harness = Harness::with_pack_and_experience(
+                    &real_experience_mode_sources(),
+                    pack_fixture_with_data(MEDIA, None),
+                    Content::default(),
+                    experience,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+
+                assert_eq!(
+                    harness.recorded(),
+                    vec![Recorded::SpawnAudio {
+                        media_id: 2,
+                        volume: 1.0,
+                    }],
+                    "music.ogg carries none of the stage's tags, but silence is the wrong answer: \
+                     the narrowed pool is empty, so the whole background pool applies"
                 );
             })
             .await;

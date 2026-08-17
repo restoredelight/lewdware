@@ -1,3 +1,4 @@
+import { behaviourTags } from './tagReferences.js';
 import { NON_POPUP_TAG, POPUP_AUDIO_TAG, withoutManagedTags } from './tags.js';
 import type {
 	Behaviour,
@@ -176,6 +177,14 @@ class AppStore {
 
 	// Viewer: the active media tab's, which browses `filteredFiles` and steps through them.
 	openedId = $state<number | null>(null);
+	// Whether the viewer is scoped to the selection rather than to the whole filtered list.
+	//
+	// The overlay is where every per-popup attribute is edited, and it is a one-file surface by
+	// construction -- so this is how it reaches a selection: "Edit n items" opens it scoped, and
+	// then prev/next walk the selection and every control writes to all of it. A flag rather than
+	// a stored list of ids, so a file deleted or filtered out while the viewer is open cannot
+	// leave it editing something that is no longer there.
+	openedSelection = $state(false);
 	// One-shot handoff to the destination surface when another part of the editor links to a file.
 	// The grid or list consumes it once it has mounted, scrolling the file into view if it is there
 	// to be scrolled to and clearing it either way: a request left pending would be answered by the
@@ -201,6 +210,7 @@ class AppStore {
 		if (view === 'popups' || view === 'audio' || view === 'all-media') {
 			this.lastMediaView = view;
 			this.openedId = null;
+			this.openedSelection = false;
 		}
 	}
 
@@ -409,6 +419,36 @@ class AppStore {
 		if (!tracked) this.markLocallyBackedUp();
 	}
 
+	/**
+	 * Follows a pack-wide tag rename or delete through the copies held here: every file's tag list,
+	 * and the suggestion list.
+	 *
+	 * `to` of null deletes it. The suggestion list is rebuilt from what is actually left rather than
+	 * patched in place, because a tag can be in the pack by way of the behaviour document alone —
+	 * typed into a caption, naming a content group — so dropping it from the files does not
+	 * necessarily drop it from the pack.
+	 */
+	retagEverywhere(from: string, to: string | null, tracked = false) {
+		this.files = this.files.map((file) =>
+			file.tags.includes(from)
+				? {
+						...file,
+						tags: [
+							...new Set(file.tags.flatMap((tag) => (tag === from ? (to ? [to] : []) : [tag])))
+						]
+					}
+				: file
+		);
+		this.allTags = withoutManagedTags([
+			...new Set([
+				...this.allTags.flatMap((tag) => (tag === from ? (to ? [to] : []) : [tag])),
+				...this.files.flatMap((file) => file.tags),
+				...(this.behaviour ? behaviourTags(this.behaviour) : [])
+			])
+		]);
+		if (!tracked) this.markLocallyBackedUp();
+	}
+
 	removeTagFromFiles(ids: number[], tag: string, tracked = false) {
 		const idSet = new Set(ids);
 		this.files = this.files.map((file) =>
@@ -453,6 +493,19 @@ class AppStore {
 		return this.files.find((f) => f.id === id) ?? null;
 	});
 
+	/**
+	 * The files the viewer is walking: the selection when it was opened over one, the whole
+	 * filtered list otherwise.
+	 *
+	 * Kept in `filteredFiles` order rather than in selection order, so stepping through a
+	 * selection moves in the direction the grid shows it.
+	 */
+	openedFiles = $derived.by(() => {
+		if (!this.openedSelection) return this.filteredFiles;
+		const selected = this.mediaTab.selectedIds;
+		return this.filteredFiles.filter((file) => selected.has(file.id));
+	});
+
 	previewedFile = $derived.by(() => {
 		const id = this.previewId;
 		if (id == null) return null;
@@ -485,6 +538,7 @@ class AppStore {
 		this.mediaTabs = newMediaTabs();
 		this.lastMediaView = 'popups';
 		this.openedId = null;
+		this.openedSelection = false;
 		this.mediaRevealId = null;
 		this.previewId = null;
 		this.activeView = 'popups';
@@ -511,6 +565,7 @@ class AppStore {
 		this.mediaTabs = newMediaTabs();
 		this.lastMediaView = 'popups';
 		this.openedId = null;
+		this.openedSelection = false;
 		this.mediaRevealId = null;
 		this.previewId = null;
 		this.importWarnings = [];

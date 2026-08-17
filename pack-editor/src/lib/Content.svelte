@@ -9,6 +9,8 @@
 	import { SUBLIMINAL_TAG } from './tags.js';
 	import WebLinksEditor from './WebLinksEditor.svelte';
 	import Tabs from '$ui/Tabs.svelte';
+	import Field from '$ui/Field.svelte';
+	import Select from '$ui/Select.svelte';
 	import {
 		editBehaviourField,
 		ensureBehaviour,
@@ -179,6 +181,94 @@
 									class="border-border bg-surface text-text w-48 rounded-sm border px-2.5 py-2 text-sm transition-colors hover:border-[var(--ui-border-strong)]"
 								/></label
 							>
+							<div
+								class="border-border bg-surface mt-2 grid grid-cols-2 gap-3 rounded-sm border p-4 max-[600px]:grid-cols-1"
+							>
+								<Field
+									label="Close after"
+									description="Empty keeps the prompt open until it is answered."
+									type="number"
+									suffix="s"
+									min={1}
+									step={1}
+									value={store.behaviour!.content.prompt_settings.timeout_seconds ?? ''}
+									oninput={(value) => {
+										const number = Number(value);
+										if (value && Number.isFinite(number))
+											store.behaviour!.content.prompt_settings.timeout_seconds = number;
+										else delete store.behaviour!.content.prompt_settings.timeout_seconds;
+										editBehaviourField(
+											'content.prompt_settings.timeout_seconds',
+											'Edit prompt timeout'
+										);
+									}}
+								/>
+								<Select
+									label="On a wrong answer"
+									value={store.behaviour!.content.prompt_settings.wrong_answer?.kind ?? 'none'}
+									options={[
+										{ value: 'none', label: 'Clear the answer' },
+										{ value: 'popup_burst', label: 'Spawn a popup burst' },
+										{ value: 'add_time', label: 'Add time' },
+										{ value: 'sound', label: 'Play a popup sound' }
+									]}
+									onchange={(value) => {
+										if (value === 'popup_burst')
+											store.behaviour!.content.prompt_settings.wrong_answer = {
+												kind: 'popup_burst',
+												count: 5
+											};
+										else if (value === 'add_time')
+											store.behaviour!.content.prompt_settings.wrong_answer = {
+												kind: 'add_time',
+												seconds: 10
+											};
+										else if (value === 'sound')
+											store.behaviour!.content.prompt_settings.wrong_answer = { kind: 'sound' };
+										else delete store.behaviour!.content.prompt_settings.wrong_answer;
+										editBehaviourField(
+											'content.prompt_settings.wrong_answer',
+											'Edit wrong-answer effect'
+										);
+									}}
+								/>
+								{#if store.behaviour!.content.prompt_settings.wrong_answer?.kind === 'popup_burst'}
+									<Field
+										label="Popups in burst"
+										type="number"
+										min={1}
+										step={1}
+										value={store.behaviour!.content.prompt_settings.wrong_answer.count}
+										oninput={(value) => {
+											const effect = store.behaviour!.content.prompt_settings.wrong_answer;
+											if (effect?.kind === 'popup_burst')
+												effect.count = Math.max(1, Number(value) || 1);
+											editBehaviourField(
+												'content.prompt_settings.wrong_answer.count',
+												'Edit wrong-answer effect'
+											);
+										}}
+									/>
+								{:else if store.behaviour!.content.prompt_settings.wrong_answer?.kind === 'add_time'}
+									<Field
+										label="Time added"
+										type="number"
+										suffix="s"
+										min={1}
+										step={1}
+										value={store.behaviour!.content.prompt_settings.wrong_answer.seconds}
+										oninput={(value) => {
+											const effect = store.behaviour!.content.prompt_settings.wrong_answer;
+											if (effect?.kind === 'add_time')
+												effect.seconds = Math.max(1, Number(value) || 1);
+											editBehaviourField(
+												'content.prompt_settings.wrong_answer.seconds',
+												'Edit wrong-answer effect'
+											);
+										}}
+									/>
+								{/if}
+							</div>
 						</div>
 					{:else if activeTab === 'notifications'}
 						<TextPoolEditor title="Notifications" poolKey="notifications" idPrefix="notification" />

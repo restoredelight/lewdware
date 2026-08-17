@@ -251,6 +251,76 @@ mod tests {
         assert_eq!(patched.content.captions[0].text, "two");
     }
 
+    /// The per-item maps are keyed by media id, so their path segments *look* like array indices.
+    /// They are not: `set_at_path` only parses a segment as an index when the cursor is an array,
+    /// so an object keyed by "42" is addressed by key, and the entry an edit lands in is the one
+    /// the author pointed at rather than the one at that position.
+    #[test]
+    fn addresses_a_per_item_entry_by_media_id_not_by_position() {
+        use crate::behaviour::PopupMedia;
+
+        let mut behaviour = behaviour();
+        behaviour.content.popups.insert(
+            7,
+            PopupMedia {
+                scale: Some(1.0),
+                ..PopupMedia::default()
+            },
+        );
+        behaviour.content.popups.insert(
+            42,
+            PopupMedia {
+                scale: Some(2.0),
+                ..PopupMedia::default()
+            },
+        );
+
+        let patched = behaviour
+            .patched(&[Patch::new("content.popups.42.scale", 3.0.into())])
+            .unwrap();
+        assert_eq!(patched.content.popups[&42].scale, Some(3.0));
+        assert_eq!(
+            patched.content.popups[&7].scale,
+            Some(1.0),
+            "the entry that happens to be first must be untouched",
+        );
+    }
+
+    /// Unlike the pools, adding and removing an entry needs no whole-collection replacement: the
+    /// key is stable, so a new entry is written by naming it. (A missing *final* segment on an
+    /// object is written rather than rejected -- see `set_at_path`.) Individual fields of an entry
+    /// that does not exist yet are still out of reach, so the editor writes the whole entry.
+    #[test]
+    fn adds_and_clears_a_per_item_entry_by_key() {
+        let behaviour = behaviour();
+        assert!(behaviour.content.popups.is_empty());
+
+        let added = behaviour
+            .patched(&[Patch::new(
+                "content.popups.42",
+                serde_json::json!({ "scale": 2.0 }),
+            )])
+            .unwrap();
+        assert_eq!(added.content.popups[&42].scale, Some(2.0));
+        assert_eq!(added.content.popups[&42].weight, None);
+
+        // Clearing every field leaves an entry that says nothing; `storage::write` drops it, so
+        // the document does not need a removal patch of its own.
+        let cleared = added
+            .patched(&[Patch::new("content.popups.42.scale", Value::Null)])
+            .unwrap();
+        assert!(cleared.content.popups[&42].is_empty());
+
+        // A field of an entry that was never created has nothing to write into.
+        assert_eq!(
+            behaviour.patched(&[Patch::new("content.popups.42.scale", 2.0.into())]),
+            Err(PatchError::NoSuchPath {
+                path: "content.popups.42.scale".to_string(),
+                segment: "42".to_string(),
+            })
+        );
+    }
+
     #[test]
     fn rejects_a_path_into_a_missing_section() {
         // The timeline is suspended, so `experience` is absent -- a stale editor's write into it

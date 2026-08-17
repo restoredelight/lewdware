@@ -36,6 +36,7 @@ fn popup_size_caps(monitor_width: u32, monitor_height: u32) -> (f64, f64) {
 pub fn calculate_media_popup_size(
     width: Option<Coord>,
     height: Option<Coord>,
+    scale: Option<f64>,
     media_width: u32,
     media_height: u32,
     monitor_width: u32,
@@ -45,9 +46,13 @@ pub fn calculate_media_popup_size(
     let height = height.map(|height| height.to_pixels(monitor_height).max(0) as u32);
 
     match (width, height) {
-        (None, None) => {
-            default_media_popup_size(media_width, media_height, monitor_width, monitor_height)
-        }
+        (None, None) => default_media_popup_size(
+            media_width,
+            media_height,
+            scale,
+            monitor_width,
+            monitor_height,
+        ),
         (None, Some(height)) => (
             ((height as f64 / media_height as f64) * media_width as f64).round() as u32,
             height,
@@ -116,11 +121,17 @@ pub fn calculate_text_popup_size(
 fn default_media_popup_size(
     media_width: u32,
     media_height: u32,
+    scale: Option<f64>,
     monitor_width: u32,
     monitor_height: u32,
 ) -> (u32, u32) {
-    let width = media_width as f64;
-    let height = media_height as f64;
+    // Applied to the media's own dimensions, so the caps below still get the last word: a pack
+    // asking for 3x on an already-capped image gets the cap, not three times it. A non-positive
+    // scale would collapse the window to nothing, which `check_requested_size` would then reject
+    // for a size the caller never really asked for -- so it is ignored like any other nonsense.
+    let scale = scale.filter(|scale| *scale > 0.0).unwrap_or(1.0);
+    let width = media_width as f64 * scale;
+    let height = media_height as f64 * scale;
 
     let (cap_width, cap_height) = popup_size_caps(monitor_width, monitor_height);
 
@@ -142,6 +153,33 @@ pub fn random_position(window_size: u32, total_size: u32) -> i32 {
         0
     } else {
         rand::random_range(0i32..=(total_size - window_size) as i32)
+    }
+}
+
+/// Pick a random coordinate at which a window of `window_size` fits entirely inside the span
+/// `[start, start + span]` — the slice of one axis a mode restricted the window to.
+///
+/// This has to live here, next to the sizing, rather than in the mode: placing a window *inside*
+/// a rectangle needs the size the engine chose for it, and a mode that computed that size itself
+/// would be transcribing [`calculate_media_popup_size`] and its caps. Same reasoning that put
+/// `scale` on the engine side.
+///
+/// **A window too big for the span is centred on it**, not pinned to its start. That is what makes
+/// a *collapsed* span — zero width, at some point on the axis — mean "put the window here", and
+/// with the caller's clamp to the monitor it is what lets a zero-size region express the nine
+/// corner placements exactly: centred on the top-left corner, then clamped back on screen, is the
+/// top-left corner.
+pub fn random_position_in(window_size: u32, start: f64, span: f64) -> i32 {
+    // A degenerate span is a point, not an error: `0.0.max(...)` below would otherwise turn a
+    // negative width into a spread the mode never asked for.
+    let span = if span.is_finite() { span.max(0.0) } else { 0.0 };
+    let start = if start.is_finite() { start } else { 0.0 };
+    let free = span - window_size as f64;
+
+    if free <= 0.0 {
+        (start + free / 2.0).round() as i32
+    } else {
+        start.round() as i32 + rand::random_range(0i32..=free.round() as i32)
     }
 }
 
@@ -276,7 +314,67 @@ mod tests {
     const MEDIA: (u32, u32) = (1920, 1080);
 
     fn default_size(monitor: (u32, u32)) -> (u32, u32) {
-        calculate_media_popup_size(None, None, MEDIA.0, MEDIA.1, monitor.0, monitor.1)
+        calculate_media_popup_size(None, None, None, MEDIA.0, MEDIA.1, monitor.0, monitor.1)
+    }
+
+    /// The reason `scale` is an engine option rather than arithmetic a caller does for itself:
+    /// it multiplies the media's dimensions *before* the caps, so the caps still get the last
+    /// word. A pack asking for 3x cannot take more than a third of the screen's width -- which is
+    /// what makes a per-item scale safe to accept from pack data at all.
+    #[test]
+    fn scale_cannot_take_a_popup_past_the_caps() {
+        let capped = default_size(SCREEN);
+        let scaled =
+            calculate_media_popup_size(None, None, Some(3.0), MEDIA.0, MEDIA.1, SCREEN.0, SCREEN.1);
+        assert_eq!(scaled, capped, "already at the cap, so 3x changes nothing");
+
+        // Small media has room to grow, and stops at the cap rather than at 3x.
+        let (cap_width, _) = popup_size_caps(SCREEN.0, SCREEN.1);
+        let (width, height) =
+            calculate_media_popup_size(None, None, Some(3.0), 100, 50, SCREEN.0, SCREEN.1);
+        assert_eq!((width, height), (300, 150));
+        assert!((width as f64) <= cap_width);
+
+        let (huge, _) =
+            calculate_media_popup_size(None, None, Some(50.0), 100, 50, SCREEN.0, SCREEN.1);
+        assert!(
+            (huge as f64) <= cap_width,
+            "{huge} exceeded the cap of {cap_width}",
+        );
+    }
+
+    /// Scaling down needs no cap to stop it, and an absent or nonsensical scale is the same as
+    /// saying nothing -- a zero would otherwise collapse the window to nothing.
+    #[test]
+    fn scale_below_one_shrinks_and_nonsense_is_ignored() {
+        assert_eq!(
+            calculate_media_popup_size(None, None, Some(0.5), 100, 50, SCREEN.0, SCREEN.1),
+            (50, 25),
+        );
+        for nonsense in [Some(0.0), Some(-2.0), None] {
+            assert_eq!(
+                calculate_media_popup_size(None, None, nonsense, 100, 50, SCREEN.0, SCREEN.1),
+                (100, 50),
+            );
+        }
+    }
+
+    /// An explicit size is taken literally, caps and all -- so `scale` has nothing to say once one
+    /// is given, rather than compounding with it.
+    #[test]
+    fn an_explicit_size_ignores_scale() {
+        assert_eq!(
+            calculate_media_popup_size(
+                Some(Coord::Pixel(800)),
+                None,
+                Some(3.0),
+                100,
+                50,
+                SCREEN.0,
+                SCREEN.1,
+            ),
+            (800, 400),
+        );
     }
 
     /// The floors must be invisible on a real screen: the ratios, and nothing else, decide there.
@@ -329,7 +427,7 @@ mod tests {
     #[test]
     fn small_media_is_never_upscaled_to_a_floor() {
         assert_eq!(
-            calculate_media_popup_size(None, None, 64, 48, 400, 300),
+            calculate_media_popup_size(None, None, None, 64, 48, 400, 300),
             (64, 48)
         );
     }
@@ -344,5 +442,44 @@ mod tests {
             height,
             ((width as f64 / MEDIA.0 as f64) * MEDIA.1 as f64).round() as u32
         );
+    }
+
+    /// The whole point of a region: the window lands inside it, every time. Sampled, because the
+    /// result is random and a single draw would pass on a broken implementation often enough.
+    #[test]
+    fn a_window_lands_inside_a_region_it_fits_in() {
+        for _ in 0..500 {
+            let x = random_position_in(200, 480.0, 960.0);
+
+            assert!(
+                (480..=480 + 960 - 200).contains(&x),
+                "{x} escaped the region"
+            );
+        }
+    }
+
+    /// A collapsed region is a point, and a window bigger than it is centred there rather than
+    /// starting there. That is what makes the nine corner placements expressible: centred on a
+    /// corner, then clamped back on screen by the caller, *is* that corner.
+    #[test]
+    fn a_window_too_big_for_its_region_is_centred_on_it() {
+        assert_eq!(random_position_in(200, 960.0, 0.0), 860);
+        // The same arithmetic at the screen's edges, where the caller's clamp finishes the job.
+        assert_eq!(random_position_in(200, 0.0, 0.0), -100);
+        assert_eq!(random_position_in(200, 1920.0, 0.0), 1820);
+        // A region exactly the window's size has one legal position and no randomness left.
+        assert_eq!(random_position_in(200, 300.0, 200.0), 300);
+    }
+
+    /// Nonsense from a pack is a point, never a panic: `rand::random_range` on an inverted or
+    /// NaN range would.
+    #[test]
+    fn a_degenerate_region_does_not_panic() {
+        assert_eq!(random_position_in(100, 500.0, -50.0), 450);
+        assert_eq!(random_position_in(100, 500.0, f64::NAN), 450);
+        assert_eq!(random_position_in(100, 500.0, f64::INFINITY), 450);
+        // A bad start is the origin, and the span it was paired with still stands -- so this one
+        // is still a random draw, not a fixed point.
+        assert!((0..=100).contains(&random_position_in(100, f64::NAN, 200.0)));
     }
 }

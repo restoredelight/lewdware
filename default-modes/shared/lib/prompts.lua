@@ -34,10 +34,18 @@ local function matches(typed, required)
 	return typed:match("^%s*(.-)%s*$") == required:match("^%s*(.-)%s*$")
 end
 
-function M.fire(active_tags)
+function M.fire(active_tags, overrides)
 	local prompt = content.pick_prompt(active_tags and active_tags())
 	if not prompt then return false end
 	local settings = content.prompt_settings()
+	overrides = overrides or {}
+	local timeout_seconds = overrides.timeout_seconds
+	if timeout_seconds == nil and not overrides.ignore_settings then timeout_seconds = settings.timeout_seconds end
+	local wrong_answer = overrides.wrong_answer
+	if wrong_answer == nil and not overrides.ignore_settings then wrong_answer = settings.wrong_answer end
+	local on_wrong = overrides.on_wrong
+	local closed = false
+	local timeout
 	-- The dialog has to say what it wants before the user can do it: the title states the task,
 	-- the text is the thing to copy (bold, so it reads as the subject rather than as instructions
 	-- about it), and the placeholder repeats the instruction where the answer is actually typed.
@@ -58,15 +66,31 @@ function M.fire(active_tags)
 	local function answer(values)
 		local typed = values and values.response or dialog:value("response")
 		if matches(typed, prompt.text) then
+			closed = true
+			if timeout then timeout:stop() end
 			dialog:close()
 		else
 			-- Wrong: clear the box so it is obvious the attempt was rejected rather than lost.
 			dialog:update("response", { value = "" })
+			if wrong_answer and wrong_answer.kind == "add_time" and timeout_seconds then
+				if timeout then timeout:stop() end
+				timeout_seconds = timeout_seconds + (wrong_answer.seconds or 0)
+				timeout = lewdware.after(secs(timeout_seconds), function()
+					if not closed then closed = true; dialog:close() end
+				end)
+			elseif wrong_answer and on_wrong then
+				on_wrong(wrong_answer)
+			end
 		end
 	end
 
 	dialog:on_select(function(_, values) answer(values) end)
 	dialog:on_submit(function(_, values) answer(values) end)
+	if timeout_seconds and timeout_seconds > 0 then
+		timeout = lewdware.after(secs(timeout_seconds), function()
+			if not closed then closed = true; dialog:close() end
+		end)
+	end
 	return true
 end
 
@@ -78,13 +102,13 @@ end
 --- @param active_tags (fun(): string[]|nil)|nil See `lib/notifications.lua`'s doc comment on the
 ---   same parameter.
 --- @return Interval|nil See `lib/notifications.lua`'s doc comment on the same return value.
-function M.start(is_dormant, enabled, frequency_seconds, active_tags, on_spawn)
+function M.start(is_dormant, enabled, frequency_seconds, active_tags, on_spawn, overrides)
 	if not enabled then return end
 
 	return lewdware.every(secs(frequency_seconds), function()
 		if is_dormant() then return end
 
-		if M.fire(active_tags) and on_spawn then on_spawn() end
+		if M.fire(active_tags, overrides) and on_spawn then on_spawn() end
 	end)
 end
 

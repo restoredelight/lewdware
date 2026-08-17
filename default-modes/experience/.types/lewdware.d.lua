@@ -93,6 +93,25 @@ lewdware.user_appearance = ""
 ---| "bottom-center"
 ---| "bottom-right"
 
+---@class SpawnRegion
+---
+---A rectangle of the monitor a randomly placed window is confined to, given as fractions of the
+---usable area: `{ x = 0, y = 0, width = 0.5, height = 1 }` is its left half, and
+---`{ x = 0, y = 0, width = 1, height = 1 }` is the whole thing (the default, so there is no reason
+---to pass it).
+---
+---The window lands **entirely inside** the region — the engine knows the size it chose, so it
+---picks from the positions that fit. A window too big for the region is *centred* on it instead of
+---pinned to a corner, and (unless you turned `clamp` off) then pulled back onto the screen. Those
+---two rules together are why a region of zero size names one placement: a region at
+---`{ x = 1, y = 1, width = 0, height = 0 }` puts the window's bottom-right corner in the screen's,
+---and one at `{ x = 0.5, y = 0.5, width = 0, height = 0 }` centres it.
+---
+---@field x number Left edge, from 0 (the monitor's left) to 1 (its right).
+---@field y number Top edge, from 0 to 1.
+---@field width number Width, as a fraction of the monitor's.
+---@field height number Height, as a fraction of the monitor's.
+
 ---@alias Easing
 ---| "linear"
 ---| "ease_in"
@@ -450,11 +469,15 @@ lewdware.media = {}
 ---@field tags? string | string[] | TagFilter Filter media by tag; a single tag or a plain list
 ---  is shorthand for `{ any = ... }`. Tags the pack doesn't define never match: they are ignored
 ---  in `any` and `none`, while an unknown tag in `all` means nothing can satisfy the filter.
+---@field weights? table<integer, number> Sparse weights keyed by media id. Missing ids have weight
+---  1; zero excludes an id from the draw. Used only by the random query functions.
 
 ---@class TagFilterOpts
 ---@field tags? string | string[] | TagFilter Filter media by tag; a single tag or a plain list
 ---  is shorthand for `{ any = ... }`. Tags the pack doesn't define never match: they are ignored
 ---  in `any` and `none`, while an unknown tag in `all` means nothing can satisfy the filter.
+---@field weights? table<integer, number> Sparse weights keyed by media id. Missing ids have weight
+---  1; zero excludes an id from the draw. Used only by the random query functions.
 
 ---Get a specific file. File names are unique within a pack (the pack editor
 ---enforces this -- adding a file that collides with an existing name gets
@@ -559,6 +582,16 @@ lewdware.popup = {}
 ---  small area does not shrink popups twice over: below roughly 900x400 pixels the limit becomes
 ---  the area itself, and a popup may fill it entirely. On a whole screen the fractions above are
 ---  what apply.
+---@field scale? number Multiplies the size the engine would otherwise pick from the media's own
+---  dimensions — *before* the limits above apply, so a scaled-up popup is still at most a third of
+---  the screen wide and half of it tall. Use this rather than computing a `width` from
+---  `image.width` when the size is a preference rather than an exact requirement: an explicit
+---  `width` is taken literally and steps around the limits instead of through them. Values at or
+---  below zero are ignored. No effect when `width` or `height` is given, or on text and dialog
+---  windows, which are not sized from media.
+---@field region? SpawnRegion Confines a randomly placed window to part of the monitor. Ignored on
+---  an axis `x` or `y` already pins exactly, since those say where the window goes and this says
+---  where it goes *at random*.
 ---@field monitor? Monitor The monitor to spawn the window on. By default, chooses a monitor at
 ---  random.
 ---@field decorations? boolean Whether to spawn the window with a header and border (defaults to

@@ -1,6 +1,7 @@
 use crate::app::{EventPoster, UserEvent};
 use shared::read_pack::Metadata;
 use std::{
+    collections::HashMap,
     error::Error,
     fmt::Display,
     io,
@@ -165,10 +166,12 @@ impl MediaManager {
         &self,
         types: MediaTypes,
         tags: Option<TagFilter>,
+        weights: Option<HashMap<u64, f64>>,
     ) -> Result<Option<Media>> {
         self.send(|tx| MediaRequest::RandomMedia {
             types,
             tags,
+            weights,
             response_tx: tx,
         })?
     }
@@ -301,8 +304,16 @@ async fn handle_request<T: EventPoster>(
         MediaRequest::RandomMedia {
             types,
             tags,
+            weights,
             response_tx,
-        } => response_tx.send(pack.random_media(types, tags)).is_ok(),
+        } => response_tx
+            .send(match weights {
+                Some(weights) => pack
+                    .list_media(types, tags)
+                    .map(|media| weighted_media(media, &weights)),
+                None => pack.random_media(types, tags),
+            })
+            .is_ok(),
         MediaRequest::ListMedia {
             types,
             tags,
@@ -477,6 +488,7 @@ enum MediaRequest {
     RandomMedia {
         types: MediaTypes,
         tags: Option<TagFilter>,
+        weights: Option<HashMap<u64, f64>>,
         response_tx: std_mpsc::Sender<Result<Option<Media>>>,
     },
     ListMedia {
@@ -503,6 +515,39 @@ enum MediaRequest {
     GetBehaviour {
         response_tx: std_mpsc::Sender<anyhow::Result<shared::behaviour::Behaviour>>,
     },
+}
+
+/// Selects one candidate using sparse per-id weights. Missing ids retain the ordinary weight of
+/// one. Zero explicitly removes an item from the draw; malformed negative/non-finite values are
+/// ignored as if absent. Scaling by the largest weight keeps a set of individually finite values
+/// from overflowing when summed.
+fn weighted_media(media: Vec<Media>, weights: &HashMap<u64, f64>) -> Option<Media> {
+    if media.is_empty() {
+        return None;
+    }
+    let resolved = |item: &Media| match weights.get(&item.id).copied() {
+        Some(weight) if weight.is_finite() && weight >= 0.0 => weight,
+        _ => 1.0,
+    };
+    let maximum = media.iter().map(&resolved).fold(0.0_f64, f64::max);
+    if maximum == 0.0 {
+        let count = media.len();
+        return media.into_iter().nth(rand::random_range(0..count));
+    }
+    let total: f64 = media.iter().map(|item| resolved(item) / maximum).sum();
+    let mut draw = rand::random_range(0.0..total);
+    let fallback = media.iter().rfind(|item| resolved(item) > 0.0)?.id;
+    for item in media {
+        let weight = resolved(&item) / maximum;
+        if weight > 0.0 && draw < weight {
+            return Some(item);
+        }
+        draw -= weight;
+        if item.id == fallback {
+            return Some(item);
+        }
+    }
+    None
 }
 
 #[derive(Debug)]
@@ -557,5 +602,43 @@ impl From<MediaError> for LewdwareError {
             MediaError::Internal(err) => LewdwareError::Internal(err),
             _ => LewdwareError::MediaError(value),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lua::MediaData;
+
+    fn audio(id: u64) -> Media {
+        Media {
+            id,
+            name: format!("{id}.ogg"),
+            tags: Vec::new(),
+            media_data: MediaData::Audio { duration: 1.0 },
+        }
+    }
+
+    #[test]
+    fn weighted_selection_excludes_zero_weight_candidates() {
+        let weights = HashMap::from([(1, 0.0), (2, 5.0), (3, 0.0)]);
+        for _ in 0..100 {
+            assert_eq!(
+                weighted_media(vec![audio(1), audio(2), audio(3)], &weights)
+                    .unwrap()
+                    .id,
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn weighted_selection_keeps_sparse_and_malformed_weights_safe() {
+        let sparse = HashMap::from([(1, f64::NAN), (2, -1.0)]);
+        assert!(weighted_media(vec![audio(1), audio(2), audio(3)], &sparse).is_some());
+
+        let all_zero = HashMap::from([(1, 0.0), (2, 0.0)]);
+        assert!(weighted_media(vec![audio(1), audio(2)], &all_zero).is_some());
+        assert!(weighted_media(Vec::new(), &HashMap::new()).is_none());
     }
 }

@@ -96,8 +96,12 @@ fn levels_to_experience(levels: Vec<Level>) -> (Experience, Vec<(MediaSlot, Stri
                 end,
                 content: ContentSelection {
                     tags: level.tags.clone(),
+                    // Every tag here is an Edgeware mood the author wrote, so the stage owns none
+                    // of them: renaming a converted stage must not rewrite `succubus`.
+                    owned_tag: None,
                     // Filled in by the importer once the file has an id -- see the return value.
                     wallpaper: None,
+                    audio: None,
                 },
                 events: Events {
                     popup: schedule(level.anchors.popup),
@@ -105,9 +109,11 @@ fn levels_to_experience(levels: Vec<Level>) -> (Experience, Vec<(MediaSlot, Stri
                     notification: schedule(level.anchors.notification),
                     prompt: schedule(level.anchors.prompt),
                     subliminal: schedule(level.anchors.subliminal),
+                    sound: None,
                 },
                 movement: movement(&level.design),
                 mitosis: mitosis(&level.design),
+                on_enter: None,
             }
         })
         .collect::<Vec<_>>();
@@ -403,6 +409,8 @@ fn populate_prompts(index: &EdgewareIndex, content: &mut Content) {
     content.prompts = text_items(&index.default.prompts, &index.moods, |base| &base.prompts);
     content.prompt_settings = PromptSettings {
         submit_label: index.default_extra.prompt_submit.clone(),
+        timeout_seconds: None,
+        wrong_answer: None,
     };
 }
 

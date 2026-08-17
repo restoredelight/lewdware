@@ -11,12 +11,56 @@
 
 local M = {}
 
+local function content()
+	return rawget(_G, "__lewdware_content") or {}
+end
+
+-- The two per-item attribute maps, re-keyed by number.
+--
+-- They arrive from Rust as `BTreeMap<u64, _>`, and the serializer that hands the behaviour
+-- document to Lua gives a map's keys as *strings* -- while every media item's `id` is a number, so
+-- `popups[item.id]` would miss every time. Normalised once, here, rather than coercing at each
+-- lookup: one place to be wrong, and one place to stop being wrong if that ever changes.
+--
+-- Built on first use and kept, like the audio indexes below and for the same reason: nothing they
+-- are built from can change while a session runs.
+local attribute_indexes = {}
+
+---@param section string
+---@return table
+local function attributes(section)
+	local index = attribute_indexes[section]
+	if index then return index end
+	index = {}
+	for key, value in pairs(content()[section] or {}) do
+		index[tonumber(key) or key] = value
+	end
+	attribute_indexes[section] = index
+	return index
+end
+
+--- The pack author's attributes for one popup file, or nil if they said nothing about it.
+---
+--- Every field is independently optional, and absent means "no opinion" -- never a zero. Callers
+--- must treat a missing table and a table with a missing field the same way.
+---@param id number
+---@return table|nil
+function M.popup_attributes(id)
+	return attributes("popups")[id]
+end
+
+--- The pack author's attributes for one audio file. See `popup_attributes`.
+---@param id number
+---@return table|nil
+function M.audio_attributes(id)
+	return attributes("audio")[id]
+end
+
 -- Exported (not just used internally) so `lib/content.lua` can subtract the same disabled-group
 -- tags from its own pools without re-deriving them from `__lewdware_content` a second time.
 ---@return string[]
 local function disabled_tags()
-	local content = rawget(_G, "__lewdware_content")
-	local groups = (content and content.content_groups) or {}
+	local groups = content().content_groups or {}
 	local excluded = {}
 	for _, group in ipairs(groups) do
 		if lewdware.config["content_group." .. group.id] == false then
@@ -60,6 +104,31 @@ local function normalize_tags(tags)
 	return tags
 end
 
+--- Whether `opts` states an inclusion set that is empty -- "match nothing", as distinct from "no
+--- restriction at all".
+---
+--- The engine documents empty tag lists as imposing no constraint (`TagFilter`: "Empty lists
+--- impose no constraint, so the default value matches everything"), which is the right default for
+--- a query API. Behaviour documents mean the opposite by the same shape: `ContentSelection::tags`
+--- is `None` for "no restriction" and `Some([])` for "deliberately no content", and the pack
+--- database carries a `restricts_content` column for the sole purpose of keeping the two apart.
+---
+--- Absorbing that mismatch is exactly this layer's job, and without it the distinction died here:
+--- an empty list arrived as `{ any = {} }`, the engine skipped the clause, and a stage that
+--- selects *no* content spawned from the *whole* pack -- the loudest available way to express
+--- silence.
+---
+--- Only `any` counts. `all` of zero tags is vacuously satisfied by everything, and a `none`-only
+--- filter states no inclusion criterion at all; neither is a request for nothing.
+---@param opts table|nil
+---@return boolean
+local function selects_nothing(opts)
+	local tags = opts and opts.tags
+	if tags == nil then return false end
+	local normalized = normalize_tags(tags)
+	return normalized.any ~= nil and #normalized.any == 0
+end
+
 -- Unions the disabled-group tags and the non-popup marker into opts.tags.none, on top of whatever
 -- the caller already asked to exclude. A pure union composes correctly regardless of what else
 -- populates `none` later (e.g. a future timeline tag change) -- see default-mode.md's "disabled
@@ -90,11 +159,35 @@ local function merge_tags(opts)
 	return merged
 end
 
+-- The empty-inclusion-set answer is given by *not asking*: no tag is guaranteed absent from a
+-- pack, so there is no filter that reliably matches nothing, and a query whose answer is already
+-- known needs no query. Every public entry point here checks, so a caller cannot reintroduce the
+-- bug by reaching for a different one.
+
 function M.random(opts)
+	if selects_nothing(opts) then return nil end
+	opts = opts or {}
+	if opts.weights == nil then
+		local weights = {}
+		local has_weights = false
+		for id, value in pairs(attributes("popups")) do
+			if value.weight ~= nil then
+				weights[id] = value.weight
+				has_weights = true
+			end
+		end
+		if has_weights then
+			local copy = {}
+			for key, value in pairs(opts) do copy[key] = value end
+			copy.weights = weights
+			opts = copy
+		end
+	end
 	return lewdware.media.random(merge_tags(opts))
 end
 
 function M.random_audio(opts)
+	if selects_nothing(opts) then return nil end
 	return lewdware.media.random_audio(merge_tags(opts))
 end
 
@@ -113,9 +206,39 @@ local function exclude_tag(opts, tag)
 	return merged
 end
 
+--- Playback options for one background track.
+---
+--- The author's per-file level composes with the user's rather than replacing it: the author is
+--- levelling this track against the rest of the pack, the user is setting how loud the pack is.
+---
+--- Deliberately never sets `loop`. A pack whose background pool is one file already repeats it --
+--- the rotation re-picks the only candidate -- so looping needs no option, and having one meant a
+--- single marked track silently kept every other track in the pack from playing.
+---@param audio table
+---@param user_volume number|nil
+---@return table
+function M.background_options(audio, user_volume)
+	local attributes = M.audio_attributes(audio.id) or {}
+	return { volume = (user_volume or 1) * (attributes.volume or 1) }
+end
+
 --- Background is the default audio role: anything not explicitly marked as popup audio.
 function M.random_background_audio(opts)
+	if selects_nothing(opts) then return nil end
 	return lewdware.media.random_audio(merge_tags(exclude_tag(opts, POPUP_AUDIO_TAG)))
+end
+
+--- Picks a role-assigned popup sound for a declarative effect not attached to a popup.
+--- Goes through `M.list` so disabled content groups remain an absolute subtraction, and accepts
+--- the active stage's tags for the same reason every other timeline consumer does.
+---@param tags string[]|nil
+function M.random_popup_sting(tags)
+	local pool = M.list({
+		type = "audio",
+		tags = { all = { POPUP_AUDIO_TAG }, any = tags },
+	})
+	if #pool == 0 then return nil end
+	return pool[math.random(#pool)]
 end
 
 -- Built on first use and then kept, because nothing it is built from can change while a session
@@ -155,6 +278,46 @@ local function popup_audio()
 	return index
 end
 
+-- Every audio file the pack has, by id, for resolving the explicit pairings below. Built on first
+-- use and kept, for the same reason as `popup_audio_index`. Goes through `M.list`, so a paired
+-- sound sitting in a content group the user disabled is excluded like anything else -- an author
+-- naming a file directly does not get to reach past a class-1 control.
+local audio_by_id_index = nil
+
+local function audio_by_id()
+	if audio_by_id_index then return audio_by_id_index end
+	local index = {}
+	for _, item in ipairs(M.list({ type = "audio" })) do index[item.id] = item end
+	audio_by_id_index = index
+	return index
+end
+
+--- Picks the sound to play when `item` spawns.
+---
+--- An explicit pairing (`PopupMedia::audio`) is the author naming the sounds for *this* popup, so
+--- it replaces tag matching rather than being pooled alongside it -- otherwise naming one sound
+--- would leave the popup mostly still playing the tag-matched ones. The role marker is not
+--- required of a paired file: naming it *is* the author saying it belongs here, and demanding the
+--- marker as well would be a gotcha with no failure it prevents.
+---
+--- Falling back to tags when no paired file resolves is deliberate: every pairing pointing at
+--- deleted or excluded media should sound like the author had named none, not like silence.
+---@param item table The popup's media item -- its `id` for pairings, its `tags` for matching.
+---@return table|nil
+function M.random_popup_audio(item)
+	local paired = (M.popup_attributes(item.id) or {}).audio
+	if paired then
+		local index = audio_by_id()
+		local eligible = {}
+		for _, id in ipairs(paired) do
+			local audio = index[id]
+			if audio then table.insert(eligible, audio) end
+		end
+		if #eligible > 0 then return eligible[math.random(#eligible)] end
+	end
+	return M.tag_matched_popup_audio(item.tags)
+end
+
 --- Picks popup audio whose ordinary tags are empty (universal) or intersect the popup's tags.
 ---
 --- Every eligible file is equally likely: a file carrying two of the popup's tags is in two of the
@@ -163,7 +326,7 @@ end
 --- at all -- there is no need to build a list of the whole pool to pick one item out of it.
 ---@param popup_tags string[]
 ---@return table|nil
-function M.random_popup_audio(popup_tags)
+function M.tag_matched_popup_audio(popup_tags)
 	local index = popup_audio()
 	local matched = {}
 	local seen = {}
@@ -185,6 +348,7 @@ function M.random_popup_audio(popup_tags)
 end
 
 function M.list(opts)
+	if selects_nothing(opts) then return {} end
 	return lewdware.media.list(merge_tags(opts))
 end
 

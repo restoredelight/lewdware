@@ -163,6 +163,8 @@ describe('the media tabs’ file lists', () => {
 		store.behaviour = {
 			version: 3,
 			content: {
+				popups: {},
+				audio: {},
 				content_groups: [],
 				captions: [],
 				prompts: [],

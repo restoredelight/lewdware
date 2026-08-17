@@ -14,6 +14,7 @@
 	import { openMediaPreview } from './mediaPreview.js';
 	import RadioGroup from '$ui/RadioGroup.svelte';
 	import { audioRole, setAudioRole, type AudioRole } from './audioRoles.js';
+	import { openSelectionEditor } from './mediaPreview.js';
 	import { taskFeedback } from './taskFeedback.svelte.js';
 	import { formatDuration, formatFileSize } from './format.js';
 
@@ -50,6 +51,15 @@
 		store.activeView === 'audio' &&
 			selected.length > 0 &&
 			selected.every((file) => file.file_info.type === 'audio')
+	);
+	// Popup attributes are *not* here. They live in the overlay, next to the picture that is the
+	// only thing able to say whether a size or a placement is right -- see `MediaViewer`. What the
+	// inspector keeps is the way in, since the overlay is a one-file surface and this is the
+	// surface that knows about selections.
+	const selectedPopups = $derived(
+		store.activeView === 'popups' &&
+			selected.length > 0 &&
+			selected.every((file) => file.file_info.type !== 'audio')
 	);
 	const selectedAudioRole = $derived.by((): AudioRole | null => {
 		if (!selectedAudio) return null;
@@ -382,6 +392,21 @@
 							<button type="button" onclick={() => navigateToUse(use.target)}>{use.label}</button>
 						{/each}
 					</div>
+				</section>
+			{/if}
+
+			{#if selectedPopups}
+				<!-- The way into the popup editor, not a copy of it. Everything a file does as a popup
+				     is edited in the overlay, where the picture is; what this surface contributes is the
+				     selection, which the overlay cannot see on its own. -->
+				<section>
+					<div class="section-heading">
+						<h2>Popup</h2>
+					</div>
+					<Button size="compact" variant="quiet" onclick={() => openSelectionEditor()}>
+						{selCount === 1 ? 'Edit this popup…' : `Edit ${selCount} popups…`}
+					</Button>
+					<p class="hint">Size, position, frequency, caption and video options.</p>
 				</section>
 			{/if}
 
@@ -768,6 +793,12 @@
 		font-size: 12px;
 		font-weight: 700;
 		cursor: pointer;
+	}
+	.hint {
+		margin: 7px 0 0;
+		color: var(--ui-muted);
+		font-size: 10px;
+		line-height: 1.45;
 	}
 	table {
 		width: 100%;

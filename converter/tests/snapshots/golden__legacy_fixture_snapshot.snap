@@ -11,6 +11,8 @@ metadata:
   recommended_mode: Sandbox
 behaviour:
   content:
+    popups: {}
+    audio: {}
     content_groups:
       - id: vanilla
         label: vanilla

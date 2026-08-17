@@ -97,9 +97,56 @@ pub fn effective_options(
         );
     }
 
-    let pack_has = pack_has_constants(&behaviour.content, behaviour.experience.is_some(), media);
+    let mut pack_has =
+        pack_has_constants(&behaviour.content, behaviour.experience.is_some(), media);
+    pack_has.extend(pack_uses_constants(behaviour));
 
     EffectiveSchema { entries, pack_has }
+}
+
+/// The `pack_uses_*` facts: whether the pack's *timeline* actually drives a given feature.
+///
+/// Distinct from `pack_has_*`, which asks whether a content pool has entries. These ask whether
+/// the feature can do anything at all for this pack: in Experience, movement speeds and mitosis
+/// chances come *only* from the active stage, so a pack whose timeline sets neither cannot move or
+/// split a window however the user sets the switch.
+///
+/// That is why they gate those switches through `show_when` rather than merely defaulting them:
+/// a switch the user can turn on to no effect is the dead toggle `default-mode.md`'s honesty
+/// invariant exists to prevent ("the toggle is only shown where it is honored"). Shown, the switch
+/// defaults on, because a pack whose design uses the feature is a pack that expects it.
+///
+/// Only timeline-derived features belong here. Popup audio, for instance, is a property of the
+/// pack's *media* (files carrying `__lewdware-audio-popup`), which the resolver cannot see:
+/// `MediaLookup` answers "what type is this id", not "what does the pack contain".
+fn pack_uses_constants(behaviour: &Behaviour) -> IndexMap<String, OptionValue> {
+    let stages = behaviour
+        .experience
+        .as_ref()
+        .map(|experience| experience.timeline.stages.as_slice())
+        .unwrap_or_default();
+
+    let mut map = IndexMap::new();
+    map.insert(
+        "pack_uses_movement".to_string(),
+        OptionValue::Boolean(stages.iter().any(|stage| {
+            // Both speeds, because `lib/spawn.lua` skips movement unless it has a full range: a
+            // half-filled `Movement` moves nothing, and a switch shown for it would be dead.
+            stage.movement.as_ref().is_some_and(|movement| {
+                movement.minimum_speed.is_some() && movement.maximum_speed.is_some()
+            })
+        })),
+    );
+    map.insert(
+        "pack_uses_mitosis".to_string(),
+        OptionValue::Boolean(stages.iter().any(|stage| {
+            stage
+                .mitosis
+                .as_ref()
+                .is_some_and(|mitosis| mitosis.chance.is_some())
+        })),
+    );
+    map
 }
 
 /// The `pack_has_*` facts.
@@ -484,6 +531,112 @@ mod tests {
         );
     }
 
+    fn behaviour_with_stage(stage: crate::behaviour::schema::Stage) -> Behaviour {
+        use crate::behaviour::schema::{Experience, Timeline};
+        Behaviour {
+            experience: Some(Experience {
+                timeline: Timeline {
+                    stages: vec![stage],
+                    transitions: vec![],
+                },
+                label: None,
+            }),
+            ..Behaviour::new()
+        }
+    }
+
+    fn plain_stage() -> crate::behaviour::schema::Stage {
+        crate::behaviour::schema::Stage {
+            id: "only".to_string(),
+            label: "Only".to_string(),
+            end: None,
+            content: Default::default(),
+            events: Default::default(),
+            movement: None,
+            mitosis: None,
+            on_enter: None,
+        }
+    }
+
+    fn fact(behaviour: &Behaviour, key: &str) -> bool {
+        match effective_options(&empty_mode_schema(), behaviour, &no_media)
+            .pack_has
+            .get(key)
+        {
+            Some(&OptionValue::Boolean(value)) => value,
+            other => panic!("expected a boolean {key}, got {other:?}"),
+        }
+    }
+
+    /// The facts gate Experience's movement/mitosis switches through `show_when`, so they have to
+    /// mean exactly "this pack can actually do it" -- a switch shown where nothing can happen is
+    /// the dead toggle the honesty invariant exists to prevent.
+    #[test]
+    fn pack_uses_facts_track_what_the_timeline_actually_drives() {
+        use crate::behaviour::schema::{Mitosis, Movement};
+
+        // No timeline at all -- every Sandbox pack.
+        assert!(!fact(&Behaviour::new(), "pack_uses_movement"));
+        assert!(!fact(&Behaviour::new(), "pack_uses_mitosis"));
+
+        let mut moving = plain_stage();
+        moving.movement = Some(Movement {
+            minimum_speed: Some(50.0),
+            maximum_speed: Some(150.0),
+        });
+        let moving = behaviour_with_stage(moving);
+        assert!(fact(&moving, "pack_uses_movement"));
+        // Independent: a timeline using movement says nothing about mitosis.
+        assert!(!fact(&moving, "pack_uses_mitosis"));
+
+        let mut splitting = plain_stage();
+        splitting.mitosis = Some(Mitosis {
+            chance: Some(0.5),
+            count: None,
+        });
+        let splitting = behaviour_with_stage(splitting);
+        assert!(fact(&splitting, "pack_uses_mitosis"));
+        assert!(!fact(&splitting, "pack_uses_movement"));
+    }
+
+    /// A section present but empty is what an editor leaves behind, not a design decision. And
+    /// movement needs *both* speeds: `lib/spawn.lua` skips movement unless it has a range, so a
+    /// half-filled `Movement` can no more move a window than an absent one.
+    #[test]
+    fn a_half_filled_section_is_not_a_pack_that_uses_the_feature() {
+        use crate::behaviour::schema::{Mitosis, Movement};
+
+        for movement in [
+            Movement {
+                minimum_speed: None,
+                maximum_speed: None,
+            },
+            Movement {
+                minimum_speed: Some(50.0),
+                maximum_speed: None,
+            },
+            Movement {
+                minimum_speed: None,
+                maximum_speed: Some(150.0),
+            },
+        ] {
+            let mut stage = plain_stage();
+            stage.movement = Some(movement);
+            assert!(
+                !fact(&behaviour_with_stage(stage), "pack_uses_movement"),
+                "movement without a full speed range cannot move anything"
+            );
+        }
+
+        // Mitosis needs only a chance; `count` falls back to one spawn.
+        let mut stage = plain_stage();
+        stage.mitosis = Some(Mitosis {
+            chance: None,
+            count: Some(3),
+        });
+        assert!(!fact(&behaviour_with_stage(stage), "pack_uses_mitosis"));
+    }
+
     #[test]
     fn effective_options_preserves_the_mode_schemas_own_entries() {
         // Guards against effective_options silently dropping the mode's own options while
@@ -499,5 +652,82 @@ mod tests {
 
         assert!(schema.entries.contains_key("popup_frequency"));
         assert!(schema.entries.contains_key(CONTENT_GROUPS_ENTRY_KEY));
+    }
+}
+
+#[cfg(test)]
+mod shipped_mode_tests {
+    use super::*;
+    use crate::behaviour::schema::{Behaviour, Experience, Movement, Stage, Timeline};
+
+    /// End-to-end over the real shipped bundle: the `show_when` gating has to survive `lw mode
+    /// build`'s JSONC parse and the CBOR round-trip, not just be written in `config.jsonc`. Reads
+    /// the same `Sequence.lwmode` the engine embeds.
+    ///
+    /// Asserts the wiring, not the rendering -- evaluating `show_when` is the config app's job
+    /// (`PackMode.svelte` seeds these facts into it). What has to be true here is that the mode
+    /// names the fact, that the fact exists, and that it answers correctly for a pack that uses
+    /// movement and one that does not.
+    #[test]
+    fn the_shipped_sequence_mode_gates_movement_on_the_timeline() {
+        use crate::mode::{ConditionValue, ModeEntry};
+
+        let bytes = include_bytes!("../../../default-modes/experience/build/Sequence.lwmode");
+        let (_header, metadata) =
+            crate::mode::read_mode_metadata(std::io::Cursor::new(&bytes[..])).unwrap();
+
+        let ModeEntry::Group(movement) = metadata.entries.get("movement").expect("movement group")
+        else {
+            panic!("`movement` should be a group");
+        };
+        assert_eq!(
+            movement
+                .show_when
+                .as_ref()
+                .and_then(|w| w.get("pack_uses_movement")),
+            Some(&ConditionValue::Bool(true)),
+            "the movement group must be gated on the fact, or the switch is dead for packs              whose timeline never sets a speed",
+        );
+        // Visible means honored, so the switch itself defaults on.
+        assert_eq!(
+            metadata.get_option("movement_enabled").unwrap().option_type,
+            crate::mode::OptionType::Boolean { default: true },
+        );
+
+        let stage = Stage {
+            id: "s".into(),
+            label: "S".into(),
+            end: None,
+            content: Default::default(),
+            events: Default::default(),
+            movement: Some(Movement {
+                minimum_speed: Some(40.0),
+                maximum_speed: Some(90.0),
+            }),
+            mitosis: None,
+            on_enter: None,
+        };
+        let with_movement = Behaviour {
+            experience: Some(Experience {
+                timeline: Timeline {
+                    stages: vec![stage],
+                    transitions: vec![],
+                },
+                label: None,
+            }),
+            ..Behaviour::new()
+        };
+
+        let visible = |behaviour: &Behaviour| {
+            effective_options(&metadata, behaviour, &no_media)
+                .pack_has
+                .get("pack_uses_movement")
+                .cloned()
+        };
+        assert_eq!(visible(&with_movement), Some(OptionValue::Boolean(true)));
+        assert_eq!(
+            visible(&Behaviour::new()),
+            Some(OptionValue::Boolean(false))
+        );
     }
 }

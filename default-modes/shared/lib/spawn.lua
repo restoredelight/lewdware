@@ -11,6 +11,19 @@ local content = require("lib.content")
 
 local M = {}
 
+--- The monitor a file asks to spawn on, or nil for the engine's own random choice.
+---
+--- A *preference*, not a guarantee: the user may have switched their primary monitor off in the
+--- Monitors tab, in which case `lewdware.monitors.primary()` has nothing to return and the popup
+--- falls back to a random one. A pack cannot overrule a monitor the user withheld, and rule 5
+--- (an unavailable resource is skip-and-continue) says not to refuse the spawn over it.
+---@param preference string|nil
+---@return Monitor|nil
+local function preferred_monitor(preference)
+	if preference ~= "primary" then return nil end
+	return lewdware.monitors.primary()
+end
+
 --- Accepts either a plain value (Sandbox's call site: a fixed user option) or a getter function
 --- (Experience's call site: re-read the current timeline level fresh at each spawn/close
 --- decision, mirroring `active_tags`) -- lets both modes share this module's option shape without
@@ -102,8 +115,13 @@ end
 ---   caller's images_enabled/videos_enabled (both modes' own class-1 options).
 --- @field max_popups integer|nil Hard cap (both modes' own option); nil/false means unlimited.
 --- @field captions_enabled boolean
---- @field popup_audio_enabled boolean Whether role-assigned audio plays when a popup spawns. One
----   sound at a time, whatever the spawn rate -- see the spawn hook.
+--- @field popup_audio_enabled boolean Whether role-assigned audio plays when a popup spawns, and
+---   whether a video popup opens its own audio stream. Both are the same question to the user --
+---   "do popups make noise?" -- so they share one switch.
+--- @field popup_audio_volume number|nil Volume for both of the above, between 0 and 1. Absent =
+---   full volume. User-owned in both modes (comfort, not pacing).
+--- @field popup_audio_layered boolean|nil Whether popup sounds may overlap. Absent/false keeps one
+---   sound at a time, whatever the spawn rate -- see the spawn hook for why that is the default.
 --- @field movement_enabled boolean
 --- @field movement_speed_min number|(fun(): number|nil) Sandbox: a fixed user option. Experience:
 ---   a getter re-reading the current timeline level's design value fresh at each spawn (see
@@ -189,6 +207,31 @@ function M.make_spawner(opts)
 		popup_opts.opacity = opts.opacity
 		popup_opts.click_through = opts.click_through
 
+		-- What the pack author said about this particular file. Every field is independently
+		-- optional and absent means "no opinion", so each is applied only where it is set rather
+		-- than defaulted here. None of them can reach a user-owned window property: the four
+		-- assignments above are the mode's, set unconditionally, and are not an attribute's to
+		-- touch.
+		local attributes = media.popup_attributes(item.id) or {}
+		-- `scale` rather than a computed `width`: the engine applies it before its own monitor
+		-- caps, so a pack cannot use it to fill the screen. See `PopupOpts.scale`.
+		popup_opts.scale = attributes.scale
+		-- A file's placement is a *region* the engine picks a position inside, rather than a point
+		-- this module computes: only the engine knows the size it settled on after its monitor
+		-- caps, and "inside this rectangle" is a statement about the whole window, not its corner.
+		-- A region of zero size is how a file pins itself to one placement -- see `SpawnRegion`.
+		--
+		-- Only where the caller is not already placing the window: mitosis positions its children
+		-- around the popup that spawned them, and a file's own placement has nothing to say about
+		-- where a *different* popup's children land.
+		if attributes.region and not (spawn_opts and spawn_opts.x) then
+			popup_opts.region = attributes.region
+		end
+		-- Likewise: a caller that named a monitor is placing this window relative to another one.
+		if not (spawn_opts and spawn_opts.monitor) then
+			popup_opts.monitor = preferred_monitor(attributes.monitor)
+		end
+
 		local window
 		-- No theme named, here or at any other spawn site in these modes: a popup is drawn in
 		-- whatever look the user picked in the app, which is what a mode should want unless the
@@ -196,30 +239,61 @@ function M.make_spawner(opts)
 		if item.type == "image" then
 			window = lewdware.popup.image(item, popup_opts)
 		elseif item.type == "video" then
+			-- A video's own soundtrack is a popup making noise, so it answers to the same switch
+			-- and the same volume as the pack's popup sounds. `audio = false` opens no audio
+			-- stream at all, which is what the user asked for when they turned popup sounds off.
+			-- The file's own `video_audio` can silence a clip the user allowed, never the reverse:
+			-- an author saying "this one is silent" is content, an author saying "this one plays
+			-- anyway" would be overriding a class-1 switch.
+			popup_opts.audio = opts.popup_audio_enabled and attributes.video_audio ~= false
+			popup_opts.volume = opts.popup_audio_volume
+			-- Absent leaves the engine default (loop forever); `false` closes the window when the
+			-- clip ends, which is what a short one-shot wants and no mode-wide option can express.
+			popup_opts.loop = attributes.video_loop
 			window = lewdware.popup.video(item, popup_opts)
 		end
 
 		if opts.captions_enabled then
-			local caption = content.pick_caption(item.tags)
-			if caption then window:set_title(caption.text) end
+			-- A caption pinned to this file is the author captioning *it*, so it wins over the
+			-- tag-matched pool rather than being drawn from alongside it. Still under the user's
+			-- captions switch: it is a caption either way.
+			local caption = attributes.caption
+			if not caption then
+				local picked = content.pick_caption(item.tags)
+				caption = picked and picked.text
+			end
+			if caption then window:set_title(caption) end
 		end
 
-		-- One popup sound at a time. Popups arrive in bursts -- acceleration, mitosis, a spawn
-		-- interval shorter than the sounds themselves -- and one-shots layered over each other stop
-		-- reading as individual sounds. The one already playing keeps the slot rather than being
-		-- cut off by the newcomer: replacing it would leave a fast spawner playing nothing but the
-		-- first fraction of each sound over and over. Popups that spawn meanwhile go without.
-		if opts.popup_audio_enabled and not popup_audio_playing then
+		-- One popup sound at a time, unless the user asked for layering. Popups arrive in bursts --
+		-- acceleration, mitosis, a spawn interval shorter than the sounds themselves -- and
+		-- one-shots layered over each other stop reading as individual sounds. The one already
+		-- playing keeps the slot rather than being cut off by the newcomer: replacing it would
+		-- leave a fast spawner playing nothing but the first fraction of each sound over and over.
+		-- Popups that spawn meanwhile go without. That is the default rather than the only
+		-- behaviour: a pack of short stings over a slow spawner is a legitimate thing to want
+		-- layered, and the user is the one who can hear which it is.
+		local layered = opts.popup_audio_layered or false
+		if opts.popup_audio_enabled and (layered or not popup_audio_playing) then
 			window:on_spawn(function()
-				if popup_audio_playing then return end
-				local audio = media.random_popup_audio(item.tags)
+				if not layered and popup_audio_playing then return end
+				local audio = media.random_popup_audio(item)
 				if not audio then return end
-				popup_audio_playing = true
-				-- Fires on the track ending, on decoding turning out to be impossible, and on an
-				-- explicit stop (see `AudioHandle::on_finish`), so nothing can hold the slot for a
-				-- sound that never plays. The sound is not tied to the popup that started it: a
-				-- window closed early leaves it to finish.
-				lewdware.play_audio(audio):on_finish(function() popup_audio_playing = false end)
+				-- The file's own level composes with the user's rather than replacing it: the
+				-- author is levelling this sound against the rest of the pack, the user is
+				-- setting how loud the pack is.
+				local level = (media.audio_attributes(audio.id) or {}).volume or 1
+				local handle = lewdware.play_audio(audio, {
+					volume = (opts.popup_audio_volume or 1) * level,
+				})
+				if not layered then
+					popup_audio_playing = true
+					-- Fires on the track ending, on decoding turning out to be impossible, and on
+					-- an explicit stop (see `AudioHandle::on_finish`), so nothing can hold the slot
+					-- for a sound that never plays. The sound is not tied to the popup that started
+					-- it: a window closed early leaves it to finish.
+					handle:on_finish(function() popup_audio_playing = false end)
+				end
 			end)
 		end
 

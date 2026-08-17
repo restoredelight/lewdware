@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,22 @@ use serde::{Deserialize, Serialize};
 /// opt-in: `None` means the pack doesn't use engine-managed wallpaper/splash at all.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Content {
+    /// Per-file popup attributes, keyed by media id. See [`PopupMedia`].
+    ///
+    /// A map rather than a list because the key is the address: unlike the pools, an entry is
+    /// edited, added and removed by media id, which is stable across everything except deleting
+    /// the file. That also makes it patchable field by field (`content.popups.42.scale`) instead
+    /// of by whole-array replacement.
+    ///
+    /// Serialized even when empty, like the pools and unlike the optional media slots. A patch
+    /// writes a missing key only as its *final* segment — inventing an intermediate one would
+    /// resurrect a section a stale editor is writing into (see `patch.rs`) — so a map that
+    /// vanished when empty would reject the first entry ever added to a pack.
+    #[serde(default)]
+    pub popups: BTreeMap<u64, PopupMedia>,
+    /// Per-file audio attributes, keyed by media id. See [`AudioMedia`] and `popups` above.
+    #[serde(default)]
+    pub audio: BTreeMap<u64, AudioMedia>,
     #[serde(default)]
     pub content_groups: Vec<ContentGroup>,
     #[serde(default)]
@@ -46,7 +62,9 @@ impl Content {
     /// `prompt_settings` is deliberately not consulted -- it configures how prompts are presented,
     /// so it says nothing on its own about whether there are any.
     pub fn is_empty(&self) -> bool {
-        self.content_groups.is_empty()
+        self.popups.is_empty()
+            && self.audio.is_empty()
+            && self.content_groups.is_empty()
             && self.captions.is_empty()
             && self.prompts.is_empty()
             && self.notifications.is_empty()
@@ -71,6 +89,179 @@ pub enum MediaSlot {
     /// The wallpaper a timeline stage sets, addressed by stage id rather than by position: a
     /// slot may be filled long after it was read, and ids are what survive editing in between.
     StageWallpaper { stage: String },
+    /// The background track a timeline stage selects. `None` retains the current track.
+    StageAudio { stage: String },
+}
+
+/// What a pack author says about one file used as popup content.
+///
+/// Every field is optional, and an entry with nothing set is not stored at all (see
+/// [`PopupMedia::is_empty`]) — "unset" has to stay distinguishable from "set to today's default",
+/// because defaults move under the user across engine releases. A mode reading this treats an
+/// absent field as "no opinion", never as a zero.
+///
+/// These describe the *content*, never the user's relationship to the window: there is
+/// deliberately no per-file opacity, click-through, decorations or auto-close, since those are
+/// user-owned in both modes and a per-file override is exactly the silent surprise the ownership
+/// model exists to prevent. See `behaviour-design/default-mode-v2.md`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct PopupMedia {
+    /// How often this file is drawn relative to its neighbours. Affects *which* file spawns,
+    /// never how many windows exist, so it cannot escape `max_popups`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
+    /// Multiplies the size the mode would otherwise have chosen. The engine's monitor-fraction
+    /// cap still binds, so this cannot fill the screen from a pack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
+    /// The part of the monitor this file may spawn in. `None` is the whole of it — the mode's
+    /// ordinary random placement — so an author who has said nothing is not pinned to a rectangle
+    /// that was the default when they wrote the pack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<SpawnRegion>,
+    /// Which monitor this file prefers. `None` means the mode's choice, which is a random one of
+    /// the monitors the user allows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<MonitorPreference>,
+    /// A caption belonging to this file, as opposed to the tag-matched pool in `captions`. Still
+    /// under the user's `captions_enabled`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    /// `VideoPopupOpts::loop` for this clip — `Some(false)` closes the popup when the clip ends,
+    /// which a short clip usually wants and the mode-wide default cannot express.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_loop: Option<bool>,
+    /// `VideoPopupOpts::audio` for this clip. Still under the user's popup-sound switch: this can
+    /// silence a clip the user allowed, never unsilence one they didn't.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_audio: Option<bool>,
+    /// Sounds paired explicitly with this popup, by media id — the cases tag matching cannot
+    /// express. A set: the mode picks one at random, so the order carries no meaning and is
+    /// normalised on read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio: Vec<u64>,
+}
+
+impl PopupMedia {
+    /// Whether this entry says nothing, and so should not be stored.
+    ///
+    /// The editor clears an attribute by setting it to null; when the last one goes, the entry
+    /// stops existing rather than lingering as a row of NULLs. `read` never produces one, so the
+    /// distinction is invisible above this layer.
+    pub fn is_empty(&self) -> bool {
+        self.weight.is_none()
+            && self.scale.is_none()
+            && self.region.is_none()
+            && self.monitor.is_none()
+            && self.caption.is_none()
+            && self.video_loop.is_none()
+            && self.video_audio.is_none()
+            && self.audio.is_empty()
+    }
+}
+
+/// What a pack author says about one audio file. See [`PopupMedia`] for the conventions; the same
+/// "absent means no opinion" rule applies.
+///
+/// Deliberately no `loop`. A track that should repeat is expressible already -- a pack whose
+/// background pool is one file plays that file on a loop, because the rotation re-picks it -- and
+/// as an option it did more harm than good: on a popup sound it means nothing (a sting that never
+/// ends), and on a background track it *stops the rotation*, so one file marked to loop silently
+/// keeps every other track in the pack from ever playing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct AudioMedia {
+    /// This track's own level, for levelling a pack assembled from mixed sources. Composes with
+    /// the user's volume rather than replacing it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
+}
+
+impl AudioMedia {
+    /// See [`PopupMedia::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.volume.is_none()
+    }
+}
+
+/// The part of a monitor a popup may spawn in, as fractions of its usable area — the
+/// `SpawnRegion` class in `api.lua`, which this reaches the engine as.
+///
+/// This *replaced* a nine-value anchor, and subsumes it: the engine places the window entirely
+/// inside the region, centring it on the region and clamping to the screen when it does not fit,
+/// so a region of zero size names one placement exactly (`{1, 1, 0, 0}` is the bottom-right
+/// corner, `{0.5, 0.5, 0, 0}` is centred). One field instead of two, and "somewhere in the left
+/// half" stops being inexpressible.
+///
+/// Sanitised on the way in rather than trusted: a pack is data, and NaN reaching
+/// `rand::random_range` is a panic in the engine.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct SpawnRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl SpawnRegion {
+    /// The whole monitor: what `PopupMedia::region` being absent means, spelled out.
+    pub const FULL: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+
+    /// This region with every edge inside the monitor and no negative or non-finite extent.
+    ///
+    /// The position is preserved where it can be: an over-large rectangle shrinks against the
+    /// far edge rather than sliding, which is what an author dragging one out expects.
+    ///
+    /// Rounded to a thousandth of the screen — a pixel on a 1920-wide monitor, which is below
+    /// anything an author can express or see. That is not cosmetic: clamping produces values like
+    /// `1.0 - 0.8`, and the editor decides whether to *store* a region at all by comparing it
+    /// against the full screen. Two implementations of this rule disagreeing in the last bit
+    /// would make that comparison answer differently on either side.
+    pub fn sanitized(self) -> Self {
+        fn finite(value: f64) -> f64 {
+            if value.is_finite() { value } else { 0.0 }
+        }
+
+        fn round(value: f64) -> f64 {
+            (value * 1000.0).round() / 1000.0
+        }
+
+        let x = finite(self.x).clamp(0.0, 1.0);
+        let y = finite(self.y).clamp(0.0, 1.0);
+
+        Self {
+            x: round(x),
+            y: round(y),
+            width: round(finite(self.width).clamp(0.0, 1.0 - x)),
+            height: round(finite(self.height).clamp(0.0, 1.0 - y)),
+        }
+    }
+
+    /// Whether this is the whole monitor, and so says nothing the default does not already say.
+    /// The editor stores `None` instead of a full region, for the reason on [`PopupMedia`].
+    pub fn is_full(&self) -> bool {
+        self.sanitized() == Self::FULL
+    }
+}
+
+/// Which monitor a popup prefers, when the user has more than one.
+///
+/// A *preference*, not a guarantee: the user may have switched their primary monitor off in the
+/// Monitors tab, and a pack cannot overrule that. The mode falls back to its ordinary random
+/// choice rather than refusing to spawn.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MonitorPreference {
+    /// Any monitor the user allows, chosen at random. The same as saying nothing; the editor
+    /// writes `None` rather than this, and it exists so a mode reading the field can match
+    /// exhaustively.
+    Any,
+    /// The user's primary monitor.
+    Primary,
 }
 
 /// A single content-pool entry, taggable independently of any other entry in the same pool
@@ -102,6 +293,21 @@ pub struct PromptSettings {
     /// Submit-button label override, rendered via `popup.dialog`.
     #[serde(default)]
     pub submit_label: Option<String>,
+    /// Closes the prompt after this many seconds. Absent preserves the unbounded behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<f64>,
+    /// What a rejected submission does. Every feature-producing variant remains gated by the
+    /// user's corresponding presence switch in the mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrong_answer: Option<PromptWrongAnswer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PromptWrongAnswer {
+    PopupBurst { count: u32 },
+    AddTime { seconds: f64 },
+    Sound,
 }
 
 /// A named, described, user-toggleable set of tags. See `behaviour-design/default-mode.md`
@@ -191,13 +397,21 @@ impl Behaviour {
             .experience
             .iter_mut()
             .flat_map(|experience| experience.timeline.stages.iter_mut())
-            .map(|stage| {
-                (
-                    MediaSlot::StageWallpaper {
-                        stage: stage.id.clone(),
-                    },
-                    &mut stage.content.wallpaper,
-                )
+            .flat_map(|stage| {
+                [
+                    (
+                        MediaSlot::StageWallpaper {
+                            stage: stage.id.clone(),
+                        },
+                        &mut stage.content.wallpaper,
+                    ),
+                    (
+                        MediaSlot::StageAudio {
+                            stage: stage.id.clone(),
+                        },
+                        &mut stage.content.audio,
+                    ),
+                ]
             });
         [
             (MediaSlot::Wallpaper, &mut self.content.wallpaper),
@@ -223,6 +437,13 @@ impl Behaviour {
                     .stages
                     .iter()
                     .filter_map(|stage| stage.content.wallpaper),
+            );
+            ids.extend(
+                experience
+                    .timeline
+                    .stages
+                    .iter()
+                    .filter_map(|stage| stage.content.audio),
             );
         }
         ids
@@ -318,6 +539,21 @@ pub struct Stage {
     pub movement: Option<Movement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mitosis: Option<Mitosis>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_enter: Option<StageEntry>,
+}
+
+/// Declarative punctuation fired once after a stage transition has completed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct StageEntry {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub splash: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sound: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub popup_burst: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notification: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -325,11 +561,23 @@ pub struct ContentSelection {
     /// `None` uses all content; `Some([])` deliberately selects none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// The one of [`Self::tags`] the editor created for this stage, and therefore maintains the
+    /// name of: renaming the stage renames it, and deleting the stage retires it when nothing else
+    /// claims it. A tag the author added by hand is never owned, and never touched.
+    ///
+    /// Necessarily one of `tags` — ownership is recorded on the association row, so a stage that
+    /// stops selecting by a tag stops owning it. `None` for every stage whose tags the author chose
+    /// themselves, and for every unrestricted stage, which has no selection to own a tag in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_tag: Option<String>,
     /// Id of the media file this stage sets as the wallpaper. `None` retains whatever the
     /// previous stage (or `Content::wallpaper`) left in effect -- an absolute write, not a
     /// delta, which is why one id is enough.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallpaper: Option<u64>,
+    /// Background track selected on entry. `None` retains whatever is already playing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -344,6 +592,8 @@ pub struct Events {
     pub prompt: Option<EventSchedule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subliminal: Option<EventSchedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<EventSchedule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -425,6 +675,7 @@ pub enum EventKind {
     Notification,
     Prompt,
     Subliminal,
+    Sound,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -463,6 +714,8 @@ pub enum TransitionCategory {
     NotificationInterval,
     PromptInterval,
     SubliminalInterval,
+    SoundInterval,
+    Crossfade,
     MovementMinimumSpeed,
     MovementMaximumSpeed,
     MitosisChance,
@@ -518,11 +771,14 @@ mod tests {
                     end: None,
                     content: ContentSelection {
                         tags: None,
+                        owned_tag: None,
                         wallpaper: Some(stage_wallpaper),
+                        audio: None,
                     },
                     events: Events::default(),
                     movement: None,
                     mitosis: None,
+                    on_enter: None,
                 }],
                 transitions: vec![],
             },
@@ -552,6 +808,12 @@ mod tests {
             },
             3
         ));
+        assert!(behaviour.fill_media_reference(
+            &MediaSlot::StageAudio {
+                stage: "stage-1".to_string()
+            },
+            4
+        ));
         // A stage deleted while the import ran simply has nowhere to fill.
         assert!(!behaviour.fill_media_reference(
             &MediaSlot::StageWallpaper {
@@ -564,6 +826,7 @@ mod tests {
         assert_eq!(behaviour.content.splash, Some(99));
         let stage = &behaviour.experience.as_ref().unwrap().timeline.stages[0];
         assert_eq!(stage.content.wallpaper, Some(3));
+        assert_eq!(stage.content.audio, Some(4));
     }
 
     #[test]
@@ -618,6 +881,7 @@ mod tests {
                     events: Default::default(),
                     movement: None,
                     mitosis: None,
+                    on_enter: None,
                 }],
                 transitions: vec![],
             },

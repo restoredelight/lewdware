@@ -71,6 +71,62 @@ pub struct BehaviourEdit {
     /// Media the edit retired that turned out to be scenery nothing else referenced, so it left
     /// the pack with the edit. The front end drops these from its media grid.
     pub deleted_ids: Vec<u64>,
+    /// Tags the edit's [`TagAction`]s took out of the pack, so the grid can drop them from the
+    /// files that carried them without refetching. Reported rather than assumed: a retirement is
+    /// conditional on nothing claiming the tag, and that is decided here.
+    pub removed_tags: Vec<String>,
+    /// `[from, to]` for each rename that actually happened, for the same reason: a rename onto a
+    /// name the pack already has is skipped rather than turned into a merge.
+    pub renamed_tags: Vec<(String, String)>,
+}
+
+/// A tag edit that belongs to the same author action as a behaviour patch.
+///
+/// The tag half of `retiring`, and there for the same reason: renaming a stage renames the tag it
+/// owns, and dropping a stage retires it, so the two halves have to be one transaction or undo
+/// would leave a stage renamed and its tag not (or the reverse). See
+/// `behaviour-design/default-mode-v2.md`, "Stage tags".
+///
+/// Ordering is by *phase*, not by position in the list, because the two groups ask their questions
+/// of different documents: [`TagAction::Apply`], [`TagAction::Remove`] and [`TagAction::Rename`]
+/// run before the patch is written, so media membership and the stage association change in one
+/// transaction (and a rename afterwards would be undone on the spot, since writing a tag list
+/// re-creates any name it does not find). Retirement and deletion run after it, because "does
+/// anything still claim this tag?" is a question about the document the edit produced.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TagAction {
+    /// Puts `tag` on media, creating the tag if the pack does not have it.
+    ///
+    /// `media` of `None` means every file in the pack -- the seeding rule, which keeps a stage
+    /// showing what it showed a moment before its tags were switched on. A list rather than ids for
+    /// that case would mean shipping every id in the pack across the IPC boundary to describe one
+    /// checkbox.
+    Apply {
+        tag: String,
+        media: Option<Vec<u64>>,
+    },
+    /// Removes `tag` from the named media.
+    ///
+    /// This is part of a behaviour edit (rather than the ordinary tag command) when leaving one
+    /// stage first has to give neighbouring stages replacement tags. Keeping the additions, the
+    /// stage patch and the removal in one transaction makes the whole toggle one undo entry.
+    Remove { tag: String, media: Vec<u64> },
+    /// Renames `from` to `to`, and does nothing at all if the pack already has a tag called `to`.
+    ///
+    /// Skipped rather than refused: this rides along with a stage rename, and failing the whole
+    /// edit would mean the author's stage cannot be renamed because a *tag* name collides. The
+    /// stage keeps the tag it had, under the name it had, which is the honest outcome.
+    Rename { from: String, to: String },
+    /// Deletes `tag` if nothing claims it: no media carries it, and no stage, text pool, web link
+    /// or content group names it in the patched document. Otherwise leaves it entirely alone.
+    ///
+    /// The condition is re-checked here rather than trusted from the front end, because the front
+    /// end asked it of the document *before* the edit.
+    RetireIfUnclaimed { tag: String },
+    /// Deletes `tag` outright, associations and all -- the author having been told what it is on
+    /// and having asked for it anyway.
+    Delete { tag: String },
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -158,6 +214,164 @@ fn tag_media_ids(tx: &rusqlite::Transaction<'_>, tag: &str) -> Result<Vec<u64>> 
     )?;
     let ids = statement
         .query_map([tag], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
+
+/// What a group of [`TagAction`]s did, accumulated across both phases of one edit.
+#[derive(Default)]
+struct TagActionOutcome {
+    /// Whether anything actually happened. A behaviour patch that lands on the value already there
+    /// is not an edit, and neither is a rename that collided or a retirement that was claimed --
+    /// but a tag action that *did* something makes the edit real even when the document is
+    /// unchanged, which is exactly the case a per-file "Appears in" toggle produces.
+    changed: bool,
+    media_refs: Vec<u64>,
+    removed: Vec<String>,
+    renamed: Vec<(String, String)>,
+}
+
+/// The media membership edits and renames, which run before the patched document is written. See
+/// [`TagAction`] for why the ordering is by phase.
+fn run_tag_actions_before_write(
+    tx: &rusqlite::Transaction<'_>,
+    actions: &[TagAction],
+    outcome: &mut TagActionOutcome,
+) -> Result<()> {
+    for action in actions {
+        match action {
+            TagAction::Apply { tag, media } => {
+                reject_managed_tag(tag)?;
+                outcome.changed |=
+                    tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])? > 0;
+                let tag_id: u64 =
+                    tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
+                        row.get(0)
+                    })?;
+                match media {
+                    Some(ids) => {
+                        for id in ids {
+                            outcome.changed |= tx.execute(
+                                "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+                                params![id, tag_id],
+                            )? > 0;
+                        }
+                        outcome.media_refs.extend(ids.iter().copied());
+                    }
+                    None => {
+                        outcome.changed |= tx.execute(
+                            "INSERT OR IGNORE INTO media_tags (media_id, tag_id)
+                             SELECT id, ? FROM media WHERE deleted = 0",
+                            params![tag_id],
+                        )? > 0;
+                        outcome.media_refs.extend(live_media_ids(tx)?);
+                    }
+                }
+            }
+            TagAction::Remove { tag, media } => {
+                reject_managed_tag(tag)?;
+                let Some(tag_id) = tx
+                    .query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
+                        row.get::<_, u64>(0)
+                    })
+                    .optional()?
+                else {
+                    continue;
+                };
+                for id in media {
+                    outcome.changed |= tx.execute(
+                        "DELETE FROM media_tags WHERE media_id = ? AND tag_id = ?",
+                        params![id, tag_id],
+                    )? > 0;
+                }
+                outcome.media_refs.extend(media.iter().copied());
+            }
+            TagAction::Rename { from, to } => {
+                reject_managed_tag(from)?;
+                reject_managed_tag(to)?;
+                let taken: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tags WHERE name = ?)",
+                    params![to],
+                    |row| row.get(0),
+                )?;
+                if taken {
+                    continue;
+                }
+                let refs = tag_media_ids(tx, from)?;
+                if tx.execute("UPDATE tags SET name = ? WHERE name = ?", params![to, from])? > 0 {
+                    outcome.changed = true;
+                    outcome.media_refs.extend(refs);
+                    outcome.renamed.push((from.clone(), to.clone()));
+                }
+            }
+            TagAction::RetireIfUnclaimed { .. } | TagAction::Delete { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+/// [`TagAction::RetireIfUnclaimed`] and [`TagAction::Delete`], which run once the patched document
+/// is stored -- "claimed" being a question about the document the edit produced.
+fn run_tag_actions_after_write(
+    tx: &rusqlite::Transaction<'_>,
+    actions: &[TagAction],
+    outcome: &mut TagActionOutcome,
+) -> Result<()> {
+    for action in actions {
+        let tag = match action {
+            TagAction::RetireIfUnclaimed { tag } if !tag_is_claimed(tx, tag)? => tag,
+            TagAction::Delete { tag } => tag,
+            _ => continue,
+        };
+        let refs = tag_media_ids(tx, tag)?;
+        if tx.execute("DELETE FROM tags WHERE name = ?", params![tag])? > 0 {
+            outcome.changed = true;
+            outcome.media_refs.extend(refs);
+            outcome.removed.push(tag.clone());
+        }
+    }
+    Ok(())
+}
+
+/// Whether anything in the pack still holds `tag`: media that carries it, or any of the behaviour
+/// document's tag lists.
+///
+/// Soft-deleted media does not count, so that the Tags tab's file count and this agree -- a stage
+/// tag left only on files the author already removed is machinery, not work. Undo covers the
+/// asymmetry: restoring those files and restoring the tag are the same two entries, in order.
+fn tag_is_claimed(tx: &rusqlite::Transaction<'_>, tag: &str) -> Result<bool> {
+    let on_media: bool = tx.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM media_tags mt
+             JOIN tags t ON t.id = mt.tag_id
+             JOIN media m ON m.id = mt.media_id
+             WHERE t.name = ? AND m.deleted = 0)",
+        params![tag],
+        |row| row.get(0),
+    )?;
+    if on_media {
+        return Ok(true);
+    }
+    for (table, _) in TAG_JOIN_TABLES {
+        let named: bool = tx.query_row(
+            &format!(
+                "SELECT EXISTS(
+                     SELECT 1 FROM {table} j JOIN tags t ON t.id = j.tag_id WHERE t.name = ?)"
+            ),
+            params![tag],
+            |row| row.get(0),
+        )?;
+        if named {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn live_media_ids(tx: &rusqlite::Transaction<'_>) -> Result<Vec<u64>> {
+    let mut statement = tx.prepare("SELECT id FROM media WHERE deleted = 0")?;
+    let ids = statement
+        .query_map([], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     Ok(ids)
 }
@@ -2856,6 +3070,7 @@ impl MediaPack {
         patches: Vec<Patch>,
         label: String,
         retiring: Vec<u64>,
+        tag_actions: Vec<TagAction>,
     ) -> Result<BehaviourEdit> {
         let _handle = self.saving.read().await;
         let (edit, changed) = self
@@ -2863,6 +3078,11 @@ impl MediaPack {
                 history::record_with_media_refs(&mut connection, &label, 0, |tx| {
                     let stored = read_behaviour(tx)?;
                     let patched = stored.patched(&patches)?;
+
+                    // Before the write, so the document is stored against the tag names the patch
+                    // uses rather than re-creating the ones a rename just left behind.
+                    let mut tags = TagActionOutcome::default();
+                    run_tag_actions_before_write(tx, &tag_actions, &mut tags)?;
 
                     // Against the *patched* document, so "still referenced" means after the edit
                     // -- a wallpaper the retired stage shared with another stage stays.
@@ -2876,21 +3096,28 @@ impl MediaPack {
                     // A patch that lands on the value already there is an `oninput` that changed
                     // nothing, not an edit. Writing it would cost an undo entry out of the
                     // hundred history keeps, evicting a real one off the bottom of the list.
-                    if patched == stored && deleted_ids.is_empty() {
-                        let edit = BehaviourEdit {
-                            behaviour: patched,
-                            deleted_ids,
-                        };
-                        return Ok(((edit, false), vec![]));
+                    let document_changed = patched != stored;
+                    if document_changed {
+                        write_behaviour(tx, &patched)?;
                     }
-                    write_behaviour(tx, &patched)?;
+                    run_tag_actions_after_write(tx, &tag_actions, &mut tags)?;
+
                     // The retired file's bytes have to outlive the entry that dropped it, or undo
-                    // would restore a slot pointing at media the collector has taken away.
-                    let refs = deleted_ids.clone();
+                    // would restore a slot pointing at media the collector has taken away. The tag
+                    // actions' media is here for the same reason association-wide tag edits collect
+                    // it (see `history::record_with_media_refs`).
+                    let mut refs = deleted_ids.clone();
+                    refs.extend(tags.media_refs);
                     let edit = BehaviourEdit {
                         behaviour: patched,
                         deleted_ids,
+                        removed_tags: tags.removed,
+                        renamed_tags: tags.renamed,
                     };
+                    let changed = document_changed || !edit.deleted_ids.is_empty() || tags.changed;
+                    if !changed {
+                        return Ok(((edit, false), vec![]));
+                    }
                     Ok(((edit, true), refs))
                 })
             })
@@ -3912,6 +4139,7 @@ fn slot_label(slot: &MediaSlot) -> &'static str {
     match slot {
         MediaSlot::Wallpaper | MediaSlot::StageWallpaper { .. } => "Set wallpaper",
         MediaSlot::Splash => "Set splash",
+        MediaSlot::StageAudio { .. } => "Set stage audio",
     }
 }
 
@@ -3930,6 +4158,17 @@ fn slot_value(behaviour: &Behaviour, slot: &MediaSlot) -> Option<u64> {
                 .find(|candidate| &candidate.id == stage)?
                 .content
                 .wallpaper
+        }
+        MediaSlot::StageAudio { stage } => {
+            behaviour
+                .experience
+                .as_ref()?
+                .timeline
+                .stages
+                .iter()
+                .find(|candidate| &candidate.id == stage)?
+                .content
+                .audio
         }
     }
 }
@@ -3952,6 +4191,18 @@ fn set_slot(behaviour: &mut Behaviour, slot: &MediaSlot, media: Option<u64>) -> 
                 return false;
             };
             &mut target.content.wallpaper
+        }
+        MediaSlot::StageAudio { stage } => {
+            let Some(target) = behaviour.experience.as_mut().and_then(|experience| {
+                experience
+                    .timeline
+                    .stages
+                    .iter_mut()
+                    .find(|candidate| &candidate.id == stage)
+            }) else {
+                return false;
+            };
+            &mut target.content.audio
         }
     };
     *target = media;
@@ -5662,6 +5913,7 @@ mod tests {
                         events: Events::default(),
                         movement: None,
                         mitosis: None,
+                        on_enter: None,
                     }],
                     transitions: vec![],
                 },
@@ -5736,6 +5988,7 @@ mod tests {
                 )],
                 "Edit caption".to_string(),
                 vec![],
+                vec![],
             )
             .await
             .unwrap();
@@ -5762,6 +6015,7 @@ mod tests {
             )],
             "Edit submit label".to_string(),
             vec![],
+            vec![],
         )
         .await
         .unwrap();
@@ -5778,6 +6032,7 @@ mod tests {
             )],
             "Edit submit label".to_string(),
             vec![],
+            vec![],
         )
         .await
         .unwrap();
@@ -5791,6 +6046,109 @@ mod tests {
         pack.undo().await.unwrap();
         let behaviour = read_pack_behaviour(&pack).await;
         assert_eq!(behaviour.content.prompt_settings.submit_label, None);
+    }
+
+    /// Leaving one stage can require a replacement tag for another stage that shared its only
+    /// tag. The document patch and both media-tag changes are one author action and must undo as
+    /// one; otherwise undo can restore a membership without restoring the stage selection that
+    /// makes it mean anything (or the reverse).
+    #[tokio::test]
+    async fn a_stage_membership_rewrite_is_one_undoable_edit() {
+        let tmp = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let pack = new_test_pack(
+            &tmp.path().join("membership.lwpack"),
+            data_dir.path(),
+            "Membership",
+        )
+        .await;
+        let media = insert_staged_audio(&pack, b"member").await;
+        pack.add_tags(media, vec!["shared".to_string()])
+            .await
+            .unwrap();
+
+        let make_stage = |id: &str| Stage {
+            id: id.to_string(),
+            label: id.to_string(),
+            end: None,
+            content: ContentSelection {
+                tags: Some(vec!["shared".to_string()]),
+                owned_tag: None,
+                wallpaper: None,
+                audio: None,
+            },
+            events: Events::default(),
+            movement: None,
+            mitosis: None,
+            on_enter: None,
+        };
+        pack.replace_behaviour(
+            Behaviour {
+                experience: Some(Experience {
+                    timeline: Timeline {
+                        stages: vec![make_stage("leave"), make_stage("keep")],
+                        transitions: vec![],
+                    },
+                    label: None,
+                }),
+                ..Behaviour::default()
+            },
+            "Seed behaviour".to_string(),
+        )
+        .await
+        .unwrap();
+
+        pack.edit_behaviour(
+            vec![Patch::new(
+                "experience.timeline.stages.1.content",
+                serde_json::json!({
+                    "tags": ["shared", "stage-keep"],
+                    "owned_tag": "stage-keep"
+                }),
+            )],
+            "Remove from leave".to_string(),
+            vec![],
+            vec![
+                TagAction::Apply {
+                    tag: "stage-keep".to_string(),
+                    media: Some(vec![media]),
+                },
+                TagAction::Remove {
+                    tag: "shared".to_string(),
+                    media: vec![media],
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        let tags = pack.get_tags(media).await.unwrap();
+        assert!(tags.contains(&"stage-keep".to_string()));
+        assert!(!tags.contains(&"shared".to_string()));
+        let stages = read_pack_behaviour(&pack)
+            .await
+            .experience
+            .unwrap()
+            .timeline
+            .stages;
+        assert_eq!(
+            stages[1].content.tags.as_deref(),
+            Some(&["shared".to_string(), "stage-keep".to_string()][..])
+        );
+
+        pack.undo().await.unwrap();
+        assert_eq!(pack.get_tags(media).await.unwrap(), vec!["shared"]);
+        let stages = read_pack_behaviour(&pack)
+            .await
+            .experience
+            .unwrap()
+            .timeline
+            .stages;
+        assert_eq!(
+            stages[1].content.tags.as_deref(),
+            Some(&["shared".to_string()][..])
+        );
+        assert_eq!(stages[1].content.owned_tag, None);
     }
 
     /// A patch the document can't take leaves it exactly as it was -- the editor keeps showing
@@ -5808,6 +6166,7 @@ mod tests {
             )],
             "Add caption".to_string(),
             vec![],
+            vec![],
         )
         .await
         .unwrap();
@@ -5820,6 +6179,7 @@ mod tests {
                     Patch::new("content.captions.9.text", "no such entry".into()),
                 ],
                 "Edit caption".to_string(),
+                vec![],
                 vec![],
             )
             .await
@@ -5855,6 +6215,7 @@ mod tests {
             events: Events::default(),
             movement: None,
             mitosis: None,
+            on_enter: None,
         };
         let behaviour = Behaviour {
             experience: Some(Experience {
@@ -5894,6 +6255,7 @@ mod tests {
                 )],
                 "Remove stage".to_string(),
                 vec![scenery],
+                vec![],
             )
             .await
             .unwrap();
@@ -5948,7 +6310,7 @@ mod tests {
             .unwrap();
 
         let edit = pack
-            .edit_behaviour(vec![], "Remove stage".to_string(), vec![shared])
+            .edit_behaviour(vec![], "Remove stage".to_string(), vec![shared], vec![])
             .await
             .unwrap();
 
@@ -5983,6 +6345,7 @@ mod tests {
                         events: Events::default(),
                         movement: None,
                         mitosis: None,
+                        on_enter: None,
                     }],
                     transitions: vec![],
                 },
@@ -6008,6 +6371,7 @@ mod tests {
             .edit_behaviour(
                 vec![Patch::new("experience", serde_json::Value::Null)],
                 "Disable timeline".to_string(),
+                vec![],
                 vec![],
             )
             .await
@@ -6045,6 +6409,7 @@ mod tests {
             events: Events::default(),
             movement: None,
             mitosis: None,
+            on_enter: None,
         };
         // Enough captions that the blob is comfortably larger than one stage row, so a
         // whole-document write would be unmistakable in the numbers below.
@@ -6078,6 +6443,7 @@ mod tests {
                 "Renamed".into(),
             )],
             "Rename stage".to_string(),
+            vec![],
             vec![],
         )
         .await
@@ -6137,6 +6503,7 @@ mod tests {
             events: Events::default(),
             movement: None,
             mitosis: None,
+            on_enter: None,
         };
         let behaviour = Behaviour {
             experience: Some(Experience {
@@ -6339,11 +6706,14 @@ mod tests {
                         end: None,
                         content: ContentSelection {
                             tags: Some(vec!["old".to_string()]),
+                            owned_tag: None,
                             wallpaper: None,
+                            audio: None,
                         },
                         events: Events::default(),
                         movement: None,
                         mitosis: None,
+                        on_enter: None,
                     }],
                     transitions: vec![],
                 },
@@ -6397,6 +6767,7 @@ mod tests {
         pack.edit_behaviour(
             vec![Patch::new("content.captions.99.text", "Edited.".into())],
             "Edit caption".to_string(),
+            vec![],
             vec![],
         )
         .await
@@ -6728,6 +7099,7 @@ mod tests {
                         },
                         movement: None,
                         mitosis: None,
+                        on_enter: None,
                     },
                     Stage {
                         id: "stage-2".to_string(),
@@ -6735,7 +7107,9 @@ mod tests {
                         end: None,
                         content: ContentSelection {
                             tags: Some(vec!["kinky".to_string()]),
+                            owned_tag: None,
                             wallpaper: None,
+                            audio: None,
                         },
                         events: Events {
                             popup: Some(EventSchedule {
@@ -6747,6 +7121,7 @@ mod tests {
                         },
                         movement: None,
                         mitosis: None,
+                        on_enter: None,
                     },
                 ],
                 transitions: vec![Transition {

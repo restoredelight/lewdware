@@ -12,19 +12,26 @@
 	// role at a time, and the inspector still changes a whole selection at once.
 	import { clampScroll } from '$ui/scroll';
 	import EmptyState from '$ui/EmptyState.svelte';
+	import Slider from '$ui/Slider.svelte';
 	import { onDestroy } from 'svelte';
 	import { Icon, MusicalNote } from 'svelte-hero-icons';
 	import { api } from './api.js';
 	import { playback } from './audioPlayback.svelte.js';
 	import { audioRole, setAudioRole, type AudioRole } from './audioRoles.js';
+	import { audioAttributes, editAudioAttributes } from './mediaAttributes.js';
+	import { indexAt, offsetOf, totalHeight } from './virtualRows.js';
+	import { ChevronDown } from 'svelte-hero-icons';
 	import { formatDuration, formatFileSize } from './format.js';
 	import InlineAudioPlayer from './InlineAudioPlayer.svelte';
+	import StageMembership from './StageMembership.svelte';
 	import { store } from './store.svelte.js';
 	import { taskFeedback } from './taskFeedback.svelte.js';
 	import type { MediaFile } from './types.js';
 
 	/** Fixed, and the style below holds it to that: the virtual window is index arithmetic. */
 	const ROW_H = 58;
+	/** The expanded row's panel, likewise fixed so the arithmetic below stays arithmetic. */
+	const PANEL_H = 132;
 	const BUFFER = 4;
 
 	const files = $derived(store.filteredFiles);
@@ -36,9 +43,36 @@
 	let announcement = $state('');
 	let roleBusy = $state(false);
 
-	const firstRow = $derived(Math.max(0, Math.floor(scrollTop / ROW_H) - BUFFER));
+	// At most one row is expanded at a time. That is what keeps this list virtualised: offsets are
+	// still index arithmetic plus a single constant, rather than the prefix-sum bookkeeping a
+	// variable-height window would need. It also matches how the panel is used -- you open one
+	// file's details, adjust it, and move on.
+	let expandedId = $state<number | null>(null);
+	// The volume mid-drag, before it is committed.
+	//
+	// `Slider` draws its filled track from the `value` it is *given*, and the reading beside it is
+	// drawn from the same place — so with only an `onchange` both sat at the old value until the
+	// pointer came up, while the thumb moved with it. Committing on every `input` instead would
+	// write an undo entry per pixel. So: track it here, commit on release. Only ever one row's,
+	// because only one row is open.
+	let liveVolume = $state<number | null>(null);
+	$effect(() => {
+		expandedId;
+		liveVolume = null;
+	});
+	const expandedIndex = $derived(
+		expandedId === null ? -1 : files.findIndex((file) => file.id === expandedId)
+	);
+	// The arithmetic lives in `virtualRows.ts` and is tested there: an off-by-one in it does not
+	// throw, it renders a gap or scrolls to the wrong row, and only for lists long enough to
+	// virtualise -- which is exactly where nobody is looking.
+	const geometry = $derived({ rowHeight: ROW_H, panelHeight: PANEL_H, expandedIndex });
+	const listHeight = $derived(totalHeight(files.length, geometry));
+	const rowOffset = (index: number) => offsetOf(index, geometry);
+
+	const firstRow = $derived(Math.max(0, indexAt(scrollTop, geometry) - BUFFER));
 	const lastRow = $derived(
-		Math.min(files.length - 1, Math.ceil((scrollTop + viewH) / ROW_H) - 1 + BUFFER)
+		Math.min(files.length - 1, indexAt(scrollTop + viewH, geometry) + BUFFER)
 	);
 	const visible = $derived(
 		files.slice(firstRow, lastRow + 1).map((file, offset) => ({ file, index: firstRow + offset }))
@@ -75,7 +109,14 @@
 		if ((event.target as HTMLElement).closest('button, input')) return;
 		if (event.shiftKey && anchorId != null) store.selectRange(anchorId, file.id);
 		else if (event.ctrlKey || event.metaKey) store.toggleSelection(file.id);
-		else store.selectSingle(file.id);
+		else {
+			store.selectSingle(file.id);
+			// A plain click opens the row as well as selecting it. There is one file's worth of
+			// detail behind the chevron and nothing else a click on a row could mean, so making the
+			// chevron the only way in was an extra step for the common case. Modified clicks are
+			// building a selection, which is a different intent — those leave the panel alone.
+			expandedId = expandedId === file.id ? null : file.id;
+		}
 		if (!event.shiftKey) anchorId = file.id;
 		announceSelection();
 	}
@@ -102,7 +143,7 @@
 
 	function scrollToIndex(index: number) {
 		if (!container) return;
-		const top = index * ROW_H;
+		const top = rowOffset(index);
 		if (top < scrollTop) container.scrollTop = top;
 		else if (top + ROW_H > scrollTop + viewH) container.scrollTop = top + ROW_H - viewH;
 	}
@@ -199,7 +240,7 @@
 		use:clampScroll
 	>
 		<span class="sr-only" aria-live="polite">{announcement}</span>
-		<div class="rows" style={`height: ${files.length * ROW_H}px`}>
+		<div class="rows" style={`height: ${listHeight}px`}>
 			{#each visible as { file, index } (file.id)}
 				{@const role = audioRole(file.tags)}
 				{@const selected = store.mediaTab.selectedIds.has(file.id)}
@@ -215,7 +256,7 @@
 					class="audio-row"
 					class:selected
 					class:active={store.mediaTab.gridActiveId === file.id}
-					style={`transform: translateY(${index * ROW_H}px)`}
+					style={`transform: translateY(${rowOffset(index)}px)`}
 					onclick={(event) => select(file, event)}
 					onkeydown={() => {}}
 				>
@@ -248,7 +289,72 @@
 							duration={file.file_info.type === 'audio' ? file.file_info.duration : 0}
 						/>
 					</span>
+					<span role="gridcell" class="disclosure">
+						<button
+							type="button"
+							class:open={expandedId === file.id}
+							aria-expanded={expandedId === file.id}
+							aria-controls={`audio-details-${file.id}`}
+							aria-label={`Details for ${file.file_name}`}
+							title={`Details for ${file.file_name}`}
+							onclick={() => (expandedId = expandedId === file.id ? null : file.id)}
+							><Icon src={ChevronDown} mini size="15px" /></button
+						>
+					</span>
 				</div>
+				{#if expandedId === file.id}
+					{@const attributes = audioAttributes(file.id)}
+					{@const volume = liveVolume ?? attributes.volume ?? 1}
+					<!-- Positioned by the same arithmetic as the rows rather than sitting in flow or
+					     floating over them: the panel is part of the virtual window, so it scrolls
+					     with its row and the rows below it are already offset to make room. -->
+					<!-- The panel is not the list's background, so a click in it is not "click off the
+					     selection". Without this, adjusting the volume of a selected file cleared the
+					     selection out from under the inspector -- the list's own handler treats any
+					     click that reaches it as a click on empty space, and the panel is a sibling of
+					     the rows rather than a child, so nothing else was stopping it. -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div
+						id={`audio-details-${file.id}`}
+						class="details"
+						style={`transform: translateY(${rowOffset(index) + ROW_H}px)`}
+						onclick={(event) => event.stopPropagation()}
+						onkeydown={() => {}}
+					>
+						<div class="detail-field">
+							<span class="detail-label" id={`audio-volume-label-${file.id}`}>Volume</span>
+							<Slider
+								value={volume}
+								min={0}
+								max={1}
+								step={0.05}
+								ariaLabel={`Volume for ${file.file_name}`}
+								oninput={(value) => (liveVolume = value)}
+								onchange={(value) => {
+									liveVolume = null;
+									// Full volume is "no opinion", not "set to 1": storing it would pin
+									// this file against a default that may move under it.
+									editAudioAttributes(
+										file.id,
+										{ volume: value === 1 ? undefined : value },
+										`Set volume for “${file.file_name}”`
+									);
+								}}
+							/>
+							<span class="reading">{volume === 1 ? 'Full' : `${Math.round(volume * 100)}%`}</span>
+						</div>
+						<StageMembership
+							{file}
+							label={audioRole(file.tags) === 'background' ? 'Plays in' : 'Stage tags'}
+							compact
+						/>
+						<p class="detail-note">
+							{audioRole(file.tags) === 'popup'
+								? 'Matched to popups by its tags. Pair it with specific popups from the Popups tab.'
+								: 'Plays in the background rotation, narrowed by the timeline stage’s tags. A pack with one background track repeats it.'}
+						</p>
+					</div>
+				{/if}
 			{/each}
 		</div>
 	</div>
@@ -396,6 +502,77 @@
 		display: flex;
 		min-width: 0;
 		flex: 1;
+	}
+	.disclosure {
+		display: flex;
+		flex: none;
+	}
+	.disclosure button {
+		display: grid;
+		width: 26px;
+		height: 26px;
+		padding: 0;
+		place-items: center;
+		border: 0;
+		border-radius: var(--ui-radius-sm);
+		background: transparent;
+		color: var(--ui-muted);
+		cursor: pointer;
+		transition:
+			transform 120ms,
+			color 120ms;
+	}
+	.disclosure button:hover {
+		color: var(--ui-text);
+	}
+	.disclosure button.open {
+		color: var(--ui-text);
+		transform: rotate(180deg);
+	}
+	.disclosure button:focus-visible {
+		outline: 2px solid var(--ui-focus);
+		outline-offset: -1px;
+	}
+	.details {
+		position: absolute;
+		top: 0;
+		right: 0;
+		left: 0;
+		display: flex;
+		height: 132px;
+		box-sizing: border-box;
+		padding: 12px 16px 12px 54px;
+		flex-direction: column;
+		gap: 10px;
+		border-bottom: 1px solid var(--ui-border);
+		background: var(--ui-surface);
+		box-shadow: inset 2px 0 0 var(--ui-border-strong);
+	}
+	.detail-field {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		color: var(--ui-muted);
+		font-size: 11px;
+	}
+	.detail-label {
+		width: 52px;
+		flex: none;
+	}
+	.detail-field :global(input[type='range']) {
+		max-width: 220px;
+		flex: 1;
+	}
+	.detail-field .reading {
+		min-width: 34px;
+		color: var(--ui-text);
+		font-variant-numeric: tabular-nums;
+	}
+	.detail-note {
+		margin: 0;
+		color: var(--ui-muted);
+		font-size: 10px;
+		line-height: 1.45;
 	}
 	.empty-overlay {
 		position: absolute;

@@ -1,7 +1,7 @@
 import { api } from './api.js';
 import { store } from './store.svelte.js';
 import { history, type HistoryRecord } from './history.svelte.js';
-import type { Behaviour, BehaviourPatch, FilledSlot } from './types.js';
+import type { Behaviour, BehaviourPatch, FilledSlot, TagAction } from './types.js';
 import { taskFeedback } from './taskFeedback.svelte.js';
 
 /**
@@ -86,7 +86,12 @@ const DEBOUNCE_MS = 500;
  * One label per batch. Scheduling an edit under a different label sends the batch first, so a
  * batch is always one kind of action and its undo entry can say which.
  */
-let pending: { label: string; patches: Map<string, unknown>; retiring: number[] } | null = null;
+let pending: {
+	label: string;
+	patches: Map<string, unknown>;
+	retiring: number[];
+	tagActions: TagAction[];
+} | null = null;
 
 /**
  * Batches sent but not yet acknowledged, oldest first.
@@ -135,9 +140,17 @@ export function editBehaviourField(path: string, label: string) {
  * inside the same transaction, so the two halves are one undo entry rather than two. Say nothing
  * for an edit that merely stops referencing something: suspending the timeline drops every stage
  * on purpose and must keep their wallpapers.
+ *
+ * `tagActions` is the same idea for tags — the tag a stage owns, renamed with it and retired with
+ * it. See {@link TagAction}.
  */
-export function commitBehaviourEdit(path: string, label: string, retiring: number[] = []) {
-	stage(path, label, retiring);
+export function commitBehaviourEdit(
+	path: string,
+	label: string,
+	retiring: number[] = [],
+	tagActions: TagAction[] = []
+) {
+	stage(path, label, retiring, tagActions);
 	if (saveTimer !== null) {
 		clearTimeout(saveTimer);
 		saveTimer = null;
@@ -146,14 +159,15 @@ export function commitBehaviourEdit(path: string, label: string, retiring: numbe
 }
 
 /** Captures the current value at `path`, opening a new batch if this edit is a different action. */
-function stage(path: string, label: string, retiring: number[] = []) {
+function stage(path: string, label: string, retiring: number[] = [], tagActions: TagAction[] = []) {
 	if (!store.behaviour) return;
 	// A batch is one undo entry, so it has to be one action. A different label means the author
 	// moved on to something else, and the previous action should stand on its own in the list.
 	if (pending && pending.label !== label) send();
-	if (!pending) pending = { label, patches: new Map(), retiring: [] };
+	if (!pending) pending = { label, patches: new Map(), retiring: [], tagActions: [] };
 	pending.patches.set(path, readAtPath(store.behaviour, path));
 	pending.retiring.push(...retiring);
+	pending.tagActions.push(...tagActions);
 	store.markBackupPending('behaviour');
 }
 
@@ -166,11 +180,21 @@ function send() {
 	saveChain = saveChain
 		.catch(() => {})
 		.then(async () => {
-			const { deleted_ids } = await api.editBehaviour(patches, batch.label, batch.retiring);
+			const { deleted_ids, removed_tags, renamed_tags } = await api.editBehaviour(
+				patches,
+				batch.label,
+				batch.retiring,
+				batch.tagActions
+			);
 			// Scenery that left with the edit -- the wallpaper a removed stage was the only user
 			// of. It went in the same transaction, so the grid drops it here rather than through
 			// a command of its own.
 			if (deleted_ids.length > 0) store.removeFilesById(deleted_ids, true);
+			// The tag half of the same idea. Reported rather than assumed, because both of these
+			// are conditional at the backend: a retirement only happens if nothing claims the tag,
+			// and a rename only if the new name is free.
+			for (const tag of removed_tags) store.retagEverywhere(tag, null, true);
+			for (const [from, to] of renamed_tags) store.retagEverywhere(from, to, true);
 			// The backend recorded its own history entry; this only re-reads the status so undo
 			// becomes available and the Save button learns the pack is dirty.
 			history.record({ label: batch.label });
@@ -355,7 +379,10 @@ function fillSlots(filled: FilledSlot[]) {
 			behaviour.content.splash ??= media_id;
 		} else {
 			const stage = behaviour.experience?.timeline.stages.find((s) => s.id === slot.stage);
-			if (stage) stage.content.wallpaper ??= media_id;
+			if (stage) {
+				if (slot.kind === 'stage_audio') stage.content.audio ??= media_id;
+				else stage.content.wallpaper ??= media_id;
+			}
 		}
 	}
 }

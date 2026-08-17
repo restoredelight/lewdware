@@ -39,7 +39,8 @@
 				{ key: 'web_interval', label: 'Web links' },
 				{ key: 'notification_interval', label: 'Notifications' },
 				{ key: 'prompt_interval', label: 'Prompts' },
-				{ key: 'subliminal_interval', label: 'Subliminals' }
+				{ key: 'subliminal_interval', label: 'Subliminals' },
+				{ key: 'sound_interval', label: 'Sounds' }
 			]
 		},
 		{
@@ -59,6 +60,11 @@
 			]
 		}
 	];
+	const crossfadeGroup = {
+		label: 'Audio',
+		legacy: 'crossfade' as TransitionValue,
+		values: [{ key: 'crossfade' as TransitionValue, label: 'Background audio' }]
+	};
 	function isAffected(group: (typeof groups)[number], key: TransitionValue) {
 		return transition.affected.includes(group.legacy) || transition.affected.includes(key);
 	}
@@ -157,6 +163,19 @@
 					</div>
 				</div>
 			{/each}
+			<div class="group">
+				<div class="group-label">Audio</div>
+				<div class="value-grid">
+					<label class="value"
+						><Checkbox
+							checked={transition.affected.includes('crossfade')}
+							disabled={transition.duration_seconds === 0}
+							ariaLabel="Crossfade background audio"
+							onchange={(checked) => affected(crossfadeGroup, 'crossfade', checked)}
+						/><span>Crossfade background audio</span></label
+					>
+				</div>
+			</div>
 		</section>
 		<p class="end-note">
 			Content selections and enabled or disabled features switch to {to.label}’s values when this

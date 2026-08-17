@@ -10,8 +10,9 @@
 	import TagPicker from './TagPicker.svelte';
 	import TransitionEditor from './TransitionEditor.svelte';
 	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
+	import { stageTagName, tagClaims, takenTagNames } from './stageTags.js';
 	import { store } from './store.svelte.js';
-	import type { EventSchedule, Stage } from './types.js';
+	import type { EventSchedule, Stage, TagAction } from './types.js';
 	import {
 		duplicateStage as duplicateTimelineStage,
 		moveStage as moveTimelineStage,
@@ -61,6 +62,13 @@
 		}
 		return store.behaviour?.content.wallpaper;
 	});
+	const inheritedAudio = $derived.by(() => {
+		for (let index = activeIndex - 1; index >= 0; index--) {
+			const media = stages[index].content.audio;
+			if (media) return media;
+		}
+		return undefined;
+	});
 	const next = $derived(activeIndex >= 0 ? stages[activeIndex + 1] : undefined);
 	const outgoing = $derived(
 		stage && next
@@ -72,7 +80,8 @@
 		{ key: 'web', label: 'Web links', interval: 300 },
 		{ key: 'notification', label: 'Notifications', interval: 300 },
 		{ key: 'prompt', label: 'Prompts', interval: 90 },
-		{ key: 'subliminal', label: 'Subliminals', interval: 60 }
+		{ key: 'subliminal', label: 'Subliminals', interval: 60 },
+		{ key: 'sound', label: 'Sounds', interval: 90 }
 	] as const;
 	const clone = <T,>(value: T): T => structuredClone($state.snapshot(value)) as T;
 	// Adding, moving or removing a stage renumbers the rest and rewrites the transitions between
@@ -99,6 +108,9 @@
 		const next: Stage = source ? clone(source) : { id: '', label: '', content: {}, events: {} };
 		next.id = id('stage');
 		next.label = `Stage ${stages.length + 1}`;
+		// Same rule as duplicating: the new stage inherits the source's selection but owns none of
+		// it, so renaming it cannot rewrite a tag the source is reading. See `timelineModel.ts`.
+		delete next.content.owned_tag;
 		stages.splice(insertIndex, 0, next);
 		activeId = next.id;
 		changed('Add stage');
@@ -117,7 +129,97 @@
 		activeId = selected.id;
 		commitBehaviourEdit(TIMELINE, 'Move stage');
 	}
-	function confirmRemove() {
+	// ── The stage's own tag ────────────────────────────────────────────────────
+	//
+	// A stage that restricts its content needs a tag for the "Appears in" strip to write, and
+	// leaving authors to invent one per stage gives the pack arbitrary names that mean nothing to
+	// anyone reading it. So the editor creates one, keeps its name in step with the stage's, and
+	// takes it away again when the stage goes and nothing else is holding it. Naming and the
+	// claim check live in `stageTags.ts`; this is where the three moments are.
+
+	/** Every tag name the pack already has, so a new one cannot land on an existing classification. */
+	function taken(except?: string) {
+		const names = takenTagNames(store.behaviour, store.allTags);
+		if (except) names.delete(except);
+		return names;
+	}
+
+	/**
+	 * Turns a stage's tag selection on or off.
+	 *
+	 * Switching it on is the cliff: the stage goes from *everything* to *nothing* in one checkbox,
+	 * because an empty inclusion list selects no media. So the stage's new tag is seeded onto the
+	 * media that appears there right now — which, for a stage that restricted nothing, is the whole
+	 * pack. Behaviour is preserved exactly, and only then do the per-file toggles have a tag to
+	 * remove. See `behaviour-design/default-mode-v2.md`, "Turning a stage's tags on is the cliff".
+	 */
+	function setRestriction(on: boolean) {
+		if (!stage) return;
+		if (!on) {
+			delete stage.content.tags;
+			delete stage.content.owned_tag;
+			commitBehaviourEdit(`${stagePath}.content`, 'Change stage content');
+			return;
+		}
+		const tag = stageTagName(stage.label, taken());
+		stage.content.tags = [tag];
+		stage.content.owned_tag = tag;
+		commitBehaviourEdit(
+			`${stagePath}.content`,
+			'Restrict stage content',
+			[],
+			[{ kind: 'apply', tag, media: null }]
+		);
+		store.addTagToFiles(
+			store.files.map((file) => file.id),
+			tag,
+			true
+		);
+	}
+
+	/**
+	 * Follows a stage rename through to the tag it owns, on blur rather than on every keystroke —
+	 * `stage-i`, `stage-in`, `stage-int` are renames of a real tag, not an intermediate state.
+	 *
+	 * Only a tag no other stage selects by. A rename is lossless everywhere else it appears (the
+	 * lists are joins, so media, pools and groups follow the id), but another stage reading this
+	 * name is another author decision, and this one is bookkeeping.
+	 */
+	function renameOwnedTag() {
+		const owned = stage?.content.owned_tag;
+		if (!stage || !owned) return;
+		if (stages.some((other) => other.id !== stage.id && (other.content.tags ?? []).includes(owned)))
+			return;
+		const next = stageTagName(stage.label, taken(owned));
+		if (next === owned) return;
+		stage.content.tags = (stage.content.tags ?? []).map((tag) => (tag === owned ? next : tag));
+		stage.content.owned_tag = next;
+		// Same label as the field's own edits, so the rename and the typing that caused it coalesce
+		// into one undo entry rather than two.
+		commitBehaviourEdit(stagePath, 'Rename stage', [], [{ kind: 'rename', from: owned, to: next }]);
+	}
+
+	/** What still holds the stage being removed's tag, for the confirmation to say out loud. */
+	const removingClaims = $derived(
+		removing?.content.owned_tag
+			? tagClaims(store.behaviour, removing.content.owned_tag, removing.id, store.files)
+			: null
+	);
+
+	function removalNote() {
+		const tag = removing?.content.owned_tag;
+		if (!tag || !removingClaims) return '';
+		if (!removingClaims.claimed) return ` Its tag “${tag}” is unused and goes with it.`;
+		const parts: string[] = [];
+		const { media, stages: others, content } = removingClaims;
+		if (media > 0) parts.push(`${media} file${media === 1 ? '' : 's'}`);
+		if (others.length > 0)
+			parts.push(others.length === 1 ? `“${others[0]}”` : `${others.length} other stages`);
+		if (content > 0) parts.push(`${content} content ${content === 1 ? 'entry' : 'entries'}`);
+		return ` Its tag “${tag}” is on ${parts.join(', ')}, and is kept unless you remove it too.`;
+	}
+
+	function confirmRemove(alsoRemoveTag = false) {
 		if (!removing || stages.length === 1) return;
 		const target = removing;
 		const index = stages.indexOf(target);
@@ -127,11 +229,24 @@
 		// cleared through a command of its own, so that dropping the stage and dropping its
 		// wallpaper are one transaction -- and so one undo brings back both, instead of leaving a
 		// stage without the wallpaper it had.
-		const retiring = target.content.wallpaper;
+		const retiring = [target.content.wallpaper, target.content.audio].filter(
+			(value): value is number => value != null
+		);
+		// And the same for the tag the stage owns, for the same reason and in the same transaction.
+		// Unconditional removal only where the author asked for it having been told what it is on;
+		// otherwise the backend drops it if — and only if — nothing turns out to claim it.
+		const owned = target.content.owned_tag;
+		const tagActions: TagAction[] = owned
+			? [
+					alsoRemoveTag
+						? { kind: 'delete', tag: owned }
+						: { kind: 'retire_if_unclaimed', tag: owned }
+				]
+			: [];
 		removeTimelineStage(store.behaviour!.experience!.timeline, target);
 		activeId = stages[Math.min(index, stages.length - 1)].id;
 		removing = null;
-		commitBehaviourEdit(TIMELINE, 'Remove stage', retiring != null ? [retiring] : []);
+		commitBehaviourEdit(TIMELINE, 'Remove stage', retiring, tagActions);
 	}
 	function eventValue(key: keyof Stage['events']): EventSchedule | undefined {
 		return stage?.events[key];
@@ -141,6 +256,20 @@
 		if (value) stage.events[key] = value;
 		else delete stage.events[key];
 		commitBehaviourEdit(`${stagePath}.events`, 'Change stage events');
+	}
+	function setEntryEffect(key: 'splash' | 'sound' | 'notification', on: boolean) {
+		if (!stage) return;
+		stage.on_enter ??= {};
+		if (on) stage.on_enter[key] = true;
+		else delete stage.on_enter[key];
+		if (
+			!stage.on_enter.splash &&
+			!stage.on_enter.sound &&
+			!stage.on_enter.notification &&
+			!stage.on_enter.popup_burst
+		)
+			delete stage.on_enter;
+		commitBehaviourEdit(`${stagePath}.on_enter`, 'Change stage entry effects');
 	}
 	function transitionSummary() {
 		if (!outgoing || outgoing.duration_seconds === 0) return 'Immediately';
@@ -177,6 +306,7 @@
 							aria-label="Stage name"
 							bind:value={stage.label}
 							oninput={() => editBehaviourField(`${stagePath}.label`, 'Rename stage')}
+							onblur={renameOwnedTag}
 						/>
 					</div>
 				</header>
@@ -199,11 +329,7 @@
 						<Toggle
 							ariaLabel="Active tags"
 							checked={!!stage.content.tags}
-							onchange={(on) => {
-								if (on) stage.content.tags = [];
-								else delete stage.content.tags;
-								commitBehaviourEdit(`${stagePath}.content`, 'Change stage content');
-							}}
+							onchange={setRestriction}
 						/>
 					</div>
 					{#if stage.content.tags}<TagPicker
@@ -211,7 +337,11 @@
 							id={`stage-content-${stage.id}`}
 							path={`${stagePath}.content.tags`}
 							onchange={(tags) => (stage.content.tags = tags)}
-						/>{/if}
+						/>
+						{#if stage.content.owned_tag}<p class="owned-note">
+								“{stage.content.owned_tag}” is this stage's own tag — the editor renames it with the
+								stage, and the Popups tab uses it to put files in and out of this stage.
+							</p>{/if}{/if}
 					<MediaSlot
 						slot={{ kind: 'stage_wallpaper', stage: stage.id }}
 						mediaId={stage.content.wallpaper}
@@ -223,6 +353,77 @@
 						reveal={store.experienceTargetStageId === stage.id}
 						onrevealed={() => (store.experienceTargetStageId = null)}
 					/>
+					<MediaSlot
+						slot={{ kind: 'stage_audio', stage: stage.id }}
+						mediaId={stage.content.audio}
+						title="Background audio"
+						description="The track this stage starts. Leaving it empty keeps the current track playing, without restarting it."
+						emptyNote={inheritedAudio
+							? 'Keeps the track selected by an earlier stage.'
+							: 'Keeps the background rotation already playing.'}
+					/>
+				</section>
+
+				<section class="card">
+					<div class="section-title">
+						<div>
+							<h3>On entry</h3>
+							<p>Fire these effects once, after the transition into this stage finishes.</p>
+						</div>
+					</div>
+					<div class="entry-effects">
+						<div class="toggle-row">
+							<div><strong>Show splash</strong><small>Uses the pack's splash.</small></div>
+							<Toggle
+								ariaLabel="Show splash on entry"
+								checked={!!stage.on_enter?.splash}
+								onchange={(on) => setEntryEffect('splash', on)}
+							/>
+						</div>
+						<div class="toggle-row">
+							<div><strong>Play sound</strong><small>Plays a popup-audio sting.</small></div>
+							<Toggle
+								ariaLabel="Play sound on entry"
+								checked={!!stage.on_enter?.sound}
+								onchange={(on) => setEntryEffect('sound', on)}
+							/>
+						</div>
+						<div class="toggle-row">
+							<div>
+								<strong>Show notification</strong><small
+									>Picks from the active notification pool.</small
+								>
+							</div>
+							<Toggle
+								ariaLabel="Show notification on entry"
+								checked={!!stage.on_enter?.notification}
+								onchange={(on) => setEntryEffect('notification', on)}
+							/>
+						</div>
+						<label
+							>Popup burst<input
+								type="number"
+								min="0"
+								step="1"
+								value={stage.on_enter?.popup_burst ?? 0}
+								oninput={(event) => {
+									const count = event.currentTarget.valueAsNumber;
+									if (!Number.isFinite(count) || !stage) return;
+									stage.on_enter ??= {};
+									if (count > 0) stage.on_enter.popup_burst = Math.floor(count);
+									else delete stage.on_enter.popup_burst;
+									if (
+										!stage.on_enter.splash &&
+										!stage.on_enter.sound &&
+										!stage.on_enter.notification &&
+										!stage.on_enter.popup_burst
+									)
+										delete stage.on_enter;
+									editBehaviourField(`${stagePath}.on_enter`, 'Change stage entry effects');
+								}}
+							/><small>Zero disables the burst. The user's popup limit still applies.</small></label
+						>
+					</div>
 				</section>
 
 				<section class="card">
@@ -407,10 +608,21 @@
 		title={`Remove “${removing.label}”?`}
 		description={`This stage and its settings will be removed. Transitions to its neighbours will be reset.${
 			removing.content.wallpaper ? ' Its wallpaper is cleared with it.' : ''
-		}`}
+		}${removing.content.audio ? ' Its audio slot is cleared with it.' : ''}${removalNote()}`}
 		buttons={[
 			{ label: 'Cancel', onclick: () => (removing = null) },
-			{ label: 'Remove stage', destructive: true, onclick: confirmRemove }
+			// Offered, never the default: an owned tag is almost always on media, and losing that
+			// classification to a restructuring is a much worse trade than an unused tag left behind.
+			...(removingClaims?.claimed
+				? [
+						{
+							label: `Remove stage and “${removing.content.owned_tag}”`,
+							destructive: true,
+							onclick: () => confirmRemove(true)
+						}
+					]
+				: []),
+			{ label: 'Remove stage', destructive: true, primary: true, onclick: () => confirmRemove() }
 		]}
 		onclose={() => (removing = null)}
 	/>{/if}
@@ -488,6 +700,12 @@
 		color: var(--ui-muted);
 		font-size: 12px;
 	}
+	.owned-note {
+		margin: 0;
+		color: var(--ui-muted);
+		font-size: 11px;
+		line-height: 1.45;
+	}
 	.card {
 		display: flex;
 		padding: 16px;
@@ -536,6 +754,32 @@
 		color: var(--ui-text);
 		font-size: 12px;
 		font-weight: 600;
+	}
+	.entry-effects {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+	.entry-effects label {
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		font-size: 12px;
+		font-weight: 600;
+	}
+	.entry-effects input {
+		width: 100%;
+		height: 36px;
+		padding: 0 9px;
+		border: 1px solid var(--ui-border);
+		border-radius: var(--ui-radius-sm);
+		background: var(--ui-bg);
+		color: var(--ui-text);
+	}
+	.entry-effects label small {
+		color: var(--ui-muted);
+		font-size: 10px;
+		font-weight: 400;
 	}
 	.fields input {
 		width: 100%;

@@ -23,7 +23,9 @@ use crate::{
     },
     media::{MediaManager, MediaTypes, TagFilter},
     monitor::Monitor,
-    utils::{calculate_media_popup_size, calculate_text_popup_size, random_position},
+    utils::{
+        calculate_media_popup_size, calculate_text_popup_size, random_position, random_position_in,
+    },
     window::{AppearanceChoice, ChromeDefaults, Theme, ThemeChoice},
 };
 
@@ -571,6 +573,7 @@ struct QueryMediaOpts {
     #[serde(rename = "type")]
     types: Option<OneOrMore<MediaType>>,
     tags: Option<TagFilterInput>,
+    weights: Option<HashMap<u64, f64>>,
 }
 
 impl FromLua for QueryMediaOpts {
@@ -585,7 +588,7 @@ fn list_media(
     media_manager: MediaManager,
 ) -> mlua::Result<Vec<Media>> {
     let (types, tags) = match opts {
-        Some(QueryMediaOpts { types, tags }) => (
+        Some(QueryMediaOpts { types, tags, .. }) => (
             types.map_or(MediaTypes::ALL, MediaTypes::from),
             tags.map(TagFilter::from),
         ),
@@ -598,6 +601,7 @@ fn list_media(
 #[derive(Serialize, Deserialize, Default)]
 struct QueryMediaTypeOpts {
     tags: Option<TagFilterInput>,
+    weights: Option<HashMap<u64, f64>>,
 }
 
 impl FromLua for QueryMediaTypeOpts {
@@ -640,10 +644,11 @@ fn random_media_type(
     _: &Lua,
     types: MediaTypes,
     tags: Option<TagFilter>,
+    weights: Option<HashMap<u64, f64>>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
     media_manager
-        .random_media(types, tags)
+        .random_media(types, tags, weights)
         .map_err(|err| err.into_lua_err())
 }
 
@@ -652,15 +657,20 @@ fn random_media(
     opts: Option<QueryMediaOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    let (types, tags) = match opts {
-        Some(QueryMediaOpts { types, tags }) => (
+    let (types, tags, weights) = match opts {
+        Some(QueryMediaOpts {
+            types,
+            tags,
+            weights,
+        }) => (
             types.map_or(MediaTypes::ALL, MediaTypes::from),
             tags.map(TagFilter::from),
+            weights,
         ),
-        None => (MediaTypes::ALL, None),
+        None => (MediaTypes::ALL, None, None),
     };
 
-    random_media_type(lua, types, tags, media_manager)
+    random_media_type(lua, types, tags, weights, media_manager)
 }
 
 fn random_image(
@@ -668,9 +678,11 @@ fn random_image(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    let tags = opts.and_then(|x| x.tags).map(TagFilter::from);
+    let (tags, weights) = opts
+        .map(|x| (x.tags.map(TagFilter::from), x.weights))
+        .unwrap_or_default();
 
-    random_media_type(lua, MediaTypes::IMAGE, tags, media_manager)
+    random_media_type(lua, MediaTypes::IMAGE, tags, weights, media_manager)
 }
 
 fn random_video(
@@ -678,9 +690,11 @@ fn random_video(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    let tags = opts.and_then(|x| x.tags).map(TagFilter::from);
+    let (tags, weights) = opts
+        .map(|x| (x.tags.map(TagFilter::from), x.weights))
+        .unwrap_or_default();
 
-    random_media_type(lua, MediaTypes::VIDEO, tags, media_manager)
+    random_media_type(lua, MediaTypes::VIDEO, tags, weights, media_manager)
 }
 
 fn random_audio(
@@ -688,9 +702,11 @@ fn random_audio(
     opts: Option<QueryMediaTypeOpts>,
     media_manager: MediaManager,
 ) -> mlua::Result<Option<Media>> {
-    let tags = opts.and_then(|x| x.tags).map(TagFilter::from);
+    let (tags, weights) = opts
+        .map(|x| (x.tags.map(TagFilter::from), x.weights))
+        .unwrap_or_default();
 
-    random_media_type(lua, MediaTypes::AUDIO, tags, media_manager)
+    random_media_type(lua, MediaTypes::AUDIO, tags, weights, media_manager)
 }
 
 fn list_tags(_: &Lua, _: (), media_manager: MediaManager) -> mlua::Result<Vec<String>> {
@@ -761,6 +777,33 @@ pub enum Anchor {
     BottomRight,
 }
 
+/// A rectangle of the monitor a randomly placed window is confined to, as fractions of the usable
+/// area (so `{ x = 0, y = 0, width = 0.5, height = 1 }` is its left half).
+///
+/// Only consulted for an axis the mode gave no coordinate for: `x` and `y` say exactly where the
+/// window goes, and a region is a statement about where it goes *at random*. A window too big for
+/// the region is centred on it rather than pinned to a corner (see [`random_position_in`]), which
+/// is what lets a zero-size region name a single placement.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct SpawnRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl SpawnRegion {
+    /// This region's horizontal span in pixels on a monitor of `width`, as `(start, span)`.
+    pub fn horizontal(&self, width: u32) -> (f64, f64) {
+        (self.x * width as f64, self.width * width as f64)
+    }
+
+    /// This region's vertical span in pixels on a monitor of `height`. See [`Self::horizontal`].
+    pub fn vertical(&self, height: u32) -> (f64, f64) {
+        (self.y * height as f64, self.height * height as f64)
+    }
+}
+
 /// Where a coordinate falls relative to the window's edge along one axis.
 #[derive(Clone, Copy)]
 enum AxisAnchor {
@@ -811,8 +854,22 @@ pub struct SpawnWindowOpts {
     pub y: Option<Coord>,
     pub width: Option<Coord>,
     pub height: Option<Coord>,
+    /// Multiplies the size the engine would otherwise pick for media, *before* the monitor caps
+    /// apply -- so a scaled-up popup is still at most a third of the screen wide and half of it
+    /// tall. That is the point of putting this here rather than leaving callers to compute a
+    /// `width`: an explicit `width` is taken literally, and a caller scaling one from the media's
+    /// own dimensions would be stepping around the caps rather than through them.
+    ///
+    /// Ignored when `width` or `height` is given (they already say the size exactly), and for
+    /// windows that are not sized from media.
+    #[serde(default)]
+    pub scale: Option<f64>,
     #[serde(default)]
     pub anchor: Anchor,
+    /// Confines a *randomly placed* window to part of the monitor. Ignored on an axis `x` or `y`
+    /// already pins exactly. See [`SpawnRegion`].
+    #[serde(default)]
+    pub region: Option<SpawnRegion>,
     pub monitor: Option<Monitor>,
     #[serde(default = "return_true")]
     pub decorations: bool,
@@ -855,7 +912,9 @@ impl Default for SpawnWindowOpts {
             y: None,
             width: None,
             height: None,
+            scale: None,
             anchor: Anchor::default(),
+            region: None,
             monitor: None,
             decorations: true,
             title: None,
@@ -961,6 +1020,7 @@ impl PopupSpawnOpts {
             WindowSizeBehaviour::ResizeWithMedia { width, height } => calculate_media_popup_size(
                 spawn_opts.width,
                 spawn_opts.height,
+                spawn_opts.scale,
                 width,
                 height,
                 monitor_width,
@@ -1005,6 +1065,7 @@ impl PopupSpawnOpts {
             outer_height += padding_y;
         }
 
+        let region = spawn_opts.region;
         let x: i32 = {
             let v = spawn_opts
                 .x
@@ -1013,7 +1074,13 @@ impl PopupSpawnOpts {
                         .anchor
                         .resolve_x(c.to_pixels(monitor_width), outer_width)
                 })
-                .unwrap_or_else(|| random_position(outer_width, monitor_width));
+                .unwrap_or_else(|| match region {
+                    Some(region) => {
+                        let (start, span) = region.horizontal(monitor_width);
+                        random_position_in(outer_width, start, span)
+                    }
+                    None => random_position(outer_width, monitor_width),
+                });
             if spawn_opts.clamp {
                 v.max(0)
                     .min(monitor_width.saturating_sub(outer_width) as i32)
@@ -1029,7 +1096,13 @@ impl PopupSpawnOpts {
                         .anchor
                         .resolve_y(c.to_pixels(monitor_height), outer_height)
                 })
-                .unwrap_or_else(|| random_position(outer_height, monitor_height));
+                .unwrap_or_else(|| match region {
+                    Some(region) => {
+                        let (start, span) = region.vertical(monitor_height);
+                        random_position_in(outer_height, start, span)
+                    }
+                    None => random_position(outer_height, monitor_height),
+                });
             if spawn_opts.clamp {
                 v.max(0)
                     .min(monitor_height.saturating_sub(outer_height) as i32)

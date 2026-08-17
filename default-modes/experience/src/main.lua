@@ -26,7 +26,9 @@ local open_popup = spawn.make_spawner({
 	popup_types = popup_types,
 	max_popups = popup_limit,
 	captions_enabled = config.captions_enabled,
-	popup_audio_enabled = config.audio_enabled,
+	popup_audio_enabled = config.popup_audio_enabled,
+	popup_audio_volume = config.popup_volume,
+	popup_audio_layered = config.popup_audio_layered,
 	movement_enabled = config.movement_enabled,
 	movement_speed_min = function() return timeline.movement() and timeline.movement().minimum_speed end,
 	movement_speed_max = function() return timeline.movement() and timeline.movement().maximum_speed end,
@@ -79,20 +81,129 @@ schedule_event("popup", #popup_types > 0, function() return open_popup() end)
 schedule_event("notification", config.notifications_enabled, function() return require("lib.notifications").fire(timeline.tags) end)
 schedule_event("web", config.web_opening_enabled, function() return require("lib.web").fire(timeline.tags) end)
 schedule_event("subliminal", config.subliminals_enabled, function() return require("lib.subliminals").fire(timeline.tags) end)
-schedule_event("prompt", config.prompts_enabled, function() return require("lib.prompts").fire(timeline.tags) end)
-
-if config.audio_enabled then
-	local function spawn_audio()
-		local audio = media.random_background_audio()
-		if not audio then return end
-		local handle = lewdware.play_audio(audio)
-		handle:on_finish(spawn_audio)
-	end
-	spawn_audio()
+local function play_sting()
+	if not config.popup_audio_enabled then return false end
+	local audio = media.random_popup_sting(timeline.tags())
+	if not audio then return false end
+	lewdware.play_audio(audio, media.background_options(audio, config.popup_volume))
+	return true
 end
 
+schedule_event("sound", config.popup_audio_enabled, play_sting)
+
+local function prompt_wrong(effect)
+	if effect.kind == "popup_burst" and #popup_types > 0 then
+		for _ = 1, (effect.count or 1) do open_popup() end
+	elseif effect.kind == "sound" then play_sting() end
+end
+
+schedule_event("prompt", config.prompts_enabled, function()
+	return require("lib.prompts").fire(timeline.tags, { on_wrong = prompt_wrong })
+end)
+
+-- Background audio follows the active stage's tag set, like every other consumer in this file.
+-- It did not until now, which made a stage's content selection mean "everything except the
+-- music" -- the one hole in an otherwise universal rule.
+if config.background_audio_enabled then
+	-- Idle when nothing is playing: either the pack has no background audio at all, or the active
+	-- stage deliberately selects none. Only the stage-change listener below can restart it, since
+	-- there is no `on_finish` to carry the loop while it is silent.
+	local playing = false
+	local handle = nil
+	local selected_name = nil
+	local primary = nil
+	local secondary = nil
+
+	local function stage_background_audio()
+		local tags = timeline.tags()
+		-- `nil` means this stage does not restrict content; an empty list means it deliberately
+		-- selects none (`ContentSelection::tags`). `lib/media.lua` already answers an empty
+		-- inclusion set with nil, so this looks redundant -- it is not. Without it the fallback
+		-- below would read that nil as "nothing matched the stage's tags" and play the whole
+		-- background pool, turning "no content" into music.
+		if tags and #tags == 0 then return nil end
+		-- Narrow to the stage's tags, but fall back to the whole background pool rather than going
+		-- silent. A pack whose music carries no stage tags is the ordinary case (every converted
+		-- Edgeware pack: moods tag the images, not the soundtrack), and rule 5 makes an empty pool
+		-- skip-and-continue rather than an error.
+		return (tags and media.random_background_audio({ tags = tags }))
+			or media.random_background_audio()
+	end
+
+	local spawn_audio
+	local function start_track(name, gain)
+		local audio = name and lewdware.media.get_audio(name) or stage_background_audio()
+		if not audio then return nil end
+		local volume = media.background_options(audio, config.background_volume).volume
+		local state = { name=name, volume=volume }
+		state.handle = lewdware.play_audio(audio, { volume=volume * (gain or 1) })
+		state.handle:on_finish(function()
+			if primary == state then
+				primary = nil
+				handle = nil
+				playing = false
+				spawn_audio(selected_name)
+			elseif secondary == state then secondary = nil end
+		end)
+		return state
+	end
+
+	spawn_audio = function(name)
+		primary = start_track(name, 1)
+		handle = primary and primary.handle or nil
+		playing = primary ~= nil
+		selected_name = name
+	end
+
+	-- Compared by stage rather than acting on every notification: `on_change` also fires on each
+	-- interpolation tick of a transition. An explicit new track switches once on entry; an absent
+	-- value retains the current handle, and repeating the same name never restarts it.
+	local last_stage = timeline.stage_index()
+	timeline.on_change(function()
+		local fade = timeline.crossfade()
+		if fade and fade.audio ~= selected_name then
+			if not secondary or secondary.name ~= fade.audio then
+				if secondary then secondary.handle:stop() end
+				secondary = start_track(fade.audio, 0)
+			end
+			if primary then primary.handle:set_volume(primary.volume * (1 - fade.progress)) end
+			if secondary then secondary.handle:set_volume(secondary.volume * fade.progress) end
+			if fade.progress >= 1 and secondary then
+				local old = primary
+				primary = secondary
+				secondary = nil
+				handle = primary.handle
+				playing = true
+				selected_name = fade.audio
+				if old then old.handle:stop() end
+			end
+		end
+		local stage = timeline.stage_index()
+		if stage == last_stage then return end
+		last_stage = stage
+		local requested = timeline.audio()
+		if requested and requested ~= selected_name then
+			selected_name = requested
+			if handle and playing then handle:stop() else spawn_audio(requested) end
+		elseif not playing then spawn_audio(requested) end
+	end)
+
+	spawn_audio(timeline.audio())
+end
+
+timeline.on_enter(function(entry)
+	if entry.splash and config.splash_enabled then wallpaper.show_splash() end
+	if entry.sound then play_sting() end
+	if entry.notification and config.notifications_enabled then require("lib.notifications").fire(timeline.tags) end
+	if entry.popup_burst and #popup_types > 0 then
+		for _ = 1, entry.popup_burst do open_popup() end
+	end
+end)
+
 wallpaper.apply_wallpaper(timeline.wallpaper())
-wallpaper.show_splash()
+-- The first stage is entered during `timeline.init()`. If it explicitly requests a splash, its
+-- entry effect owns this moment; otherwise preserve the ordinary one-at-startup splash.
+if not timeline.entry().splash then wallpaper.show_splash() end
 
 -- Only reapply when the stage actually names a different file: a stage that repeats the previous
 -- one's wallpaper (Edgeware's ordinary case) shouldn't churn the desktop. One name compares by

@@ -9,7 +9,6 @@
 	import { adoptBehaviour, ensureBehaviour } from './behaviourSave.svelte.js';
 	import { store } from './store.svelte.js';
 	import { behaviourTags, tagUsage } from './tagReferences.js';
-	import { withoutManagedTags } from './tags.js';
 	import type { TagSummary } from './types.js';
 	import { history } from './history.svelte.js';
 	import EmptyState from '$ui/EmptyState.svelte';
@@ -49,24 +48,6 @@
 		error = null;
 	}
 
-	function updateLocal(from: string, to: string | null, tracked = false) {
-		store.files = store.files.map((file) => ({
-			...file,
-			tags: [...new Set(file.tags.flatMap((tag) => (tag === from ? (to ? [to] : []) : [tag])))]
-		}));
-		const renamedSuggestions = store.allTags.flatMap((tag) =>
-			tag === from ? (to ? [to] : []) : [tag]
-		);
-		store.allTags = withoutManagedTags([
-			...new Set([
-				...renamedSuggestions,
-				...store.files.flatMap((file) => file.tags),
-				...(store.behaviour ? behaviourTags(store.behaviour) : [])
-			])
-		]);
-		if (!tracked) store.markLocallyBackedUp();
-	}
-
 	async function apply() {
 		if (!editing || !store.behaviour) return;
 		const target = value.trim();
@@ -86,7 +67,7 @@
 					: await api.mergeTag(source, target);
 			const operation = editMode === 'rename' ? 'Rename' : 'Merge';
 			adoptBehaviour(after, { label: `${operation} tag “${source}”` });
-			updateLocal(source, target, true);
+			store.retagEverywhere(source, target, true);
 			summaries = await api.getTagSummaries();
 			editing = null;
 		} catch (err) {
@@ -105,7 +86,7 @@
 		try {
 			const after = await api.deleteTag(tag);
 			adoptBehaviour(after, { label: `Delete tag “${tag}”` });
-			updateLocal(tag, null, true);
+			store.retagEverywhere(tag, null, true);
 			summaries = await api.getTagSummaries();
 		} catch (err) {
 			error = String(err);

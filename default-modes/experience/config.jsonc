@@ -38,36 +38,86 @@
           "label": "Videos",
           "type": "boolean",
           "default": true
-        },
-        "audio_enabled": {
-          "label": "Audio",
-          "description": "Background music, and the sounds the pack marks as popup audio",
-          "type": "boolean",
-          "default": true
         }
       }
     },
+    // See the same group in sandbox/config.jsonc. Presence and comfort only: which tracks play
+    // when is the pack author's design (from this stage's tag set, and from its own track once
+    // stage audio lands).
+    "audio": {
+      "type": "group",
+      "label": "Audio",
+      "options": {
+        "background_audio_enabled": {
+          "label": "Background audio",
+          "description": "Plays continuously through the session",
+          "type": "boolean",
+          "default": true
+        },
+        "background_volume": {
+          "label": "Background volume",
+          "type": "number",
+          "default": 1,
+          "min": 0,
+          "max": 1,
+          "step": 0.05,
+          "slider": true,
+          "show_when": { "background_audio_enabled": true }
+        },
+        "popup_audio_enabled": {
+          "label": "Popup sounds",
+          "description": "The sounds the pack marks as popup audio, and the audio track of video popups",
+          "type": "boolean",
+          "default": true
+        },
+        "popup_volume": {
+          "label": "Popup volume",
+          "type": "number",
+          "default": 1,
+          "min": 0,
+          "max": 1,
+          "step": 0.05,
+          "slider": true,
+          "show_when": { "popup_audio_enabled": true }
+        },
+        "popup_audio_layered": {
+          "label": "Let popup sounds overlap",
+          "description": "Off by default: popups arrive in bursts, and one-shots layered over each other stop reading as individual sounds",
+          "type": "boolean",
+          "default": false,
+          "show_when": { "popup_audio_enabled": true }
+        }
+      }
+    },
+    // Shown only for a pack whose timeline actually sets mitosis values. The chance and count come
+    // from the active stage and nowhere else, so for any other pack this switch could be turned on
+    // to no effect -- the dead toggle the honesty invariant forbids ("the toggle is only shown
+    // where it is honored"). Where it is shown it defaults on, because a pack whose design uses
+    // mitosis is a pack that expects it; a stored choice still wins.
     "close_trigger": {
       "type": "group",
       "label": "Close trigger",
+      "show_when": { "pack_uses_mitosis": true },
       "options": {
         "close_trigger_enabled": {
           "label": "Spawn popups when closing",
           "description": "Closing a popup may spawn more -- chance and count are the pack author's design",
           "type": "boolean",
-          "default": false
+          "default": true
         }
       }
     },
+    // See `close_trigger` above -- same reasoning, on the stage's movement speeds.
     "movement": {
       "type": "group",
       "label": "Movement",
+      "show_when": { "pack_uses_movement": true },
       "options": {
         "movement_enabled": {
           "label": "Move windows after spawning",
           "description": "Speed is the pack author's design",
           "type": "boolean",
-          "default": false
+          "default": true
         }
       }
     },

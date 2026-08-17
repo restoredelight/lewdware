@@ -9,7 +9,8 @@ const mocks = vi.hoisted(() => ({
 		markBackupComplete: vi.fn(),
 		markBackupFailed: vi.fn(),
 		markBackupPending: vi.fn(),
-		removeFilesById: vi.fn()
+		removeFilesById: vi.fn(),
+		retagEverywhere: vi.fn()
 	},
 	history: { record: vi.fn() },
 	feedback: { error: vi.fn(), dismiss: vi.fn() }
@@ -39,7 +40,12 @@ const document = (caption = 'first'): Behaviour =>
 	}) as unknown as Behaviour;
 
 /** What `edit_behaviour` hands back. */
-const edit = (behaviour: Behaviour, deleted_ids: number[] = []) => ({ behaviour, deleted_ids });
+const edit = (behaviour: Behaviour, deleted_ids: number[] = []) => ({
+	behaviour,
+	deleted_ids,
+	removed_tags: [],
+	renamed_tags: []
+});
 
 const CAPTION = 'content.captions.0.text';
 
@@ -156,6 +162,7 @@ describe('editing the behaviour document', () => {
 		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(
 			[{ path: CAPTION, value: 'typed' }],
 			'Edit caption',
+			[],
 			[]
 		);
 		expect(mocks.history.record).toHaveBeenCalledWith({ label: 'Edit caption' });
@@ -176,6 +183,7 @@ describe('editing the behaviour document', () => {
 		expect(mocks.api.editBehaviour).toHaveBeenLastCalledWith(
 			[{ path: CAPTION, value: 'typed' }],
 			'Edit caption',
+			[],
 			[]
 		);
 
@@ -183,6 +191,7 @@ describe('editing the behaviour document', () => {
 		expect(mocks.api.editBehaviour).toHaveBeenLastCalledWith(
 			[{ path: 'content.prompt_settings.submit_label', value: 'Go' }],
 			'Edit submit button label',
+			[],
 			[]
 		);
 	});
@@ -199,6 +208,7 @@ describe('editing the behaviour document', () => {
 		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(
 			[{ path: 'content.captions', value: mocks.store.behaviour!.content.captions }],
 			'Add caption',
+			[],
 			[]
 		);
 	});
@@ -215,7 +225,8 @@ describe('editing the behaviour document', () => {
 		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(
 			[{ path: 'experience.timeline', value: null }],
 			'Remove stage',
-			[12]
+			[12],
+			[]
 		);
 		expect(mocks.store.removeFilesById).toHaveBeenCalledWith([12], true);
 	});
@@ -238,7 +249,7 @@ describe('editing the behaviour document', () => {
 		typeCaption(save, 'typed');
 		await vi.advanceTimersByTimeAsync(500);
 
-		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(expect.anything(), 'Edit caption', []);
+		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(expect.anything(), 'Edit caption', [], []);
 	});
 
 	it('flushes immediately and waits for the write to land', async () => {
@@ -305,6 +316,7 @@ describe('editing the behaviour document', () => {
 		expect(mocks.api.editBehaviour).toHaveBeenCalledWith(
 			[{ path: CAPTION, value: 'typed' }],
 			'Edit caption',
+			[],
 			[]
 		);
 	});

@@ -36,6 +36,11 @@ export function duplicateStage(
 	const copy = clone(source);
 	copy.id = `stage-${createId()}`;
 	copy.label = `${copy.label} copy`;
+	// The copy keeps the source's tags — it has to, or it would show nothing where the original
+	// showed something — but it does not inherit ownership of any of them. Two stages claiming the
+	// same tag would mean renaming either one rewrote a name the other reads, which is the case the
+	// ownership flag exists to prevent. The copy gets its own tag if and when it needs one.
+	delete copy.content.owned_tag;
 	timeline.stages.splice(index + 1, 0, copy);
 	normalizeTimeline(timeline, createId);
 	return copy;

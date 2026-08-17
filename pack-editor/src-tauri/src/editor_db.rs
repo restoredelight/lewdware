@@ -17,7 +17,23 @@ const MIGRATION_2: &str =
 
 const MIGRATION_3: &str = include_str!("../../../shared/src/migrations/0003_behaviour_content.sql");
 
-const MIGRATIONS: &[&str] = &[MIGRATION_1, MIGRATION_2, MIGRATION_3];
+const MIGRATION_4: &str = include_str!("../../../shared/src/migrations/0004_behaviour_media.sql");
+
+const MIGRATION_5: &str =
+    include_str!("../../../shared/src/migrations/0005_stage_tag_ownership.sql");
+
+const MIGRATION_6: &str = include_str!("../../../shared/src/migrations/0006_timeline_effects.sql");
+const MIGRATION_7: &str = include_str!("../../../shared/src/migrations/0007_sound_events.sql");
+
+const MIGRATIONS: &[&str] = &[
+    MIGRATION_1,
+    MIGRATION_2,
+    MIGRATION_3,
+    MIGRATION_4,
+    MIGRATION_5,
+    MIGRATION_6,
+    MIGRATION_7,
+];
 
 /// The behaviour document's structural half (see `shared::behaviour::storage`), in an order that
 /// satisfies its foreign keys: parents before children, stages before the transitions between them.
@@ -34,6 +50,7 @@ pub const BEHAVIOUR_TABLES: &[&str] = &[
     "behaviour_stage_end",
     "behaviour_stage_movement",
     "behaviour_stage_mitosis",
+    "behaviour_stage_entry",
     "behaviour_stage_event",
     "behaviour_transition",
     "behaviour_transition_category",
@@ -44,6 +61,27 @@ pub const BEHAVIOUR_TABLES: &[&str] = &[
     "behaviour_web_link_tag",
     "behaviour_content_group",
     "behaviour_content_group_tag",
+    "behaviour_popup_media",
+    "behaviour_popup_audio_pair",
+    "behaviour_audio_media",
+];
+
+/// The behaviour tables keyed by a media id, and which of their columns hold one.
+///
+/// They need a filter the rest do not. The editor *soft*-deletes media (`media.deleted`), so undo
+/// can bring a file back, which means its `media` table holds rows the exported pack will not --
+/// and an attribute row for one of them would land in the pack as a foreign-key violation. The
+/// filter is expressed against the *destination* rather than against `deleted`, so the same SQL
+/// serves both directions: every call site populates `main.media` before copying these, so "the
+/// media actually made it across" is exactly the right question in each. The runtime pack has no
+/// `deleted` column to ask about anyway.
+const MEDIA_KEYED_BEHAVIOUR_TABLES: &[(&str, &[&str])] = &[
+    ("behaviour_popup_media", &["media_id"]),
+    (
+        "behaviour_popup_audio_pair",
+        &["popup_media_id", "audio_media_id"],
+    ),
+    ("behaviour_audio_media", &["media_id"]),
 ];
 
 /// Copies every behaviour table across from the attached database `source`.
@@ -51,8 +89,22 @@ pub const BEHAVIOUR_TABLES: &[&str] = &[
 /// `behaviour_content` is a singleton the migration seeds, so it is replaced rather than inserted.
 fn copy_behaviour_tables(tx: &rusqlite::Transaction<'_>, source: &str) -> Result<()> {
     for table in BEHAVIOUR_TABLES {
+        let media_keys = MEDIA_KEYED_BEHAVIOUR_TABLES
+            .iter()
+            .find(|(name, _)| name == table)
+            .map(|(_, columns)| *columns);
+        let filter = match media_keys {
+            None => String::new(),
+            Some(columns) => {
+                let conditions: Vec<String> = columns
+                    .iter()
+                    .map(|column| format!("t.{column} IN (SELECT id FROM main.media)"))
+                    .collect();
+                format!(" WHERE {}", conditions.join(" AND "))
+            }
+        };
         tx.execute(
-            &format!("INSERT OR REPLACE INTO {table} SELECT * FROM {source}.{table}"),
+            &format!("INSERT OR REPLACE INTO {table} SELECT t.* FROM {source}.{table} t{filter}"),
             [],
         )?;
     }
@@ -458,6 +510,92 @@ mod tests {
                 )
                 .unwrap(),
             MIGRATIONS.len()
+        );
+    }
+
+    /// The editor soft-deletes media so undo can bring a file back, which means its `media` table
+    /// holds rows the exported pack will not. A per-item attribute row for one of those would land
+    /// in the pack as a dangling foreign key -- a corrupt pack, produced by a successful save.
+    #[test]
+    fn exporting_drops_attributes_for_media_the_pack_will_not_contain() {
+        // File-backed, not in-memory: `export_runtime` attaches the editor database by path.
+        let directory = tempfile::tempdir().unwrap();
+        let editor = Connection::open(directory.path().join("editor.db")).unwrap();
+        configure_connection(&editor).unwrap();
+        initialize_empty(
+            &editor,
+            &Metadata {
+                name: "Test pack".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        editor
+            .execute_batch(
+                "INSERT INTO media (id, file_name, file_type, hash, deleted)
+                 VALUES (1, 'kept.png', 'image', x'00', 0),
+                        (2, 'removed.png', 'image', x'01', 1),
+                        (3, 'kept.ogg', 'audio', x'02', 0);
+                 INSERT INTO pack_media (media_id, generation_id, \"offset\", length)
+                 VALUES (1, 'g', 0, 0), (2, 'g', 0, 0), (3, 'g', 0, 0);
+                 INSERT INTO behaviour_popup_media (media_id, scale)
+                 VALUES (1, 2.0), (2, 3.0);
+                 INSERT INTO behaviour_audio_media (media_id, volume) VALUES (3, 0.5);
+                 -- A pairing from a surviving popup to a file that is going away, and one that
+                 -- stays: the pair table is filtered on both of its media columns.
+                 INSERT INTO behaviour_popup_audio_pair (popup_media_id, audio_media_id)
+                 VALUES (1, 3);
+                 -- Stands in for the import/save that would normally have set this; the export
+                 -- refuses a snapshot with no archive generation.
+                 UPDATE editor_state SET archive_generation = 'g' WHERE singleton = 1;",
+            )
+            .unwrap();
+
+        let runtime_path = directory.path().join("pack.lwpack");
+        export_runtime(&editor, &runtime_path).unwrap();
+
+        let runtime = Connection::open(&runtime_path).unwrap();
+        configure_connection(&runtime).unwrap();
+
+        let popup_ids: Vec<u64> = runtime
+            .prepare("SELECT media_id FROM behaviour_popup_media ORDER BY media_id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            popup_ids,
+            vec![1],
+            "the deleted file's attributes stay behind"
+        );
+
+        let audio_ids: Vec<u64> = runtime
+            .prepare("SELECT media_id FROM behaviour_audio_media")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(audio_ids, vec![3]);
+
+        let pairs: u32 = runtime
+            .query_row(
+                "SELECT COUNT(*) FROM behaviour_popup_audio_pair",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pairs, 1, "the surviving pairing came across");
+
+        // The check that would have caught this whatever the counts said.
+        assert!(
+            runtime
+                .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+                .optional()
+                .unwrap()
+                .is_none(),
+            "the exported pack must have no dangling references",
         );
     }
 

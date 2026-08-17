@@ -17,14 +17,18 @@
 //! moving out of the blob was meant to remove. So each table is reconciled: rows that are gone are
 //! deleted, rows that are new are inserted, and rows that already match are left alone.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Serialize, de::DeserializeOwned};
 
+use crate::behaviour::SpawnRegion;
+
 use super::schema::{
-    Behaviour, Content, ContentGroup, ContentSelection, EventCountCondition, EventSchedule, Events,
-    Experience, Interval, Mitosis, Movement, PromptSettings, Stage, StageEnd, TextItem, Timeline,
-    Transition, WebLink,
+    AudioMedia, Behaviour, Content, ContentGroup, ContentSelection, EventCountCondition,
+    EventSchedule, Events, Experience, Interval, Mitosis, Movement, PopupMedia, PromptSettings,
+    PromptWrongAnswer, Stage, StageEnd, StageEntry, TextItem, Timeline, Transition, WebLink,
 };
 
 /// The `pack_data` key the document used to live under.
@@ -44,21 +48,44 @@ pub fn read(conn: &Connection) -> Result<Behaviour> {
         )
         .optional()?
         .unwrap_or((None, None));
-    let submit_label: Option<String> = conn
+    let prompt_settings = conn
         .query_row(
-            "SELECT prompt_submit_label FROM behaviour_settings WHERE singleton = 1",
+            "SELECT prompt_submit_label, prompt_timeout_seconds, prompt_wrong_answer_kind,
+                    prompt_wrong_answer_value FROM behaviour_settings WHERE singleton = 1",
             [],
-            |row| row.get(0),
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<f64>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<f64>>(3)?,
+                ))
+            },
         )
         .optional()?
-        .flatten();
+        .unwrap_or((None, None, None, None));
+    let wrong_answer = match (prompt_settings.2.as_deref(), prompt_settings.3) {
+        (Some("popup_burst"), Some(value)) => Some(PromptWrongAnswer::PopupBurst {
+            count: value.max(0.0) as u32,
+        }),
+        (Some("add_time"), Some(seconds)) => Some(PromptWrongAnswer::AddTime { seconds }),
+        (Some("sound"), _) => Some(PromptWrongAnswer::Sound),
+        (None, _) => None,
+        (Some(other), _) => bail!("unknown prompt wrong-answer effect {other:?}"),
+    };
 
     Ok(Behaviour {
         content: Content {
+            popups: read_popup_media(conn)?,
+            audio: read_audio_media(conn)?,
             content_groups: read_content_groups(conn)?,
             captions: read_text_pool(conn, "caption")?,
             prompts: read_text_pool(conn, "prompt")?,
-            prompt_settings: PromptSettings { submit_label },
+            prompt_settings: PromptSettings {
+                submit_label: prompt_settings.0,
+                timeout_seconds: prompt_settings.1,
+                wrong_answer,
+            },
             notifications: read_text_pool(conn, "notification")?,
             subliminals: read_text_pool(conn, "subliminal")?,
             web_links: read_web_links(conn)?,
@@ -72,6 +99,12 @@ pub fn read(conn: &Connection) -> Result<Behaviour> {
 /// Replaces the stored document with `behaviour`, touching only the rows that actually differ.
 pub fn write(tx: &Transaction<'_>, behaviour: &Behaviour) -> Result<()> {
     let content = &behaviour.content;
+    let (wrong_kind, wrong_value) = match &content.prompt_settings.wrong_answer {
+        Some(PromptWrongAnswer::PopupBurst { count }) => (Some("popup_burst"), Some(*count as f64)),
+        Some(PromptWrongAnswer::AddTime { seconds }) => (Some("add_time"), Some(*seconds)),
+        Some(PromptWrongAnswer::Sound) => (Some("sound"), None),
+        None => (None, None),
+    };
     tx.execute(
         "INSERT INTO behaviour_content (singleton, wallpaper, splash) VALUES (1, ?, ?)
          ON CONFLICT(singleton) DO UPDATE SET wallpaper = excluded.wallpaper,
@@ -79,10 +112,24 @@ pub fn write(tx: &Transaction<'_>, behaviour: &Behaviour) -> Result<()> {
         params![content.wallpaper, content.splash],
     )?;
     tx.execute(
-        "INSERT INTO behaviour_settings (singleton, prompt_submit_label) VALUES (1, ?)
-         ON CONFLICT(singleton) DO UPDATE SET prompt_submit_label = excluded.prompt_submit_label",
-        params![content.prompt_settings.submit_label],
+        "INSERT INTO behaviour_settings
+             (singleton, prompt_submit_label, prompt_timeout_seconds,
+              prompt_wrong_answer_kind, prompt_wrong_answer_value)
+         VALUES (1, ?, ?, ?, ?)
+         ON CONFLICT(singleton) DO UPDATE SET
+             prompt_submit_label = excluded.prompt_submit_label,
+             prompt_timeout_seconds = excluded.prompt_timeout_seconds,
+             prompt_wrong_answer_kind = excluded.prompt_wrong_answer_kind,
+             prompt_wrong_answer_value = excluded.prompt_wrong_answer_value",
+        params![
+            content.prompt_settings.submit_label,
+            content.prompt_settings.timeout_seconds,
+            wrong_kind,
+            wrong_value
+        ],
     )?;
+    write_popup_media(tx, &content.popups)?;
+    write_audio_media(tx, &content.audio)?;
     write_content_groups(tx, &content.content_groups)?;
     write_text_pool(tx, "caption", &content.captions)?;
     write_text_pool(tx, "prompt", &content.prompts)?;
@@ -103,6 +150,201 @@ fn reject_legacy_blob(conn: &Connection) -> Result<()> {
             "this pack's behaviour document predates the behaviour tables; re-import the pack in \
              the pack editor"
         );
+    }
+    Ok(())
+}
+
+// ── Per-item media attributes ────────────────────────────────────────────────
+//
+// Keyed by media id rather than by position, which is what lets an edit address one file's
+// attributes directly and lets `ON DELETE CASCADE` do the work `clear_media_reference` has to do
+// by hand for the slots. An entry that says nothing is not stored (`PopupMedia::is_empty`), so
+// clearing the last attribute removes the row rather than leaving a row of NULLs behind.
+
+fn read_popup_media(conn: &Connection) -> Result<BTreeMap<u64, PopupMedia>> {
+    let mut statement = conn.prepare(
+        "SELECT media_id, weight, scale, region_x, region_y, region_width, region_height,
+                monitor, caption, video_loop, video_audio
+         FROM behaviour_popup_media ORDER BY media_id",
+    )?;
+    type Row = (
+        u64,
+        Option<f64>,
+        Option<f64>,
+        (Option<f64>, Option<f64>, Option<f64>, Option<f64>),
+        Option<String>,
+        Option<String>,
+        Option<bool>,
+        Option<bool>,
+    );
+    let rows: Vec<Row> = statement
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                (row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?),
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+                row.get(10)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    rows.into_iter()
+        .map(
+            |(media_id, weight, scale, region, monitor, caption, video_loop, video_audio)| {
+                Ok((
+                    media_id,
+                    PopupMedia {
+                        weight,
+                        scale,
+                        region: read_region(region),
+                        monitor: monitor.as_deref().map(from_text).transpose()?,
+                        caption,
+                        video_loop,
+                        video_audio,
+                        audio: read_popup_audio_pairs(conn, media_id)?,
+                    },
+                ))
+            },
+        )
+        .collect()
+}
+
+/// The four region columns as one value: a region exists only when all four are present.
+///
+/// A partial row is treated as no region rather than as a rectangle with invented edges — the
+/// four columns are one field split across a table, and half of a rectangle is not a placement
+/// anybody asked for. `sanitized` then keeps a hand-edited pack from reaching the engine with a
+/// NaN or an inverted extent.
+fn read_region(
+    columns: (Option<f64>, Option<f64>, Option<f64>, Option<f64>),
+) -> Option<SpawnRegion> {
+    let (Some(x), Some(y), Some(width), Some(height)) = columns else {
+        return None;
+    };
+    Some(
+        SpawnRegion {
+            x,
+            y,
+            width,
+            height,
+        }
+        .sanitized(),
+    )
+}
+
+/// Ordered by id purely so the document round-trips: the pairings are a set, and the mode picks
+/// one of them at random.
+fn read_popup_audio_pairs(conn: &Connection, popup: u64) -> Result<Vec<u64>> {
+    let mut statement = conn.prepare(
+        "SELECT audio_media_id FROM behaviour_popup_audio_pair
+         WHERE popup_media_id = ? ORDER BY audio_media_id",
+    )?;
+    Ok(statement
+        .query_map(params![popup], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+fn write_popup_media(tx: &Transaction<'_>, popups: &BTreeMap<u64, PopupMedia>) -> Result<()> {
+    let kept: Vec<u64> = popups
+        .iter()
+        .filter(|(_, entry)| !entry.is_empty())
+        .map(|(media_id, _)| *media_id)
+        .collect();
+    // Deleting the parent takes its pairings with it, so the pair table needs no retain of its own
+    // for entries that went away entirely.
+    retain_ids(tx, "behaviour_popup_media", "media_id", &kept)?;
+    for (media_id, entry) in popups {
+        if entry.is_empty() {
+            continue;
+        }
+        let region = entry.region.map(SpawnRegion::sanitized);
+        let monitor = entry.monitor.as_ref().map(to_text).transpose()?;
+        tx.execute(
+            "INSERT INTO behaviour_popup_media
+                 (media_id, weight, scale, region_x, region_y, region_width, region_height,
+                  monitor, caption, video_loop, video_audio)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(media_id) DO UPDATE SET weight = excluded.weight,
+                                                 scale = excluded.scale,
+                                                 region_x = excluded.region_x,
+                                                 region_y = excluded.region_y,
+                                                 region_width = excluded.region_width,
+                                                 region_height = excluded.region_height,
+                                                 monitor = excluded.monitor,
+                                                 caption = excluded.caption,
+                                                 video_loop = excluded.video_loop,
+                                                 video_audio = excluded.video_audio",
+            params![
+                media_id,
+                entry.weight,
+                entry.scale,
+                region.map(|region| region.x),
+                region.map(|region| region.y),
+                region.map(|region| region.width),
+                region.map(|region| region.height),
+                monitor,
+                entry.caption,
+                entry.video_loop,
+                entry.video_audio,
+            ],
+        )?;
+        write_popup_audio_pairs(tx, *media_id, &entry.audio)?;
+    }
+    Ok(())
+}
+
+fn write_popup_audio_pairs(tx: &Transaction<'_>, popup: u64, audio: &[u64]) -> Result<()> {
+    tx.execute(
+        "DELETE FROM behaviour_popup_audio_pair
+         WHERE popup_media_id = ?1
+           AND audio_media_id NOT IN (SELECT value FROM json_each(?2))",
+        params![popup, serde_json::to_string(audio)?],
+    )?;
+    for audio_media_id in audio {
+        tx.execute(
+            "INSERT OR IGNORE INTO behaviour_popup_audio_pair (popup_media_id, audio_media_id)
+             VALUES (?, ?)",
+            params![popup, audio_media_id],
+        )?;
+    }
+    Ok(())
+}
+
+fn read_audio_media(conn: &Connection) -> Result<BTreeMap<u64, AudioMedia>> {
+    let mut statement =
+        conn.prepare("SELECT media_id, volume FROM behaviour_audio_media ORDER BY media_id")?;
+    Ok(statement
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                AudioMedia {
+                    volume: row.get(1)?,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+fn write_audio_media(tx: &Transaction<'_>, audio: &BTreeMap<u64, AudioMedia>) -> Result<()> {
+    let kept: Vec<u64> = audio
+        .iter()
+        .filter(|(_, entry)| !entry.is_empty())
+        .map(|(media_id, _)| *media_id)
+        .collect();
+    retain_ids(tx, "behaviour_audio_media", "media_id", &kept)?;
+    for (media_id, entry) in audio {
+        if entry.is_empty() {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO behaviour_audio_media (media_id, volume)
+             VALUES (?, ?)
+             ON CONFLICT(media_id) DO UPDATE SET volume = excluded.volume",
+            params![media_id, entry.volume],
+        )?;
     }
     Ok(())
 }
@@ -349,32 +591,92 @@ fn read_experience(conn: &Connection) -> Result<Option<Experience>> {
 
 fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
     let mut statement = conn.prepare(
-        "SELECT id, label, restricts_content, wallpaper FROM behaviour_stage ORDER BY position",
+        "SELECT id, label, restricts_content, wallpaper, audio FROM behaviour_stage ORDER BY position",
     )?;
-    let rows: Vec<(String, String, bool, Option<u64>)> = statement
+    let rows: Vec<(String, String, bool, Option<u64>, Option<u64>)> = statement
         .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })?
         .collect::<rusqlite::Result<_>>()?;
 
     rows.into_iter()
-        .map(|(id, label, restricts_content, wallpaper)| {
+        .map(|(id, label, restricts_content, wallpaper, audio)| {
             Ok(Stage {
                 content: ContentSelection {
                     tags: restricts_content
                         .then(|| read_tags(conn, "behaviour_stage_tag", "stage_id", &id))
                         .transpose()?,
+                    owned_tag: read_owned_stage_tag(conn, &id)?,
                     wallpaper,
+                    audio,
                 },
                 end: read_stage_end(conn, &id)?,
                 events: read_stage_events(conn, &id)?,
                 movement: read_stage_movement(conn, &id)?,
                 mitosis: read_stage_mitosis(conn, &id)?,
+                on_enter: read_stage_entry(conn, &id)?,
                 id,
                 label,
             })
         })
         .collect()
+}
+
+fn read_stage_entry(conn: &Connection, stage: &str) -> Result<Option<StageEntry>> {
+    Ok(conn.query_row(
+        "SELECT splash, sound, popup_burst, notification FROM behaviour_stage_entry WHERE stage_id = ?",
+        params![stage],
+        |row| Ok(StageEntry { splash: row.get(0)?, sound: row.get(1)?, popup_burst: row.get(2)?, notification: row.get(3)? }),
+    ).optional()?)
+}
+
+/// The tag this stage owns, if it has one.
+///
+/// Reads the flag off the association row rather than off the stage, which is what keeps ownership
+/// and membership from drifting apart: a tag the stage no longer selects by has no row to carry the
+/// flag, so it is no longer owned. `LIMIT 1` because a stage owns at most one — the editor creates
+/// exactly one per stage — and a document that somehow named two would be an ambiguity, not a
+/// feature.
+fn read_owned_stage_tag(conn: &Connection, stage: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT tags.name FROM behaviour_stage_tag
+             JOIN tags ON tags.id = behaviour_stage_tag.tag_id
+             WHERE behaviour_stage_tag.stage_id = ? AND behaviour_stage_tag.owned = 1
+             ORDER BY behaviour_stage_tag.position LIMIT 1",
+            params![stage],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Marks `owned` on the stage's row for that tag, and clears it on the rest.
+///
+/// Runs after [`write_tags`], which has already reconciled which rows exist: a tag the document no
+/// longer lists has no row left to mark, so naming one that is not in `tags` silently owns nothing
+/// rather than resurrecting the association. That is the invariant the schema comment states, kept
+/// here rather than validated — an owned tag outside the selection is not a document a writer can
+/// produce, and refusing it would turn a stale editor's harmless patch into a failed save.
+fn write_owned_stage_tag(tx: &Transaction<'_>, stage: &str, owned: Option<&str>) -> Result<()> {
+    tx.execute(
+        "UPDATE behaviour_stage_tag SET owned = 0 WHERE stage_id = ?1 AND owned = 1
+         AND tag_id IS NOT (SELECT id FROM tags WHERE name = ?2)",
+        params![stage, owned],
+    )?;
+    if let Some(tag) = owned {
+        tx.execute(
+            "UPDATE behaviour_stage_tag SET owned = 1 WHERE stage_id = ?1 AND owned = 0
+             AND tag_id = (SELECT id FROM tags WHERE name = ?2)",
+            params![stage, tag],
+        )?;
+    }
+    Ok(())
 }
 
 fn read_stage_end(conn: &Connection, stage: &str) -> Result<Option<StageEnd>> {
@@ -496,6 +798,7 @@ fn read_stage_events(conn: &Connection, stage: &str) -> Result<Events> {
             "notification" => events.notification = schedule,
             "prompt" => events.prompt = schedule,
             "subliminal" => events.subliminal = schedule,
+            "sound" => events.sound = schedule,
             other => bail!("unknown event kind {other:?}"),
         }
     }
@@ -574,18 +877,20 @@ fn write_stages(tx: &Transaction<'_>, stages: &[Stage]) -> Result<()> {
     )?;
     for (position, stage) in stages.iter().enumerate() {
         tx.execute(
-            "INSERT INTO behaviour_stage (id, position, label, restricts_content, wallpaper)
-             VALUES (?, ?, ?, ?, ?)
+            "INSERT INTO behaviour_stage (id, position, label, restricts_content, wallpaper, audio)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET position = excluded.position,
                                            label = excluded.label,
                                            restricts_content = excluded.restricts_content,
-                                           wallpaper = excluded.wallpaper",
+                                           wallpaper = excluded.wallpaper,
+                                           audio = excluded.audio",
             params![
                 stage.id,
                 position as i64,
                 stage.label,
                 stage.content.tags.is_some(),
                 stage.content.wallpaper,
+                stage.content.audio,
             ],
         )?;
         write_tags(
@@ -595,11 +900,37 @@ fn write_stages(tx: &Transaction<'_>, stages: &[Stage]) -> Result<()> {
             &stage.id,
             stage.content.tags.as_deref().unwrap_or(&[]),
         )?;
+        write_owned_stage_tag(tx, &stage.id, stage.content.owned_tag.as_deref())?;
         write_stage_end(tx, &stage.id, stage.end.as_ref())?;
         write_stage_movement(tx, &stage.id, stage.movement.as_ref())?;
         write_stage_mitosis(tx, &stage.id, stage.mitosis.as_ref())?;
+        write_stage_entry(tx, &stage.id, stage.on_enter.as_ref())?;
         write_stage_events(tx, &stage.id, &stage.events)?;
     }
+    Ok(())
+}
+
+fn write_stage_entry(tx: &Transaction<'_>, stage: &str, entry: Option<&StageEntry>) -> Result<()> {
+    let Some(entry) = entry else {
+        tx.execute(
+            "DELETE FROM behaviour_stage_entry WHERE stage_id = ?",
+            params![stage],
+        )?;
+        return Ok(());
+    };
+    tx.execute(
+        "INSERT INTO behaviour_stage_entry (stage_id, splash, sound, popup_burst, notification)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(stage_id) DO UPDATE SET splash = excluded.splash, sound = excluded.sound,
+             popup_burst = excluded.popup_burst, notification = excluded.notification",
+        params![
+            stage,
+            entry.splash,
+            entry.sound,
+            entry.popup_burst,
+            entry.notification
+        ],
+    )?;
     Ok(())
 }
 
@@ -685,6 +1016,7 @@ fn write_stage_events(tx: &Transaction<'_>, stage: &str, events: &Events) -> Res
         ("notification", events.notification.as_ref()),
         ("prompt", events.prompt.as_ref()),
         ("subliminal", events.subliminal.as_ref()),
+        ("sound", events.sound.as_ref()),
     ];
     for (kind, schedule) in scheduled {
         let Some(schedule) = schedule else {
@@ -776,6 +1108,17 @@ fn write_transitions(tx: &Transaction<'_>, transitions: &[Transition]) -> Result
     Ok(())
 }
 
+/// [`retain`] for a numeric key column. Separate because the ids never exist as strings anywhere
+/// else, and stringifying them just to satisfy one signature would invite the comparison to be
+/// made against SQLite's text affinity by accident.
+fn retain_ids(tx: &Transaction<'_>, table: &str, key: &str, keep: &[u64]) -> Result<()> {
+    tx.execute(
+        &format!("DELETE FROM {table} WHERE {key} NOT IN (SELECT value FROM json_each(?))"),
+        params![serde_json::to_string(keep)?],
+    )?;
+    Ok(())
+}
+
 /// Deletes every row of `table` whose `key` column is not in `keep`.
 ///
 /// The delete half of the diff. Passing the surviving keys as JSON rather than building an `IN
@@ -815,19 +1158,20 @@ fn from_text<T: DeserializeOwned>(text: &str) -> Result<T> {
 mod tests {
     use super::*;
     use crate::behaviour::{
-        ContentGroup, CountScope, Easing, EndStrategy, EventKind, PromptSettings, TextItem,
-        TransitionCategory, WebLink,
+        ContentGroup, CountScope, Easing, EndStrategy, EventKind, MonitorPreference,
+        PromptSettings, TextItem, TransitionCategory, WebLink,
     };
 
-    /// A migrated pack database with one media file, so the slot foreign keys have something real
-    /// to point at.
+    /// A migrated pack database with a few media files, so the slot and per-item foreign keys
+    /// have something real to point at.
     fn pack() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", true).unwrap();
         crate::db::migrate(&conn).unwrap();
         conn.execute(
             "INSERT INTO media (id, file_name, file_type, \"offset\", length, hash)
-             VALUES (1, 'bg.png', 'image', 0, 0, x'00'), (2, 'intro.gif', 'video', 0, 0, x'01')",
+             VALUES (1, 'bg.png', 'image', 0, 0, x'00'), (2, 'intro.gif', 'video', 0, 0, x'01'),
+                    (3, 'sting.ogg', 'audio', 0, 0, x'02')",
             [],
         )
         .unwrap();
@@ -849,6 +1193,7 @@ mod tests {
             events: Events::default(),
             movement: None,
             mitosis: None,
+            on_enter: None,
         }
     }
 
@@ -859,10 +1204,17 @@ mod tests {
         let mut first = stage("a");
         first.content.tags = Some(vec!["kinky".to_string(), "soft".to_string()]);
         first.content.wallpaper = Some(1);
+        first.content.audio = Some(3);
+        first.on_enter = Some(StageEntry {
+            splash: true,
+            sound: true,
+            popup_burst: Some(4),
+            notification: true,
+        });
         first.end = Some(StageEnd {
             duration_seconds: Some(300.0),
             event_count: Some(EventCountCondition {
-                event: EventKind::Popup,
+                event: EventKind::Sound,
                 count: 10,
                 scope: CountScope::Session,
             }),
@@ -889,9 +1241,43 @@ mod tests {
             initial_delay_seconds: None,
             max_concurrent: None,
         });
+        first.events.sound = Some(EventSchedule {
+            interval: Interval::Fixed { seconds: 7.5 },
+            initial_delay_seconds: Some(1.0),
+            max_concurrent: None,
+        });
 
         let behaviour = Behaviour {
             content: crate::behaviour::Content {
+                popups: BTreeMap::from([
+                    (
+                        1,
+                        PopupMedia {
+                            weight: Some(2.5),
+                            scale: Some(1.5),
+                            region: Some(SpawnRegion {
+                                x: 0.5,
+                                y: 0.25,
+                                width: 0.5,
+                                height: 0.5,
+                            }),
+                            monitor: Some(MonitorPreference::Primary),
+                            caption: Some("Look.".to_string()),
+                            video_loop: None,
+                            video_audio: None,
+                            audio: vec![3],
+                        },
+                    ),
+                    (
+                        2,
+                        PopupMedia {
+                            video_loop: Some(false),
+                            video_audio: Some(true),
+                            ..PopupMedia::default()
+                        },
+                    ),
+                ]),
+                audio: BTreeMap::from([(3, AudioMedia { volume: Some(0.4) })]),
                 content_groups: vec![ContentGroup {
                     id: "kinky".to_string(),
                     label: "Kinky".to_string(),
@@ -915,6 +1301,8 @@ mod tests {
                 }],
                 prompt_settings: PromptSettings {
                     submit_label: Some("Obey".to_string()),
+                    timeout_seconds: Some(45.0),
+                    wrong_answer: Some(PromptWrongAnswer::PopupBurst { count: 3 }),
                 },
                 notifications: vec![TextItem {
                     text: "Ping.".to_string(),
@@ -944,6 +1332,8 @@ mod tests {
                         affected: vec![
                             TransitionCategory::MitosisChance,
                             TransitionCategory::PopupInterval,
+                            TransitionCategory::SoundInterval,
+                            TransitionCategory::Crossfade,
                         ],
                     }],
                 },
@@ -953,6 +1343,200 @@ mod tests {
 
         store(&mut conn, &behaviour);
         assert_eq!(read(&conn).unwrap(), behaviour);
+    }
+
+    /// An entry that says nothing is not a row. The editor clears an attribute by nulling it, and
+    /// when the last one goes the entry has to stop existing rather than linger as a row of
+    /// NULLs -- which `read` would then hand back as a meaningless `PopupMedia::default()`.
+    #[test]
+    fn an_entry_with_nothing_set_is_not_stored() {
+        let mut conn = pack();
+        let mut behaviour = Behaviour::new();
+        behaviour.content.popups.insert(
+            1,
+            PopupMedia {
+                scale: Some(2.0),
+                ..PopupMedia::default()
+            },
+        );
+        behaviour
+            .content
+            .audio
+            .insert(3, AudioMedia { volume: Some(0.5) });
+        store(&mut conn, &behaviour);
+        assert_eq!(read(&conn).unwrap(), behaviour);
+
+        // Clearing the last attribute of each removes the entry entirely.
+        behaviour.content.popups.insert(1, PopupMedia::default());
+        behaviour.content.audio.insert(3, AudioMedia::default());
+        store(&mut conn, &behaviour);
+
+        let stored = read(&conn).unwrap();
+        assert!(stored.content.popups.is_empty());
+        assert!(stored.content.audio.is_empty());
+        assert!(stored.content.is_empty(), "and the document is empty again");
+    }
+
+    /// The spawn region is one field across four columns, so it has two failure modes the other
+    /// attributes do not: a row where only some of them are set, and values that are not a
+    /// rectangle at all. Both have to be answered on read, because the engine's placement
+    /// arithmetic panics on a NaN range and a pack is data, not code.
+    #[test]
+    fn a_region_is_all_four_columns_or_none_of_them() {
+        let mut conn = pack();
+        let mut behaviour = Behaviour::new();
+        behaviour.content.popups.insert(
+            1,
+            PopupMedia {
+                // Off the screen and inside out on the way in; a rectangle on the way out.
+                region: Some(SpawnRegion {
+                    x: 0.8,
+                    y: -1.0,
+                    width: 0.5,
+                    height: f64::NAN,
+                }),
+                ..PopupMedia::default()
+            },
+        );
+        store(&mut conn, &behaviour);
+
+        assert_eq!(
+            read(&conn).unwrap().content.popups[&1].region,
+            Some(SpawnRegion {
+                x: 0.8,
+                y: 0.0,
+                // Shrunk against the far edge rather than slid back, so the corner the author
+                // dragged to stays where they put it.
+                width: 0.2,
+                height: 0.0,
+            })
+        );
+
+        // A half-written row -- a hand-edited pack, or one from a newer editor -- is no region
+        // rather than a rectangle with invented edges. The rest of the entry survives.
+        conn.execute(
+            "UPDATE behaviour_popup_media SET region_height = NULL, weight = 2.0",
+            [],
+        )
+        .unwrap();
+
+        let stored = read(&conn).unwrap();
+        assert_eq!(stored.content.popups[&1].region, None);
+        assert_eq!(stored.content.popups[&1].weight, Some(2.0));
+    }
+
+    /// The whole reason these are rows rather than a map in the document: deleting a file takes
+    /// its attributes with it, with no equivalent of `clear_media_reference` to remember to call.
+    /// A pairing pointing at the deleted file goes too, without disturbing the popup it belonged
+    /// to.
+    #[test]
+    fn deleting_a_file_cascades_its_attributes_away() {
+        let mut conn = pack();
+        let mut behaviour = Behaviour::new();
+        behaviour.content.popups.insert(
+            1,
+            PopupMedia {
+                scale: Some(2.0),
+                audio: vec![3],
+                ..PopupMedia::default()
+            },
+        );
+        behaviour
+            .content
+            .audio
+            .insert(3, AudioMedia { volume: Some(0.5) });
+        store(&mut conn, &behaviour);
+
+        conn.execute("DELETE FROM media WHERE id = 3", []).unwrap();
+
+        let stored = read(&conn).unwrap();
+        assert!(stored.content.audio.is_empty(), "its own entry is gone");
+        assert_eq!(
+            stored.content.popups.get(&1).map(|popup| popup.audio.len()),
+            Some(0),
+            "and so is the pairing that named it",
+        );
+        assert_eq!(
+            stored.content.popups.get(&1).and_then(|popup| popup.scale),
+            Some(2.0),
+            "while the popup entry itself is untouched",
+        );
+
+        conn.execute("DELETE FROM media WHERE id = 1", []).unwrap();
+        assert!(read(&conn).unwrap().content.popups.is_empty());
+    }
+
+    /// Pairings are a set: the mode picks one at random, so order carries no meaning and the same
+    /// pair twice is one pair. Normalised on read so the document round-trips whatever the editor
+    /// sent.
+    #[test]
+    fn pairings_are_a_set_not_a_list() {
+        let mut conn = pack();
+        conn.execute(
+            "INSERT INTO media (id, file_name, file_type, \"offset\", length, hash)
+             VALUES (4, 'other.ogg', 'audio', 0, 0, x'03')",
+            [],
+        )
+        .unwrap();
+
+        let mut behaviour = Behaviour::new();
+        behaviour.content.popups.insert(
+            1,
+            PopupMedia {
+                audio: vec![4, 3, 4],
+                ..PopupMedia::default()
+            },
+        );
+        store(&mut conn, &behaviour);
+
+        assert_eq!(
+            read(&conn).unwrap().content.popups[&1].audio,
+            vec![3, 4],
+            "deduplicated and ordered, so a round-trip is stable",
+        );
+    }
+
+    /// The diff-not-replace discipline, which is what keeps the editor's undo changesets the size
+    /// of the edit. Rewriting an unrelated entry must not touch this one's row.
+    #[test]
+    fn writing_one_entry_leaves_the_others_row_alone() {
+        let mut conn = pack();
+        let mut behaviour = Behaviour::new();
+        behaviour.content.popups.insert(
+            1,
+            PopupMedia {
+                scale: Some(2.0),
+                ..PopupMedia::default()
+            },
+        );
+        behaviour.content.popups.insert(
+            2,
+            PopupMedia {
+                weight: Some(3.0),
+                ..PopupMedia::default()
+            },
+        );
+        store(&mut conn, &behaviour);
+
+        let rowid_before: i64 = conn
+            .query_row(
+                "SELECT rowid FROM behaviour_popup_media WHERE media_id = 2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        behaviour.content.popups.get_mut(&1).unwrap().scale = Some(3.0);
+        store(&mut conn, &behaviour);
+
+        let rowid_after: i64 = conn
+            .query_row(
+                "SELECT rowid FROM behaviour_popup_media WHERE media_id = 2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rowid_before, rowid_after);
     }
 
     /// The three-state tag field. "No restriction" and "restricted to nothing" are different

@@ -16,6 +16,7 @@ import type {
 	RecentPack,
 	SlotCleared,
 	SlotFilled,
+	TagAction,
 	TagSummary
 } from './types.js';
 
@@ -122,10 +123,15 @@ export const api = {
 	getBehaviour: () => invoke<Behaviour>('get_behaviour'),
 	// Patches rather than a document: the backend is the only writer of behaviour, so an edit
 	// describes what changed instead of replacing what the backend has (see behaviourSave.ts).
-	// `retiring` names media the action deliberately lets go of, so that dropping a stage and
-	// dropping the wallpaper that existed only for it are one transaction and one undo entry.
-	editBehaviour: (patches: BehaviourPatch[], label: string, retiring: number[]) =>
-		invoke<BehaviourEdit>('edit_behaviour', { patches, label, retiring }),
+	// `retiring` names media the action deliberately lets go of and `tagActions` the tag edits that
+	// belong to it, so that dropping a stage and dropping the wallpaper and the tag that existed
+	// only for it are one transaction and one undo entry.
+	editBehaviour: (
+		patches: BehaviourPatch[],
+		label: string,
+		retiring: number[],
+		tagActions: TagAction[]
+	) => invoke<BehaviourEdit>('edit_behaviour', { patches, label, retiring, tagActions }),
 
 	/** Returns the ids it deleted: media that was only ever a subliminal leaves with the pool. */
 	removeFromSubliminals: (ids: number[]) => invoke<number[]>('remove_from_subliminals', { ids }),

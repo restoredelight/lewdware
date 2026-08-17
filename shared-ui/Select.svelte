@@ -33,8 +33,17 @@
 	}: Props = $props();
 	const uid = $props.id();
 	const listId = `select-list-${uid}`;
-	// The width `.list.described` asks for, needed here too so `openList` can tell whether it fits.
+	// The width a described list would like, when there is room and the trigger is too narrow to
+	// wrap into on its own.
 	const DESCRIBED_WIDTH = 340;
+	// Past this, a description has enough room to wrap and widening the list is cosmetic. Below it,
+	// wrapping alone produces a column of two-word lines and the list should reach for `DESCRIBED_WIDTH`.
+	//
+	// The distinction matters because widening is not free: a list wider than its trigger has to
+	// escape the trigger's container to fit, which inside a narrow panel means overhanging whatever
+	// is beside it. Wrapping stays inside; widening does not, so only do it when wrapping cannot
+	// carry the text on its own.
+	const COMFORTABLE_DESCRIBED_WIDTH = 240;
 	// Breathing room kept between the list and the edge of the window, on every side.
 	const EDGE_MARGIN = 12;
 
@@ -44,10 +53,12 @@
 	let alignRight = $state(false);
 	let availableHeight = $state(280);
 	let availableWidth = $state(DESCRIBED_WIDTH);
+	/** The definite width a described list wraps into, or `null` when it is not described. */
+	let listWidth = $state<number | null>(null);
 	let root: HTMLDivElement;
 	let trigger: HTMLButtonElement;
 	const selected = $derived(options.find((option) => option.value === value));
-	// Descriptions change how the list has to be sized: see `.list.described`.
+	// Descriptions change how the list has to be sized: see `listWidth` in `openList`.
 	const described = $derived(options.some((option) => option.description));
 
 	function openList() {
@@ -67,11 +78,17 @@
 		// `desired` is the trigger's own width when there are no descriptions: the list is
 		// `max-content` then, and its growth past the trigger is opportunistic rather than something
 		// to relocate the whole list for.
-		const desired = described ? DESCRIBED_WIDTH : rect.width;
+		const widen = described && rect.width < COMFORTABLE_DESCRIBED_WIDTH;
+		const desired = widen ? DESCRIBED_WIDTH : rect.width;
 		const spaceRight = window.innerWidth - rect.left - EDGE_MARGIN;
 		const spaceLeft = rect.right - EDGE_MARGIN;
 		alignRight = desired > spaceRight && spaceLeft > spaceRight;
 		availableWidth = Math.max(rect.width, alignRight ? spaceLeft : spaceRight);
+		// A description has to wrap, and wrapping needs a width to wrap *into* — `max-content`
+		// cannot supply one, since a wrapping element's max-content contribution is its full
+		// unwrapped length. So a described list always takes a definite width: the trigger's,
+		// unless the trigger is too narrow to be worth wrapping into.
+		listWidth = described ? Math.max(rect.width, Math.min(desired, availableWidth)) : null;
 		highlighted = Math.max(
 			0,
 			options.findIndex((option) => option.value === value)
@@ -155,9 +172,9 @@
 			class="list"
 			class:above={openAbove}
 			class:right={alignRight}
-			class:described
 			style:max-height={`${availableHeight}px`}
 			style:max-width={`${availableWidth}px`}
+			style:width={listWidth === null ? undefined : `${listWidth}px`}
 			role="listbox"
 			aria-label={label}
 		>
@@ -175,9 +192,8 @@
 					<span class="option-text">
 						<span class="option-label">{option.label}</span>
 						{#if option.description}<small>{option.description}</small>{/if}
-					</span>{#if option.value === value}<span
-							class="selected-icon"
-							aria-hidden="true"><Icon src={Check} mini /></span
+					</span>{#if option.value === value}<span class="selected-icon" aria-hidden="true"
+							><Icon src={Check} mini /></span
 						>{/if}
 				</button>
 			{/each}
@@ -269,13 +285,6 @@
 		border-radius: var(--ui-radius-md);
 		background: var(--ui-surface);
 		box-shadow: 0 12px 32px rgb(0 0 0 / 0.4);
-	}
-	/* A description has to wrap, and wrapping needs a width to wrap *into*. `max-content` can't
-	   supply one: a wrapping element's max-content contribution is its full unwrapped length, so
-	   the list asks for a width no description will ever be given and then clips what overflows.
-	   With descriptions present, take a definite width and let the text flow inside it. */
-	.list.described {
-		width: 340px;
 	}
 	/* Anchored to the trigger's right edge instead of its left, so a list wider than its trigger
 	   grows into the window rather than out of it. See `openList`. */

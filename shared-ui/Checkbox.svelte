@@ -2,24 +2,51 @@
 	import { Check, Icon } from '$icons';
 	type Props = {
 		checked?: boolean;
+		/**
+		 * The third state: this box is about several things and they disagree.
+		 *
+		 * Drawn as a dash rather than a tick, and reported as `aria-checked="mixed"` — a control
+		 * that showed a selection's disagreement as "off" would silently answer for the items the
+		 * user cannot see. Clicking resolves it to `checked`, since "make them all agree" is the
+		 * only thing a click on a mixed box can sensibly mean.
+		 */
+		indeterminate?: boolean;
 		disabled?: boolean;
 		ariaLabel?: string;
 		onchange?: (checked: boolean) => void;
 	};
 
-	let { checked = false, disabled = false, ariaLabel, onchange = () => {} }: Props = $props();
+	let {
+		checked = false,
+		indeterminate = false,
+		disabled = false,
+		ariaLabel,
+		onchange = () => {}
+	}: Props = $props();
+
+	// `indeterminate` is a DOM property with no attribute, so it cannot be set from markup.
+	let input = $state<HTMLInputElement | null>(null);
+	$effect(() => {
+		if (input) input.indeterminate = indeterminate;
+	});
 </script>
 
 <span class="ui-checkbox" class:ui-disabled={disabled}>
 	<input
+		bind:this={input}
 		type="checkbox"
 		{checked}
 		{disabled}
 		aria-label={ariaLabel}
-		onchange={(event) => onchange(event.currentTarget.checked)}
+		aria-checked={indeterminate ? 'mixed' : checked}
+		onchange={(event) => onchange(indeterminate ? true : event.currentTarget.checked)}
 	/>
 	<span class="ui-checkbox-box" aria-hidden="true">
-		<span class="check"><Icon src={Check} mini /></span>
+		{#if indeterminate}
+			<span class="dash"></span>
+		{:else}
+			<span class="check"><Icon src={Check} mini /></span>
+		{/if}
 	</span>
 </span>
 
@@ -66,7 +93,14 @@
 			opacity 120ms,
 			transform 120ms;
 	}
-	input:checked + .ui-checkbox-box {
+	.dash {
+		width: 10px;
+		height: 2px;
+		border-radius: 1px;
+		background: currentcolor;
+	}
+	input:checked + .ui-checkbox-box,
+	input:indeterminate + .ui-checkbox-box {
 		border-color: var(--color-accent);
 		background: var(--color-accent);
 	}

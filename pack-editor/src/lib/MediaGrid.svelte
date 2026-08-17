@@ -6,7 +6,7 @@
 	import { store } from './store.svelte.js';
 	import type { MediaFile } from './types.js';
 	import { copyFileName } from './clipboard.js';
-	import { openMediaPreview } from './mediaPreview.js';
+	import { openMediaPreview, openSelectionEditor } from './mediaPreview.js';
 
 	// Item geometry (px). ITEM_H is the fixed virtualization slot; the visible tile inside
 	// it hugs its content (thumbnail + up to two caption lines) and may be shorter.
@@ -204,6 +204,26 @@
 				await MenuItem.new({
 					text: 'Copy file name',
 					action: () => void copyFileName(clickedFile.file_name)
+				}),
+				await PredefinedMenuItem.new({ item: 'Separator' })
+			);
+		}
+
+		// The overlay is where every per-popup attribute is edited, and it is a one-file surface.
+		// This is how a selection reaches it: opened this way it walks the selection and writes to
+		// all of it. Only in the Popups tab, and only over media that can be a popup -- the same
+		// rule the inspector follows about offering a control where it is honoured.
+		if (
+			selCount > 0 &&
+			store.activeView === 'popups' &&
+			store.filteredFiles.some(
+				(file) => store.mediaTab.selectedIds.has(file.id) && file.file_info.type !== 'audio'
+			)
+		) {
+			items.push(
+				await MenuItem.new({
+					text: selCount === 1 ? 'Edit popup…' : `Edit ${selCount} popups…`,
+					action: () => void openSelectionEditor()
 				}),
 				await PredefinedMenuItem.new({ item: 'Separator' })
 			);
