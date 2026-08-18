@@ -17,6 +17,7 @@
 	import { openSelectionEditor } from './mediaPreview.js';
 	import { taskFeedback } from './taskFeedback.svelte.js';
 	import { formatDuration, formatFileSize } from './format.js';
+	import { clampScroll } from '$ui/scroll';
 
 	function infoRows(info: FileInfo, size: number): { label: string; value: string }[] {
 		const rows =
@@ -383,7 +384,7 @@
 		{/if}
 
 		<!-- Info -->
-		<div class="inspector-body" bind:this={inspectorBody}>
+		<div class="inspector-body" bind:this={inspectorBody} use:clampScroll>
 			{#if showUsedAs}
 				<section>
 					<div class="section-heading"><h2>Used as</h2></div>
@@ -403,10 +404,9 @@
 					<div class="section-heading">
 						<h2>Popup</h2>
 					</div>
-					<Button size="compact" variant="quiet" onclick={() => openSelectionEditor()}>
+					<Button size="compact" onclick={() => openSelectionEditor()}>
 						{selCount === 1 ? 'Edit this popup…' : `Edit ${selCount} popups…`}
 					</Button>
-					<p class="hint">Size, position, frequency, caption and video options.</p>
 				</section>
 			{/if}
 
@@ -440,7 +440,7 @@
 				{#if selCount === 1}
 					<div class="title-field">
 						<label for={`media-title-${primary.id}`}>File name</label>
-						<div class="title-control">
+						<div class="title-control pb-1">
 							<input
 								id={`media-title-${primary.id}`}
 								bind:value={titleValue}
@@ -794,12 +794,6 @@
 		font-weight: 700;
 		cursor: pointer;
 	}
-	.hint {
-		margin: 7px 0 0;
-		color: var(--ui-muted);
-		font-size: 10px;
-		line-height: 1.45;
-	}
 	table {
 		width: 100%;
 		margin-top: 7px;
@@ -852,7 +846,7 @@
 		padding-top: 12px;
 		border-top: 1px solid var(--ui-border);
 	}
-	@media (max-width: 760px) and (min-width: 521px) {
+	@media (max-width: 1000px) and (min-width: 521px) {
 		.inspector {
 			width: 220px !important;
 		}

@@ -55,10 +55,17 @@ export function slugifyStageLabel(label: string): string {
  * A label with nothing tag-shaped in it (empty, or only punctuation) falls back to `stage`, which
  * then dedupes like any other — `stage-2`, `stage-3` — so an unnamed stage still gets a usable tag
  * rather than a bare dash.
+ *
+ * A label that already says "stage" keeps the prefix it has: "Stage 3" is `stage-3`, not
+ * `stage-stage-3`. The prefix is there to mark the tag as a stage's, and the label has done that
+ * job already — stuttering it reads like a bug, which is exactly what an author sees in the Tags
+ * tab. Only the word on its own counts, so "Stages of grief" is still `stage-stages-of-grief`;
+ * the label is about stages, it is not one.
  */
 export function stageTagName(label: string, taken: Iterable<string> = []): string {
 	const slug = slugifyStageLabel(label);
-	const base = slug ? `stage-${slug}` : 'stage';
+	const prefixed = slug === 'stage' || slug.startsWith('stage-');
+	const base = !slug ? 'stage' : prefixed ? slug : `stage-${slug}`;
 	const used = new Set(taken);
 	if (!used.has(base)) return base;
 	for (let suffix = 2; ; suffix++) {

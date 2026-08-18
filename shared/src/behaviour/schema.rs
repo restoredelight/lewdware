@@ -37,8 +37,6 @@ pub struct Content {
     #[serde(default)]
     pub prompts: Vec<TextItem>,
     #[serde(default)]
-    pub prompt_settings: PromptSettings,
-    #[serde(default)]
     pub notifications: Vec<TextItem>,
     #[serde(default)]
     pub subliminals: Vec<TextItem>,
@@ -58,9 +56,6 @@ pub struct Content {
 impl Content {
     /// Whether this document describes no content at all: no pools, no groups, and neither media
     /// slot filled.
-    ///
-    /// `prompt_settings` is deliberately not consulted -- it configures how prompts are presented,
-    /// so it says nothing on its own about whether there are any.
     pub fn is_empty(&self) -> bool {
         self.popups.is_empty()
             && self.audio.is_empty()
@@ -291,6 +286,11 @@ pub struct TextItem {
     /// character count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<f64>,
+    /// Only notifications use this: the desktop notification's title, with `text` as its body.
+    /// Absent (or empty) means the notification is shown with no title, which is what every
+    /// converted Edgeware pack gets — Edgeware notifications are bodies only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -303,13 +303,6 @@ pub struct WebLink {
     pub args: Vec<String>,
     #[serde(default)]
     pub tags: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct PromptSettings {
-    /// Submit-button label override, rendered via `popup.dialog`.
-    #[serde(default)]
-    pub submit_label: Option<String>,
 }
 
 /// A named, described, user-toggleable set of tags. See `behaviour-design/default-mode.md`

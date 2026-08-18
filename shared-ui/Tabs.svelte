@@ -25,13 +25,17 @@
 >
 	{#each tabs as tab, index}
 		{#if orientation === 'vertical' && tab.group && (index === 0 || tabs[index - 1].group !== tab.group)}
-			{#if collapsed}
-				<!-- No room for the heading, but the grouping is most of what makes a column of icons
-				     readable, so it becomes a seam. Not before the first group: nothing to separate. -->
-				{#if index > 0}<span class="group-seam" aria-hidden="true"></span>{/if}
-			{:else}
-				<span class="group-label">{tab.group}</span>
-			{/if}
+			<!-- Collapsed there is no room for the heading, but the grouping is most of what makes a
+			     column of icons readable, so it becomes a seam. The heading's *box* is kept either way,
+			     text and all: it is what holds every tab at the same height in both states, so
+			     collapsing the nav swaps labels for icons in place instead of sliding the whole column
+			     upwards. Nothing to separate before the first group, so that one is spacing only. -->
+			<span
+				class="group-label"
+				class:seam={collapsed}
+				class:first={index === 0}
+				aria-hidden={collapsed ? 'true' : undefined}><span>{tab.group}</span></span
+			>
 		{/if}
 		<button
 			type="button"
@@ -162,19 +166,37 @@
 		background: var(--color-surface-2, #1f191c);
 	}
 	.group-label {
+		flex: none;
 		padding: 12px 12px 4px;
 		color: var(--color-muted);
 		font-family: var(--ui-font-mono, monospace);
 		font-size: 11px;
 		font-weight: 700;
 	}
-	.vertical .group-label:first-child {
+	.vertical .group-label.first {
 		padding-top: 4px;
 	}
-	.group-seam {
+	/* Same box, no text: the label is hidden rather than removed so the heights match the expanded
+	   nav exactly, and the seam is drawn across the space it leaves. */
+	.group-label.seam {
+		position: relative;
+		overflow: hidden;
+		padding-inline: 6px;
+	}
+	.group-label.seam > span {
+		visibility: hidden;
+		white-space: nowrap;
+	}
+	.group-label.seam::after {
+		content: '';
+		position: absolute;
+		top: 50%;
+		right: 6px;
+		left: 6px;
 		height: 1px;
-		margin: 5px 6px;
-		flex: none;
 		background: var(--color-border);
+	}
+	.group-label.seam.first::after {
+		display: none;
 	}
 </style>

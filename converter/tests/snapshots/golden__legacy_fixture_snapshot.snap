@@ -51,8 +51,6 @@ behaviour:
       - text: A high-intensity prompt
         tags:
           - high
-    prompt_settings:
-      submit_label: I Submit <3
     notifications:
       - text: New notification
         tags: []

@@ -19,7 +19,6 @@ function pack(...stages: Stage[]): Behaviour {
 			content_groups: [],
 			captions: [],
 			prompts: [],
-			prompt_settings: { submit_label: null },
 			notifications: [],
 			subliminals: [],
 			web_links: []

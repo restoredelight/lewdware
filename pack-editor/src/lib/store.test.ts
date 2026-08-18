@@ -20,6 +20,33 @@ const audio = (id: number, file_name: string, tags: string[] = []): MediaFile =>
 	file_info: { type: 'audio', duration: 10 }
 });
 
+describe('editor section context', () => {
+	beforeEach(() => {
+		store.openPack('pack-id', 'Test', [], [], []);
+	});
+
+	it('keeps the selected Content tab and Timeline item while navigating', () => {
+		store.contentTab = 'prompts';
+		store.experienceActiveId = 'stage-two';
+
+		store.setActiveView('audio');
+		store.setActiveView('content');
+
+		expect(store.contentTab).toBe('prompts');
+		expect(store.experienceActiveId).toBe('stage-two');
+	});
+
+	it('resets section context for a different pack', () => {
+		store.contentTab = 'notifications';
+		store.experienceActiveId = 'stage-two';
+
+		store.openPack('other-pack', 'Other', [], [], []);
+
+		expect(store.contentTab).toBe('groups');
+		expect(store.experienceActiveId).toBeNull();
+	});
+});
+
 describe('the media tabs’ file lists', () => {
 	beforeEach(() => {
 		store.openPack('pack-id', 'Test', [], [], []);
@@ -192,7 +219,6 @@ describe('the media tabs’ file lists', () => {
 				content_groups: [],
 				captions: [],
 				prompts: [],
-				prompt_settings: { submit_label: 'Submit' },
 				notifications: [],
 				subliminals: [],
 				web_links: []
@@ -210,5 +236,76 @@ describe('the media tabs’ file lists', () => {
 
 		expect(store.revealExperienceStage('missing')).toBe(false);
 		expect(store.experienceTargetStageId).toBe('stage-1');
+	});
+});
+
+describe('the Tags and Artists tabs’ way into the media', () => {
+	beforeEach(() => {
+		store.openPack('pack-id', 'Test', [], [], []);
+		store.files = [
+			file(1, 'popup.png', ['moody']),
+			{ ...file(2, 'wallpaper.png', ['moody', NON_POPUP_TAG]), artists: ['ren'] },
+			{ ...audio(3, 'theme.ogg', ['moody']), artists: ['ren'] },
+			file(4, 'hidden.png', ['moody', EXPLICIT_ONLY_TAG])
+		];
+	});
+
+	// The counts are what decide which destinations the row can offer, so they have to agree with
+	// the tab each one lands in.
+	it('counts a tag once per media tab that lists it', () => {
+		expect(store.mediaCountsByTag.get('moody')).toEqual({
+			'all-media': 4,
+			popups: 1,
+			audio: 1
+		});
+		expect(store.mediaCountsByTag.get('unused')).toBeUndefined();
+	});
+
+	it('counts an artist the same way', () => {
+		expect(store.mediaCountsByArtist.get('ren')).toEqual({
+			'all-media': 2,
+			popups: 0,
+			audio: 1
+		});
+	});
+
+	// Counted from the files rather than the backend's summaries, so tagging done in the inspector
+	// shows up without a round trip.
+	it('follows a tag added in the inspector', () => {
+		store.addTagToFiles([1], 'fresh');
+
+		expect(store.mediaCountsByTag.get('fresh')).toEqual({
+			'all-media': 1,
+			popups: 1,
+			audio: 0
+		});
+	});
+
+	it('shows a tag’s media in All media by default', () => {
+		store.showMediaFor({ tag: 'moody' });
+
+		expect(store.activeView).toBe('all-media');
+		expect([...store.mediaTab.tagFilter]).toEqual(['moody']);
+		expect(store.filteredFiles.map((f) => f.id)).toEqual([1, 2, 3, 4]);
+	});
+
+	it('shows it in a named tab instead, narrowed to what that tab lists', () => {
+		store.showMediaFor({ tag: 'moody' }, 'audio');
+
+		expect(store.activeView).toBe('audio');
+		expect([...store.mediaTab.tagFilter]).toEqual(['moody']);
+		expect(store.filteredFiles.map((f) => f.id)).toEqual([3]);
+	});
+
+	// Each media tab keeps its own filters between visits; a query left in the destination would
+	// silently intersect with the jump and land the author on an empty grid.
+	it('clears the destination’s own filters on the way in', () => {
+		store.mediaTabs.popups.searchQuery = 'does not match';
+		store.mediaTabs.popups.artistFilter = new Set(['someone']);
+
+		store.showMediaFor({ artist: 'ren' }, 'popups');
+
+		expect(store.mediaTab.searchQuery).toBe('');
+		expect([...store.mediaTab.artistFilter]).toEqual(['ren']);
 	});
 });

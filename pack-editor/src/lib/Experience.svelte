@@ -10,9 +10,17 @@
 	} from './behaviourSave.svelte.js';
 	import type { Experience, Stage } from './types.js';
 	import Toggle from '$ui/Toggle.svelte';
+	import EmptyState from '$ui/EmptyState.svelte';
+
+	let behaviourLoadFailed = $state(false);
+
+	async function loadBehaviour() {
+		behaviourLoadFailed = false;
+		behaviourLoadFailed = (await ensureBehaviour()) === null;
+	}
 
 	onMount(() => {
-		void ensureBehaviour();
+		void loadBehaviour();
 	});
 
 	onDestroy(() => {
@@ -74,7 +82,16 @@
 	</p>
 
 	{#if store.behaviour === null}
-		<p class="text-muted p-6 text-sm">Loading…</p>
+		{#if behaviourLoadFailed}
+			<div class="grid flex-1 place-items-center p-6">
+				<EmptyState
+					title="Could not load Timeline"
+					description="The pack behaviour could not be loaded. Your media is unaffected."
+					actionLabel="Try again"
+					onclick={loadBehaviour}
+				/>
+			</div>
+		{:else}<p class="text-muted p-6 text-sm">Loading…</p>{/if}
 	{:else if !store.behaviour.experience}
 		<div class="grid flex-1 place-items-center p-8">
 			<div class="max-w-md text-center">

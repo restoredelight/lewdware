@@ -68,7 +68,7 @@ pub fn create_api<T: EventPoster>(
     // Nothing empty may reach Lua as mlua's `Value::NULL` sentinel (a lightuserdata, distinct from
     // Lua `nil`, for JSON-style null-vs-absent round-tripping): that sentinel is *truthy*, so the
     // idiomatic `field or default` fallback used throughout `default-modes/shared/lib/*.lua` (e.g.
-    // `PromptSettings.submit_label`) would silently never fall back. This is an internal
+    // `TextItem.timeout_seconds`) would silently never fall back. This is an internal
     // engine-to-Lua channel, not a JSON API needing that distinction, so plain `nil` is correct.
     //
     // Both options, not just `serialize_none_to_null`: these sections arrive as `serde_json::Value`

@@ -1,6 +1,5 @@
 <script lang="ts">
 	import type { TextItem } from './types.js';
-	import type { Snippet } from 'svelte';
 	import { tick } from 'svelte';
 	import TagPicker from './TagPicker.svelte';
 	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
@@ -16,15 +15,18 @@
 	type Props = {
 		title: string;
 		description?: string;
-		settings?: Snippet;
 		// A key into behaviour content rather than the array itself: this editor mutates the
 		// pool, and mutating an unbound prop trips Svelte's ownership warning.
 		poolKey: 'captions' | 'prompts' | 'notifications' | 'subliminals';
 		idPrefix: string;
 	};
 
-	let { title, description, settings, poolKey, idPrefix }: Props = $props();
+	let { title, description, poolKey, idPrefix }: Props = $props();
 	const pool = $derived(store.behaviour!.content[poolKey]);
+	// Notifications are the one pool whose entry is two fields: the desktop notification's title
+	// and its body. Everywhere else `text` is the whole entry, and an unlabelled box is clearer
+	// than a labelled one.
+	const titled = $derived(poolKey === 'notifications');
 	// The pool's address in the behaviour document. Adding and removing entries move every later
 	// index, so those edits replace the array whole rather than addressing one entry.
 	const poolPath = $derived(`content.${poolKey}`);
@@ -39,11 +41,12 @@
 		await tick();
 		const item = listElement?.lastElementChild;
 		item?.scrollIntoView({ block: 'center' });
-		item?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+		// The title comes first where there is one, so that is where typing should start.
+		item?.querySelector<HTMLElement>(titled ? 'input' : 'textarea')?.focus();
 	}
 
 	function removeItem(index: number) {
-		if (pool[index].text.trim() || pool[index].tags.length > 0) {
+		if (pool[index].text.trim() || pool[index].summary?.trim() || pool[index].tags.length > 0) {
 			removing = pool[index];
 			return;
 		}
@@ -76,13 +79,6 @@
 		</div>
 	{/if}
 
-	{#if settings}
-		<Card class="flex flex-col gap-3 p-3">
-			<h3 class="ui-section-title">Settings</h3>
-			{@render settings()}
-		</Card>
-	{/if}
-
 	<div class="flex flex-col gap-2" bind:this={listElement}>
 		{#if pool.length === 0}
 			<EmptyState
@@ -101,12 +97,29 @@
 						size="compact"
 						variant="destructive"
 						class="!h-7"
+						ariaLabel={`Remove ${noun.toLowerCase()} ${index + 1}`}
 						onclick={() => removeItem(index)}>Remove</Button
 					>
 				</div>
-				<div class="flex items-start gap-2">
-					<label class="sr-only" for={`${idPrefix}-text-${index}`}
-						>{title.replace(/s$/, '')} text</label
+				{#if titled}
+					<Field
+						label="Title"
+						size="compact"
+						placeholder="Optional"
+						value={item.summary ?? ''}
+						oninput={(value) => {
+							// Stored only when it says something: a blank title is the absence of one, and
+							// the notification is shown body-only.
+							if (value.trim()) item.summary = value;
+							else delete item.summary;
+							editBehaviourField(`${poolPath}.${index}.summary`, 'Edit notification title');
+						}}
+					/>
+				{/if}
+				<div class="flex flex-col gap-[5px]">
+					<label
+						class={titled ? 'text-text text-xs font-semibold' : 'sr-only'}
+						for={`${idPrefix}-text-${index}`}>{titled ? 'Message' : `${noun} text`}</label
 					>
 					<textarea
 						id={`${idPrefix}-text-${index}`}
@@ -114,9 +127,9 @@
 						oninput={() =>
 							editBehaviourField(`${poolPath}.${index}.text`, `Edit ${noun.toLowerCase()}`)}
 						rows={2}
-						placeholder="Text"
-						class="border-border bg-bg text-text flex-1 resize-none rounded border px-2 py-1 text-xs
-"></textarea>
+						placeholder={titled ? undefined : 'Text'}
+						class="border-border bg-bg text-text w-full resize-none rounded border px-2 py-1 text-xs"
+					></textarea>
 				</div>
 				<TagPicker
 					tags={item.tags}
@@ -147,12 +160,6 @@
 			</Card>
 		{/each}
 	</div>
-
-	{#if pool.length > 0}<Button size="compact" class="self-start" onclick={addItem}
-			><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add {title
-				.toLowerCase()
-				.replace(/s$/, '')}</Button
-		>{/if}
 </section>
 
 {#if removing}

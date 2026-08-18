@@ -19,7 +19,6 @@ const behaviour = (
 			content_groups: [],
 			captions: [],
 			prompts: [],
-			prompt_settings: {},
 			notifications: [],
 			subliminals: [],
 			web_links: [],

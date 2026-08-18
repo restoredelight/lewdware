@@ -21,7 +21,11 @@
 	const playing = $derived(active && playback.playing);
 	const failed = $derived(playback.failedId === id);
 	const total = $derived(audioDuration((active ? playback.measured : 0) || duration));
-	const current = $derived(active ? clampAudioPosition(playback.position, total) : 0);
+	/** Where the thumb is being held, while it is. The element's own position keeps moving under a
+	 * drag, and letting it write the thumb back would fight whoever is holding it. */
+	let scrubbed = $state<number | null>(null);
+	const played = $derived(active ? clampAudioPosition(playback.position, total) : 0);
+	const current = $derived(scrubbed ?? played);
 </script>
 
 <div class="player" role="group" aria-label={`Play ${label}`}>
@@ -39,11 +43,17 @@
 		type="range"
 		min="0"
 		max={total || 1}
-		step="0.1"
+		step="any"
 		value={current}
 		aria-label={`Position in ${label}`}
 		aria-valuetext={`${formatDuration(current)} of ${formatDuration(total)}`}
-		oninput={(event) => playback.seek(id, src, Number(event.currentTarget.value))}
+		oninput={(event) => {
+			const seconds = Number(event.currentTarget.value);
+			scrubbed = seconds;
+			playback.seek(id, src, seconds);
+		}}
+		onchange={() => (scrubbed = null)}
+		onblur={() => (scrubbed = null)}
 	/>
 	<span class="time">{formatDuration(current)} / {formatDuration(total)}</span>
 	<button
@@ -62,9 +72,11 @@
 </div>
 
 <style>
+	/* No explicit `min-width`: an override here would let a tight row shrink the transport past its
+	   own controls, and the mute button -- the last item, and unshrinkable -- would be drawn outside
+	   the border. `auto` keeps the floor at the controls' own width. */
 	.player {
 		display: flex;
-		min-width: 160px;
 		height: 34px;
 		flex: 1;
 		align-items: center;

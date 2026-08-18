@@ -1,7 +1,7 @@
 -- Prompts process: on its own frequency, spawns a dialog with the pack's prompt text, a single
 -- input, and a submit button. See behaviour-design/default-mode.md's feature table ("Prompts |
--- both | Process | frequency; ... Pools are mode parameters") and
--- shared/src/behaviour/schema.rs's PromptSettings (submit_label override).
+-- both | Process | frequency; ... Pools are mode parameters"). The submit button reads "Submit"
+-- for every pack -- packs used to be able to override it, and nothing does now.
 --
 -- The prompt text is something to *copy out*, not a question to answer freely: the dialog only
 -- closes once the user has typed it back exactly (Edgeware's own prompt semantics). So it has no
@@ -15,7 +15,7 @@ local content = require("lib.content")
 
 local M = {}
 
-local DEFAULT_SUBMIT_LABEL = "Submit"
+local SUBMIT_LABEL = "Submit"
 local TITLE = "Type this to continue"
 local PLACEHOLDER = "Type the text above, exactly"
 
@@ -47,7 +47,6 @@ end
 function M.fire(active_tags, overrides)
 	local prompt = content.pick_prompt(active_tags and active_tags())
 	if not prompt then return false end
-	local settings = content.prompt_settings()
 	overrides = overrides or {}
 	local timeout_seconds = prompt.timeout_seconds
 	if not timeout_seconds or timeout_seconds <= 0 then
@@ -71,7 +70,7 @@ function M.fire(active_tags, overrides)
 		table.insert(elements, { type = "text", id = "countdown", text = string.format("Time remaining: %d seconds", math.ceil(timeout_seconds)) })
 	end
 	table.insert(elements, { type = "input", id = "response", placeholder = PLACEHOLDER })
-	table.insert(elements, { type = "buttons", options = {{ id = "submit", label = settings.submit_label or DEFAULT_SUBMIT_LABEL, default = true }} })
+	table.insert(elements, { type = "buttons", options = {{ id = "submit", label = SUBMIT_LABEL, default = true }} })
 	local dialog = lewdware.popup.dialog({
 		closeable = false,
 		title = TITLE,

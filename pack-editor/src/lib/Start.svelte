@@ -312,7 +312,7 @@
 	}
 	.start-screen {
 		display: flex;
-		height: 100vh;
+		height: 100%;
 		padding: 32px;
 		flex-direction: column;
 		overflow-y: auto;

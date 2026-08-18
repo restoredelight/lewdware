@@ -1,18 +1,21 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Icon, MagnifyingGlass, PencilSquare, Trash } from 'svelte-hero-icons';
+	import { Icon, PencilSquare, Trash } from 'svelte-hero-icons';
 	import Button from '$ui/Button.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import Field from '$ui/Field.svelte';
 	import Select from '$ui/Select.svelte';
 	import { api } from './api.js';
-	import { store } from './store.svelte.js';
+	import MediaScopeMenu from './MediaScopeMenu.svelte';
+	import { NO_MEDIA_SCOPE_COUNTS, store } from './store.svelte.js';
 	import type { ArtistSummary } from './types.js';
 	import { history } from './history.svelte.js';
 	import EmptyState from '$ui/EmptyState.svelte';
+	import { clampScroll } from '$ui/scroll';
 
 	let summaries = $state<ArtistSummary[]>([]);
 	let loaded = $state(false);
+	let loadError = $state<string | null>(null);
 	let query = $state('');
 	let editing = $state<string | null>(null);
 	let mode = $state<'rename' | 'merge'>('rename');
@@ -21,15 +24,32 @@
 	let error = $state<string | null>(null);
 	let busy = $state(false);
 
+	// The counts come from `store.files` rather than from the summaries beside them, so that
+	// attribution added in the inspector shows up here without a round trip.
 	const rows = $derived(
 		summaries
 			.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase()))
+			.map((row) => ({
+				name: row.name,
+				media: store.mediaCountsByArtist.get(row.name) ?? NO_MEDIA_SCOPE_COUNTS
+			}))
 			.sort((a, b) => a.name.localeCompare(b.name))
 	);
 
-	onMount(async () => {
-		summaries = await api.getArtistSummaries();
-		loaded = true;
+	async function load() {
+		loaded = false;
+		loadError = null;
+		try {
+			summaries = await api.getArtistSummaries();
+		} catch (cause) {
+			loadError = String(cause);
+		} finally {
+			loaded = true;
+		}
+	}
+
+	onMount(() => {
+		void load();
 	});
 
 	function begin(artist: string, nextMode: 'rename' | 'merge') {
@@ -100,13 +120,9 @@
 			busy = false;
 		}
 	}
-
-	function showMedia(artist: string) {
-		store.showMediaFor({ artist });
-	}
 </script>
 
-<div class="page">
+<div class="page" use:clampScroll>
 	<header>
 		<div>
 			<h2 class="ui-page-title">Artists</h2>
@@ -124,6 +140,13 @@
 			{error}<button onclick={() => (error = null)}>Dismiss</button>
 		</div>{/if}
 	{#if !loaded}<p class="loading">Loading…</p>
+	{:else if loadError}
+		<EmptyState
+			title="Could not load artists"
+			description={loadError}
+			actionLabel="Try again"
+			onclick={load}
+		/>
 	{:else if rows.length === 0}
 		<EmptyState
 			title={query ? 'No matching artists' : 'No artists yet'}
@@ -134,19 +157,19 @@
 			onclick={() => (query ? (query = '') : store.setActiveView('all-media'))}
 		/>
 	{:else}
-		<div class="table" aria-label="Pack artists">
-			<div class="table-head"><span>Artist</span><span>Media</span><span></span></div>
+		<div class="table" role="table" aria-label="Pack artists">
+			<div class="table-head" role="row">
+				<span role="columnheader" aria-label="Artist">Artist</span><span
+					role="columnheader"
+					aria-label="Media">Media</span
+				><span class="actions-heading" role="columnheader" aria-label="Actions">Actions</span>
+			</div>
 			{#each rows as row (row.name)}
-				<div class="artist-row">
-					<strong>{row.name}</strong><span>{row.media_count}</span>
-					<div class="row-actions">
-						<Button
-							size="compact"
-							variant="quiet"
-							onclick={() => showMedia(row.name)}
-							disabled={row.media_count === 0}
-							><Icon src={MagnifyingGlass} mini size="14px" /> Media</Button
-						>
+				<div class="artist-row" role="row">
+					<div role="cell"><strong>{row.name}</strong></div>
+					<span role="cell">{row.media['all-media']}</span>
+					<div class="row-actions" role="cell">
+						<MediaScopeMenu filter={{ artist: row.name }} counts={row.media} />
 						<Button size="compact" variant="quiet" onclick={() => begin(row.name, 'rename')}
 							><Icon src={PencilSquare} mini size="14px" /> Rename</Button
 						>
@@ -163,8 +186,8 @@
 					</div>
 				</div>
 				{#if editing === row.name}
-					<div class="edit-row">
-						<div>
+					<div class="edit-row" role="row">
+						<div role="cell">
 							<strong
 								>{mode === 'rename' ? `Rename “${row.name}”` : `Merge “${row.name}” into`}</strong
 							><small
@@ -173,23 +196,25 @@
 									: 'References will be combined and duplicates removed.'}</small
 							>
 						</div>
-						{#if mode === 'rename'}<Field
-								label="New artist name"
-								hideLabel
-								{value}
-								placeholder="New artist name"
-								oninput={(next) => (value = next)}
-							/>
-						{:else}<Select
-								label="Target artist"
-								hideLabel
-								{value}
-								options={rows
-									.filter((item) => item.name !== row.name)
-									.map((item) => ({ value: item.name, label: item.name }))}
-								onchange={(next) => (value = next)}
-							/>{/if}
-						<div class="edit-actions">
+						<div role="cell">
+							{#if mode === 'rename'}<Field
+									label="New artist name"
+									hideLabel
+									{value}
+									placeholder="New artist name"
+									oninput={(next) => (value = next)}
+								/>
+							{:else}<Select
+									label="Target artist"
+									hideLabel
+									{value}
+									options={rows
+										.filter((item) => item.name !== row.name)
+										.map((item) => ({ value: item.name, label: item.name }))}
+									onchange={(next) => (value = next)}
+								/>{/if}
+						</div>
+						<div class="edit-actions" role="cell">
 							<Button size="compact" onclick={() => (editing = null)}>Cancel</Button><Button
 								size="compact"
 								variant="primary"
@@ -210,7 +235,7 @@
 	{@const usage = rows.find((row) => row.name === deleting)}
 	<Dialog
 		title={`Delete “${deleting}”?`}
-		description={`This removes the artist from ${usage?.media_count ?? 0} media item(s). No media files will be deleted.`}
+		description={`This removes the artist from ${usage?.media['all-media'] ?? 0} media item(s). No media files will be deleted.`}
 		buttons={[
 			{ label: 'Cancel', onclick: () => (deleting = null) },
 			{ label: 'Delete artist', destructive: true, onclick: confirmDelete }
@@ -337,8 +362,13 @@
 		.artist-row {
 			grid-template-columns: minmax(100px, 1fr) 48px;
 		}
-		.table-head span:last-child {
-			display: none;
+		.table-head .actions-heading {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			overflow: hidden;
+			clip: rect(0, 0, 0, 0);
+			white-space: nowrap;
 		}
 		.row-actions {
 			grid-column: 1 / -1;

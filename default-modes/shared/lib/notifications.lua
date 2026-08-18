@@ -14,7 +14,11 @@ end
 function M.fire(active_tags)
 	local notification = content.pick_notification(active_tags and active_tags())
 	if not notification then return false end
-	lewdware.show_notification({ body = notification.text })
+	-- `summary` is the pack author's optional title (`TextItem.summary`); nil means the pack left
+	-- it blank, and the notification is shown body-only -- which is every converted Edgeware pack.
+	local summary = notification.summary
+	if summary == "" then summary = nil end
+	lewdware.show_notification({ summary = summary, body = notification.text })
 	return true
 end
 

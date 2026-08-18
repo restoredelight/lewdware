@@ -98,17 +98,16 @@ export interface MediaServerInfo {
 export interface TextItem {
 	text: string;
 	tags: string[];
+	/** Prompts only: the answer deadline, in seconds. */
 	timeout_seconds?: number;
+	/** Notifications only: the title shown above the notification's body (`text`). */
+	summary?: string;
 }
 
 export interface WebLink {
 	url: string;
 	args: string[];
 	tags: string[];
-}
-
-export interface PromptSettings {
-	submit_label: string | null;
 }
 
 export interface ContentGroup {
@@ -183,7 +182,6 @@ export interface Content {
 	content_groups: ContentGroup[];
 	captions: TextItem[];
 	prompts: TextItem[];
-	prompt_settings: PromptSettings;
 	notifications: TextItem[];
 	subliminals: TextItem[];
 	web_links: WebLink[];
@@ -342,7 +340,7 @@ export interface Behaviour {
  * One edit to the behaviour document: the value at `path` becomes `value`.
  *
  * `path` is dot-separated, with a numeric segment indexing an array --
- * `content.prompt_settings.submit_label`, `experience.timeline.stages.2.label`. Structural
+ * `content.captions.0.text`, `experience.timeline.stages.2.label`. Structural
  * changes (adding a caption, removing a stage, reordering) address the whole array and carry its
  * new contents; see `shared/src/behaviour/patch.rs`, which applies these.
  */

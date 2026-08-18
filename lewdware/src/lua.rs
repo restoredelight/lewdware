@@ -3425,6 +3425,7 @@ mod tests {
                         text: "hi".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -3454,6 +3455,118 @@ mod tests {
                 harness.advance(Duration::from_millis(3100)).await;
 
                 assert_eq!(harness.eval_number("COUNT"), 3.0);
+            })
+            .await;
+    }
+
+    /// Records what the last notification was actually shown with, rather than only that one was:
+    /// `TextItem.summary` is the pack author's title, and a mode that dropped it on the floor
+    /// would look identical to `COUNTING_NOTIFICATION_WRAP`.
+    const RECORDING_NOTIFICATION_WRAP: &str = r#"
+        SUMMARY = ""
+        BODY = ""
+        local real = lewdware.show_notification
+        lewdware.show_notification = function(n)
+            SUMMARY = n.summary or ""
+            BODY = n.body
+            return real(n)
+        end
+    "#;
+
+    #[tokio::test(start_paused = true)]
+    async fn notifications_carry_the_authors_title() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    notifications: vec![shared::behaviour::TextItem {
+                        text: "hi".to_string(),
+                        tags: vec![],
+                        timeout_seconds: None,
+                        summary: Some("Attention".to_string()),
+                    }],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(RECORDING_NOTIFICATION_WRAP);
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert(
+                    "notifications_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert(
+                    "notification_frequency".to_string(),
+                    OptionValue::Number(1.0),
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(harness.eval_string("SUMMARY"), "Attention");
+                assert_eq!(harness.eval_string("BODY"), "hi");
+            })
+            .await;
+    }
+
+    /// A pack that left the title blank -- every converted Edgeware pack -- must reach the
+    /// notification with no summary at all, not with an empty-string one.
+    #[tokio::test(start_paused = true)]
+    async fn notifications_without_a_title_pass_no_summary() {
+        LocalSet::new()
+            .run_until(async {
+                let content = Content {
+                    notifications: vec![shared::behaviour::TextItem {
+                        text: "hi".to_string(),
+                        tags: vec![],
+                        timeout_seconds: None,
+                        summary: None,
+                    }],
+                    ..Default::default()
+                };
+
+                let owned = wrapped_default_mode_sources(
+                    r#"
+                        HAD_SUMMARY = 1
+                        local real = lewdware.show_notification
+                        lewdware.show_notification = function(n)
+                            HAD_SUMMARY = n.summary == nil and 0 or 1
+                            return real(n)
+                        end
+                    "#,
+                );
+                let sources = as_str_sources(&owned);
+
+                let mut config = isolated_process_config();
+                config.insert(
+                    "notifications_enabled".to_string(),
+                    OptionValue::Boolean(true),
+                );
+                config.insert(
+                    "notification_frequency".to_string(),
+                    OptionValue::Number(1.0),
+                );
+
+                let mut harness = Harness::with_pack(
+                    &sources,
+                    pack_fixture(false),
+                    content,
+                    config,
+                    all_capabilities(),
+                    Volume::default(),
+                );
+                harness.run_entrypoint("main.lua").unwrap();
+                harness.advance(Duration::from_millis(1100)).await;
+
+                assert_eq!(harness.eval_number("HAD_SUMMARY"), 0.0);
             })
             .await;
     }
@@ -3500,6 +3613,7 @@ mod tests {
                         text: "hi".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -3542,6 +3656,7 @@ mod tests {
                         text: "hi".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -3760,6 +3875,7 @@ mod tests {
                         text: "Obey".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -3803,6 +3919,7 @@ mod tests {
                         text: "Obey".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -3871,6 +3988,7 @@ mod tests {
                         text: "Obey".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -4021,6 +4139,7 @@ mod tests {
                         text: "Well?".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -4094,7 +4213,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn prompt_dialog_spawns_with_pool_text_and_configured_submit_label() {
+    async fn prompt_dialog_spawns_with_pool_text_and_submit_label() {
         LocalSet::new()
             .run_until(async {
                 let content = Content {
@@ -4102,11 +4221,8 @@ mod tests {
                         text: "Well?".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
-                    prompt_settings: shared::behaviour::PromptSettings {
-                        submit_label: Some("Confirm".to_string()),
-                        ..Default::default()
-                    },
                     ..Default::default()
                 };
 
@@ -4134,42 +4250,6 @@ mod tests {
                     harness.eval_string("DIALOG_COUNTDOWN"),
                     "Time remaining: 15 seconds"
                 );
-                assert_eq!(harness.eval_string("DIALOG_LABEL"), "Confirm");
-            })
-            .await;
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn prompt_dialog_falls_back_to_default_submit_label_when_unset() {
-        LocalSet::new()
-            .run_until(async {
-                let content = Content {
-                    prompts: vec![shared::behaviour::TextItem {
-                        text: "Well?".to_string(),
-                        tags: vec![],
-                        timeout_seconds: None,
-                    }],
-                    ..Default::default()
-                };
-
-                let owned = wrapped_default_mode_sources(DIALOG_ELEMENT_CAPTURE_WRAP);
-                let sources = as_str_sources(&owned);
-
-                let mut config = isolated_process_config();
-                config.insert("prompts_enabled".to_string(), OptionValue::Boolean(true));
-                config.insert("prompt_frequency".to_string(), OptionValue::Number(1.0));
-
-                let mut harness = Harness::with_pack(
-                    &sources,
-                    pack_fixture(false),
-                    content,
-                    config,
-                    all_capabilities(),
-                    Volume::default(),
-                );
-                harness.run_entrypoint("main.lua").unwrap();
-                harness.advance(Duration::from_millis(1100)).await;
-
                 assert_eq!(harness.eval_string("DIALOG_LABEL"), "Submit");
             })
             .await;
@@ -4184,6 +4264,7 @@ mod tests {
                         text: "Well?".into(),
                         tags: vec![],
                         timeout_seconds: Some(0.2),
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -4229,6 +4310,7 @@ mod tests {
                         text: "Well?".into(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -4277,6 +4359,7 @@ mod tests {
                         text: "Well?".into(),
                         tags: vec![],
                         timeout_seconds: Some(0.2),
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -4321,6 +4404,7 @@ mod tests {
                         text: "Well?".into(),
                         tags: vec![],
                         timeout_seconds: Some(0.2),
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -4382,6 +4466,7 @@ mod tests {
                         text: "Well?".into(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -4425,6 +4510,7 @@ mod tests {
                     text: "Well?".to_string(),
                     tags: vec![],
                     timeout_seconds: None,
+                    summary: None,
                 }],
                 ..Default::default()
             };
@@ -4549,6 +4635,7 @@ mod tests {
                         text: "Well?".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -5017,6 +5104,7 @@ mod tests {
                         text: "Obey.".to_string(),
                         tags: vec!["red".to_string()],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -5266,6 +5354,7 @@ mod tests {
                             text: "Obey.".to_string(),
                             tags: vec!["nonexistent".to_string()],
                             timeout_seconds: None,
+                            summary: None,
                         }],
                         ..Default::default()
                     },
@@ -5300,6 +5389,7 @@ mod tests {
                         text: "Obey.".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -5339,6 +5429,7 @@ mod tests {
                         text: "kinky".to_string(),
                         tags: vec!["kinky".to_string()],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -5379,11 +5470,13 @@ mod tests {
                             text: "untagged".to_string(),
                             tags: vec![],
                             timeout_seconds: None,
+                            summary: None,
                         },
                         shared::behaviour::TextItem {
                             text: "kinky".to_string(),
                             tags: vec!["kinky".to_string()],
                             timeout_seconds: None,
+                            summary: None,
                         },
                     ],
                     ..Default::default()
@@ -5457,11 +5550,13 @@ mod tests {
                             text: "vanilla".to_string(),
                             tags: vec![],
                             timeout_seconds: None,
+                            summary: None,
                         },
                         shared::behaviour::TextItem {
                             text: "kinky".to_string(),
                             tags: vec!["kinky".to_string()],
                             timeout_seconds: None,
+                            summary: None,
                         },
                     ],
                     ..Default::default()
@@ -5506,6 +5601,7 @@ mod tests {
                         text: "obey".to_string(),
                         tags: vec!["hypno".to_string()],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -5676,6 +5772,7 @@ mod tests {
                         text: "hi".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };
@@ -5722,6 +5819,7 @@ mod tests {
                         text: "hi".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     }],
                     ..Default::default()
                 };

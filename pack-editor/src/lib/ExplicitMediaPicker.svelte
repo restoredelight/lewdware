@@ -86,8 +86,12 @@
 			</Button>
 			<Button size="compact" disabled={busy} onclick={upload}>Upload…</Button>
 			{#if mediaId != null && onclear}
-				<Button variant="destructive" size="compact" disabled={busy} onclick={onclear}
-					>Remove</Button
+				<Button
+					variant="destructive"
+					size="compact"
+					disabled={busy}
+					ariaLabel={`Remove selected ${kind}`}
+					onclick={onclear}>Remove</Button
 				>
 			{/if}
 		</div>
@@ -106,14 +110,22 @@
 				{#each candidates as item (item.id)}
 					{#if item.file_info.type === 'audio'}
 						<div class:selected={item.id === mediaId} class="audio-result">
-							<span class="audio-name" title={item.file_name}>{item.file_name}</span>
+							<!-- The row is the button, stretched over the whole card by `.choose::after`, so a
+							     click anywhere but the transport picks the file. Nesting is not an option: the
+							     transport's own controls cannot live inside a button. -->
+							<button
+								class="choose"
+								type="button"
+								disabled={busy}
+								title={`Choose ${item.file_name}`}
+								onclick={() => choose(item.id)}>{item.file_name}</button
+							>
 							<InlineAudioPlayer
 								id={item.id}
 								src={store.mediaUrl(`/file/${item.id}`, item.hash)}
 								label={item.file_name}
 								duration={duration(item)}
 							/>
-							<Button size="compact" disabled={busy} onclick={() => choose(item.id)}>Choose</Button>
 						</div>
 					{:else}
 						<button
@@ -141,6 +153,13 @@
 	.picker {
 		display: flex;
 		min-width: 0;
+		width: 100%;
+		/* Kept on whole pixels. WebKitGTK's scrollbar is 8.5px wide, so opening the browser below moves
+		   this panel's right edge onto a half pixel -- and painting then snaps the boxes flush against
+		   it, eating most of a device pixel off `Remove`'s right border while its left border stays
+		   crisp. Rounding the width down absorbs the half pixel instead. Engines without `round()` drop
+		   the declaration and keep `width: 100%`, which is what they had. */
+		width: round(down, 100%, 1px);
 		flex-direction: column;
 		gap: 8px;
 	}
@@ -158,6 +177,9 @@
 		min-height: 50px;
 	}
 	.selection.audio > :global(.player) {
+		/* A basis of its own, or the player shares free space evenly with the file name beside it and
+		   comes out barely wider than the controls it has to hold. */
+		flex: 1 1 300px;
 		max-width: 430px;
 	}
 	.preview,
@@ -264,7 +286,11 @@
 		flex-direction: column;
 		align-items: stretch;
 	}
-	.results > button:hover {
+	.audio-result {
+		position: relative;
+	}
+	.results > button:hover,
+	.audio-result:hover {
 		border-color: var(--ui-border-strong);
 	}
 	.results > button.selected,
@@ -283,15 +309,46 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.audio-name {
-		width: 140px;
-		flex: none;
+	/* Shrinkable rather than fixed: the player next to it cannot give up any width without spilling
+	   its own controls, so the name is what a narrow list has to take room from. */
+	.choose {
+		min-width: 0;
+		padding: 0;
+		flex: 1 1 140px;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		font-size: 11px;
 		overflow: hidden;
+		text-align: left;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		cursor: pointer;
 	}
+	.choose:disabled {
+		cursor: default;
+	}
+	/* The hit area, and the focus ring with it, covers the whole card; `cursor` is inherited from the
+	   button, so the pointer reads as clickable across all of it. */
+	.choose::after {
+		content: '';
+		position: absolute;
+		border-radius: var(--ui-radius-sm);
+		inset: 0;
+	}
+	.choose:focus-visible {
+		outline: none;
+	}
+	.choose:focus-visible::after {
+		outline: 2px solid var(--ui-focus);
+		outline-offset: -2px;
+	}
+	/* Above the stretched hit area: the transport keeps its own clicks. */
 	.audio-result :global(.player) {
-		min-width: 180px;
+		position: relative;
+		max-width: 380px;
+		cursor: default;
 	}
 	.no-results {
 		margin: 8px;

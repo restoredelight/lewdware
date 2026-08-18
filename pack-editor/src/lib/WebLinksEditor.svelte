@@ -93,6 +93,7 @@
 						size="compact"
 						variant="destructive"
 						class="!h-7"
+						ariaLabel={`Remove web link ${index + 1}`}
 						onclick={() => removeLink(index)}>Remove</Button
 					>
 				</div>
@@ -121,7 +122,7 @@
 								<button
 									onclick={() => removeArg(index, argIndex)}
 									class="text-muted hover:text-text leading-none"
-									aria-label="Remove arg"
+									aria-label={`Remove URL suffix ${arg}`}
 									><span class="block h-3.5 w-3.5"><Icon src={XMark} mini /></span></button
 								>
 							</span>
@@ -151,10 +152,6 @@
 			</Card>
 		{/each}
 	</div>
-
-	{#if links.length > 0}<Button size="compact" class="self-start" onclick={addLink}
-			><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add web link</Button
-		>{/if}
 </section>
 
 {#if removing}

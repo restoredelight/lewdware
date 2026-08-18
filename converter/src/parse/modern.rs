@@ -41,9 +41,11 @@ fn default_max_clicks() -> u32 {
     1
 }
 
-/// `promptCommand`/`promptMinLength`/`promptMaxLength` are deliberately not parsed here at all
-/// -- both are dropped silently (no schema equivalent worth having yet; see the plan doc's
-/// rationale), so there's nothing to do with them even if we read them.
+/// `promptCommand`/`promptMinLength`/`promptMaxLength`/`promptSubmit` are deliberately not parsed
+/// here at all -- all of them are dropped silently (no schema equivalent worth having yet; see the
+/// plan doc's rationale, and for `promptSubmit` the fixed "Submit" button in
+/// `default-modes/shared/lib/prompts.lua`), so there's nothing to do with them even if we read
+/// them.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 struct RawDefault {
@@ -51,8 +53,6 @@ struct RawDefault {
     base: RawBase,
     #[serde(rename = "popupClose")]
     popup_close: Option<String>,
-    #[serde(rename = "promptSubmit")]
-    prompt_submit: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,7 +85,6 @@ fn build_index(raw: RawIndex, warnings: &mut Vec<Warning>) -> EdgewareIndex {
     let mut index = EdgewareIndex {
         default_extra: DefaultExtra {
             popup_close: non_empty(raw.default.popup_close),
-            prompt_submit: non_empty(raw.default.prompt_submit),
         },
         default: convert_base(raw.default.base, "default", warnings),
         ..Default::default()
@@ -201,18 +200,19 @@ mod tests {
     }
 
     #[test]
-    fn popup_close_and_prompt_submit_only_set_when_present() {
+    fn popup_close_only_set_when_present() {
         let (_dir, source) = source_with_index(r#"{"default": {}}"#);
         let mut warnings = Vec::new();
 
         let index = load(&source, &mut warnings);
 
         assert_eq!(index.default_extra.popup_close, None);
-        assert_eq!(index.default_extra.prompt_submit, None);
     }
 
+    /// `promptSubmit` rides along to prove that reading past it is silent: the prompt dialog's
+    /// button is always "Submit", so an authored override is neither converted nor warned about.
     #[test]
-    fn popup_close_and_prompt_submit_captured_when_authored() {
+    fn popup_close_captured_when_authored_and_prompt_submit_ignored() {
         let (_dir, source) =
             source_with_index(r#"{"default": {"popupClose": "Close me", "promptSubmit": "Go"}}"#);
         let mut warnings = Vec::new();
@@ -220,7 +220,7 @@ mod tests {
         let index = load(&source, &mut warnings);
 
         assert_eq!(index.default_extra.popup_close.as_deref(), Some("Close me"));
-        assert_eq!(index.default_extra.prompt_submit.as_deref(), Some("Go"));
+        assert!(warnings.is_empty());
     }
 
     #[test]

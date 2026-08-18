@@ -31,14 +31,12 @@ pub struct EdgewareMood {
 }
 
 /// `Default`-only fields, with no Python-style backfill: `None` unless the pack's own JSON
-/// explicitly set them. Needed because both fields fold into behaviour.json fields
-/// (`Content.captions` / `PromptSettings.submit_label`) that must stay unset -- not Edgeware's
-/// own boilerplate ("I Submit <3") -- when the pack author never touched them, per the schema's
-/// "no defaults injection" principle.
+/// explicitly set them. Needed because `popup_close` folds into a behaviour.json field
+/// (`Content.captions`) that must stay unset -- not Edgeware's own boilerplate ("I Submit <3")
+/// -- when the pack author never touched it, per the schema's "no defaults injection" principle.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DefaultExtra {
     pub popup_close: Option<String>,
-    pub prompt_submit: Option<String>,
 }
 
 /// The unified internal model both the modern (`index.json`) and legacy (`captions.json` +

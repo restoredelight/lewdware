@@ -12,6 +12,9 @@
 	import { tick } from 'svelte';
 
 	const groups = $derived(store.behaviour!.content.content_groups);
+	const availableToggleTags = $derived(
+		store.allTags.filter((tag) => !groups.some((group) => group.tags.includes(tag)))
+	);
 	// Adding or removing a group moves every later index, so those edits replace the array whole
 	// rather than addressing one entry.
 	const GROUPS = 'content.content_groups';
@@ -43,8 +46,7 @@
 		await revealNewGroup();
 	}
 
-	async function quickCreateFromTag() {
-		const tag = quickCreateTag;
+	async function quickCreateFromTag(tag: string) {
 		if (!tag) return;
 		groups.push({
 			id: tag,
@@ -78,24 +80,39 @@
 </script>
 
 <section class="flex flex-col gap-3" aria-label="Content groups">
-	{#if groups.length > 0}
-		<div
-			class="border-border bg-bg sticky top-0 z-10 flex items-center justify-between gap-3 border-y py-2"
-		>
-			<span class="ui-metadata">{groups.length} {groups.length === 1 ? 'item' : 'items'}</span>
+	<div
+		class="border-border bg-bg sticky top-0 z-10 flex items-center justify-between gap-3 border-y py-2"
+	>
+		<span class="ui-metadata">{groups.length} {groups.length === 1 ? 'item' : 'items'}</span>
+		<div class="flex flex-wrap items-center justify-end gap-2">
+			{#if availableToggleTags.length > 0}
+				<Select
+					class="w-48"
+					size="compact"
+					hideLabel
+					label="Make an existing tag toggleable"
+					value={quickCreateTag}
+					options={[
+						{ value: '', label: 'Make tag toggleable…' },
+						...availableToggleTags.map((tag) => ({ value: tag, label: tag }))
+					]}
+					onchange={(value) => {
+						quickCreateTag = value;
+						void quickCreateFromTag(value);
+					}}
+				/>
+			{/if}
 			<Button size="compact" onclick={addGroup}
 				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add group</Button
 			>
 		</div>
-	{/if}
+	</div>
 
 	<div class="flex flex-col gap-2" bind:this={listElement}>
 		{#if groups.length === 0}
 			<EmptyState
 				title="No content groups yet"
 				description="Create a group when you want people to opt in or out of related tagged content."
-				actionLabel="Add content group"
-				onclick={addGroup}
 			/>
 		{/if}
 		{#each groups as group, index}
@@ -106,6 +123,7 @@
 						size="compact"
 						variant="destructive"
 						class="!h-7"
+						ariaLabel={`Remove group ${index + 1}: ${group.label}`}
 						onclick={() => removeGroup(index)}>Remove</Button
 					>
 				</div>
@@ -155,29 +173,6 @@
 				</label>
 			</Card>
 		{/each}
-	</div>
-
-	<div class="flex items-center gap-2">
-		{#if groups.length > 0}<Button size="compact" onclick={addGroup}
-				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add group</Button
-			>{/if}
-
-		{#if store.allTags.length > 0}
-			<span class="text-muted text-xs">or</span>
-			<Select
-				class="w-48"
-				size="compact"
-				hideLabel
-				label="Tag to make toggleable"
-				value={quickCreateTag}
-				options={[
-					{ value: '', label: 'Make a tag toggleable…' },
-					...store.allTags.map((tag) => ({ value: tag, label: tag }))
-				]}
-				onchange={(value) => (quickCreateTag = value)}
-			/>
-			<Button size="compact" onclick={quickCreateFromTag} disabled={!quickCreateTag}>Create</Button>
-		{/if}
 	</div>
 </section>
 

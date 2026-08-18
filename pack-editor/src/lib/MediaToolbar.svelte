@@ -99,7 +99,7 @@
 				onclick={toggle}
 				aria-haspopup="menu"
 				aria-expanded={open}
-				class="flex h-8 items-center gap-1.5 rounded border px-2.5 text-xs font-medium transition-colors {store
+				class="flex h-8 items-center gap-1.5 rounded border px-2.5 text-xs font-medium transition-colors hover:cursor-pointer {store
 					.mediaTab.tagFilter.size
 					? 'border-accent text-accent-foreground bg-accent/10'
 					: 'border-border text-text bg-surface hover:bg-surface-2'}"
@@ -154,7 +154,7 @@
 				onclick={toggle}
 				aria-haspopup="menu"
 				aria-expanded={open}
-				class="flex h-8 items-center gap-1.5 rounded border px-2.5 text-xs font-medium transition-colors {store
+				class="flex h-8 items-center gap-1.5 rounded border px-2.5 text-xs font-medium transition-colors hover:cursor-pointer {store
 					.mediaTab.artistFilter.size
 					? 'border-accent text-accent-foreground bg-accent/10'
 					: 'border-border text-text bg-surface hover:bg-surface-2'}"

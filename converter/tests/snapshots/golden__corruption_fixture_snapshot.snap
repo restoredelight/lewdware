@@ -42,8 +42,6 @@ behaviour:
         tags:
           - corrupted
     prompts: []
-    prompt_settings:
-      submit_label: ~
     notifications: []
     subliminals: []
     web_links: []

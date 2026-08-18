@@ -25,6 +25,7 @@ class AudioPlayback {
 	failedId = $state<number | null>(null);
 
 	#element: HTMLAudioElement | null = null;
+	#frame: number | null = null;
 
 	// Built on first use, never at module scope: this module is imported during prerendering, where
 	// there is no `Audio`.
@@ -32,22 +33,58 @@ class AudioPlayback {
 		if (this.#element) return this.#element;
 		const element = new Audio();
 		element.preload = 'none';
-		element.addEventListener('play', () => (this.playing = true));
-		element.addEventListener('pause', () => (this.playing = false));
+		element.addEventListener('play', () => {
+			this.playing = true;
+			this.#tick();
+		});
+		element.addEventListener('pause', () => {
+			this.playing = false;
+			this.#untick();
+			this.position = element.currentTime;
+		});
 		element.addEventListener('ended', () => {
 			this.playing = false;
+			this.#untick();
 			this.position = 0;
 		});
-		element.addEventListener('timeupdate', () => (this.position = element.currentTime));
+		// `timeupdate` only fires a few times a second, which is enough to keep a paused or stalled
+		// player honest but far too coarse for a seekbar; while playing, `#tick` takes over.
+		element.addEventListener('timeupdate', () => {
+			if (this.#frame === null) this.position = element.currentTime;
+		});
+		element.addEventListener('seeked', () => (this.position = element.currentTime));
 		element.addEventListener('durationchange', () => {
 			this.measured = audioDuration(element.duration);
 		});
 		element.addEventListener('error', () => {
 			this.failedId = this.activeId;
 			this.playing = false;
+			this.#untick();
 		});
 		this.#element = element;
 		return element;
+	}
+
+	/** Follows `currentTime` per frame, so the seekbar moves with the audio rather than in the
+	 * quarter-second jumps `timeupdate` reports. Runs only while something is playing. */
+	#tick() {
+		if (this.#frame !== null) return;
+		const step = () => {
+			const element = this.#element;
+			if (!element || element.paused) {
+				this.#frame = null;
+				return;
+			}
+			this.position = element.currentTime;
+			this.#frame = requestAnimationFrame(step);
+		};
+		this.#frame = requestAnimationFrame(step);
+	}
+
+	#untick() {
+		if (this.#frame === null) return;
+		cancelAnimationFrame(this.#frame);
+		this.#frame = null;
 	}
 
 	#load(id: number, src: string): HTMLAudioElement {
@@ -96,6 +133,7 @@ class AudioPlayback {
 	/** Leaves the list. The element is kept, muted and all, for the next visit. */
 	stop() {
 		this.#element?.pause();
+		this.#untick();
 		this.activeId = null;
 		this.playing = false;
 		this.position = 0;

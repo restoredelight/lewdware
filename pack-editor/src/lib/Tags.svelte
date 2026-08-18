@@ -1,20 +1,23 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Icon, MagnifyingGlass, PencilSquare, Trash } from 'svelte-hero-icons';
+	import { Icon, PencilSquare, Trash } from 'svelte-hero-icons';
 	import Button from '$ui/Button.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import Field from '$ui/Field.svelte';
 	import Select from '$ui/Select.svelte';
 	import { api } from './api.js';
 	import { adoptBehaviour, ensureBehaviour } from './behaviourSave.svelte.js';
-	import { store } from './store.svelte.js';
+	import MediaScopeMenu from './MediaScopeMenu.svelte';
+	import { NO_MEDIA_SCOPE_COUNTS, store } from './store.svelte.js';
 	import { behaviourTags, tagUsage } from './tagReferences.js';
 	import type { TagSummary } from './types.js';
 	import { history } from './history.svelte.js';
 	import EmptyState from '$ui/EmptyState.svelte';
+	import { clampScroll } from '$ui/scroll';
 
 	let summaries = $state<TagSummary[]>([]);
 	let summariesLoaded = $state(false);
+	let loadError = $state<string | null>(null);
 	let query = $state('');
 	let editing = $state<string | null>(null);
 	let mode = $state<'rename' | 'merge'>('rename');
@@ -25,20 +28,39 @@
 
 	const allRows = $derived.by(() => {
 		if (!store.behaviour) return [];
-		const media = new Map(summaries.map((item) => [item.name, item.media_count]));
-		const names = new Set([...store.allTags, ...media.keys(), ...behaviourTags(store.behaviour)]);
+		const counts = store.mediaCountsByTag;
+		const names = new Set([
+			...store.allTags,
+			...summaries.map((item) => item.name),
+			...behaviourTags(store.behaviour)
+		]);
 		return [...names]
-			.map((name) => ({ name, media: media.get(name) ?? 0, ...tagUsage(store.behaviour!, name) }))
+			.map((name) => ({
+				name,
+				media: counts.get(name) ?? NO_MEDIA_SCOPE_COUNTS,
+				...tagUsage(store.behaviour!, name)
+			}))
 			.sort((a, b) => a.name.localeCompare(b.name));
 	});
 	const rows = $derived(
 		allRows.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase()))
 	);
 
-	onMount(async () => {
-		await ensureBehaviour();
-		summaries = await api.getTagSummaries();
-		summariesLoaded = true;
+	async function load() {
+		summariesLoaded = false;
+		loadError = null;
+		try {
+			if (!(await ensureBehaviour())) throw new Error('The pack behaviour could not be loaded.');
+			summaries = await api.getTagSummaries();
+		} catch (cause) {
+			loadError = String(cause);
+		} finally {
+			summariesLoaded = true;
+		}
+	}
+
+	onMount(() => {
+		void load();
 	});
 
 	function begin(tag: string, nextMode: 'rename' | 'merge') {
@@ -94,13 +116,9 @@
 			busy = false;
 		}
 	}
-
-	function showMedia(tag: string) {
-		store.showMediaFor({ tag });
-	}
 </script>
 
-<div class="page">
+<div class="page" use:clampScroll>
 	<header>
 		<div>
 			<h2 class="ui-page-title">Tags</h2>
@@ -117,7 +135,14 @@
 	{#if error}<div class="error" role="alert">
 			{error}<button onclick={() => (error = null)}>Dismiss</button>
 		</div>{/if}
-	{#if !store.behaviour || !summariesLoaded}<p class="loading">Loading…</p>
+	{#if !summariesLoaded}<p class="loading">Loading…</p>
+	{:else if loadError || !store.behaviour}
+		<EmptyState
+			title="Could not load tags"
+			description={loadError ?? 'The pack behaviour could not be loaded.'}
+			actionLabel="Try again"
+			onclick={load}
+		/>
 	{:else if rows.length === 0}
 		<EmptyState
 			title={query ? 'No matching tags' : 'No tags yet'}
@@ -128,23 +153,23 @@
 			onclick={() => (query ? (query = '') : store.setActiveView('all-media'))}
 		/>
 	{:else}
-		<div class="table" aria-label="Pack tags">
-			<div class="table-head">
-				<span>Tag</span><span>Media</span><span>Content</span><span>Experience</span><span></span>
+		<div class="table" role="table" aria-label="Pack tags">
+			<div class="table-head" role="row">
+				<span role="columnheader" aria-label="Tag">Tag</span><span
+					role="columnheader"
+					aria-label="Media">Media</span
+				><span role="columnheader" aria-label="Content">Content</span><span
+					role="columnheader"
+					aria-label="Experience">Experience</span
+				><span class="actions-heading" role="columnheader" aria-label="Actions">Actions</span>
 			</div>
 			{#each rows as row (row.name)}
-				<div class="tag-row">
-					<strong>{row.name}</strong><span>{row.media}</span><span>{row.content}</span><span
-						>{row.experience}</span
-					>
-					<div class="row-actions">
-						<Button
-							size="compact"
-							variant="quiet"
-							onclick={() => showMedia(row.name)}
-							disabled={row.media === 0}
-							><Icon src={MagnifyingGlass} mini size="14px" /> Media</Button
-						>
+				<div class="tag-row" role="row">
+					<div role="cell"><strong>{row.name}</strong></div>
+					<span role="cell">{row.media['all-media']}</span><span role="cell">{row.content}</span
+					><span role="cell">{row.experience}</span>
+					<div class="row-actions" role="cell">
+						<MediaScopeMenu filter={{ tag: row.name }} counts={row.media} />
 						<Button size="compact" variant="quiet" onclick={() => begin(row.name, 'rename')}
 							><Icon src={PencilSquare} mini size="14px" /> Rename</Button
 						>
@@ -161,8 +186,8 @@
 					</div>
 				</div>
 				{#if editing === row.name}
-					<div class="edit-row">
-						<div>
+					<div class="edit-row" role="row">
+						<div role="cell">
 							<strong
 								>{mode === 'rename' ? `Rename “${row.name}”` : `Merge “${row.name}” into`}</strong
 							><small
@@ -171,23 +196,25 @@
 									: 'References will be combined and duplicates removed.'}</small
 							>
 						</div>
-						{#if mode === 'rename'}<Field
-								label="New tag name"
-								hideLabel
-								{value}
-								placeholder="New tag name"
-								oninput={(next) => (value = next)}
-							/>
-						{:else}<Select
-								label="Target tag"
-								hideLabel
-								{value}
-								options={allRows
-									.filter((item) => item.name !== row.name)
-									.map((item) => ({ value: item.name, label: item.name }))}
-								onchange={(next) => (value = next)}
-							/>{/if}
-						<div class="edit-actions">
+						<div role="cell">
+							{#if mode === 'rename'}<Field
+									label="New tag name"
+									hideLabel
+									{value}
+									placeholder="New tag name"
+									oninput={(next) => (value = next)}
+								/>
+							{:else}<Select
+									label="Target tag"
+									hideLabel
+									{value}
+									options={allRows
+										.filter((item) => item.name !== row.name)
+										.map((item) => ({ value: item.name, label: item.name }))}
+									onchange={(next) => (value = next)}
+								/>{/if}
+						</div>
+						<div class="edit-actions" role="cell">
 							<Button size="compact" onclick={() => (editing = null)}>Cancel</Button><Button
 								size="compact"
 								variant="primary"
@@ -208,7 +235,7 @@
 	{@const usage = rows.find((row) => row.name === deleting)}
 	<Dialog
 		title={`Delete “${deleting}”?`}
-		description={`This removes the tag from ${usage?.media ?? 0} media item(s) and ${usage?.total ?? 0} Content/Experience reference(s). No media files will be deleted.`}
+		description={`This removes the tag from ${usage?.media['all-media'] ?? 0} media item(s) and ${usage?.total ?? 0} Content/Experience reference(s). No media files will be deleted.`}
 		buttons={[
 			{ label: 'Cancel', onclick: () => (deleting = null) },
 			{ label: 'Delete tag', destructive: true, onclick: confirmDelete }
@@ -335,8 +362,13 @@
 		.tag-row {
 			grid-template-columns: minmax(100px, 1fr) 48px 58px 68px;
 		}
-		.table-head span:last-child {
-			display: none;
+		.table-head .actions-heading {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			overflow: hidden;
+			clip: rect(0, 0, 0, 0);
+			white-space: nowrap;
 		}
 		.row-actions {
 			grid-column: 1 / -1;

@@ -28,8 +28,9 @@
 	import { taskFeedback } from './taskFeedback.svelte.js';
 	import type { MediaFile } from './types.js';
 
-	/** Fixed, and the style below holds it to that: the virtual window is index arithmetic. */
+	/** Both row variants are fixed: the virtual window remains index arithmetic. */
 	const ROW_H = 58;
+	const COMPACT_ROW_H = 96;
 	/** The expanded row's panel, likewise fixed so the arithmetic below stays arithmetic. */
 	const PANEL_H = 132;
 	const BUFFER = 4;
@@ -39,6 +40,7 @@
 	let container = $state<HTMLElement | null>(null);
 	let scrollTop = $state(0);
 	let viewH = $state(0);
+	let viewW = $state(0);
 	let anchorId = $state<number | null>(null);
 	let announcement = $state('');
 	let roleBusy = $state(false);
@@ -66,7 +68,8 @@
 	// The arithmetic lives in `virtualRows.ts` and is tested there: an off-by-one in it does not
 	// throw, it renders a gap or scrolls to the wrong row, and only for lists long enough to
 	// virtualise -- which is exactly where nobody is looking.
-	const geometry = $derived({ rowHeight: ROW_H, panelHeight: PANEL_H, expandedIndex });
+	const rowHeight = $derived(viewW > 0 && viewW <= 680 ? COMPACT_ROW_H : ROW_H);
+	const geometry = $derived({ rowHeight, panelHeight: PANEL_H, expandedIndex });
 	const listHeight = $derived(totalHeight(files.length, geometry));
 	const rowOffset = (index: number) => offsetOf(index, geometry);
 
@@ -102,11 +105,27 @@
 		store.mediaRevealId = null;
 	});
 
+	// Where the pointer went down, for `fromControl` below. Set for every press anywhere in the
+	// list, so it is never stale by the time the click it belongs to arrives.
+	let pressOrigin: HTMLElement | null = null;
+	// A click is dispatched on the nearest common ancestor of where the press started and where it
+	// ended, so a drag that begins on a row control and ends anywhere else -- dragging the seekbar
+	// past the end of its track, most often -- arrives as a click on the row, or on the list when
+	// the pointer left the row. Read as a plain click, that re-selected the row and toggled its
+	// panel shut mid-drag, or cleared the selection. The gesture belongs to the control it started
+	// on either way, so ask where it started as well as where it landed.
+	function fromControl(event: MouseEvent) {
+		return Boolean(
+			(event.target as HTMLElement).closest('button, input') ??
+				pressOrigin?.closest('button, input')
+		);
+	}
+
 	function select(file: MediaFile, event: MouseEvent) {
 		event.stopPropagation();
 		// The row's own controls are not selection gestures: playing a sound or changing its role
 		// while twenty rows are selected must not collapse that selection to the row clicked.
-		if ((event.target as HTMLElement).closest('button, input')) return;
+		if (fromControl(event)) return;
 		if (event.shiftKey && anchorId != null) store.selectRange(anchorId, file.id);
 		else if (event.ctrlKey || event.metaKey) store.toggleSelection(file.id);
 		else {
@@ -119,6 +138,12 @@
 		}
 		if (!event.shiftKey) anchorId = file.id;
 		announceSelection();
+		// Focus belongs to the list: it is what `aria-activedescendant` points *from* and what the
+		// keyboard handler is attached to. A row carries `tabindex="-1"` so it can be a legal
+		// activedescendant, which also makes it focusable by mouse -- and a row left holding focus
+		// draws a focus ring of its own on the next key press (Escape, most visibly), clipped on
+		// both sides by the list it is absolutely positioned in.
+		container?.focus({ preventScroll: true });
 	}
 
 	// One row, not the selection: the row control is attached to a file the author is pointing at,
@@ -145,7 +170,7 @@
 		if (!container) return;
 		const top = rowOffset(index);
 		if (top < scrollTop) container.scrollTop = top;
-		else if (top + ROW_H > scrollTop + viewH) container.scrollTop = top + ROW_H - viewH;
+		else if (top + rowHeight > scrollTop + viewH) container.scrollTop = top + rowHeight - viewH;
 	}
 
 	function move(key: string, extend: boolean, preserveSelection: boolean) {
@@ -229,9 +254,14 @@
 		tabindex="0"
 		bind:this={container}
 		bind:clientHeight={viewH}
+		bind:clientWidth={viewW}
 		onscroll={(event) => (scrollTop = event.currentTarget.scrollTop)}
 		onkeydown={handleKeydown}
-		onclick={() => {
+		onpointerdown={(event) => (pressOrigin = event.target as HTMLElement)}
+		onclick={(event) => {
+			// A drag off the end of a row's seekbar, or of the panel's volume slider, lands here as a
+			// click on empty space. It is not one.
+			if (fromControl(event)) return;
 			store.clearSelection();
 			store.mediaTab.gridActiveId = null;
 			anchorId = null;
@@ -317,7 +347,7 @@
 					<div
 						id={`audio-details-${file.id}`}
 						class="details"
-						style={`transform: translateY(${rowOffset(index) + ROW_H}px)`}
+						style={`transform: translateY(${rowOffset(index) + rowHeight}px)`}
 						onclick={(event) => event.stopPropagation()}
 						onkeydown={() => {}}
 					>
@@ -396,8 +426,10 @@
 		font-size: 11px;
 	}
 	.audio-list {
+		container-type: inline-size;
 		min-height: 0;
 		flex: 1;
+		overflow-x: hidden;
 		overflow-y: auto;
 		background: var(--ui-bg);
 	}
@@ -424,6 +456,13 @@
 	}
 	.audio-row:hover {
 		background: var(--ui-surface);
+	}
+	/* A row is an `aria-activedescendant` target, never a focus target -- `select` hands focus back
+	   to the list. Belt and braces for any route that still lands on one: a ring here would be drawn
+	   outside a box that spans the full width of a clipping scroll container, so it comes out cut
+	   off on both sides. */
+	.audio-row:focus {
+		outline: none;
 	}
 	.audio-row.selected {
 		background: var(--ui-surface-raised);
@@ -582,12 +621,35 @@
 		place-items: center;
 		background: var(--ui-bg);
 	}
-	@media (max-width: 620px) {
+	@container (max-width: 680px) {
+		.audio-row {
+			display: grid;
+			height: 96px;
+			grid-template-columns: minmax(0, 1fr) auto 26px;
+			grid-template-rows: 32px 42px;
+			column-gap: 8px;
+			row-gap: 6px;
+		}
 		.identity {
-			width: 40%;
+			width: auto;
+			min-width: 0;
+		}
+		.role {
+			grid-column: 2;
+			grid-row: 1;
 		}
 		.role button {
 			padding: 3px 5px;
+		}
+		.transport {
+			width: 100%;
+			grid-column: 1 / 3;
+			grid-row: 2;
+		}
+		.disclosure {
+			align-self: center;
+			grid-column: 3;
+			grid-row: 1 / 3;
 		}
 	}
 </style>

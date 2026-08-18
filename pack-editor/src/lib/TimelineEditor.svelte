@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Icon, Plus } from 'svelte-hero-icons';
 	import Button from '$ui/Button.svelte';
+	import { clampScroll } from '$ui/scroll';
 	import Dialog from '$ui/Dialog.svelte';
 	import Field from '$ui/Field.svelte';
 	import Select from '$ui/Select.svelte';
@@ -23,7 +24,7 @@
 
 	const stages = $derived(store.behaviour!.experience!.timeline.stages);
 	const transitions = $derived(store.behaviour!.experience!.timeline.transitions);
-	let activeId = $state('');
+	let activeId = $state(store.experienceActiveId ?? '');
 	let removing = $state<Stage | null>(null);
 	let mainEl = $state<HTMLElement>();
 	let audioPickerStage = $state<string | null>(null);
@@ -32,6 +33,9 @@
 	$effect(() => {
 		activeId;
 		mainEl?.scrollTo(0, 0);
+	});
+	$effect(() => {
+		store.experienceActiveId = activeId || null;
 	});
 	$effect(() => {
 		const target = store.experienceTargetStageId;
@@ -57,13 +61,21 @@
 	// What this stage's wallpaper would be if it sets none: the nearest earlier stage that sets
 	// one, or the pack's own. A stage's wallpaper is an absolute write, so "empty" isn't "none" --
 	// it's "whatever is already up", and the author can only judge that if we name it.
-	const inheritedWallpaper = $derived.by(() => {
+	const inheritedWallpaperId = $derived.by(() => {
 		for (let index = activeIndex - 1; index >= 0; index--) {
-			const name = stages[index].content.wallpaper;
-			if (name) return name;
+			const id = stages[index].content.wallpaper;
+			if (id != null) return id;
 		}
 		return store.behaviour?.content.wallpaper;
 	});
+	// The behaviour stores a media id; the author knows the file by its name, so resolve it against
+	// the file grid. A file that has since left the pack resolves to nothing, and we fall back to
+	// the generic wording rather than naming an id.
+	const inheritedWallpaper = $derived(
+		inheritedWallpaperId == null
+			? undefined
+			: store.files.find((file) => file.id === inheritedWallpaperId)?.file_name
+	);
 	const next = $derived(activeIndex >= 0 ? stages[activeIndex + 1] : undefined);
 	const outgoing = $derived(
 		stage && next
@@ -293,7 +305,7 @@
 
 <section class="layout">
 	<aside>
-		<div class="tabs">
+		<div class="tabs" use:clampScroll>
 			<StageTabs
 				{stages}
 				{transitions}
@@ -310,7 +322,7 @@
 			onclick={addStage}><Icon src={Plus} mini width="auto" height="25px" />Add stage</Button
 		>
 	</aside>
-	{#if stage}<main bind:this={mainEl}>
+	{#if stage}<main bind:this={mainEl} use:clampScroll>
 			<div class="panel">
 				<header>
 					<div>

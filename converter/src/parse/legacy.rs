@@ -149,17 +149,14 @@ fn load_prompts(source: &dyn PackSource, index: &mut EdgewareIndex, warnings: &m
         return;
     };
 
-    // `commandtext` (-> prompt_command) and `minLen`/`maxLen` are dropped silently, same as the
-    // modern layout's `promptCommand`/`promptMinLength`/`promptMaxLength` -- see
-    // `parse::modern` for why. `freqList` (per-mood weighting) is dropped silently too, for a
-    // different reason: reading `EdgewarePlusPlus/edgeware/src/pack/load.py`'s
-    // `load_index_fallback` shows it's validated but never actually assigned to anything --
-    // it's dead in upstream Edgeware++ itself, so converting it would warn about a feature that
-    // never did anything.
+    // `commandtext` (-> prompt_command), `minLen`/`maxLen` and `subtext` (the submit-button
+    // label, which is always "Submit" here) are dropped silently, same as the modern layout's
+    // `promptCommand`/`promptMinLength`/`promptMaxLength`/`promptSubmit` -- see `parse::modern`
+    // for why. `freqList` (per-mood weighting) is dropped silently too, for a different reason:
+    // reading `EdgewarePlusPlus/edgeware/src/pack/load.py`'s `load_index_fallback` shows it's
+    // validated but never actually assigned to anything -- it's dead in upstream Edgeware++
+    // itself, so converting it would warn about a feature that never did anything.
     index.default.prompts = as_string_array(obj.get("default"));
-    if let Some(prompt_submit) = as_string(obj.get("subtext")) {
-        index.default_extra.prompt_submit = Some(prompt_submit);
-    }
 
     for name in as_string_array(obj.get("moods")) {
         if name == "default" {
@@ -278,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_json_default_and_moods_ignoring_freq_and_lengths() {
+    fn prompt_json_default_and_moods_ignoring_freq_lengths_and_subtext() {
         let (_dir, source) = source_with(&[(
             "prompt.json",
             r#"{
@@ -294,14 +291,11 @@ mod tests {
         let index = load(&source, &mut warnings);
 
         assert_eq!(index.default.prompts, vec!["default prompt".to_string()]);
-        assert_eq!(
-            index.default_extra.prompt_submit.as_deref(),
-            Some("I Submit <3")
-        );
         let high = index.moods.iter().find(|m| m.name == "high").unwrap();
         assert_eq!(high.base.prompts, vec!["high prompt".to_string()]);
         // "default" in `moods` is skipped (already covered by the `default` key directly), and
-        // freqList/minLen/maxLen are dead/dropped -- no warnings at all.
+        // freqList/minLen/maxLen are dead/dropped -- as is `subtext`, since the prompt dialog's
+        // button is always "Submit". No warnings at all.
         assert!(warnings.is_empty());
     }
 

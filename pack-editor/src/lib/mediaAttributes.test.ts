@@ -25,7 +25,6 @@ function behaviour(): Behaviour {
 			content_groups: [],
 			captions: [],
 			prompts: [],
-			prompt_settings: { submit_label: 'Submit' },
 			notifications: [],
 			subliminals: [],
 			web_links: []

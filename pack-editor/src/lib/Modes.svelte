@@ -15,9 +15,11 @@
 	} from './metadataSave.svelte.js';
 	import { store } from './store.svelte.js';
 	import type { EmbeddedMode, RecommendedMode } from './types.js';
+	import { clampScroll } from '$ui/scroll';
 
 	let modes = $state<EmbeddedMode[]>([]);
 	let loaded = $state(false);
+	let loadError = $state<string | null>(null);
 	let adding = $state(false);
 	let addingMode = $state(false);
 	let removing = $state<EmbeddedMode | null>(null);
@@ -43,7 +45,9 @@
 		...modes.map((mode) => ({ value: `pack:${mode.id}`, label: mode.name }))
 	]);
 
-	onMount(async () => {
+	async function load() {
+		loaded = false;
+		loadError = null;
 		try {
 			const [loadedModes, metadata] = await Promise.all([
 				api.getModes(),
@@ -54,10 +58,14 @@
 			initializeMetadataHistory(metadata);
 			await ensureBehaviour();
 		} catch (cause) {
-			error = String(cause);
+			loadError = String(cause);
 		} finally {
 			loaded = true;
 		}
+	}
+
+	onMount(() => {
+		void load();
 	});
 
 	function setRecommendation(value: string) {
@@ -116,7 +124,7 @@
 	}
 </script>
 
-<div class="page">
+<div class="page" use:clampScroll>
 	<header>
 		<div>
 			<h2 class="ui-page-title">Modes</h2>
@@ -135,25 +143,32 @@
 			<span>{error}</span><button onclick={() => (error = null)}>Dismiss</button>
 		</div>{/if}
 
-	<section class="recommendation">
-		<div>
-			<h3>Recommended mode</h3>
-			<p>
-				The config app preselects this mode when someone opens the pack. They can still choose
-				another mode.
-			</p>
-		</div>
-		<Select
-			class="mode-select"
-			label="Recommended mode"
-			hideLabel
-			value={recommendedValue}
-			options={recommendationOptions}
-			onchange={setRecommendation}
-		/>
-	</section>
+	{#if store.metadata}<section class="recommendation">
+			<div>
+				<h3>Recommended mode</h3>
+				<p>
+					The config app preselects this mode when someone opens the pack. They can still choose
+					another mode.
+				</p>
+			</div>
+			<Select
+				class="mode-select"
+				label="Recommended mode"
+				hideLabel
+				value={recommendedValue}
+				options={recommendationOptions}
+				onchange={setRecommendation}
+			/>
+		</section>{/if}
 
 	{#if !loaded}<p class="loading">Loading…</p>
+	{:else if loadError}
+		<EmptyState
+			title="Could not load modes"
+			description={loadError}
+			actionLabel="Try again"
+			onclick={load}
+		/>
 	{:else if modes.length === 0}
 		<EmptyState
 			title="No custom modes"

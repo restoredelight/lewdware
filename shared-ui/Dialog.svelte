@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 	import Button from './Button.svelte';
+	import { clampScroll } from './scroll.js';
 
 	export type DialogButton = {
 		label: string;
@@ -14,9 +15,10 @@
 		title: string;
 		description: string;
 		buttons: DialogButton[];
+		children?: Snippet;
 		onclose?: () => void;
 	};
-	let { title, description, buttons, onclose }: Props = $props();
+	let { title, description, buttons, children, onclose }: Props = $props();
 	let panel: HTMLDivElement;
 	const uid = $props.id();
 	const titleId = `dialog-title-${uid}`;
@@ -89,6 +91,7 @@
 		</header>
 		<div class="body">
 			<p id={descriptionId}>{description}</p>
+			{#if children}<div class="content" use:clampScroll>{@render children()}</div>{/if}
 			<div class="actions">
 				{#each buttons as action}
 					<span>
@@ -121,7 +124,10 @@
 	}
 	.panel {
 		position: relative;
+		display: flex;
 		width: min(400px, calc(100vw - 48px));
+		max-height: min(680px, calc(100dvh - 48px));
+		flex-direction: column;
 		border: 1px solid var(--ui-border-strong);
 		border-radius: var(--ui-radius-md);
 		background: var(--ui-surface);
@@ -198,13 +204,21 @@
 		height: 12px;
 	}
 	.body {
+		display: flex;
+		min-height: 0;
 		padding: 16px;
+		flex-direction: column;
 	}
 	p {
 		margin: 0 0 18px;
 		color: var(--ui-muted);
 		font-size: 13px;
 		line-height: 1.45;
+	}
+	.content {
+		min-height: 0;
+		margin-bottom: 18px;
+		overflow-y: auto;
 	}
 	.actions {
 		display: flex;

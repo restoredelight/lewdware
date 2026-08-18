@@ -28,6 +28,8 @@ const MIGRATION_8: &str =
     include_str!("../../../shared/src/migrations/0008_explicit_timeline_media.sql");
 const MIGRATION_9: &str =
     include_str!("../../../shared/src/migrations/0009_prompt_timeout_multiplier.sql");
+const MIGRATION_10: &str =
+    include_str!("../../../shared/src/migrations/0010_notification_summary.sql");
 
 const MIGRATIONS: &[&str] = &[
     MIGRATION_1,
@@ -39,6 +41,7 @@ const MIGRATIONS: &[&str] = &[
     MIGRATION_7,
     MIGRATION_8,
     MIGRATION_9,
+    MIGRATION_10,
 ];
 
 /// The behaviour document's structural half (see `shared::behaviour::storage`), in an order that

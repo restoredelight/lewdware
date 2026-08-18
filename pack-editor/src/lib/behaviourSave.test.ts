@@ -31,7 +31,6 @@ const document = (caption = 'first'): Behaviour =>
 			content_groups: [],
 			captions: [{ text: caption, tags: [] }],
 			prompts: [],
-			prompt_settings: { submit_label: null },
 			notifications: [],
 			subliminals: [],
 			web_links: []
@@ -175,8 +174,8 @@ describe('editing the behaviour document', () => {
 	it('sends the open batch when the author moves on to another action', async () => {
 		const save = await scheduler();
 		typeCaption(save, 'typed');
-		mocks.store.behaviour!.content.prompt_settings.submit_label = 'Go';
-		save.editBehaviourField('content.prompt_settings.submit_label', 'Edit submit button label');
+		mocks.store.behaviour!.content.wallpaper = 7;
+		save.editBehaviourField('content.wallpaper', 'Set wallpaper');
 
 		await vi.advanceTimersByTimeAsync(0);
 		expect(mocks.api.editBehaviour).toHaveBeenCalledOnce();
@@ -189,8 +188,8 @@ describe('editing the behaviour document', () => {
 
 		await vi.advanceTimersByTimeAsync(500);
 		expect(mocks.api.editBehaviour).toHaveBeenLastCalledWith(
-			[{ path: 'content.prompt_settings.submit_label', value: 'Go' }],
-			'Edit submit button label',
+			[{ path: 'content.wallpaper', value: 7 }],
+			'Set wallpaper',
 			[],
 			[]
 		);

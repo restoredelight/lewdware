@@ -135,7 +135,9 @@
 			store.setActiveView(rememberedMediaView);
 		}
 		mediaViewRestored = true;
-		const narrowQuery = window.matchMedia('(max-width: 760px)');
+		// The app supports an 800 px-wide window. Collapse the global navigation before the
+		// editor and inspector panes become too narrow to lay out their own controls.
+		const narrowQuery = window.matchMedia('(max-width: 1000px)');
 		const updateNarrowWindow = () => (narrowWindow = narrowQuery.matches);
 		updateNarrowWindow();
 		narrowQuery.addEventListener('change', updateNarrowWindow);
@@ -486,7 +488,7 @@
 	}
 </script>
 
-<div class="bg-bg text-text flex h-screen flex-col select-none">
+<div class="bg-bg text-text flex h-full flex-col select-none">
 	<!-- Toolbar -->
 	<header class="bg-surface border-border flex h-11 shrink-0 items-center gap-2 border-b px-3">
 		<div class="flex items-center gap-0">
@@ -564,8 +566,8 @@
 					aria-label="More pack actions"
 					aria-haspopup="menu"
 					aria-expanded={open}
-					class="text-muted hover:text-text hover:bg-surface-2 grid h-8 w-8 place-items-center rounded"
-					><Icon src={EllipsisVertical} mini size="16px" /></button
+					class="text-muted hover:text-text hover:bg-surface-2 hover:cursor-pointer grid h-8 w-8 place-items-center rounded"
+					><Icon src={EllipsisVertical} mini size="18px" /></button
 				>
 			{/snippet}
 			{#snippet children(close)}
@@ -588,7 +590,7 @@
 								close();
 								discard();
 							}}
-							class="hover:bg-bg w-full px-3 py-2 text-left text-xs text-[var(--ui-warning)] disabled:cursor-not-allowed disabled:opacity-40"
+							class="w-full px-3 py-2 text-left text-xs text-[var(--ui-danger)] hover:bg-[var(--ui-danger-bg)] disabled:cursor-not-allowed disabled:opacity-40"
 							>Discard changes</button
 						>{/if}
 					<div class="border-border my-1 border-t"></div>
@@ -598,8 +600,9 @@
 							close();
 							requestClosePack();
 						}}
-						class="w-full px-3 py-2 text-left text-xs text-[var(--ui-danger)] hover:bg-[var(--ui-danger-bg)]"
-						>Close pack</button
+						class="w-full px-3 py-2 text-left text-xs {store.packSaved
+							? 'hover:bg-bg'
+							: 'text-[var(--ui-danger)] hover:bg-[var(--ui-danger-bg)]'}">Close pack</button
 					>
 				</div>
 			{/snippet}

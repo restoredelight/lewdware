@@ -6083,34 +6083,22 @@ mod tests {
         let data_dir = tempdir().unwrap();
         let pack = new_test_pack(&tmp.path().join("noop.lwpack"), data_dir.path(), "Noop").await;
 
-        pack.edit_behaviour(
-            vec![Patch::new(
-                "content.prompt_settings.submit_label",
-                "Go".into(),
-            )],
-            "Edit submit label".to_string(),
-            vec![],
-            vec![],
-        )
-        .await
-        .unwrap();
-        let after_real_edit = pack.history_status().await.unwrap();
-        assert_eq!(
-            after_real_edit.undo_label.as_deref(),
-            Some("Edit submit label")
-        );
+        let caption = || {
+            Patch::new(
+                "content.captions",
+                serde_json::json!([{ "text": "typed", "tags": [] }]),
+            )
+        };
 
-        pack.edit_behaviour(
-            vec![Patch::new(
-                "content.prompt_settings.submit_label",
-                "Go".into(),
-            )],
-            "Edit submit label".to_string(),
-            vec![],
-            vec![],
-        )
-        .await
-        .unwrap();
+        pack.edit_behaviour(vec![caption()], "Edit caption".to_string(), vec![], vec![])
+            .await
+            .unwrap();
+        let after_real_edit = pack.history_status().await.unwrap();
+        assert_eq!(after_real_edit.undo_label.as_deref(), Some("Edit caption"));
+
+        pack.edit_behaviour(vec![caption()], "Edit caption".to_string(), vec![], vec![])
+            .await
+            .unwrap();
         let after_noop = pack.history_status().await.unwrap();
         assert_eq!(
             after_noop.undo_label, after_real_edit.undo_label,
@@ -6120,7 +6108,7 @@ mod tests {
         // One entry, not two: undoing once returns to the original document.
         pack.undo().await.unwrap();
         let behaviour = read_pack_behaviour(&pack).await;
-        assert_eq!(behaviour.content.prompt_settings.submit_label, None);
+        assert!(behaviour.content.captions.is_empty());
     }
 
     /// Leaving one stage can require a replacement tag for another stage that shared its only
@@ -6500,6 +6488,7 @@ mod tests {
                         text: format!("Caption number {index}, padded out to have some length."),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     })
                     .collect(),
                 ..Default::default()
@@ -6734,6 +6723,7 @@ mod tests {
                     text: "Obey.".to_string(),
                     tags: vec!["source".to_string(), "target".to_string()],
                     timeout_seconds: None,
+                    summary: None,
                 }],
                 ..Default::default()
             },
@@ -6774,6 +6764,7 @@ mod tests {
                     text: "Obey.".to_string(),
                     tags: vec!["old".to_string()],
                     timeout_seconds: None,
+                    summary: None,
                 }],
                 web_links: vec![WebLink {
                     url: "https://example.com".to_string(),
@@ -6841,6 +6832,7 @@ mod tests {
                         text: format!("Caption number {index}, padded out to have some length."),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     })
                     .collect(),
                 ..Default::default()
@@ -6897,6 +6889,7 @@ mod tests {
             text: "Obey.".to_string(),
             tags: vec!["old".to_string()],
             timeout_seconds: None,
+            summary: None,
         }];
         pack.replace_behaviour(behaviour.clone(), "Seed behaviour".to_string())
             .await
@@ -7024,6 +7017,7 @@ mod tests {
             text: "Obey.".to_string(),
             tags: vec!["source".into()],
             timeout_seconds: None,
+            summary: None,
         }];
         pack.replace_behaviour(before.clone(), "Seed behaviour".to_string())
             .await
@@ -7078,6 +7072,7 @@ mod tests {
             text: "Obey.".to_string(),
             tags: vec!["restore-me".into()],
             timeout_seconds: None,
+            summary: None,
         }];
         pack.replace_behaviour(before.clone(), "Seed behaviour".to_string())
             .await
@@ -7161,6 +7156,7 @@ mod tests {
             text: "Obey.".to_string(),
             tags: vec!["kinky".to_string()],
             timeout_seconds: None,
+            summary: None,
         });
         behaviour.content.web_links.push(WebLink {
             url: "https://duckduckgo.com/?q=".to_string(),

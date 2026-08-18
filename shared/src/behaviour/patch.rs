@@ -11,7 +11,7 @@
 //! edit to `content.captions` cannot disturb a wallpaper slot filled a moment earlier, and the
 //! author's action arrives with enough context to label its own undo entry.
 //!
-//! Paths are dot-separated: `content.prompt_settings.submit_label`,
+//! Paths are dot-separated: `content.captions.0.text`,
 //! `experience.timeline.stages.2.label`. A segment that parses as a number indexes an array;
 //! anything else is an object key. Structural changes (adding a caption, removing a stage,
 //! reordering) are expressed as a patch replacing the whole array -- coarse, but an array is a
@@ -183,11 +183,13 @@ mod tests {
                 text: "first".to_string(),
                 tags: vec![],
                 timeout_seconds: None,
+                summary: None,
             },
             TextItem {
                 text: "second".to_string(),
                 tags: vec!["a".to_string()],
                 timeout_seconds: None,
+                summary: None,
             },
         ];
         behaviour.content.content_groups = vec![ContentGroup {
@@ -274,8 +276,14 @@ mod tests {
 
     #[test]
     fn clears_an_optional_field_with_null() {
-        let patched = patch("content.prompt_settings.submit_label", Value::Null).unwrap();
-        assert_eq!(patched.content.prompt_settings.submit_label, None);
+        let mut behaviour = behaviour();
+        behaviour.content.wallpaper = Some(7);
+
+        let patched = behaviour
+            .patched(&[Patch::new("content.wallpaper", Value::Null)])
+            .unwrap();
+
+        assert_eq!(patched.content.wallpaper, None);
     }
 
     #[test]

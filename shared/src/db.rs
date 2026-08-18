@@ -66,7 +66,7 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-const MIGRATIONS: [&str; 9] = [
+const MIGRATIONS: [&str; 10] = [
     include_str!("migrations/0001_init_schema.sql"),
     include_str!("migrations/0002_behaviour_timeline.sql"),
     include_str!("migrations/0003_behaviour_content.sql"),
@@ -76,6 +76,7 @@ const MIGRATIONS: [&str; 9] = [
     include_str!("migrations/0007_sound_events.sql"),
     include_str!("migrations/0008_explicit_timeline_media.sql"),
     include_str!("migrations/0009_prompt_timeout_multiplier.sql"),
+    include_str!("migrations/0010_notification_summary.sql"),
 ];
 
 #[cfg(test)]

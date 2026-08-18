@@ -353,6 +353,7 @@ mod tests {
             text: "hi".to_string(),
             tags: vec![],
             timeout_seconds: None,
+            summary: None,
         }];
         behaviour.content.content_groups = vec![ContentGroup {
             id: "kinky".to_string(),

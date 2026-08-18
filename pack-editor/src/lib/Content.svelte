@@ -2,6 +2,8 @@
 	import { clampScroll } from '$ui/scroll';
 	import { onDestroy, onMount } from 'svelte';
 	import { store } from './store.svelte.js';
+	import type { ContentTab } from './store.svelte.js';
+	import EmptyState from '$ui/EmptyState.svelte';
 	import TextPoolEditor from './TextPoolEditor.svelte';
 	import ContentGroupsEditor from './ContentGroupsEditor.svelte';
 	import MediaSlot from './MediaSlot.svelte';
@@ -9,14 +11,7 @@
 	import { SUBLIMINAL_TAG } from './tags.js';
 	import WebLinksEditor from './WebLinksEditor.svelte';
 	import Tabs from '$ui/Tabs.svelte';
-	import {
-		editBehaviourField,
-		ensureBehaviour,
-		flushBehaviourSave
-	} from './behaviourSave.svelte.js';
-
-	type Tab =
-		'groups' | 'captions' | 'prompts' | 'notifications' | 'subliminals' | 'web_links' | 'wallpaper';
+	import { ensureBehaviour, flushBehaviourSave } from './behaviourSave.svelte.js';
 
 	// The subliminal pool is media, not a behaviour field: membership is the managed tag every
 	// file already carries in `store.files`, so the count is a filter rather than a query.
@@ -24,7 +19,7 @@
 		store.files.filter((file) => file.tags.includes(SUBLIMINAL_TAG)).length
 	);
 
-	const tabs = $derived<{ id: Tab; label: string; group: string; badge?: number }[]>([
+	const tabs = $derived<{ id: ContentTab; label: string; group: string; badge?: number }[]>([
 		{
 			id: 'groups',
 			label: 'Content Groups',
@@ -64,7 +59,7 @@
 		{ id: 'wallpaper', label: 'Wallpaper & Splash', group: 'Other' }
 	]);
 
-	const sectionInfo: Record<Tab, { title: string; description: string }> = {
+	const sectionInfo: Record<ContentTab, { title: string; description: string }> = {
 		groups: {
 			title: 'Content Groups',
 			description:
@@ -78,7 +73,8 @@
 		prompts: { title: 'Prompts', description: 'Questions that ask the user for a typed response.' },
 		notifications: {
 			title: 'Notifications',
-			description: 'Messages displayed as desktop notifications.'
+			description:
+				'Messages displayed as desktop notifications. A notification can carry a title above its message; leave it blank to show the message on its own.'
 		},
 		subliminals: {
 			title: 'Subliminals',
@@ -96,23 +92,28 @@
 		}
 	};
 
-	let activeTab = $state<Tab>('groups');
 	$effect(() => {
 		if (store.contentTarget === null) return;
-		activeTab = store.contentTarget.tab;
+		store.contentTab = store.contentTarget.tab;
 	});
 	let narrowWindow = $state(false);
 	let panel = $state<HTMLDivElement>();
+	let behaviourLoadFailed = $state(false);
+
+	async function loadBehaviour() {
+		behaviourLoadFailed = false;
+		behaviourLoadFailed = (await ensureBehaviour()) === null;
+	}
 
 	// WebKitGTK doesn't reliably clamp scrollTop when the panel's content shrinks,
 	// leaving a shorter tab blank and unscrollable.
 	$effect(() => {
-		activeTab;
+		store.contentTab;
 		panel?.scrollTo(0, 0);
 	});
 
 	onMount(() => {
-		const query = window.matchMedia('(max-width: 700px)');
+		const query = window.matchMedia('(max-width: 900px)');
 		const update = () => (narrowWindow = query.matches);
 		update();
 		query.addEventListener('change', update);
@@ -120,7 +121,7 @@
 	});
 
 	onMount(() => {
-		void ensureBehaviour();
+		void loadBehaviour();
 	});
 
 	onDestroy(() => {
@@ -130,69 +131,61 @@
 
 <div class="flex min-h-0 w-full flex-1 flex-col">
 	{#if store.behaviour === null}
-		<p class="text-muted p-6 text-sm">Loading…</p>
+		{#if behaviourLoadFailed}
+			<div class="grid flex-1 place-items-center p-6">
+				<EmptyState
+					title="Could not load Content"
+					description="The pack behaviour could not be loaded. Your media is unaffected."
+					actionLabel="Try again"
+					onclick={loadBehaviour}
+				/>
+			</div>
+		{:else}<p class="text-muted p-6 text-sm">Loading…</p>{/if}
 	{:else}
-		<div class="flex min-h-0 flex-1 max-[700px]:flex-col">
+		<div class="flex min-h-0 flex-1 max-[900px]:flex-col">
 			<aside
-				class="border-border bg-surface w-48 shrink-0 border-r p-3 max-[900px]:w-40 max-[700px]:w-full max-[700px]:border-r-0 max-[700px]:border-b max-[700px]:py-0"
+				class="border-border bg-surface w-48 shrink-0 border-r p-3 max-[900px]:w-full max-[900px]:border-r-0 max-[900px]:border-b max-[900px]:py-0"
 			>
 				<Tabs
 					{tabs}
-					active={activeTab}
+					active={store.contentTab}
 					orientation={narrowWindow ? 'horizontal' : 'vertical'}
 					onselect={(id) => {
 						store.contentTarget = null;
-						activeTab = id as Tab;
+						store.contentTab = id as ContentTab;
 					}}
 				/>
 			</aside>
 
-			<div
-				class="min-w-0 flex-1 overflow-y-auto p-6 max-[700px]:p-4"
-				bind:this={panel}
-				use:clampScroll
-			>
-				<div class="mx-auto w-full max-w-[800px]">
+			<div class="min-w-0 flex-1 overflow-y-auto" bind:this={panel} use:clampScroll>
+				<div
+					class="mx-auto w-full max-w-[848px] px-6 pt-6 pb-6 max-[900px]:max-w-[832px] max-[900px]:px-4 max-[900px]:pt-4 max-[900px]:pb-4"
+				>
 					<p class="text-muted mb-4 text-xs">
 						Read by the built-in modes (Sandbox and Sequence). A custom mode reads none of this.
 					</p>
 					<div class="mb-5 max-w-2xl">
-						<h2 class="ui-page-title">{sectionInfo[activeTab].title}</h2>
-						<p class="text-muted mt-1 text-sm">{sectionInfo[activeTab].description}</p>
+						<h2 class="ui-page-title">{sectionInfo[store.contentTab].title}</h2>
+						<p class="text-muted mt-1 text-sm">{sectionInfo[store.contentTab].description}</p>
 					</div>
-					{#if activeTab === 'groups'}
+					{#if store.contentTab === 'groups'}
 						<ContentGroupsEditor />
-					{:else if activeTab === 'captions'}
+					{:else if store.contentTab === 'captions'}
 						<TextPoolEditor title="Captions" poolKey="captions" idPrefix="caption" />
-					{:else if activeTab === 'prompts'}
-						<TextPoolEditor title="Prompts" poolKey="prompts" idPrefix="prompt">
-							{#snippet settings()}
-								<label class="flex flex-col gap-[5px]"
-									><span class="text-text text-xs font-semibold">Submit button label</span><input
-										bind:value={store.behaviour!.content.prompt_settings.submit_label}
-										oninput={() =>
-											editBehaviourField(
-												'content.prompt_settings.submit_label',
-												'Edit submit button label'
-											)}
-										placeholder="Submit"
-										class="border-border bg-surface text-text w-48 rounded-sm border px-2.5 py-2 text-sm transition-colors hover:border-[var(--ui-border-strong)]"
-									/></label
-								>
-							{/snippet}
-						</TextPoolEditor>
-					{:else if activeTab === 'notifications'}
+					{:else if store.contentTab === 'prompts'}
+						<TextPoolEditor title="Prompts" poolKey="prompts" idPrefix="prompt" />
+					{:else if store.contentTab === 'notifications'}
 						<TextPoolEditor title="Notifications" poolKey="notifications" idPrefix="notification" />
-					{:else if activeTab === 'subliminals'}
+					{:else if store.contentTab === 'subliminals'}
 						<SubliminalPool
 							revealId={store.contentTarget?.tab === 'subliminals'
 								? store.contentTarget.fileId
 								: null}
 							onrevealed={() => (store.contentTarget = null)}
 						/>
-					{:else if activeTab === 'web_links'}
+					{:else if store.contentTab === 'web_links'}
 						<WebLinksEditor />
-					{:else if activeTab === 'wallpaper'}
+					{:else if store.contentTab === 'wallpaper'}
 						<div class="flex flex-col gap-6">
 							<MediaSlot
 								slot={{ kind: 'wallpaper' }}

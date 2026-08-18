@@ -18,6 +18,8 @@ export type MediaView = 'popups' | 'audio' | 'all-media';
 export type AudioRoleFilter = 'all' | 'background' | 'popup';
 export type EditorView =
 	MediaView | 'tags' | 'artists' | 'content' | 'experience' | 'modes' | 'options';
+export type ContentTab =
+	'groups' | 'captions' | 'prompts' | 'notifications' | 'subliminals' | 'web_links' | 'wallpaper';
 export type ContentReveal =
 	{ tab: 'subliminals'; fileId: number } | { tab: 'wallpaper'; slot: 'wallpaper' | 'splash' };
 
@@ -59,6 +61,30 @@ function newMediaTab(): MediaTabState {
 
 function newMediaTabs(): Record<MediaView, MediaTabState> {
 	return { popups: newMediaTab(), audio: newMediaTab(), 'all-media': newMediaTab() };
+}
+
+/** How much media one tag or artist has in each media tab. */
+export type MediaScopeCounts = Record<MediaView, number>;
+
+export const NO_MEDIA_SCOPE_COUNTS: MediaScopeCounts = Object.freeze({
+	'all-media': 0,
+	popups: 0,
+	audio: 0
+});
+
+function countByName(
+	scopes: Record<MediaView, MediaFile[]>,
+	names: (file: MediaFile) => string[]
+): Map<string, MediaScopeCounts> {
+	const counts = new Map<string, MediaScopeCounts>();
+	for (const [scope, files] of Object.entries(scopes) as [MediaView, MediaFile[]][])
+		for (const file of files)
+			for (const name of names(file)) {
+				let entry = counts.get(name);
+				if (!entry) counts.set(name, (entry = { 'all-media': 0, popups: 0, audio: 0 }));
+				entry[scope]++;
+			}
+	return counts;
 }
 
 class AppStore {
@@ -240,14 +266,16 @@ class AppStore {
 	/**
 	 * Shows everything carrying one tag or one artist, from the Tags and Artists tabs.
 	 *
-	 * All media rather than Popups, because these are namespace surfaces over the whole pack: a
-	 * tag's media includes the wallpaper and the subliminals that carry it. The rest of that tab's
-	 * filters are cleared first -- each media tab keeps its own between visits (see
-	 * `MediaTabState`), and a query left there from an earlier visit would silently intersect with
-	 * this jump and land the author on an empty grid.
+	 * All media by default, because these are namespace surfaces over the whole pack: a tag's media
+	 * includes the wallpaper and the subliminals that carry it, and no other tab lists those. The
+	 * caller can name a narrower tab -- what the tag means *as a popup* or *as audio* is a different
+	 * question, and the answer is in the tab that owns the role. The destination's other filters are
+	 * cleared first -- each media tab keeps its own between visits (see `MediaTabState`), and a query
+	 * left there from an earlier visit would silently intersect with this jump and land the author on
+	 * an empty grid.
 	 */
-	showMediaFor(filter: { tag: string } | { artist: string }) {
-		this.setActiveView('all-media');
+	showMediaFor(filter: { tag: string } | { artist: string }, view: MediaView = 'all-media') {
+		this.setActiveView(view);
 		this.clearMediaFilters();
 		if ('tag' in filter) this.mediaTab.tagFilter = new Set([filter.tag]);
 		else this.mediaTab.artistFilter = new Set([filter.artist]);
@@ -255,6 +283,7 @@ class AppStore {
 
 	revealContent(target: ContentReveal) {
 		this.setActiveView('content');
+		this.contentTab = target.tab;
 		this.contentTarget = target;
 	}
 
@@ -263,6 +292,7 @@ class AppStore {
 			this.behaviour?.experience?.timeline.stages.some((stage) => stage.id === stageId) ?? false;
 		if (!exists) return false;
 		this.setActiveView('experience');
+		this.experienceActiveId = stageId;
 		this.experienceTargetStageId = stageId;
 		return true;
 	}
@@ -315,7 +345,9 @@ class AppStore {
 	// Retained only for the lifetime of the open pack, so disabling Experience can persist `null`
 	// without making a quick disable/re-enable cycle destroy the timeline the user was editing.
 	suspendedExperience = $state<Experience | null>(null);
+	contentTab = $state<ContentTab>('groups');
 	contentTarget = $state<ContentReveal | null>(null);
+	experienceActiveId = $state<string | null>(null);
 	experienceTargetStageId = $state<string | null>(null);
 
 	uploading = $derived(this.uploadBatches > 0);
@@ -372,6 +404,26 @@ class AppStore {
 			(file) => file.file_info.type === 'audio' && !file.tags.includes(EXPLICIT_ONLY_TAG)
 		)
 	);
+	/**
+	 * How much media carries each tag / each artist, per media tab.
+	 *
+	 * The Tags and Artists tabs offer one destination per tab and need to know which of them have
+	 * anything to show. Counted from `files` rather than from the backend's summaries so that
+	 * tagging done in the inspector is reflected without a round trip.
+	 */
+	mediaCountsByTag = $derived(
+		countByName(
+			{ 'all-media': this.files, popups: this.popupFiles, audio: this.audioFiles },
+			(file) => file.tags
+		)
+	);
+	mediaCountsByArtist = $derived(
+		countByName(
+			{ 'all-media': this.files, popups: this.popupFiles, audio: this.audioFiles },
+			(file) => file.artists
+		)
+	);
+
 	/** Whichever of the three the active media tab lists, before its own filters and sort. */
 	mediaScopeFiles = $derived.by(() => {
 		if (this.mediaView === 'popups') return this.popupFiles;
@@ -556,7 +608,9 @@ class AppStore {
 		this.importWarnings = [];
 		this.behaviour = null;
 		this.suspendedExperience = null;
+		this.contentTab = 'groups';
 		this.contentTarget = null;
+		this.experienceActiveId = null;
 		this.experienceTargetStageId = null;
 		this.dragActive = false;
 	}
@@ -581,7 +635,9 @@ class AppStore {
 		this.importWarnings = [];
 		this.behaviour = null;
 		this.suspendedExperience = null;
+		this.contentTab = 'groups';
 		this.contentTarget = null;
+		this.experienceActiveId = null;
 		this.experienceTargetStageId = null;
 		this.dragActive = false;
 		this.uploadTotal = 0;

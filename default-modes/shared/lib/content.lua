@@ -89,11 +89,6 @@ function M.pick_prompt(active_tags)
 	return M.pick(content().prompts or {}, nil, active_tags)
 end
 
----@return table
-function M.prompt_settings()
-	return content().prompt_settings or {}
-end
-
 ---@param active_tags? string[]
 ---@return table|nil
 function M.pick_notification(active_tags)

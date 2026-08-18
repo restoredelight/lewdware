@@ -8,7 +8,7 @@ use shared::behaviour::{
     EventSchedule, Events, Experience, Interval, MediaSlot, Mitosis, Movement, Stage, StageEnd,
     Timeline, Transition,
 };
-use shared::behaviour::{Content, ContentGroup, PromptSettings, TextItem, WebLink};
+use shared::behaviour::{Content, ContentGroup, TextItem, WebLink};
 use shared::read_pack::{Metadata, RecommendedMode};
 use shared::tags::{self, NON_POPUP_TAG, SUBLIMINAL_TAG};
 
@@ -358,6 +358,7 @@ fn text_items(
             text: text.clone(),
             tags: vec![],
             timeout_seconds: None,
+            summary: None,
         })
         .collect();
     for mood in moods {
@@ -366,6 +367,7 @@ fn text_items(
                 text: text.clone(),
                 tags: vec![mood.name.clone()],
                 timeout_seconds: None,
+                summary: None,
             });
         }
     }
@@ -382,6 +384,7 @@ fn populate_captions(index: &EdgewareIndex, content: &mut Content) {
             text: popup_close.clone(),
             tags: vec![],
             timeout_seconds: None,
+            summary: None,
         });
     }
 }
@@ -410,11 +413,10 @@ fn escape_managed_mood_names(index: &mut EdgewareIndex, levels: &mut [Corruption
     }
 }
 
+/// Edgeware's own submit-button label (`promptSubmit`/`subtext`) has nowhere to go: every prompt
+/// submits with a plain "Submit", so the pack's override is read past rather than carried over.
 fn populate_prompts(index: &EdgewareIndex, content: &mut Content) {
     content.prompts = text_items(&index.default.prompts, &index.moods, |base| &base.prompts);
-    content.prompt_settings = PromptSettings {
-        submit_label: index.default_extra.prompt_submit.clone(),
-    };
 }
 
 fn populate_notifications(index: &EdgewareIndex, content: &mut Content) {

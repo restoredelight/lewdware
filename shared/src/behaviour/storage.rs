@@ -27,8 +27,8 @@ use crate::behaviour::SpawnRegion;
 
 use super::schema::{
     AudioMedia, Behaviour, Content, ContentGroup, ContentSelection, EventCountCondition,
-    EventSchedule, Events, Experience, Interval, Mitosis, Movement, PopupMedia, PromptSettings,
-    Stage, StageEnd, StageEntry, StagePrompt, TextItem, Timeline, Transition, WebLink,
+    EventSchedule, Events, Experience, Interval, Mitosis, Movement, PopupMedia, Stage, StageEnd,
+    StageEntry, StagePrompt, TextItem, Timeline, Transition, WebLink,
 };
 
 /// The `pack_data` key the document used to live under.
@@ -48,15 +48,6 @@ pub fn read(conn: &Connection) -> Result<Behaviour> {
         )
         .optional()?
         .unwrap_or((None, None));
-    let prompt_settings = conn
-        .query_row(
-            "SELECT prompt_submit_label FROM behaviour_settings WHERE singleton = 1",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .flatten();
-
     Ok(Behaviour {
         content: Content {
             popups: read_popup_media(conn)?,
@@ -64,9 +55,6 @@ pub fn read(conn: &Connection) -> Result<Behaviour> {
             content_groups: read_content_groups(conn)?,
             captions: read_text_pool(conn, "caption")?,
             prompts: read_text_pool(conn, "prompt")?,
-            prompt_settings: PromptSettings {
-                submit_label: prompt_settings,
-            },
             notifications: read_text_pool(conn, "notification")?,
             subliminals: read_text_pool(conn, "subliminal")?,
             web_links: read_web_links(conn)?,
@@ -85,11 +73,6 @@ pub fn write(tx: &Transaction<'_>, behaviour: &Behaviour) -> Result<()> {
          ON CONFLICT(singleton) DO UPDATE SET wallpaper = excluded.wallpaper,
                                               splash = excluded.splash",
         params![content.wallpaper, content.splash],
-    )?;
-    tx.execute(
-        "INSERT INTO behaviour_settings (singleton, prompt_submit_label) VALUES (1, ?)
-         ON CONFLICT(singleton) DO UPDATE SET prompt_submit_label = excluded.prompt_submit_label",
-        params![content.prompt_settings.submit_label],
     )?;
     write_popup_media(tx, &content.popups)?;
     write_audio_media(tx, &content.audio)?;
@@ -316,19 +299,21 @@ fn write_audio_media(tx: &Transaction<'_>, audio: &BTreeMap<u64, AudioMedia>) ->
 
 fn read_text_pool(conn: &Connection, kind: &str) -> Result<Vec<TextItem>> {
     let mut statement = conn.prepare(
-        "SELECT id, text, timeout_seconds FROM behaviour_text_item WHERE kind = ? ORDER BY position",
+        "SELECT id, text, timeout_seconds, summary FROM behaviour_text_item WHERE kind = ? \
+         ORDER BY position",
     )?;
-    let rows: Vec<(i64, String, Option<f64>)> = statement
+    let rows: Vec<(i64, String, Option<f64>, Option<String>)> = statement
         .query_map(params![kind], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
     rows.into_iter()
-        .map(|(id, text, timeout_seconds)| {
+        .map(|(id, text, timeout_seconds, summary)| {
             Ok(TextItem {
                 text,
                 tags: read_tags(conn, "behaviour_text_item_tag", "item_id", &id)?,
                 timeout_seconds,
+                summary,
             })
         })
         .collect()
@@ -343,11 +328,19 @@ fn write_text_pool(tx: &Transaction<'_>, kind: &str, items: &[TextItem]) -> Resu
     )?;
     for (position, item) in items.iter().enumerate() {
         let id: i64 = tx.query_row(
-            "INSERT INTO behaviour_text_item (kind, position, text, timeout_seconds) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO behaviour_text_item (kind, position, text, timeout_seconds, summary)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(kind, position) DO UPDATE SET text = excluded.text,
-                                                       timeout_seconds = excluded.timeout_seconds
+                                                       timeout_seconds = excluded.timeout_seconds,
+                                                       summary = excluded.summary
              RETURNING id",
-            params![kind, position as i64, item.text, item.timeout_seconds],
+            params![
+                kind,
+                position as i64,
+                item.text,
+                item.timeout_seconds,
+                item.summary
+            ],
             |row| row.get(0),
         )?;
         write_tags(tx, "behaviour_text_item_tag", "item_id", &id, &item.tags)?;
@@ -1173,8 +1166,8 @@ fn from_text<T: DeserializeOwned>(text: &str) -> Result<T> {
 mod tests {
     use super::*;
     use crate::behaviour::{
-        ContentGroup, CountScope, Easing, EndStrategy, EventKind, MonitorPreference,
-        PromptSettings, TextItem, TransitionCategory, WebLink,
+        ContentGroup, CountScope, Easing, EndStrategy, EventKind, MonitorPreference, TextItem,
+        TransitionCategory, WebLink,
     };
 
     /// A migrated pack database with a few media files, so the slot and per-item foreign keys
@@ -1308,30 +1301,32 @@ mod tests {
                         text: "Obey.".to_string(),
                         tags: vec!["kinky".to_string()],
                         timeout_seconds: None,
+                        summary: None,
                     },
                     TextItem {
                         text: "Good.".to_string(),
                         tags: vec![],
                         timeout_seconds: None,
+                        summary: None,
                     },
                 ],
                 prompts: vec![TextItem {
                     text: "Type this.".to_string(),
                     tags: vec![],
                     timeout_seconds: Some(30.0),
+                    summary: None,
                 }],
-                prompt_settings: PromptSettings {
-                    submit_label: Some("Obey".to_string()),
-                },
                 notifications: vec![TextItem {
                     text: "Ping.".to_string(),
                     tags: vec!["soft".to_string()],
                     timeout_seconds: None,
+                    summary: Some("Attention".to_string()),
                 }],
                 subliminals: vec![TextItem {
                     text: "Deeper.".to_string(),
                     tags: vec![],
                     timeout_seconds: None,
+                    summary: None,
                 }],
                 web_links: vec![WebLink {
                     url: "https://duckduckgo.com/?q=".to_string(),
@@ -1755,6 +1750,7 @@ mod tests {
                     text: "Obey.".to_string(),
                     tags: vec!["fresh".to_string()],
                     timeout_seconds: None,
+                    summary: None,
                 }],
                 ..Default::default()
             },
@@ -1811,6 +1807,7 @@ mod tests {
                     text: "Obey.".to_string(),
                     tags: vec!["kinky".to_string()],
                     timeout_seconds: None,
+                    summary: None,
                 }],
                 wallpaper: Some(1),
                 ..Default::default()

@@ -53,8 +53,6 @@ behaviour:
       - text: Vanilla prompt 2
         tags:
           - vanilla
-    prompt_settings:
-      submit_label: Submit
     notifications:
       - text: Notification
         tags: []
