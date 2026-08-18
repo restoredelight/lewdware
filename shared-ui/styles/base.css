@@ -6,6 +6,10 @@
 	outline-color: var(--ui-focus);
 }
 
+/* The ring itself is defined once, here. A control that needs it drawn inside its own box --
+   anything inside a clipping scroll container, where an outset ring comes out cut off on both
+   sides -- overrides `outline-offset` alone and inherits the rest. Zero specificity via `:where`,
+   so any such override wins without needing `!important`. */
 :where(button, input, select, textarea, [tabindex]):focus-visible {
 	outline: 2px solid var(--ui-focus);
 	outline-offset: 2px;

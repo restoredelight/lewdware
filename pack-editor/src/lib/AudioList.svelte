@@ -19,6 +19,7 @@
 	import { playback } from './audioPlayback.svelte.js';
 	import { audioRole, setAudioRole, type AudioRole } from './audioRoles.js';
 	import { audioAttributes, editAudioAttributes } from './mediaAttributes.js';
+	import { MediaSelection } from './mediaSelection.svelte.js';
 	import { indexAt, offsetOf, totalHeight } from './virtualRows.js';
 	import { ChevronDown } from 'svelte-hero-icons';
 	import { formatDuration, formatFileSize } from './format.js';
@@ -41,9 +42,11 @@
 	let scrollTop = $state(0);
 	let viewH = $state(0);
 	let viewW = $state(0);
-	let anchorId = $state<number | null>(null);
-	let announcement = $state('');
 	let roleBusy = $state(false);
+
+	// Clicking, the range anchor, the shared keyboard commands and what they announce -- see
+	// `mediaSelection.svelte.ts`, which the media grid shares.
+	const selection = new MediaSelection('audio file');
 
 	// At most one row is expanded at a time. That is what keeps this list virtualised: offsets are
 	// still index arithmetic plus a single constant, rather than the prefix-sum bookkeeping a
@@ -100,7 +103,7 @@
 		if (index >= 0) {
 			scrollToIndex(index);
 			container.focus();
-			announcement = `${files[index].file_name} selected`;
+			selection.announcement = `${files[index].file_name} selected`;
 		}
 		store.mediaRevealId = null;
 	});
@@ -117,7 +120,7 @@
 	function fromControl(event: MouseEvent) {
 		return Boolean(
 			(event.target as HTMLElement).closest('button, input') ??
-				pressOrigin?.closest('button, input')
+			pressOrigin?.closest('button, input')
 		);
 	}
 
@@ -126,18 +129,14 @@
 		// The row's own controls are not selection gestures: playing a sound or changing its role
 		// while twenty rows are selected must not collapse that selection to the row clicked.
 		if (fromControl(event)) return;
-		if (event.shiftKey && anchorId != null) store.selectRange(anchorId, file.id);
-		else if (event.ctrlKey || event.metaKey) store.toggleSelection(file.id);
-		else {
-			store.selectSingle(file.id);
-			// A plain click opens the row as well as selecting it. There is one file's worth of
-			// detail behind the chevron and nothing else a click on a row could mean, so making the
-			// chevron the only way in was an extra step for the common case. Modified clicks are
-			// building a selection, which is a different intent — those leave the panel alone.
+		// A plain click opens the row as well as selecting it. There is one file's worth of detail
+		// behind the chevron and nothing else a click on a row could mean, so making the chevron the
+		// only way in was an extra step for the common case. Modified clicks are building a
+		// selection, which is a different intent — those leave the panel alone.
+		if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
 			expandedId = expandedId === file.id ? null : file.id;
 		}
-		if (!event.shiftKey) anchorId = file.id;
-		announceSelection();
+		selection.click(file.id, event);
 		// Focus belongs to the list: it is what `aria-activedescendant` points *from* and what the
 		// keyboard handler is attached to. A row carries `tabindex="-1"` so it can be a legal
 		// activedescendant, which also makes it focusable by mouse -- and a row left holding focus
@@ -153,17 +152,12 @@
 		roleBusy = true;
 		try {
 			await setAudioRole([file.id], role);
-			announcement = `${file.file_name} is now ${role} audio`;
+			selection.announcement = `${file.file_name} is now ${role} audio`;
 		} catch (error) {
 			taskFeedback.error('audio-role', `Could not change audio type: ${String(error)}`);
 		} finally {
 			roleBusy = false;
 		}
-	}
-
-	function announceSelection() {
-		const count = store.mediaTab.selectedIds.size;
-		announcement = `${count || 'No'} audio ${count === 1 ? 'file' : 'files'} selected`;
 	}
 
 	function scrollToIndex(index: number) {
@@ -173,61 +167,32 @@
 		else if (top + rowHeight > scrollTop + viewH) container.scrollTop = top + rowHeight - viewH;
 	}
 
-	function move(key: string, extend: boolean, preserveSelection: boolean) {
-		if (files.length === 0) return;
+	const NAVIGATION_KEYS = ['ArrowUp', 'ArrowDown', 'Home', 'End'];
+
+	function navigate(key: string, extend: boolean, preserveSelection: boolean) {
 		const current = store.mediaTab.gridActiveId;
-		let index = current != null ? files.findIndex((file) => file.id === current) : -1;
-		if (index === -1) index = 0;
-
-		let next = index;
-		if (key === 'ArrowDown') next = Math.min(files.length - 1, index + 1);
-		else if (key === 'ArrowUp') next = Math.max(0, index - 1);
-		else if (key === 'Home') next = 0;
-		else if (key === 'End') next = files.length - 1;
-
-		if (current != null && next === index) return;
-		const nextId = files[next].id;
-		store.mediaTab.gridActiveId = nextId;
-		if (extend) {
-			anchorId ??= current ?? nextId;
-			store.selectRange(anchorId, nextId);
-		} else if (!preserveSelection) {
-			store.selectSingle(nextId);
-			anchorId = nextId;
-		}
-		announceSelection();
+		const from = Math.max(0, current == null ? -1 : files.findIndex((file) => file.id === current));
+		const last = files.length - 1;
+		const next =
+			key === 'ArrowDown'
+				? Math.min(last, from + 1)
+				: key === 'ArrowUp'
+					? Math.max(0, from - 1)
+					: key === 'Home'
+						? 0
+						: last;
+		// Already at the end of the list: not a move, so it must not collapse a selection built up
+		// around the active row. The first key press with nothing active always is one.
+		if (current != null && next === from) return;
+		selection.moveTo(files, next, extend, preserveSelection);
 		scrollToIndex(next);
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') {
-			store.clearSelection();
-			store.mediaTab.gridActiveId = null;
-			anchorId = null;
-			announceSelection();
-			return;
-		}
-		if (event.key === ' ' && store.mediaTab.gridActiveId != null) {
+		if (selection.keydown(event)) return;
+		if (NAVIGATION_KEYS.includes(event.key) && files.length > 0) {
 			event.preventDefault();
-			store.toggleSelection(store.mediaTab.gridActiveId);
-			anchorId ??= store.mediaTab.gridActiveId;
-			announceSelection();
-			return;
-		}
-		if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
-			event.preventDefault();
-			store.selectAll();
-			announceSelection();
-			return;
-		}
-		if (event.key === 'Delete' && store.mediaTab.selectedIds.size > 0) {
-			event.preventDefault();
-			store.requestMediaRemoval();
-			return;
-		}
-		if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
-			event.preventDefault();
-			move(event.key, event.shiftKey, event.ctrlKey || event.metaKey);
+			navigate(event.key, event.shiftKey, event.ctrlKey || event.metaKey);
 		}
 	}
 
@@ -262,14 +227,11 @@
 			// A drag off the end of a row's seekbar, or of the panel's volume slider, lands here as a
 			// click on empty space. It is not one.
 			if (fromControl(event)) return;
-			store.clearSelection();
-			store.mediaTab.gridActiveId = null;
-			anchorId = null;
-			announceSelection();
+			selection.clear();
 		}}
 		use:clampScroll
 	>
-		<span class="sr-only" aria-live="polite">{announcement}</span>
+		<span class="sr-only" aria-live="polite">{selection.announcement}</span>
 		<div class="rows" style={`height: ${listHeight}px`}>
 			{#each visible as { file, index } (file.id)}
 				{@const role = audioRole(file.tags)}
@@ -434,7 +396,6 @@
 		background: var(--ui-bg);
 	}
 	.audio-list:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -2px;
 	}
 	.rows {
@@ -534,7 +495,6 @@
 		cursor: default;
 	}
 	.role button:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -1px;
 	}
 	.transport {
@@ -569,7 +529,6 @@
 		transform: rotate(180deg);
 	}
 	.disclosure button:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -1px;
 	}
 	.details {

@@ -86,10 +86,6 @@ export const api = {
 	removeMode: (id: number) => invoke<void>('remove_mode', { id }),
 
 	getAllTags: () => invoke<string[]>('get_all_tags'),
-	getFileTags: (id: number) => invoke<string[]>('get_file_tags', { id }),
-	addTagToFile: (id: number, tag: string) => invoke<void>('add_tag_to_file', { id, tag }),
-	removeTagFromFile: (id: number, tag: string) => invoke<void>('remove_tag_from_file', { id, tag }),
-	createAndAddTag: (id: number, tag: string) => invoke<void>('create_and_add_tag', { id, tag }),
 	addTagToFiles: (ids: number[], tag: string) => invoke<void>('add_tag_to_files', { ids, tag }),
 	removeTagFromFiles: (ids: number[], tag: string) =>
 		invoke<void>('remove_tag_from_files', { ids, tag }),
@@ -99,13 +95,6 @@ export const api = {
 	deleteTag: (tag: string) => invoke<Behaviour>('delete_tag', { tag }),
 
 	getAllArtists: () => invoke<string[]>('get_all_artists'),
-	getFileArtists: (id: number) => invoke<string[]>('get_file_artists', { id }),
-	addArtistToFile: (id: number, artist: string) =>
-		invoke<void>('add_artist_to_file', { id, artist }),
-	removeArtistFromFile: (id: number, artist: string) =>
-		invoke<void>('remove_artist_from_file', { id, artist }),
-	createAndAddArtist: (id: number, artist: string) =>
-		invoke<void>('create_and_add_artist', { id, artist }),
 	addArtistToFiles: (ids: number[], artist: string) =>
 		invoke<void>('add_artist_to_files', { ids, artist }),
 	removeArtistFromFiles: (ids: number[], artist: string) =>
@@ -118,7 +107,6 @@ export const api = {
 	getPackMetadata: () => invoke<MetadataDto>('get_pack_metadata'),
 	setPackMetadata: (dto: MetadataDto) => invoke<void>('set_pack_metadata', { dto }),
 	savePackMetadata: () => invoke<void>('save_pack_metadata'),
-	markPackUnsaved: () => invoke<void>('mark_pack_unsaved'),
 
 	getBehaviour: () => invoke<Behaviour>('get_behaviour'),
 	// Patches rather than a document: the backend is the only writer of behaviour, so an edit

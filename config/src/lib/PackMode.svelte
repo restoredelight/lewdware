@@ -247,9 +247,7 @@
 	// heading and nothing to configure. Recursive, since a group may hold groups.
 	function hasVisibleContent(entry: OptionEntryDto): boolean {
 		if (entry.kind === 'Option') return true;
-		return entry.entries.some(
-			(child) => isVisible(child.show_when) && hasVisibleContent(child)
-		);
+		return entry.entries.some((child) => isVisible(child.show_when) && hasVisibleContent(child));
 	}
 
 	type EntryChunk =
@@ -328,7 +326,7 @@
 		     row still has free space. The floor keeps short enums aligned with the text input
 		     above; past the ceiling the row wraps and `.value` ellipsizes as a last resort. -->
 		<Select
-			class="w-fit min-w-56 max-w-80"
+			class="w-fit max-w-80 min-w-56"
 			size="compact"
 			hideLabel
 			label={opt.label}

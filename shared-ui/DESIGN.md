@@ -232,12 +232,20 @@ border-color`. Respect `prefers-reduced-motion`.
 Prefer these over hand-rolling. They already encode the rules above:
 
 `Button` · `IconButton` · `Checkbox` · `Toggle` · `RadioGroup` · `Slider` ·
-`Select` · `Field` · `TagInput` · `Tabs` · `Card` · `Dialog` · `Popover` ·
-`Tooltip` · `EmptyState`.
+`Select` · `Field` · `NumberField` · `TagInput` · `Tabs` · `Card` · `Dialog` ·
+`Popover` · `Tooltip` · `EmptyState`.
 
 `Button` variants: `primary` (carmine fill — one per surface), `secondary`
 (bordered), `quiet` (transparent, muted → text on hover), `destructive` (coral
 outline). Sizes: `compact` (32px), `normal` (36px).
+
+**Use `NumberField`, not `Field type="number"`.** `Field` reports what was typed as a
+string, and `Number('')` is `0` rather than `NaN` — so a guard written as
+`Number.isFinite(Number(raw))` accepts an *empty field* as a real zero, and clearing a
+speed writes `0` instead of clearing it. `NumberField` reports `number | null`, where
+`null` is "empty or not a number". What `null` *means* stays the caller's decision — for
+most fields it clears the value (the sparse-row rule), for a few it means "keep what was
+there" — but it is now one visible line at the call site.
 
 `Field` takes an optional `suffix` (`%`, `px`, `s`) — a unit drawn inside the
 field's right edge in the mono readout face. A suffixed `number` field drops its

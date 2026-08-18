@@ -13,6 +13,12 @@ export function formatDuration(value: number): string {
 		: `${minutes}:${String(remainder).padStart(2, '0')}`;
 }
 
+/** `"a"`, `"a and b"`, `"a, b and c"` — for naming what an action will clear or affect. */
+export function formatList(items: string[]): string {
+	if (items.length <= 1) return items[0] ?? '';
+	return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
 export function formatFileSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
 	const units = ['KB', 'MB', 'GB'];

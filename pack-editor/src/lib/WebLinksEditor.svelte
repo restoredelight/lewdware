@@ -1,13 +1,12 @@
 <script lang="ts">
 	import { store } from './store.svelte.js';
+	import ContentList from './ContentList.svelte';
 	import TagPicker from './TagPicker.svelte';
 	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
-	import Button from '$ui/Button.svelte';
-	import Card from '$ui/Card.svelte';
 	import EmptyState from '$ui/EmptyState.svelte';
+	import Field from '$ui/Field.svelte';
 	import Dialog from '$ui/Dialog.svelte';
-	import { Icon, Plus, XMark } from 'svelte-hero-icons';
-	import { tick } from 'svelte';
+	import { Icon, XMark } from 'svelte-hero-icons';
 
 	const links = $derived(store.behaviour!.content.web_links);
 	// Adding or removing a link moves every later index, so those edits replace the array whole
@@ -16,15 +15,10 @@
 
 	let newArgByLink = $state<Record<number, string>>({});
 	let removing = $state<(typeof links)[number] | null>(null);
-	let listElement = $state<HTMLDivElement>();
 
-	async function addLink() {
+	function addLink() {
 		links.push({ url: '', args: [], tags: [] });
 		commitBehaviourEdit(LINKS, 'Add web link');
-		await tick();
-		const link = listElement?.lastElementChild;
-		link?.scrollIntoView({ block: 'center' });
-		link?.querySelector<HTMLInputElement>('input')?.focus();
 	}
 
 	function removeLink(index: number) {
@@ -59,100 +53,83 @@
 	}
 </script>
 
-<section class="flex flex-col gap-3" aria-label="Web links">
-	<p class="text-muted text-xs">
-		Optional URL suffixes can be appended at random—for example, to choose from several search
-		terms. Leave them empty to always open the URL unchanged.
-	</p>
+<ContentList
+	label="Web links"
+	items={links}
+	entryLabel="Web link"
+	addLabel="Add web link"
+	focusSelector="input"
+	onadd={addLink}
+	onremove={removeLink}
+>
+	{#snippet intro()}
+		<p class="text-muted text-xs">
+			Optional URL suffixes can be appended at random—for example, to choose from several search
+			terms. Leave them empty to always open the URL unchanged.
+		</p>
+	{/snippet}
+	{#snippet empty()}
+		<EmptyState
+			title="No web links yet"
+			description="Add a link if this pack should be able to open a page in the user’s browser."
+			actionLabel="Add web link"
+			onclick={addLink}
+		/>
+	{/snippet}
+	{#snippet fields(link, index)}
+		<Field
+			label="URL"
+			type="url"
+			size="compact"
+			value={link.url}
+			placeholder="https://…"
+			oninput={(value) => {
+				link.url = value;
+				editBehaviourField(`${LINKS}.${index}.url`, 'Edit web link');
+			}}
+		/>
 
-	{#if links.length > 0}
-		<div
-			class="border-border bg-bg sticky top-0 z-10 flex items-center justify-between gap-3 border-y py-2"
-		>
-			<span class="ui-metadata">{links.length} {links.length === 1 ? 'item' : 'items'}</span>
-			<Button size="compact" onclick={addLink}
-				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add web link</Button
-			>
-		</div>
-	{/if}
-
-	<div class="flex flex-col gap-2" bind:this={listElement}>
-		{#if links.length === 0}
-			<EmptyState
-				title="No web links yet"
-				description="Add a link if this pack should be able to open a page in the user’s browser."
-				actionLabel="Add web link"
-				onclick={addLink}
-			/>
-		{/if}
-		{#each links as link, index}
-			<Card class="flex flex-col gap-3 p-3">
-				<div class="flex items-center justify-between">
-					<span class="text-muted font-mono text-[11px] font-semibold">Web link {index + 1}</span
-					><Button
-						size="compact"
-						variant="destructive"
-						class="!h-7"
-						ariaLabel={`Remove web link ${index + 1}`}
-						onclick={() => removeLink(index)}>Remove</Button
+		<div>
+			<p class="text-muted mb-1.5 text-xs font-medium">
+				Random URL suffixes <span class="font-normal">(optional)</span>
+			</p>
+			<div class="flex flex-wrap items-center gap-1.5">
+				{#each link.args as arg, argIndex}
+					<span
+						class="bg-bg border-border text-text flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs"
 					>
-				</div>
-				<label class="text-muted text-xs font-medium" for={`web-link-url-${index}`}>URL</label>
-				<div class="flex items-start gap-2">
-					<input
-						id={`web-link-url-${index}`}
-						bind:value={link.url}
-						oninput={() => editBehaviourField(`${LINKS}.${index}.url`, 'Edit web link')}
-						placeholder="https://…"
-						class="border-border bg-bg text-text flex-1 rounded border px-2 py-1 text-xs
-"
-					/>
-				</div>
-
-				<div>
-					<p class="text-muted mb-1.5 text-xs font-medium">
-						Random URL suffixes <span class="font-normal">(optional)</span>
-					</p>
-					<div class="flex flex-wrap items-center gap-1.5">
-						{#each link.args as arg, argIndex}
-							<span
-								class="bg-bg border-border text-text flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs"
-							>
-								{arg}
-								<button
-									onclick={() => removeArg(index, argIndex)}
-									class="text-muted hover:text-text leading-none"
-									aria-label={`Remove URL suffix ${arg}`}
-									><span class="block h-3.5 w-3.5"><Icon src={XMark} mini /></span></button
-								>
-							</span>
-						{/each}
-						<input
-							value={newArgByLink[index] ?? ''}
-							oninput={(e) => (newArgByLink[index] = e.currentTarget.value)}
-							onkeydown={(e) => {
-								if (e.key === 'Enter') {
-									e.preventDefault();
-									addArg(index);
-								}
-							}}
-							placeholder="Add arg…"
-							class="border-border bg-surface text-text w-24 rounded border px-2 py-0.5 text-xs
-"
-						/>
-					</div>
-				</div>
-
-				<TagPicker
-					tags={link.tags}
-					id={`web-link-${index}`}
-					path={`${LINKS}.${index}.tags`}
-					onchange={(tags) => (link.tags = tags)}
+						{arg}
+						<button
+							onclick={() => removeArg(index, argIndex)}
+							class="text-muted hover:text-text leading-none"
+							aria-label={`Remove URL suffix ${arg}`}
+							><span class="block h-3.5 w-3.5"><Icon src={XMark} mini /></span></button
+						>
+					</span>
+				{/each}
+				<input
+					value={newArgByLink[index] ?? ''}
+					oninput={(event) => (newArgByLink[index] = event.currentTarget.value)}
+					onkeydown={(event) => {
+						if (event.key === 'Enter') {
+							event.preventDefault();
+							addArg(index);
+						}
+					}}
+					placeholder="Add arg…"
+					class="border-border bg-surface text-text w-24 rounded border px-2 py-0.5 text-xs"
 				/>
-			</Card>
-		{/each}
-	</div>
-</section>
+			</div>
+		</div>
+
+		<TagPicker
+			tags={link.tags}
+			id={`web-link-${index}`}
+			path={`${LINKS}.${index}.tags`}
+			onchange={(tags) => (link.tags = tags)}
+		/>
+	{/snippet}
+</ContentList>
 
 {#if removing}
 	<Dialog

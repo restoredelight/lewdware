@@ -1,53 +1,49 @@
 <script lang="ts">
+	// The tag namespace. Everything about *being a searchable table of names* lives in
+	// `VocabularyPage`, which the Artists tab shares; what is here is the two things tags do that
+	// artists do not — they are also referenced by the behaviour document, and every edit to one
+	// comes back from the backend as a new document.
 	import { onMount } from 'svelte';
-	import { Icon, PencilSquare, Trash } from 'svelte-hero-icons';
-	import Button from '$ui/Button.svelte';
-	import Dialog from '$ui/Dialog.svelte';
-	import Field from '$ui/Field.svelte';
-	import Select from '$ui/Select.svelte';
 	import { api } from './api.js';
 	import { adoptBehaviour, ensureBehaviour } from './behaviourSave.svelte.js';
-	import MediaScopeMenu from './MediaScopeMenu.svelte';
 	import { NO_MEDIA_SCOPE_COUNTS, store } from './store.svelte.js';
 	import { behaviourTags, tagUsage } from './tagReferences.js';
-	import type { TagSummary } from './types.js';
-	import { history } from './history.svelte.js';
-	import EmptyState from '$ui/EmptyState.svelte';
-	import { clampScroll } from '$ui/scroll';
+	import type { Behaviour, TagSummary } from './types.js';
+	import VocabularyPage from './VocabularyPage.svelte';
 
 	let summaries = $state<TagSummary[]>([]);
-	let summariesLoaded = $state(false);
+	let loaded = $state(false);
 	let loadError = $state<string | null>(null);
-	let query = $state('');
-	let editing = $state<string | null>(null);
-	let mode = $state<'rename' | 'merge'>('rename');
-	let value = $state('');
-	let deleting = $state<string | null>(null);
-	let error = $state<string | null>(null);
-	let busy = $state(false);
 
-	const allRows = $derived.by(() => {
-		if (!store.behaviour) return [];
+	// A tag can be in the pack three ways at once: on media, in the backend's own summary, or named
+	// only by the behaviour document (typed into a caption, naming a content group). All three, or
+	// the table would be missing rows the Content tab can see.
+	const rows = $derived.by(() => {
+		const behaviour = store.behaviour;
+		if (!behaviour) return [];
 		const counts = store.mediaCountsByTag;
 		const names = new Set([
 			...store.allTags,
 			...summaries.map((item) => item.name),
-			...behaviourTags(store.behaviour)
+			...behaviourTags(behaviour)
 		]);
 		return [...names]
 			.map((name) => ({
 				name,
 				media: counts.get(name) ?? NO_MEDIA_SCOPE_COUNTS,
-				...tagUsage(store.behaviour!, name)
+				...tagUsage(behaviour, name)
 			}))
 			.sort((a, b) => a.name.localeCompare(b.name));
 	});
-	const rows = $derived(
-		allRows.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase()))
+
+	// The behaviour can also go away *after* a successful load — an undo or a discard replaces it —
+	// and a table of tags with no document to count them against has nothing to show.
+	const failure = $derived(
+		loadError ?? (store.behaviour ? null : 'The pack behaviour could not be loaded.')
 	);
 
 	async function load() {
-		summariesLoaded = false;
+		loaded = false;
 		loadError = null;
 		try {
 			if (!(await ensureBehaviour())) throw new Error('The pack behaviour could not be loaded.');
@@ -55,7 +51,7 @@
 		} catch (cause) {
 			loadError = String(cause);
 		} finally {
-			summariesLoaded = true;
+			loaded = true;
 		}
 	}
 
@@ -63,342 +59,33 @@
 		void load();
 	});
 
-	function begin(tag: string, nextMode: 'rename' | 'merge') {
-		editing = tag;
-		mode = nextMode;
-		value = nextMode === 'rename' ? tag : '';
-		error = null;
-	}
-
-	async function apply() {
-		if (!editing || !store.behaviour) return;
-		const target = value.trim();
-		if (!target || target === editing) return;
-		if (mode === 'rename' && allRows.some((row) => row.name === target)) {
-			error = `A tag named “${target}” already exists. Merge the tags instead.`;
-			return;
-		}
-		busy = true;
-		error = null;
-		try {
-			const source = editing;
-			const editMode = mode;
-			const after =
-				editMode === 'rename'
-					? await api.renameTag(source, target)
-					: await api.mergeTag(source, target);
-			const operation = editMode === 'rename' ? 'Rename' : 'Merge';
-			adoptBehaviour(after, { label: `${operation} tag “${source}”` });
-			store.retagEverywhere(source, target, true);
-			summaries = await api.getTagSummaries();
-			editing = null;
-		} catch (err) {
-			error = String(err);
-		} finally {
-			busy = false;
-		}
-	}
-
-	async function confirmDelete() {
-		if (!deleting || !store.behaviour) return;
-		const tag = deleting;
-		deleting = null;
-		busy = true;
-		error = null;
-		try {
-			const after = await api.deleteTag(tag);
-			adoptBehaviour(after, { label: `Delete tag “${tag}”` });
-			store.retagEverywhere(tag, null, true);
-			summaries = await api.getTagSummaries();
-		} catch (err) {
-			error = String(err);
-		} finally {
-			busy = false;
-		}
+	/** All three edits rewrite the document server-side, so all three adopt what comes back. */
+	async function edit(request: Promise<Behaviour>, label: string, from: string, to: string | null) {
+		adoptBehaviour(await request, { label });
+		store.retagEverywhere(from, to, true);
+		summaries = await api.getTagSummaries();
 	}
 </script>
 
-<div class="page" use:clampScroll>
-	<header>
-		<div>
-			<h2 class="ui-page-title">Tags</h2>
-			<p>Manage the vocabulary used across media, Content, and Experience.</p>
-		</div>
-		<Field
-			label="Search tags"
-			hideLabel
-			value={query}
-			placeholder="Search tags…"
-			oninput={(next) => (query = next)}
-		/>
-	</header>
-	{#if error}<div class="error" role="alert">
-			{error}<button onclick={() => (error = null)}>Dismiss</button>
-		</div>{/if}
-	{#if !summariesLoaded}<p class="loading">Loading…</p>
-	{:else if loadError || !store.behaviour}
-		<EmptyState
-			title="Could not load tags"
-			description={loadError ?? 'The pack behaviour could not be loaded.'}
-			actionLabel="Try again"
-			onclick={load}
-		/>
-	{:else if rows.length === 0}
-		<EmptyState
-			title={query ? 'No matching tags' : 'No tags yet'}
-			description={query
-				? 'No tags match this search. Clear it to see every tag in the pack.'
-				: 'Tags are created when you tag media or use them in Content and Experience settings.'}
-			actionLabel={query ? 'Clear search' : 'Go to All media'}
-			onclick={() => (query ? (query = '') : store.setActiveView('all-media'))}
-		/>
-	{:else}
-		<div class="table" role="table" aria-label="Pack tags">
-			<div class="table-head" role="row">
-				<span role="columnheader" aria-label="Tag">Tag</span><span
-					role="columnheader"
-					aria-label="Media">Media</span
-				><span role="columnheader" aria-label="Content">Content</span><span
-					role="columnheader"
-					aria-label="Experience">Experience</span
-				><span class="actions-heading" role="columnheader" aria-label="Actions">Actions</span>
-			</div>
-			{#each rows as row (row.name)}
-				<div class="tag-row" role="row">
-					<div role="cell"><strong>{row.name}</strong></div>
-					<span role="cell">{row.media['all-media']}</span><span role="cell">{row.content}</span
-					><span role="cell">{row.experience}</span>
-					<div class="row-actions" role="cell">
-						<MediaScopeMenu filter={{ tag: row.name }} counts={row.media} />
-						<Button size="compact" variant="quiet" onclick={() => begin(row.name, 'rename')}
-							><Icon src={PencilSquare} mini size="14px" /> Rename</Button
-						>
-						<Button size="compact" variant="quiet" onclick={() => begin(row.name, 'merge')}
-							>Merge</Button
-						>
-						<Button
-							size="compact"
-							variant="quiet"
-							ariaLabel={`Delete ${row.name}`}
-							title="Delete tag"
-							onclick={() => (deleting = row.name)}><Icon src={Trash} mini size="14px" /></Button
-						>
-					</div>
-				</div>
-				{#if editing === row.name}
-					<div class="edit-row" role="row">
-						<div role="cell">
-							<strong
-								>{mode === 'rename' ? `Rename “${row.name}”` : `Merge “${row.name}” into`}</strong
-							><small
-								>{mode === 'rename'
-									? 'Every media and behaviour reference will be updated.'
-									: 'References will be combined and duplicates removed.'}</small
-							>
-						</div>
-						<div role="cell">
-							{#if mode === 'rename'}<Field
-									label="New tag name"
-									hideLabel
-									{value}
-									placeholder="New tag name"
-									oninput={(next) => (value = next)}
-								/>
-							{:else}<Select
-									label="Target tag"
-									hideLabel
-									{value}
-									options={allRows
-										.filter((item) => item.name !== row.name)
-										.map((item) => ({ value: item.name, label: item.name }))}
-									onchange={(next) => (value = next)}
-								/>{/if}
-						</div>
-						<div class="edit-actions" role="cell">
-							<Button size="compact" onclick={() => (editing = null)}>Cancel</Button><Button
-								size="compact"
-								variant="primary"
-								onclick={apply}
-								loading={busy}
-								disabled={!value.trim() || value.trim() === row.name}
-								>{mode === 'rename' ? 'Rename' : 'Merge'}</Button
-							>
-						</div>
-					</div>
-				{/if}
-			{/each}
-		</div>
-	{/if}
-</div>
-
-{#if deleting && store.behaviour}
-	{@const usage = rows.find((row) => row.name === deleting)}
-	<Dialog
-		title={`Delete “${deleting}”?`}
-		description={`This removes the tag from ${usage?.media['all-media'] ?? 0} media item(s) and ${usage?.total ?? 0} Content/Experience reference(s). No media files will be deleted.`}
-		buttons={[
-			{ label: 'Cancel', onclick: () => (deleting = null) },
-			{ label: 'Delete tag', destructive: true, onclick: confirmDelete }
-		]}
-		onclose={() => (deleting = null)}
-	/>
-{/if}
-
-<style>
-	.page {
-		display: flex;
-		height: 100%;
-		padding: 24px;
-		overflow-y: auto;
-		flex-direction: column;
-		align-items: center;
-	}
-	.page > :global(*) {
-		width: 100%;
-		max-width: 800px;
-	}
-	header {
-		display: flex;
-		margin-bottom: 18px;
-		align-items: end;
-		justify-content: space-between;
-		gap: 24px;
-	}
-	header p {
-		margin: 4px 0 0;
-		color: var(--ui-muted);
-		font-size: 13px;
-	}
-	header :global(.root) {
-		width: 220px;
-	}
-	.table {
-		overflow: hidden;
-		border: 1px solid var(--ui-border);
-		border-radius: var(--ui-radius-md);
-		background: var(--ui-surface);
-	}
-	.table-head,
-	.tag-row {
-		display: grid;
-		grid-template-columns: minmax(120px, 1fr) 70px 80px 90px minmax(310px, auto);
-		min-height: 45px;
-		padding: 0 12px;
-		align-items: center;
-		gap: 8px;
-		border-bottom: 1px solid var(--ui-border);
-	}
-	.table-head {
-		min-height: 34px;
-		color: var(--ui-muted);
-		background: var(--ui-bg);
-		font-family: var(--ui-font-mono);
-		font-size: 11px;
-		font-weight: 700;
-	}
-	.tag-row {
-		font-size: 12px;
-	}
-	.tag-row > span {
-		color: var(--ui-muted);
-	}
-	.row-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: 2px;
-	}
-	.edit-row {
-		display: grid;
-		padding: 12px;
-		grid-template-columns: minmax(180px, 1fr) minmax(180px, 260px) auto;
-		align-items: center;
-		gap: 14px;
-		border-bottom: 1px solid var(--ui-border);
-		background: var(--ui-bg);
-	}
-	.edit-row strong,
-	.edit-row small {
-		display: block;
-	}
-	.edit-row strong {
-		font-size: 12px;
-	}
-	.edit-row small {
-		margin-top: 3px;
-		color: var(--ui-muted);
-		font-size: 10px;
-	}
-	.edit-actions {
-		display: flex;
-		gap: 6px;
-	}
-	.error {
-		display: flex;
-		margin-bottom: 12px;
-		padding: 9px 11px;
-		justify-content: space-between;
-		border: 1px solid var(--ui-danger-border);
-		border-radius: var(--ui-radius-sm);
-		background: var(--ui-danger-bg);
-		color: var(--ui-danger);
-		font-size: 12px;
-	}
-	.error button {
-		border: 0;
-		background: transparent;
-		color: inherit;
-		cursor: pointer;
-	}
-	.loading {
-		padding: 36px;
-		border: 1px dashed var(--ui-border);
-		border-radius: var(--ui-radius-md);
-		color: var(--ui-muted);
-		text-align: center;
-		font-size: 13px;
-	}
-	@media (max-width: 950px) {
-		.table-head,
-		.tag-row {
-			grid-template-columns: minmax(100px, 1fr) 48px 58px 68px;
-		}
-		.table-head .actions-heading {
-			position: absolute;
-			width: 1px;
-			height: 1px;
-			overflow: hidden;
-			clip: rect(0, 0, 0, 0);
-			white-space: nowrap;
-		}
-		.row-actions {
-			grid-column: 1 / -1;
-			padding-bottom: 8px;
-			justify-content: flex-start;
-		}
-		.edit-row {
-			grid-template-columns: 1fr;
-		}
-	}
-	@media (max-width: 620px) {
-		.page {
-			padding: 16px;
-		}
-		header {
-			align-items: stretch;
-			flex-direction: column;
-			gap: 10px;
-		}
-		header :global(.root) {
-			width: 100%;
-		}
-		.table-head,
-		.tag-row {
-			grid-template-columns: minmax(90px, 1fr) repeat(3, 44px);
-			padding-inline: 8px;
-			gap: 4px;
-		}
-		.row-actions {
-			flex-wrap: wrap;
-		}
-	}
-</style>
+<VocabularyPage
+	title="Tags"
+	noun="tag"
+	description="Manage the vocabulary used across media, Content, and Experience."
+	columns={[
+		{ label: 'Media', value: (row) => row.media['all-media'], width: '70px', narrowWidth: '48px' },
+		{ label: 'Content', value: (row) => row.content, width: '80px', narrowWidth: '58px' },
+		{ label: 'Experience', value: (row) => row.experience, width: '90px', narrowWidth: '68px' }
+	]}
+	{rows}
+	{loaded}
+	loadError={failure}
+	onload={load}
+	emptyDescription="Tags are created when you tag media or use them in Content and Experience settings."
+	renameNote="Every media and behaviour reference will be updated."
+	mergeNote="References will be combined and duplicates removed."
+	deleteDescription={(row) =>
+		`This removes the tag from ${row.media['all-media']} media item(s) and ${row.total} Content/Experience reference(s). No media files will be deleted.`}
+	onrename={(from, to) => edit(api.renameTag(from, to), `Rename tag “${from}”`, from, to)}
+	onmerge={(from, to) => edit(api.mergeTag(from, to), `Merge tag “${from}”`, from, to)}
+	ondelete={(tag) => edit(api.deleteTag(tag), `Delete tag “${tag}”`, tag, null)}
+/>

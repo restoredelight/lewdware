@@ -15,7 +15,9 @@
 	} from './metadataSave.svelte.js';
 	import { store } from './store.svelte.js';
 	import type { EmbeddedMode, RecommendedMode } from './types.js';
-	import { clampScroll } from '$ui/scroll';
+	import LoadingNote from './LoadingNote.svelte';
+	import PageShell from './PageShell.svelte';
+	import { formatFileSize } from './format.js';
 
 	let modes = $state<EmbeddedMode[]>([]);
 	let loaded = $state(false);
@@ -116,32 +118,22 @@
 			error = String(cause);
 		}
 	}
-
-	function formatSize(bytes: number) {
-		return bytes < 1024 * 1024
-			? `${(bytes / 1024).toFixed(1)} KB`
-			: `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-	}
 </script>
 
-<div class="page" use:clampScroll>
-	<header>
-		<div>
-			<h2 class="ui-page-title">Modes</h2>
-			<p>
-				Bundle a Lua mode with this pack and define the options people can configure before it runs.
-			</p>
-		</div>
+<PageShell
+	title="Modes"
+	description="Bundle a Lua mode with this pack and define the options people can configure before it runs."
+	align="start"
+	{error}
+	ondismisserror={() => (error = null)}
+>
+	{#snippet actions()}
 		{#if loaded && modes.length > 0}
 			<Button variant="primary" onclick={addMode} disabled={adding} loading={addingMode}
 				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add mode…</Button
 			>
 		{/if}
-	</header>
-
-	{#if error}<div class="error" role="alert">
-			<span>{error}</span><button onclick={() => (error = null)}>Dismiss</button>
-		</div>{/if}
+	{/snippet}
 
 	{#if store.metadata}<section class="recommendation">
 			<div>
@@ -161,7 +153,7 @@
 			/>
 		</section>{/if}
 
-	{#if !loaded}<p class="loading">Loading…</p>
+	{#if !loaded}<LoadingNote />
 	{:else if loadError}
 		<EmptyState
 			title="Could not load modes"
@@ -189,7 +181,7 @@
 								.join(' · ') || 'No author or version provided'}
 						</p>
 						<small
-							>{mode.option_count} option{mode.option_count === 1 ? '' : 's'} · {formatSize(
+							>{mode.option_count} option{mode.option_count === 1 ? '' : 's'} · {formatFileSize(
 								mode.size
 							)}</small
 						>
@@ -207,7 +199,7 @@
 			{/each}
 		</div>
 	{/if}
-</div>
+</PageShell>
 
 {#if removing}
 	<Dialog
@@ -222,59 +214,6 @@
 {/if}
 
 <style>
-	.page {
-		display: flex;
-		height: 100%;
-		padding: 24px;
-		overflow-y: auto;
-		flex-direction: column;
-		align-items: center;
-	}
-	.page > :global(*) {
-		width: 100%;
-		max-width: 800px;
-	}
-	header {
-		display: flex;
-		margin-bottom: 18px;
-		align-items: start;
-		justify-content: space-between;
-		gap: 24px;
-	}
-	header p,
-	.recommendation p {
-		margin: 4px 0 0;
-		max-width: 620px;
-		color: var(--ui-muted);
-		font-size: 13px;
-		line-height: 1.45;
-	}
-	.error {
-		display: flex;
-		margin-bottom: 12px;
-		padding: 9px 11px;
-		justify-content: space-between;
-		gap: 12px;
-		border: 1px solid var(--ui-danger-border);
-		border-radius: var(--ui-radius-sm);
-		background: var(--ui-danger-bg);
-		color: var(--ui-danger);
-		font-size: 12px;
-	}
-	.error button {
-		border: 0;
-		background: transparent;
-		color: inherit;
-		cursor: pointer;
-	}
-	.loading {
-		padding: 36px;
-		border: 1px dashed var(--ui-border);
-		border-radius: var(--ui-radius-md);
-		color: var(--ui-muted);
-		text-align: center;
-		font-size: 13px;
-	}
 	.recommendation {
 		display: flex;
 		margin-bottom: 18px;
@@ -291,7 +230,11 @@
 		font-size: 14px;
 	}
 	.recommendation p {
+		max-width: 620px;
+		margin: 4px 0 0;
+		color: var(--ui-muted);
 		font-size: 12px;
+		line-height: 1.45;
 	}
 	.recommendation :global(.mode-select) {
 		width: 240px;
@@ -352,10 +295,6 @@
 		font-weight: 600;
 	}
 	@media (max-width: 650px) {
-		.page {
-			padding: 16px;
-		}
-		header,
 		.recommendation {
 			align-items: stretch;
 			flex-direction: column;

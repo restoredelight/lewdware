@@ -3,7 +3,7 @@
 	import { store } from './store.svelte.js';
 	import type { FileInfo } from './types.js';
 	import TagInput from '$ui/TagInput.svelte';
-	import { NON_POPUP_TAG, SUBLIMINAL_TAG, withoutManagedTags } from './tags.js';
+	import { NON_POPUP_TAG, SUBLIMINAL_TAG } from './tags.js';
 	import Button from '$ui/Button.svelte';
 	import { api } from './api.js';
 	import { onMount } from 'svelte';
@@ -11,10 +11,10 @@
 	import EmptyState from '$ui/EmptyState.svelte';
 	import IconButton from '$ui/IconButton.svelte';
 	import { copyFileName } from './clipboard.js';
-	import { openMediaPreview } from './mediaPreview.js';
+	import { openMediaPreview, openSelectionEditor } from './mediaPreview.js';
 	import RadioGroup from '$ui/RadioGroup.svelte';
 	import { audioRole, setAudioRole, type AudioRole } from './audioRoles.js';
-	import { openSelectionEditor } from './mediaPreview.js';
+	import { summarizeLabels, type LabelSummary } from './labelSummary.js';
 	import { taskFeedback } from './taskFeedback.svelte.js';
 	import { formatDuration, formatFileSize } from './format.js';
 	import { clampScroll } from '$ui/scroll';
@@ -111,46 +111,8 @@
 		return uses;
 	});
 	const showUsedAs = $derived(store.activeView === 'all-media' && usedAs.length > 0);
-	// Managed tags are the editor's, not the author's: they're applied and cleared by the media
-	// slots and the subliminal pool, and they'd be undeletable clutter in this list (the backend
-	// refuses to remove one through a tag command). See ./tags.ts.
-	const tagCounts = $derived.by(() => {
-		const counts = new Map<string, number>();
-		for (const file of selected)
-			for (const tag of withoutManagedTags(file.tags)) counts.set(tag, (counts.get(tag) ?? 0) + 1);
-		return counts;
-	});
-
-	const commonTags = $derived(
-		[...tagCounts]
-			.filter(([, count]) => count === selCount)
-			.map(([tag]) => tag)
-			.sort()
-	);
-	const mixedTags = $derived(
-		[...tagCounts]
-			.filter(([, count]) => count < selCount)
-			.map(([tag, count]) => ({ tag, count }))
-			.sort((a, b) => a.tag.localeCompare(b.tag))
-	);
-	const artistCounts = $derived.by(() => {
-		const counts = new Map<string, number>();
-		for (const file of selected)
-			for (const artist of file.artists) counts.set(artist, (counts.get(artist) ?? 0) + 1);
-		return counts;
-	});
-	const commonArtists = $derived(
-		[...artistCounts]
-			.filter(([, count]) => count === selCount)
-			.map(([artist]) => artist)
-			.sort()
-	);
-	const mixedArtists = $derived(
-		[...artistCounts]
-			.filter(([, count]) => count < selCount)
-			.map(([artist, count]) => ({ artist, count }))
-			.sort((a, b) => a.artist.localeCompare(b.artist))
-	);
+	const tagSummary = $derived(summarizeLabels(selected, 'tags'));
+	const artistSummary = $derived(summarizeLabels(selected, 'artists'));
 	let titleValue = $state('');
 	let titleError = $state<string | null>(null);
 	let sourceValue = $state('');
@@ -219,60 +181,44 @@
 		});
 	});
 
-	async function addTag(tag: string) {
+	/**
+	 * Puts a tag or an artist on the whole selection, or takes it off.
+	 *
+	 * The undo entry counts only the files the edit actually changed, not the files it was sent
+	 * for: "Add tag “spiral” to 3 items" over a selection of twenty already carrying it would
+	 * describe work that did not happen.
+	 */
+	async function editLabel(field: 'tags' | 'artists', value: string, add: boolean) {
 		const ids = selected.map((file) => file.id);
-		const affected = selected.filter((file) => !file.tags.includes(tag)).map((file) => file.id);
-		if (!affected.length) return;
-		await api.addTagToFiles(ids, tag);
-		store.addTagToFiles(ids, tag, true);
+		const affected = selected.filter((file) => file[field].includes(value) !== add).length;
+		if (!affected) return;
+
+		if (field === 'tags') {
+			if (add) {
+				await api.addTagToFiles(ids, value);
+				store.addTagToFiles(ids, value, true);
+			} else {
+				await api.removeTagFromFiles(ids, value);
+				store.removeTagFromFiles(ids, value, true);
+			}
+		} else if (add) {
+			await api.addArtistToFiles(ids, value);
+			store.addArtistToFiles(ids, value, true);
+		} else {
+			await api.removeArtistFromFiles(ids, value);
+			store.removeArtistFromFiles(ids, value, true);
+		}
+
+		const verb = add ? 'Add' : 'Remove';
+		const noun = field === 'tags' ? 'tag' : 'artist';
 		history.record({
 			label:
-				affected.length === 1 ? `Add tag “${tag}”` : `Add tag “${tag}” to ${affected.length} items`
+				affected === 1
+					? `${verb} ${noun} “${value}”`
+					: `${verb} ${noun} “${value}” ${add ? 'to' : 'from'} ${affected} items`
 		});
 	}
-	async function removeTag(tag: string) {
-		const ids = selected.map((file) => file.id);
-		const affected = selected.filter((file) => file.tags.includes(tag)).map((file) => file.id);
-		if (!affected.length) return;
-		await api.removeTagFromFiles(ids, tag);
-		store.removeTagFromFiles(ids, tag, true);
-		history.record({
-			label:
-				affected.length === 1
-					? `Remove tag “${tag}”`
-					: `Remove tag “${tag}” from ${affected.length} items`
-		});
-	}
-	async function addArtist(artist: string) {
-		const ids = selected.map((file) => file.id);
-		const affected = selected
-			.filter((file) => !file.artists.includes(artist))
-			.map((file) => file.id);
-		if (!affected.length) return;
-		await api.addArtistToFiles(ids, artist);
-		store.addArtistToFiles(ids, artist, true);
-		history.record({
-			label:
-				affected.length === 1
-					? `Add artist “${artist}”`
-					: `Add artist “${artist}” to ${affected.length} items`
-		});
-	}
-	async function removeArtist(artist: string) {
-		const ids = selected.map((file) => file.id);
-		const affected = selected
-			.filter((file) => file.artists.includes(artist))
-			.map((file) => file.id);
-		if (!affected.length) return;
-		await api.removeArtistFromFiles(ids, artist);
-		store.removeArtistFromFiles(ids, artist, true);
-		history.record({
-			label:
-				affected.length === 1
-					? `Remove artist “${artist}”`
-					: `Remove artist “${artist}” from ${affected.length} items`
-		});
-	}
+
 	async function saveSource() {
 		if (!primary || selCount !== 1) return;
 		const id = primary.id;
@@ -329,6 +275,50 @@
 		else store.revealExperienceStage(target.stageId);
 	}
 </script>
+
+<!-- Tags and artists are the same control over two different lists: the names the whole selection
+     shares, editable as a set, and the names only part of it carries, offered as chips that add to
+     all or remove from the selection. -->
+{#snippet labelSection(
+	title: string,
+	noun: string,
+	field: 'tags' | 'artists',
+	summary: LabelSummary,
+	suggestions: string[]
+)}
+	<section>
+		<div class="section-heading">
+			<h2>{title}</h2>
+			<span>{summary.common.length} shared</span>
+		</div>
+		<TagInput
+			tags={summary.common}
+			{suggestions}
+			label={selCount === 1 ? title : `${title} on all selected items`}
+			placeholder={selCount === 1 ? `Add ${noun}…` : 'Add to all…'}
+			onadd={(value) => editLabel(field, value, true)}
+			onremove={(value) => editLabel(field, value, false)}
+		/>
+		{#if summary.mixed.length > 0}
+			<p class="mixed-label">On some selected items</p>
+			<div class="mixed-tags">
+				{#each summary.mixed as item (item.name)}
+					<span class="mixed-tag"
+						><span>{item.name} <small>{item.count}/{selCount}</small></span><button
+							onclick={() => editLabel(field, item.name, true)}
+							aria-label={`Add ${item.name} to all selected items`}
+							title="Add to all"><Icon src={Plus} mini size="13px" /></button
+						><button
+							onclick={() => editLabel(field, item.name, false)}
+							aria-label={`Remove ${item.name} from selected items`}
+							title="Remove from selection"><Icon src={XMark} mini size="13px" /></button
+						></span
+					>
+				{/each}
+			</div>
+		{/if}
+	</section>
+{/snippet}
 
 <aside
 	class:resizing
@@ -490,71 +480,8 @@
 				{/if}
 			</section>
 
-			<section>
-				<div class="section-heading">
-					<h2>Tags</h2>
-					<span>{commonTags.length} shared</span>
-				</div>
-				<TagInput
-					tags={commonTags}
-					suggestions={store.allTags}
-					label={selCount === 1 ? 'Tags' : 'Tags on all selected items'}
-					placeholder={selCount === 1 ? 'Add tag…' : 'Add to all…'}
-					onadd={addTag}
-					onremove={removeTag}
-				/>
-				{#if mixedTags.length > 0}
-					<p class="mixed-label">On some selected items</p>
-					<div class="mixed-tags">
-						{#each mixedTags as item (item.tag)}
-							<span class="mixed-tag"
-								><span>{item.tag} <small>{item.count}/{selCount}</small></span><button
-									onclick={() => addTag(item.tag)}
-									aria-label={`Add ${item.tag} to all selected items`}
-									title="Add to all"><Icon src={Plus} mini size="13px" /></button
-								><button
-									onclick={() => removeTag(item.tag)}
-									aria-label={`Remove ${item.tag} from selected items`}
-									title="Remove from selection"><Icon src={XMark} mini size="13px" /></button
-								></span
-							>
-						{/each}
-					</div>
-				{/if}
-			</section>
-
-			<section>
-				<div class="section-heading">
-					<h2>Artists</h2>
-					<span>{commonArtists.length} shared</span>
-				</div>
-				<TagInput
-					tags={commonArtists}
-					suggestions={store.allArtists}
-					label={selCount === 1 ? 'Artists' : 'Artists on all selected items'}
-					placeholder={selCount === 1 ? 'Add artist…' : 'Add to all…'}
-					onadd={addArtist}
-					onremove={removeArtist}
-				/>
-				{#if mixedArtists.length > 0}
-					<p class="mixed-label">On some selected items</p>
-					<div class="mixed-tags">
-						{#each mixedArtists as item (item.artist)}
-							<span class="mixed-tag"
-								><span>{item.artist} <small>{item.count}/{selCount}</small></span><button
-									onclick={() => addArtist(item.artist)}
-									aria-label={`Add ${item.artist} to all selected items`}
-									title="Add to all"><Icon src={Plus} mini size="13px" /></button
-								><button
-									onclick={() => removeArtist(item.artist)}
-									aria-label={`Remove ${item.artist} from selected items`}
-									title="Remove from selection"><Icon src={XMark} mini size="13px" /></button
-								></span
-							>
-						{/each}
-					</div>
-				{/if}
-			</section>
+			{@render labelSection('Tags', 'tag', 'tags', tagSummary, store.allTags)}
+			{@render labelSection('Artists', 'artist', 'artists', artistSummary, store.allArtists)}
 
 			{#if selCount === 1}
 				<details open>
@@ -640,7 +567,6 @@
 		background: var(--ui-accent);
 	}
 	.resize-handle:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -3px;
 	}
 	.resizing {
@@ -655,7 +581,6 @@
 		cursor: pointer;
 	}
 	.preview:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -2px;
 	}
 	.preview-hint {
@@ -781,7 +706,6 @@
 		color: var(--ui-text);
 	}
 	.mixed-tag button:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -2px;
 	}
 	details {
@@ -839,7 +763,6 @@
 		border-color: var(--ui-border-strong);
 	}
 	.used-as button:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -2px;
 	}
 	.actions {

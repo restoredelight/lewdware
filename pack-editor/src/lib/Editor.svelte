@@ -1,20 +1,15 @@
 <script lang="ts">
 	import { clampScroll } from '$ui/scroll';
-	import Button from '$ui/Button.svelte';
 	import Tabs from '$ui/Tabs.svelte';
 	import IconButton from '$ui/IconButton.svelte';
-	import Popover from '$ui/Popover.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import {
-		ArrowUturnLeft,
-		ArrowUturnRight,
 		ChevronLeft,
 		ChevronRight,
 		Clock,
 		CodeBracketSquare,
 		Cog6Tooth,
 		DocumentText,
-		EllipsisVertical,
 		Icon,
 		MusicalNote,
 		PaintBrush,
@@ -22,10 +17,13 @@
 		Squares2x2,
 		Tag
 	} from 'svelte-hero-icons';
+	import { modifierKeyLabel } from './platform.js';
 	import { onMount, tick } from 'svelte';
 	import { getCurrentWebview } from '@tauri-apps/api/webview';
 	import { api } from './api.js';
-	import { store } from './store.svelte.js';
+	import { isMediaView, store } from './store.svelte.js';
+	import DropOverlay from './DropOverlay.svelte';
+	import EditorToolbar from './EditorToolbar.svelte';
 	import MediaGrid from './MediaGrid.svelte';
 	import Sidebar from './Sidebar.svelte';
 	import Options from './Options.svelte';
@@ -38,29 +36,14 @@
 	import AudioList from './AudioList.svelte';
 	import ImportWarnings from './ImportWarnings.svelte';
 	import { mediaSlotUsage } from './tagReferences.js';
-
-	/** "a", "a and b", "a, b and c" -- for naming what a removal will clear. */
-	function formatList(items: string[]): string {
-		if (items.length <= 1) return items[0] ?? '';
-		return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
-	}
+	import { formatList } from './format.js';
 	import MediaToolbar from './MediaToolbar.svelte';
 	import Tags from './Tags.svelte';
 	import Artists from './Artists.svelte';
-	import {
-		adoptBehaviour,
-		cancelBehaviourSave,
-		ensureBehaviour,
-		flushBehaviourSave
-	} from './behaviourSave.svelte.js';
-	import {
-		cancelMetadataSave,
-		flushMetadataSave,
-		initializeMetadataHistory,
-		scheduleMetadataSave
-	} from './metadataSave.svelte.js';
+	import { adoptBehaviour, ensureBehaviour } from './behaviourSave.svelte.js';
+	import { initializeMetadataHistory, scheduleMetadataSave } from './metadataSave.svelte.js';
+	import { cancelPendingWrites, flushPendingWrites, packSave } from './packActions.svelte.js';
 	import { history } from './history.svelte.js';
-	import TaskStatus from './TaskStatus.svelte';
 	import { taskFeedback } from './taskFeedback.svelte.js';
 	import type { MediaFile } from './types.js';
 	import EmptyState from '$ui/EmptyState.svelte';
@@ -70,16 +53,14 @@
 	// beside it do, and a key per pack would accrue one for every pack ever opened.
 	const LAST_MEDIA_VIEW_KEY = 'pack-editor:last-media-view';
 
-	let saveError = $state<string | null>(null);
 	let navCollapsed = $state(false);
 	let narrowWindow = $state(false);
 	let showClosePackDialog = $state(false);
 	let closePackAfterSave = $state(false);
 	let removingMedia = $state(false);
-	let saveDestinationChosen = $state(false);
 	let modifierLabel = $state('Ctrl');
 	let packTitle = $state(store.packName);
-	let packTitleInput = $state<HTMLInputElement>();
+	let toolbar = $state<ReturnType<typeof EditorToolbar>>();
 	let mediaViewRestored = $state(false);
 
 	const navigationTabs = [
@@ -97,7 +78,7 @@
 
 	$effect(() => {
 		const name = store.packName;
-		if (packTitleInput !== document.activeElement) packTitle = name;
+		if (!toolbar?.isEditingTitle()) packTitle = name;
 	});
 
 	$effect(() => {
@@ -108,7 +89,7 @@
 	});
 
 	$effect(() => {
-		if (!store.saveActive) saveDestinationChosen = false;
+		if (!store.saveActive) packSave.destinationChosen = false;
 	});
 
 	// The only writer of the remembered media tab: every route into one goes through
@@ -118,22 +99,11 @@
 		if (mediaViewRestored) localStorage.setItem(LAST_MEDIA_VIEW_KEY, store.lastMediaView);
 	});
 
-	function onSaveDestinationChosen() {
-		saveDestinationChosen = true;
-		taskFeedback.progress('save', 'Saving pack…');
-	}
-
 	onMount(() => {
-		modifierLabel = navigator.platform.includes('Mac') ? '⌘' : 'Ctrl';
+		modifierLabel = modifierKeyLabel();
 		navCollapsed = localStorage.getItem('pack-editor:navigation-collapsed') === 'true';
 		const rememberedMediaView = localStorage.getItem(LAST_MEDIA_VIEW_KEY);
-		if (
-			rememberedMediaView === 'popups' ||
-			rememberedMediaView === 'audio' ||
-			rememberedMediaView === 'all-media'
-		) {
-			store.setActiveView(rememberedMediaView);
-		}
+		if (isMediaView(rememberedMediaView)) store.setActiveView(rememberedMediaView);
 		mediaViewRestored = true;
 		// The app supports an 800 px-wide window. Collapse the global navigation before the
 		// editor and inspector panes become too narrow to lay out their own controls.
@@ -194,8 +164,7 @@
 			packTitle = metadata.name;
 			initializeMetadataHistory(metadata);
 		} catch (error) {
-			saveError = `Could not load pack metadata: ${String(error)}`;
-			taskFeedback.error('metadata-load', saveError);
+			taskFeedback.error('metadata-load', `Could not load pack metadata: ${String(error)}`);
 		}
 	});
 
@@ -219,10 +188,10 @@
 	}
 
 	function handlePackTitleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter') packTitleInput?.blur();
+		if (event.key === 'Enter') toolbar?.blurTitle();
 		else if (event.key === 'Escape') {
 			packTitle = store.packName;
-			packTitleInput?.blur();
+			toolbar?.blurTitle();
 		}
 	}
 
@@ -231,92 +200,36 @@
 		localStorage.setItem('pack-editor:navigation-collapsed', String(navCollapsed));
 	}
 
-	async function undo() {
-		saveError = null;
+	/** Undo and redo differ only in direction, and both must flush before the backend rewinds. */
+	async function step(direction: 'undo' | 'redo') {
+		const undoing = direction === 'undo';
+		const label = undoing ? history.undoLabel : history.redoLabel;
+		const verb = undoing ? 'Undoing' : 'Redoing';
 		try {
-			taskFeedback.progress(
-				'history',
-				history.undoLabel ? `Undoing “${history.undoLabel}”…` : 'Undoing change…'
-			);
-			await flushMetadataSave();
-			await flushBehaviourSave();
-			await history.undo();
-			taskFeedback.success('history', 'Change undone');
-		} catch (err) {
-			saveError = `Undo failed: ${String(err)}`;
-			taskFeedback.error('history', saveError);
+			taskFeedback.progress('history', label ? `${verb} “${label}”…` : `${verb} change…`);
+			await flushPendingWrites();
+			await (undoing ? history.undo() : history.redo());
+			taskFeedback.success('history', undoing ? 'Change undone' : 'Change redone');
+		} catch (error) {
+			taskFeedback.error('history', `${undoing ? 'Undo' : 'Redo'} failed: ${String(error)}`);
 		}
 	}
 
-	async function redo() {
-		saveError = null;
-		try {
-			taskFeedback.progress(
-				'history',
-				history.redoLabel ? `Redoing “${history.redoLabel}”…` : 'Redoing change…'
-			);
-			await flushMetadataSave();
-			await flushBehaviourSave();
-			await history.redo();
-			taskFeedback.success('history', 'Change redone');
-		} catch (err) {
-			saveError = `Redo failed: ${String(err)}`;
-			taskFeedback.error('history', saveError);
-		}
-	}
+	const undo = () => step('undo');
+	const redo = () => step('redo');
 
-	async function save() {
+	async function write(mode: 'save' | 'save-as') {
 		if (!store.beginSave()) return;
-		saveError = null;
-		if (store.uploading && !store.packHasDestination)
-			taskFeedback.warning('save', 'Waiting for the import to finish before the first save…');
-		else if (store.uploading)
-			taskFeedback.warning('save', 'Saving now — unfinished uploads won’t be included');
-		else if (store.packHasDestination) taskFeedback.progress('save', 'Saving pack…');
-		try {
-			await flushMetadataSave();
-			await flushBehaviourSave();
-			const info = await api.savePack(onSaveDestinationChosen);
-			if (info) {
-				store.packId = info.id;
-				store.packName = info.name;
-				store.packHasDestination = info.has_destination;
-			} else {
-				store.endSave();
-				taskFeedback.dismiss('save');
-			}
-		} catch (err) {
-			// The backend only emits save:done on success, so a failed save would
-			// otherwise leave the "Saving… X/Y" progress bar stuck on screen forever.
-			saveError = String(err);
-			taskFeedback.error('save', `Save failed: ${saveError}`);
-			store.endSave();
-		}
+		const { info } = await packSave.run(mode);
+		if (!info) return;
+		store.packId = info.id;
+		store.packName = info.name;
+		// A Save As always leaves the pack with the destination it just chose.
+		store.packHasDestination = mode === 'save-as' || info.has_destination;
 	}
 
-	async function saveAs() {
-		if (!store.beginSave()) return;
-		saveError = null;
-		if (store.uploading)
-			taskFeedback.warning('save', 'Waiting for the import to finish before Save As…');
-		try {
-			await flushMetadataSave();
-			await flushBehaviourSave();
-			const info = await api.savePackAsDialog(onSaveDestinationChosen);
-			if (info) {
-				store.packId = info.id;
-				store.packName = info.name;
-				store.packHasDestination = true;
-			} else {
-				store.endSave();
-				taskFeedback.dismiss('save');
-			}
-		} catch (err) {
-			saveError = String(err);
-			taskFeedback.error('save', `Save failed: ${saveError}`);
-			store.endSave();
-		}
-	}
+	const save = () => write('save');
+	const saveAs = () => write('save-as');
 
 	async function discard() {
 		if (store.saveActive || store.uploading) {
@@ -328,9 +241,7 @@
 			);
 			return;
 		}
-		cancelMetadataSave();
-		cancelBehaviourSave();
-		saveError = null;
+		cancelPendingWrites();
 		try {
 			const meta = await api.discardChanges();
 			store.metadata = meta;
@@ -351,15 +262,13 @@
 			initializeMetadataHistory(meta);
 			history.reset(true);
 			taskFeedback.success('pack-action', 'Changes discarded');
-		} catch (err) {
-			saveError = `Could not discard changes: ${String(err)}`;
-			taskFeedback.error('pack-action', saveError);
+		} catch (error) {
+			taskFeedback.error('pack-action', `Could not discard changes: ${String(error)}`);
 		}
 	}
 
 	async function finishClosePack() {
-		cancelBehaviourSave();
-		cancelMetadataSave();
+		cancelPendingWrites();
 		await api.closePack();
 		store.closePack();
 	}
@@ -379,8 +288,7 @@
 			);
 		} else {
 			try {
-				await flushMetadataSave();
-				await flushBehaviourSave();
+				await flushPendingWrites();
 				const saved = await api.isPackSaved();
 				store.packSaved = saved;
 				if (saved) await finishClosePack();
@@ -400,23 +308,12 @@
 			closePackAfterSave = true;
 			return;
 		}
-		saveError = null;
-		try {
-			await flushMetadataSave();
-			await flushBehaviourSave();
-			const info = await api.savePack(onSaveDestinationChosen);
-			if (!info) {
-				store.endSave();
-				taskFeedback.dismiss('save');
-				return;
-			}
-			if (info.has_unsaved_changes) showClosePackDialog = true;
-			else await finishClosePack();
-		} catch (err) {
-			saveError = String(err);
-			taskFeedback.error('save', `Save failed: ${saveError}`);
-			store.endSave();
-		}
+		const { info } = await packSave.run('save');
+		if (!info) return;
+		// A pack that still reports unsaved changes gained some while it was being written; ask
+		// again rather than closing over them.
+		if (info.has_unsaved_changes) showClosePackDialog = true;
+		else await finishClosePack();
 	}
 
 	async function discardAndClosePack() {
@@ -429,15 +326,12 @@
 			taskFeedback.warning('pack-action', 'Stop the import before closing the pack');
 			return;
 		}
-		cancelBehaviourSave();
-		cancelMetadataSave();
-		saveError = null;
+		cancelPendingWrites();
 		try {
 			await api.discardPack();
 			store.closePack();
-		} catch (err) {
-			saveError = `Could not discard changes: ${String(err)}`;
-			taskFeedback.error('pack-action', saveError);
+		} catch (error) {
+			taskFeedback.error('pack-action', `Could not discard changes: ${String(error)}`);
 		}
 	}
 
@@ -489,125 +383,20 @@
 </script>
 
 <div class="bg-bg text-text flex h-full flex-col select-none">
-	<!-- Toolbar -->
-	<header class="bg-surface border-border flex h-11 shrink-0 items-center gap-2 border-b px-3">
-		<div class="flex items-center gap-0">
-			<input
-				bind:this={packTitleInput}
-				class="pack-title text-text truncate text-sm font-semibold"
-				aria-label="Pack title"
-				title="Edit pack title"
-				value={packTitle}
-				disabled={!store.metadata}
-				oninput={(event) => editPackTitle(event.currentTarget.value)}
-				onblur={finishPackTitleEdit}
-				onkeydown={handlePackTitleKeydown}
-			/>
-			{#if store.recoveryStatus === 'error'}
-				<span
-					class="recovery-status flex items-center gap-1.5 font-mono text-[11px] text-[var(--ui-danger)]"
-					role="alert"
-					title={store.recoveryError ?? 'Changes could not be backed up locally.'}
-				>
-					<span class="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ui-danger)]"></span>
-					<span class="recovery-label">Backup failed</span>
-				</span>
-			{:else if store.recoveryStatus !== 'saved'}
-				<span
-					class="bg-muted h-1.5 w-1.5 shrink-0 rounded-full {store.recoveryStatus === 'pending'
-						? 'animate-pulse'
-						: ''}"
-					role="status"
-					aria-label="Unsaved changes"
-					title={store.recoveryStatus === 'pending'
-						? 'Backing up changes…'
-						: store.packHasDestination
-							? 'Unsaved changes — backed up locally'
-							: 'Draft — backed up locally; choose a destination on first save'}
-				></span>
-			{/if}
-		</div>
-		<div class="flex-1"></div>
-		<TaskStatus />
-		<div class="flex items-center">
-			<IconButton
-				label={history.undoLabel ? `Undo ${history.undoLabel}` : 'Undo'}
-				disabled={!history.canUndo}
-				onclick={undo}
-				title={history.undoLabel
-					? `Undo “${history.undoLabel}” (${modifierLabel}+Z)`
-					: `Undo (${modifierLabel}+Z)`}
-			>
-				<span class="h-4 w-4"><Icon src={ArrowUturnLeft} mini /></span>
-			</IconButton>
-			<IconButton
-				label={history.redoLabel ? `Redo ${history.redoLabel}` : 'Redo'}
-				disabled={!history.canRedo}
-				onclick={redo}
-				title={history.redoLabel
-					? `Redo “${history.redoLabel}” (${modifierLabel}+Shift+Z)`
-					: `Redo (${modifierLabel}+Shift+Z)`}
-			>
-				<span class="h-4 w-4"><Icon src={ArrowUturnRight} mini /></span>
-			</IconButton>
-		</div>
-		<Button
-			size="compact"
-			variant="primary"
-			onclick={save}
-			disabled={store.packSaved || store.saveActive}
-			loading={store.saveActive && (store.packHasDestination || saveDestinationChosen)}
-			title={`Save (${modifierLabel}+S)`}>Save</Button
-		>
-		<Popover align="end" label="Pack actions">
-			{#snippet trigger(toggle, open)}
-				<button
-					onclick={toggle}
-					aria-label="More pack actions"
-					aria-haspopup="menu"
-					aria-expanded={open}
-					class="text-muted hover:text-text hover:bg-surface-2 hover:cursor-pointer grid h-8 w-8 place-items-center rounded"
-					><Icon src={EllipsisVertical} mini size="18px" /></button
-				>
-			{/snippet}
-			{#snippet children(close)}
-				<div class="w-48 py-1">
-					<button
-						role="menuitem"
-						disabled={store.saveActive}
-						onclick={() => {
-							close();
-							saveAs();
-						}}
-						class="hover:bg-bg flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40"
-						><span>Save As…</span><kbd class="text-muted text-[10px]">{modifierLabel}+Shift+S</kbd
-						></button
-					>
-					{#if !store.packSaved && store.packHasDestination}<button
-							role="menuitem"
-							disabled={store.saveActive}
-							onclick={() => {
-								close();
-								discard();
-							}}
-							class="w-full px-3 py-2 text-left text-xs text-[var(--ui-danger)] hover:bg-[var(--ui-danger-bg)] disabled:cursor-not-allowed disabled:opacity-40"
-							>Discard changes</button
-						>{/if}
-					<div class="border-border my-1 border-t"></div>
-					<button
-						role="menuitem"
-						onclick={() => {
-							close();
-							requestClosePack();
-						}}
-						class="w-full px-3 py-2 text-left text-xs {store.packSaved
-							? 'hover:bg-bg'
-							: 'text-[var(--ui-danger)] hover:bg-[var(--ui-danger-bg)]'}">Close pack</button
-					>
-				</div>
-			{/snippet}
-		</Popover>
-	</header>
+	<EditorToolbar
+		bind:this={toolbar}
+		{packTitle}
+		{modifierLabel}
+		onedittitle={editPackTitle}
+		onfinishtitle={finishPackTitleEdit}
+		ontitlekeydown={handlePackTitleKeydown}
+		onundo={undo}
+		onredo={redo}
+		onsave={save}
+		onsaveas={saveAs}
+		ondiscard={discard}
+		onclosepack={requestClosePack}
+	/>
 
 	<div class="flex min-h-0 flex-1">
 		<aside
@@ -798,110 +587,5 @@
 
 <!-- Drag and drop overlay -->
 {#if store.dragActive}
-	<div class="drop-overlay pointer-events-none fixed inset-0 z-[60] grid place-items-center">
-		<div class="drop-window">
-			<div class="drop-titlebar"><span class="drop-dot"></span><span>Import</span></div>
-			<div class="drop-body">Drop files or folders to import them into this pack.</div>
-		</div>
-	</div>
+	<DropOverlay />
 {/if}
-
-<style>
-	.pack-title {
-		field-sizing: content;
-		min-width: 1ch;
-		max-width: min(36vw, 360px);
-		padding: 2px 2px 2px 4px;
-		border: 1px solid transparent;
-		border-radius: var(--ui-radius-sm);
-		background: transparent;
-		outline: none;
-		margin-right: 0.25rem;
-	}
-	.pack-title:hover:not(:disabled) {
-		border-color: var(--ui-border);
-		background: var(--ui-bg);
-	}
-	.pack-title:focus {
-		border-color: var(--ui-focus);
-		background: var(--ui-bg);
-	}
-	.pack-title:disabled {
-		opacity: 1;
-	}
-	.drop-overlay {
-		background: rgb(0 0 0 / 0.62);
-	}
-	.drop-window {
-		position: relative;
-		width: min(380px, calc(100vw - 64px));
-		border: 1px solid var(--ui-accent);
-		border-radius: var(--ui-radius-md);
-		background: var(--ui-surface);
-		box-shadow: var(--ui-shadow-pop);
-	}
-	.drop-window::before,
-	.drop-window::after {
-		content: '';
-		position: absolute;
-		inset: 0;
-		z-index: -1;
-		border: 1px solid var(--ui-border);
-		border-radius: var(--ui-radius-md);
-		background: rgb(10 8 9 / 0.4);
-	}
-	.drop-window::before {
-		transform: translate(-18px, -16px);
-		opacity: 0.5;
-	}
-	.drop-window::after {
-		transform: translate(-9px, -8px);
-	}
-	.drop-titlebar {
-		display: flex;
-		height: 32px;
-		padding: 0 10px;
-		align-items: center;
-		gap: 8px;
-		border-bottom: 1px solid var(--ui-border);
-		border-radius: var(--ui-radius-md) var(--ui-radius-md) 0 0;
-		background: var(--ui-surface-raised);
-		color: var(--ui-text);
-		font-family: var(--ui-font-mono);
-		font-size: 11.5px;
-		font-weight: 700;
-	}
-	.drop-dot {
-		width: 8px;
-		height: 8px;
-		flex: none;
-		border-radius: 50%;
-		background: var(--ui-accent);
-	}
-	.drop-body {
-		padding: 20px 16px;
-		color: var(--ui-muted);
-		font-size: 13px;
-	}
-	@media (max-width: 760px) {
-		.pack-title {
-			max-width: 28vw;
-		}
-		.recovery-label {
-			position: absolute;
-			width: 1px;
-			height: 1px;
-			overflow: hidden;
-			clip-path: inset(50%);
-			white-space: nowrap;
-		}
-		.recovery-status {
-			flex: none;
-		}
-	}
-	@media (max-width: 520px) {
-		.pack-title {
-			max-width: 20vw;
-		}
-	}
-</style>

@@ -154,7 +154,6 @@
 		cursor: default;
 	}
 	.stages button:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -2px;
 	}
 	section.compact {

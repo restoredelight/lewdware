@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Button from '$ui/Button.svelte';
+	import Field from '$ui/Field.svelte';
 	import InlineAudioPlayer from './InlineAudioPlayer.svelte';
 	import { openStandalonePreview } from './mediaPreview.js';
 	import { store } from './store.svelte.js';
@@ -100,10 +101,14 @@
 	{#if open}
 		<div class="browser">
 			<div class="browser-head">
-				<input
-					bind:value={query}
-					aria-label="Search pack media"
+				<Field
+					label="Search pack media"
+					hideLabel
+					type="search"
+					size="compact"
+					value={query}
 					placeholder={kind === 'audio' ? 'Search audio…' : 'Search media…'}
+					oninput={(value) => (query = value)}
 				/>
 			</div>
 			<div class:audio={kind === 'audio'} class="results">
@@ -244,15 +249,8 @@
 		padding: 8px;
 		border-bottom: 1px solid var(--ui-border);
 	}
-	.browser-head input {
-		min-width: 0;
-		height: 32px;
+	.browser-head :global(label) {
 		flex: 1;
-		padding: 0 9px;
-		border: 1px solid var(--ui-border);
-		border-radius: var(--ui-radius-sm);
-		background: var(--ui-surface);
-		color: var(--ui-text);
 	}
 	.results {
 		display: grid;

@@ -13,7 +13,15 @@ import type {
 // a.localeCompare(b, undefined, opts)) is drastically slower at scale.
 const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
-export type MediaView = 'popups' | 'audio' | 'all-media';
+/** The three tabs that list media. Ordered as they appear in the navigation. */
+export const MEDIA_VIEWS = ['popups', 'audio', 'all-media'] as const;
+export type MediaView = (typeof MEDIA_VIEWS)[number];
+
+/** Whether `value` names one of the media tabs — for anything arriving untyped, e.g. localStorage. */
+export function isMediaView(value: unknown): value is MediaView {
+	return MEDIA_VIEWS.includes(value as MediaView);
+}
+
 /** The Audio tab's stand-in for the media-type filter, which has nothing to narrow there. */
 export type AudioRoleFilter = 'all' | 'background' | 'popup';
 export type EditorView =
@@ -60,17 +68,20 @@ function newMediaTab(): MediaTabState {
 }
 
 function newMediaTabs(): Record<MediaView, MediaTabState> {
-	return { popups: newMediaTab(), audio: newMediaTab(), 'all-media': newMediaTab() };
+	return Object.fromEntries(MEDIA_VIEWS.map((view) => [view, newMediaTab()])) as Record<
+		MediaView,
+		MediaTabState
+	>;
 }
 
 /** How much media one tag or artist has in each media tab. */
 export type MediaScopeCounts = Record<MediaView, number>;
 
-export const NO_MEDIA_SCOPE_COUNTS: MediaScopeCounts = Object.freeze({
-	'all-media': 0,
-	popups: 0,
-	audio: 0
-});
+function zeroScopeCounts(): MediaScopeCounts {
+	return Object.fromEntries(MEDIA_VIEWS.map((view) => [view, 0])) as MediaScopeCounts;
+}
+
+export const NO_MEDIA_SCOPE_COUNTS: MediaScopeCounts = Object.freeze(zeroScopeCounts());
 
 function countByName(
 	scopes: Record<MediaView, MediaFile[]>,
@@ -81,7 +92,7 @@ function countByName(
 		for (const file of files)
 			for (const name of names(file)) {
 				let entry = counts.get(name);
-				if (!entry) counts.set(name, (entry = { 'all-media': 0, popups: 0, audio: 0 }));
+				if (!entry) counts.set(name, (entry = zeroScopeCounts()));
 				entry[scope]++;
 			}
 	return counts;
@@ -189,11 +200,7 @@ class AppStore {
 	 * describing a real list rather than going empty or throwing under Tags, Content or Modes.
 	 */
 	get mediaView(): MediaView {
-		return this.activeView === 'popups' ||
-			this.activeView === 'audio' ||
-			this.activeView === 'all-media'
-			? this.activeView
-			: this.lastMediaView;
+		return isMediaView(this.activeView) ? this.activeView : this.lastMediaView;
 	}
 
 	/** The open media tab's filters, sort and selection -- what every media surface reads. */
@@ -233,7 +240,7 @@ class AppStore {
 		this.contentTarget = null;
 		this.experienceTargetStageId = null;
 		this.activeView = view;
-		if (view === 'popups' || view === 'audio' || view === 'all-media') {
+		if (isMediaView(view)) {
 			this.lastMediaView = view;
 			this.openedId = null;
 			this.openedSelection = false;
@@ -241,7 +248,7 @@ class AppStore {
 	}
 
 	revealMedia(view: MediaView, id: number): boolean {
-		const file = this.files.find((candidate) => candidate.id === id);
+		const file = this.fileById(id);
 		const belongs =
 			file != null &&
 			(view === 'all-media' ||
@@ -443,40 +450,54 @@ class AppStore {
 		const sortBy = this.mediaTab.sortBy;
 		const dirMul = this.mediaTab.sortDir === 'asc' ? 1 : -1;
 
-		const filtered = files.filter((f) => {
-			if (typeFilter !== 'all' && f.file_info.type !== typeFilter) return false;
-			if (roleFilter !== 'all' && f.file_info.type === 'audio') {
-				if ((roleFilter === 'popup') !== f.tags.includes(POPUP_AUDIO_TAG)) return false;
+		const filtered = files.filter((file) => {
+			if (typeFilter !== 'all' && file.file_info.type !== typeFilter) return false;
+			if (roleFilter !== 'all' && file.file_info.type === 'audio') {
+				if ((roleFilter === 'popup') !== file.tags.includes(POPUP_AUDIO_TAG)) return false;
 			}
-			if (query && !f.file_name.toLowerCase().includes(query)) return false;
-			if (tagFilter.size > 0 && !f.tags.some((t) => tagFilter.has(t))) return false;
-			if (artistFilter.size > 0 && !f.artists.some((a) => artistFilter.has(a))) return false;
+			if (query && !file.file_name.toLowerCase().includes(query)) return false;
+			if (tagFilter.size > 0 && !file.tags.some((tag) => tagFilter.has(tag))) return false;
+			if (artistFilter.size > 0 && !file.artists.some((artist) => artistFilter.has(artist)))
+				return false;
 			return true;
 		});
 
 		filtered.sort((a, b) => {
-			let cmp = 0;
-			if (sortBy === 'created') cmp = a.id - b.id;
-			else if (sortBy === 'name') cmp = nameCollator.compare(a.file_name, b.file_name);
-			else if (sortBy === 'size') cmp = a.size - b.size;
-			return cmp * dirMul;
+			let comparison = 0;
+			if (sortBy === 'created') comparison = a.id - b.id;
+			else if (sortBy === 'name') comparison = nameCollator.compare(a.file_name, b.file_name);
+			else if (sortBy === 'size') comparison = a.size - b.size;
+			return comparison * dirMul;
 		});
 		return filtered;
 	});
 
-	primaryFile = $derived.by(() => {
-		const id = this.mediaTab.primaryId;
-		if (id == null) return null;
-		return this.files.find((f) => f.id === id) ?? null;
-	});
+	/** The file with this id, or null — the lookup behind every "which file is X looking at". */
+	fileById(id: number | null): MediaFile | null {
+		return id == null ? null : (this.files.find((file) => file.id === id) ?? null);
+	}
+
+	primaryFile = $derived(this.fileById(this.mediaTab.primaryId));
 
 	selectedFiles = $derived(this.files.filter((file) => this.mediaTab.selectedIds.has(file.id)));
 
-	addTagToFiles(ids: number[], tag: string, tracked = false) {
+	/**
+	 * Adds or removes one entry of a file's `tags` / `artists` list across `ids`.
+	 *
+	 * Files the edit would not change are left as they are rather than replaced by an equal copy,
+	 * so a bulk tag over a large selection only invalidates the rows it actually touched.
+	 */
+	#labelFiles(field: 'tags' | 'artists', ids: number[], value: string, add: boolean) {
 		const idSet = new Set(ids);
-		this.files = this.files.map((file) =>
-			idSet.has(file.id) && !file.tags.includes(tag) ? { ...file, tags: [...file.tags, tag] } : file
-		);
+		this.files = this.files.map((file) => {
+			if (!idSet.has(file.id) || file[field].includes(value) === add) return file;
+			const next = add ? [...file[field], value] : file[field].filter((item) => item !== value);
+			return field === 'tags' ? { ...file, tags: next } : { ...file, artists: next };
+		});
+	}
+
+	addTagToFiles(ids: number[], tag: string, tracked = false) {
+		this.#labelFiles('tags', ids, tag, true);
 		if (!this.allTags.includes(tag)) this.allTags = [...this.allTags, tag];
 		if (!tracked) this.markLocallyBackedUp();
 	}
@@ -512,31 +533,18 @@ class AppStore {
 	}
 
 	removeTagFromFiles(ids: number[], tag: string, tracked = false) {
-		const idSet = new Set(ids);
-		this.files = this.files.map((file) =>
-			idSet.has(file.id) ? { ...file, tags: file.tags.filter((item) => item !== tag) } : file
-		);
+		this.#labelFiles('tags', ids, tag, false);
 		if (!tracked) this.markLocallyBackedUp();
 	}
 
 	addArtistToFiles(ids: number[], artist: string, tracked = false) {
-		const idSet = new Set(ids);
-		this.files = this.files.map((file) =>
-			idSet.has(file.id) && !file.artists.includes(artist)
-				? { ...file, artists: [...file.artists, artist] }
-				: file
-		);
+		this.#labelFiles('artists', ids, artist, true);
 		if (!this.allArtists.includes(artist)) this.allArtists = [...this.allArtists, artist];
 		if (!tracked) this.markLocallyBackedUp();
 	}
 
 	removeArtistFromFiles(ids: number[], artist: string, tracked = false) {
-		const idSet = new Set(ids);
-		this.files = this.files.map((file) =>
-			idSet.has(file.id)
-				? { ...file, artists: file.artists.filter((item) => item !== artist) }
-				: file
-		);
+		this.#labelFiles('artists', ids, artist, false);
 		if (!tracked) this.markLocallyBackedUp();
 	}
 
@@ -549,11 +557,7 @@ class AppStore {
 		this.pendingMediaRemoval = [];
 	}
 
-	openedFile = $derived.by(() => {
-		const id = this.openedId;
-		if (id == null) return null;
-		return this.files.find((f) => f.id === id) ?? null;
-	});
+	openedFile = $derived(this.fileById(this.openedId));
 
 	/**
 	 * The files the viewer is walking: the selection when it was opened over one, the whole
@@ -568,73 +572,32 @@ class AppStore {
 		return this.filteredFiles.filter((file) => selected.has(file.id));
 	});
 
-	previewedFile = $derived.by(() => {
-		const id = this.previewId;
-		if (id == null) return null;
-		return this.files.find((f) => f.id === id) ?? null;
-	});
+	previewedFile = $derived(this.fileById(this.previewId));
 
-	openPack(
-		id: string,
-		name: string,
-		files: MediaFile[],
-		tags: string[],
-		artists: string[] = [],
-		saved = true,
-		hasDestination = true
-	) {
-		this.packOpen = true;
-		this.packId = id;
-		this.packName = name;
-		this.packSaved = saved;
-		this.untrackedDirty = !saved;
-		this.packHasDestination = hasDestination;
-		this.endSave();
-		this.metadataBackupPending = false;
-		this.behaviourBackupPending = false;
-		this.recoveryError = null;
-		this.recoveryErrorKind = null;
-		this.files = files;
-		this.allTags = tags;
-		this.allArtists = artists;
-		this.mediaTabs = newMediaTabs();
-		this.lastMediaView = 'popups';
-		this.openedId = null;
-		this.openedSelection = false;
-		this.mediaRevealId = null;
-		this.previewId = null;
-		this.activeView = 'popups';
-		this.metadata = null;
-		this.importWarnings = [];
-		this.behaviour = null;
-		this.suspendedExperience = null;
-		this.contentTab = 'groups';
-		this.contentTarget = null;
-		this.experienceActiveId = null;
-		this.experienceTargetStageId = null;
-		this.dragActive = false;
-	}
-
-	closePack() {
-		this.packOpen = false;
-		this.packId = '';
-		this.packName = '';
-		this.markPackSaved();
-		this.packHasDestination = false;
+	/**
+	 * Everything the editor holds *about a pack* — contents, per-tab view state, the surfaces
+	 * looking at it, and anything still in flight.
+	 *
+	 * Shared by opening and closing, because the two want the same thing: nothing left over from
+	 * the pack before. Only the identity fields around it differ, and those are the callers'.
+	 */
+	#resetPackState() {
 		this.endSave();
 		this.pendingMediaRemoval = [];
 		this.files = [];
 		this.allTags = [];
 		this.allArtists = [];
+		this.metadata = null;
+		this.behaviour = null;
+		this.suspendedExperience = null;
+		this.importWarnings = [];
 		this.mediaTabs = newMediaTabs();
 		this.lastMediaView = 'popups';
+		this.activeView = 'popups';
 		this.openedId = null;
 		this.openedSelection = false;
 		this.mediaRevealId = null;
 		this.previewId = null;
-		this.importWarnings = [];
-		this.behaviour = null;
-		this.suspendedExperience = null;
 		this.contentTab = 'groups';
 		this.contentTarget = null;
 		this.experienceActiveId = null;
@@ -648,6 +611,40 @@ class AppStore {
 		this._showDoneBriefly = false;
 		if (this._doneTimer !== null) clearTimeout(this._doneTimer);
 		this._doneTimer = null;
+	}
+
+	openPack(
+		id: string,
+		name: string,
+		files: MediaFile[],
+		tags: string[],
+		artists: string[] = [],
+		saved = true,
+		hasDestination = true
+	) {
+		this.#resetPackState();
+		this.packOpen = true;
+		this.packId = id;
+		this.packName = name;
+		this.packSaved = saved;
+		this.untrackedDirty = !saved;
+		this.packHasDestination = hasDestination;
+		this.metadataBackupPending = false;
+		this.behaviourBackupPending = false;
+		this.recoveryError = null;
+		this.recoveryErrorKind = null;
+		this.files = files;
+		this.allTags = tags;
+		this.allArtists = artists;
+	}
+
+	closePack() {
+		this.#resetPackState();
+		this.packOpen = false;
+		this.packId = '';
+		this.packName = '';
+		this.packHasDestination = false;
+		this.markPackSaved();
 	}
 
 	addFile(file: MediaFile, tracked = false) {
@@ -667,7 +664,7 @@ class AppStore {
 
 	removeFilesById(ids: number[], tracked = false) {
 		const idSet = new Set(ids);
-		this.files = this.files.filter((f) => !idSet.has(f.id));
+		this.files = this.files.filter((file) => !idSet.has(file.id));
 		for (const state of Object.values(this.mediaTabs)) {
 			const next = new Set(state.selectedIds);
 			for (const id of ids) next.delete(id);
@@ -678,52 +675,19 @@ class AppStore {
 		if (!tracked) this.markLocallyBackedUp();
 	}
 
+	#patchFile(id: number, patch: Partial<MediaFile>, tracked: boolean) {
+		const index = this.files.findIndex((file) => file.id === id);
+		if (index < 0) return;
+		this.files[index] = { ...this.files[index], ...patch };
+		if (!tracked) this.markLocallyBackedUp();
+	}
+
 	updateFileName(id: number, name: string, tracked = false) {
-		const idx = this.files.findIndex((f) => f.id === id);
-		if (idx >= 0) {
-			this.files[idx] = { ...this.files[idx], file_name: name };
-			if (!tracked) this.markLocallyBackedUp();
-		}
+		this.#patchFile(id, { file_name: name }, tracked);
 	}
 
 	updateFileSourceUrl(id: number, url: string | null, tracked = false) {
-		const idx = this.files.findIndex((f) => f.id === id);
-		if (idx >= 0) {
-			this.files[idx] = { ...this.files[idx], source_url: url };
-			if (!tracked) this.markLocallyBackedUp();
-		}
-	}
-
-	addTagToFile(id: number, tag: string) {
-		const idx = this.files.findIndex((f) => f.id === id);
-		if (idx >= 0) {
-			const f = this.files[idx];
-			this.files[idx] = { ...f, tags: [...f.tags, tag] };
-		}
-	}
-
-	removeTagFromFile(id: number, tag: string) {
-		const idx = this.files.findIndex((f) => f.id === id);
-		if (idx >= 0) {
-			const f = this.files[idx];
-			this.files[idx] = { ...f, tags: f.tags.filter((t) => t !== tag) };
-		}
-	}
-
-	addArtistToFile(id: number, artist: string) {
-		const idx = this.files.findIndex((f) => f.id === id);
-		if (idx >= 0) {
-			const f = this.files[idx];
-			this.files[idx] = { ...f, artists: [...f.artists, artist] };
-		}
-	}
-
-	removeArtistFromFile(id: number, artist: string) {
-		const idx = this.files.findIndex((f) => f.id === id);
-		if (idx >= 0) {
-			const f = this.files[idx];
-			this.files[idx] = { ...f, artists: f.artists.filter((a) => a !== artist) };
-		}
+		this.#patchFile(id, { source_url: url }, tracked);
 	}
 
 	// Selection belongs to the open media tab, and so does the list these walk: `filteredFiles` is
@@ -736,13 +700,11 @@ class AppStore {
 
 	selectRange(anchorId: number, targetId: number) {
 		const list = this.filteredFiles;
-		const ai = list.findIndex((f) => f.id === anchorId);
-		const ti = list.findIndex((f) => f.id === targetId);
-		if (ai === -1 || ti === -1) return;
-		const [lo, hi] = ai < ti ? [ai, ti] : [ti, ai];
-		const next = new Set<number>();
-		for (const f of list.slice(lo, hi + 1)) next.add(f.id);
-		this.mediaTab.selectedIds = next;
+		const anchor = list.findIndex((file) => file.id === anchorId);
+		const target = list.findIndex((file) => file.id === targetId);
+		if (anchor === -1 || target === -1) return;
+		const [first, last] = anchor < target ? [anchor, target] : [target, anchor];
+		this.mediaTab.selectedIds = new Set(list.slice(first, last + 1).map((file) => file.id));
 		this.mediaTab.primaryId = targetId;
 		this.mediaTab.gridActiveId = targetId;
 	}
@@ -763,8 +725,8 @@ class AppStore {
 
 	selectAll() {
 		const list = this.filteredFiles;
-		this.mediaTab.selectedIds = new Set(list.map((f) => f.id));
-		this.mediaTab.primaryId = list.length > 0 ? list[list.length - 1].id : null;
+		this.mediaTab.selectedIds = new Set(list.map((file) => file.id));
+		this.mediaTab.primaryId = list.at(-1)?.id ?? null;
 		this.mediaTab.gridActiveId = this.mediaTab.primaryId;
 	}
 

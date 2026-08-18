@@ -108,7 +108,6 @@
 	}
 	button:focus-visible,
 	.seek:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -2px;
 	}
 	button span {

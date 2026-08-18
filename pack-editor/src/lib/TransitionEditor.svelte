@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Checkbox from '$ui/Checkbox.svelte';
+	import NumberField from '$ui/NumberField.svelte';
 	import Select from '$ui/Select.svelte';
 	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
 	import { store } from './store.svelte.js';
@@ -104,21 +105,19 @@
 				</div>
 			</div>
 			<div class="fields">
-				<label
-					>Duration (seconds)<input
-						type="number"
-						min="0"
-						step="1"
-						value={transition.duration_seconds}
-						oninput={(event) => {
-							const value = event.currentTarget.valueAsNumber;
-							if (Number.isFinite(value)) {
-								transition.duration_seconds = value;
-								editBehaviourField(`${path}.duration_seconds`, 'Edit transition duration');
-							}
-						}}
-					/></label
-				>
+				<NumberField
+					label="Duration (seconds)"
+					min={0}
+					step={1}
+					value={transition.duration_seconds}
+					oninput={(seconds) => {
+						// An empty field is mid-edit, not a request for an instant transition: leave the
+						// stored duration where it is until a real number is typed.
+						if (seconds === null) return;
+						transition.duration_seconds = seconds;
+						editBehaviourField(`${path}.duration_seconds`, 'Edit transition duration');
+					}}
+				/>
 				<Select
 					label="Easing"
 					value={transition.easing}
@@ -257,24 +256,6 @@
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		align-items: end;
 		gap: 12px;
-	}
-	.fields > label {
-		display: flex;
-		min-width: 0;
-		flex-direction: column;
-		gap: 5px;
-		color: var(--ui-text);
-		font-size: 12px;
-		font-weight: 600;
-	}
-	.fields input {
-		width: 100%;
-		height: 36px;
-		padding: 0 9px;
-		border: 1px solid var(--ui-border);
-		border-radius: var(--ui-radius-sm);
-		background: var(--ui-bg);
-		color: var(--ui-text);
 	}
 	.group {
 		min-width: 0;

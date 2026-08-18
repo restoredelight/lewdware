@@ -399,7 +399,6 @@
 	.menu-trigger:focus-visible,
 	.drag:focus-visible,
 	.transition-tab:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -2px;
 	}
 	.menu-trigger {

@@ -103,9 +103,6 @@
 	button:hover {
 		background: rgb(0 0 0 / 0.07);
 	}
-	button:focus-visible {
-		outline: 2px solid var(--ui-focus);
-	}
 	@media (max-width: 760px) {
 		.status {
 			min-width: 0;

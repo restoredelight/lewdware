@@ -3,12 +3,8 @@
 	import { listen } from '@tauri-apps/api/event';
 	import { store } from '$lib/store.svelte.js';
 	import { api } from '$lib/api.js';
-	import {
-		applyFilledMediaSlots,
-		cancelBehaviourSave,
-		flushBehaviourSave
-	} from '$lib/behaviourSave.svelte.js';
-	import { cancelMetadataSave, flushMetadataSave } from '$lib/metadataSave.svelte.js';
+	import { applyFilledMediaSlots } from '$lib/behaviourSave.svelte.js';
+	import { cancelPendingWrites, flushPendingWrites, packSave } from '$lib/packActions.svelte.js';
 	import type { FilledSlot, MediaFile, UploadError, SaveDone, SaveProgress } from '$lib/types.js';
 	import Start from '$lib/Start.svelte';
 	import Editor from '$lib/Editor.svelte';
@@ -51,8 +47,7 @@
 		}
 		checkingClose = true;
 		try {
-			await flushMetadataSave();
-			await flushBehaviourSave();
+			await flushPendingWrites();
 			const saved = await api.isPackSaved();
 			store.packSaved = saved;
 			if (saved) await api.confirmClose();
@@ -165,34 +160,20 @@
 		pendingClose = true;
 		if (store.saveActive) return;
 		store.beginSave();
-		if (store.uploading && !store.packHasDestination)
-			taskFeedback.warning('save', 'Waiting for the import to finish before the first save…');
-		else if (store.uploading)
-			taskFeedback.warning('save', 'Saving now — unfinished uploads won’t be included');
-		else if (store.packHasDestination) taskFeedback.progress('save', 'Saving pack…');
-		try {
-			await flushMetadataSave();
-			await flushBehaviourSave();
-			const info = await api.savePack(() => taskFeedback.progress('save', 'Saving pack…'));
-			if (!info) {
-				pendingClose = false;
-				store.endSave();
-				taskFeedback.dismiss('save');
-				return;
-			}
-			store.packHasDestination = info.has_destination;
-		} catch (err) {
+		const { info, error } = await packSave.run('save');
+		// Either way the pack is still open; only a failure is worth a dialog of its own, since a
+		// dismissed destination picker is the user having already said no.
+		if (!info) {
 			pendingClose = false;
-			store.endSave();
-			closeError = `Save failed: ${String(err)} The pack was not closed.`;
-			taskFeedback.error('save', `Save failed: ${String(err)}`);
+			if (error) closeError = `Save failed: ${String(error)} The pack was not closed.`;
+			return;
 		}
+		store.packHasDestination = info.has_destination;
 	}
 
 	async function onCloseDiscard() {
 		showCloseDialog = false;
-		cancelBehaviourSave();
-		cancelMetadataSave();
+		cancelPendingWrites();
 		try {
 			await api.discardPack();
 			await api.confirmClose();

@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { clampScroll } from '$ui/scroll';
-	import { onDestroy, onMount } from 'svelte';
+	import { onMount } from 'svelte';
 	import { store } from './store.svelte.js';
 	import type { ContentTab } from './store.svelte.js';
-	import EmptyState from '$ui/EmptyState.svelte';
+	import BehaviourGate from './BehaviourGate.svelte';
 	import TextPoolEditor from './TextPoolEditor.svelte';
 	import ContentGroupsEditor from './ContentGroupsEditor.svelte';
 	import MediaSlot from './MediaSlot.svelte';
@@ -11,7 +11,6 @@
 	import { SUBLIMINAL_TAG } from './tags.js';
 	import WebLinksEditor from './WebLinksEditor.svelte';
 	import Tabs from '$ui/Tabs.svelte';
-	import { ensureBehaviour, flushBehaviourSave } from './behaviourSave.svelte.js';
 
 	// The subliminal pool is media, not a behaviour field: membership is the managed tag every
 	// file already carries in `store.files`, so the count is a filter rather than a query.
@@ -98,12 +97,6 @@
 	});
 	let narrowWindow = $state(false);
 	let panel = $state<HTMLDivElement>();
-	let behaviourLoadFailed = $state(false);
-
-	async function loadBehaviour() {
-		behaviourLoadFailed = false;
-		behaviourLoadFailed = (await ensureBehaviour()) === null;
-	}
 
 	// WebKitGTK doesn't reliably clamp scrollTop when the panel's content shrinks,
 	// leaving a shorter tab blank and unscrollable.
@@ -119,29 +112,10 @@
 		query.addEventListener('change', update);
 		return () => query.removeEventListener('change', update);
 	});
-
-	onMount(() => {
-		void loadBehaviour();
-	});
-
-	onDestroy(() => {
-		flushBehaviourSave();
-	});
 </script>
 
 <div class="flex min-h-0 w-full flex-1 flex-col">
-	{#if store.behaviour === null}
-		{#if behaviourLoadFailed}
-			<div class="grid flex-1 place-items-center p-6">
-				<EmptyState
-					title="Could not load Content"
-					description="The pack behaviour could not be loaded. Your media is unaffected."
-					actionLabel="Try again"
-					onclick={loadBehaviour}
-				/>
-			</div>
-		{:else}<p class="text-muted p-6 text-sm">Loading…</p>{/if}
-	{:else}
+	<BehaviourGate title="Content">
 		<div class="flex min-h-0 flex-1 max-[900px]:flex-col">
 			<aside
 				class="border-border bg-surface w-48 shrink-0 border-r p-3 max-[900px]:w-full max-[900px]:border-r-0 max-[900px]:border-b max-[900px]:py-0"
@@ -212,5 +186,5 @@
 				</div>
 			</div>
 		</div>
-	{/if}
+	</BehaviourGate>
 </div>

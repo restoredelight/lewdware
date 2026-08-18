@@ -705,7 +705,6 @@
 		background: var(--ui-accent-hover);
 	}
 	.grid button:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: 1px;
 	}
 	.presets {

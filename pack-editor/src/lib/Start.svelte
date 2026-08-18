@@ -7,6 +7,7 @@
 	import type { PackInfo, RecentPack } from './types.js';
 	import Button from '$ui/Button.svelte';
 	import { ArrowDownTray, DocumentPlus, FolderOpen, Icon, XMark } from 'svelte-hero-icons';
+	import { modifierKeyLabel } from './platform.js';
 	import { onMount } from 'svelte';
 
 	let showUnsavedDialog = $state(false);
@@ -22,7 +23,7 @@
 	});
 
 	onMount(() => {
-		modifierLabel = navigator.platform.includes('Mac') ? '⌘' : 'Ctrl';
+		modifierLabel = modifierKeyLabel();
 		const handleShortcut = (event: KeyboardEvent) => {
 			if (
 				event.defaultPrevented ||
@@ -558,7 +559,6 @@
 	}
 	.recent-open:focus-visible,
 	.recent-remove:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -2px;
 	}
 	.migration-icon {
@@ -601,10 +601,6 @@
 	}
 	.error button:hover {
 		background: color-mix(in srgb, var(--ui-danger) 12%, transparent);
-	}
-	.error button:focus-visible {
-		outline: 2px solid var(--ui-focus);
-		outline-offset: 2px;
 	}
 	/* Short windows: give the fixed chrome less room so the recents keep some. */
 	@media (max-height: 760px) {

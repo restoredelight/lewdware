@@ -6,6 +6,7 @@
 	import { store } from './store.svelte.js';
 	import type { MediaFile } from './types.js';
 	import { copyFileName } from './clipboard.js';
+	import { MediaSelection } from './mediaSelection.svelte.js';
 	import { openMediaPreview, openSelectionEditor } from './mediaPreview.js';
 
 	// Item geometry (px). ITEM_H is the fixed virtualization slot; the visible tile inside
@@ -21,10 +22,10 @@
 	let viewH = $state(0);
 	let viewW = $state(0);
 	let gridFocused = $state(false);
-	let announcement = $state('');
 
-	// Track last non-shift-click for range anchor
-	let anchorId = $state<number | null>(null);
+	// Clicking, the range anchor, the shared keyboard commands and what they announce -- see
+	// `mediaSelection.svelte.ts`, which the Audio list shares.
+	const selection = new MediaSelection('media item');
 
 	const files = $derived(store.filteredFiles);
 	$effect(() => {
@@ -52,7 +53,7 @@
 		queueMicrotask(() => {
 			scrollToIndex(index);
 			container?.focus();
-			announcement = `${files[index].file_name} selected`;
+			selection.announcement = `${files[index].file_name} selected`;
 			store.mediaRevealId = null;
 		});
 	});
@@ -65,126 +66,64 @@
 
 	// Each visible row as an array of (file | null), null = sentinel for partial last row.
 	const visibleRows = $derived.by(() => {
-		const result: { row: number; items: ((typeof files)[number] | null)[] }[] = [];
-		for (let r = firstRow; r <= lastRow; r++) {
-			const items: ((typeof files)[number] | null)[] = [];
-			for (let c = 0; c < cols; c++) {
-				const idx = r * cols + c;
-				items.push(idx < files.length ? files[idx] : null);
+		const result: { row: number; items: (MediaFile | null)[] }[] = [];
+		for (let row = firstRow; row <= lastRow; row++) {
+			const items: (MediaFile | null)[] = [];
+			for (let column = 0; column < cols; column++) {
+				const index = row * cols + column;
+				items.push(index < files.length ? files[index] : null);
 			}
-			result.push({ row: r, items });
+			result.push({ row, items });
 		}
 		return result;
 	});
 
-	function handleClick(file: MediaFile, e: MouseEvent) {
-		e.stopPropagation();
-		if (e.shiftKey && anchorId != null) {
-			store.selectRange(anchorId, file.id);
-		} else if (e.ctrlKey || e.metaKey) {
-			store.toggleSelection(file.id);
-		} else {
-			store.selectSingle(file.id);
-		}
-		if (!e.shiftKey) anchorId = file.id;
-		announceSelection();
+	function handleClick(file: MediaFile, event: MouseEvent) {
+		event.stopPropagation();
+		selection.click(file.id, event);
 		container?.focus();
 	}
 
-	function handleDblClick(file: MediaFile) {
-		openMediaPreview(file.id);
-	}
-
-	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			e.preventDefault();
-			store.clearSelection();
-			anchorId = null;
-			announcement = 'Selection cleared';
-			return;
-		}
-		if (e.key === 'Enter' && store.mediaTab.gridActiveId != null) {
+	function handleKeydown(event: KeyboardEvent) {
+		if (selection.keydown(event)) return;
+		if (event.key === 'Enter' && store.mediaTab.gridActiveId != null) {
 			openMediaPreview(store.mediaTab.gridActiveId);
 			return;
 		}
-		if (e.key === ' ' && store.mediaTab.gridActiveId != null) {
-			e.preventDefault();
-			store.toggleSelection(store.mediaTab.gridActiveId);
-			anchorId ??= store.mediaTab.gridActiveId;
-			announceSelection();
-			return;
-		}
-		if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
-			e.preventDefault();
-			store.selectAll();
-			announceSelection();
-			return;
-		}
-		if (e.key === 'Delete' && store.mediaTab.selectedIds.size > 0) {
-			e.preventDefault();
-			deleteSelected();
-			return;
-		}
-		if ((e.key === 'Home' || e.key === 'End') && files.length > 0) {
-			e.preventDefault();
-			const next = e.key === 'Home' ? 0 : files.length - 1;
-			store.selectSingle(files[next].id);
-			anchorId = files[next].id;
-			announceSelection();
-			scrollToIndex(next);
-			return;
-		}
-		if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
-			e.preventDefault();
-			navigateGrid(e.key, e.shiftKey, e.ctrlKey || e.metaKey);
+		if (NAVIGATION_KEYS.includes(event.key) && files.length > 0) {
+			event.preventDefault();
+			navigate(event.key, event.shiftKey, event.ctrlKey || event.metaKey);
 		}
 	}
 
-	function navigateGrid(key: string, extend: boolean, preserveSelection: boolean) {
-		const list = files;
-		if (list.length === 0) return;
-		const cur = store.mediaTab.gridActiveId;
-		let idx = cur != null ? list.findIndex((f) => f.id === cur) : -1;
-		if (idx === -1) idx = 0;
+	const NAVIGATION_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
 
-		let next = idx;
-		if (key === 'ArrowRight') next = Math.min(list.length - 1, idx + 1);
-		else if (key === 'ArrowLeft') next = Math.max(0, idx - 1);
-		else if (key === 'ArrowDown') next = Math.min(list.length - 1, idx + cols);
-		else if (key === 'ArrowUp') next = Math.max(0, idx - cols);
-
-		if (cur == null || next !== idx) {
-			const nextId = list[next].id;
-			store.mediaTab.gridActiveId = nextId;
-			if (extend) {
-				anchorId ??= cur ?? nextId;
-				store.selectRange(anchorId, nextId);
-			} else if (!preserveSelection) {
-				store.selectSingle(nextId);
-				anchorId = nextId;
-			}
-			announceSelection();
-			scrollToIndex(next);
-		}
+	/** Where a navigation key goes from `from`. The grid's two dimensions are `cols` apart. */
+	function destination(key: string, from: number): number {
+		const last = files.length - 1;
+		if (key === 'ArrowRight') return Math.min(last, from + 1);
+		if (key === 'ArrowLeft') return Math.max(0, from - 1);
+		if (key === 'ArrowDown') return Math.min(last, from + cols);
+		if (key === 'ArrowUp') return Math.max(0, from - cols);
+		return key === 'Home' ? 0 : last;
 	}
 
-	function announceSelection() {
-		const count = store.mediaTab.selectedIds.size;
-		announcement =
-			count === 0 ? 'No media selected' : `${count} media item${count === 1 ? '' : 's'} selected`;
+	function navigate(key: string, extend: boolean, preserveSelection: boolean) {
+		const current = store.mediaTab.gridActiveId;
+		const from = Math.max(0, current == null ? -1 : files.findIndex((file) => file.id === current));
+		const next = destination(key, from);
+		// An arrow already at the edge is not a move, so it should not collapse a selection built up
+		// around it. Home and End always are, and so is the first key press with nothing active yet.
+		if (current != null && next === from && key !== 'Home' && key !== 'End') return;
+		selection.moveTo(files, next, extend, preserveSelection);
+		scrollToIndex(next);
 	}
 
-	function scrollToIndex(idx: number) {
+	function scrollToIndex(index: number) {
 		if (!container) return;
-		const row = Math.floor(idx / cols);
-		const itemTop = row * ROW_H;
-		const itemBot = itemTop + ROW_H;
-		if (itemTop < scrollTop) container.scrollTop = itemTop;
-		else if (itemBot > scrollTop + viewH) container.scrollTop = itemBot - viewH;
-	}
-
-	function deleteSelected() {
-		store.requestMediaRemoval();
+		const top = Math.floor(index / cols) * ROW_H;
+		if (top < scrollTop) container.scrollTop = top;
+		else if (top + ROW_H > scrollTop + viewH) container.scrollTop = top + ROW_H - viewH;
 	}
 
 	async function showContextMenu(e: MouseEvent, clickedFile?: MediaFile) {
@@ -193,7 +132,7 @@
 
 		if (clickedFile && !store.mediaTab.selectedIds.has(clickedFile.id)) {
 			store.selectSingle(clickedFile.id);
-			anchorId = clickedFile.id;
+			selection.anchor = clickedFile.id;
 		}
 
 		const selCount = store.mediaTab.selectedIds.size;
@@ -233,7 +172,7 @@
 			items.push(
 				await MenuItem.new({
 					text: `Delete ${selCount} item${selCount > 1 ? 's' : ''}`,
-					action: () => deleteSelected()
+					action: () => store.requestMediaRemoval()
 				})
 			);
 			items.push(await PredefinedMenuItem.new({ item: 'Separator' }));
@@ -251,10 +190,7 @@
 			items.push(
 				await MenuItem.new({
 					text: 'Clear selection',
-					action: () => {
-						store.clearSelection();
-						anchorId = null;
-					}
+					action: () => selection.clear()
 				})
 			);
 		}
@@ -284,14 +220,9 @@
 	oncontextmenu={(e) => showContextMenu(e)}
 	class="media-grid bg-bg relative h-full w-full overflow-auto rounded-sm p-2"
 	use:clampScroll
-	onclick={() => {
-		store.clearSelection();
-		store.mediaTab.gridActiveId = null;
-		anchorId = null;
-		announcement = 'Selection cleared';
-	}}
+	onclick={() => selection.clear()}
 >
-	<span class="sr-only" aria-live="polite">{announcement}</span>
+	<span class="sr-only" aria-live="polite">{selection.announcement}</span>
 	<div style="height: {totalH}px; position: relative;">
 		{#each visibleRows as { row, items } (row)}
 			<div
@@ -312,7 +243,7 @@
 								aria-selected={selected}
 								aria-colindex={column + 1}
 								onclick={(e) => handleClick(file, e)}
-								ondblclick={() => handleDblClick(file)}
+								ondblclick={() => openMediaPreview(file.id)}
 								oncontextmenu={(e) => showContextMenu(e, file)}
 								onkeydown={() => {}}
 								class="group flex cursor-pointer flex-col rounded p-1 transition-colors duration-75 select-none
@@ -375,16 +306,5 @@
 		box-shadow:
 			0 2px 6px rgb(0 0 0 / 0.55),
 			0 0 0 1px rgb(255 255 255 / 0.07);
-	}
-	.sr-only {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		padding: 0;
-		margin: -1px;
-		overflow: hidden;
-		clip: rect(0, 0, 0, 0);
-		white-space: nowrap;
-		border: 0;
 	}
 </style>

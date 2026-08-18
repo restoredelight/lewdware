@@ -329,7 +329,6 @@
 	}
 	.icon-btn:focus-visible,
 	.close:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: -1px;
 	}
 	.icon-btn svg,
@@ -405,7 +404,6 @@
 	}
 	.stop:focus-visible,
 	.errors-toggle:focus-visible {
-		outline: 2px solid var(--ui-focus);
 		outline-offset: 1px;
 	}
 	.errors-toggle {

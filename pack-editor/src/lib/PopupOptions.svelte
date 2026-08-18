@@ -10,7 +10,7 @@
 	// every control below takes a count and a shared/mixed value rather than a plain one.
 	import Button from '$ui/Button.svelte';
 	import Checkbox from '$ui/Checkbox.svelte';
-	import Field from '$ui/Field.svelte';
+	import NumberField from '$ui/NumberField.svelte';
 	import Select from '$ui/Select.svelte';
 	import { isCapped, popupSize } from './popupSize.js';
 	import { describeRegion } from './spawnRegion.js';
@@ -49,12 +49,6 @@
 		edit(changes, plural(label));
 	}
 
-	/** Empty, or anything that doesn't parse, clears the field rather than storing a zero. */
-	function numberOrCleared(raw: string): number | undefined {
-		const value = Number(raw.trim());
-		return raw.trim() === '' || !Number.isFinite(value) || value <= 0 ? undefined : value;
-	}
-
 	// Only where the dimensions are known and the selection agrees: across mixed media a single
 	// pixel figure would be a guess presented as a fact.
 	const mediaSize = $derived(
@@ -84,17 +78,22 @@
 	</header>
 
 	<section>
-		<Field
+		<NumberField
 			label="Frequency"
-			type="number"
 			size="compact"
 			suffix="×"
 			min={0.1}
 			step={0.1}
 			placeholder={weight.mixed ? 'Mixed' : 'Equal'}
-			value={weight.value ?? ''}
+			value={weight.value ?? null}
 			description="How often this is drawn against the rest of the pack."
-			onchange={(value) => set({ weight: numberOrCleared(value) }, 'Set popup frequency')}
+			onchange={(weight) =>
+				set(
+					// Empty, or a number that could not be a frequency, both mean "no opinion" -- which
+					// is stored as nothing at all rather than as a multiplier of 1.
+					{ weight: weight !== null && weight > 0 ? weight : undefined },
+					'Set popup frequency'
+				)}
 		/>
 	</section>
 

@@ -1,31 +1,10 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
 	import { store } from './store.svelte.js';
+	import BehaviourGate from './BehaviourGate.svelte';
 	import TimelineEditor from './TimelineEditor.svelte';
-	import {
-		commitBehaviourEdit,
-		editBehaviourField,
-		ensureBehaviour,
-		flushBehaviourSave
-	} from './behaviourSave.svelte.js';
+	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
 	import type { Experience, Stage } from './types.js';
 	import Toggle from '$ui/Toggle.svelte';
-	import EmptyState from '$ui/EmptyState.svelte';
-
-	let behaviourLoadFailed = $state(false);
-
-	async function loadBehaviour() {
-		behaviourLoadFailed = false;
-		behaviourLoadFailed = (await ensureBehaviour()) === null;
-	}
-
-	onMount(() => {
-		void loadBehaviour();
-	});
-
-	onDestroy(() => {
-		flushBehaviourSave();
-	});
 
 	function emptyBaselineLevel(): Stage {
 		return {
@@ -81,39 +60,30 @@
 		Read by the built-in modes (Sandbox and Sequence). A custom mode reads none of this.
 	</p>
 
-	{#if store.behaviour === null}
-		{#if behaviourLoadFailed}
-			<div class="grid flex-1 place-items-center p-6">
-				<EmptyState
-					title="Could not load Timeline"
-					description="The pack behaviour could not be loaded. Your media is unaffected."
-					actionLabel="Try again"
-					onclick={loadBehaviour}
+	<BehaviourGate title="Timeline">
+		{#if !store.behaviour!.experience}
+			<div class="grid flex-1 place-items-center p-8">
+				<div class="max-w-md text-center">
+					<h3 class="text-text text-base font-semibold">Timeline is off</h3>
+					<p class="text-muted mt-1 text-sm">
+						A timeline allows you to create a more interactive experience for your pack, without
+						writing your own mode.
+					</p>
+				</div>
+			</div>
+		{:else}
+			<div class="border-border bg-bg flex shrink-0 items-center gap-3 border-b px-3 py-2 sm:px-4">
+				<label for="mode-name" class="text-text shrink-0 text-xs font-semibold">Mode name</label>
+				<input
+					id="mode-name"
+					type="text"
+					value={store.behaviour!.experience.label ?? ''}
+					placeholder="Sequence"
+					oninput={(event) => setLabel(event.currentTarget.value)}
+					class="border-border bg-surface text-text placeholder:text-muted h-8 w-56 min-w-0 rounded-sm border px-2.5 text-xs transition-colors hover:border-[var(--ui-border-strong)]"
 				/>
 			</div>
-		{:else}<p class="text-muted p-6 text-sm">Loading…</p>{/if}
-	{:else if !store.behaviour.experience}
-		<div class="grid flex-1 place-items-center p-8">
-			<div class="max-w-md text-center">
-				<h3 class="text-text text-base font-semibold">Timeline is off</h3>
-				<p class="text-muted mt-1 text-sm">
-					A timeline allows you to create a more interactive experience for your pack, without
-					writing your own mode.
-				</p>
-			</div>
-		</div>
-	{:else}
-		<div class="border-border bg-bg flex shrink-0 items-center gap-3 border-b px-3 py-2 sm:px-4">
-			<label for="mode-name" class="text-text shrink-0 text-xs font-semibold">Mode name</label>
-			<input
-				id="mode-name"
-				type="text"
-				value={store.behaviour.experience.label ?? ''}
-				placeholder="Sequence"
-				oninput={(event) => setLabel(event.currentTarget.value)}
-				class="border-border bg-surface text-text placeholder:text-muted h-8 w-56 min-w-0 rounded-sm border px-2.5 text-xs transition-colors hover:border-[var(--ui-border-strong)]"
-			/>
-		</div>
-		<TimelineEditor />
-	{/if}
+			<TimelineEditor />
+		{/if}
+	</BehaviourGate>
 </div>

@@ -1,15 +1,13 @@
 <script lang="ts">
 	import Checkbox from '$ui/Checkbox.svelte';
+	import Field from '$ui/Field.svelte';
 	import Select from '$ui/Select.svelte';
 	import { store } from './store.svelte.js';
+	import ContentList from './ContentList.svelte';
 	import TagPicker from './TagPicker.svelte';
 	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
-	import Button from '$ui/Button.svelte';
-	import Card from '$ui/Card.svelte';
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Dialog from '$ui/Dialog.svelte';
-	import { Icon, Plus } from 'svelte-hero-icons';
-	import { tick } from 'svelte';
 
 	const groups = $derived(store.behaviour!.content.content_groups);
 	const availableToggleTags = $derived(
@@ -21,20 +19,13 @@
 
 	let quickCreateTag = $state('');
 	let removing = $state<(typeof groups)[number] | null>(null);
-	let listElement = $state<HTMLDivElement>();
+	let list = $state<ContentList<(typeof groups)[number]>>();
 
-	function capitalize(s: string): string {
-		return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
+	function capitalize(value: string): string {
+		return value.length === 0 ? value : value[0].toUpperCase() + value.slice(1);
 	}
 
-	async function revealNewGroup() {
-		await tick();
-		const group = listElement?.lastElementChild;
-		group?.scrollIntoView({ block: 'center' });
-		group?.querySelector<HTMLInputElement>('input')?.focus();
-	}
-
-	async function addGroup() {
+	function addGroup() {
 		groups.push({
 			id: `group-${Date.now()}`,
 			label: 'New group',
@@ -43,9 +34,9 @@
 			enabled_by_default: true
 		});
 		commitBehaviourEdit(GROUPS, 'Add content group');
-		await revealNewGroup();
 	}
 
+	/** The shortcut in the bar: an existing tag becomes a group people can switch off. */
 	async function quickCreateFromTag(tag: string) {
 		if (!tag) return;
 		groups.push({
@@ -57,7 +48,7 @@
 		});
 		quickCreateTag = '';
 		commitBehaviourEdit(GROUPS, 'Add content group');
-		await revealNewGroup();
+		await list?.reveal();
 	}
 
 	function removeGroup(index: number) {
@@ -79,102 +70,85 @@
 	}
 </script>
 
-<section class="flex flex-col gap-3" aria-label="Content groups">
-	<div
-		class="border-border bg-bg sticky top-0 z-10 flex items-center justify-between gap-3 border-y py-2"
-	>
-		<span class="ui-metadata">{groups.length} {groups.length === 1 ? 'item' : 'items'}</span>
-		<div class="flex flex-wrap items-center justify-end gap-2">
-			{#if availableToggleTags.length > 0}
-				<Select
-					class="w-48"
-					size="compact"
-					hideLabel
-					label="Make an existing tag toggleable"
-					value={quickCreateTag}
-					options={[
-						{ value: '', label: 'Make tag toggleable…' },
-						...availableToggleTags.map((tag) => ({ value: tag, label: tag }))
-					]}
-					onchange={(value) => {
-						quickCreateTag = value;
-						void quickCreateFromTag(value);
-					}}
-				/>
-			{/if}
-			<Button size="compact" onclick={addGroup}
-				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add group</Button
-			>
-		</div>
-	</div>
-
-	<div class="flex flex-col gap-2" bind:this={listElement}>
-		{#if groups.length === 0}
-			<EmptyState
-				title="No content groups yet"
-				description="Create a group when you want people to opt in or out of related tagged content."
+<ContentList
+	bind:this={list}
+	label="Content groups"
+	items={groups}
+	entryLabel="Group"
+	addLabel="Add group"
+	focusSelector="input"
+	toolbarWhenEmpty
+	removeLabel={(group, index) => `Remove group ${index + 1}: ${group.label}`}
+	onadd={addGroup}
+	onremove={removeGroup}
+>
+	{#snippet toolbar()}
+		{#if availableToggleTags.length > 0}
+			<Select
+				class="w-48"
+				size="compact"
+				hideLabel
+				label="Make an existing tag toggleable"
+				value={quickCreateTag}
+				options={[
+					{ value: '', label: 'Make tag toggleable…' },
+					...availableToggleTags.map((tag) => ({ value: tag, label: tag }))
+				]}
+				onchange={(value) => {
+					quickCreateTag = value;
+					void quickCreateFromTag(value);
+				}}
 			/>
 		{/if}
-		{#each groups as group, index}
-			<Card class="flex flex-col gap-3 p-3">
-				<div class="flex items-center justify-between">
-					<span class="text-muted font-mono text-[11px] font-semibold">Group {index + 1}</span
-					><Button
-						size="compact"
-						variant="destructive"
-						class="!h-7"
-						ariaLabel={`Remove group ${index + 1}: ${group.label}`}
-						onclick={() => removeGroup(index)}>Remove</Button
-					>
-				</div>
-				<div class="flex items-start gap-2">
-					<div class="flex flex-1 flex-col gap-1.5">
-						<label class="text-muted text-xs font-medium" for={`group-name-${index}`}
-							>Group name</label
-						>
-						<input
-							id={`group-name-${index}`}
-							bind:value={group.label}
-							oninput={() => editBehaviourField(`${GROUPS}.${index}.label`, 'Edit group name')}
-							placeholder="Label"
-							class="border-border bg-bg text-text rounded border px-2 py-1 text-xs
-"
-						/>
-						<label class="text-muted mt-1 text-xs font-medium" for={`group-description-${index}`}
-							>Description <span class="font-normal">(optional)</span></label
-						>
-						<input
-							id={`group-description-${index}`}
-							bind:value={group.description}
-							oninput={() =>
-								editBehaviourField(`${GROUPS}.${index}.description`, 'Edit group description')}
-							placeholder="Explain what this group contains"
-							class="border-border bg-bg text-text rounded border px-2 py-1 text-xs
-"
-						/>
-					</div>
-				</div>
-				<TagPicker
-					tags={group.tags}
-					id={`content-group-${index}`}
-					path={`${GROUPS}.${index}.tags`}
-					onchange={(tags) => (group.tags = tags)}
-				/>
-				<label class="flex items-center gap-2">
-					<Checkbox
-						checked={group.enabled_by_default}
-						ariaLabel="Enabled by default"
-						onchange={(checked) => {
-							group.enabled_by_default = checked;
-							commitBehaviourEdit(`${GROUPS}.${index}.enabled_by_default`, 'Change group default');
-						}}
-					/>
-					<span class="text-text text-xs">Enabled by default</span>
-				</label>
-			</Card>
-		{/each}
-	</div>
-</section>
+	{/snippet}
+	{#snippet empty()}
+		<EmptyState
+			title="No content groups yet"
+			description="Create a group when you want people to opt in or out of related tagged content."
+		/>
+	{/snippet}
+	{#snippet fields(group, index)}
+		<div class="flex flex-1 flex-col gap-3">
+			<Field
+				label="Group name"
+				size="compact"
+				value={group.label}
+				placeholder="Label"
+				oninput={(value) => {
+					group.label = value;
+					editBehaviourField(`${GROUPS}.${index}.label`, 'Edit group name');
+				}}
+			/>
+			<Field
+				label="Description (optional)"
+				size="compact"
+				value={group.description ?? ''}
+				placeholder="Explain what this group contains"
+				oninput={(value) => {
+					group.description = value;
+					editBehaviourField(`${GROUPS}.${index}.description`, 'Edit group description');
+				}}
+			/>
+		</div>
+		<TagPicker
+			tags={group.tags}
+			id={`content-group-${index}`}
+			path={`${GROUPS}.${index}.tags`}
+			onchange={(tags) => (group.tags = tags)}
+		/>
+		<label class="flex items-center gap-2">
+			<Checkbox
+				checked={group.enabled_by_default}
+				ariaLabel="Enabled by default"
+				onchange={(checked) => {
+					group.enabled_by_default = checked;
+					commitBehaviourEdit(`${GROUPS}.${index}.enabled_by_default`, 'Change group default');
+				}}
+			/>
+			<span class="text-text text-xs">Enabled by default</span>
+		</label>
+	{/snippet}
+</ContentList>
 
 {#if removing}
 	<Dialog

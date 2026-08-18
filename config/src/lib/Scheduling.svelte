@@ -6,6 +6,7 @@
 	import Card from '$ui/Card.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import Field from '$ui/Field.svelte';
+	import NumberField from '$ui/NumberField.svelte';
 	import type { QuietHoursDto, WindowDto } from './types';
 	import { taskFeedback } from './taskFeedback.svelte';
 
@@ -273,15 +274,19 @@
 										onchange={(value) => updateWindowEnd(i, window, value)}
 									/>
 								{/if}
-								<Field
+								<NumberField
 									label="Duration (minutes)"
-									type="number"
 									size="compact"
 									min={1}
 									max={1440}
 									value={window.duration_minutes}
-									onchange={(value) =>
-										store.updateWindow(i, { duration_minutes: Math.max(1, Number(value) || 0) })}
+									onchange={(minutes) => {
+										// An empty field is mid-edit, not a zero-length window. It used to read as
+										// one: `Number('')` is 0, so clearing the box silently rewrote the window
+										// to a single minute.
+										if (minutes === null) return;
+										store.updateWindow(i, { duration_minutes: Math.max(1, minutes) });
+									}}
 								/>
 							</div>
 						</Card>
