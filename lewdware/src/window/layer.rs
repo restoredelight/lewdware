@@ -129,6 +129,7 @@ pub enum LayerStatus {
 /// A window currently holds exactly one, composited under its decorations. The dispatch here is
 /// what a future multi-layer window would iterate over: `prepare` every layer, draw the frame if
 /// any of them asked for it, then draw each in order.
+#[allow(clippy::large_enum_variant)]
 pub enum Layer {
     Image(ImageLayer),
     Video(VideoLayer),

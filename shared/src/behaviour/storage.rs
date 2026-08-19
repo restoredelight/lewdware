@@ -554,43 +554,33 @@ fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
     let mut statement = conn.prepare(
         "SELECT id, label, restricts_content, wallpaper, audio, audio_random FROM behaviour_stage ORDER BY position",
     )?;
-    let rows: Vec<(String, String, bool, Option<u64>, Option<u64>, bool)> = statement
-        .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
 
-    rows.into_iter()
-        .map(
-            |(id, label, restricts_content, wallpaper, audio, audio_random)| {
-                Ok(Stage {
-                    content: ContentSelection {
-                        tags: restricts_content
-                            .then(|| read_tags(conn, "behaviour_stage_tag", "stage_id", &id))
-                            .transpose()?,
-                        owned_tag: read_owned_stage_tag(conn, &id)?,
-                        wallpaper,
-                        audio,
-                        audio_random,
+    statement
+        .query_and_then([], |row| -> anyhow::Result<_> {
+            let id: String = row.get("id")?;
+
+            Ok(Stage {
+                content: ContentSelection {
+                    tags: if row.get("restricts_content")? {
+                        Some(read_tags(conn, "behaviour_stage_tag", "stage_id", &id)?)
+                    } else {
+                        None
                     },
-                    end: read_stage_end(conn, &id)?,
-                    events: read_stage_events(conn, &id)?,
-                    movement: read_stage_movement(conn, &id)?,
-                    mitosis: read_stage_mitosis(conn, &id)?,
-                    on_enter: read_stage_entry(conn, &id)?.unwrap_or_default(),
-                    prompt: read_stage_prompt(conn, &id)?,
-                    id,
-                    label,
-                })
-            },
-        )
+                    owned_tag: read_owned_stage_tag(conn, &id)?,
+                    wallpaper: row.get("wallpaper")?,
+                    audio: row.get("audio")?,
+                    audio_random: row.get("audio_random")?,
+                },
+                end: read_stage_end(conn, &id)?,
+                events: read_stage_events(conn, &id)?,
+                movement: read_stage_movement(conn, &id)?,
+                mitosis: read_stage_mitosis(conn, &id)?,
+                on_enter: read_stage_entry(conn, &id)?.unwrap_or_default(),
+                prompt: read_stage_prompt(conn, &id)?,
+                id,
+                label: row.get("label")?,
+            })
+        })?
         .collect()
 }
 

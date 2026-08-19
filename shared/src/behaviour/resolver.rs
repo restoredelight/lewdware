@@ -689,7 +689,7 @@ mod shipped_mode_tests {
                 .as_ref()
                 .and_then(|w| w.get("pack_uses_movement")),
             Some(&ConditionValue::Bool(true)),
-            "the movement group must be gated on the fact, or the switch is dead for packs              whose timeline never sets a speed",
+            "the movement group must be gated on the fact, or the switch is dead for packs whose timeline never sets a speed",
         );
         // Visible means honored, so the switch itself defaults on.
         assert_eq!(

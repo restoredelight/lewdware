@@ -6,12 +6,20 @@ on:
   pull_request:
     branches: [main]
 
+# Three Rust jobs, split by which system libraries their crates need rather than one crate each:
+# `rust-core` needs nothing, `rust-apps` needs the Tauri/GTK stack, `rust-engine` needs FFmpeg,
+# ALSA and X11. Between them they cover every crate in the workspace.
+#
+# Every job that compiles `shared`'s tests, `lewdware` or `lewdware-config` has to build the
+# default modes first: all three `include_bytes!` the built `.lwmode` bundles, so without them the
+# crate does not compile at all. Actions has no YAML anchors, hence the repeated step.
+
 jobs:
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -21,11 +29,12 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
-  rust:
-    name: Rust tests
+  # shared, lw, converter -- pure Rust, no system dependencies.
+  rust-core:
+    name: Core Rust tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -35,40 +44,27 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Install Lua 5.4 headers
-        run: sudo apt-get install -y liblua5.4-dev
+      - name: Build the default modes
+        run: |
+          for mode in sandbox experience; do
+            (cd "default-modes/$mode" && cargo run -p lw -- mode build)
+          done
 
       - name: Run tests
-        run: cargo test -p shared -p lw
+        run: cargo test -p shared -p lw -p converter
 
-      - name: Clippy
-        run: cargo clippy -p shared -p lw --all-targets -- -D warnings
-
-  # The media-classification unit tests are hermetic (frozen ffprobe JSON, no binaries), so they
-  # run in `rust` above. This job covers what those can't: the sidecars are built from FFmpeg
-  # *master*, so ffprobe's actual output shifts under us between releases -- animated WebP became
-  # decodable mid-2026 and silently changed how those files classify. These `#[ignore]`d tests
-  # probe real generated media, so that drift fails here instead of in a user's pack.
-  #
-  # Split from `rust` on purpose: it pulls ~150MB from a third-party release, so keeping it in
-  # its own job means a fetch outage points at itself instead of looking like a test failure.
-  media-sidecar:
-    name: Media classification (real ffprobe)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Lua 5.4 headers
-        run: sudo apt-get install -y liblua5.4-dev
-
-      # Stages lewdware-ffmpeg/lewdware-ffprobe under pack-editor/src-tauri/binaries, which is
-      # where the tests look by default. Must run from the repo root.
+      # The media-classification unit tests are hermetic (frozen ffprobe JSON, no binaries) and ran
+      # above. These `#[ignore]`d ones are the counterpart: the sidecars are built from FFmpeg
+      # *master*, so ffprobe's actual output shifts under us between releases -- animated WebP
+      # became decodable mid-2026 and silently changed how those files classify. Running them here
+      # means that drift fails in CI instead of in a user's pack.
+      #
+      # They share this job rather than standing alone: the download is its own step, so a fetch
+      # outage still fails under its own name, and a separate job would rebuild all of `shared`
+      # -- default modes included -- to run a handful of tests.
+      #
+      # The script stages lewdware-ffmpeg/lewdware-ffprobe under pack-editor/src-tauri/binaries,
+      # which is where the tests look by default. It must run from the repo root.
       - name: Download FFmpeg sidecars
         run: ./deploy/linux/download_ffmpeg_sidecars.sh
 
@@ -78,11 +74,16 @@ jobs:
       - name: Run classification tests against the real sidecar
         run: cargo test -p shared --lib sidecar -- --ignored --nocapture
 
-  rust-pack-editor:
-    name: pack-editor Rust tests
+      - name: Clippy
+        run: cargo clippy -p shared -p lw -p converter --all-targets -- -D warnings
+
+  # The two Tauri apps plus the supervisor: GTK/WebKit for the apps, X11 for the supervisor's
+  # global panic-key hook (rdev -> libX11/XTest/XInput).
+  rust-apps:
+    name: App Rust tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -100,39 +101,35 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            liblua5.4-dev
+            libx11-dev \
+            libxi-dev \
+            libxtst-dev
 
-      - name: Create sidecar stubs
+      # `bundle.resources` in the pack editor's tauri.conf.json globs `binaries/lewdware-*`, and
+      # tauri-build fails at compile time when a resource glob matches nothing. Nothing here ever
+      # runs them -- the tests that need real sidecars live in `rust-core` -- so empty files do.
+      - name: Create sidecar placeholders
         run: |
-          TRIPLE=$(rustc -vV | grep '^host:' | cut -d' ' -f2)
           mkdir -p pack-editor/src-tauri/binaries
-          for name in lewdware-ffmpeg lewdware-ffprobe lewdware-avifenc; do
-            stub="pack-editor/src-tauri/binaries/${name}-${TRIPLE}"
-            printf '#!/bin/sh\n' > "$stub"
-            chmod +x "$stub"
+          touch pack-editor/src-tauri/binaries/lewdware-{ffmpeg,ffprobe,avifenc}
+
+      - name: Build the default modes
+        run: |
+          for mode in sandbox experience; do
+            (cd "default-modes/$mode" && cargo run -p lw -- mode build)
           done
 
-      - name: Build default modes
-        run: |
-          cargo run -p lw -- mode build
-        working-directory: default-modes/sandbox
-
-      - name: Build Experience mode
-        run: |
-          cargo run -p lw -- mode build
-        working-directory: default-modes/experience
-
       - name: Run tests
-        run: cargo test -p lewdware-pack-editor
+        run: cargo test -p lewdware-pack-editor -p lewdware-config -p lewdware-supervisor
 
       - name: Clippy
-        run: cargo clippy -p lewdware-pack-editor -p lewdware-config --all-targets -- -D warnings
+        run: cargo clippy -p lewdware-pack-editor -p lewdware-config -p lewdware-supervisor --all-targets -- -D warnings
 
   rust-engine:
     name: Engine Rust tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -142,20 +139,13 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      # ffmpeg-next links the system libav* here (release builds vendor them instead, via the
+      # `build-ffmpeg` feature). dav1d is the AVIF decoder behind `image`, alsa is cpal's Linux
+      # backend, and X11 is winit's. No GTK/WebKit: the engine is winit + wgpu, not Tauri.
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            curl \
-            wget \
-            file \
-            rpm \
-            libssl-dev \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
             libasound2-dev \
             libx11-dev \
             libxi-dev \
@@ -169,21 +159,13 @@ jobs:
             libswresample-dev \
             libavfilter-dev \
             libavdevice-dev \
-            libdav1d-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            patchelf \
-            xdg-utils
+            libdav1d-dev
 
-      - name: Build default modes
+      - name: Build the default modes
         run: |
-          cargo run -p lw -- mode build
-        working-directory: default-modes/sandbox
-
-      - name: Build Experience mode
-        run: |
-          cargo run -p lw -- mode build
-        working-directory: default-modes/experience
+          for mode in sandbox experience; do
+            (cd "default-modes/$mode" && cargo run -p lw -- mode build)
+          done
 
       - name: Run tests
         run: cargo test -p lewdware
@@ -193,11 +175,6 @@ jobs:
       # B-frames, because the thing they pin -- that the decoder is drained rather than flushed at
       # the end of each pass, so the frames it holds back are shown instead of discarded -- cannot
       # be reproduced without a decoder that actually holds frames back.
-      #
-      # Unlike `media-sidecar`, this shares a job with the tests above rather than standing alone:
-      # building the engine pulls the whole ffmpeg/GTK/X11 dependency set installed above, so a
-      # separate job would pay for all of it again to run two tests that take under a second. The
-      # download is its own step, so a fetch outage still fails under its own name.
       - name: Download FFmpeg sidecars
         run: ./deploy/linux/download_ffmpeg_sidecars.sh
 
@@ -208,20 +185,24 @@ jobs:
         run: cargo clippy -p lewdware --all-targets -- -D warnings
 
   frontend:
-    name: Frontend type check
+    name: Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: latest
+          version: 11
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: lts/*
+          node-version: 26
+          cache: 'pnpm'
+          cache-dependency-path: |
+            config/pnpm-lock.yaml
+            pack-editor/pnpm-lock.yaml
 
       - name: Install dependencies (config)
         run: pnpm install
@@ -239,11 +220,15 @@ jobs:
         run: pnpm check
         working-directory: pack-editor
 
+      - name: Unit tests (pack-editor)
+        run: pnpm test
+        working-directory: pack-editor
+
   lua:
     name: Lua syntax check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Lua 5.4
         run: sudo apt-get install -y lua5.4

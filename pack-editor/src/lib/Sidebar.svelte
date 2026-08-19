@@ -351,7 +351,6 @@
 			     preview because its grid tile has no playback control. -->
 			<button
 				class="preview bg-bg flex shrink-0 items-center justify-center"
-				style="height: 160px"
 				onclick={() => openMediaPreview(primary.id)}
 				aria-label={`Preview ${primary.file_name}`}
 			>
@@ -365,8 +364,7 @@
 						)}
 						alt={primary.file_name}
 						draggable="false"
-						class="max-h-full max-w-full object-contain"
-						style="max-height: 160px"
+						class="h-full w-full object-contain"
 					/>
 				{/if}
 				<span class="preview-hint"><Icon src={Eye} mini /> Preview</span>
@@ -575,6 +573,10 @@
 	.preview {
 		position: relative;
 		width: 100%;
+		/* Grows with the inspector: widening it is the way to ask for a bigger picture. Capped
+		   against the window so a short one still leaves room for the fields below. */
+		aspect-ratio: 16 / 10;
+		max-height: 38vh;
 		padding: 0;
 		border: 0;
 		color: var(--ui-muted);

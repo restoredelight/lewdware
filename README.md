@@ -66,11 +66,13 @@ repo root:
 - **macOS**: `./deploy/macos/download_ffmpeg_sidecars.sh`
 - **Windows**: `.\deploy\windows\download_ffmpeg_sidecars.ps1`
 
-The engine and config apps require the default modes to be built:
+The engine, the config app and `shared`'s test suite all embed the built default
+modes, so they have to be built first -- once per mode project:
 
 ```bash
-cd default-modes
-cargo run -p lw -- mode build
+for mode in sandbox experience; do
+  (cd "default-modes/$mode" && cargo run -p lw -- mode build)
+done
 ```
 
 Once those are built, you should be able to run the four apps.

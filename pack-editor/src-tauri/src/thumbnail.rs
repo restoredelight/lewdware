@@ -47,9 +47,14 @@ pub async fn generate_preview(
 
     // Transparent videos are packed as color-on-top, alpha-as-luma-on-bottom (see
     // `encode_video_with_transparency`); crop to the top half before scaling so the preview
-    // shows the actual color frame instead of the raw double-height packed frame.
-    let scale = "scale='min(iw,300)':'min(ih,200)':force_original_aspect_ratio=decrease";
-    let filter = if transparent {
+    // shows the actual color frame instead of the raw double-height packed frame. Only videos:
+    // a transparent image keeps a real alpha plane (see `encode_image`), so cropping one would
+    // throw away the bottom half of the picture.
+    // Sized for the inspector preview, the largest consumer: it grows with the inspector, up to
+    // 420x262 CSS px, which is twice that on a HiDPI display. `min()` keeps this a cap rather
+    // than a target -- a small source is served at its own size instead of being upscaled here.
+    let scale = "scale='min(iw,800)':'min(ih,600)':force_original_aspect_ratio=decrease";
+    let filter = if transparent && !is_image {
         format!("crop=iw:ih/2:0:0,{scale}")
     } else {
         scale.to_string()

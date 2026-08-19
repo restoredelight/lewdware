@@ -11,8 +11,10 @@
 	// Being a one-file surface is the cost of that, and `store.openedSelection` is what pays it
 	// back: opened over a selection, prev/next walk the selection and every control writes to all
 	// of it, showing shared values and "Mixed" the way the inspector's tag controls do.
+	import { onDestroy } from 'svelte';
 	import { store } from './store.svelte.js';
 	import { ChevronLeft, ChevronRight, Icon } from 'svelte-hero-icons';
+	import { KeyRepeater } from './keyRepeat.js';
 	import MediaDisplay from './MediaDisplay.svelte';
 	import MediaOverlay from './MediaOverlay.svelte';
 	import PopupOptions from './PopupOptions.svelte';
@@ -37,9 +39,21 @@
 		}
 	}
 
+	/**
+	 * The gap between steps while an arrow key is held, and the clock that keeps to it.
+	 *
+	 * A step here loads a full-size image or video, nowhere near as fast as the thirty repeats a
+	 * second a held key sends, so the repeats are not what steps the viewer -- see `keyRepeat.ts`.
+	 * Slower than the grid's, having much more to do per step.
+	 */
+	const REPEAT_STEP_MS = 120;
+	const repeater = new KeyRepeater(REPEAT_STEP_MS);
+	onDestroy(() => repeater.stop());
+
 	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'ArrowRight') navigate(1);
-		else if (event.key === 'ArrowLeft') navigate(-1);
+		const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+		if (step === 0) return;
+		repeater.press(event, () => navigate(step));
 	}
 
 	const index = $derived(file ? files.findIndex((item) => item.id === file.id) : -1);
@@ -132,6 +146,7 @@
 	position={`${index + 1} of ${files.length}${store.openedSelection ? ' selected' : ''}`}
 	onclose={close}
 	onkey={handleKeydown}
+	onkeyrelease={(event) => repeater.release(event)}
 	style={`--rail-w: ${RAIL_WIDTH}px`}
 >
 	<!-- Nav prev -->

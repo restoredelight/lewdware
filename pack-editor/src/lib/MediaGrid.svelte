@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { clampScroll } from '$ui/scroll';
 	import { Icon, MusicalNote, Play } from 'svelte-hero-icons';
 	import { Menu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
@@ -6,6 +7,7 @@
 	import { store } from './store.svelte.js';
 	import type { MediaFile } from './types.js';
 	import { copyFileName } from './clipboard.js';
+	import { KeyRepeater } from './keyRepeat.js';
 	import { MediaSelection } from './mediaSelection.svelte.js';
 	import { openMediaPreview, openSelectionEditor } from './mediaPreview.js';
 
@@ -92,9 +94,19 @@
 		}
 		if (NAVIGATION_KEYS.includes(event.key) && files.length > 0) {
 			event.preventDefault();
-			navigate(event.key, event.shiftKey, event.ctrlKey || event.metaKey);
+			// Held down, the steps are paced by a clock rather than by the repeats: moving the active
+			// tile scrolls rows of thumbnails into view to be fetched and decoded, which the repeat
+			// rate outruns, and the backlog that builds up used to carry the grid on past wherever the
+			// key was let go. See `keyRepeat.ts`.
+			const { key, shiftKey, ctrlKey, metaKey } = event;
+			repeater.press(event, () => navigate(key, shiftKey, ctrlKey || metaKey));
 		}
 	}
+
+	/** Brisker than the viewer's: a step is a scroll and some thumbnails, not a whole video. */
+	const REPEAT_STEP_MS = 60;
+	const repeater = new KeyRepeater(REPEAT_STEP_MS);
+	onDestroy(() => repeater.stop());
 
 	const NAVIGATION_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
 
@@ -215,8 +227,14 @@
 	bind:clientWidth={viewW}
 	onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}
 	onkeydown={handleKeydown}
+	onkeyup={(event) => repeater.release(event)}
 	onfocus={() => (gridFocused = true)}
-	onblur={() => (gridFocused = false)}
+	onblur={() => {
+		gridFocused = false;
+		// Focus gone mid-hold: the keyup will be delivered wherever it went instead, so end the hold
+		// here rather than waiting for the repeater's own timeout to notice.
+		repeater.stop();
+	}}
 	oncontextmenu={(e) => showContextMenu(e)}
 	class="media-grid bg-bg relative h-full w-full overflow-auto rounded-sm p-2"
 	use:clampScroll

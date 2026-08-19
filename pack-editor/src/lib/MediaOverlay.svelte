@@ -28,12 +28,21 @@
 		 * caption box has the cursor.
 		 */
 		onkey?: (event: KeyboardEvent) => void;
+		/**
+		 * Keys let go of, for an overlay that does something for as long as one is held.
+		 *
+		 * Unfiltered, unlike `onkey`: a key that went down somewhere this overlay was listening has
+		 * to be seen coming up wherever the focus has got to since, or whatever it started never
+		 * stops.
+		 */
+		onkeyrelease?: (event: KeyboardEvent) => void;
 		/** Custom properties the contents read back, e.g. the options rail's width. */
 		style?: string;
 		children: Snippet;
 	};
 
-	let { ariaLabel, fileName, position, onclose, onkey, style, children }: Props = $props();
+	let { ariaLabel, fileName, position, onclose, onkey, onkeyrelease, style, children }: Props =
+		$props();
 
 	let dialog: HTMLDivElement;
 	let previouslyFocused: HTMLElement | null = null;
@@ -86,6 +95,7 @@
 	class="fixed inset-0 z-50 flex bg-black/80"
 	{style}
 	onkeydown={handleKeydown}
+	onkeyup={onkeyrelease}
 	tabindex="-1"
 >
 	<!-- Close overlay -->
