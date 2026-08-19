@@ -9,7 +9,7 @@
 	import { adoptBehaviour } from './behaviourSave.svelte.js';
 	import ExplicitMediaPicker from './ExplicitMediaPicker.svelte';
 	import { store } from './store.svelte.js';
-	import { taskFeedback } from './taskFeedback.svelte.js';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import type { MediaSlot } from './types.js';
 
 	type Props = {

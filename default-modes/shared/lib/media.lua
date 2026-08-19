@@ -5,7 +5,7 @@
 -- enforced below Lua").
 --
 -- `__lewdware_content` is a private engine-injected global (not part of the public `lewdware`
--- API -- see `create_api` in `lewdware/src/lua/api.rs`) carrying the pack's whole behaviour.json
+-- API -- see `create_api` in `lewdware/src/lua/api/`) carrying the pack's whole behaviour.json
 -- `content` section. It's empty (all-default) for custom modes and for a pack with no
 -- behaviour.json.
 
@@ -246,7 +246,7 @@ end
 -- Built on first use and then kept, because nothing it is built from can change while a session
 -- runs: the pack's media is read-only, and the exclusions `merge_tags` folds in come from
 -- `lewdware.config`, which the engine injects once when it creates the API (`create_api` in
--- `lewdware/src/lua/api.rs`). Worth keeping because this sits on the spawn path -- every popup used
+-- `lewdware/src/lua/api/`). Worth keeping because this sits on the spawn path -- every popup used
 -- to ask the engine for the whole popup-audio pool and re-derive each file's ordinary tags before
 -- picking one of them.
 local popup_audio_index = nil

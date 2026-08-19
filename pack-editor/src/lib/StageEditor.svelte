@@ -59,7 +59,6 @@
 		{ key: 'web', label: 'Web links', interval: 300 },
 		{ key: 'notification', label: 'Notifications', interval: 300 },
 		{ key: 'prompt', label: 'Prompts', interval: 90 },
-		{ key: 'subliminal', label: 'Subliminals', interval: 60 },
 		{ key: 'sound', label: 'Sounds', interval: 90 }
 	] as const;
 

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openMediaPreview, openStandalonePreview } from './mediaPreview.js';
 import { store } from './store.svelte.js';
-import { taskFeedback } from './taskFeedback.svelte.js';
+import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 describe('openMediaPreview', () => {
 	beforeEach(() => {

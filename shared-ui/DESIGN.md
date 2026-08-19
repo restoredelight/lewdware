@@ -233,7 +233,7 @@ Prefer these over hand-rolling. They already encode the rules above:
 
 `Button` · `IconButton` · `Checkbox` · `Toggle` · `RadioGroup` · `Slider` ·
 `Select` · `Field` · `NumberField` · `TagInput` · `Tabs` · `Card` · `Dialog` ·
-`Popover` · `Tooltip` · `EmptyState`.
+`Popover` · `Tooltip` · `EmptyState` · `UpdateBanner`.
 
 `Button` variants: `primary` (carmine fill — one per surface), `secondary`
 (bordered), `quiet` (transparent, muted → text on hover), `destructive` (coral
@@ -257,6 +257,14 @@ reliably re-clamp `scrollTop` when content below it collapses, so a section clos
 can strand the view past the end of the page, showing blank space. This pulls it
 back, and is a no-op on engines that clamp correctly. Every page-level scroll
 container in both apps already uses it; use it on any new one.
+
+Also shared and not a component: **`taskFeedback`**
+(`shared-ui/taskFeedback.svelte.ts`) — the single transient status message an app is
+showing, and the queue behind it. `progress`/`warning`/`error`/`confirm` set one by
+id; `success` *dismisses* rather than showing anything, because a successful outcome
+is already visible in the UI. Only the highest-priority message is drawn (error >
+warning > progress > success, then task id, then arrival); the rest are counted, not
+stacked. Each app renders it with its own `TaskStatus.svelte`.
 
 ---
 

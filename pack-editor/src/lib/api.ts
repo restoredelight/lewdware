@@ -121,10 +121,6 @@ export const api = {
 		tagActions: TagAction[]
 	) => invoke<BehaviourEdit>('edit_behaviour', { patches, label, retiring, tagActions }),
 
-	/** Returns the ids it deleted: media that was only ever a subliminal leaves with the pool. */
-	removeFromSubliminals: (ids: number[]) => invoke<number[]>('remove_from_subliminals', { ids }),
-	addSubliminalFilesDialog: () => invoke<MediaFile[] | null>('add_subliminal_files_dialog'),
-
 	fillMediaSlotDialog: (slot: MediaSlot) =>
 		invoke<SlotFilled | null>('fill_media_slot_dialog', { slot }),
 	setMediaSlot: (slot: MediaSlot, mediaId: number) =>

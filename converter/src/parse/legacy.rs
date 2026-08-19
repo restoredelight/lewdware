@@ -106,6 +106,16 @@ fn load_captions(source: &dyn PackSource, index: &mut EdgewareIndex, warnings: &
         index.default_extra.popup_close = Some(popup_close);
     }
 
+    if !index.default.subliminals.is_empty() {
+        warnings.push(Warning::new(
+            WarningKind::UnsupportedFeatureDropped,
+            format!(
+                "{} subliminal(s) for \"default\" were dropped (subliminals aren't supported)",
+                index.default.subliminals.len()
+            ),
+        ));
+    }
+
     if !index.default.denial.is_empty() {
         warnings.push(Warning::new(
             WarningKind::UnsupportedFeatureDropped,

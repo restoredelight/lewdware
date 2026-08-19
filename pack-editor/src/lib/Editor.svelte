@@ -44,7 +44,7 @@
 	import { initializeMetadataHistory, scheduleMetadataSave } from './metadataSave.svelte.js';
 	import { cancelPendingWrites, flushPendingWrites, packSave } from './packActions.svelte.js';
 	import { history } from './history.svelte.js';
-	import { taskFeedback } from './taskFeedback.svelte.js';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import type { MediaFile } from './types.js';
 	import EmptyState from '$ui/EmptyState.svelte';
 
@@ -441,8 +441,8 @@
 					{#if store.activeView === 'all-media'}
 						<div class="border-border bg-surface border-b px-3 py-2">
 							<p class="text-muted text-xs">
-								Everything in the pack, including wallpapers, splashes and subliminals. Custom modes
-								can draw from all of it.
+								Everything in the pack, including wallpapers and splashes. Custom modes can draw
+								from all of it.
 							</p>
 						</div>
 					{/if}

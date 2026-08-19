@@ -27,9 +27,8 @@ export type AudioRoleFilter = 'all' | 'background' | 'popup';
 export type EditorView =
 	MediaView | 'tags' | 'artists' | 'content' | 'experience' | 'modes' | 'options';
 export type ContentTab =
-	'groups' | 'captions' | 'prompts' | 'notifications' | 'subliminals' | 'web_links' | 'wallpaper';
-export type ContentReveal =
-	{ tab: 'subliminals'; fileId: number } | { tab: 'wallpaper'; slot: 'wallpaper' | 'splash' };
+	'groups' | 'captions' | 'prompts' | 'notifications' | 'web_links' | 'wallpaper';
+export type ContentReveal = { tab: 'wallpaper'; slot: 'wallpaper' | 'splash' };
 
 /**
  * What one media tab remembers about how it is being looked at.
@@ -274,7 +273,7 @@ class AppStore {
 	 * Shows everything carrying one tag or one artist, from the Tags and Artists tabs.
 	 *
 	 * All media by default, because these are namespace surfaces over the whole pack: a tag's media
-	 * includes the wallpaper and the subliminals that carry it, and no other tab lists those. The
+	 * includes the wallpaper that carries it, and no other tab lists those. The
 	 * caller can name a narrower tab -- what the tag means *as a popup* or *as audio* is a different
 	 * question, and the answer is in the tab that owns the role. The destination's other filters are
 	 * cleared first -- each media tab keeps its own between visits (see `MediaTabState`), and a query
@@ -388,14 +387,14 @@ class AppStore {
 	/**
 	 * The Popups tab's universe: what the default modes would spawn as an ordinary popup. Audio is
 	 * out because it is played rather than drawn (it has the Audio tab), and so is anything that
-	 * exists only as scenery -- a wallpaper, a splash, a subliminal.
+	 * exists only as scenery -- a wallpaper, a splash.
 	 *
-	 * Scenery lives in the slot or pool that owns it (Content tab), which is the only place it can
-	 * be added or removed. Listing it here as well made the author reason about a distinction that
-	 * is the editor's bookkeeping, not theirs: a grid row that looks like ordinary media but whose
-	 * removal would silently empty a slot. `files` itself stays complete -- the slots and the
-	 * subliminal pool resolve their own members out of it, and All media shows all of it, which is
-	 * the honest picture of what a custom mode's `lewdware.media.*` draws from.
+	 * Scenery lives in the slot that owns it (Content tab), which is the only place it can be added
+	 * or removed. Listing it here as well made the author reason about a distinction that is the
+	 * editor's bookkeeping, not theirs: a grid row that looks like ordinary media but whose removal
+	 * would silently empty a slot. `files` itself stays complete -- the slots resolve their own
+	 * members out of it, and All media shows all of it, which is the honest picture of what a
+	 * custom mode's `lewdware.media.*` draws from.
 	 */
 	popupFiles = $derived(
 		this.files.filter(
@@ -652,7 +651,7 @@ class AppStore {
 		if (existing === -1) this.files.push(file);
 		else this.files[existing] = file;
 		// `allTags` is the author-facing suggestion list, so a file arriving with a managed marker
-		// (slot media, imported subliminals) must not put that marker in it -- see ./tags.ts.
+		// (slot media) must not put that marker in it -- see ./tags.ts.
 		const newTags = withoutManagedTags(file.tags).filter((t) => !this.allTags.includes(t));
 		if (newTags.length > 0) this.allTags = [...this.allTags, ...newTags];
 		if (file.artists.length > 0) {

@@ -3,12 +3,12 @@
 //!
 //! A pack's tags are otherwise a flat, author-owned namespace. These few are mechanical -- they
 //! say what a file *is to the engine*, not what it's about -- so the pack editor writes them
-//! itself (from the media slots and the subliminal pool) and hides them everywhere a tag is
+//! itself (from the media slots) and hides them everywhere a tag is
 //! offered or listed. Authors can neither create them nor see them; the prefix is what makes
 //! that enforceable without a second table.
 //!
 //! The prefix matches the engine's existing `__lewdware_content` private global (see
-//! `create_api` in `lewdware/src/lua/api.rs`) -- same "this belongs to the engine" signal.
+//! `create_api` in `lewdware/src/lua/api/`) -- same "this belongs to the engine" signal.
 
 use std::borrow::Cow;
 
@@ -19,13 +19,6 @@ pub const MANAGED_TAG_PREFIX: &str = "__lewdware-";
 /// wallpaper, a splash) rather than content: showing the desktop wallpaper as a popup is a bug,
 /// and seeing the splash again as an ordinary popup gives away that it was never special.
 pub const NON_POPUP_TAG: &str = "__lewdware-non-popup";
-
-/// Membership of the subliminal pool.
-///
-/// Deliberately orthogonal to [`NON_POPUP_TAG`]: a subliminal image carries both by default, and
-/// clearing the marker makes it also a popup while it stays a subliminal. If pool membership
-/// implied exclusion, "put this back in popups" would have no way to say itself.
-pub const SUBLIMINAL_TAG: &str = "__lewdware-subliminal";
 
 /// Marks audio that plays when a popup spawns. Audio without this marker is background audio.
 pub const POPUP_AUDIO_TAG: &str = "__lewdware-audio-popup";
@@ -63,7 +56,6 @@ mod tests {
     #[test]
     fn only_the_prefix_is_managed() {
         assert!(is_managed(NON_POPUP_TAG));
-        assert!(is_managed(SUBLIMINAL_TAG));
         assert!(is_managed(POPUP_AUDIO_TAG));
         assert!(is_managed(EXPLICIT_ONLY_TAG));
         assert!(is_managed("__lewdware-something-later"));

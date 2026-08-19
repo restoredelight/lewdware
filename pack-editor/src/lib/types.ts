@@ -183,7 +183,6 @@ export interface Content {
 	captions: TextItem[];
 	prompts: TextItem[];
 	notifications: TextItem[];
-	subliminals: TextItem[];
 	web_links: WebLink[];
 	/** Id of the media file used as the wallpaper; absent means the pack has no wallpaper. */
 	wallpaper?: number;
@@ -204,7 +203,6 @@ export interface Events {
 	web?: EventSchedule;
 	notification?: EventSchedule;
 	prompt?: EventSchedule;
-	subliminal?: EventSchedule;
 	sound?: EventSchedule;
 }
 export interface Movement {
@@ -262,7 +260,7 @@ export interface ContentSelection {
 	audio_random?: boolean;
 }
 export interface EventCountCondition {
-	event: 'popup' | 'web' | 'notification' | 'prompt' | 'subliminal' | 'sound';
+	event: 'popup' | 'web' | 'notification' | 'prompt' | 'sound';
 	count: number;
 	scope: 'stage' | 'session';
 }
@@ -303,7 +301,6 @@ export type TransitionValue =
 	| 'web_interval'
 	| 'notification_interval'
 	| 'prompt_interval'
-	| 'subliminal_interval'
 	| 'sound_interval'
 	| 'crossfade'
 	| 'movement_minimum_speed'

@@ -117,6 +117,16 @@ fn convert_base(raw: RawBase, mood_label: &str, warnings: &mut Vec<Warning>) -> 
         ));
     }
 
+    if !raw.subliminals.is_empty() {
+        warnings.push(Warning::new(
+            WarningKind::UnsupportedFeatureDropped,
+            format!(
+                "{} subliminal(s) for \"{mood_label}\" were dropped (subliminals aren't supported)",
+                raw.subliminals.len()
+            ),
+        ));
+    }
+
     let mut web = Vec::with_capacity(raw.web.len());
     for (i, url) in raw.web.into_iter().enumerate() {
         let args = raw.web_args.get(i).cloned().unwrap_or_default();

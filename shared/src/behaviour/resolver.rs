@@ -176,10 +176,6 @@ fn pack_has_constants(
         OptionValue::Boolean(!content.notifications.is_empty()),
     );
     map.insert(
-        "pack_has_subliminals".to_string(),
-        OptionValue::Boolean(!content.subliminals.is_empty()),
-    );
-    map.insert(
         "pack_has_web_links".to_string(),
         OptionValue::Boolean(!content.web_links.is_empty()),
     );
@@ -331,7 +327,6 @@ mod tests {
             "pack_has_captions",
             "pack_has_prompts",
             "pack_has_notifications",
-            "pack_has_subliminals",
             "pack_has_web_links",
             "pack_has_content_groups",
             "pack_has_experience",
@@ -363,7 +358,7 @@ mod tests {
             enabled_by_default: true,
         }];
         behaviour.experience = Some(Default::default());
-        // prompts/notifications/subliminals/web_links left empty deliberately, so each flag
+        // prompts/notifications/web_links left empty deliberately, so each flag
         // is checked independently rather than all flipping together.
 
         let schema = effective_options(&empty_mode_schema(), &behaviour, &no_media);
@@ -386,10 +381,6 @@ mod tests {
         );
         assert_eq!(
             schema.pack_has.get("pack_has_notifications"),
-            Some(&OptionValue::Boolean(false))
-        );
-        assert_eq!(
-            schema.pack_has.get("pack_has_subliminals"),
             Some(&OptionValue::Boolean(false))
         );
         assert_eq!(

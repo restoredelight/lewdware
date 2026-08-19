@@ -23,7 +23,7 @@ import type {
 	WallpaperRestore,
 	WindowDto
 } from './types';
-import { taskFeedback } from './taskFeedback.svelte';
+import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 function defaultWindow(): WindowDto {
 	return {

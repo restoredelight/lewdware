@@ -7,16 +7,8 @@
 	import TextPoolEditor from './TextPoolEditor.svelte';
 	import ContentGroupsEditor from './ContentGroupsEditor.svelte';
 	import MediaSlot from './MediaSlot.svelte';
-	import SubliminalPool from './SubliminalPool.svelte';
-	import { SUBLIMINAL_TAG } from './tags.js';
 	import WebLinksEditor from './WebLinksEditor.svelte';
 	import Tabs from '$ui/Tabs.svelte';
-
-	// The subliminal pool is media, not a behaviour field: membership is the managed tag every
-	// file already carries in `store.files`, so the count is a filter rather than a query.
-	const subliminalCount = $derived(
-		store.files.filter((file) => file.tags.includes(SUBLIMINAL_TAG)).length
-	);
 
 	const tabs = $derived<{ id: ContentTab; label: string; group: string; badge?: number }[]>([
 		{
@@ -44,12 +36,6 @@
 			badge: store.behaviour?.content.notifications.length
 		},
 		{
-			id: 'subliminals',
-			label: 'Subliminals',
-			group: 'Messages',
-			badge: subliminalCount
-		},
-		{
 			id: 'web_links',
 			label: 'Web Links',
 			group: 'Other',
@@ -74,11 +60,6 @@
 			title: 'Notifications',
 			description:
 				'Messages displayed as desktop notifications. A notification can carry a title above its message; leave it blank to show the message on its own.'
-		},
-		subliminals: {
-			title: 'Subliminals',
-			description:
-				'Videos layered over popups at low opacity — hypno spirals and anything else meant to sit on top.'
 		},
 		web_links: {
 			title: 'Web Links',
@@ -150,13 +131,6 @@
 						<TextPoolEditor title="Prompts" poolKey="prompts" idPrefix="prompt" />
 					{:else if store.contentTab === 'notifications'}
 						<TextPoolEditor title="Notifications" poolKey="notifications" idPrefix="notification" />
-					{:else if store.contentTab === 'subliminals'}
-						<SubliminalPool
-							revealId={store.contentTarget?.tab === 'subliminals'
-								? store.contentTarget.fileId
-								: null}
-							onrevealed={() => (store.contentTarget = null)}
-						/>
 					{:else if store.contentTab === 'web_links'}
 						<WebLinksEditor />
 					{:else if store.contentTab === 'wallpaper'}

@@ -8,41 +8,20 @@ use uuid::Uuid;
 const ARCHIVE_GENERATION_KEY: &str = "__pack_editor_archive_generation";
 const ARCHIVE_STATE_KEY: &str = "__pack_editor_archive_state";
 
-const MIGRATION_1: &str = include_str!("migrations/0001_init_schema.sql");
-// Reached across into `shared` on purpose: the behaviour tables are identical in the runtime pack
-// and the editor's working copy, and two hand-kept copies of this schema drifting apart would be
-// a silent corruption rather than a compile error.
-const MIGRATION_2: &str =
-    include_str!("../../../shared/src/migrations/0002_behaviour_timeline.sql");
+/// One migration, because nothing is released yet: a database is either current or absent, so
+/// there is no upgrade path worth carrying. The ledger stays a list so that the first real
+/// migration is an append rather than a rewrite of `initialize`.
+///
+/// Two files concatenated: the editor's own base schema, and the behaviour tables. The latter is
+/// reached across into `shared` on purpose -- they are identical in the runtime pack and the
+/// editor's working copy, and two hand-kept copies of that schema drifting apart would be a silent
+/// corruption rather than a compile error.
+const MIGRATION_1: &str = concat!(
+    include_str!("migrations/0001_init_schema.sql"),
+    include_str!("../../../shared/src/migrations/behaviour_schema.sql"),
+);
 
-const MIGRATION_3: &str = include_str!("../../../shared/src/migrations/0003_behaviour_content.sql");
-
-const MIGRATION_4: &str = include_str!("../../../shared/src/migrations/0004_behaviour_media.sql");
-
-const MIGRATION_5: &str =
-    include_str!("../../../shared/src/migrations/0005_stage_tag_ownership.sql");
-
-const MIGRATION_6: &str = include_str!("../../../shared/src/migrations/0006_timeline_effects.sql");
-const MIGRATION_7: &str = include_str!("../../../shared/src/migrations/0007_sound_events.sql");
-const MIGRATION_8: &str =
-    include_str!("../../../shared/src/migrations/0008_explicit_timeline_media.sql");
-const MIGRATION_9: &str =
-    include_str!("../../../shared/src/migrations/0009_prompt_timeout_multiplier.sql");
-const MIGRATION_10: &str =
-    include_str!("../../../shared/src/migrations/0010_notification_summary.sql");
-
-const MIGRATIONS: &[&str] = &[
-    MIGRATION_1,
-    MIGRATION_2,
-    MIGRATION_3,
-    MIGRATION_4,
-    MIGRATION_5,
-    MIGRATION_6,
-    MIGRATION_7,
-    MIGRATION_8,
-    MIGRATION_9,
-    MIGRATION_10,
-];
+const MIGRATIONS: &[&str] = &[MIGRATION_1];
 
 /// The behaviour document's structural half (see `shared::behaviour::storage`), in an order that
 /// satisfies its foreign keys: parents before children, stages before the transitions between them.
@@ -52,7 +31,6 @@ const MIGRATIONS: &[&str] = &[
 /// kind of thing three parallel SQL blocks drift into.
 pub const BEHAVIOUR_TABLES: &[&str] = &[
     "behaviour_content",
-    "behaviour_settings",
     "behaviour_experience",
     "behaviour_stage",
     "behaviour_stage_tag",
@@ -504,7 +482,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initialize_adopts_an_existing_pre_migration_editor_database() {
+    fn initialize_is_idempotent() {
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch(MIGRATION_1).unwrap();
 

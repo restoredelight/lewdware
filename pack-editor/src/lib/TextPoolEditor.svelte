@@ -14,7 +14,7 @@
 		title: string;
 		// A key into behaviour content rather than the array itself: this editor mutates the
 		// pool, and mutating an unbound prop trips Svelte's ownership warning.
-		poolKey: 'captions' | 'prompts' | 'notifications' | 'subliminals';
+		poolKey: 'captions' | 'prompts' | 'notifications';
 		idPrefix: string;
 	};
 

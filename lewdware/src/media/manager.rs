@@ -18,7 +18,7 @@ use crate::{
     audio::AudioPlayer,
     error::LewdwareError,
     lua::{ItemId, Media, MediaType},
-    media::{FileOrPath, ImageData, pack::MediaPack},
+    media::{ExtractedFile, ImageData, pack::MediaPack},
     video::VideoDecoder,
 };
 
@@ -203,7 +203,7 @@ impl MediaManager {
         })
     }
 
-    pub fn get_image_file(&self, id: u64) -> Result<FileOrPath> {
+    pub fn get_image_file(&self, id: u64) -> Result<ExtractedFile> {
         self.send(|tx| MediaRequest::GetImageFile {
             id,
             response_tx: tx,
@@ -506,7 +506,7 @@ enum MediaRequest {
     },
     GetImageFile {
         id: u64,
-        response_tx: std_mpsc::Sender<Result<FileOrPath>>,
+        response_tx: std_mpsc::Sender<Result<ExtractedFile>>,
     },
     GetModeData {
         id: u64,

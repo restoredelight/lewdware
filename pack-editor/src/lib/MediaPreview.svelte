@@ -1,6 +1,6 @@
 <script lang="ts">
 	// One file on its own: the viewer for media the Media tab doesn't list -- a slot's wallpaper or
-	// splash, a subliminal. Opened by `openStandalonePreview`.
+	// splash. Opened by `openStandalonePreview`.
 	//
 	// Deliberately not a mode of `MediaViewer`. That one is a position in `store.filteredFiles`:
 	// prev/next, "3 of 57", arrow keys. Scenery isn't in that list at all, so every one of those

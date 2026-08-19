@@ -40,7 +40,6 @@
 				{ key: 'web_interval', label: 'Web links' },
 				{ key: 'notification_interval', label: 'Notifications' },
 				{ key: 'prompt_interval', label: 'Prompts' },
-				{ key: 'subliminal_interval', label: 'Subliminals' },
 				{ key: 'sound_interval', label: 'Sounds' }
 			]
 		},

@@ -13,8 +13,8 @@ local transitions = timeline.transitions or {}
 local stage_index = 1
 local phase = "stage"
 local generation = 0 -- invalidates timers left behind by an event-count advance
-local session_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0, sound=0 }
-local stage_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0, sound=0 }
+local session_counts = { popup=0, web=0, notification=0, prompt=0, sound=0 }
+local stage_counts = { popup=0, web=0, notification=0, prompt=0, sound=0 }
 local listeners = {}
 local enter_listeners = {}
 local current = stages[1] or { content={}, events={} }
@@ -77,8 +77,7 @@ end
 
 local event_values = {
 	popup="popup_interval", web="web_interval", notification="notification_interval",
-	prompt="prompt_interval", subliminal="subliminal_interval",
-	sound="sound_interval",
+	prompt="prompt_interval", sound="sound_interval",
 }
 
 local function interpolate(from, to, transition, progress)
@@ -190,7 +189,7 @@ enter_stage = function(index)
 	phase = "stage"
 	audio_crossfade = nil
 	duration_reached = false
-	stage_counts = { popup=0, web=0, notification=0, prompt=0, subliminal=0, sound=0 }
+	stage_counts = { popup=0, web=0, notification=0, prompt=0, sound=0 }
 	current = stages[index] or { content={}, events={} }
 	notify()
 	for _, listener in ipairs(enter_listeners) do listener(current.on_enter or {}) end

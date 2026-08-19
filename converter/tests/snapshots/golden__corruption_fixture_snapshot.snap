@@ -1,6 +1,5 @@
 ---
 source: converter/tests/golden.rs
-assertion_line: 46
 expression: output
 ---
 metadata:
@@ -43,7 +42,6 @@ behaviour:
           - corrupted
     prompts: []
     notifications: []
-    subliminals: []
     web_links: []
   experience:
     timeline:
@@ -152,4 +150,4 @@ media_references:
 icon: ~
 warnings:
   - kind: ConfigNotConverted
-    message: "config.json's other setting(s) (corruptionMode) have no Lewdware equivalent and were dropped"
+    message: "config.json's other setting(s) (capPopChance, corruptionMode) have no Lewdware equivalent and were dropped"

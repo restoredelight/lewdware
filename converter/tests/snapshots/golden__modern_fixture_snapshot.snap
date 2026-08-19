@@ -1,6 +1,5 @@
 ---
 source: converter/tests/golden.rs
-assertion_line: 20
 expression: output
 ---
 metadata:
@@ -56,9 +55,6 @@ behaviour:
     notifications:
       - text: Notification
         tags: []
-    subliminals:
-      - text: Subliminal message
-        tags: []
     web_links:
       - url: "https://duckduckgo.com/?q="
         args:
@@ -95,10 +91,6 @@ behaviour:
               interval:
                 kind: fixed
                 seconds: 90
-            subliminal:
-              interval:
-                kind: fixed
-                seconds: 60
       transitions: []
 media:
   - source_path: wallpaper.png
@@ -140,11 +132,6 @@ media:
     suggested_name: moody_d.mp3
     tags:
       - moody
-  - source_path: hypno/glimmer.gif
-    suggested_name: glimmer.gif
-    tags:
-      - __lewdware-subliminal
-      - __lewdware-non-popup
 media_references:
   - - kind: wallpaper
     - wallpaper.png
@@ -155,4 +142,8 @@ warnings:
   - kind: UnsupportedFeatureDropped
     message: "1 denial caption(s) for \"default\" were dropped (denial/blur isn't supported yet)"
   - kind: UnsupportedFeatureDropped
+    message: "1 subliminal(s) for \"default\" were dropped (subliminals aren't supported)"
+  - kind: UnsupportedFeatureDropped
     message: "\"kinky\"'s multi-click dismissal (maxClicks: 2) isn't supported and was dropped"
+  - kind: UnsupportedFeatureDropped
+    message: "1 hypno/subliminal file(s) were skipped (subliminals aren't supported)"

@@ -2,9 +2,10 @@ use anyhow::{Result, bail};
 use rusqlite::{OptionalExtension, params};
 
 pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
-    // Table rebuilds need foreign-key enforcement disabled, but the schema and migration ledger
-    // still move atomically. Restoring the connection setting outside the transaction is
-    // important because SQLite ignores PRAGMA foreign_keys changes while a transaction is open.
+    // A migration that rebuilds a table needs foreign-key enforcement disabled, but the schema and
+    // migration ledger still move atomically. Restoring the connection setting outside the
+    // transaction is important because SQLite ignores PRAGMA foreign_keys changes while a
+    // transaction is open.
     let foreign_keys: bool = db.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
     db.pragma_update(None, "foreign_keys", false)?;
     let result = (|| -> Result<()> {
@@ -66,18 +67,16 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-const MIGRATIONS: [&str; 10] = [
+/// One migration, because nothing is released yet: a database is either current or absent, so
+/// there is no upgrade path worth carrying. The ledger stays a list so that the first real
+/// migration is an append rather than a rewrite of `migrate`.
+///
+/// Two files concatenated: the base schema below, and the behaviour tables that the pack editor's
+/// ledger includes from the same file (see `migrations/behaviour_schema.sql`).
+const MIGRATIONS: [&str; 1] = [concat!(
     include_str!("migrations/0001_init_schema.sql"),
-    include_str!("migrations/0002_behaviour_timeline.sql"),
-    include_str!("migrations/0003_behaviour_content.sql"),
-    include_str!("migrations/0004_behaviour_media.sql"),
-    include_str!("migrations/0005_stage_tag_ownership.sql"),
-    include_str!("migrations/0006_timeline_effects.sql"),
-    include_str!("migrations/0007_sound_events.sql"),
-    include_str!("migrations/0008_explicit_timeline_media.sql"),
-    include_str!("migrations/0009_prompt_timeout_multiplier.sql"),
-    include_str!("migrations/0010_notification_summary.sql"),
-];
+    include_str!("migrations/behaviour_schema.sql"),
+)];
 
 #[cfg(test)]
 mod tests {
@@ -123,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_preserves_data_across_media_tags_and_media_artists_relations() {
+    fn migrating_an_already_current_database_leaves_its_rows_alone() {
         let db = rusqlite::Connection::open_in_memory().unwrap();
         migrate(&db).unwrap();
 
@@ -145,42 +144,6 @@ mod tests {
                 .get::<_, u64>(0))
                 .unwrap(),
             1
-        );
-    }
-
-    #[test]
-    fn migration_eight_moves_the_pack_wide_timeout_onto_each_existing_prompt() {
-        let db = rusqlite::Connection::open_in_memory().unwrap();
-        db.execute(
-            "CREATE TABLE migrations (migration_index INTEGER NOT NULL)",
-            [],
-        )
-        .unwrap();
-        for migration in &MIGRATIONS[..7] {
-            db.execute_batch(migration).unwrap();
-        }
-        db.execute("INSERT INTO migrations VALUES (7)", []).unwrap();
-        db.execute(
-            "UPDATE behaviour_settings SET prompt_timeout_seconds = 12.5 WHERE singleton = 1",
-            [],
-        )
-        .unwrap();
-        db.execute(
-            "INSERT INTO behaviour_text_item (kind, position, text) VALUES ('prompt', 0, 'Type me')",
-            [],
-        )
-        .unwrap();
-
-        migrate(&db).unwrap();
-
-        assert_eq!(
-            db.query_row(
-                "SELECT timeout_seconds FROM behaviour_text_item WHERE kind = 'prompt'",
-                [],
-                |row| row.get::<_, f64>(0),
-            )
-            .unwrap(),
-            12.5
         );
     }
 }

@@ -12,7 +12,6 @@ function lists(behaviour: Behaviour): { tags: string[]; area: 'content' | 'exper
 		...content.captions.map((item) => ({ tags: item.tags, area: 'content' as const })),
 		...content.prompts.map((item) => ({ tags: item.tags, area: 'content' as const })),
 		...content.notifications.map((item) => ({ tags: item.tags, area: 'content' as const })),
-		...content.subliminals.map((item) => ({ tags: item.tags, area: 'content' as const })),
 		...content.web_links.map((item) => ({ tags: item.tags, area: 'content' as const }))
 		// The wallpaper/splash slots reference media by id, not by tag, so they contribute
 		// nothing here -- a tag rename or delete can't affect them.

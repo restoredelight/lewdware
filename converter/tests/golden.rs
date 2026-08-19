@@ -24,8 +24,8 @@ fn modern_fixture_snapshot() {
 /// adapted from `EdgewarePlusPlus/examples/legacy/*.json`. Deliberately uses a different mood
 /// vocabulary per file (`low`/`high` from captions, `vanilla`/`spicy` from media, `high` reused
 /// by prompts, `low`/`vanilla` reused by web) to exercise the merge-by-name logic the real
-/// `Edgeware++ Test Pack V2` also relies on, plus the legacy-only `subliminals/` hypno fallback
-/// and the legacy web-args comma-split.
+/// `Edgeware++ Test Pack V2` also relies on, plus the legacy `subliminals/` hypno directory
+/// (skipped, with a warning) and the legacy web-args comma-split.
 #[test]
 fn legacy_fixture_snapshot() {
     let source = DirSource::new(fixture_path("legacy"));

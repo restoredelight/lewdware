@@ -8,7 +8,7 @@
 	import Card from '$ui/Card.svelte';
 	import Button from '$ui/Button.svelte';
 	import RadioGroup from '$ui/RadioGroup.svelte';
-	import { taskFeedback } from './taskFeedback.svelte';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import type { Capabilities, Key, WallpaperSupportDto } from './types';
 
 	// Read once on mount rather than polled: it runs a real snapshot against the desktop, and the

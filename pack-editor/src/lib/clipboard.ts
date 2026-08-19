@@ -1,4 +1,4 @@
-import { taskFeedback } from './taskFeedback.svelte.js';
+import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 export async function copyFileName(name: string): Promise<void> {
 	try {

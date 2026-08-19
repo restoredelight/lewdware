@@ -20,7 +20,6 @@ const behaviour = (
 			captions: [],
 			prompts: [],
 			notifications: [],
-			subliminals: [],
 			web_links: [],
 			...overrides
 		},

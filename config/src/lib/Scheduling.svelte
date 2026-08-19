@@ -8,7 +8,7 @@
 	import Field from '$ui/Field.svelte';
 	import NumberField from '$ui/NumberField.svelte';
 	import type { QuietHoursDto, WindowDto } from './types';
-	import { taskFeedback } from './taskFeedback.svelte';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 	const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 

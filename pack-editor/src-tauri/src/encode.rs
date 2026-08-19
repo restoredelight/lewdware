@@ -18,10 +18,7 @@ use walkdir::WalkDir;
 
 use tauri::Emitter;
 
-use shared::{
-    behaviour::{Behaviour, MediaSlot},
-    tags,
-};
+use shared::behaviour::{Behaviour, MediaSlot};
 
 use crate::pack::{AddOutcome, MediaFile};
 
@@ -404,125 +401,6 @@ pub async fn process_file_into_slot(
         let _ = app.emit("upload:added", file);
     }
     Ok((outcome, behaviour, displaced))
-}
-
-/// Imports several files straight into the subliminal pool, as a single action.
-///
-/// The batch shares one history entry -- filling a pool is one thing the author did, not eight --
-/// so the pool tagging is folded into the same pending entry the imports accumulate into (see
-/// `history::record_into_pending`), exactly as `process_file_into_slot` does for one file.
-///
-/// Sequential rather than concurrent: a handful of images is not the bulk uploader's problem, and
-/// keeping it in order means the returned outcomes line up with `paths` for reporting.
-pub async fn process_files_into_subliminals(
-    pack_state: &crate::PackState,
-    paths: &[std::path::PathBuf],
-    app: &tauri::AppHandle,
-    encoder: HardwareEncoder,
-    upload_lock: &Arc<RwLock<()>>,
-) -> anyhow::Result<Vec<AddOutcome>> {
-    let _batch_guard = upload_lock.read().await;
-    let (dir, pack_id) = {
-        let lock = pack_state.lock().await;
-        let pack = lock.as_ref().context("No pack is open")?;
-        (pack.dir().to_path_buf(), pack.id())
-    };
-    let staging = Arc::new(
-        tempfile::Builder::new()
-            .prefix("pack-editor-pool-")
-            .tempdir_in(&dir)
-            .context("Could not create upload staging directory")?,
-    );
-    let history_id = {
-        let lock = pack_state.lock().await;
-        let pack = lock
-            .as_ref()
-            .filter(|pack| pack.id() == pack_id)
-            .context("No pack is open")?;
-        pack.begin_media_import().await?
-    };
-
-    let mut outcomes = Vec::new();
-    let mut failure = None;
-    for path in paths {
-        match process_one_file_outcome(
-            pack_state,
-            pack_id,
-            path,
-            &dir,
-            &staging,
-            encoder.clone(),
-            upload_lock,
-            history_id,
-        )
-        .await
-        {
-            Ok(outcome) => {
-                outcomes.push(outcome);
-            }
-            // One unreadable file shouldn't cost the author the rest of the batch; it is reported
-            // and the others still land.
-            Err(err) => {
-                let _ = app.emit(
-                    "upload:error",
-                    UploadErrorPayload::new(path, err.to_string()),
-                );
-                failure = Some(err);
-            }
-        }
-    }
-
-    let additions: Vec<crate::pack::MediaAddition> = outcomes.iter().map(Into::into).collect();
-    let tagged = {
-        let lock = pack_state.lock().await;
-        match lock.as_ref().filter(|pack| pack.id() == pack_id) {
-            Some(pack) => {
-                pack.add_to_subliminals_during_import(additions, history_id)
-                    .await
-            }
-            None => Ok(()),
-        }
-    };
-
-    // The pending entry has to be closed either way -- an abandoned one blocks undo for
-    // everything after it.
-    let label = match outcomes.len() {
-        1 => "Add subliminal".to_string(),
-        n => format!("Add {n} subliminals"),
-    };
-    {
-        let lock = pack_state.lock().await;
-        if let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) {
-            pack.finish_media_import(history_id, Some(label)).await?;
-        }
-    }
-    tagged?;
-
-    // `process_one_file_outcome` returns the file as it looked immediately after import. Pool
-    // membership is applied afterwards, so publishing that stale value makes the front end put a
-    // new subliminal in Popups and omit it from Subliminals until the pack is reopened. Reflect
-    // the transaction above in both the command result (which also includes duplicates) and the
-    // event used to insert genuinely new files into the store.
-    for outcome in &mut outcomes {
-        let new_to_pack = matches!(outcome, AddOutcome::Added(_));
-        let file = match outcome {
-            AddOutcome::Added(file) | AddOutcome::Duplicate(file) => file,
-        };
-        if !file.tags.iter().any(|tag| tag == tags::SUBLIMINAL_TAG) {
-            file.tags.push(tags::SUBLIMINAL_TAG.to_string());
-        }
-        if new_to_pack && !file.tags.iter().any(|tag| tag == tags::NON_POPUP_TAG) {
-            file.tags.push(tags::NON_POPUP_TAG.to_string());
-        }
-        if new_to_pack {
-            let _ = app.emit("upload:added", &*file);
-        }
-    }
-
-    match failure {
-        Some(err) if outcomes.is_empty() => Err(anyhow!("{err}")),
-        _ => Ok(outcomes),
-    }
 }
 
 // The per-file arguments are one path; the rest is the loop-invariant context every file in a

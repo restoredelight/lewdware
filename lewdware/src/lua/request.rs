@@ -15,7 +15,7 @@ use crate::{
         audio::VolumeFadeOpts,
         window::{FadeOpts, MoveOpts},
     },
-    media::FileOrPath,
+    media::ExtractedFile,
     monitor::Monitor,
 };
 
@@ -141,7 +141,7 @@ impl<T: EventPoster> RequestSender<T> {
         })?
     }
 
-    pub fn set_wallpaper(&self, file: FileOrPath) -> Result<bool> {
+    pub fn set_wallpaper(&self, file: ExtractedFile) -> Result<bool> {
         self.send(|tx| LuaRequest::SetWallpaper { file, tx })?
     }
 
@@ -396,7 +396,7 @@ pub enum LuaRequest {
         tx: mpsc::Sender<Result<ItemId>>,
     },
     SetWallpaper {
-        file: FileOrPath,
+        file: ExtractedFile,
         tx: mpsc::Sender<Result<bool>>,
     },
     ResetWallpaper {

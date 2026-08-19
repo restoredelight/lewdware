@@ -2,7 +2,7 @@ import { api } from './api.js';
 import { store } from './store.svelte.js';
 import { history, type HistoryRecord } from './history.svelte.js';
 import type { Behaviour, BehaviourPatch, FilledSlot, TagAction } from './types.js';
-import { taskFeedback } from './taskFeedback.svelte.js';
+import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 /**
  * How the editor writes the pack's behaviour document.

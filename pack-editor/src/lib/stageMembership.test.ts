@@ -20,7 +20,6 @@ function pack(...stages: Stage[]): Behaviour {
 			captions: [],
 			prompts: [],
 			notifications: [],
-			subliminals: [],
 			web_links: []
 		},
 		experience: { timeline: { stages, transitions: [] }, label: null }

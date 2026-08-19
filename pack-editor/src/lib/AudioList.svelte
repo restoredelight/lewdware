@@ -26,7 +26,7 @@
 	import InlineAudioPlayer from './InlineAudioPlayer.svelte';
 	import StageMembership from './StageMembership.svelte';
 	import { store } from './store.svelte.js';
-	import { taskFeedback } from './taskFeedback.svelte.js';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import type { MediaFile } from './types.js';
 
 	/** Both row variants are fixed: the virtual window remains index arithmetic. */

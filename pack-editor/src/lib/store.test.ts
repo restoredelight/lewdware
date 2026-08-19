@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { store } from './store.svelte.js';
-import { EXPLICIT_ONLY_TAG, NON_POPUP_TAG, POPUP_AUDIO_TAG, SUBLIMINAL_TAG } from './tags.js';
+import { EXPLICIT_ONLY_TAG, NON_POPUP_TAG, POPUP_AUDIO_TAG } from './tags.js';
 import type { Behaviour, MediaFile } from './types.js';
 
 const file = (id: number, file_name: string, tags: string[] = []): MediaFile =>
@@ -52,32 +52,32 @@ describe('the media tabs’ file lists', () => {
 		store.openPack('pack-id', 'Test', [], [], []);
 	});
 
-	// Scenery belongs to the slot or pool that owns it; listing it here made the author reason
-	// about a distinction that is the editor's bookkeeping, not theirs.
+	// Scenery belongs to the slot that owns it; listing it here made the author reason about a
+	// distinction that is the editor's bookkeeping, not theirs.
 	it('leaves out media that exists only as scenery', () => {
 		store.files = [
 			file(1, 'popup.png'),
 			file(2, 'Wallpaper.jpg', [NON_POPUP_TAG]),
-			file(3, 'spiral.gif', [SUBLIMINAL_TAG, NON_POPUP_TAG])
+			file(3, 'splash.gif', [NON_POPUP_TAG])
 		];
 
 		expect(store.popupFiles.map((f) => f.id)).toEqual([1]);
 		expect(store.filteredFiles.map((f) => f.id)).toEqual([1]);
 	});
 
-	// `files` stays complete: the slots and the subliminal pool resolve their own members out of it.
-	it('keeps scenery in the full file list the slots and pool read', () => {
+	// `files` stays complete: the slots resolve their own members out of it.
+	it('keeps scenery in the full file list the slots read', () => {
 		store.files = [file(1, 'popup.png'), file(2, 'Wallpaper.jpg', [NON_POPUP_TAG])];
 
 		expect(store.files.map((f) => f.id)).toEqual([1, 2]);
 	});
 
 	it('reconciles a file when an import result follows its added event', () => {
-		store.addFile(file(1, 'spiral.gif'));
-		store.addFile(file(1, 'spiral.gif', [SUBLIMINAL_TAG, NON_POPUP_TAG]), true);
+		store.addFile(file(1, 'splash.gif'));
+		store.addFile(file(1, 'splash.gif', [NON_POPUP_TAG]), true);
 
 		expect(store.files).toHaveLength(1);
-		expect(store.files[0].tags).toEqual([SUBLIMINAL_TAG, NON_POPUP_TAG]);
+		expect(store.files[0].tags).toEqual([NON_POPUP_TAG]);
 		expect(store.popupFiles).toEqual([]);
 	});
 
@@ -220,7 +220,6 @@ describe('the media tabs’ file lists', () => {
 				captions: [],
 				prompts: [],
 				notifications: [],
-				subliminals: [],
 				web_links: []
 			},
 			experience: {

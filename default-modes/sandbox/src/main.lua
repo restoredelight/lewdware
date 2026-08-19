@@ -40,9 +40,6 @@ local spawn = require("lib.spawn")
 ---    notification_frequency: number,
 ---    web_opening_enabled: boolean,
 ---    web_frequency: number,
----    subliminals_enabled: boolean,
----    subliminal_frequency: number,
----    subliminal_opacity: number,
 ---    prompts_enabled: boolean,
 ---    prompt_frequency: number,
 ---    prompt_timeouts_enabled: boolean,
@@ -224,7 +221,6 @@ end
 
 require("lib.notifications").start(is_dormant, config.notifications_enabled, config.notification_frequency)
 require("lib.web").start(is_dormant, config.web_opening_enabled, config.web_frequency)
-require("lib.subliminals").start(is_dormant, config.subliminals_enabled, config.subliminal_frequency)
 local function prompt_wrong()
 	if config.prompt_wrong_answer == "popup_burst" and #popup_types > 0 then
 		for _ = 1, config.prompt_wrong_answer_value do open_popup() end

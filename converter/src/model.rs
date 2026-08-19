@@ -12,6 +12,9 @@ pub struct MoodBase {
     /// Captured only so a non-empty pool earns a warning -- denial/blur is excluded from
     /// compat v1 (needs engine work), see `behaviour-design/edgeware-compat.md`.
     pub denial: Vec<String>,
+    /// Captured only so a non-empty pool earns a warning, like `denial`: Lewdware has no
+    /// subliminals feature, so an Edgeware pack's subliminal text is dropped rather than
+    /// converted.
     pub subliminals: Vec<String>,
     pub notifications: Vec<String>,
     pub prompts: Vec<String>,
@@ -96,8 +99,8 @@ pub struct CorruptionLevel {
 pub enum WarningKind {
     /// A JSON file was present but failed to parse; treated as absent, not fatal.
     MalformedSource,
-    /// Real Edgeware behavior with no behaviour.json equivalent (denial captions, per-mood
-    /// click/weight tuning) -- dropped, not converted.
+    /// Real Edgeware behavior with no behaviour.json equivalent (denial captions, subliminals,
+    /// per-mood click/weight tuning) -- dropped, not converted.
     UnsupportedFeatureDropped,
     /// `script.lua` present -- Edgeware's custom Lua-subset scripting isn't converted.
     ScriptSkipped,

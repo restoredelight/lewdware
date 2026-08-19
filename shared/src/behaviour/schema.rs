@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-/// Data read by both default modes: captions, prompts, notifications, subliminals, web links,
+/// Data read by both default modes: captions, prompts, notifications, web links,
 /// the wallpaper/splash media references, and the content groups a user can toggle. See
 /// `behaviour-design/behaviour-tab.md` and `behaviour-design/default-mode.md` (Ownership).
 ///
@@ -39,8 +39,6 @@ pub struct Content {
     #[serde(default)]
     pub notifications: Vec<TextItem>,
     #[serde(default)]
-    pub subliminals: Vec<TextItem>,
-    #[serde(default)]
     pub web_links: Vec<WebLink>,
     /// Id of the media file used as the desktop wallpaper. `None` means the pack has no
     /// wallpaper feature at all -- see this struct's doc comment.
@@ -63,7 +61,6 @@ impl Content {
             && self.captions.is_empty()
             && self.prompts.is_empty()
             && self.notifications.is_empty()
-            && self.subliminals.is_empty()
             && self.web_links.is_empty()
             && self.wallpaper.is_none()
             && self.splash.is_none()
@@ -680,8 +677,6 @@ pub struct Events {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<EventSchedule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subliminal: Option<EventSchedule>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sound: Option<EventSchedule>,
 }
 
@@ -763,7 +758,6 @@ pub enum EventKind {
     Web,
     Notification,
     Prompt,
-    Subliminal,
     Sound,
 }
 
@@ -802,7 +796,6 @@ pub enum TransitionCategory {
     WebInterval,
     NotificationInterval,
     PromptInterval,
-    SubliminalInterval,
     SoundInterval,
     Crossfade,
     MovementMinimumSpeed,

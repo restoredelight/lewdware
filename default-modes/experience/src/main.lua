@@ -80,7 +80,6 @@ end
 schedule_event("popup", #popup_types > 0, function() return open_popup() end)
 schedule_event("notification", config.notifications_enabled, function() return require("lib.notifications").fire(timeline.tags) end)
 schedule_event("web", config.web_opening_enabled, function() return require("lib.web").fire(timeline.tags) end)
-schedule_event("subliminal", config.subliminals_enabled, function() return require("lib.subliminals").fire(timeline.tags) end)
 local function play_sting()
 	if not config.popup_audio_enabled then return false end
 	local audio = media.random_popup_sting(timeline.tags())

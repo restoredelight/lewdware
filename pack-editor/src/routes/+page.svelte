@@ -10,7 +10,7 @@
 	import Editor from '$lib/Editor.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import { history } from '$lib/history.svelte.js';
-	import { taskFeedback } from '$lib/taskFeedback.svelte.js';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 	let showCloseDialog = $state(false);
 	let closeError = $state<string | null>(null);

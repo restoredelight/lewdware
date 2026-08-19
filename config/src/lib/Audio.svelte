@@ -2,7 +2,7 @@
 	import { clampScroll } from '$ui/scroll';
 	import { store } from './store.svelte';
 	import { api } from './api';
-	import { taskFeedback } from './taskFeedback.svelte';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import Slider from '$ui/Slider.svelte';
 	import Card from '$ui/Card.svelte';
 	import Button from '$ui/Button.svelte';

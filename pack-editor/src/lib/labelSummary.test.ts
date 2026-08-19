@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { summarizeLabels } from './labelSummary.js';
-import { SUBLIMINAL_TAG } from './tags.js';
+import { NON_POPUP_TAG } from './tags.js';
 import type { MediaFile } from './types.js';
 
 const file = (id: number, tags: string[] = [], artists: string[] = []): MediaFile =>
@@ -37,7 +37,7 @@ describe('summarizeLabels', () => {
 	});
 
 	it('hides managed tags, which the author does not own', () => {
-		const summary = summarizeLabels([file(1, ['spiral', SUBLIMINAL_TAG])], 'tags');
+		const summary = summarizeLabels([file(1, ['spiral', NON_POPUP_TAG])], 'tags');
 
 		expect(summary.common).toEqual(['spiral']);
 		expect(summary.mixed).toEqual([]);

@@ -11,10 +11,6 @@ export const MANAGED_TAG_PREFIX = '__lewdware-';
 /** Keeps a file out of the ordinary popup pool. */
 export const NON_POPUP_TAG = '__lewdware-non-popup';
 
-/** Membership of the subliminal pool. Orthogonal to {@link NON_POPUP_TAG}: a subliminal that is
- * also shown in popups keeps this and loses that. */
-export const SUBLIMINAL_TAG = '__lewdware-subliminal';
-
 /** Audio without this marker is background audio; marked audio plays when a popup spawns. */
 export const POPUP_AUDIO_TAG = '__lewdware-audio-popup';
 

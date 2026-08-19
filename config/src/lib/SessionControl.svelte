@@ -3,7 +3,7 @@
 	import { store } from './store.svelte';
 	import { formatKey } from './keys';
 	import Button from '$ui/Button.svelte';
-	import { taskFeedback } from './taskFeedback.svelte';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 	let engineAction = $state<'launch' | 'stop' | null>(null);
 

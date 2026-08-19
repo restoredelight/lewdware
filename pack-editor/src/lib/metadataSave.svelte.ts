@@ -2,7 +2,7 @@ import { api } from './api.js';
 import { store } from './store.svelte.js';
 import { history } from './history.svelte.js';
 import type { MetadataDto } from './types.js';
-import { taskFeedback } from './taskFeedback.svelte.js';
+import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 let pending: MetadataDto | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;

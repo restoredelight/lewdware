@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./api.js', () => ({ api: mocks.api }));
 vi.mock('./store.svelte.js', () => ({ store: mocks.store }));
 vi.mock('./history.svelte.js', () => ({ history: mocks.history }));
-vi.mock('./taskFeedback.svelte.js', () => ({ taskFeedback: mocks.feedback }));
+vi.mock('$ui/taskFeedback.svelte.js', () => ({ taskFeedback: mocks.feedback }));
 
 const value = (number: number) => ({ testValue: number }) as unknown as Behaviour;
 
@@ -32,7 +32,6 @@ const document = (caption = 'first'): Behaviour =>
 			captions: [{ text: caption, tags: [] }],
 			prompts: [],
 			notifications: [],
-			subliminals: [],
 			web_links: []
 		},
 		experience: null

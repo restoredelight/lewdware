@@ -1,3 +1,8 @@
+-- The editor working copy's base schema: the media it knows about (soft-deleted, and either
+-- inside the archive or loose on disk), the undo history, and the save bookkeeping.
+-- `shared/src/migrations/behaviour_schema.sql` is concatenated onto this to form the whole of
+-- migration 1; the behaviour tables reference `media` and `tags` from here.
+
 CREATE TABLE IF NOT EXISTS editor_state (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     archive_generation TEXT,

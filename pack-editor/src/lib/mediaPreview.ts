@@ -1,5 +1,5 @@
 import { store } from './store.svelte.js';
-import { taskFeedback } from './taskFeedback.svelte.js';
+import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 /**
  * An in-place save rewrites the pack file the media server is reading from, so anything already

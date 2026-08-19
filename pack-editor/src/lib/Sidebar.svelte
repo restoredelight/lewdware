@@ -3,7 +3,7 @@
 	import { store } from './store.svelte.js';
 	import type { FileInfo } from './types.js';
 	import TagInput from '$ui/TagInput.svelte';
-	import { NON_POPUP_TAG, SUBLIMINAL_TAG } from './tags.js';
+	import { NON_POPUP_TAG } from './tags.js';
 	import Button from '$ui/Button.svelte';
 	import { api } from './api.js';
 	import { onMount } from 'svelte';
@@ -15,7 +15,7 @@
 	import RadioGroup from '$ui/RadioGroup.svelte';
 	import { audioRole, setAudioRole, type AudioRole } from './audioRoles.js';
 	import { summarizeLabels, type LabelSummary } from './labelSummary.js';
-	import { taskFeedback } from './taskFeedback.svelte.js';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import { formatDuration, formatFileSize } from './format.js';
 	import { clampScroll } from '$ui/scroll';
 
@@ -76,7 +76,6 @@
 			label: string;
 			target:
 				| { kind: 'media'; view: 'popups' | 'audio' }
-				| { kind: 'content'; tab: 'subliminals'; fileId: number }
 				| { kind: 'content'; tab: 'wallpaper'; slot: 'wallpaper' | 'splash' }
 				| { kind: 'experience'; stageId: string };
 		}[] = [];
@@ -87,11 +86,6 @@
 			});
 		else if (!primary.tags.includes(NON_POPUP_TAG))
 			uses.push({ label: 'Popup', target: { kind: 'media', view: 'popups' } });
-		if (primary.tags.includes(SUBLIMINAL_TAG))
-			uses.push({
-				label: 'Subliminal',
-				target: { kind: 'content', tab: 'subliminals', fileId: primary.id }
-			});
 		if (store.behaviour?.content.wallpaper === primary.id)
 			uses.push({
 				label: 'Wallpaper',

@@ -15,7 +15,7 @@ import { api } from './api.js';
 import { cancelBehaviourSave, flushBehaviourSave } from './behaviourSave.svelte.js';
 import { cancelMetadataSave, flushMetadataSave } from './metadataSave.svelte.js';
 import { store } from './store.svelte.js';
-import { taskFeedback } from './taskFeedback.svelte.js';
+import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 import type { PackInfo } from './types.js';
 
 /** What a save is: an ordinary one, which may already know where it goes, or a Save As. */

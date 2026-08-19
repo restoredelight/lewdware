@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { CheckCircle, ExclamationTriangle, Icon, XMark } from 'svelte-hero-icons';
-	import { taskFeedback } from './taskFeedback.svelte';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 </script>
 
 {#if taskFeedback.active}

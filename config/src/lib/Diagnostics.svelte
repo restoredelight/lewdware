@@ -3,7 +3,7 @@
 	import { onMount, tick } from 'svelte';
 	import { api } from './api';
 	import { store } from './store.svelte';
-	import { taskFeedback } from './taskFeedback.svelte';
+	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import { isFullRegion, type DiagnosticsDto, type LogLevel, type LogRecordDto } from './types';
 	import Button from '$ui/Button.svelte';
 	import Card from '$ui/Card.svelte';

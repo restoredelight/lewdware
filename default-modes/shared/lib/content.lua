@@ -1,6 +1,6 @@
--- Shared content-pool picker for the default modes: captions, prompts, notifications,
--- subliminals and web links (`shared::behaviour::Content`'s five pools) all share the identical
--- `{ tags: string[] }` shape, so one picker serves all of them rather than five bespoke copies.
+-- Shared content-pool picker for the default modes: captions, prompts, notifications and web
+-- links (`shared::behaviour::Content`'s four pools) all share the identical `{ tags: string[] }`
+-- shape, so one picker serves all of them rather than four bespoke copies.
 -- See `behaviour-design/default-mode.md`'s feature table and Ownership section.
 --
 -- `__lewdware_content` is the same private engine-injected global `lib/media.lua` reads (see its
@@ -93,12 +93,6 @@ end
 ---@return table|nil
 function M.pick_notification(active_tags)
 	return M.pick(content().notifications or {}, nil, active_tags)
-end
-
----@param active_tags? string[]
----@return table|nil
-function M.pick_subliminal(active_tags)
-	return M.pick(content().subliminals or {}, nil, active_tags)
 end
 
 ---@param active_tags? string[]

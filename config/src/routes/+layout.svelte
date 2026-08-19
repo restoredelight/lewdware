@@ -1,6 +1,8 @@
 <script lang="ts">
 	import '../app.css';
-	import UpdateBanner from '$lib/UpdateBanner.svelte';
+	import { invoke } from '@tauri-apps/api/core';
+	import { openUrl } from '@tauri-apps/plugin-opener';
+	import UpdateBanner from '$ui/UpdateBanner.svelte';
 
 	interface Props {
 		children: import('svelte').Snippet;
@@ -11,7 +13,11 @@
 
 <div class="bg-bg text-text flex h-screen min-h-0 flex-col overflow-hidden">
 	<div class="shrink-0">
-		<UpdateBanner />
+		<UpdateBanner
+			appName="Lewdware"
+			check={() => invoke<string | null>('check_for_update')}
+			open={openUrl}
+		/>
 	</div>
 	<div class="min-h-0 flex-1">
 		{@render children()}

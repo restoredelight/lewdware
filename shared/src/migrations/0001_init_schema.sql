@@ -1,3 +1,8 @@
+-- The runtime pack's base schema: the files, who made them, what they are tagged with, and the
+-- modes and loose blobs that travel alongside. `migrations/behaviour_schema.sql` is concatenated
+-- onto this to form the whole of migration 1; the behaviour tables reference `media` and `tags`
+-- from here.
+
 CREATE TABLE IF NOT EXISTS media (
     id INTEGER PRIMARY KEY,
     file_name TEXT NOT NULL UNIQUE,
@@ -14,7 +19,7 @@ CREATE TABLE IF NOT EXISTS media (
     source_url TEXT
 ) STRICT;
 
-CREATE INDEX media_hash_index ON media (hash);
+CREATE INDEX IF NOT EXISTS media_hash_index ON media (hash);
 
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY,

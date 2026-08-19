@@ -24,7 +24,7 @@ export interface LabelSummary {
  * Splits `files`' tags or artists into the shared ones and the partial ones.
  *
  * Managed tags are left out of the tag half: they are the editor's, not the author's — applied and
- * cleared by the media slots and the subliminal pool — and they would be undeletable clutter in a
+ * cleared by the media slots — and they would be undeletable clutter in a
  * list whose whole purpose is editing (the backend refuses to remove one through a tag command).
  * See `./tags.ts`.
  */

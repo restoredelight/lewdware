@@ -367,36 +367,6 @@
         }
       }
     },
-    "subliminals": {
-      "type": "group",
-      "label": "Subliminals",
-      "show_when": { "pack_has_subliminals": true },
-      "options": {
-        "subliminals_enabled": {
-          "label": "Show subliminal flashes",
-          "type": "boolean",
-          "default": true
-        },
-        "subliminal_frequency": {
-          "label": "Subliminal frequency (seconds)",
-          "type": "number",
-          "default": 20,
-          "min": 1,
-          "step": 1,
-          "show_when": { "subliminals_enabled": true }
-        },
-        "subliminal_opacity": {
-          "label": "Subliminal opacity",
-          "type": "number",
-          "default": 0.5,
-          "min": 0.05,
-          "max": 1,
-          "step": 0.05,
-          "slider": true,
-          "show_when": { "subliminals_enabled": true }
-        }
-      }
-    },
     "prompts": {
       "type": "group",
       "label": "Prompts",
