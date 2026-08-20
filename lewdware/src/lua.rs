@@ -463,9 +463,11 @@ pub fn start_lua_thread<T: EventPoster>(
         local.spawn_local(async move {
             if let Err(err) = runtime_clone.run_entrypoint(entrypoint) {
                 tracing::error!("{err}");
-                crate::supervisor_link::report(shared::ipc::engine::EngineToSupervisor::RuntimeError {
-                    message: err.to_string(),
-                });
+                crate::supervisor_link::report(
+                    shared::ipc::engine::EngineToSupervisor::RuntimeError {
+                        message: err.to_string(),
+                    },
+                );
             }
 
             tracing::info!("Code finished");
@@ -479,9 +481,11 @@ pub fn start_lua_thread<T: EventPoster>(
             while let Some(event) = event_rx.recv().await {
                 if let Err(err) = runtime.handle_event(event) {
                     tracing::error!("{err}");
-                    crate::supervisor_link::report(shared::ipc::engine::EngineToSupervisor::RuntimeError {
-                        message: err.to_string(),
-                    });
+                    crate::supervisor_link::report(
+                        shared::ipc::engine::EngineToSupervisor::RuntimeError {
+                            message: err.to_string(),
+                        },
+                    );
                 }
             }
         });

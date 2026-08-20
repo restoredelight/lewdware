@@ -13,10 +13,7 @@ pub async fn get_pack_metadata(state: State<'_, AppState>) -> Result<MetadataDto
 }
 
 #[tauri::command]
-pub async fn set_pack_metadata(
-    state: State<'_, AppState>,
-    dto: MetadataDto,
-) -> Result<(), String> {
+pub async fn set_pack_metadata(state: State<'_, AppState>, dto: MetadataDto) -> Result<(), String> {
     state
         .with_pack_or((), async |pack| pack.set_metadata(&dto.into()).await)
         .await

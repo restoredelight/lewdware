@@ -1,12 +1,12 @@
+use anyhow::{Context as _, Result};
+use chrono::{DateTime, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use anyhow::{Context as _, Result};
-use chrono::{DateTime, NaiveDate, Utc};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
@@ -437,7 +437,11 @@ mod tests {
         fs::write(path.join("invalid.jsonl.not-a-date"), "ignore").unwrap();
 
         let mut files = log_files(path);
-        files.sort_by(|a, b| a.component.cmp(&b.component).then_with(|| a.date.cmp(&b.date)));
+        files.sort_by(|a, b| {
+            a.component
+                .cmp(&b.component)
+                .then_with(|| a.date.cmp(&b.date))
+        });
 
         assert_eq!(files.len(), 3);
 

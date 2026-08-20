@@ -255,9 +255,8 @@ fn selected_text_is_readable_on_its_highlight() {
             );
 
             // And the highlight has to be visible against the field it appears in.
-            let field = (luminance(visuals.selection.bg_fill)
-                - luminance(visuals.extreme_bg_color))
-            .abs();
+            let field =
+                (luminance(visuals.selection.bg_fill) - luminance(visuals.extreme_bg_color)).abs();
             assert!(
                 field >= 15.0,
                 "{theme:?} {appearance:?}: the highlight is only {field:.1} levels from the \

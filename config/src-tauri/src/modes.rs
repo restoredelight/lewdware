@@ -216,10 +216,7 @@ pub fn builtin_mode_label(name: &str, recommended: bool) -> String {
 /// and every caller that wants one generally wants the other. Also returns the pack-derived
 /// `pack_has_*` facts that drive `show_when` visibility -- a default mode reports every fact (all
 /// false with no pack loaded), custom modes get an empty map.
-pub fn effective_entries_for_mode(
-    mode: &Mode,
-    state: &AppState,
-) -> Option<EffectiveEntries> {
+pub fn effective_entries_for_mode(mode: &Mode, state: &AppState) -> Option<EffectiveEntries> {
     let mode_meta = match mode {
         Mode::Sandbox => Some(state.sandbox_mode.clone()),
         Mode::Experience => Some(state.experience_mode.clone()),
@@ -350,10 +347,7 @@ pub fn get_mode_options_for(config: &AppConfig, state: &AppState) -> ModeOptions
     }
 }
 
-pub fn save_to_disk(
-    config: &AppConfig,
-    uploaded: &[UploadedModeEntry],
-) -> anyhow::Result<()> {
+pub fn save_to_disk(config: &AppConfig, uploaded: &[UploadedModeEntry]) -> anyhow::Result<()> {
     let mut c = config.clone();
     c.uploaded_modes = uploaded.iter().map(|u| u.path.clone()).collect();
     user_config::save_config(&c)

@@ -509,7 +509,7 @@ mod tests {
     fn default_schedule_is_disabled_and_empty() {
         let config = AppConfig::default();
         assert!(!config.schedule.enabled);
-        assert!(config.schedule.windows.is_empty());
+        assert!(config.schedule.rules.is_empty());
         assert!(config.schedule.quiet_hours.is_empty());
         assert!(config.schedule.grace_notification);
     }

@@ -14,10 +14,7 @@ pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<String>, Str
 }
 
 #[tauri::command]
-pub async fn get_file_tags(
-    state: State<'_, AppState>,
-    id: u64,
-) -> Result<Vec<String>, String> {
+pub async fn get_file_tags(state: State<'_, AppState>, id: u64) -> Result<Vec<String>, String> {
     state
         .with_pack_or(vec![], async |pack| pack.get_tags(id).await)
         .await
@@ -57,9 +54,7 @@ pub async fn create_and_add_tag(
 }
 
 #[tauri::command]
-pub async fn get_tag_summaries(
-    state: State<'_, AppState>,
-) -> Result<Vec<TagSummary>, String> {
+pub async fn get_tag_summaries(state: State<'_, AppState>) -> Result<Vec<TagSummary>, String> {
     state
         .with_pack_or(vec![], async |pack| pack.get_tag_summaries().await)
         .await
@@ -88,10 +83,7 @@ pub async fn merge_tag(
 }
 
 #[tauri::command]
-pub async fn delete_tag(
-    state: State<'_, AppState>,
-    tag: String,
-) -> Result<Behaviour, String> {
+pub async fn delete_tag(state: State<'_, AppState>, tag: String) -> Result<Behaviour, String> {
     state
         .with_pack(async |pack| pack.delete_tag(tag).await)
         .await
@@ -129,10 +121,7 @@ pub async fn get_all_artists(state: State<'_, AppState>) -> Result<Vec<String>, 
 }
 
 #[tauri::command]
-pub async fn get_file_artists(
-    state: State<'_, AppState>,
-    id: u64,
-) -> Result<Vec<String>, String> {
+pub async fn get_file_artists(state: State<'_, AppState>, id: u64) -> Result<Vec<String>, String> {
     state
         .with_pack_or(vec![], async |pack| pack.get_artists(id).await)
         .await
@@ -205,10 +194,7 @@ pub async fn merge_artist(
 }
 
 #[tauri::command]
-pub async fn delete_artist(
-    state: State<'_, AppState>,
-    artist: String,
-) -> Result<(), String> {
+pub async fn delete_artist(state: State<'_, AppState>, artist: String) -> Result<(), String> {
     state
         .with_pack_or((), async |pack| pack.delete_artist(artist).await)
         .await

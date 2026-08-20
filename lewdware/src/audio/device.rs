@@ -11,7 +11,10 @@ use anyhow::{Context, Result};
 use rodio::{
     DeviceSinkBuilder, MixerDeviceSink, Player,
     buffer::SamplesBuffer,
-    cpal::{self, traits::{DeviceTrait, HostTrait}},
+    cpal::{
+        self,
+        traits::{DeviceTrait, HostTrait},
+    },
 };
 
 /// How many device opens go by between summaries. Every open is logged at `debug`, but the file

@@ -1,26 +1,28 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{Local, Utc};
 use shared::ipc::control::{
     ExitClassification, ExitInfo, Request, Response, ScheduleStatus, SessionKind, SessionState,
     SessionSummary, StatusInfo,
 };
 use shared::ipc::engine::EngineToSupervisor;
 use shared::ipc::{RecvHalf, SendHalf};
-use shared::schedule::{Boundary, BoundaryKind};
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
+use crate::schedule::{StartRequest, StopReason};
 use crate::session::{self, SessionCommand, SessionExit};
 use crate::{backoff, engine, schedule, wallpaper};
 
 /// Lead time for the grace notification before a scheduled start (`design/scheduling.md`: "a few
-/// seconds' desktop notification ... with a cancel action"). Below `MIN_GRACE_LEAD_TO_BOTHER`
-/// remaining before a boundary, showing (and racing) a notification isn't worth it -- start
-/// straight away instead.
+/// seconds' desktop notification ... with a cancel action").
+///
+/// Under the rate model this is the *whole* warning: a firing does not exist until the tick it
+/// happens in, so there is no earlier boundary to count back from the way v1 did. That is the
+/// feature working as intended -- a deliberate leak at the moment of firing, which costs no
+/// surprise, rather than an advance announcement, which would cost all of it.
 const GRACE_LEAD: Duration = Duration::from_secs(10);
-const MIN_GRACE_LEAD_TO_BOTHER: Duration = Duration::from_secs(2);
 
 /// How long to stay resident with no active episode before self-terminating (scheduling.md:
 /// "with no schedule enabled, the supervisor self-terminates when its last session ends" -- with
@@ -53,20 +55,20 @@ pub enum ControlMessage {
     IdleTimeout {
         seq: Option<u64>,
     },
-    /// The schedule engine's next boundary (window open/close, quiet-hours start/end) has
-    /// arrived. `generation` guards against a stale wakeup from a timer that's since been
-    /// superseded by a fresher `rearm_schedule` call (a config reload, ...).
+    /// The schedule engine asked to be woken: a range edge, a quiet-hours edge, the end of a
+    /// cooldown, or simply the next tick while a range is open. `generation` guards against a
+    /// stale wakeup from a timer since superseded by a fresher evaluation (a config reload, ...).
     ScheduleWake {
         generation: u64,
     },
-    /// The grace-notification lead time elapsed without an explicit Cancel.
+    /// The grace-notification lead time elapsed without an explicit Cancel: start the session the
+    /// firing tick already decided on.
     GraceElapsed {
         generation: u64,
     },
-    /// The grace notification's Cancel action was clicked -- skip this one occurrence only.
+    /// The grace notification's Cancel action was clicked -- drop this one firing.
     GraceCancelled {
         generation: u64,
-        window_index: usize,
     },
 }
 
@@ -91,6 +93,9 @@ enum Phase {
 struct Episode {
     seq: u64,
     kind: SessionKind,
+    /// Which schedule rule opened this session, for a `Scheduled` episode. v1 recorded nothing
+    /// here, which is why panic had nothing to attribute a skip to and so cancelled nothing.
+    rule_id: Option<Uuid>,
     mode_path: Option<PathBuf>,
     dev: bool,
     pid: Option<u32>,
@@ -133,10 +138,14 @@ pub struct Control {
     next_seq: u64,
     control_tx: mpsc::Sender<ControlMessage>,
     schedule: schedule::ScheduleEngine,
-    /// Bumped on every `rearm_schedule` call -- invalidates any in-flight `ScheduleWake`/
-    /// `GraceElapsed`/`GraceCancelled` from a timer/grace flow armed for an earlier evaluation,
-    /// same "stale message" idiom `episode_seq` uses for backoff/idle timers.
+    /// Bumped on every schedule tick -- invalidates any in-flight `ScheduleWake`/`GraceElapsed`/
+    /// `GraceCancelled` from a timer armed for an earlier evaluation, the same "stale message"
+    /// idiom `episode_seq` uses for backoff/idle timers.
     schedule_generation: u64,
+    /// A firing the schedule has already decided on, waiting out its grace notification. While
+    /// this is set the schedule does not tick: the transition it would evaluate is already in
+    /// flight, and re-ticking would either orphan this start or roll a second one.
+    pending_start: Option<StartRequest>,
     /// Push side of `Request::Subscribe`: every handled message re-publishes the current
     /// `StatusInfo` here (deduplicated), and the IPC server streams it to subscribers.
     status_tx: watch::Sender<StatusInfo>,
@@ -156,6 +165,7 @@ impl Control {
             control_tx,
             schedule: schedule::ScheduleEngine::new(initial_schedule),
             schedule_generation: 0,
+            pending_start: None,
             status_tx,
             dev_log_tx,
         }
@@ -163,9 +173,9 @@ impl Control {
 
     pub async fn run(mut self, mut rx: mpsc::Receiver<ControlMessage>) {
         self.arm_idle_timer(None);
-        // A schedule already mid-window at boot (the autostart-at-login case) must start
-        // immediately, not wait for the next boundary.
-        self.reevaluate_schedule().await;
+        // A schedule whose range is already open at boot (the autostart-at-login case) must be
+        // ticking, not waiting for the next edge.
+        self.tick_schedule().await;
         self.publish_status();
 
         while let Some(msg) = rx.recv().await {
@@ -176,7 +186,7 @@ impl Control {
         }
     }
 
-    fn publish_status(&mut self) {
+    fn publish_status(&self) {
         let status = self.status_info();
         self.status_tx.send_if_modified(|current| {
             if *current == status {
@@ -211,21 +221,21 @@ impl Control {
             ControlMessage::IdleTimeout { seq } => self.on_idle_timeout(seq),
             ControlMessage::ScheduleWake { generation } => {
                 if generation == self.schedule_generation {
-                    self.reevaluate_schedule().await;
+                    self.tick_schedule().await;
                 }
             }
             ControlMessage::GraceElapsed { generation } => {
-                if generation == self.schedule_generation {
-                    self.reevaluate_schedule().await;
+                if generation == self.schedule_generation
+                    && let Some(start) = self.pending_start.take()
+                {
+                    self.spawn_scheduled(start).await;
+                    self.tick_schedule().await;
                 }
             }
-            ControlMessage::GraceCancelled {
-                generation,
-                window_index,
-            } => {
-                if generation == self.schedule_generation {
-                    self.schedule.skip_occurrence(window_index);
-                    self.reevaluate_schedule().await;
+            ControlMessage::GraceCancelled { generation } => {
+                if generation == self.schedule_generation && self.pending_start.take().is_some() {
+                    self.schedule.note_start_cancelled(Local::now());
+                    self.tick_schedule().await;
                 }
             }
         }
@@ -270,7 +280,7 @@ impl Control {
                     } else {
                         SessionKind::Manual
                     };
-                    self.spawn_episode(kind, mode_path, dev, dev_stream_id, 0)
+                    self.spawn_episode(kind, mode_path, dev, dev_stream_id, 0, None)
                         .await
                 }
             }
@@ -288,7 +298,7 @@ impl Control {
             Request::ReloadConfig => match shared::user_config::load_config() {
                 Ok(cfg) => {
                     self.schedule.set_config(cfg.schedule);
-                    self.reevaluate_schedule().await;
+                    self.tick_schedule().await;
                     Response::Ok
                 }
                 Err(err) => Response::Error {
@@ -298,10 +308,24 @@ impl Control {
         }
     }
 
+    /// Panic stops the session *and* suppresses scheduled firing for a while. v1 only did the
+    /// first half: it claimed to cancel the rest of the window but nothing ever recorded the skip,
+    /// so any mid-window re-evaluation (a `ReloadConfig` from the config app, a quiet-hours edge)
+    /// restarted the session minutes later. Expressing the scope as a duration is what makes the
+    /// promise checkable.
+    ///
+    /// Also meaningful with nothing running: a pre-emptive "not for a while".
     async fn panic(&mut self) {
+        let now = Local::now();
+        self.pending_start = None;
+        self.schedule
+            .start_cooldown(now, self.schedule.config().panic_cooldown_minutes);
+
         if let Some(episode) = self.episode.as_mut().filter(|e| e.is_active()) {
             episode.intent = Intent::Panicking;
             let _ = episode.to_session.send(SessionCommand::Kill).await;
+        } else {
+            self.tick_schedule().await;
         }
     }
 
@@ -312,6 +336,7 @@ impl Control {
         dev: bool,
         dev_stream_id: Option<Uuid>,
         attempts: u32,
+        rule_id: Option<Uuid>,
     ) -> Response {
         let seq = self.next_seq;
         self.next_seq += 1;
@@ -332,6 +357,7 @@ impl Control {
                 self.episode = Some(Episode {
                     seq,
                     kind,
+                    rule_id,
                     mode_path,
                     dev,
                     pid: Some(pid),
@@ -410,14 +436,25 @@ impl Control {
 
         if let Some((mode_path, dev, dev_stream_id)) = episode.pending_restart.take() {
             let kind = if dev { SessionKind::Dev } else { episode.kind };
-            self.spawn_episode(kind, mode_path, dev, dev_stream_id, 0)
+            self.spawn_episode(kind, mode_path, dev, dev_stream_id, 0, None)
                 .await;
             return;
+        }
+
+        // A scheduled session ending is what starts the cooldown, whether it ended on its length,
+        // on quiet hours, on panic or on the user. Manual and dev episodes are not the schedule's
+        // business.
+        let was_scheduled = episode.kind == SessionKind::Scheduled;
+        if was_scheduled {
+            self.schedule.note_session_ended(Local::now());
         }
 
         if episode.intent != Intent::None {
             // An intentional stop/panic -- no auto-restart, regardless of exit status.
             self.arm_idle_timer(None);
+            if was_scheduled {
+                self.tick_schedule().await;
+            }
             return;
         }
 
@@ -468,8 +505,9 @@ impl Control {
         let dev = episode.dev;
         let attempts = episode.attempts;
         let dev_stream_id = episode.dev_stream_id;
+        let rule_id = episode.rule_id;
 
-        self.spawn_episode(kind, mode_path, dev, dev_stream_id, attempts)
+        self.spawn_episode(kind, mode_path, dev, dev_stream_id, attempts, rule_id)
             .await;
     }
 
@@ -501,89 +539,112 @@ impl Control {
         });
     }
 
-    /// Evaluates the schedule against now, spawns/terminates a `Scheduled` episode as needed, and
-    /// rearms the next wake. This is the schedule engine's only action path -- `status_info`'s own
-    /// `evaluate()` call (for display) must never spawn/terminate or rearm.
-    async fn reevaluate_schedule(&mut self) {
-        let now = Local::now();
-        let eval = self.schedule.evaluate(now);
-
-        if eval.should_be_active {
-            let already_active = self.episode.as_ref().is_some_and(Episode::is_active);
-            if !already_active {
-                // Same idempotency check `Request::StartSession` already uses: any already-alive
-                // session (manual, scheduled, or dev) satisfies the window and this is a no-op.
-                self.spawn_episode(SessionKind::Scheduled, None, false, None, 0)
-                    .await;
-            }
-        } else if let Some(episode) = self
-            .episode
-            .as_mut()
-            .filter(|e| e.is_active() && e.kind == SessionKind::Scheduled)
-        {
-            // "A closing window ends only schedule-owned sessions" -- a manual/dev episode is
-            // never touched here.
-            episode.intent = Intent::Stopping;
-            let _ = episode.to_session.send(SessionCommand::Terminate).await;
+    /// The schedule engine's only action path. Ticks the engine, applies whatever it decided,
+    /// and arms the next wake.
+    ///
+    /// v1 modelled the schedule as a *level* -- `should_be_active(now)`, with session existence
+    /// tracking it -- which is why "run until stopped" could not be expressed: a level says when a
+    /// session must exist, so it also says when it must stop. Here the two are separate. `start`
+    /// is an edge a rule produced; `stop` is a level (quiet hours) or the session's own length
+    /// running out.
+    async fn tick_schedule(&mut self) {
+        // A grace notification is already counting down toward a decided start. Re-ticking now
+        // would bump the generation out from under it (orphaning that start) or draw a second one.
+        if self.pending_start.is_some() {
+            return;
         }
 
-        // The idle timer only ever gets re-armed from session-lifecycle call sites elsewhere; if
-        // the schedule stops requiring residency while already idle (just disabled, with nothing
-        // running), nothing else would ever re-check idleness again without this.
+        let now = Local::now();
+        let session_active = self.episode.as_ref().is_some_and(Episode::is_active);
+        let eval = self.schedule.tick(now, session_active);
+
+        if let Some(reason) = eval.stop {
+            self.stop_scheduled_session(reason).await;
+        }
+
+        self.schedule_generation += 1;
+        let generation = self.schedule_generation;
+
+        if let Some(start) = eval.start {
+            if self.schedule.config().grace_notification {
+                self.pending_start = Some(start);
+                tokio::spawn(run_grace_flow(
+                    self.control_tx.clone(),
+                    generation,
+                    GRACE_LEAD,
+                ));
+            } else {
+                self.spawn_scheduled(start).await;
+            }
+        }
+
+        // The idle timer is only ever re-armed from session-lifecycle call sites elsewhere; if the
+        // schedule stops requiring residency while already idle (just disabled, with nothing
+        // running), nothing else would re-check idleness without this.
         if !self.schedule.resident_required()
             && !self.episode.as_ref().is_some_and(Episode::is_active)
         {
             self.arm_idle_timer(None);
         }
 
-        self.rearm_schedule(now, eval.next_wake);
+        let Some(at) = eval.next_wake else { return };
+        let remaining = (at - now).to_std().unwrap_or(Duration::ZERO);
+        let control_tx = self.control_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(remaining).await;
+            let _ = control_tx
+                .send(ControlMessage::ScheduleWake { generation })
+                .await;
+        });
     }
 
-    /// Bumps `schedule_generation` (invalidating any in-flight timer/grace flow) and spawns the
-    /// task that will wake `Control` again at the next boundary -- a plain sleep, or (when the
-    /// boundary is a window opening, grace is enabled, nothing's already running, and there's
-    /// enough lead time to bother) the grace-notification flow instead.
-    fn rearm_schedule(&mut self, now: DateTime<Local>, next_wake: Option<Boundary>) {
-        self.schedule_generation += 1;
-        let generation = self.schedule_generation;
-
-        let Some(boundary) = next_wake else { return };
-
-        let no_session = !self.episode.as_ref().is_some_and(Episode::is_active);
-        let remaining = (boundary.at - now).to_std().unwrap_or(Duration::ZERO);
-
-        let wants_grace = self.schedule.config().grace_notification
-            && no_session
-            && matches!(boundary.kind, BoundaryKind::WindowOpens { .. })
-            && remaining > MIN_GRACE_LEAD_TO_BOTHER;
-
-        let control_tx = self.control_tx.clone();
-
-        if let (true, BoundaryKind::WindowOpens { window_index }) = (wants_grace, boundary.kind) {
-            let lead = GRACE_LEAD.min(remaining);
-            let pre_wait = remaining - lead;
-            tokio::spawn(run_grace_flow(
-                control_tx,
-                generation,
-                window_index,
-                pre_wait,
-                lead,
-            ));
-        } else {
-            tokio::spawn(async move {
-                tokio::time::sleep(remaining).await;
-                let _ = control_tx
-                    .send(ControlMessage::ScheduleWake { generation })
-                    .await;
-            });
+    /// Spawns a session a rule asked for, telling the engine only once the spawn succeeded --
+    /// length accounting starts from a session that actually exists.
+    async fn spawn_scheduled(&mut self, start: StartRequest) {
+        let response = self
+            .spawn_episode(
+                SessionKind::Scheduled,
+                None,
+                false,
+                None,
+                0,
+                Some(start.rule_id),
+            )
+            .await;
+        if matches!(response, Response::Ok) {
+            self.schedule
+                .note_session_started(start.length, Local::now());
         }
     }
 
-    fn status_info(&mut self) -> StatusInfo {
-        let eval = self.schedule.evaluate(Local::now());
+    /// Ends a schedule-owned session. A manual or dev episode is never touched: "a session belongs
+    /// to whoever started it", and a user launching during their own quiet hours is the user
+    /// overriding the user.
+    async fn stop_scheduled_session(&mut self, reason: StopReason) {
+        let Some(episode) = self
+            .episode
+            .as_mut()
+            .filter(|e| e.is_active() && e.kind == SessionKind::Scheduled)
+        else {
+            return;
+        };
+        tracing::info!("ending scheduled session: {reason:?}");
+        episode.intent = Intent::Stopping;
+        let _ = episode.to_session.send(SessionCommand::Terminate).await;
+    }
+
+    /// `&self`, and the schedule query behind it is `&self` too. v1's took `&mut self` and
+    /// rerolled a cache on the way past, so a config-app status poll could destroy a session that
+    /// had not fired yet. Reading the status must never change what the schedule will do.
+    fn status_info(&self) -> StatusInfo {
+        let snapshot = self.schedule.status(Local::now());
         let schedule = ScheduleStatus {
-            enabled: self.schedule.config().enabled,
-            next_session: eval.next_session.map(|t| t.with_timezone(&Utc)),
+            enabled: snapshot.enabled,
+            next_exact_session: snapshot.next_exact_session.map(|t| t.with_timezone(&Utc)),
+            next_opportunity: snapshot.next_opportunity.map(|t| t.with_timezone(&Utc)),
+            budget_remaining: snapshot.budget_remaining,
+            budget_total: snapshot.budget_total,
+            cooldown_until: snapshot.cooldown_until.map(|t| t.with_timezone(&Utc)),
         };
 
         match &self.episode {
@@ -624,21 +685,15 @@ impl Control {
     }
 }
 
-/// Sleeps until `pre_wait` elapses (arriving at `lead` before the window's open time), then races
-/// a blocking desktop notification (with a "Cancel" action) against the remaining `lead` duration.
-/// Not a naive two-way `select!`: `wait_for_action`'s closure fires on *any* resolution (explicit
-/// Cancel, OS dismiss, timeout), so only an explicit Cancel should short-circuit -- any other
-/// resolution falls through to keep waiting on the deadline alone (the cancel branch is fused to
-/// `None` after its first resolution so it can't fire a second time).
-async fn run_grace_flow(
-    control_tx: mpsc::Sender<ControlMessage>,
-    generation: u64,
-    window_index: usize,
-    pre_wait: Duration,
-    lead: Duration,
-) {
-    tokio::time::sleep(pre_wait).await;
-
+/// Races a blocking desktop notification (with a "Cancel" action) against `lead`. Not a naive
+/// two-way `select!`: `wait_for_action`'s closure fires on *any* resolution (explicit Cancel, OS
+/// dismiss, timeout), so only an explicit Cancel should short-circuit -- any other resolution
+/// falls through to keep waiting on the deadline alone (the cancel branch is fused to `None` after
+/// its first resolution so it can't fire a second time).
+///
+/// v1 slept until `lead` before a known boundary. There is no such boundary now: the tick that
+/// decided to fire is the first moment the firing exists, so the lead starts here.
+async fn run_grace_flow(control_tx: mpsc::Sender<ControlMessage>, generation: u64, lead: Duration) {
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
     tokio::task::spawn_blocking(move || show_grace_notification(cancel_tx));
 
@@ -661,7 +716,7 @@ async fn run_grace_flow(
                 cancel_rx = None;
                 if res.is_ok() {
                     let _ = control_tx
-                        .send(ControlMessage::GraceCancelled { generation, window_index })
+                        .send(ControlMessage::GraceCancelled { generation })
                         .await;
                     return;
                 }

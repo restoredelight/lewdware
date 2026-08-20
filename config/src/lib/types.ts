@@ -193,38 +193,79 @@ export interface ThemeCatalogueDto {
 	system_appearance: 'light' | 'dark' | null;
 }
 
-/** `days[0]` = Monday .. `days[6]` = Sunday. */
-export interface WindowDto {
-	days: boolean[];
-	start_hour: number;
-	start_minute: number;
-	duration_minutes: number;
-	jitter_minutes: number;
+export interface TimeOfDay {
+	hour: number;
+	minute: number;
 }
 
-/** `end_hour`/`end_minute` before `start_hour`/`start_minute` means an overnight wrap; equal
- * start/end is a no-op (never quiet), not a 24h block -- disallow saving that in the UI. */
+/** `to` at or before `from` wraps past midnight. Equal endpoints mean a full 24 hours anchored at
+ * `from` -- unlike `QuietHoursDto`, where equal endpoints are a no-op. The asymmetry is deliberate:
+ * ranges have `all_day` for "all day", so an empty reading would express nothing, whereas quiet
+ * hours should fail open toward scheduling still working. */
+export type ScheduleRange =
+	{ kind: 'between'; from: TimeOfDay; to: TimeOfDay } | { kind: 'all_day' };
+
+export type Frequency = { kind: 'per_day'; count: number } | { kind: 'per_week'; count: number };
+
+/** The two promises a rule can make. `at` names a clock time and accepts that it may fire at an
+ * empty desk -- that is what "at 09:00" means. `rate` names a frequency and refuses to say when --
+ * that is what "three times a day" means. */
+export type Trigger =
+	{ kind: 'at'; time: TimeOfDay } | { kind: 'rate'; range: ScheduleRange; frequency: Frequency };
+
+export type SessionLength = { kind: 'fixed'; minutes: number } | { kind: 'until_stopped' };
+
+/** Sparse: `null` inherits the global setting. Not surfaced in the UI yet -- the engine takes a
+ * mode path and reads its pack from the config file, so honouring these needs engine flags that do
+ * not exist. Carried here so the shape is settled, deliberately not offered. */
+export interface SessionOverridesDto {
+	mode: ModeId | null;
+	pack_path: string | null;
+}
+
+/** `days[0]` = Monday .. `days[6]` = Sunday. */
+export interface RuleDto {
+	/** Stable across list edits, so the supervisor's budget counters survive one. */
+	id: string;
+	days: boolean[];
+	trigger: Trigger;
+	length: SessionLength;
+	overrides: SessionOverridesDto;
+}
+
+/** `end` before `start` means an overnight wrap; equal start/end is a no-op (never quiet), not a
+ * 24h block -- the UI warns rather than saving something that does nothing. */
 export interface QuietHoursDto {
 	days: boolean[];
-	start_hour: number;
-	start_minute: number;
-	end_hour: number;
-	end_minute: number;
+	start: TimeOfDay;
+	end: TimeOfDay;
 }
 
 /** `enabled` also drives OS autostart-at-login registration one-to-one -- see
  * `store.setScheduleEnabled`, the only place that ever changes it. */
 export interface ScheduleDto {
 	enabled: boolean;
-	windows: WindowDto[];
+	rules: RuleDto[];
 	quiet_hours: QuietHoursDto[];
 	grace_notification: boolean;
+	cooldown_minutes: number;
+	away_timeout_minutes: number;
+	panic_cooldown_minutes: number;
 }
 
+/** What the Scheduling tab may show. There is deliberately no firing time for a rate rule, and
+ * could not be: under the rate model a firing does not exist until the tick it happens in. */
 export interface ScheduleStatusDto {
 	enabled: boolean;
-	/** RFC3339, or null if nothing's scheduled. */
-	next_session: string | null;
+	/** RFC3339, or null. Only ever an `at` rule's instant, whose whole promise is the time. */
+	next_exact_session: string | null;
+	/** RFC3339, or null. The earliest a rate rule *could* fire -- a range boundary the user typed
+	 * in. Null while a range is already open, where the honest answer is not a time. */
+	next_opportunity: string | null;
+	budget_remaining: number;
+	budget_total: number;
+	/** RFC3339, or null. Set while a post-session or panic cooldown is suppressing firing. */
+	cooldown_until: string | null;
 }
 
 /** A permission a mode's schema declares it uses. Matches `shared::mode::Permission`, and its

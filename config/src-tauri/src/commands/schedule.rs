@@ -3,17 +3,31 @@ use serde::Serialize;
 use crate::modes::save_to_disk;
 use crate::state::State;
 
+/// What the Scheduling tab may show. Deliberately no firing time for a rate rule -- there is not
+/// one to show: under the rate model a firing does not exist until the tick it happens in. The
+/// schedule is public, the roll is secret.
 #[derive(Serialize, Clone)]
 pub struct ScheduleStatusDto {
     pub enabled: bool,
-    /// RFC3339, or `null` if nothing's scheduled -- the frontend renders it via `Date`.
-    pub next_session: Option<String>,
+    /// RFC3339, or `null`. Only ever an `At` rule's instant, whose whole promise is the time.
+    pub next_exact_session: Option<String>,
+    /// RFC3339, or `null`. The earliest a rate rule *could* fire -- a range boundary the user
+    /// typed in. `null` while a range is already open.
+    pub next_opportunity: Option<String>,
+    pub budget_remaining: u32,
+    pub budget_total: u32,
+    /// RFC3339, or `null`. Set while a post-session or panic cooldown is suppressing firing.
+    pub cooldown_until: Option<String>,
 }
 
 pub fn schedule_status_from(info: &shared::ipc::control::StatusInfo) -> ScheduleStatusDto {
     ScheduleStatusDto {
         enabled: info.schedule.enabled,
-        next_session: info.schedule.next_session.map(|t| t.to_rfc3339()),
+        next_exact_session: info.schedule.next_exact_session.map(|t| t.to_rfc3339()),
+        next_opportunity: info.schedule.next_opportunity.map(|t| t.to_rfc3339()),
+        budget_remaining: info.schedule.budget_remaining,
+        budget_total: info.schedule.budget_total,
+        cooldown_until: info.schedule.cooldown_until.map(|t| t.to_rfc3339()),
     }
 }
 
@@ -23,7 +37,11 @@ pub async fn get_schedule_status() -> ScheduleStatusDto {
         Ok(shared::ipc::control::Response::Status(info)) => schedule_status_from(&info),
         _ => ScheduleStatusDto {
             enabled: false,
-            next_session: None,
+            next_exact_session: None,
+            next_opportunity: None,
+            budget_remaining: 0,
+            budget_total: 0,
+            cooldown_until: None,
         },
     }
 }

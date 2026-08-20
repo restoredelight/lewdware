@@ -16,13 +16,9 @@ use ffmpeg_next::{
     format::{Sample, sample},
     frame,
 };
-use rodio::{
-    MixerDeviceSink, Player,
-    buffer::SamplesBuffer,
-    source::UniformSourceIterator,
-};
+use rodio::{MixerDeviceSink, Player, buffer::SamplesBuffer, source::UniformSourceIterator};
 
-use crate::media::{bounded_input::BoundedInput, MediaSource};
+use crate::media::{MediaSource, bounded_input::BoundedInput};
 
 use super::device::{open_sink, record_device_open};
 

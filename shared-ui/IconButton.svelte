@@ -8,6 +8,9 @@
 		disabled?: boolean;
 		title?: string;
 		class?: string;
+		/** For a button that opens a popover, matching `Button`'s props of the same name. */
+		ariaHaspopup?: 'menu' | 'dialog';
+		ariaExpanded?: boolean;
 		onclick?: (event: MouseEvent) => void;
 	};
 	let {
@@ -18,12 +21,16 @@
 		disabled = false,
 		title,
 		class: className = '',
+		ariaHaspopup,
+		ariaExpanded,
 		onclick
 	}: Props = $props();
 </script>
 
 <button
 	aria-label={label}
+	aria-haspopup={ariaHaspopup}
+	aria-expanded={ariaExpanded}
 	title={title ?? label}
 	{disabled}
 	class={`${variant} ${size} ${className}`}

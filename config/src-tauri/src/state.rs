@@ -1,11 +1,7 @@
 //! What the app holds while it runs: the loaded pack, the modes uploaded to it, and the
 //! live config.
 
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::Mutex,
-};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 use shared::{
     behaviour::Behaviour, encode::FileType, mode::Metadata, pack::RecommendedMode,

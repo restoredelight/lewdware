@@ -56,13 +56,14 @@ fn run(
     };
 
     rt.block_on(async move {
-        let EngineLink { recv, mut send } = match shared::ipc::engine::connect_engine_link(&token).await {
-            Ok(link) => link,
-            Err(err) => {
-                tracing::warn!("failed to connect to the supervisor: {err}");
-                return;
-            }
-        };
+        let EngineLink { recv, mut send } =
+            match shared::ipc::engine::connect_engine_link(&token).await {
+                Ok(link) => link,
+                Err(err) => {
+                    tracing::warn!("failed to connect to the supervisor: {err}");
+                    return;
+                }
+            };
 
         tokio::spawn(watch_for_stop(recv, stop_tx));
 

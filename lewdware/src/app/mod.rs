@@ -1,7 +1,7 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use shared::user_config::AppConfig;
@@ -16,9 +16,7 @@ use winit::{
 
 use crate::audio::AudioPlayer;
 use crate::error::{LewdwareError, Result};
-use crate::lua::{
-    self, ItemId, LuaThreadHandle, PackInfo, start_lua_thread,
-};
+use crate::lua::{self, ItemId, LuaThreadHandle, PackInfo, start_lua_thread};
 use crate::media::{
     ExtractedFile, MediaError, MediaManager, MediaRequirement, RequirementId, ResolvedMedia,
 };

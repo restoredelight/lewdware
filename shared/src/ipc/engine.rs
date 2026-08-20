@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use interprocess::local_socket::Name;
 use serde::{Deserialize, Serialize};
 
-use crate::logging::LogRecord;
 use super::{RecvHalf, SendHalf, Stream, prelude::*, socket_name, write_line};
+use crate::logging::LogRecord;
 
 // ─── Engine <-> supervisor protocol (long-lived duplex, one per session) ───────
 
@@ -75,8 +75,8 @@ pub async fn connect_engine_link(token: &str) -> Result<EngineLink> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use super::*;
+    use chrono::Utc;
 
     fn roundtrip<T: Serialize + for<'de> Deserialize<'de> + PartialEq + std::fmt::Debug>(value: T) {
         let json = serde_json::to_string(&value).unwrap();

@@ -83,7 +83,11 @@ async fn run_services(
         last_exit: None,
         schedule: shared::ipc::control::ScheduleStatus {
             enabled: config.schedule.enabled,
-            next_session: None,
+            next_exact_session: None,
+            next_opportunity: None,
+            budget_remaining: 0,
+            budget_total: 0,
+            cooldown_until: None,
         },
     });
     // Development records are ephemeral and session-scoped. A bounded broadcast channel keeps a

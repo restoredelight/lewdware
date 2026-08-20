@@ -1,5 +1,5 @@
 //! Since the engine always uses X11, its view of the monitors may be different from
-//! the config app. 
+//! the config app.
 
 use serde::{Deserialize, Serialize};
 

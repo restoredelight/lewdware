@@ -6,8 +6,18 @@
 		align?: 'start' | 'end';
 		width?: 'normal' | 'compact';
 		label: string;
+		/** `menu` for a list of actions (the default). `dialog` for a panel of prose -- announcing
+		 *  an explanation as a menu leaves a screen reader looking for items that do not exist. */
+		role?: 'menu' | 'dialog';
 	};
-	let { trigger, children, align = 'start', width = 'normal', label }: Props = $props();
+	let {
+		trigger,
+		children,
+		align = 'start',
+		width = 'normal',
+		label,
+		role = 'menu'
+	}: Props = $props();
 	let open = $state(false);
 	let root: HTMLDivElement;
 	let panel = $state<HTMLDivElement>();
@@ -95,7 +105,7 @@
 			style={panelStyle}
 			class:compact={width === 'compact'}
 			class="panel"
-			role="menu"
+			{role}
 			aria-label={label}
 			tabindex="-1"
 			onkeydown={keydown}

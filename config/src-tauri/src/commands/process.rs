@@ -30,7 +30,8 @@ pub async fn launch_lewdware() -> Result<(), String> {
         shared::ipc::control::Response::Ok
         | shared::ipc::control::Response::Busy { .. }
         | shared::ipc::control::Response::Status(_) => Ok(()),
-        shared::ipc::control::Response::DevLogReady | shared::ipc::control::Response::DevLog { .. } => {
+        shared::ipc::control::Response::DevLogReady
+        | shared::ipc::control::Response::DevLog { .. } => {
             Err("unexpected development log response while launching".to_string())
         }
     }
@@ -122,19 +123,24 @@ pub async fn forward_supervisor_status(app: tauri::AppHandle) {
         // supervisor predating `Subscribe` drops the stream while still answering one-shot
         // requests, so confirm with `Status` before reporting stopped. Against such a
         // supervisor this loop degrades into accurate 2s polling instead of lying.
-        let payload = match shared::ipc::control::request(&shared::ipc::control::Request::Status).await {
-            Ok(shared::ipc::control::Response::Status(info)) => SupervisorStatusDto {
-                engine: engine_status_from(&info),
-                schedule: schedule_status_from(&info),
-            },
-            _ => SupervisorStatusDto {
-                engine: EngineStatusDto::stopped(),
-                schedule: ScheduleStatusDto {
-                    enabled: false,
-                    next_session: None,
+        let payload =
+            match shared::ipc::control::request(&shared::ipc::control::Request::Status).await {
+                Ok(shared::ipc::control::Response::Status(info)) => SupervisorStatusDto {
+                    engine: engine_status_from(&info),
+                    schedule: schedule_status_from(&info),
                 },
-            },
-        };
+                _ => SupervisorStatusDto {
+                    engine: EngineStatusDto::stopped(),
+                    schedule: ScheduleStatusDto {
+                        enabled: false,
+                        next_exact_session: None,
+                        next_opportunity: None,
+                        budget_remaining: 0,
+                        budget_total: 0,
+                        cooldown_until: None,
+                    },
+                },
+            };
         let _ = app.emit("supervisor:status", payload);
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }

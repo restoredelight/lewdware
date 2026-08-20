@@ -474,10 +474,7 @@ pub async fn discard_pack(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn confirm_close(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
+pub async fn confirm_close(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     close_pack(state).await?;
     app.exit(0);
     Ok(())
@@ -491,9 +488,7 @@ pub async fn is_pack_saved(state: State<'_, AppState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn get_history_status(
-    state: State<'_, AppState>,
-) -> Result<history::Status, String> {
+pub async fn get_history_status(state: State<'_, AppState>) -> Result<history::Status, String> {
     let none_open = history::Status {
         can_undo: false,
         can_redo: false,

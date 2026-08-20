@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use uuid::Uuid;
 
+use super::{RecvHalf, SendHalf, Stream, prelude::*, read_line, socket_name, write_line};
 use crate::logging::LogRecord;
 use crate::utils::silence_command;
-use super::{RecvHalf, SendHalf, Stream, prelude::*, read_line, socket_name, write_line};
 
 // ─── CLI / config-app protocol (one-shot request/response) ────────────────────
 
@@ -65,13 +65,30 @@ pub struct StatusInfo {
 
 /// Schedule-engine status for display -- not itself the source of truth (that's
 /// `AppConfig::schedule` on disk), just a snapshot for the config app's Scheduling tab.
+///
+/// Carries no firing time for a rate rule, and could not if it wanted to: under the rate model a
+/// firing does not exist until the tick it happens in. v1 shipped its pre-rolled instant over this
+/// wire, so blurring it in the UI would have changed nothing -- anyone reading the socket learned
+/// the answer. The schedule is public, the roll is secret.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScheduleStatus {
     pub enabled: bool,
+    /// The next `Trigger::At` firing. Naming the instant is that trigger's whole promise, so this
+    /// is the one time the UI may display.
+    ///
     /// UTC on the wire, not local -- the supervisor and config-app are separate OS processes that
     /// shouldn't need to agree on what "local" means (e.g. under different `TZ` environments); the
     /// frontend renders it timezone-aware for free via `Date`.
-    pub next_session: Option<DateTime<Utc>>,
+    pub next_exact_session: Option<DateTime<Utc>>,
+    /// The earliest instant a rate rule could next fire: a range boundary the user typed in, never
+    /// a draw. `None` while a range is already open, where the honest answer is not a time.
+    pub next_opportunity: Option<DateTime<Utc>>,
+    /// Firings left in the current budget period, and the total, summed across rate rules --
+    /// "2 of 3 remaining today".
+    pub budget_remaining: u32,
+    pub budget_total: u32,
+    /// Set while a post-session or panic cooldown is suppressing firing.
+    pub cooldown_until: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,7 +335,11 @@ mod tests {
             }),
             schedule: ScheduleStatus {
                 enabled: true,
-                next_session: Some(Utc::now()),
+                next_exact_session: Some(Utc::now()),
+                next_opportunity: None,
+                budget_remaining: 2,
+                budget_total: 3,
+                cooldown_until: None,
             },
         }));
     }
@@ -327,11 +348,21 @@ mod tests {
     fn schedule_status_variants_roundtrip() {
         roundtrip(ScheduleStatus {
             enabled: false,
-            next_session: None,
+            next_exact_session: None,
+            next_opportunity: None,
+            budget_remaining: 0,
+            budget_total: 0,
+            cooldown_until: None,
         });
+        // An `At` rule pending, a rate rule's range still shut, and a cooldown running: the three
+        // things the UI may say, all at once.
         roundtrip(ScheduleStatus {
             enabled: true,
-            next_session: Some(Utc::now()),
+            next_exact_session: Some(Utc::now()),
+            next_opportunity: Some(Utc::now()),
+            budget_remaining: 1,
+            budget_total: 3,
+            cooldown_until: Some(Utc::now()),
         });
     }
 

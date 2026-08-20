@@ -498,4 +498,3 @@ fn parse_media(row: &Row<'_>) -> Result<Media> {
 
 #[cfg(test)]
 mod tests;
-

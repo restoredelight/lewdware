@@ -84,6 +84,12 @@
 
 <style>
 	label {
+		/* Contains `.sr-only`, which `hideLabel` turns on. Without a positioned root that label's
+		   containing block is the initial one -- the document -- so it is placed at its static
+		   position in *document* coordinates and drags `<html>`'s scrollHeight down with it. In a
+		   scrolling page that makes the whole app scrollable behind its own scroll container,
+		   sidebar and all. `Select`'s `.root` is already relative for this reason. */
+		position: relative;
 		display: flex;
 		min-width: 0;
 		flex-direction: column;

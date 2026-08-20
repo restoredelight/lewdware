@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 use shared::{
     mode::{OptionType, OptionValue, Permission, ShowWhen},
     monitor::MonitorRegion,
-    schedule::{QuietHours, ScheduleConfig, Window},
+    schedule::{QuietHours, Rule, ScheduleConfig, SessionLength, SessionOverrides, Trigger},
     user_config::{AppConfig, AudioDeviceChoice, Capabilities, Key, Mode, Volume, WallpaperConfig},
 };
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(tag = "type")]
@@ -44,70 +45,86 @@ impl From<ModeIdDto> for Mode {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct WindowDto {
-    pub days: [bool; 7],
-    pub start_hour: u32,
-    pub start_minute: u32,
-    pub duration_minutes: u32,
-    pub jitter_minutes: u32,
+/// The v2 schedule types are reused here rather than mirrored, unlike v1's `WindowDto`. The
+/// mirror only ever existed to keep `PathBuf` off the wire and to pin the frontend's contract;
+/// `Rule`'s trigger, length and quiet hours carry no paths and serialise as tagged unions the
+/// frontend can switch on directly, so a copy of each would be duplication rather than insulation.
+/// `SessionOverrides` is the one part that does hold paths, so it keeps a DTO.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct SessionOverridesDto {
+    #[serde(default)]
+    pub mode: Option<ModeIdDto>,
+    #[serde(default)]
+    pub pack_path: Option<String>,
 }
 
-impl From<Window> for WindowDto {
-    fn from(w: Window) -> Self {
-        WindowDto {
-            days: w.days,
-            start_hour: w.start_hour,
-            start_minute: w.start_minute,
-            duration_minutes: w.duration_minutes,
-            jitter_minutes: w.jitter_minutes,
+impl From<SessionOverrides> for SessionOverridesDto {
+    fn from(o: SessionOverrides) -> Self {
+        SessionOverridesDto {
+            mode: o.mode.map(Into::into),
+            pack_path: o.pack_path.map(|p| p.to_string_lossy().into_owned()),
         }
     }
 }
 
-impl From<WindowDto> for Window {
-    fn from(w: WindowDto) -> Self {
-        Window {
-            days: w.days,
-            start_hour: w.start_hour,
-            start_minute: w.start_minute,
-            duration_minutes: w.duration_minutes,
-            jitter_minutes: w.jitter_minutes,
+impl From<SessionOverridesDto> for SessionOverrides {
+    fn from(o: SessionOverridesDto) -> Self {
+        SessionOverrides {
+            mode: o.mode.map(Into::into),
+            pack_path: o.pack_path.map(PathBuf::from),
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct QuietHoursDto {
+pub struct RuleDto {
+    /// Stable across list edits, so the supervisor's budget counters survive one. Serialises as a
+    /// plain string; the frontend treats it as an opaque key.
+    pub id: Uuid,
     pub days: [bool; 7],
-    pub start_hour: u32,
-    pub start_minute: u32,
-    pub end_hour: u32,
-    pub end_minute: u32,
+    pub trigger: Trigger,
+    pub length: SessionLength,
+    #[serde(default)]
+    pub overrides: SessionOverridesDto,
 }
 
-impl From<QuietHours> for QuietHoursDto {
-    fn from(q: QuietHours) -> Self {
-        QuietHoursDto {
-            days: q.days,
-            start_hour: q.start_hour,
-            start_minute: q.start_minute,
-            end_hour: q.end_hour,
-            end_minute: q.end_minute,
+impl From<Rule> for RuleDto {
+    fn from(r: Rule) -> Self {
+        RuleDto {
+            id: r.id,
+            days: r.days,
+            trigger: r.trigger,
+            length: r.length,
+            overrides: r.overrides.into(),
         }
     }
 }
 
-impl From<QuietHoursDto> for QuietHours {
-    fn from(q: QuietHoursDto) -> Self {
-        QuietHours {
-            days: q.days,
-            start_hour: q.start_hour,
-            start_minute: q.start_minute,
-            end_hour: q.end_hour,
-            end_minute: q.end_minute,
+impl From<RuleDto> for Rule {
+    fn from(r: RuleDto) -> Self {
+        Rule {
+            id: r.id,
+            days: r.days,
+            trigger: r.trigger,
+            length: r.length,
+            overrides: r.overrides.into(),
         }
     }
+}
+
+/// A frontend that predates these fields must not silently reset them, for the same reason
+/// `default_theme_dto` exists: `save_config` rebuilds a whole `ScheduleConfig` from this DTO, so
+/// an absent field would be written back as whatever `Default` says rather than what the user set.
+fn default_cooldown_minutes() -> u32 {
+    ScheduleConfig::default().cooldown_minutes
+}
+
+fn default_away_timeout_minutes() -> u32 {
+    ScheduleConfig::default().away_timeout_minutes
+}
+
+fn default_panic_cooldown_minutes() -> u32 {
+    ScheduleConfig::default().panic_cooldown_minutes
 }
 
 /// Mirrors `shared::schedule::ScheduleConfig` 1:1. Round-trips through the ordinary
@@ -118,18 +135,27 @@ impl From<QuietHoursDto> for QuietHours {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ScheduleDto {
     pub enabled: bool,
-    pub windows: Vec<WindowDto>,
-    pub quiet_hours: Vec<QuietHoursDto>,
+    pub rules: Vec<RuleDto>,
+    pub quiet_hours: Vec<QuietHours>,
     pub grace_notification: bool,
+    #[serde(default = "default_cooldown_minutes")]
+    pub cooldown_minutes: u32,
+    #[serde(default = "default_away_timeout_minutes")]
+    pub away_timeout_minutes: u32,
+    #[serde(default = "default_panic_cooldown_minutes")]
+    pub panic_cooldown_minutes: u32,
 }
 
 impl From<ScheduleConfig> for ScheduleDto {
     fn from(s: ScheduleConfig) -> Self {
         ScheduleDto {
             enabled: s.enabled,
-            windows: s.windows.into_iter().map(Into::into).collect(),
-            quiet_hours: s.quiet_hours.into_iter().map(Into::into).collect(),
+            rules: s.rules.into_iter().map(Into::into).collect(),
+            quiet_hours: s.quiet_hours,
             grace_notification: s.grace_notification,
+            cooldown_minutes: s.cooldown_minutes,
+            away_timeout_minutes: s.away_timeout_minutes,
+            panic_cooldown_minutes: s.panic_cooldown_minutes,
         }
     }
 }
@@ -138,9 +164,12 @@ impl From<ScheduleDto> for ScheduleConfig {
     fn from(s: ScheduleDto) -> Self {
         ScheduleConfig {
             enabled: s.enabled,
-            windows: s.windows.into_iter().map(Into::into).collect(),
-            quiet_hours: s.quiet_hours.into_iter().map(Into::into).collect(),
+            rules: s.rules.into_iter().map(Into::into).collect(),
+            quiet_hours: s.quiet_hours,
             grace_notification: s.grace_notification,
+            cooldown_minutes: s.cooldown_minutes,
+            away_timeout_minutes: s.away_timeout_minutes,
+            panic_cooldown_minutes: s.panic_cooldown_minutes,
         }
     }
 }

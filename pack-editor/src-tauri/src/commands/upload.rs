@@ -8,10 +8,7 @@ use tauri::{AppHandle, State};
 use crate::{encode, AppState};
 
 #[tauri::command]
-pub async fn add_files_dialog(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
+pub async fn add_files_dialog(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     use tauri_plugin_dialog::DialogExt;
     let app_c = app.clone();
     let files = tokio::task::spawn_blocking(move || {
@@ -55,10 +52,7 @@ pub async fn add_files_dialog(
 }
 
 #[tauri::command]
-pub async fn add_folder_dialog(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
+pub async fn add_folder_dialog(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     use tauri_plugin_dialog::DialogExt;
     let app_c = app.clone();
     let folder = tokio::task::spawn_blocking(move || {

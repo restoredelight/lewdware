@@ -3,7 +3,7 @@
 //! Thin wrapper around the `auto-launch` crate, which handles the three real platform mechanisms
 //! (Windows registry run key, macOS LaunchAgent plist, Linux XDG autostart `.desktop` file).
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use auto_launch::{AutoLaunchBuilder, MacOSLaunchMode};
 
 use shared::binaries::find_supervisor_binary_path;

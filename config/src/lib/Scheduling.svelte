@@ -7,19 +7,34 @@
 	import Dialog from '$ui/Dialog.svelte';
 	import Field from '$ui/Field.svelte';
 	import NumberField from '$ui/NumberField.svelte';
-	import type { QuietHoursDto, WindowDto } from './types';
+	import Select from '$ui/Select.svelte';
+	import Popover from '$ui/Popover.svelte';
+	import IconButton from '$ui/IconButton.svelte';
+	import { Icon, QuestionMarkCircle } from '$icons';
+	import type { Frequency, QuietHoursDto, RuleDto, TimeOfDay } from './types';
 	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 	const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+	// Attached to the frequency input rather than set out as a panel: it explains one number, and
+	// only matters to someone looking at that number. Deliberately does not restate the randomness
+	// -- the timing section already says that, a few lines above.
+	const RATE_EXPLANATION =
+		'Sometimes you will get fewer sessions than this - Lewdware only starts them while ' +
+		'you’re actually at your computer. It learns which hours you’re usually around, so this ' +
+		'gets less common over time.';
+
 	// Kept fresh by the `supervisor:status` push event; see +page.svelte.
 	const status = $derived(store.scheduleStatus);
+	const schedule = $derived(store.config?.schedule);
 	let enableError = $state<string | null>(null);
 	let enablePending = $state(false);
-	let pendingRemoval = $state<{ kind: 'window' | 'quiet'; index: number } | null>(null);
+	let pendingRemoval = $state<
+		{ kind: 'rule'; id: string } | { kind: 'quiet'; index: number } | null
+	>(null);
 
 	async function toggleEnabled() {
-		const next = !(store.config?.schedule.enabled ?? false);
+		const next = !(schedule?.enabled ?? false);
 		enableError = null;
 		enablePending = true;
 		try {
@@ -40,17 +55,17 @@
 		return n.toString().padStart(2, '0');
 	}
 
-	function toTimeValue(hour: number, minute: number): string {
-		return `${pad(hour)}:${pad(minute)}`;
+	function toTimeValue(time: TimeOfDay): string {
+		return `${pad(time.hour)}:${pad(time.minute)}`;
 	}
 
-	function fromTimeValue(value: string): { hour: number; minute: number } | null {
+	function fromTimeValue(value: string): TimeOfDay | null {
 		const match = /^(\d{1,2}):(\d{1,2})$/.exec(value);
 		if (!match) return null;
 		return { hour: Number(match[1]), minute: Number(match[2]) };
 	}
 
-	function formatNextSession(iso: string | null): string {
+	function formatInstant(iso: string | null): string {
 		if (!iso) return '';
 		const date = new Date(iso);
 		const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
@@ -58,21 +73,9 @@
 		const today = new Date();
 		const tomorrow = new Date(today);
 		tomorrow.setDate(today.getDate() + 1);
-		if (sameDay(date, today)) return `today - ${time}`;
-		if (sameDay(date, tomorrow)) return `tomorrow - ${time}`;
-		return `${date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} - ${time}`;
-	}
-
-	function toggleWindowDay(index: number, window: WindowDto, dayIndex: number) {
-		const days = [...window.days];
-		days[dayIndex] = !days[dayIndex];
-		store.updateWindow(index, { days });
-	}
-
-	function toggleQuietDay(index: number, quiet: QuietHoursDto, dayIndex: number) {
-		const days = [...quiet.days];
-		days[dayIndex] = !days[dayIndex];
-		store.updateQuietHours(index, { days });
+		if (sameDay(date, today)) return `today ${time}`;
+		if (sameDay(date, tomorrow)) return `tomorrow ${time}`;
+		return `${date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} ${time}`;
 	}
 
 	function daySummary(days: boolean[]): string {
@@ -83,53 +86,186 @@
 		return selected.length ? selected.join(', ') : 'No days selected';
 	}
 
-	function windowSummary(window: WindowDto): string {
-		const start = toTimeValue(window.start_hour, window.start_minute);
-		const timing =
-			window.jitter_minutes > 0 ? `between ${start} and ${windowEndValue(window)}` : `at ${start}`;
-		return `${daySummary(window.days)}, ${timing}, for ${window.duration_minutes} min`;
+	function frequencyWord(frequency: Frequency): string {
+		const times = frequency.count === 1 ? 'once' : `${frequency.count} times`;
+		return `${times} a ${frequency.kind === 'per_day' ? 'day' : 'week'}`;
 	}
 
-	function windowEndValue(window: WindowDto): string {
-		const total = (window.start_hour * 60 + window.start_minute + window.jitter_minutes) % 1440;
-		return toTimeValue(Math.floor(total / 60), total % 60);
+	function lengthWord(rule: RuleDto): string {
+		return rule.length.kind === 'until_stopped'
+			? 'until you stop it'
+			: `for ${rule.length.minutes} min`;
 	}
 
-	function setWindowStartMode(index: number, window: WindowDto, between: boolean) {
-		store.updateWindow(index, { jitter_minutes: between ? window.jitter_minutes || 30 : 0 });
-	}
-
-	function updateWindowEnd(index: number, window: WindowDto, value: string) {
-		const end = fromTimeValue(value);
-		if (!end) return;
-		const startMinutes = window.start_hour * 60 + window.start_minute;
-		const endMinutes = end.hour * 60 + end.minute;
-		const difference = (endMinutes - startMinutes + 1440) % 1440;
-		// Equal clock times represent a full-day range rather than unexpectedly switching the UI
-		// back to “Start at”.
-		store.updateWindow(index, { jitter_minutes: difference || 1440 });
+	// The one readable sentence each rule is meant to reduce to. "About" is not hedging: the rate
+	// is capped so it cannot cram a shortfall into the end of a range, so under-delivery is a real
+	// (and intended) outcome.
+	function ruleSummary(rule: RuleDto): string {
+		const days = daySummary(rule.days);
+		if (rule.trigger.kind === 'at') {
+			return `${days} at ${toTimeValue(rule.trigger.time)}, ${lengthWord(rule)}.`;
+		}
+		const when =
+			rule.trigger.range.kind === 'all_day'
+				? 'any time of day'
+				: `any time between ${toTimeValue(rule.trigger.range.from)} and ${toTimeValue(rule.trigger.range.to)}`;
+		return `${days}, ${when}, about ${frequencyWord(rule.trigger.frequency)}, ${lengthWord(rule)}.`;
 	}
 
 	function quietSummary(quiet: QuietHoursDto): string {
-		return `${daySummary(quiet.days)}, ${toTimeValue(quiet.start_hour, quiet.start_minute)}–${toTimeValue(quiet.end_hour, quiet.end_minute)}`;
+		return `${daySummary(quiet.days)}, ${toTimeValue(quiet.start)}–${toTimeValue(quiet.end)}`;
+	}
+
+	function toggleDay(days: boolean[], dayIndex: number): boolean[] {
+		const next = [...days];
+		next[dayIndex] = !next[dayIndex];
+		return next;
+	}
+
+	type TimingMode = 'at' | 'between' | 'all_day';
+
+	function timingMode(rule: RuleDto): TimingMode {
+		if (rule.trigger.kind === 'at') return 'at';
+		return rule.trigger.range.kind === 'all_day' ? 'all_day' : 'between';
+	}
+
+	// Switching mode keeps whatever times and counts the user already typed, so flipping between
+	// "at" and "between" to compare them doesn't quietly discard their work.
+	function setTimingMode(rule: RuleDto, mode: TimingMode) {
+		if (timingMode(rule) === mode) return;
+		const time = rule.trigger.kind === 'at' ? rule.trigger.time : rangeStart(rule);
+		const frequency: Frequency =
+			rule.trigger.kind === 'rate' ? rule.trigger.frequency : { kind: 'per_day', count: 1 };
+
+		if (mode === 'at') {
+			store.updateRule(rule.id, { trigger: { kind: 'at', time } });
+		} else if (mode === 'all_day') {
+			store.updateRule(rule.id, {
+				trigger: { kind: 'rate', range: { kind: 'all_day' }, frequency }
+			});
+		} else {
+			store.updateRule(rule.id, {
+				trigger: {
+					kind: 'rate',
+					range: { kind: 'between', from: time, to: rangeEnd(rule) },
+					frequency
+				}
+			});
+		}
+	}
+
+	function rangeStart(rule: RuleDto): TimeOfDay {
+		if (rule.trigger.kind === 'at') return rule.trigger.time;
+		return rule.trigger.range.kind === 'between' ? rule.trigger.range.from : { hour: 9, minute: 0 };
+	}
+
+	function rangeEnd(rule: RuleDto): TimeOfDay {
+		if (rule.trigger.kind === 'rate' && rule.trigger.range.kind === 'between')
+			return rule.trigger.range.to;
+		return { hour: 17, minute: 0 };
+	}
+
+	function updateRange(rule: RuleDto, patch: { from?: TimeOfDay; to?: TimeOfDay }) {
+		if (rule.trigger.kind !== 'rate') return;
+		store.updateRule(rule.id, {
+			trigger: {
+				...rule.trigger,
+				range: {
+					kind: 'between',
+					from: patch.from ?? rangeStart(rule),
+					to: patch.to ?? rangeEnd(rule)
+				}
+			}
+		});
+	}
+
+	function updateFrequency(rule: RuleDto, patch: Partial<Frequency>) {
+		if (rule.trigger.kind !== 'rate') return;
+		store.updateRule(rule.id, {
+			trigger: { ...rule.trigger, frequency: { ...rule.trigger.frequency, ...patch } as Frequency }
+		});
+	}
+
+	function setLengthMode(rule: RuleDto, fixed: boolean) {
+		if ((rule.length.kind === 'fixed') === fixed) return;
+		store.updateRule(rule.id, {
+			length: fixed ? { kind: 'fixed', minutes: 20 } : { kind: 'until_stopped' }
+		});
+	}
+
+	// A rule that can never fire. Worth saying out loud rather than leaving the user to wonder why
+	// nothing happens.
+	function ruleWarning(rule: RuleDto): string | null {
+		if (!rule.days.some(Boolean)) return 'Select at least one day for this rule to take effect.';
+		if (rule.trigger.kind === 'rate' && rule.trigger.frequency.count === 0)
+			return 'A frequency of zero means this rule never runs.';
+		return null;
 	}
 
 	function confirmRemoval() {
 		const removal = pendingRemoval;
 		pendingRemoval = null;
 		if (!removal) return;
-		if (removal.kind === 'window') store.removeWindow(removal.index);
+		if (removal.kind === 'rule') store.removeRule(removal.id);
 		else store.removeQuietHours(removal.index);
 	}
 </script>
 
-<div class="flex-1 overflow-y-auto" use:clampScroll>
+{#snippet dayPicker(days: boolean[], label: string, onpick: (dayIndex: number) => void)}
+	<div class="flex flex-col gap-1.5">
+		<span class="text-text text-xs font-semibold">Days</span>
+		<div
+			class="border-border inline-flex self-start overflow-hidden rounded-sm border"
+			role="group"
+			aria-label={label}
+		>
+			{#each DAY_LABELS as dayLabel, dayIndex (dayIndex)}
+				<button
+					onclick={() => onpick(dayIndex)}
+					aria-pressed={days[dayIndex]}
+					class="border-border h-8 w-11 cursor-pointer border-r font-mono text-[11px] font-medium transition-colors last:border-r-0
+					{days[dayIndex]
+						? 'bg-surface-2 text-text shadow-[inset_0_-2px_0_var(--ui-accent-hover)]'
+						: 'bg-bg text-muted hover:text-text'}"
+				>
+					{dayLabel}
+				</button>
+			{/each}
+		</div>
+	</div>
+{/snippet}
+
+{#snippet segmented(
+	label: string,
+	options: { value: string; label: string }[],
+	current: string,
+	onpick: (value: string) => void
+)}
+	<div
+		class="border-border bg-bg inline-flex self-start rounded-md border p-0.5"
+		role="group"
+		aria-label={label}
+	>
+		{#each options as option (option.value)}
+			<button
+				class="h-7 cursor-pointer rounded-sm px-3 text-xs font-medium transition-colors
+				{current === option.value
+					? 'bg-surface-2 text-text shadow-[inset_0_-2px_0_var(--ui-accent-hover)]'
+					: 'text-muted hover:text-text'}"
+				aria-pressed={current === option.value}
+				onclick={() => onpick(option.value)}>{option.label}</button
+			>
+		{/each}
+	</div>
+{/snippet}
+
+<div class="min-h-0 flex-1 overflow-y-auto" use:clampScroll>
 	<div class="mx-auto flex w-full max-w-4xl flex-col gap-6 p-8">
 		<header class="max-w-2xl">
 			<h1 class="ui-page-title">Scheduling</h1>
 			<p class="text-muted mt-1.5 mb-0 text-sm">
-				Start sessions automatically within allowed windows. Lewdware runs a background supervisor
-				at login while scheduling is enabled.
+				Start sessions on their own, at a set time or an unpredictable number of times within a
+				range. Lewdware runs a background supervisor at login while scheduling is enabled.
 			</p>
 		</header>
 
@@ -137,26 +273,27 @@
 			<Card class="flex items-center gap-4 p-4">
 				<div class="min-w-0 flex-1">
 					<h2 class="text-text m-0 text-sm font-semibold">Automatic scheduling</h2>
-					<p class="text-muted m-0 mt-1 text-xs">
-						{#if store.config?.schedule.enabled && status.next_session}
-							<span class="font-mono text-[11px]"
-								>Next session: {formatNextSession(status.next_session)}</span
-							>
-						{:else if store.config?.schedule.enabled}
-							Enabled, but no upcoming session matches the current rules.
-						{:else}
+					<p class="text-muted m-0 mt-1 font-mono text-[11px]">
+						{#if !schedule?.enabled}
 							Disabled. No sessions will start automatically.
+						{:else if status.cooldown_until}
+							Paused until {formatInstant(status.cooldown_until)}
+						{:else if status.next_exact_session}
+							Next session: {formatInstant(status.next_exact_session)}
+						{:else if status.budget_total > 0}
+							{status.budget_remaining} of {status.budget_total} left in this period{#if status.next_opportunity}{' '}·
+								not before {formatInstant(status.next_opportunity)}{/if}
+						{:else}
+							Enabled, but no rule can start a session yet.
 						{/if}
 					</p>
 				</div>
-				<span
-					class="text-xs font-medium {store.config?.schedule.enabled ? 'text-text' : 'text-muted'}"
-				>
-					{store.config?.schedule.enabled ? 'Enabled' : 'Disabled'}
+				<span class="text-xs font-medium {schedule?.enabled ? 'text-text' : 'text-muted'}">
+					{schedule?.enabled ? 'Enabled' : 'Disabled'}
 				</span>
 				<Toggle
 					ariaLabel="Enable scheduling"
-					checked={store.config?.schedule.enabled ?? false}
+					checked={schedule?.enabled ?? false}
 					disabled={enablePending}
 					onchange={() => toggleEnabled()}
 				/>
@@ -171,136 +308,206 @@
 			{/if}
 		</section>
 
-		{#if store.config?.schedule.enabled}
+		{#if schedule?.enabled}
 			<section class="border-border flex flex-col gap-3 border-t pt-6">
 				<div class="flex items-start justify-between gap-4">
 					<div>
-						<h2 class="ui-section-title">Session windows</h2>
+						<h2 class="ui-section-title">Rules</h2>
 						<p class="text-muted m-0 mt-1 text-xs">
-							Define when a session may start, how long it runs, and whether its start time varies.
+							Each rule decides when a session may start, how often, and how long it runs.
 						</p>
 					</div>
-					<Button size="compact" variant="secondary" onclick={() => store.addWindow()}
-						>Add window</Button
+					<Button size="compact" variant="secondary" onclick={() => store.addRule()}
+						>Add rule</Button
 					>
 				</div>
 				<div class="flex flex-col gap-3">
-					{#each store.config?.schedule.windows ?? [] as window, i (i)}
+					{#each schedule.rules as rule, i (rule.id)}
+						{@const mode = timingMode(rule)}
+						{@const warning = ruleWarning(rule)}
 						<Card class="flex flex-col gap-4 p-4">
 							<div class="flex items-start justify-between gap-4">
 								<div class="min-w-0">
-									<h3 class="text-text m-0 text-sm font-semibold">Window {i + 1}</h3>
-									<p class="text-muted m-0 mt-1 text-xs">{windowSummary(window)}</p>
+									<h3 class="text-text m-0 text-sm font-semibold">Rule {i + 1}</h3>
+									<p class="text-muted m-0 mt-1 font-mono text-[11px]">{ruleSummary(rule)}</p>
 								</div>
 								<Button
 									size="compact"
 									variant="destructive"
-									onclick={() => (pendingRemoval = { kind: 'window', index: i })}>Remove</Button
+									onclick={() => (pendingRemoval = { kind: 'rule', id: rule.id })}>Remove</Button
 								>
 							</div>
-							<div class="flex flex-col gap-1.5">
-								<span class="text-text text-xs font-semibold">Days</span>
-								<div
-									class="border-border inline-flex self-start overflow-hidden rounded-sm border"
-									role="group"
-									aria-label={`Days for window ${i + 1}`}
-								>
-									{#each DAY_LABELS as label, dayIndex (dayIndex)}
-										<button
-											onclick={() => toggleWindowDay(i, window, dayIndex)}
-											aria-pressed={window.days[dayIndex]}
-											class="border-border h-8 w-11 cursor-pointer border-r font-mono text-[11px] font-medium transition-colors last:border-r-0
-                       {window.days[dayIndex]
-												? 'bg-surface-2 text-text shadow-[inset_0_-2px_0_var(--ui-accent-hover)]'
-												: 'bg-bg text-muted hover:text-text'}"
-										>
-											{label}
-										</button>
-									{/each}
-								</div>
-								{#if !window.days.some(Boolean)}<span class="text-xs text-[var(--ui-warning)]"
-										>Select at least one day for this window to take effect.</span
-									>{/if}
-							</div>
+
+							{@render dayPicker(rule.days, `Days for rule ${i + 1}`, (dayIndex) =>
+								store.updateRule(rule.id, { days: toggleDay(rule.days, dayIndex) })
+							)}
+
 							<div class="flex flex-col gap-2">
-								<span class="text-text text-xs font-semibold">Start timing</span>
-								<div
-									class="border-border bg-bg inline-flex self-start rounded-md border p-0.5"
-									role="group"
-									aria-label={`Start timing for window ${i + 1}`}
-								>
-									<button
-										class="h-7 cursor-pointer rounded px-3 text-xs font-medium transition-colors {window.jitter_minutes ===
-										0
-											? 'bg-surface-2 text-text'
-											: 'text-muted hover:text-text'}"
-										aria-pressed={window.jitter_minutes === 0}
-										onclick={() => setWindowStartMode(i, window, false)}>Start at</button
-									>
-									<button
-										class="h-7 cursor-pointer rounded px-3 text-xs font-medium transition-colors {window.jitter_minutes >
-										0
-											? 'bg-surface-2 text-text'
-											: 'text-muted hover:text-text'}"
-										aria-pressed={window.jitter_minutes > 0}
-										onclick={() => setWindowStartMode(i, window, true)}>Start between</button
-									>
-								</div>
-							</div>
-							{#if window.jitter_minutes > 0}
+								<span class="text-text text-xs font-semibold">When</span>
+								{@render segmented(
+									`Timing for rule ${i + 1}`,
+									[
+										{ value: 'at', label: 'At a set time' },
+										{ value: 'between', label: 'Between times' },
+										{ value: 'all_day', label: 'Any time of day' }
+									],
+									mode,
+									(value) => setTimingMode(rule, value as TimingMode)
+								)}
 								<p class="text-muted text-xs">
-									{window.jitter_minutes === 1440
-										? 'Any time during the following 24 hours:'
-										: 'The session starts at a random time in this range.'}
+									{#if mode === 'at'}
+										Starts at exactly this time, whether or not you’re at your computer.
+									{:else}
+										Starts at an unpredictable moment, chosen while you’re actually using the
+										computer. Lewdware won’t tell you when.
+									{/if}
 								</p>
-							{/if}
-							<div class="grid gap-3 {window.jitter_minutes > 0 ? 'grid-cols-3' : 'grid-cols-2'}">
-								<Field
-									label={window.jitter_minutes > 0 ? 'From' : 'Start time'}
-									type="time"
-									size="compact"
-									value={toTimeValue(window.start_hour, window.start_minute)}
-									onchange={(value) => {
-										const t = fromTimeValue(value);
-										if (t) store.updateWindow(i, { start_hour: t.hour, start_minute: t.minute });
-									}}
-								/>
-								{#if window.jitter_minutes > 0}
-									<Field
-										label="Until"
-										type="time"
-										size="compact"
-										value={windowEndValue(window)}
-										onchange={(value) => updateWindowEnd(i, window, value)}
-									/>
-								{/if}
-								<NumberField
-									label="Duration (minutes)"
-									size="compact"
-									min={1}
-									max={1440}
-									value={window.duration_minutes}
-									onchange={(minutes) => {
-										// An empty field is mid-edit, not a zero-length window. It used to read as
-										// one: `Number('')` is 0, so clearing the box silently rewrote the window
-										// to a single minute.
-										if (minutes === null) return;
-										store.updateWindow(i, { duration_minutes: Math.max(1, minutes) });
-									}}
-								/>
 							</div>
+
+							{#if mode !== 'all_day'}
+								<div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+									{#if mode === 'at'}
+										<Field
+											label="Time"
+											type="time"
+											size="compact"
+											value={toTimeValue(rangeStart(rule))}
+											onchange={(value) => {
+												const time = fromTimeValue(value);
+												if (time) store.updateRule(rule.id, { trigger: { kind: 'at', time } });
+											}}
+										/>
+									{:else if mode === 'between'}
+										<Field
+											label="From"
+											type="time"
+											size="compact"
+											value={toTimeValue(rangeStart(rule))}
+											onchange={(value) => {
+												const from = fromTimeValue(value);
+												if (from) updateRange(rule, { from });
+											}}
+										/>
+										<Field
+											label="Until"
+											type="time"
+											size="compact"
+											value={toTimeValue(rangeEnd(rule))}
+											onchange={(value) => {
+												const to = fromTimeValue(value);
+												if (to) updateRange(rule, { to });
+											}}
+										/>
+									{/if}
+								</div>
+							{/if}
+
+							{#if rule.trigger.kind === 'rate'}
+								{@const frequency = rule.trigger.frequency}
+								<div class="flex flex-col gap-1.5">
+									<span class="text-text flex items-center gap-1 text-xs font-semibold">
+										How often
+										<Popover label="About the number of sessions" role="dialog">
+											{#snippet trigger(toggle, open)}
+												<IconButton
+													label="About the number of sessions"
+													ariaHaspopup="dialog"
+													ariaExpanded={open}
+													class="!h-5 !w-5"
+													onclick={toggle}
+												>
+													<Icon src={QuestionMarkCircle} mini size="14px" />
+												</IconButton>
+											{/snippet}
+											{#snippet children()}
+												<p class="text-muted m-0 max-w-[264px] p-3 text-xs leading-relaxed">
+													{RATE_EXPLANATION}
+												</p>
+											{/snippet}
+										</Popover>
+									</span>
+									<div class="flex items-center gap-2">
+										<NumberField
+											label="How many sessions"
+											hideLabel
+											size="compact"
+											class="w-24"
+											min={1}
+											max={99}
+											value={frequency.count}
+											onchange={(count) => {
+												// An empty field is mid-edit, not a frequency of zero.
+												if (count === null) return;
+												updateFrequency(rule, { count: Math.max(1, count) });
+											}}
+										/>
+										<Select
+											label="How often"
+											hideLabel
+											size="compact"
+											class="w-40"
+											value={frequency.kind}
+											options={[
+												{ value: 'per_day', label: 'times a day' },
+												{ value: 'per_week', label: 'times a week' }
+											]}
+											onchange={(value) =>
+												updateFrequency(rule, { kind: value as Frequency['kind'] })}
+										/>
+									</div>
+								</div>
+							{/if}
+
+							<div class="flex flex-col gap-2">
+								<span class="text-text text-xs font-semibold">Session length</span>
+								{@render segmented(
+									`Session length for rule ${i + 1}`,
+									[
+										{ value: 'fixed', label: 'For a set time' },
+										{ value: 'until_stopped', label: 'Until I stop it' }
+									],
+									rule.length.kind,
+									(value) => setLengthMode(rule, value === 'fixed')
+								)}
+								{#if rule.length.kind === 'fixed'}
+									<div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+										<NumberField
+											label="Minutes"
+											size="compact"
+											min={1}
+											max={1440}
+											value={rule.length.minutes}
+											onchange={(minutes) => {
+												if (minutes === null) return;
+												store.updateRule(rule.id, {
+													length: { kind: 'fixed', minutes: Math.max(1, minutes) }
+												});
+											}}
+										/>
+									</div>
+								{:else}
+									<p class="text-muted text-xs">
+										Runs until you stop it or quiet hours begin. It also ends on its own if you
+										leave the computer for a while, so nothing is left running at an empty desk.
+									</p>
+								{/if}
+							</div>
+
+							{#if warning}
+								<span class="text-xs text-[var(--ui-warning)]">{warning}</span>
+							{/if}
 						</Card>
 					{/each}
-					{#if (store.config?.schedule.windows ?? []).length === 0}
+					{#if schedule.rules.length === 0}
 						<Card
 							class="flex flex-col items-center border-dashed !border-[var(--ui-border-strong)] p-7 text-center"
 						>
-							<h3 class="text-text m-0 text-sm font-semibold">No session windows</h3>
+							<h3 class="text-text m-0 text-sm font-semibold">No rules</h3>
 							<p class="text-muted m-0 mt-1 mb-4 text-xs">
-								Scheduling is enabled, but no sessions can start until you add a window.
+								Scheduling is enabled, but no sessions can start until you add a rule.
 							</p>
-							<Button size="compact" variant="secondary" onclick={() => store.addWindow()}
-								>Add window</Button
+							<Button size="compact" variant="secondary" onclick={() => store.addRule()}
+								>Add rule</Button
 							>
 						</Card>
 					{/if}
@@ -313,8 +520,8 @@
 					<div>
 						<h2 class="ui-section-title">Quiet hours</h2>
 						<p class="text-muted m-0 mt-1 text-xs">
-							Prevent scheduled activity during these times. Manually launched sessions are
-							unaffected.
+							Never start during these times, and stop a scheduled session that is already running.
+							Sessions you launch yourself are unaffected.
 						</p>
 					</div>
 					<Button size="compact" variant="secondary" onclick={() => store.addQuietHours()}
@@ -322,12 +529,12 @@
 					>
 				</div>
 				<div class="flex flex-col gap-3">
-					{#each store.config?.schedule.quiet_hours ?? [] as quiet, i (i)}
+					{#each schedule.quiet_hours as quiet, i (i)}
 						<Card class="flex flex-col gap-4 p-4">
 							<div class="flex items-start justify-between gap-4">
 								<div>
 									<h3 class="text-text m-0 text-sm font-semibold">Quiet period {i + 1}</h3>
-									<p class="text-muted m-0 mt-1 text-xs">{quietSummary(quiet)}</p>
+									<p class="text-muted m-0 mt-1 font-mono text-[11px]">{quietSummary(quiet)}</p>
 								</div>
 								<Button
 									size="compact"
@@ -335,86 +542,102 @@
 									onclick={() => (pendingRemoval = { kind: 'quiet', index: i })}>Remove</Button
 								>
 							</div>
-							<div class="flex flex-col gap-1.5">
-								<span class="text-text text-xs font-semibold">Days</span>
-								<div
-									class="border-border inline-flex self-start overflow-hidden rounded-sm border"
-									role="group"
-									aria-label={`Days for quiet period ${i + 1}`}
-								>
-									{#each DAY_LABELS as label, dayIndex (dayIndex)}
-										<button
-											onclick={() => toggleQuietDay(i, quiet, dayIndex)}
-											aria-pressed={quiet.days[dayIndex]}
-											class="border-border h-8 w-11 cursor-pointer border-r font-mono text-[11px] font-medium transition-colors last:border-r-0
-                       {quiet.days[dayIndex]
-												? 'bg-surface-2 text-text shadow-[inset_0_-2px_0_var(--ui-accent-hover)]'
-												: 'bg-bg text-muted hover:text-text'}">{label}</button
-										>
-									{/each}
-								</div>
-								{#if !quiet.days.some(Boolean)}<span class="text-xs text-[var(--ui-warning)]"
-										>Select at least one day for this quiet period to take effect.</span
-									>{/if}
-							</div>
+							{@render dayPicker(quiet.days, `Days for quiet period ${i + 1}`, (dayIndex) =>
+								store.updateQuietHours(i, { days: toggleDay(quiet.days, dayIndex) })
+							)}
 							<div class="grid grid-cols-2 gap-3">
 								<Field
 									label="From"
 									type="time"
 									size="compact"
-									value={toTimeValue(quiet.start_hour, quiet.start_minute)}
+									value={toTimeValue(quiet.start)}
 									onchange={(value) => {
-										const t = fromTimeValue(value);
-										if (t)
-											store.updateQuietHours(i, { start_hour: t.hour, start_minute: t.minute });
+										const start = fromTimeValue(value);
+										if (start) store.updateQuietHours(i, { start });
 									}}
-								/><Field
+								/>
+								<Field
 									label="Until"
 									type="time"
 									size="compact"
-									value={toTimeValue(quiet.end_hour, quiet.end_minute)}
+									value={toTimeValue(quiet.end)}
 									onchange={(value) => {
-										const t = fromTimeValue(value);
-										if (t) store.updateQuietHours(i, { end_hour: t.hour, end_minute: t.minute });
+										const end = fromTimeValue(value);
+										if (end) store.updateQuietHours(i, { end });
 									}}
 								/>
 							</div>
-							{#if quiet.start_hour === quiet.end_hour && quiet.start_minute === quiet.end_minute}<span
-									class="text-xs text-[var(--ui-warning)]"
+							{#if !quiet.days.some(Boolean)}
+								<span class="text-xs text-[var(--ui-warning)]"
+									>Select at least one day for this quiet period to take effect.</span
+								>
+							{:else if quiet.start.hour === quiet.end.hour && quiet.start.minute === quiet.end.minute}
+								<span class="text-xs text-[var(--ui-warning)]"
 									>Start and end are the same, so this quiet period has no effect.</span
-								>{/if}
+								>
+							{/if}
 						</Card>
 					{/each}
-					{#if (store.config?.schedule.quiet_hours ?? []).length === 0}
+					{#if schedule.quiet_hours.length === 0}
 						<Card class="border-dashed !border-[var(--ui-border-strong)] p-5 text-center">
 							<p class="text-muted m-0 text-xs">
-								No quiet hours. Scheduled sessions may run during any configured window.
+								No quiet hours. Scheduled sessions may run whenever a rule allows.
 							</p>
 						</Card>
 					{/if}
 				</div>
 			</section>
 
+			<!-- Pacing -->
+			<section class="border-border flex flex-col gap-3 border-t pt-6">
+				<h2 class="ui-section-title">Pacing</h2>
+				<p class="text-muted text-xs">
+					How scheduled sessions space themselves out, across every rule.
+				</p>
+				<Card class="flex items-center gap-4 p-4">
+					<div class="min-w-0 flex-1">
+						<h3 class="text-text m-0 text-sm font-medium">Minimum gap between sessions</h3>
+						<p class="text-muted m-0 mt-1 text-xs">
+							Stops “3 times a day” from arriving as three in a row.
+						</p>
+					</div>
+					<NumberField
+						label="Minimum gap between sessions"
+						hideLabel
+						size="compact"
+						class="w-28"
+						min={1}
+						max={1440}
+						suffix="min"
+						value={schedule.cooldown_minutes}
+						onchange={(minutes) => {
+							if (minutes === null) return;
+							store.setScheduleSettings({ cooldown_minutes: Math.max(1, minutes) });
+						}}
+					/>
+				</Card>
+			</section>
+
 			<!-- Grace notification -->
 			<section class="border-border flex flex-col gap-3 border-t pt-6">
 				<h2 class="ui-section-title">Grace notification</h2>
 				<p class="text-muted text-xs">
-					A short desktop notification before a scheduled session starts, with a Cancel action that
-					skips just that one occurrence.
+					A few seconds’ desktop notification before a scheduled session starts, with a Cancel
+					action.
 				</p>
-				<Card class="flex items-center justify-between gap-4 p-4"
-					><div>
+				<Card class="flex items-center justify-between gap-4 p-4">
+					<div>
 						<h3 class="text-text m-0 text-sm font-medium">Warn before starting</h3>
 						<p class="text-muted m-0 mt-1 text-xs">
-							The notification includes an action to skip that occurrence.
+							Cancelling skips that session and starts the gap above.
 						</p>
 					</div>
 					<Toggle
-						checked={store.config?.schedule.grace_notification ?? false}
+						checked={schedule.grace_notification}
 						ariaLabel="Warn before a scheduled session starts"
 						onchange={(checked) => store.setGraceNotification(checked)}
-					/></Card
-				>
+					/>
+				</Card>
 			</section>
 		{:else}
 			<Card
@@ -422,7 +645,7 @@
 			>
 				<h2 class="text-text m-0 text-sm font-semibold">Scheduling is turned off</h2>
 				<p class="text-muted m-0 mt-1 max-w-md text-xs leading-relaxed">
-					Enable automatic scheduling above to review and edit session windows, quiet hours, and
+					Enable automatic scheduling above to review and edit rules, quiet hours, pacing, and
 					startup notifications.
 				</p>
 			</Card>
@@ -432,9 +655,9 @@
 
 {#if pendingRemoval}
 	<Dialog
-		title={pendingRemoval.kind === 'window' ? 'Remove session window?' : 'Remove quiet period?'}
-		description={pendingRemoval.kind === 'window'
-			? 'Sessions will no longer be able to start during this window.'
+		title={pendingRemoval.kind === 'rule' ? 'Remove rule?' : 'Remove quiet period?'}
+		description={pendingRemoval.kind === 'rule'
+			? 'Sessions will no longer start from this rule.'
 			: 'Scheduled activity will no longer be blocked during this quiet period.'}
 		buttons={[
 			{ label: 'Cancel', onclick: () => (pendingRemoval = null) },

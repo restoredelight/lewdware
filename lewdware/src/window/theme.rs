@@ -164,4 +164,3 @@ pub fn to_color32(c: Color) -> egui::Color32 {
 
 #[cfg(test)]
 mod tests;
-

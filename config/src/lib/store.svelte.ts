@@ -16,32 +16,38 @@ import type {
 	MonitorDto,
 	MonitorRegion,
 	QuietHoursDto,
+	RuleDto,
+	ScheduleDto,
 	ScheduleStatusDto,
 	SupervisorStatusDto,
 	ThemeCatalogueDto,
 	Volume,
-	WallpaperRestore,
-	WindowDto
+	WallpaperRestore
 } from './types';
 import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
-function defaultWindow(): WindowDto {
+// A rule that does nothing until edited would be a poor default, so this fires: every day, once,
+// somewhere in the working afternoon. The range is wide on purpose -- a wide range is where the
+// rate model earns its keep, and a narrow one is a step the user can take deliberately.
+function defaultRule(): RuleDto {
 	return {
-		days: [false, false, false, false, false, false, false],
-		start_hour: 9,
-		start_minute: 0,
-		duration_minutes: 60,
-		jitter_minutes: 0
+		id: crypto.randomUUID(),
+		days: [true, true, true, true, true, true, true],
+		trigger: {
+			kind: 'rate',
+			range: { kind: 'between', from: { hour: 9, minute: 0 }, to: { hour: 17, minute: 0 } },
+			frequency: { kind: 'per_day', count: 1 }
+		},
+		length: { kind: 'fixed', minutes: 20 },
+		overrides: { mode: null, pack_path: null }
 	};
 }
 
 function defaultQuietHours(): QuietHoursDto {
 	return {
 		days: [true, true, true, true, true, true, true],
-		start_hour: 22,
-		start_minute: 0,
-		end_hour: 7,
-		end_minute: 0
+		start: { hour: 22, minute: 0 },
+		end: { hour: 7, minute: 0 }
 	};
 }
 
@@ -107,7 +113,14 @@ class AppStore {
 	// Kept fresh by the `supervisor:status` push event (see +page.svelte); the initial values
 	// come from one fetch at startup.
 	engineStatus = $state<EngineStatusDto>({ running: false, error: null, warning: null });
-	scheduleStatus = $state<ScheduleStatusDto>({ enabled: false, next_session: null });
+	scheduleStatus = $state<ScheduleStatusDto>({
+		enabled: false,
+		next_exact_session: null,
+		next_opportunity: null,
+		budget_remaining: 0,
+		budget_total: 0,
+		cooldown_until: null
+	});
 	private saveQueue: Promise<void> = Promise.resolve();
 	private pendingSaves = 0;
 
@@ -357,39 +370,48 @@ class AppStore {
 		this.saveSchedule();
 	}
 
-	addWindow() {
+	addRule() {
+		if (!this.config) return;
+		this.config = {
+			...this.config,
+			schedule: { ...this.config.schedule, rules: [...this.config.schedule.rules, defaultRule()] }
+		};
+		this.saveSchedule();
+	}
+
+	// Keyed by rule id rather than list index, matching the supervisor: it keys budget counters the
+	// same way, so removing one rule no longer re-points another rule's state at it.
+	removeRule(id: string) {
 		if (!this.config) return;
 		this.config = {
 			...this.config,
 			schedule: {
 				...this.config.schedule,
-				windows: [...this.config.schedule.windows, defaultWindow()]
+				rules: this.config.schedule.rules.filter((rule) => rule.id !== id)
 			}
 		};
 		this.saveSchedule();
 	}
 
-	removeWindow(index: number) {
+	updateRule(id: string, patch: Partial<RuleDto>) {
 		if (!this.config) return;
 		this.config = {
 			...this.config,
 			schedule: {
 				...this.config.schedule,
-				windows: this.config.schedule.windows.filter((_, i) => i !== index)
+				rules: this.config.schedule.rules.map((rule) =>
+					rule.id === id ? { ...rule, ...patch } : rule
+				)
 			}
 		};
 		this.saveSchedule();
 	}
 
-	updateWindow(index: number, patch: Partial<WindowDto>) {
+	// The scalar schedule settings (cooldown, away timeout, panic cooldown) in one place, since
+	// each is a single number with identical save handling.
+	setScheduleSettings(patch: Partial<ScheduleDto>) {
 		if (!this.config) return;
-		this.config = {
-			...this.config,
-			schedule: {
-				...this.config.schedule,
-				windows: this.config.schedule.windows.map((w, i) => (i === index ? { ...w, ...patch } : w))
-			}
-		};
+		this.config = { ...this.config, schedule: { ...this.config.schedule, ...patch } };
 		this.saveSchedule();
 	}
 
