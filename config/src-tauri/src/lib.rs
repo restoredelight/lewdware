@@ -11,12 +11,9 @@ mod dto;
 mod modes;
 mod state;
 
-pub use commands::*;
-pub use dto::*;
-pub use state::*;
-
+use commands::process::forward_supervisor_status;
 use modes::{load_mode_file, load_pack};
-use state::UploadedModeEntry;
+use state::{AppState, UploadedModeEntry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -70,35 +67,35 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_config,
-            save_config,
-            get_theme_catalogue,
-            get_monitors,
-            get_audio_devices,
-            test_audio_device,
-            get_mode_groups,
-            get_mode_options,
-            set_mode_option,
-            pick_pack,
-            remove_pack,
-            upload_mode,
-            remove_uploaded_mode,
-            launch_lewdware,
-            stop_lewdware,
-            lewdware_running,
-            get_schedule_status,
-            set_schedule_enabled,
-            reload_supervisor_schedule,
-            open_logs,
-            get_diagnostics,
-            check_for_update,
-            input_monitoring_granted,
-            request_input_monitoring,
-            open_input_monitoring_settings,
-            wallpaper_support,
-            wallpaper_restore_preview,
-            pick_restore_image,
-            default_restore_image,
+            commands::config::get_config,
+            commands::config::save_config,
+            commands::theme::get_theme_catalogue,
+            commands::hardware::get_monitors,
+            commands::hardware::get_audio_devices,
+            commands::hardware::test_audio_device,
+            commands::modes::get_mode_groups,
+            commands::modes::get_mode_options,
+            commands::modes::set_mode_option,
+            commands::pack::pick_pack,
+            commands::pack::remove_pack,
+            commands::modes::upload_mode,
+            commands::modes::remove_uploaded_mode,
+            commands::process::launch_lewdware,
+            commands::process::stop_lewdware,
+            commands::process::lewdware_running,
+            commands::schedule::get_schedule_status,
+            commands::schedule::set_schedule_enabled,
+            commands::schedule::reload_supervisor_schedule,
+            commands::diagnostics::open_logs,
+            commands::diagnostics::get_diagnostics,
+            commands::updates::check_for_update,
+            commands::hardware::input_monitoring_granted,
+            commands::hardware::request_input_monitoring,
+            commands::hardware::open_input_monitoring_settings,
+            commands::wallpaper::wallpaper_support,
+            commands::wallpaper::wallpaper_restore_preview,
+            commands::wallpaper::pick_restore_image,
+            commands::wallpaper::default_restore_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

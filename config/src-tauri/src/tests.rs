@@ -6,14 +6,17 @@ use shared::{
     behaviour::{Behaviour, ContentGroup},
     db::migrate,
     encode::FileType,
-    mode::{Metadata, ModeEntry, OptionType, OptionValue, Permission, StoredValue},
+    mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, StoredValue},
     user_config::{AppConfig, AudioDeviceChoice, Mode},
 };
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-use super::*;
-use crate::modes::{apply_config_dto, get_mode_options_for};
+use std::sync::Mutex;
+
+use crate::dto::{ConfigDto, OptionEntryDto};
+use crate::modes::{apply_config_dto, get_mode_options_for, load_pack};
+use crate::state::{AppState, LoadedPack, PackModeEntry};
 
 fn empty_metadata(name: &str) -> Metadata {
     Metadata {
