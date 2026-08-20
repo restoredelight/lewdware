@@ -7,9 +7,9 @@ use crate::behaviour::{
 /// A migrated pack database with a few media files, so the slot and per-item foreign keys
 /// have something real to point at.
 fn pack() -> Connection {
-    let conn = Connection::open_in_memory().unwrap();
+    let mut conn = Connection::open_in_memory().unwrap();
     conn.pragma_update(None, "foreign_keys", true).unwrap();
-    crate::db::migrate(&conn).unwrap();
+    crate::db::migrate(&mut conn).unwrap();
     conn.execute(
         "INSERT INTO media (id, file_name, file_type, \"offset\", length, hash)
          VALUES (1, 'bg.png', 'image', 0, 0, x'00'), (2, 'intro.gif', 'video', 0, 0, x'01'),

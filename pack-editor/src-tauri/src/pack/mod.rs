@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use shared::{
     behaviour::Behaviour,
     encode::FileInfo,
-    read_pack::{Header, Metadata, HEADER_SIZE},
+    pack::{Header, Metadata, HEADER_SIZE},
     tags,
 };
 use tokio::{
@@ -479,7 +479,7 @@ pub struct Range {
 }
 
 #[derive(Debug)]
-pub(crate) struct InvalidRange;
+pub struct InvalidRange;
 
 impl std::fmt::Display for InvalidRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -496,7 +496,7 @@ fn draft_lock_path(data_dir: &Path, id: Uuid) -> PathBuf {
 }
 
 impl MediaPack {
-    pub(crate) fn remove_recoverable_draft(data_dir: &Path, id: Uuid) -> Result<()> {
+    pub fn remove_recoverable_draft(data_dir: &Path, id: Uuid) -> Result<()> {
         let dir = data_dir.join("Lewdware Pack Editor").join(id.to_string());
         if !dir.exists() {
             return Ok(());

@@ -1,17 +1,17 @@
 pub mod attribution;
 pub mod audio;
-#[cfg(feature = "autostart")]
-pub mod autostart;
+
 pub mod behaviour;
-pub mod child;
+pub mod binaries;
 pub mod db;
 pub mod encode;
+#[cfg(feature = "ipc")]
 pub mod ipc;
 pub mod logging;
 pub mod mode;
 pub mod monitor;
 mod once;
-pub mod read_pack;
+pub mod pack;
 pub mod schedule;
 pub mod tags;
 pub mod theme;

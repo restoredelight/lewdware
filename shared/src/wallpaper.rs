@@ -19,7 +19,7 @@ use std::{path::Path, process::Command};
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::utils::sanitize_child_env;
+use crate::utils::{sanitize_child_env, silence_command};
 
 #[cfg(all(unix, not(target_os = "macos")))]
 mod daemons;
@@ -257,12 +257,7 @@ fn stdout_of(command: &'static str, args: &[&str]) -> Result<String> {
     let mut cmd = Command::new(command);
     cmd.args(args);
     sanitize_child_env(&mut cmd);
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+    silence_command(&mut cmd);
 
     let output = match cmd.output() {
         Ok(output) => output,

@@ -147,11 +147,11 @@ impl From<ScheduleDto> for ScheduleConfig {
 
 /// A frontend that predates these fields (or a partial payload) must not silently reset the
 /// user's look, so both mirror `AppConfig`'s own defaults rather than falling back to `String`'s.
-pub(crate) fn default_theme_dto() -> String {
+pub fn default_theme_dto() -> String {
     AppConfig::default().theme
 }
 
-pub(crate) fn default_appearance_dto() -> String {
+pub fn default_appearance_dto() -> String {
     AppConfig::default().appearance
 }
 
@@ -291,7 +291,7 @@ pub struct ThemeLookDto {
     pub widgets: shared::theme::Widgets,
 }
 
-pub(crate) fn theme_look(
+pub fn theme_look(
     theme: shared::theme::Theme,
     appearance: shared::theme::Appearance,
 ) -> ThemeLookDto {

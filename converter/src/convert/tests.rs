@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use shared::behaviour::{
     CountScope, EventCountCondition, EventKind, EventSchedule, Interval, MediaSlot,
 };
-use shared::read_pack::RecommendedMode;
+use shared::pack::RecommendedMode;
 use shared::tags::NON_POPUP_TAG;
 
 use crate::model::WarningKind;

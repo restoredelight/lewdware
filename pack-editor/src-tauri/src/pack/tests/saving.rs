@@ -3,7 +3,7 @@
 use std::sync::{Condvar, Mutex};
 
 use rusqlite::params;
-use shared::read_pack::Metadata;
+use shared::pack::Metadata;
 use tempfile::tempdir;
 
 use super::*;

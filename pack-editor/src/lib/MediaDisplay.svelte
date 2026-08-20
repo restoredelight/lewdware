@@ -2,7 +2,6 @@
 	// The media element itself, at viewer size -- shared by the media-tab viewer and the
 	// standalone one so the awkward cases (a transparent video's packed frame, audio having no
 	// picture at all) are handled once rather than drifting apart in two overlays.
-	import { api } from './api.js';
 	import { StallWatcher, STALL_TICK_MS } from './stallRecovery.js';
 	import { store } from './store.svelte.js';
 	import type { MediaFile } from './types.js';
@@ -39,19 +38,7 @@
 	// that it is worth surviving rather than freezing.
 	//
 	// When to nudge -- and, as much, when not to -- lives in `stallRecovery.ts`, where it is
-	// tested. A nudge logs itself, so a recurrence shows up in the `media_trace` log rather than
-	// only as a hitch someone notices.
-	function describe(file: MediaFile) {
-		const info = file.file_info;
-		const duration = 'duration' in info ? info.duration : 0;
-		return (
-			`id=${file.id} duration=${duration.toFixed(2)} bytes=${file.size} ` +
-			(info.type === 'video'
-				? `dim=${info.width}x${info.height} transparent=${info.transparent} audio=${info.audio}`
-				: `kind=${info.type}`)
-		);
-	}
-
+	// tested.
 	/**
 	 * The size the element will settle at, written before the browser knows the media's own.
 	 *
@@ -73,29 +60,15 @@
 		return `min(${width}px, ${maxWidth}, calc(${maxHeight} * ${width} / ${height}))`;
 	}
 
-	function recoverFromStalls(node: HTMLMediaElement, file: MediaFile) {
-		// Arrowing through the viewer swaps this element's `src` rather than mounting a new
-		// element, so the action outlives the file it was created for and the label has to follow
-		// it -- otherwise every file after the first is logged under its predecessor's id.
-		let label = describe(file);
-
+	function recoverFromStalls(node: HTMLMediaElement) {
 		const watcher = new StallWatcher();
 		const watchdog = setInterval(() => {
 			if (!watcher.tick(node)) return;
-			void api
-				.traceMediaEvent(
-					`nudging a stalled player ${label} t=${node.currentTime.toFixed(2)} ` +
-						`ready=${node.readyState} net=${node.networkState} attempt=${watcher.attempts}`
-				)
-				.catch(() => {});
 			node.pause();
 			void node.play().catch(() => {});
 		}, STALL_TICK_MS);
 
 		return {
-			update(next: MediaFile) {
-				label = describe(next);
-			},
 			destroy() {
 				clearInterval(watchdog);
 			}
@@ -136,7 +109,7 @@
        the top half visible — no wrapper/absolute positioning needed. -->
 	<!-- svelte-ignore a11y_media_has_caption -->
 	<video
-		use:recoverFromStalls={file}
+		use:recoverFromStalls
 		src={store.mediaUrl(`/file/${file.id}`, file.hash)}
 		draggable="false"
 		autoplay
@@ -154,7 +127,7 @@
 	     a width) all along. -->
 	<!-- svelte-ignore a11y_media_has_caption -->
 	<video
-		use:recoverFromStalls={file}
+		use:recoverFromStalls
 		src={store.mediaUrl(`/file/${file.id}`, file.hash)}
 		draggable="false"
 		controls
@@ -165,7 +138,7 @@
 	></video>
 {:else if file.file_info.type === 'audio'}
 	<audio
-		use:recoverFromStalls={file}
+		use:recoverFromStalls
 		src={store.mediaUrl(`/file/${file.id}`, file.hash)}
 		controls
 		class="pointer-events-auto w-80"

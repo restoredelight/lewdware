@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use shared::read_pack::RecommendedMode;
+use shared::pack::RecommendedMode;
 use shared::user_config::Mode;
 use tauri::{AppHandle, Emitter};
 

@@ -1,4 +1,4 @@
-pub(crate) mod bounded_input;
+pub mod bounded_input;
 mod manager;
 mod pack;
 mod types;

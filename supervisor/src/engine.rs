@@ -14,7 +14,7 @@ pub fn build_command(
     dev: bool,
     dev_stream_id: Option<Uuid>,
 ) -> Result<tokio::process::Command> {
-    let cmd = shared::child::find_engine_binary()
+    let cmd = shared::binaries::find_engine_binary()
         .ok_or_else(|| anyhow!("could not find the lewdware-engine binary"))?;
     let mut cmd = tokio::process::Command::from(cmd);
 

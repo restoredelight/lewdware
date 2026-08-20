@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use crate::control::{Control, ControlMessage};
 
 pub fn run() -> Result<()> {
-    let _log_guard = shared::logging::init("lewdware-supervisor");
+    let _log_guard = shared::logging::init("lewdware-supervisor")?;
 
     let lock_path = dirs::runtime_dir()
         .unwrap_or_else(std::env::temp_dir)
@@ -74,14 +74,14 @@ async fn run_services(
     // Push side of `Request::Subscribe`: Control publishes, the IPC server streams to
     // subscribers. Seeded with an idle status so a subscriber that connects before Control's
     // first publish still gets a coherent snapshot.
-    let (status_tx, status_rx) = tokio::sync::watch::channel(shared::ipc::StatusInfo {
-        session: shared::ipc::SessionState::Idle,
+    let (status_tx, status_rx) = tokio::sync::watch::channel(shared::ipc::control::StatusInfo {
+        session: shared::ipc::control::SessionState::Idle,
         session_kind: None,
         mode_path: None,
         warning: None,
         last_runtime_error: None,
         last_exit: None,
-        schedule: shared::ipc::ScheduleStatus {
+        schedule: shared::ipc::control::ScheduleStatus {
             enabled: config.schedule.enabled,
             next_session: None,
         },

@@ -23,8 +23,9 @@ tauri-plugin-dialog = { version = "2", default-features = false, features = ["xd
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-shared = { path = "../../shared", features = ["ipc", "autostart"] }
+shared = { path = "../../shared", features = ["ipc"] }
 anyhow = "1"
+auto-launch = "0.6"
 base64 = "0.22"
 dirs = "6"
 tokio = { version = "1", features = ["full"] }

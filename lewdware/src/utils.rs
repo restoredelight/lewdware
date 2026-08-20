@@ -262,7 +262,7 @@ pub fn report_fatal_startup_error(err: impl std::fmt::Display) {
     let message = err.to_string();
     tracing::error!("{message}");
 
-    crate::supervisor_link::report(shared::ipc::EngineToSupervisor::FailedToStart {
+    crate::supervisor_link::report(shared::ipc::engine::EngineToSupervisor::FailedToStart {
         message: message.clone(),
     });
 

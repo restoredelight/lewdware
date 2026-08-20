@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use std::{path::Path, time::Duration};
 
 use rusqlite::{params, Connection, OptionalExtension};
-use shared::read_pack::Metadata;
+use shared::pack::Metadata;
 use uuid::Uuid;
 
 const ARCHIVE_GENERATION_KEY: &str = "__pack_editor_archive_generation";
@@ -334,7 +334,7 @@ pub fn export_runtime(editor: &Connection, runtime_path: &Path) -> Result<()> {
     let _ = std::fs::remove_file(runtime_path);
     let mut runtime = Connection::open(runtime_path)?;
     configure_connection(&runtime)?;
-    shared::db::migrate(&runtime)?;
+    shared::db::migrate(&mut runtime)?;
     runtime.execute("ATTACH DATABASE ? AS editor", [editor.path().unwrap()])?;
     let result = (|| -> Result<()> {
         let tx = runtime.transaction()?;

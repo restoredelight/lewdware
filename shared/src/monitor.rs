@@ -1,42 +1,21 @@
-//! Monitor identity, shared between the engine and the config app.
-//!
-//! These two processes see different monitors. The engine forces winit onto X11/XWayland
-//! (`lewdware/src/main.rs`: Wayland can't position windows), while the config app is a native
-//! Wayland Tauri app. On a fractional-scaled Wayland session the same display comes back as:
-//!
-//! | | name | size | scale |
-//! |---|---|---|---|
-//! | tao, native Wayland | `eDP-1-0x1405` | 5487x3087 | 3 |
-//! | winit, XWayland | `eDP-1` | 3840x2160 | 2.09375 |
-//!
-//! Neither the name nor the geometry matches, so `AppConfig::disabled_monitors` written by the
-//! config app never matched what the engine compared it against, and disabling a monitor silently
-//! did nothing. Rather than trying to reconcile two views, the config app asks the engine for its
-//! list (`lewdware-engine --list-monitors`) and stores those identities verbatim -- the engine is
-//! the process that will act on them, so it is the only view that can't be wrong.
+//! Since the engine always uses X11, its view of the monitors may be different from
+//! the config app. 
 
 use serde::{Deserialize, Serialize};
 
 /// One monitor, as the engine sees it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MonitorInfo {
-    /// What `AppConfig::disabled_monitors` stores. Whatever winit calls the monitor, falling back
-    /// to its geometry when winit reports no name at all.
     pub id: String,
-    /// For display. Same as `id` unless there was no name to use.
     pub name: String,
     pub width: u32,
     pub height: u32,
     pub primary: bool,
-    /// Where this monitor sits in the desktop's coordinate space, in the same (physical) units as
-    /// `width`/`height`. Only so the config app can draw the arrangement to scale; the engine
-    /// re-reads it fresh at spawn time and never trusts what was stored.
+    // The monitor's position
     #[serde(default)]
     pub x: i32,
     #[serde(default)]
     pub y: i32,
-    /// So the config app can label a region in the logical pixels a mode would see, rather than
-    /// the physical ones above.
     #[serde(default = "default_scale_factor")]
     pub scale_factor: f64,
 }
@@ -45,20 +24,6 @@ fn default_scale_factor() -> f64 {
     1.0
 }
 
-/// The sub-area of one monitor that popups are confined to, as fractions of that monitor
-/// (`0.0..=1.0`, origin top-left).
-///
-/// Fractions rather than pixels, for the same reason this module exists at all: the config app and
-/// the engine measure the same display differently (see above), and the probe reports physical
-/// pixels while the engine places windows in logical ones. A stored pixel rectangle would have to
-/// mean one of those, and would be wrong in the other -- as well as breaking the first time the
-/// user changed resolution or scale. A fraction means the same thing to both.
-///
-/// The engine applies this by *shrinking the monitor*: `lewdware::monitor::Monitor` reports the
-/// region's size, and the region's origin is added to the window's absolute position. So a mode
-/// sees the region as the whole monitor -- `{ percent = 50 }` is the region's centre, a random
-/// position lands inside it, and clamping clamps to its edges -- with no mode-side changes. It
-/// governs popups only; the wallpaper is still the whole screen.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MonitorRegion {
     pub x: f64,
@@ -82,11 +47,9 @@ impl Default for MonitorRegion {
 /// see what happened and drag it bigger.
 pub const MIN_REGION_SIZE: u32 = 100;
 
-/// A [`MonitorRegion`] resolved against a monitor's logical size: concrete logical pixels, ready
-/// to offset a window position by.
+/// A [`MonitorRegion`] resolved against a monitor's size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResolvedRegion {
-    /// Offset from the monitor's top-left corner.
     pub x: i32,
     pub y: i32,
     pub width: u32,
@@ -106,11 +69,6 @@ impl MonitorRegion {
         *self == Self::FULL
     }
 
-    /// Resolve against a monitor's **logical** size -- the units the engine positions windows in.
-    ///
-    /// Total function by construction: a region that is inverted, out of range, degenerate or
-    /// outright NaN resolves to something drawable rather than failing. Config written by a newer
-    /// version, or hand-edited, cannot stop a session from starting.
     pub fn resolve(&self, monitor_width: u32, monitor_height: u32) -> ResolvedRegion {
         let (x, width) = resolve_axis(self.x, self.width, monitor_width);
         let (y, height) = resolve_axis(self.y, self.height, monitor_height);
@@ -124,9 +82,6 @@ impl MonitorRegion {
     }
 }
 
-/// One axis of [`MonitorRegion::resolve`]. Returns an offset and an extent that are always within
-/// the monitor, and an extent that is always at least [`MIN_REGION_SIZE`] -- unless the monitor
-/// itself is smaller, in which case the monitor wins.
 fn resolve_axis(offset: f64, extent: f64, total: u32) -> (i32, u32) {
     if !offset.is_finite() || !extent.is_finite() {
         return (0, total);
@@ -141,12 +96,9 @@ fn resolve_axis(offset: f64, extent: f64, total: u32) -> (i32, u32) {
     (position, size)
 }
 
-/// The argument that makes the engine print its monitor list as JSON and exit.
+/// Makes the engine print its monitor list as JSON and exit.
 pub const LIST_MONITORS_FLAG: &str = "--list-monitors";
 
-/// A stable-ish identity for a monitor winit won't name.
-///
-/// X11 geometry syntax, so it's recognisable if a user ever reads their `config.json`.
 pub fn geometry_id(width: u32, height: u32, x: i32, y: i32) -> String {
     format!("{width}x{height}+{x}+{y}")
 }
@@ -193,11 +145,6 @@ mod tests {
         assert_eq!(decoded[0].y, 0);
         assert_eq!(decoded[0].scale_factor, 1.0);
     }
-}
-
-#[cfg(test)]
-mod region_tests {
-    use super::*;
 
     #[test]
     fn the_default_region_is_the_whole_monitor() {

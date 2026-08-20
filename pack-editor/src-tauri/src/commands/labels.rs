@@ -7,14 +7,14 @@ use crate::pack::{ArtistSummary, TagSummary};
 use crate::AppState;
 
 #[tauri::command]
-pub(crate) async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     state
         .with_pack_or(vec![], async |pack| pack.get_all_tags().await)
         .await
 }
 
 #[tauri::command]
-pub(crate) async fn get_file_tags(
+pub async fn get_file_tags(
     state: State<'_, AppState>,
     id: u64,
 ) -> Result<Vec<String>, String> {
@@ -24,7 +24,7 @@ pub(crate) async fn get_file_tags(
 }
 
 #[tauri::command]
-pub(crate) async fn add_tag_to_file(
+pub async fn add_tag_to_file(
     state: State<'_, AppState>,
     id: u64,
     tag: String,
@@ -35,7 +35,7 @@ pub(crate) async fn add_tag_to_file(
 }
 
 #[tauri::command]
-pub(crate) async fn remove_tag_from_file(
+pub async fn remove_tag_from_file(
     state: State<'_, AppState>,
     id: u64,
     tag: String,
@@ -46,7 +46,7 @@ pub(crate) async fn remove_tag_from_file(
 }
 
 #[tauri::command]
-pub(crate) async fn create_and_add_tag(
+pub async fn create_and_add_tag(
     state: State<'_, AppState>,
     id: u64,
     tag: String,
@@ -57,7 +57,7 @@ pub(crate) async fn create_and_add_tag(
 }
 
 #[tauri::command]
-pub(crate) async fn get_tag_summaries(
+pub async fn get_tag_summaries(
     state: State<'_, AppState>,
 ) -> Result<Vec<TagSummary>, String> {
     state
@@ -66,7 +66,7 @@ pub(crate) async fn get_tag_summaries(
 }
 
 #[tauri::command]
-pub(crate) async fn rename_tag(
+pub async fn rename_tag(
     state: State<'_, AppState>,
     from: String,
     to: String,
@@ -77,7 +77,7 @@ pub(crate) async fn rename_tag(
 }
 
 #[tauri::command]
-pub(crate) async fn merge_tag(
+pub async fn merge_tag(
     state: State<'_, AppState>,
     from: String,
     to: String,
@@ -88,7 +88,7 @@ pub(crate) async fn merge_tag(
 }
 
 #[tauri::command]
-pub(crate) async fn delete_tag(
+pub async fn delete_tag(
     state: State<'_, AppState>,
     tag: String,
 ) -> Result<Behaviour, String> {
@@ -98,7 +98,7 @@ pub(crate) async fn delete_tag(
 }
 
 #[tauri::command]
-pub(crate) async fn add_tag_to_files(
+pub async fn add_tag_to_files(
     state: State<'_, AppState>,
     ids: Vec<u64>,
     tag: String,
@@ -109,7 +109,7 @@ pub(crate) async fn add_tag_to_files(
 }
 
 #[tauri::command]
-pub(crate) async fn remove_tag_from_files(
+pub async fn remove_tag_from_files(
     state: State<'_, AppState>,
     ids: Vec<u64>,
     tag: String,
@@ -122,14 +122,14 @@ pub(crate) async fn remove_tag_from_files(
 // ── Artists ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub(crate) async fn get_all_artists(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+pub async fn get_all_artists(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     state
         .with_pack_or(vec![], async |pack| pack.get_all_artists().await)
         .await
 }
 
 #[tauri::command]
-pub(crate) async fn get_file_artists(
+pub async fn get_file_artists(
     state: State<'_, AppState>,
     id: u64,
 ) -> Result<Vec<String>, String> {
@@ -139,7 +139,7 @@ pub(crate) async fn get_file_artists(
 }
 
 #[tauri::command]
-pub(crate) async fn add_artist_to_file(
+pub async fn add_artist_to_file(
     state: State<'_, AppState>,
     id: u64,
     artist: String,
@@ -150,7 +150,7 @@ pub(crate) async fn add_artist_to_file(
 }
 
 #[tauri::command]
-pub(crate) async fn remove_artist_from_file(
+pub async fn remove_artist_from_file(
     state: State<'_, AppState>,
     id: u64,
     artist: String,
@@ -161,7 +161,7 @@ pub(crate) async fn remove_artist_from_file(
 }
 
 #[tauri::command]
-pub(crate) async fn create_and_add_artist(
+pub async fn create_and_add_artist(
     state: State<'_, AppState>,
     id: u64,
     artist: String,
@@ -174,7 +174,7 @@ pub(crate) async fn create_and_add_artist(
 }
 
 #[tauri::command]
-pub(crate) async fn get_artist_summaries(
+pub async fn get_artist_summaries(
     state: State<'_, AppState>,
 ) -> Result<Vec<ArtistSummary>, String> {
     state
@@ -183,7 +183,7 @@ pub(crate) async fn get_artist_summaries(
 }
 
 #[tauri::command]
-pub(crate) async fn rename_artist(
+pub async fn rename_artist(
     state: State<'_, AppState>,
     from: String,
     to: String,
@@ -194,7 +194,7 @@ pub(crate) async fn rename_artist(
 }
 
 #[tauri::command]
-pub(crate) async fn merge_artist(
+pub async fn merge_artist(
     state: State<'_, AppState>,
     from: String,
     to: String,
@@ -205,7 +205,7 @@ pub(crate) async fn merge_artist(
 }
 
 #[tauri::command]
-pub(crate) async fn delete_artist(
+pub async fn delete_artist(
     state: State<'_, AppState>,
     artist: String,
 ) -> Result<(), String> {
@@ -215,7 +215,7 @@ pub(crate) async fn delete_artist(
 }
 
 #[tauri::command]
-pub(crate) async fn add_artist_to_files(
+pub async fn add_artist_to_files(
     state: State<'_, AppState>,
     ids: Vec<u64>,
     artist: String,
@@ -226,7 +226,7 @@ pub(crate) async fn add_artist_to_files(
 }
 
 #[tauri::command]
-pub(crate) async fn remove_artist_from_files(
+pub async fn remove_artist_from_files(
     state: State<'_, AppState>,
     ids: Vec<u64>,
     artist: String,

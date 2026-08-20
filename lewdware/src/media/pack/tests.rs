@@ -1,7 +1,7 @@
 use std::io::Write as _;
 
 use ffmpeg_next as ffmpeg;
-use shared::read_pack::HEADER_SIZE;
+use shared::pack::HEADER_SIZE;
 
 use super::*;
 
@@ -16,8 +16,8 @@ fn deserializes_a_vacuumed_on_disk_file_copy_like_pack_editor_produces() {
     let db_path = db_path.to_path_buf();
 
     {
-        let conn = Connection::open(&db_path).unwrap();
-        migrate(&conn).unwrap();
+        let mut conn = Connection::open(&db_path).unwrap();
+        migrate(&mut conn).unwrap();
         conn.execute("INSERT INTO tags (name) VALUES ('from-disk')", [])
             .unwrap();
         // Mirrors `Pack::save`: VACUUM then treat the file as done, no explicit close/flush
@@ -44,8 +44,8 @@ fn deserializes_a_vacuumed_on_disk_file_copy_like_pack_editor_produces() {
 /// so `get_image_file` has something to extract. The `NamedTempFile` is returned because it
 /// owns the pack file the `MediaPack` reads from.
 fn pack_with_image_bytes(image: &[u8]) -> (NamedTempFile, MediaPack) {
-    let db = Connection::open_in_memory().unwrap();
-    migrate(&db).unwrap();
+    let mut db = Connection::open_in_memory().unwrap();
+    migrate(&mut db).unwrap();
     db.execute(
         "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash)
          VALUES ('pic.avif', 'image', 0, 0, 8, 8, 0, x'00')",
@@ -121,8 +121,8 @@ async fn an_extracted_image_file_only_exists_while_its_handle_does() {
 /// queryable database rather than just satisfying the type checker.
 #[test]
 fn open_reads_deserialized_index() {
-    let db = Connection::open_in_memory().unwrap();
-    migrate(&db).unwrap();
+    let mut db = Connection::open_in_memory().unwrap();
+    migrate(&mut db).unwrap();
 
     db.execute("INSERT INTO tags (name) VALUES ('test-tag')", [])
         .unwrap();
@@ -288,10 +288,10 @@ fn open_reads_deserialized_index() {
 /// ships in the same format batch.
 #[test]
 fn a_real_pack_file_yields_its_behaviour_and_the_recommended_mode_hint() {
-    use shared::read_pack::RecommendedMode;
+    use shared::pack::RecommendedMode;
 
-    let db = Connection::open_in_memory().unwrap();
-    migrate(&db).unwrap();
+    let mut db = Connection::open_in_memory().unwrap();
+    migrate(&mut db).unwrap();
 
     let db_bytes = db.serialize(MAIN_DB).unwrap();
 
@@ -337,8 +337,8 @@ fn get_video_data_opens_embedded_clip() {
 
     ffmpeg::init().unwrap();
 
-    let db = Connection::open_in_memory().unwrap();
-    migrate(&db).unwrap();
+    let mut db = Connection::open_in_memory().unwrap();
+    migrate(&mut db).unwrap();
     db.execute(
         "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, duration, hash)
          VALUES ('clip.mp4', 'video', 0, 0, 64, 48, 0, 1.0, x'00')",

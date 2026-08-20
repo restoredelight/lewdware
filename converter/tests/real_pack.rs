@@ -123,7 +123,7 @@ fn real_test_pack_converts_without_hard_error() {
         .expect("corruption.json should produce an experience section");
     assert_eq!(
         output.metadata.recommended_mode,
-        Some(shared::read_pack::RecommendedMode::Experience)
+        Some(shared::pack::RecommendedMode::Experience)
     );
     let timeline = &experience.timeline;
     assert_eq!(timeline.stages.len(), 5);

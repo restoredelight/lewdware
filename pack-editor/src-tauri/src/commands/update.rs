@@ -3,12 +3,12 @@
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-pub(crate) struct UpdateManifest {
-    pub(crate) version: String,
-    pub(crate) download_page: String,
+pub struct UpdateManifest {
+    pub version: String,
+    pub download_page: String,
 }
 
-pub(crate) fn parse_version(v: &str) -> (u32, u32, u32) {
+pub fn parse_version(v: &str) -> (u32, u32, u32) {
     let mut parts = v.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
     (
         parts.next().unwrap_or(0),
@@ -18,7 +18,7 @@ pub(crate) fn parse_version(v: &str) -> (u32, u32, u32) {
 }
 
 #[tauri::command]
-pub(crate) async fn check_for_update() -> Result<Option<String>, String> {
+pub async fn check_for_update() -> Result<Option<String>, String> {
     let current = env!("CARGO_PKG_VERSION");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))

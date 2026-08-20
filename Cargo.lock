@@ -3836,6 +3836,7 @@ name = "lewdware-config"
 version = "0.0.2"
 dependencies = [
  "anyhow",
+ "auto-launch",
  "base64 0.22.1",
  "dirs",
  "indexmap 2.14.0",
@@ -6733,7 +6734,6 @@ name = "shared"
 version = "0.0.2"
 dependencies = [
  "anyhow",
- "auto-launch",
  "blake3",
  "chrono",
  "ciborium",

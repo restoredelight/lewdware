@@ -15,7 +15,7 @@ pub mod theme;
 pub use opts::WindowOpts;
 pub use pool::WindowPool;
 pub use popup::{Popup, RenderOutcome};
-pub(crate) use redraw::RedrawRequester;
+pub use redraw::RedrawRequester;
 pub use state::WindowState;
 pub use target::RenderTarget;
 pub use theme::{AppearanceChoice, ChromeDefaults, Theme, ThemeChoice};

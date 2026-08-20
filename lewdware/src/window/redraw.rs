@@ -10,7 +10,7 @@ use crate::app::UserEvent;
 /// also posts a user event to wake winit; the rest are batched until `about_to_wait` drains them.
 /// Other platforms retain winit's normal `request_redraw` path.
 #[derive(Clone)]
-pub(crate) struct RedrawRequester {
+pub struct RedrawRequester {
     /// `None` only in tests, which have no window to notify.
     #[cfg(not(target_os = "windows"))]
     window: Option<Arc<Window>>,
@@ -22,7 +22,7 @@ pub(crate) struct RedrawRequester {
 }
 
 impl RedrawRequester {
-    pub(crate) fn new(
+    pub fn new(
         _window: Arc<Window>,
         _event_loop_proxy: EventLoopProxy<UserEvent>,
         _wakeup_pending: Arc<AtomicBool>,
@@ -38,7 +38,7 @@ impl RedrawRequester {
         }
     }
 
-    pub(crate) fn request_redraw(&self) {
+    pub fn request_redraw(&self) {
         self.redraw.store(true, Ordering::Release);
 
         #[cfg(target_os = "windows")]
@@ -61,7 +61,7 @@ impl RedrawRequester {
 
     /// A requester with nothing to notify, for tests that build window pieces headlessly.
     #[cfg(test)]
-    pub(crate) fn detached() -> Self {
+    pub fn detached() -> Self {
         Self {
             #[cfg(not(target_os = "windows"))]
             window: None,
@@ -73,7 +73,7 @@ impl RedrawRequester {
         }
     }
 
-    pub(crate) fn take_requested(&self) -> bool {
+    pub fn take_requested(&self) -> bool {
         self.redraw.swap(false, Ordering::AcqRel)
     }
 }

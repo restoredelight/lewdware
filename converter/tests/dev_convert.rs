@@ -17,7 +17,7 @@ use std::{
 };
 
 use rusqlite::Connection;
-use shared::read_pack::read_pack_metadata;
+use shared::pack::read_pack_metadata;
 
 fn tool_available(name: &str) -> bool {
     Command::new(name)

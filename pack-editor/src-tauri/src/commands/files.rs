@@ -7,14 +7,14 @@ use crate::pack::MediaFile;
 use crate::AppState;
 
 #[tauri::command]
-pub(crate) async fn get_files(state: State<'_, AppState>) -> Result<Vec<MediaFile>, String> {
+pub async fn get_files(state: State<'_, AppState>) -> Result<Vec<MediaFile>, String> {
     state
         .with_pack_or(vec![], async |pack| pack.get_files().await)
         .await
 }
 
 #[tauri::command]
-pub(crate) async fn remove_files(
+pub async fn remove_files(
     state: State<'_, AppState>,
     ids: Vec<u64>,
 ) -> Result<Option<Behaviour>, String> {
@@ -27,7 +27,7 @@ pub(crate) async fn remove_files(
 /// ids, so a rename cannot invalidate one — which is why this returns nothing where it once had
 /// to hand back a rewritten document (`design/behaviour-storage.md`, step 1).
 #[tauri::command]
-pub(crate) async fn set_file_title(
+pub async fn set_file_title(
     state: State<'_, AppState>,
     id: u64,
     name: String,
@@ -38,7 +38,7 @@ pub(crate) async fn set_file_title(
 }
 
 #[tauri::command]
-pub(crate) async fn set_file_source_url(
+pub async fn set_file_source_url(
     state: State<'_, AppState>,
     id: u64,
     url: Option<String>,

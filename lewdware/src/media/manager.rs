@@ -1,5 +1,5 @@
 use crate::app::{EventPoster, UserEvent};
-use shared::read_pack::Metadata;
+use shared::pack::Metadata;
 use std::{
     collections::HashMap,
     error::Error,

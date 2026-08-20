@@ -1,7 +1,7 @@
 //! Importing media, removing it, and undo/redo over those edits.
 
 use rusqlite::params;
-use shared::read_pack::Metadata;
+use shared::pack::Metadata;
 use tempfile::tempdir;
 
 use super::*;

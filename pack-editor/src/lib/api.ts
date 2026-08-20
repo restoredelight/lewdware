@@ -133,8 +133,5 @@ export const api = {
 	addPaths: (paths: string[]) => invoke<void>('add_paths', { paths }),
 	cancelUpload: () => invoke<void>('cancel_upload'),
 
-	getMediaServer: () => invoke<MediaServerInfo>('get_media_server'),
-
-	/** Diagnostic: forwards a media element's event into the backend's `media_trace` log. */
-	traceMediaEvent: (event: string) => invoke<void>('trace_media_event', { event })
+	getMediaServer: () => invoke<MediaServerInfo>('get_media_server')
 };

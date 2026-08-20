@@ -23,14 +23,14 @@ use shared::behaviour::{Behaviour, MediaSlot};
 use crate::pack::{AddOutcome, MediaFile};
 
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct UploadErrorPayload {
+pub struct UploadErrorPayload {
     path: String,
     file_name: String,
     error: String,
 }
 
 impl UploadErrorPayload {
-    pub(crate) fn new(path: &Path, error: impl Into<String>) -> Self {
+    pub fn new(path: &Path, error: impl Into<String>) -> Self {
         let file_name = path
             .file_name()
             .unwrap_or(path.as_os_str())
@@ -68,7 +68,7 @@ impl std::fmt::Display for ProcessErrorKind {
 }
 
 /// Resolves when the current import batch is cancelled; pends forever if it can't be.
-pub(crate) async fn wait_cancelled(cancel: &mut watch::Receiver<bool>) {
+pub async fn wait_cancelled(cancel: &mut watch::Receiver<bool>) {
     if cancel.wait_for(|cancelled| *cancelled).await.is_err() {
         std::future::pending::<()>().await;
     }
@@ -77,7 +77,7 @@ pub(crate) async fn wait_cancelled(cancel: &mut watch::Receiver<bool>) {
 /// Wraps a handle to work running outside this future (a rayon encode, a blocking extract).
 /// If the wrapping future is dropped before the work lands — the import was cancelled — the
 /// work itself can't be interrupted, so await it in a detached task and delete its output file.
-pub(crate) struct DiscardOnDrop<F: Future + Send + Unpin + 'static>
+pub struct DiscardOnDrop<F: Future + Send + Unpin + 'static>
 where
     F::Output: Send,
 {
@@ -90,7 +90,7 @@ impl<F: Future + Send + Unpin + 'static> DiscardOnDrop<F>
 where
     F::Output: Send,
 {
-    pub(crate) fn new(work: F, output: PathBuf, staging: Arc<TempDir>) -> Self {
+    pub fn new(work: F, output: PathBuf, staging: Arc<TempDir>) -> Self {
         Self {
             work: Some(work),
             output,
@@ -98,7 +98,7 @@ where
         }
     }
 
-    pub(crate) async fn finish(mut self) -> F::Output {
+    pub async fn finish(mut self) -> F::Output {
         let result = self.work.as_mut().expect("finish called once").await;
         self.work = None;
         result
@@ -124,7 +124,7 @@ where
 
 static ENCODE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
-pub(crate) fn encode_semaphore() -> &'static Semaphore {
+pub fn encode_semaphore() -> &'static Semaphore {
     ENCODE_SEMAPHORE.get_or_init(|| {
         let permits = available_parallelism()
             .map(|x| (x.get() / 4).max(2))

@@ -24,7 +24,7 @@ pub async fn get_monitors(state: State<'_>) -> Result<Vec<MonitorDto>, String> {
     };
 
     let mut command = tokio::process::Command::from(
-        shared::child::find_engine_binary()
+        shared::binaries::find_engine_binary()
             .ok_or_else(|| "could not find the lewdware-engine binary".to_string())?,
     );
     command
@@ -84,7 +84,7 @@ async fn run_engine_probe(
     what: &str,
 ) -> Result<Vec<u8>, String> {
     let mut command = tokio::process::Command::from(
-        shared::child::find_engine_binary()
+        shared::binaries::find_engine_binary()
             .ok_or_else(|| "could not find the lewdware-engine binary".to_string())?,
     );
     command

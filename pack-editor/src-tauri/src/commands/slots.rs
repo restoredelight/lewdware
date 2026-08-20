@@ -13,20 +13,20 @@ use crate::{encode, pack, AppState};
 /// the media grid can show it without waiting for a refresh. `added` distinguishes a fresh
 /// import from a file the pack already had (see `AddOutcome`), which the grid already knows about.
 #[derive(Serialize)]
-pub(crate) struct SlotFilled {
-    pub(crate) behaviour: Behaviour,
-    pub(crate) file: MediaFile,
-    pub(crate) added: bool,
+pub struct SlotFilled {
+    pub behaviour: Behaviour,
+    pub file: MediaFile,
+    pub added: bool,
     /// The file this replaced, when it was only ever this slot's scenery and left with the slot --
     /// the same rule and the same purpose as `SlotCleared::deleted_id`.
-    pub(crate) deleted_id: Option<u64>,
+    pub deleted_id: Option<u64>,
 }
 
 /// Picks one media file and puts it in `slot`. The picker is filtered to what the slot can
 /// actually use -- a wallpaper must be an image, a splash may also be a video -- since offering
 /// a file the feature would silently skip is the honesty problem `pack_has_*` exists to fix.
 #[tauri::command]
-pub(crate) async fn fill_media_slot_dialog(
+pub async fn fill_media_slot_dialog(
     state: State<'_, AppState>,
     app: AppHandle,
     slot: shared::behaviour::MediaSlot,
@@ -101,13 +101,13 @@ pub(crate) async fn fill_media_slot_dialog(
 /// What emptying a slot produced: the updated behaviour, and the file it deleted (if the file was
 /// only ever scenery -- see `MediaPack::clear_media_slot`) so the grid can drop it.
 #[derive(Serialize)]
-pub(crate) struct SlotCleared {
-    pub(crate) behaviour: Behaviour,
-    pub(crate) deleted_id: Option<u64>,
+pub struct SlotCleared {
+    pub behaviour: Behaviour,
+    pub deleted_id: Option<u64>,
 }
 
 #[tauri::command]
-pub(crate) async fn clear_media_slot(
+pub async fn clear_media_slot(
     state: State<'_, AppState>,
     slot: shared::behaviour::MediaSlot,
 ) -> Result<Option<SlotCleared>, String> {
@@ -126,7 +126,7 @@ pub(crate) async fn clear_media_slot(
 /// changes the file's pool membership: choosing an existing popup or background track explicitly
 /// must not silently remove it from the role the author already gave it.
 #[tauri::command]
-pub(crate) async fn set_media_slot(
+pub async fn set_media_slot(
     state: State<'_, AppState>,
     slot: shared::behaviour::MediaSlot,
     media_id: u64,
@@ -143,7 +143,7 @@ pub(crate) async fn set_media_slot(
 }
 
 #[tauri::command]
-pub(crate) async fn set_shown_as_popup(
+pub async fn set_shown_as_popup(
     state: State<'_, AppState>,
     id: u64,
     shown: bool,
@@ -154,7 +154,7 @@ pub(crate) async fn set_shown_as_popup(
 }
 
 #[tauri::command]
-pub(crate) async fn set_popup_audio(
+pub async fn set_popup_audio(
     state: State<'_, AppState>,
     ids: Vec<u64>,
     popup: bool,

@@ -10,7 +10,7 @@ pub struct ScheduleStatusDto {
     pub next_session: Option<String>,
 }
 
-pub fn schedule_status_from(info: &shared::ipc::StatusInfo) -> ScheduleStatusDto {
+pub fn schedule_status_from(info: &shared::ipc::control::StatusInfo) -> ScheduleStatusDto {
     ScheduleStatusDto {
         enabled: info.schedule.enabled,
         next_session: info.schedule.next_session.map(|t| t.to_rfc3339()),
@@ -19,8 +19,8 @@ pub fn schedule_status_from(info: &shared::ipc::StatusInfo) -> ScheduleStatusDto
 
 #[tauri::command]
 pub async fn get_schedule_status() -> ScheduleStatusDto {
-    match shared::ipc::request(&shared::ipc::Request::Status).await {
-        Ok(shared::ipc::Response::Status(info)) => schedule_status_from(&info),
+    match shared::ipc::control::request(&shared::ipc::control::Request::Status).await {
+        Ok(shared::ipc::control::Response::Status(info)) => schedule_status_from(&info),
         _ => ScheduleStatusDto {
             enabled: false,
             next_session: None,
@@ -37,9 +37,9 @@ pub async fn get_schedule_status() -> ScheduleStatusDto {
 #[tauri::command]
 pub async fn set_schedule_enabled(state: State<'_>, enabled: bool) -> Result<(), String> {
     let result = if enabled {
-        shared::autostart::enable()
+        crate::autostart::enable()
     } else {
-        shared::autostart::disable()
+        crate::autostart::disable()
     };
     result.map_err(|e| e.to_string())?;
 
@@ -51,9 +51,9 @@ pub async fn set_schedule_enabled(state: State<'_>, enabled: bool) -> Result<(),
     }
 
     if enabled {
-        let _ = shared::ipc::ensure_supervisor_running().await;
+        let _ = shared::ipc::control::ensure_supervisor_running().await;
     }
-    let _ = shared::ipc::request(&shared::ipc::Request::ReloadConfig).await;
+    let _ = shared::ipc::control::request(&shared::ipc::control::Request::ReloadConfig).await;
 
     Ok(())
 }
@@ -70,15 +70,15 @@ pub async fn reload_supervisor_schedule(state: State<'_>) -> Result<(), String> 
         return Ok(());
     }
 
-    shared::ipc::ensure_supervisor_running()
+    shared::ipc::control::ensure_supervisor_running()
         .await
         .map_err(|e| e.to_string())?;
 
-    match shared::ipc::request(&shared::ipc::Request::ReloadConfig)
+    match shared::ipc::control::request(&shared::ipc::control::Request::ReloadConfig)
         .await
         .map_err(|e| e.to_string())?
     {
-        shared::ipc::Response::Error { message } => Err(message),
+        shared::ipc::control::Response::Error { message } => Err(message),
         _ => Ok(()),
     }
 }

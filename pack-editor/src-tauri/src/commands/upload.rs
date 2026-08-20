@@ -8,7 +8,7 @@ use tauri::{AppHandle, State};
 use crate::{encode, AppState};
 
 #[tauri::command]
-pub(crate) async fn add_files_dialog(
+pub async fn add_files_dialog(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
@@ -55,7 +55,7 @@ pub(crate) async fn add_files_dialog(
 }
 
 #[tauri::command]
-pub(crate) async fn add_folder_dialog(
+pub async fn add_folder_dialog(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
@@ -103,7 +103,7 @@ pub(crate) async fn add_folder_dialog(
 }
 
 #[tauri::command]
-pub(crate) async fn add_paths(
+pub async fn add_paths(
     state: State<'_, AppState>,
     app: AppHandle,
     paths: Vec<PathBuf>,
@@ -148,7 +148,7 @@ pub(crate) async fn add_paths(
 }
 
 #[tauri::command]
-pub(crate) async fn cancel_upload(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn cancel_upload(state: State<'_, AppState>) -> Result<(), String> {
     state.cancel_uploads.send_replace(true);
     Ok(())
 }

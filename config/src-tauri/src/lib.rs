@@ -5,6 +5,7 @@ use shared::mode;
 use shared::user_config;
 use tauri::Manager;
 
+mod autostart;
 mod commands;
 mod dto;
 mod modes;
@@ -30,7 +31,7 @@ pub fn run() {
         .expect("failed to load embedded Experience mode")
         .1;
 
-    let _log_guard = shared::logging::init("config");
+    let _log_guard = shared::logging::init("config").expect("Couldn't start logs");
 
     let config = user_config::load_config().unwrap_or_default();
 

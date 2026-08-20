@@ -280,7 +280,7 @@ async fn lewdware_pack_reflects_pack_metadata_for_standalone_modes() {
 
             let pack_info = PackInfo {
                 id: pack_id,
-                metadata: shared::read_pack::Metadata {
+                metadata: shared::pack::Metadata {
                     name: "Test Pack".to_string(),
                     creator: Some("tester".to_string()),
                     description: None,

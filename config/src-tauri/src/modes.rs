@@ -16,7 +16,7 @@ use shared::{
     db::migrate,
     encode::FileType,
     mode::{self, ModeEntry, OptionValue, Permission, StoredValue},
-    read_pack::{read_pack_metadata, RecommendedMode},
+    pack::{read_pack_metadata, RecommendedMode},
     user_config::{self, AppConfig, Mode},
 };
 use tempfile::NamedTempFile;
@@ -27,7 +27,7 @@ use crate::dto::{
 };
 use crate::state::{AppState, LoadedPack, PackModeEntry, UploadedModeEntry};
 
-pub(crate) fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
+pub fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
     let mut file = std::fs::File::open(&path)?;
     let (header, metadata) = read_pack_metadata(&mut file)?;
 
@@ -38,8 +38,8 @@ pub(crate) fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
 
     let manager = SqliteConnectionManager::file(db_file.path());
     let pool = Pool::builder().build(manager)?;
-    let conn = pool.get()?;
-    migrate(&conn)?;
+    let mut conn = pool.get()?;
+    migrate(&mut conn)?;
 
     let mut stmt = conn.prepare("SELECT id, file FROM modes")?;
     let rows: Vec<(u64, Vec<u8>)> = stmt
@@ -84,7 +84,7 @@ pub(crate) fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
     })
 }
 
-pub(crate) fn parse_file_type(value: &str) -> Option<FileType> {
+pub fn parse_file_type(value: &str) -> Option<FileType> {
     match value {
         "image" => Some(FileType::Image),
         "video" => Some(FileType::Video),
@@ -93,7 +93,7 @@ pub(crate) fn parse_file_type(value: &str) -> Option<FileType> {
     }
 }
 
-pub(crate) fn load_mode_file(path: PathBuf) -> anyhow::Result<UploadedModeEntry> {
+pub fn load_mode_file(path: PathBuf) -> anyhow::Result<UploadedModeEntry> {
     let mut file = std::fs::File::open(&path)?;
     let (_, metadata) = mode::read_mode_metadata(&mut file)?;
     Ok(UploadedModeEntry { path, metadata })
@@ -101,7 +101,7 @@ pub(crate) fn load_mode_file(path: PathBuf) -> anyhow::Result<UploadedModeEntry>
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-pub(crate) fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
+pub fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
     let mut groups = Vec::new();
 
     if let Some(pack) = state.pack.lock().unwrap().as_ref() {
@@ -196,7 +196,7 @@ pub(crate) fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
     groups
 }
 
-pub(crate) fn builtin_mode_label(name: &str, recommended: bool) -> String {
+pub fn builtin_mode_label(name: &str, recommended: bool) -> String {
     if recommended {
         format!("{name} (recommended)")
     } else {
@@ -216,7 +216,7 @@ pub(crate) fn builtin_mode_label(name: &str, recommended: bool) -> String {
 /// and every caller that wants one generally wants the other. Also returns the pack-derived
 /// `pack_has_*` facts that drive `show_when` visibility -- a default mode reports every fact (all
 /// false with no pack loaded), custom modes get an empty map.
-pub(crate) fn effective_entries_for_mode(
+pub fn effective_entries_for_mode(
     mode: &Mode,
     state: &AppState,
 ) -> Option<EffectiveEntries> {
@@ -265,12 +265,12 @@ pub(crate) fn effective_entries_for_mode(
 }
 
 /// What [`effective_entries_for_mode`] resolves a mode to.
-pub(crate) struct EffectiveEntries {
-    pub(crate) entries: IndexMap<String, ModeEntry>,
+pub struct EffectiveEntries {
+    pub entries: IndexMap<String, ModeEntry>,
     /// The mode's unconditional permissions, off the same `Metadata` the entries came from.
-    pub(crate) needs_permissions: Vec<Permission>,
+    pub needs_permissions: Vec<Permission>,
     /// The pack-derived facts that drive `show_when` visibility; empty for a custom mode.
-    pub(crate) pack_has: IndexMap<String, OptionValue>,
+    pub pack_has: IndexMap<String, OptionValue>,
 }
 
 /// Resolves the values a mode's stored options should read from: `Mode::Experience` is scoped
@@ -278,7 +278,7 @@ pub(crate) struct EffectiveEntries {
 /// (`AppConfig::mode_options`) -- see `behaviour-design/default-mode.md`, Ownership. No pack
 /// loaded means no scope to read Experience options from, so it falls back to empty (schema
 /// defaults), the same as any other mode with nothing stored yet.
-pub(crate) fn stored_options_for(
+pub fn stored_options_for(
     mode: &Mode,
     config: &AppConfig,
     state: &AppState,
@@ -293,7 +293,7 @@ pub(crate) fn stored_options_for(
     }
 }
 
-pub(crate) fn get_mode_options_for(config: &AppConfig, state: &AppState) -> ModeOptionsDto {
+pub fn get_mode_options_for(config: &AppConfig, state: &AppState) -> ModeOptionsDto {
     let Some(EffectiveEntries {
         entries,
         needs_permissions,
@@ -350,7 +350,7 @@ pub(crate) fn get_mode_options_for(config: &AppConfig, state: &AppState) -> Mode
     }
 }
 
-pub(crate) fn save_to_disk(
+pub fn save_to_disk(
     config: &AppConfig,
     uploaded: &[UploadedModeEntry],
 ) -> anyhow::Result<()> {
@@ -369,7 +369,7 @@ pub(crate) fn save_to_disk(
 /// list. The frontend never learns about those writes (it holds a snapshot from page load), so
 /// taking them from the DTO reverted every mode option the user had set that session as soon as
 /// anything else was saved — changing the theme, the volume, or switching mode.
-pub(crate) fn apply_config_dto(current: &AppConfig, dto: ConfigDto) -> AppConfig {
+pub fn apply_config_dto(current: &AppConfig, dto: ConfigDto) -> AppConfig {
     AppConfig {
         mode_options: current.mode_options.clone(),
         experience_options: current.experience_options.clone(),

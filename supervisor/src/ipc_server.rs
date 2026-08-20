@@ -1,5 +1,6 @@
 use anyhow::Result;
-use shared::ipc::{self, Request, Response, StatusInfo, Stream, prelude::*};
+use shared::ipc::control::{Request, Response, StatusInfo, control_socket_name};
+use shared::ipc::{Stream, bind_listener, prelude::*};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use uuid::Uuid;
@@ -15,8 +16,8 @@ pub async fn run(
     status_rx: watch::Receiver<StatusInfo>,
     dev_log_rx: broadcast::Receiver<DevLog>,
 ) -> Result<()> {
-    let name = ipc::control_socket_name()?;
-    let listener = ipc::bind_listener(name)?;
+    let name = control_socket_name()?;
+    let listener = bind_listener(name)?;
 
     loop {
         let conn = match listener.accept().await {
@@ -53,7 +54,7 @@ async fn handle_connection(
     let req: Request = serde_json::from_str(line.trim_end())?;
 
     match &req {
-        Request::Subscribe => return stream_status(conn, status_rx).await,
+        Request::SubscribeStatus => return stream_status(conn, status_rx).await,
         Request::SubscribeDevLogs { stream_id } => {
             return stream_dev_logs(conn, dev_log_rx, *stream_id).await;
         }

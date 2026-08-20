@@ -142,8 +142,8 @@ fn write_pack(dir: &std::path::Path, behaviour: &Behaviour, media: &[(&str, &str
 
     let db_path = dir.join("index.db");
     {
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        migrate(&conn).unwrap();
+        let mut conn = rusqlite::Connection::open(&db_path).unwrap();
+        migrate(&mut conn).unwrap();
         for (name, file_type) in media {
             conn.execute(
                 "INSERT INTO media (file_name, file_type, offset, length, hash)
@@ -162,13 +162,13 @@ fn write_pack(dir: &std::path::Path, behaviour: &Behaviour, media: &[(&str, &str
     let db_bytes = std::fs::read(&db_path).unwrap();
 
     // `Metadata` in scope here is the *mode* one; the pack's is a different type.
-    let metadata = shared::read_pack::Metadata {
+    let metadata = shared::pack::Metadata {
         name: "Test pack".to_string(),
         ..Default::default()
     };
     let metadata_bytes = metadata.to_buf().unwrap();
-    let mut header = shared::read_pack::Header::new();
-    header.metadata_offset = shared::read_pack::HEADER_SIZE as u64;
+    let mut header = shared::pack::Header::new();
+    header.metadata_offset = shared::pack::HEADER_SIZE as u64;
     header.metadata_length = metadata_bytes.len() as u64;
     header.index_offset = header.metadata_offset + header.metadata_length;
     header.index_length = db_bytes.len() as u64;

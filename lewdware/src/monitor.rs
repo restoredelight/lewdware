@@ -43,15 +43,8 @@ impl IntoLua for Monitor {
 
 type Result<T, E = MonitorError> = std::result::Result<T, E>;
 
-/// The identity `AppConfig::disabled_monitors` is keyed on.
-///
-/// Used by both `Monitors::refresh` and `list_monitors`, so what the config app stores is exactly
-/// what gets compared here. Keeping these in one place is the point: they were previously derived
-/// in two processes on two different display backends, and never matched.
-///
-/// Wayland sessions can report no name at all. Falling back to geometry keeps such a monitor
-/// addressable -- matching on `name()` alone meant an unnamed monitor could never be disabled.
 fn monitor_id(monitor: &MonitorHandle) -> String {
+    // If a monitor is not given a name, compute an id from it's position and size
     monitor.name().unwrap_or_else(|| {
         let size = monitor.size();
         let position = monitor.position();
@@ -59,16 +52,7 @@ fn monitor_id(monitor: &MonitorHandle) -> String {
     })
 }
 
-/// Prints this process's view of the monitors as JSON, then exits. Driven by
-/// `shared::monitor::LIST_MONITORS_FLAG`.
-///
-/// The config app can't work these out for itself: it's a native Wayland app, while the engine
-/// forces winit onto XWayland, and the two disagree about both names and geometry (see
-/// `shared::monitor`). So it asks us, and stores whatever we say -- both sides go through
-/// `monitor_id`, so `disabled_monitors` compares equal in `refresh` by construction.
-///
-/// This deliberately builds the same event loop as `main`, forced X11 and all: a probe on a
-/// different backend would report different identities and reintroduce the bug it exists to fix.
+/// Prints this process's view of the monitors as JSON, then exits.
 pub fn list_monitors() -> anyhow::Result<()> {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
@@ -125,12 +109,6 @@ pub fn list_monitors() -> anyhow::Result<()> {
 
     Ok(())
 }
-
-// #[derive(PartialEq, Eq, Hash, Clone)]
-// enum MonitorId {
-//     Number(u32),
-//     String(String),
-// }
 
 impl Monitors {
     pub fn new(disabled: Vec<String>, regions: HashMap<String, MonitorRegion>) -> Self {
@@ -212,10 +190,6 @@ impl Monitors {
             let scale_factor = monitor.scale_factor();
             let size = monitor.size().to_logical(scale_factor);
 
-            // The region replaces the monitor from here on: every consumer of `Monitor` -- sizing,
-            // percentages, anchoring, random placement, clamping -- is measuring the area the user
-            // allowed, not the panel. Resolved per refresh rather than cached, since the monitor's
-            // own size can change under a running session.
             let region = self
                 .regions
                 .get(&config_id)

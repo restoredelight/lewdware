@@ -11,24 +11,26 @@ use crate::commands::schedule::{schedule_status_from, ScheduleStatusDto};
 
 #[tauri::command]
 pub async fn launch_lewdware() -> Result<(), String> {
-    shared::ipc::ensure_supervisor_running()
+    shared::ipc::control::ensure_supervisor_running()
         .await
         .map_err(|e| e.to_string())?;
 
-    match shared::ipc::request(&shared::ipc::Request::StartSession {
+    match shared::ipc::control::request(&shared::ipc::control::Request::StartSession {
         mode_path: None,
         dev: false,
+        dev_stream_id: None,
+        replace: false,
     })
     .await
     .map_err(|e| e.to_string())?
     {
-        shared::ipc::Response::Error { message } => Err(message),
+        shared::ipc::control::Response::Error { message } => Err(message),
         // `Busy` means a session is already running -- matches the old no-op-if-already-running
         // idempotency.
-        shared::ipc::Response::Ok
-        | shared::ipc::Response::Busy { .. }
-        | shared::ipc::Response::Status(_) => Ok(()),
-        shared::ipc::Response::DevLogReady | shared::ipc::Response::DevLog { .. } => {
+        shared::ipc::control::Response::Ok
+        | shared::ipc::control::Response::Busy { .. }
+        | shared::ipc::control::Response::Status(_) => Ok(()),
+        shared::ipc::control::Response::DevLogReady | shared::ipc::control::Response::DevLog { .. } => {
             Err("unexpected development log response while launching".to_string())
         }
     }
@@ -38,7 +40,7 @@ pub async fn launch_lewdware() -> Result<(), String> {
 pub async fn stop_lewdware() -> Result<(), String> {
     // Best-effort: if no supervisor is reachable, there's nothing running to stop either --
     // matches the old code's no-op-safe handling of a possibly-`None` tracked `Child`.
-    let _ = shared::ipc::request(&shared::ipc::Request::StopSession).await;
+    let _ = shared::ipc::control::request(&shared::ipc::control::Request::StopSession).await;
     Ok(())
 }
 
@@ -64,9 +66,9 @@ impl EngineStatusDto {
     }
 }
 
-pub fn engine_status_from(info: &shared::ipc::StatusInfo) -> EngineStatusDto {
+pub fn engine_status_from(info: &shared::ipc::control::StatusInfo) -> EngineStatusDto {
     let error = match &info.session {
-        shared::ipc::SessionState::GaveUp { last_error, .. } => last_error
+        shared::ipc::control::SessionState::GaveUp { last_error, .. } => last_error
             .clone()
             .or_else(|| Some("Crashed repeatedly and was not restarted".to_string())),
         _ => info.last_exit.as_ref().and_then(|exit| exit.error.clone()),
@@ -75,9 +77,9 @@ pub fn engine_status_from(info: &shared::ipc::StatusInfo) -> EngineStatusDto {
     EngineStatusDto {
         running: matches!(
             info.session,
-            shared::ipc::SessionState::Starting
-                | shared::ipc::SessionState::Running { .. }
-                | shared::ipc::SessionState::RestartPending { .. }
+            shared::ipc::control::SessionState::Starting
+                | shared::ipc::control::SessionState::Running { .. }
+                | shared::ipc::control::SessionState::RestartPending { .. }
         ),
         error,
         warning: info.warning.clone(),
@@ -86,8 +88,8 @@ pub fn engine_status_from(info: &shared::ipc::StatusInfo) -> EngineStatusDto {
 
 #[tauri::command]
 pub async fn lewdware_running() -> EngineStatusDto {
-    match shared::ipc::request(&shared::ipc::Request::Status).await {
-        Ok(shared::ipc::Response::Status(info)) => engine_status_from(&info),
+    match shared::ipc::control::request(&shared::ipc::control::Request::Status).await {
+        Ok(shared::ipc::control::Response::Status(info)) => engine_status_from(&info),
         _ => EngineStatusDto::stopped(),
     }
 }
@@ -105,7 +107,7 @@ pub struct SupervisorStatusDto {
 /// quietly — the connect attempt against a local socket is cheap.
 pub async fn forward_supervisor_status(app: tauri::AppHandle) {
     loop {
-        if let Ok(mut subscription) = shared::ipc::subscribe().await {
+        if let Ok(mut subscription) = shared::ipc::control::subscribe().await {
             while let Ok(info) = subscription.next().await {
                 let _ = app.emit(
                     "supervisor:status",
@@ -120,8 +122,8 @@ pub async fn forward_supervisor_status(app: tauri::AppHandle) {
         // supervisor predating `Subscribe` drops the stream while still answering one-shot
         // requests, so confirm with `Status` before reporting stopped. Against such a
         // supervisor this loop degrades into accurate 2s polling instead of lying.
-        let payload = match shared::ipc::request(&shared::ipc::Request::Status).await {
-            Ok(shared::ipc::Response::Status(info)) => SupervisorStatusDto {
+        let payload = match shared::ipc::control::request(&shared::ipc::control::Request::Status).await {
+            Ok(shared::ipc::control::Response::Status(info)) => SupervisorStatusDto {
                 engine: engine_status_from(&info),
                 schedule: schedule_status_from(&info),
             },

@@ -28,7 +28,7 @@ use rusqlite::{
     vtab::array::Array,
     OpenFlags, TransactionBehavior,
 };
-use shared::read_pack::{Header, Metadata, HEADER_SIZE};
+use shared::pack::{Header, Metadata, HEADER_SIZE};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},

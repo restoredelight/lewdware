@@ -7,7 +7,7 @@ use crate::pack::{BehaviourEdit, TagAction};
 use crate::AppState;
 
 #[tauri::command]
-pub(crate) async fn get_behaviour(state: State<'_, AppState>) -> Result<Behaviour, String> {
+pub async fn get_behaviour(state: State<'_, AppState>) -> Result<Behaviour, String> {
     state
         .with_pack(async |pack| pack.get_behaviour().await)
         .await
@@ -21,7 +21,7 @@ pub(crate) async fn get_behaviour(state: State<'_, AppState>) -> Result<Behaviou
 /// same author action, so that dropping a stage and dropping the wallpaper and the tag that
 /// existed only for it are one transaction and one undo entry. See [`MediaPack::edit_behaviour`].
 #[tauri::command]
-pub(crate) async fn edit_behaviour(
+pub async fn edit_behaviour(
     state: State<'_, AppState>,
     patches: Vec<Patch>,
     label: String,

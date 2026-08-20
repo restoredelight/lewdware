@@ -73,7 +73,7 @@ pub struct MediaServerInfo {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _log_guard = shared::logging::init("pack-editor");
+    let _log_guard = shared::logging::init("pack-editor").expect("Couldn't start logs");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -218,7 +218,6 @@ pub fn run() {
             upload::add_paths,
             upload::cancel_upload,
             server::get_media_server,
-            server::trace_media_event,
             update::check_for_update,
         ])
         .run(tauri::generate_context!())

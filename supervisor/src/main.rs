@@ -34,7 +34,8 @@ pub enum Command {
         dev: bool,
     },
     Restart {
-        mode_path: PathBuf,
+        #[arg(long)]
+        mode_path: Option<PathBuf>,
         #[arg(long)]
         dev: bool,
     },

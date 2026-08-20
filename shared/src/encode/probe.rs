@@ -183,7 +183,7 @@ fn stream_index(stream: &serde_json::Value, position: usize) -> u64 {
     stream_number(stream, "index").unwrap_or(position as u64)
 }
 
-pub(crate) fn parse_media_info(json: &serde_json::Value) -> Option<ProbedMedia> {
+pub fn parse_media_info(json: &serde_json::Value) -> Option<ProbedMedia> {
     let streams = json.get("streams")?.as_array()?;
     let indexed = || streams.iter().enumerate();
 

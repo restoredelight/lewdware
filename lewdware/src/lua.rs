@@ -158,7 +158,7 @@ impl Drop for LuaThreadHandle {
 /// `lewdware.pack` (see `start_lua_thread` for why pack-embedded modes don't get one).
 pub struct PackInfo {
     pub id: Uuid,
-    pub metadata: shared::read_pack::Metadata,
+    pub metadata: shared::pack::Metadata,
 }
 
 fn resolve_mode_config(
@@ -384,7 +384,7 @@ pub fn start_lua_thread<T: EventPoster>(
                 header.version_major, VERSION_MAJOR
             );
             tracing::warn!("{warning}");
-            crate::supervisor_link::report(shared::ipc::EngineToSupervisor::Warning {
+            crate::supervisor_link::report(shared::ipc::engine::EngineToSupervisor::Warning {
                 message: warning,
             });
         }
@@ -456,14 +456,14 @@ pub fn start_lua_thread<T: EventPoster>(
 
         // Everything needed to run the mode is in place; from here on a failure is a runtime
         // error rather than a reason the engine never started.
-        crate::supervisor_link::report(shared::ipc::EngineToSupervisor::Started);
+        crate::supervisor_link::report(shared::ipc::engine::EngineToSupervisor::Started);
 
         let runtime_clone = runtime.clone();
 
         local.spawn_local(async move {
             if let Err(err) = runtime_clone.run_entrypoint(entrypoint) {
                 tracing::error!("{err}");
-                crate::supervisor_link::report(shared::ipc::EngineToSupervisor::RuntimeError {
+                crate::supervisor_link::report(shared::ipc::engine::EngineToSupervisor::RuntimeError {
                     message: err.to_string(),
                 });
             }
@@ -479,7 +479,7 @@ pub fn start_lua_thread<T: EventPoster>(
             while let Some(event) = event_rx.recv().await {
                 if let Err(err) = runtime.handle_event(event) {
                     tracing::error!("{err}");
-                    crate::supervisor_link::report(shared::ipc::EngineToSupervisor::RuntimeError {
+                    crate::supervisor_link::report(shared::ipc::engine::EngineToSupervisor::RuntimeError {
                         message: err.to_string(),
                     });
                 }

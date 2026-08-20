@@ -19,7 +19,7 @@ pub struct EmbeddedMode {
     pub size: u64,
 }
 
-pub(crate) fn embedded_mode(id: u64, bytes: &[u8]) -> Result<EmbeddedMode, String> {
+pub fn embedded_mode(id: u64, bytes: &[u8]) -> Result<EmbeddedMode, String> {
     let (header, metadata) =
         mode::read_mode_metadata(Cursor::new(bytes)).map_err(|error| error.to_string())?;
     let option_count = metadata.all_options().len();
@@ -35,7 +35,7 @@ pub(crate) fn embedded_mode(id: u64, bytes: &[u8]) -> Result<EmbeddedMode, Strin
 }
 
 #[tauri::command]
-pub(crate) async fn get_modes(state: State<'_, AppState>) -> Result<Vec<EmbeddedMode>, String> {
+pub async fn get_modes(state: State<'_, AppState>) -> Result<Vec<EmbeddedMode>, String> {
     let lock = state.pack.lock().await;
     let Some(pack) = lock.as_ref() else {
         return Ok(vec![]);
@@ -49,7 +49,7 @@ pub(crate) async fn get_modes(state: State<'_, AppState>) -> Result<Vec<Embedded
 }
 
 #[tauri::command]
-pub(crate) async fn add_mode_dialog(
+pub async fn add_mode_dialog(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Option<EmbeddedMode>, String> {
@@ -97,7 +97,7 @@ pub(crate) async fn add_mode_dialog(
 }
 
 #[tauri::command]
-pub(crate) async fn remove_mode(state: State<'_, AppState>, id: u64) -> Result<(), String> {
+pub async fn remove_mode(state: State<'_, AppState>, id: u64) -> Result<(), String> {
     state
         .with_pack_or((), async |pack| pack.remove_mode(id).await)
         .await

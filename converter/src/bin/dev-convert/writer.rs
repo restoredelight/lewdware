@@ -16,7 +16,7 @@ use rusqlite::{Connection, params};
 use shared::{
     db::migrate,
     encode::{HardwareEncoder, encode_file, hash_file},
-    read_pack::Header,
+    pack::Header,
 };
 use uuid::Uuid;
 
@@ -37,8 +37,8 @@ pub fn write_pack(
 
     let work_dir = tempfile::tempdir()?;
     let db_path = work_dir.path().join("index.db");
-    let db = Connection::open(&db_path)?;
-    migrate(&db)?;
+    let mut db = Connection::open(&db_path)?;
+    migrate(&mut db)?;
 
     let mut used_names: HashSet<String> = HashSet::new();
     let mut used_hashes: HashSet<[u8; 32]> = HashSet::new();

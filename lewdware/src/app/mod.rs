@@ -168,7 +168,7 @@ impl LewdwareApp {
         })
     }
 
-    pub(crate) fn new_requirement(&mut self, media: MediaRequirement) -> Requirement {
+    pub fn new_requirement(&mut self, media: MediaRequirement) -> Requirement {
         let id = self.next_requirement_id;
         self.next_requirement_id += 1;
         Requirement {
@@ -177,7 +177,7 @@ impl LewdwareApp {
         }
     }
 
-    pub(crate) fn insert_pending_item(
+    pub fn insert_pending_item(
         &mut self,
         id: ItemId,
         opts: PendingItemOpts,
@@ -214,7 +214,7 @@ impl LewdwareApp {
         Ok(())
     }
 
-    pub(crate) fn remove_pending_item(&mut self, id: ItemId) -> Option<PendingItem> {
+    pub fn remove_pending_item(&mut self, id: ItemId) -> Option<PendingItem> {
         let ItemSlot::Pending(item) = self.items.remove(&id)? else {
             return None;
         };
@@ -224,7 +224,7 @@ impl LewdwareApp {
         Some(item)
     }
 
-    pub(crate) fn remove_item(&mut self, id: ItemId) {
+    pub fn remove_item(&mut self, id: ItemId) {
         let Some(item) = self.items.remove(&id) else {
             return;
         };

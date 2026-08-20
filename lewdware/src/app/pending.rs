@@ -12,7 +12,7 @@ use crate::{
     window::WindowOpts,
 };
 
-pub(crate) struct PendingItem {
+pub struct PendingItem {
     pub opts: PendingItemOpts,
     pub requirements: Vec<Requirement>,
 }
@@ -66,20 +66,20 @@ impl PendingItem {
     }
 }
 
-pub(crate) struct Requirement {
+pub struct Requirement {
     pub id: RequirementId,
     pub state: RequirementState,
 }
 
 /// Sized by [`ResolvedMedia`], which is deliberately unboxed — see its own note.
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum RequirementState {
+pub enum RequirementState {
     Pending(MediaRequirement),
     Resolved(ResolvedMedia),
 }
 
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum PendingItemOpts {
+pub enum PendingItemOpts {
     Image {
         window: PendingWindowOpts,
         image: RequirementId,
@@ -125,7 +125,7 @@ impl PendingItemOpts {
     }
 }
 
-pub(crate) struct PendingWindowOpts {
+pub struct PendingWindowOpts {
     pub window: WindowOpts,
     pub opacity: f32,
     pub title: Option<String>,
@@ -145,7 +145,7 @@ impl PendingWindowOpts {
     }
 }
 
-pub(crate) struct ResolvedRequirements(HashMap<RequirementId, ResolvedMedia>);
+pub struct ResolvedRequirements(HashMap<RequirementId, ResolvedMedia>);
 
 impl ResolvedRequirements {
     pub fn take_image(&mut self, id: RequirementId) -> Result<ImageData> {

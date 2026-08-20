@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use shared::read_pack::Metadata;
+use shared::pack::Metadata;
 use tauri::State;
 
 use crate::pack::MediaPack;
@@ -20,17 +20,17 @@ pub struct RecentPack {
     pub last_opened: u64,
 }
 
-pub(crate) fn editor_data_dir() -> Result<PathBuf, String> {
+pub fn editor_data_dir() -> Result<PathBuf, String> {
     dirs::data_dir()
         .map(|p| p.join("Lewdware Pack Editor"))
         .ok_or_else(|| "Couldn't find data dir".to_string())
 }
 
-pub(crate) fn recent_file() -> Result<PathBuf, String> {
+pub fn recent_file() -> Result<PathBuf, String> {
     Ok(editor_data_dir()?.join("recent-packs.json"))
 }
 
-pub(crate) fn load_recents() -> Vec<RecentPack> {
+pub fn load_recents() -> Vec<RecentPack> {
     recent_file()
         .ok()
         .and_then(|p| std::fs::read(p).ok())
@@ -38,7 +38,7 @@ pub(crate) fn load_recents() -> Vec<RecentPack> {
         .unwrap_or_default()
 }
 
-pub(crate) fn write_recents(recents: &[RecentPack]) -> Result<(), String> {
+pub fn write_recents(recents: &[RecentPack]) -> Result<(), String> {
     let path = recent_file()?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     let temp = path.with_extension("json.tmp");
@@ -50,7 +50,7 @@ pub(crate) fn write_recents(recents: &[RecentPack]) -> Result<(), String> {
     std::fs::rename(temp, path).map_err(|e| e.to_string())
 }
 
-pub(crate) fn remember_pack(path: &std::path::Path, name: String) -> Result<(), String> {
+pub fn remember_pack(path: &std::path::Path, name: String) -> Result<(), String> {
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let value = canonical.to_string_lossy().to_string();
     let mut recents = load_recents();
@@ -71,7 +71,7 @@ pub(crate) fn remember_pack(path: &std::path::Path, name: String) -> Result<(), 
     write_recents(&recents)
 }
 
-pub(crate) fn remember_draft(id: uuid::Uuid, name: String) -> Result<(), String> {
+pub fn remember_draft(id: uuid::Uuid, name: String) -> Result<(), String> {
     let id = id.to_string();
     let mut recents = load_recents();
     recents.retain(|r| r.draft_id.as_deref() != Some(&id));
@@ -91,7 +91,7 @@ pub(crate) fn remember_draft(id: uuid::Uuid, name: String) -> Result<(), String>
     write_recents(&recents)
 }
 
-pub(crate) fn forget_draft(id: uuid::Uuid) -> Result<(), String> {
+pub fn forget_draft(id: uuid::Uuid) -> Result<(), String> {
     let id = id.to_string();
     let mut recents = load_recents();
     recents.retain(|r| r.draft_id.as_deref() != Some(&id));
@@ -99,7 +99,7 @@ pub(crate) fn forget_draft(id: uuid::Uuid) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub(crate) fn get_recent_packs() -> Vec<RecentPack> {
+pub fn get_recent_packs() -> Vec<RecentPack> {
     let base = editor_data_dir().ok();
     let recents: Vec<_> = load_recents()
         .into_iter()
@@ -132,7 +132,7 @@ pub(crate) fn get_recent_packs() -> Vec<RecentPack> {
 }
 
 #[tauri::command]
-pub(crate) async fn remove_recent_pack(
+pub async fn remove_recent_pack(
     state: State<'_, AppState>,
     path: Option<String>,
     draft_id: Option<String>,

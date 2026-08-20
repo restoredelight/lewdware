@@ -592,7 +592,7 @@ pub struct StageEntry {
 }
 
 impl StageEntry {
-    pub(crate) fn is_default(&self) -> bool {
+    pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
 }

@@ -1,5 +1,6 @@
 use anyhow::Result;
-use shared::ipc::{self, EngineToSupervisor, Stream, prelude::*};
+use shared::ipc::engine::{EngineToSupervisor, engine_link_socket_name};
+use shared::ipc::{Stream, bind_listener, prelude::*};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -10,8 +11,8 @@ use crate::control::ControlMessage;
 /// episode it belongs to, and is then handed off to that episode's `session.rs` task -- this
 /// module's job stops at the handshake.
 pub async fn run(control_tx: mpsc::Sender<ControlMessage>) -> Result<()> {
-    let name = ipc::engine_link_socket_name()?;
-    let listener = ipc::bind_listener(name)?;
+    let name = engine_link_socket_name()?;
+    let listener = bind_listener(name)?;
 
     loop {
         let conn = match listener.accept().await {

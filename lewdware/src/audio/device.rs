@@ -27,7 +27,7 @@ static DEVICE_OPEN_MAX_US: AtomicU64 = AtomicU64::new(0);
 
 /// Note how long one output device open took, and summarise every
 /// [`DEVICE_OPEN_SUMMARY_EVERY`] of them.
-pub(crate) fn record_device_open(elapsed: Duration) {
+pub fn record_device_open(elapsed: Duration) {
     let micros = elapsed.as_micros() as u64;
 
     tracing::debug!(
@@ -108,7 +108,7 @@ fn output_device() -> Option<&'static cpal::Device> {
 
 /// Which device a sink ended up on, relative to what was asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SinkDevice {
+pub enum SinkDevice {
     /// The chosen device, or the system default where that is what was chosen.
     AsRequested,
     /// A device was named but could not be used, so the system default was opened instead.
@@ -116,7 +116,7 @@ pub(crate) enum SinkDevice {
 }
 
 /// Opens an output sink on the configured device, falling back to the default.
-pub(crate) fn open_sink() -> Result<(MixerDeviceSink, SinkDevice), rodio::DeviceSinkError> {
+pub fn open_sink() -> Result<(MixerDeviceSink, SinkDevice), rodio::DeviceSinkError> {
     let named = CONFIGURED_DEVICE.get().is_some_and(Option::is_some);
 
     let Some(device) = output_device() else {

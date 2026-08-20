@@ -42,8 +42,8 @@ pub(super) const FIXTURE_MEDIA: u64 = 1;
 pub(super) fn pack_fixture(with_image: bool) -> NamedTempFile {
     const IMAGE_BYTES: &[u8] = b"not a real avif, just needs to be some bytes";
 
-    let db = rusqlite::Connection::open_in_memory().unwrap();
-    shared::db::migrate(&db).unwrap();
+    let mut db = rusqlite::Connection::open_in_memory().unwrap();
+    shared::db::migrate(&mut db).unwrap();
 
     if with_image {
         db.execute(
@@ -61,14 +61,14 @@ pub(super) fn pack_fixture(with_image: bool) -> NamedTempFile {
         .unwrap();
     }
 
-    let metadata = shared::read_pack::Metadata {
+    let metadata = shared::pack::Metadata {
         name: "test-pack".to_string(),
         ..Default::default()
     };
     let metadata_bytes = metadata.to_buf().unwrap();
 
-    let mut header = shared::read_pack::Header::new();
-    header.metadata_offset = shared::read_pack::HEADER_SIZE as u64;
+    let mut header = shared::pack::Header::new();
+    header.metadata_offset = shared::pack::HEADER_SIZE as u64;
     header.metadata_length = metadata_bytes.len() as u64;
     header.index_offset = header.metadata_offset + header.metadata_length;
 
@@ -107,8 +107,8 @@ pub(super) fn pack_fixture(with_image: bool) -> NamedTempFile {
 pub(super) fn pack_fixture_with_tagged_video(tags: &[&str]) -> NamedTempFile {
     const VIDEO_BYTES: &[u8] = b"not a real webm, just needs to be some bytes";
 
-    let db = rusqlite::Connection::open_in_memory().unwrap();
-    shared::db::migrate(&db).unwrap();
+    let mut db = rusqlite::Connection::open_in_memory().unwrap();
+    shared::db::migrate(&mut db).unwrap();
 
     db.execute(
         "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, duration, audio, hash) \
@@ -127,14 +127,14 @@ pub(super) fn pack_fixture_with_tagged_video(tags: &[&str]) -> NamedTempFile {
         .unwrap();
     }
 
-    let metadata = shared::read_pack::Metadata {
+    let metadata = shared::pack::Metadata {
         name: "test-pack".to_string(),
         ..Default::default()
     };
     let metadata_bytes = metadata.to_buf().unwrap();
 
-    let mut header = shared::read_pack::Header::new();
-    header.metadata_offset = shared::read_pack::HEADER_SIZE as u64;
+    let mut header = shared::pack::Header::new();
+    header.metadata_offset = shared::pack::HEADER_SIZE as u64;
     header.metadata_length = metadata_bytes.len() as u64;
     header.index_offset = header.metadata_offset + header.metadata_length;
 
@@ -166,7 +166,7 @@ pub(super) fn pack_fixture_with_data(
     behaviour: Option<&Behaviour>,
 ) -> NamedTempFile {
     let mut db = rusqlite::Connection::open_in_memory().unwrap();
-    shared::db::migrate(&db).unwrap();
+    shared::db::migrate(&mut db).unwrap();
 
     let mut tag_ids: HashMap<&str, i64> = HashMap::new();
     for (index, (file_name, tags)) in media.iter().enumerate() {
@@ -207,14 +207,14 @@ pub(super) fn pack_fixture_with_data(
         tx.commit().unwrap();
     }
 
-    let metadata = shared::read_pack::Metadata {
+    let metadata = shared::pack::Metadata {
         name: "test-pack".to_string(),
         ..Default::default()
     };
     let metadata_bytes = metadata.to_buf().unwrap();
 
-    let mut header = shared::read_pack::Header::new();
-    header.metadata_offset = shared::read_pack::HEADER_SIZE as u64;
+    let mut header = shared::pack::Header::new();
+    header.metadata_offset = shared::pack::HEADER_SIZE as u64;
     header.metadata_length = metadata_bytes.len() as u64;
     header.index_offset = header.metadata_offset + header.metadata_length;
 

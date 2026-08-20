@@ -16,7 +16,7 @@ use rusqlite::{named_params, params, OptionalExtension, TransactionBehavior};
 use shared::{
     behaviour::{Behaviour, MediaSlot},
     encode::{EncodedFile, FileInfo, FileInfoParts},
-    read_pack::Metadata,
+    pack::Metadata,
     tags,
 };
 

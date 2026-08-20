@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use shared::ipc::{EngineLink, EngineToSupervisor, SupervisorToEngine};
+use shared::ipc::engine::{EngineLink, EngineToSupervisor, SupervisorToEngine};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -56,7 +56,7 @@ fn run(
     };
 
     rt.block_on(async move {
-        let EngineLink { recv, mut send } = match shared::ipc::connect_engine_link(&token).await {
+        let EngineLink { recv, mut send } = match shared::ipc::engine::connect_engine_link(&token).await {
             Ok(link) => link,
             Err(err) => {
                 tracing::warn!("failed to connect to the supervisor: {err}");

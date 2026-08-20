@@ -90,11 +90,11 @@ fn main() -> Result<()> {
 
     let stop_rx = supervisor_link::connect(control_token.clone());
     if dev_mode && dev_stream_id.is_some() {
-        shared::logging::set_record_sink(|record| {
-            supervisor_link::report(shared::ipc::EngineToSupervisor::Log { record });
+        shared::logging::set_log_handler(|record| {
+            supervisor_link::report(shared::ipc::engine::EngineToSupervisor::Log { record });
         });
     }
-    let _log_guard = shared::logging::init_with_session("lewdware", control_token);
+    let _log_guard = shared::logging::init_with_id("lewdware", control_token)?;
 
     // TODO: Move this to supervisor
     //

@@ -7,7 +7,7 @@ use std::{fs, io, thread};
 
 use clap::Args;
 use notify::{Event, EventKind, RecommendedWatcher, Watcher};
-use shared::ipc::{Request, Response};
+use shared::ipc::control::{DevLogSubscription, Request, Response};
 use shared::logging::LogRecord;
 use uuid::Uuid;
 
@@ -65,8 +65,8 @@ pub fn dev(_args: DevArgs) -> anyhow::Result<()> {
         .build()?;
 
     let dev_stream_id = Uuid::new_v4();
-    rt.block_on(shared::ipc::ensure_supervisor_running())?;
-    let log_subscription = rt.block_on(shared::ipc::subscribe_dev_logs(dev_stream_id))?;
+    rt.block_on(shared::ipc::control::ensure_supervisor_running())?;
+    let log_subscription = rt.block_on(shared::ipc::control::subscribe_dev_logs(dev_stream_id))?;
     spawn_dev_log_stream(log_subscription);
 
     rt.block_on(restart_session(&file.path, dev_stream_id))?;
@@ -100,12 +100,13 @@ pub fn dev(_args: DevArgs) -> anyhow::Result<()> {
 /// replacing whatever session it's currently supervising -- both the very first spawn and every
 /// rebuild go through this same call, since `RestartSession` is unconditional.
 async fn restart_session(mode_path: &Path, dev_stream_id: Uuid) -> anyhow::Result<()> {
-    shared::ipc::ensure_supervisor_running().await?;
+    shared::ipc::control::ensure_supervisor_running().await?;
 
-    match shared::ipc::request(&Request::RestartSession {
-        mode_path: mode_path.to_path_buf(),
+    match shared::ipc::control::request(&Request::StartSession {
+        mode_path: Some(mode_path.to_path_buf()),
         dev: true,
         dev_stream_id: Some(dev_stream_id),
+        replace: true,
     })
     .await?
     {
@@ -117,7 +118,7 @@ async fn restart_session(mode_path: &Path, dev_stream_id: Uuid) -> anyhow::Resul
 /// Renders the typed, session-scoped stream supplied by the supervisor. This thread owns a small
 /// runtime because the file watcher below deliberately remains blocking; neither side needs to
 /// poll a shared log file or interpret tracing's presentation format.
-fn spawn_dev_log_stream(mut subscription: shared::ipc::DevLogSubscription) {
+fn spawn_dev_log_stream(mut subscription: DevLogSubscription) {
     thread::spawn(move || {
         let use_ansi = std::io::stdout().is_terminal();
         let Ok(rt) = tokio::runtime::Builder::new_current_thread()
@@ -225,10 +226,10 @@ mod tests {
 
     fn record(level: LogLevel, message: &str) -> LogRecord {
         LogRecord {
-            schema: 1,
+            schema_version: 1,
             timestamp: Utc::now(),
             level,
-            component: "lewdware".into(),
+            program: "lewdware".into(),
             target: "lewdware::lua".into(),
             message: message.into(),
             file: None,

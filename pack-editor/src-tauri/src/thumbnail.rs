@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use anyhow::{bail, Result};
+use shared::utils::silence_command;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
 
@@ -26,12 +27,8 @@ pub async fn generate_preview(
 
     #[allow(unused_mut)]
     let mut std_cmd = std::process::Command::new(shared::encode::get_ffmpeg_path());
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        std_cmd.creation_flags(0x08000000);
-    }
     shared::utils::sanitize_child_env(&mut std_cmd);
+    silence_command(&mut std_cmd);
     let mut cmd = Command::from(std_cmd);
     cmd.args(["-y"]);
 

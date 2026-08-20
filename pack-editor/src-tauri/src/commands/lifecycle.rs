@@ -22,15 +22,15 @@ pub struct PackInfo {
 /// A picked-path-plus-converted-output result the frontend needs to both open the (still
 /// filling-in) pack and surface what the converter couldn't carry over.
 #[derive(Serialize)]
-pub(crate) struct ImportResult {
-    pub(crate) info: PackInfo,
-    pub(crate) warnings: Vec<converter::Warning>,
+pub struct ImportResult {
+    pub info: PackInfo,
+    pub warnings: Vec<converter::Warning>,
 }
 
 /// Replaces any filesystem-hostile character (Windows' reserved set is the strictest, so it's
 /// used uniformly) with `_`, for turning a converted pack's freeform `name` into a suggested
 /// `.lwpack` file name.
-pub(crate) fn sanitize_file_name(name: &str) -> String {
+pub fn sanitize_file_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
@@ -50,7 +50,7 @@ pub(crate) fn sanitize_file_name(name: &str) -> String {
 }
 
 #[tauri::command]
-pub(crate) async fn new_pack(state: State<'_, AppState>) -> Result<PackInfo, String> {
+pub async fn new_pack(state: State<'_, AppState>) -> Result<PackInfo, String> {
     let name = "Untitled Pack";
     let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
     let pack = MediaPack::new_unsaved(&data_dir, name)
@@ -68,7 +68,7 @@ pub(crate) async fn new_pack(state: State<'_, AppState>) -> Result<PackInfo, Str
 }
 
 #[tauri::command]
-pub(crate) async fn open_pack_dialog(
+pub async fn open_pack_dialog(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Option<PackInfo>, String> {
@@ -107,7 +107,7 @@ pub(crate) async fn open_pack_dialog(
 }
 
 #[tauri::command]
-pub(crate) async fn open_recent_pack(
+pub async fn open_recent_pack(
     state: State<'_, AppState>,
     path: Option<String>,
     draft_id: Option<String>,
@@ -140,7 +140,7 @@ pub(crate) async fn open_recent_pack(
 }
 
 #[tauri::command]
-pub(crate) async fn import_edgeware_pack_dialog(
+pub async fn import_edgeware_pack_dialog(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Option<ImportResult>, String> {
@@ -174,7 +174,7 @@ pub(crate) async fn import_edgeware_pack_dialog(
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
 
-    let shared::read_pack::Metadata { name, .. } = &output.metadata;
+    let shared::pack::Metadata { name, .. } = &output.metadata;
     let data_dir = dirs::data_dir().ok_or("Couldn't find data dir")?;
     let pack = MediaPack::new_unsaved(&data_dir, name)
         .await
@@ -242,7 +242,7 @@ pub(crate) async fn import_edgeware_pack_dialog(
 }
 
 #[tauri::command]
-pub(crate) async fn save_pack(
+pub async fn save_pack(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Option<PackInfo>, String> {
@@ -351,7 +351,7 @@ pub(crate) async fn save_pack(
 }
 
 #[tauri::command]
-pub(crate) async fn save_pack_as_dialog(
+pub async fn save_pack_as_dialog(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Option<PackInfo>, String> {
@@ -423,7 +423,7 @@ pub(crate) async fn save_pack_as_dialog(
 }
 
 #[tauri::command]
-pub(crate) async fn discard_changes(state: State<'_, AppState>) -> Result<MetadataDto, String> {
+pub async fn discard_changes(state: State<'_, AppState>) -> Result<MetadataDto, String> {
     state.cancel_uploads.send_replace(true);
     let _uploads = state.upload_lock.write().await;
     state
@@ -432,7 +432,7 @@ pub(crate) async fn discard_changes(state: State<'_, AppState>) -> Result<Metada
 }
 
 #[tauri::command]
-pub(crate) async fn close_pack(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn close_pack(state: State<'_, AppState>) -> Result<(), String> {
     state.cancel_uploads.send_replace(true);
     let _uploads = state.upload_lock.write().await;
     let pack = state.pack.lock().await.take();
@@ -455,7 +455,7 @@ pub(crate) async fn close_pack(state: State<'_, AppState>) -> Result<(), String>
 }
 
 #[tauri::command]
-pub(crate) async fn discard_pack(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn discard_pack(state: State<'_, AppState>) -> Result<(), String> {
     state.cancel_uploads.send_replace(true);
     let _uploads = state.upload_lock.write().await;
     let pack = state.pack.lock().await.take();
@@ -474,7 +474,7 @@ pub(crate) async fn discard_pack(state: State<'_, AppState>) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub(crate) async fn confirm_close(
+pub async fn confirm_close(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
@@ -484,14 +484,14 @@ pub(crate) async fn confirm_close(
 }
 
 #[tauri::command]
-pub(crate) async fn is_pack_saved(state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn is_pack_saved(state: State<'_, AppState>) -> Result<bool, String> {
     state
         .with_pack_or(true, async |pack| Ok(pack.is_saved().await))
         .await
 }
 
 #[tauri::command]
-pub(crate) async fn get_history_status(
+pub async fn get_history_status(
     state: State<'_, AppState>,
 ) -> Result<history::Status, String> {
     let none_open = history::Status {
@@ -507,11 +507,11 @@ pub(crate) async fn get_history_status(
 }
 
 #[tauri::command]
-pub(crate) async fn undo(state: State<'_, AppState>) -> Result<history::Status, String> {
+pub async fn undo(state: State<'_, AppState>) -> Result<history::Status, String> {
     state.with_pack(async |pack| pack.undo().await).await
 }
 
 #[tauri::command]
-pub(crate) async fn redo(state: State<'_, AppState>) -> Result<history::Status, String> {
+pub async fn redo(state: State<'_, AppState>) -> Result<history::Status, String> {
     state.with_pack(async |pack| pack.redo().await).await
 }

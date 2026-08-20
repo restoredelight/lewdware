@@ -1,65 +1,12 @@
 use anyhow::{Result, bail};
 use rusqlite::{OptionalExtension, params};
 
-pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
-    // A migration that rebuilds a table needs foreign-key enforcement disabled, but the schema and
-    // migration ledger still move atomically. Restoring the connection setting outside the
-    // transaction is important because SQLite ignores PRAGMA foreign_keys changes while a
-    // transaction is open.
+pub fn migrate(db: &mut rusqlite::Connection) -> Result<()> {
+    // Disable foreign key checking while doing migrations
     let foreign_keys: bool = db.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
     db.pragma_update(None, "foreign_keys", false)?;
-    let result = (|| -> Result<()> {
-        let tx = db.unchecked_transaction()?;
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS migrations (
-            migration_index INTEGER NOT NULL
-        )",
-            [],
-        )?;
 
-        let value = tx
-            .query_row("SELECT migration_index FROM migrations", [], |row| {
-                row.get("migration_index")
-            })
-            .optional()?;
-
-        let migration_index = value.unwrap_or(0);
-        if migration_index > MIGRATIONS.len() {
-            bail!(
-                "pack database schema {migration_index} is newer than supported schema {}",
-                MIGRATIONS.len()
-            );
-        }
-
-        tracing::info!("Migrating from {} to {}", migration_index, MIGRATIONS.len());
-
-        for migration in &MIGRATIONS[migration_index..] {
-            tx.execute_batch(migration)?;
-        }
-
-        tracing::info!("Executed migrations");
-
-        if value.is_none() {
-            tx.execute(
-                "INSERT INTO migrations (migration_index) VALUES (?)",
-                params![MIGRATIONS.len()],
-            )?;
-        } else {
-            tx.execute(
-                "UPDATE migrations SET migration_index = ?",
-                params![MIGRATIONS.len()],
-            )?;
-        }
-
-        let violation = tx
-            .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
-            .optional()?;
-        if violation.is_some() {
-            bail!("pack database migration produced a foreign-key violation");
-        }
-        tx.commit()?;
-        Ok(())
-    })();
+    let result = migrate_inner(db);
 
     let restore_result = db.pragma_update(None, "foreign_keys", foreign_keys);
     result?;
@@ -67,12 +14,62 @@ pub fn migrate(db: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-/// One migration, because nothing is released yet: a database is either current or absent, so
-/// there is no upgrade path worth carrying. The ledger stays a list so that the first real
-/// migration is an append rather than a rewrite of `migrate`.
-///
-/// Two files concatenated: the base schema below, and the behaviour tables that the pack editor's
-/// ledger includes from the same file (see `migrations/behaviour_schema.sql`).
+fn migrate_inner(db: &mut rusqlite::Connection) -> Result<()> {
+    let tx = db.transaction()?;
+    tx.execute(
+        "CREATE TABLE IF NOT EXISTS migrations (
+            migration_index INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
+    let value = tx
+        .query_row("SELECT migration_index FROM migrations", [], |row| {
+            row.get("migration_index")
+        })
+        .optional()?;
+
+    let migration_index = value.unwrap_or(0);
+    if migration_index > MIGRATIONS.len() {
+        bail!(
+            "pack database schema {migration_index} is newer than supported schema {}",
+            MIGRATIONS.len()
+        );
+    }
+
+    tracing::info!("Migrating from {} to {}", migration_index, MIGRATIONS.len());
+
+    for migration in &MIGRATIONS[migration_index..] {
+        tx.execute_batch(migration)?;
+    }
+
+    tracing::info!("Executed migrations");
+
+    if value.is_none() {
+        tx.execute(
+            "INSERT INTO migrations (migration_index) VALUES (?)",
+            params![MIGRATIONS.len()],
+        )?;
+    } else {
+        tx.execute(
+            "UPDATE migrations SET migration_index = ?",
+            params![MIGRATIONS.len()],
+        )?;
+    }
+
+    let violation = tx
+        .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+        .optional()?;
+
+    if violation.is_some() {
+        bail!("pack database migration produced a foreign-key violation");
+    }
+
+    tx.commit()?;
+
+    Ok(())
+}
+
 const MIGRATIONS: [&str; 1] = [concat!(
     include_str!("migrations/0001_init_schema.sql"),
     include_str!("migrations/behaviour_schema.sql"),
@@ -84,9 +81,9 @@ mod tests {
 
     #[test]
     fn migrate_creates_the_expected_schema() {
-        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
 
-        migrate(&db).unwrap();
+        migrate(&mut db).unwrap();
 
         let mut columns = db.prepare("PRAGMA table_info(media)").unwrap();
         let columns = columns
@@ -123,8 +120,8 @@ mod tests {
 
     #[test]
     fn migrating_an_already_current_database_leaves_its_rows_alone() {
-        let db = rusqlite::Connection::open_in_memory().unwrap();
-        migrate(&db).unwrap();
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        migrate(&mut db).unwrap();
 
         db.execute(
             "INSERT INTO media (file_name, file_type, offset, length, hash)
@@ -137,7 +134,7 @@ mod tests {
         db.execute("INSERT INTO media_tags VALUES (1, 1)", [])
             .unwrap();
 
-        migrate(&db).unwrap();
+        migrate(&mut db).unwrap();
 
         assert_eq!(
             db.query_row("SELECT COUNT(*) FROM media_tags", [], |row| row

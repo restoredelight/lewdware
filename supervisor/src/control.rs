@@ -2,10 +2,12 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local, Utc};
-use shared::ipc::{
-    EngineToSupervisor, ExitClassification, ExitInfo, RecvHalf, Request, Response, ScheduleStatus,
-    SendHalf, SessionKind, SessionState, SessionSummary, StatusInfo,
+use shared::ipc::control::{
+    ExitClassification, ExitInfo, Request, Response, ScheduleStatus, SessionKind, SessionState,
+    SessionSummary, StatusInfo,
 };
+use shared::ipc::engine::EngineToSupervisor;
+use shared::ipc::{RecvHalf, SendHalf};
 use shared::schedule::{Boundary, BoundaryKind};
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
@@ -99,7 +101,7 @@ struct Episode {
     warning: Option<String>,
     last_runtime_error: Option<String>,
     last_exit: Option<ExitInfo>,
-    pending_restart: Option<(PathBuf, bool, Option<Uuid>)>,
+    pending_restart: Option<(Option<PathBuf>, bool, Option<Uuid>)>,
     dev_stream_id: Option<Uuid>,
     intent: Intent,
 }
@@ -240,33 +242,35 @@ impl Control {
             Request::Status => Response::Status(self.status_info()),
             // Handled by the IPC server itself (it owns the connection); reaching here means a
             // buggy client sent it as a one-shot request.
-            Request::Subscribe => Response::Error {
+            Request::SubscribeStatus => Response::Error {
                 message: "Subscribe is a streaming request".to_string(),
             },
             Request::SubscribeDevLogs { .. } => Response::Error {
                 message: "SubscribeDevLogs is a streaming request".to_string(),
             },
-            Request::StartSession { mode_path, dev } => {
-                if let Some(episode) = self.episode.as_ref().filter(|e| e.is_active()) {
-                    return Response::Busy {
-                        current: episode.summary(),
-                    };
-                }
-                self.spawn_episode(SessionKind::Manual, mode_path, dev, None, 0)
-                    .await
-            }
-            Request::RestartSession {
+            Request::StartSession {
                 mode_path,
                 dev,
                 dev_stream_id,
+                replace,
             } => {
                 if let Some(episode) = self.episode.as_mut().filter(|e| e.is_active()) {
+                    if !replace {
+                        return Response::Busy {
+                            current: episode.summary(),
+                        };
+                    }
                     episode.intent = Intent::Stopping;
                     episode.pending_restart = Some((mode_path, dev, dev_stream_id));
                     let _ = episode.to_session.send(SessionCommand::Terminate).await;
                     Response::Ok
                 } else {
-                    self.spawn_episode(SessionKind::Dev, Some(mode_path), dev, dev_stream_id, 0)
+                    let kind = if dev {
+                        SessionKind::Dev
+                    } else {
+                        SessionKind::Manual
+                    };
+                    self.spawn_episode(kind, mode_path, dev, dev_stream_id, 0)
                         .await
                 }
             }
@@ -405,7 +409,8 @@ impl Control {
         });
 
         if let Some((mode_path, dev, dev_stream_id)) = episode.pending_restart.take() {
-            self.spawn_episode(episode.kind, Some(mode_path), dev, dev_stream_id, 0)
+            let kind = if dev { SessionKind::Dev } else { episode.kind };
+            self.spawn_episode(kind, mode_path, dev, dev_stream_id, 0)
                 .await;
             return;
         }

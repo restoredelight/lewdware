@@ -1,25 +1,20 @@
-//! Pure schedule vocabulary + calculation (`design/scheduling.md`). No I/O, no clock-reading side
-//! effects beyond the `now: DateTime<Local>` callers pass in -- keeps this unit-testable without
-//! faking the system clock, and lets `supervisor::schedule::ScheduleEngine` own the only stateful
-//! part (the per-window jitter-roll cache).
+//! Scheduling utils
 
 use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, Local, LocalResult, NaiveDate, TimeZone,
 };
 use serde::{Deserialize, Serialize};
 
-/// `days[0]` = Monday .. `days[6]` = Sunday (`chrono::Weekday::num_days_from_monday()`).
+/// Monday..Sunday
 pub type Days = [bool; 7];
 
-/// How far ahead boundary search looks, and how far back an in-progress (e.g. overnight)
-/// occurrence is still considered "current" -- both plain day counts, not `chrono::Duration`
-/// consts, since `Duration::days` isn't a `const fn` on the version in use here.
+/// The supervisor looks for days through [today - LOOKBACK_DAYS, today + HORIZON_DAYS].
+///
+/// This ensures that we're always aware of active sessions/quiet hours, and that we
+/// are always aware of when the next session is.
 pub const HORIZON_DAYS: i64 = 8;
 pub const LOOKBACK_DAYS: i64 = 1;
 
-/// `enabled` is the single on/off switch for scheduling -- toggling it also drives OS
-/// autostart-at-login registration one-to-one (see `config/src-tauri/src/lib.rs`'s
-/// `set_schedule_enabled`), so there's no separate `autostart` flag to fall out of sync with it.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct ScheduleConfig {
     pub enabled: bool,

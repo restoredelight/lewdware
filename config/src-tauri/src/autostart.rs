@@ -6,7 +6,7 @@
 use anyhow::{Context, Result, anyhow};
 use auto_launch::{AutoLaunchBuilder, MacOSLaunchMode};
 
-use crate::child::find_supervisor_binary_path;
+use shared::binaries::find_supervisor_binary_path;
 
 fn auto_launch() -> Result<auto_launch::AutoLaunch> {
     let path = find_supervisor_binary_path().ok_or_else(|| {
@@ -33,6 +33,7 @@ pub fn disable() -> Result<()> {
         .context("failed to deregister autostart")
 }
 
+#[allow(dead_code)]
 pub fn is_enabled() -> Result<bool> {
     auto_launch()?
         .is_enabled()

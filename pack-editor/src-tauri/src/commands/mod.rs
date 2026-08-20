@@ -1,20 +1,20 @@
 //! Every `#[tauri::command]` the frontend can invoke, grouped by the part of the editor it
 //! serves. `lib.rs` names them by path in `generate_handler!`.
 
-pub(crate) mod behaviour;
-pub(crate) mod files;
-pub(crate) mod labels;
-pub(crate) mod lifecycle;
-pub(crate) mod metadata;
-pub(crate) mod modes;
-pub(crate) mod recents;
-pub(crate) mod server;
-pub(crate) mod slots;
-pub(crate) mod update;
-pub(crate) mod upload;
+pub mod behaviour;
+pub mod files;
+pub mod labels;
+pub mod lifecycle;
+pub mod metadata;
+pub mod modes;
+pub mod recents;
+pub mod server;
+pub mod slots;
+pub mod update;
+pub mod upload;
 
 use serde::{Deserialize, Serialize};
-use shared::read_pack::{Metadata, RecommendedMode};
+use shared::pack::{Metadata, RecommendedMode};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MetadataDto {

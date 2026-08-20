@@ -9,7 +9,7 @@ use image::{ImageFormat, ImageReader};
 use rusqlite::{Connection, MAIN_DB, Row, params, params_from_iter};
 use shared::{
     db::migrate,
-    read_pack::{Header, Metadata, read_pack_metadata},
+    pack::{Header, Metadata, read_pack_metadata},
 };
 use tempfile::NamedTempFile;
 use tokio::{
@@ -74,7 +74,7 @@ impl MediaPack {
         let mut connection = Connection::open_in_memory()?;
         connection.deserialize_read_exact(MAIN_DB, db_data.as_slice(), db_data.len(), false)?;
 
-        migrate(&connection)?;
+        migrate(&mut connection)?;
 
         let mut tag_map: HashMap<String, u64> = HashMap::new();
 

@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use shared::ipc::{EngineToSupervisor, RecvHalf, SendHalf, SupervisorToEngine};
+use shared::ipc::engine::{EngineToSupervisor, SupervisorToEngine};
+use shared::ipc::{RecvHalf, SendHalf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;

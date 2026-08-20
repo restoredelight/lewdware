@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 use shared::behaviour::{Behaviour, Content, MediaSlot};
-use shared::read_pack::{Metadata, RecommendedMode};
+use shared::pack::{Metadata, RecommendedMode};
 
 use crate::model::Warning;
 use crate::parse::{self, InfoJson};
