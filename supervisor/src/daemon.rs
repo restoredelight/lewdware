@@ -40,34 +40,42 @@ fn run_linux(config: AppConfig) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let (control_tx, control_rx) = mpsc::channel::<ControlMessage>(64);
-        crate::tray::create_tray_icon(control_tx.clone())?;
-        run_services(control_tx, control_rx, config).await;
+        // No icon is created here: the tray task starts empty and only shows one once `Control`
+        // publishes a state that warrants it.
+        let tray = crate::tray::spawn(control_tx.clone());
+        run_services(control_tx, control_rx, config, tray).await;
         Ok(())
     })
 }
 
+/// The tray must live on the thread running the OS event loop, so on these platforms the main
+/// thread belongs to `tao` and the services run beside it.
 #[cfg(not(target_os = "linux"))]
 fn run_non_linux(config: AppConfig) -> Result<()> {
+    use tao::event_loop::EventLoopBuilder;
+
     let rt = tokio::runtime::Runtime::new()?;
     let (control_tx, control_rx) = mpsc::channel::<ControlMessage>(64);
 
-    let tray_tx = control_tx.clone();
+    let event_loop = EventLoopBuilder::<crate::tray::TrayView>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+
+    let tray_control_tx = control_tx.clone();
+    let loop_control_tx = control_tx.clone();
+    let tray = rt.block_on(async { crate::tray::spawn(tray_control_tx, proxy) });
+
     std::thread::spawn(move || {
-        rt.block_on(run_services(control_tx, control_rx, config));
+        rt.block_on(run_services(control_tx, control_rx, config, tray));
     });
 
-    crate::tray::create_tray_icon(tray_tx)?;
-
-    let event_loop = tao::event_loop::EventLoop::new();
-    event_loop.run(move |_event, _target, control_flow| {
-        *control_flow = tao::event_loop::ControlFlow::Wait;
-    });
+    crate::tray::run_event_loop(event_loop, loop_control_tx)
 }
 
 async fn run_services(
     control_tx: mpsc::Sender<ControlMessage>,
     control_rx: mpsc::Receiver<ControlMessage>,
     config: AppConfig,
+    tray: crate::tray::TrayUpdater,
 ) {
     crate::panic_key::spawn_panic_thread(control_tx.clone(), config.panic_button);
 
@@ -112,7 +120,7 @@ async fn run_services(
         });
     }
 
-    Control::new(control_tx, config.schedule, status_tx, dev_log_tx)
+    Control::new(control_tx, config.schedule, status_tx, dev_log_tx, tray)
         .run(control_rx)
         .await;
 }

@@ -15,6 +15,26 @@ pub struct PickPackResult {
     pub first_mode: Option<ModeIdDto>,
 }
 
+/// Opens the pack picker and returns the chosen path, without loading the pack or touching the
+/// app's own pack/mode selection.
+///
+/// Deliberately not `pick_pack`: that one *is* "the user changed their pack" -- it loads the file,
+/// preselects a mode and writes both to the config. A per-rule schedule override names a pack for
+/// the supervisor to hand the engine later; this app never loads it.
+#[tauri::command]
+pub async fn pick_pack_path(app_handle: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let path = app_handle
+        .dialog()
+        .file()
+        .add_filter("Pack", &["lwpack"])
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok());
+
+    Ok(path.map(|p| p.to_string_lossy().into_owned()))
+}
+
 #[tauri::command]
 pub async fn pick_pack(
     app_handle: AppHandle,

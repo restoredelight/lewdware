@@ -76,6 +76,20 @@ pub async fn set_schedule_enabled(state: State<'_>, enabled: bool) -> Result<(),
     Ok(())
 }
 
+/// Ends a running pause (a panic cooldown, or one set from the tray) early. Best-effort by
+/// design: no resident supervisor means nothing is paused, so there is nothing to end -- and
+/// starting one just to tell it that would be absurd.
+#[tauri::command]
+pub async fn resume_schedule() -> Result<(), String> {
+    match shared::ipc::control::request(&shared::ipc::control::Request::ResumeSchedule)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        shared::ipc::control::Response::Error { message } => Err(message),
+        _ => Ok(()),
+    }
+}
+
 /// Pings an already-saved schedule *content* change (windows/quiet-hours/grace-notification, not
 /// `enabled` itself -- see `set_schedule_enabled`) through to a resident supervisor, if the
 /// schedule is enabled (starting one on demand otherwise would just spawn a supervisor for

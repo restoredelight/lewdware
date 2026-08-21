@@ -76,6 +76,13 @@ pub fn find_engine_binary() -> Option<Command> {
     find_binary(bin_name, "lewdware")
 }
 
+/// The config app -- what the tray's "Open Lewdware" launches. Its `[[bin]]` is plainly
+/// `lewdware`, unlike the engine and supervisor which carry suffixed names.
+pub fn find_config_binary() -> Option<Command> {
+    let bin_name = if cfg!(windows) { "lewdware.exe" } else { "lewdware" };
+    find_binary(bin_name, "lewdware-config")
+}
+
 pub fn find_supervisor_binary() -> Option<Command> {
     find_binary(supervisor_bin_name(), "supervisor")
 }

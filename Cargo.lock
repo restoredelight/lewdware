@@ -1461,8 +1461,8 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "pulseaudio",
  "web-sys",
- "windows 0.61.3",
- "windows-core 0.61.2",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -3851,6 +3851,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
  "tempfile",
  "tokio",
  "tracing",
@@ -3898,13 +3899,18 @@ name = "lewdware-supervisor"
 version = "0.0.2"
 dependencies = [
  "anyhow",
+ "block2 0.6.2",
  "chrono",
  "clap",
  "dirs",
+ "futures-util",
  "image",
  "ksni",
  "nix",
  "notify-rust",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "pollster 1.0.1",
  "rand 0.10.2",
  "rdev",
@@ -3917,6 +3923,7 @@ dependencies = [
  "tray-icon",
  "uuid",
  "windows 0.62.2",
+ "zbus",
 ]
 
 [[package]]
@@ -7630,6 +7637,22 @@ dependencies = [
  "thiserror 2.0.18",
  "webview2-com",
  "windows 0.61.3",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3214becf9ef5783c0ae99a3bb25adf5353a7a16ebf53e74b909e29205735c6c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "windows-sys 0.60.2",
+ "zbus",
 ]
 
 [[package]]

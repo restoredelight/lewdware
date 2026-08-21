@@ -63,6 +63,9 @@ export const api = {
 	pickPack: (onSelected?: () => void) =>
 		invokeAfterSelection<PickPackResult | null>('pick_pack', 'picker:pack-selected', onSelected),
 
+	/// Just a file path: the per-rule schedule override names a pack, it does not load one.
+	pickPackPath: () => invoke<string | null>('pick_pack_path'),
+
 	removePack: () => invoke<void>('remove_pack'),
 
 	uploadMode: (onSelected?: () => void) =>
@@ -85,6 +88,9 @@ export const api = {
 	setScheduleEnabled: (enabled: boolean) => invoke<void>('set_schedule_enabled', { enabled }),
 
 	reloadSupervisorSchedule: () => invoke<void>('reload_supervisor_schedule'),
+
+	/// Ends a running pause early -- the counterpart to the tray's "Resume schedule".
+	resumeSchedule: () => invoke<void>('resume_schedule'),
 
 	openLogs: () => invoke<void>('open_logs'),
 

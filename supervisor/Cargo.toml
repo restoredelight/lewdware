@@ -24,6 +24,8 @@ uuid = { version = "1.18.1", features = ["serde"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = "0.3.6"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+futures-util = { version = "0.3", default-features = false }
 pollster = "1.0.1"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
@@ -32,7 +34,32 @@ tao = "0.35"
 tray-icon = "0.24.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = ["Win32_System_Threading"] }
+# `Graphics_Gdi` is not for drawing: `WNDCLASSW` names an `HBRUSH`, so the presence backend's
+# message-only window cannot be registered without it.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Power",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.3"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "NSDate",
+    "NSDistributedNotificationCenter",
+    "NSNotification",
+    "NSOperation",
+    "NSRunLoop",
+    "NSString",
+] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31.3", features = ["signal"] }

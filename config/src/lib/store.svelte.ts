@@ -365,6 +365,14 @@ class AppStore {
 		this.config = { ...this.config, schedule: { ...this.config.schedule, enabled } };
 	}
 
+	// Ends a running pause early. Refreshes the status rather than optimistically clearing it: the
+	// supervisor owns the cooldown, so the only honest source for "am I still paused" is the
+	// supervisor's own answer.
+	async resumeSchedule() {
+		await api.resumeSchedule();
+		await this.refreshSupervisorStatus();
+	}
+
 	setGraceNotification(enabled: boolean) {
 		if (!this.config) return;
 		this.config = {

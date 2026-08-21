@@ -35,6 +35,13 @@ pub enum Request {
     },
     StopSession,
     Panic,
+    /// Ends a running pause -- a panic cooldown, or one set from the tray -- early.
+    ///
+    /// The pause lives on the schedule engine rather than in `config.json`, so it survives a
+    /// config edit and even toggling scheduling off and on. That makes an explicit way to end it
+    /// necessary rather than a convenience: without one, the only route is the tray, and on a
+    /// desktop with no system tray (stock GNOME) there would be no route at all.
+    ResumeSchedule,
     /// Re-reads `config.json` from disk and feeds the new `schedule` section to the schedule
     /// engine -- how a config-app edit reaches an already-resident supervisor (`design/
     /// scheduling.md`'s schedule vocabulary).

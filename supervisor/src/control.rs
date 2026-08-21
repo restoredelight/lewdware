@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use chrono::{Local, Utc};
+use chrono::{Duration as ChronoDuration, Local, Utc};
 use shared::ipc::control::{
     ExitClassification, ExitInfo, Request, Response, ScheduleStatus, SessionKind, SessionState,
     SessionSummary, StatusInfo,
@@ -13,7 +13,9 @@ use uuid::Uuid;
 
 use crate::schedule::{StartRequest, StopReason};
 use crate::session::{self, SessionCommand, SessionExit};
+use crate::tray::{TrayAction, TrayContents, TrayItem, TrayUpdater, TrayView};
 use crate::{backoff, engine, schedule, wallpaper};
+use shared::schedule::SessionOverrides;
 
 /// Lead time for the grace notification before a scheduled start (`design/scheduling.md`: "a few
 /// seconds' desktop notification ... with a cancel action").
@@ -35,7 +37,11 @@ pub enum ControlMessage {
         respond_to: oneshot::Sender<Response>,
     },
     PanicKeyPressed,
-    TrayPanicClicked,
+    /// A tray menu item was clicked. One variant for every item, rather than v1's single
+    /// "panic was clicked" -- see `tray.rs` on why the id lookup matters.
+    TrayAction {
+        action: TrayAction,
+    },
     SessionExited {
         seq: u64,
         exit: SessionExit,
@@ -90,12 +96,42 @@ enum Phase {
     GaveUp,
 }
 
+/// Everything one spawn needs. A struct rather than a row of positional parameters: most call
+/// sites care about two of these fields and inherit the rest, which reads far better as
+/// `..Default::default()` than as five `None`s in a row.
+struct SpawnSpec {
+    kind: SessionKind,
+    mode_path: Option<PathBuf>,
+    dev: bool,
+    dev_stream_id: Option<Uuid>,
+    attempts: u32,
+    rule_id: Option<Uuid>,
+    overrides: SessionOverrides,
+}
+
+impl Default for SpawnSpec {
+    fn default() -> Self {
+        Self {
+            kind: SessionKind::Manual,
+            mode_path: None,
+            dev: false,
+            dev_stream_id: None,
+            attempts: 0,
+            rule_id: None,
+            overrides: SessionOverrides::default(),
+        }
+    }
+}
+
 struct Episode {
     seq: u64,
     kind: SessionKind,
     /// Which schedule rule opened this session, for a `Scheduled` episode. v1 recorded nothing
     /// here, which is why panic had nothing to attribute a skip to and so cancelled nothing.
     rule_id: Option<Uuid>,
+    /// Kept so a restart after a crash comes back as the same session the rule asked for, rather
+    /// than silently falling back to the global pack and mode.
+    overrides: SessionOverrides,
     mode_path: Option<PathBuf>,
     dev: bool,
     pid: Option<u32>,
@@ -150,6 +186,7 @@ pub struct Control {
     /// `StatusInfo` here (deduplicated), and the IPC server streams it to subscribers.
     status_tx: watch::Sender<StatusInfo>,
     dev_log_tx: tokio::sync::broadcast::Sender<(Uuid, shared::logging::LogRecord)>,
+    tray: TrayUpdater,
 }
 
 impl Control {
@@ -158,6 +195,7 @@ impl Control {
         initial_schedule: shared::schedule::ScheduleConfig,
         status_tx: watch::Sender<StatusInfo>,
         dev_log_tx: tokio::sync::broadcast::Sender<(Uuid, shared::logging::LogRecord)>,
+        tray: TrayUpdater,
     ) -> Self {
         Self {
             episode: None,
@@ -168,6 +206,7 @@ impl Control {
             pending_start: None,
             status_tx,
             dev_log_tx,
+            tray,
         }
     }
 
@@ -186,8 +225,9 @@ impl Control {
         }
     }
 
-    fn publish_status(&self) {
+    fn publish_status(&mut self) {
         let status = self.status_info();
+        self.tray.set(self.tray_view(&status));
         self.status_tx.send_if_modified(|current| {
             if *current == status {
                 false
@@ -204,9 +244,8 @@ impl Control {
                 let response = self.handle_request(req).await;
                 let _ = respond_to.send(response);
             }
-            ControlMessage::PanicKeyPressed | ControlMessage::TrayPanicClicked => {
-                self.panic().await;
-            }
+            ControlMessage::PanicKeyPressed => self.panic().await,
+            ControlMessage::TrayAction { action } => self.on_tray_action(action).await,
             ControlMessage::SessionExited { seq, exit } => self.on_session_exited(seq, exit).await,
             ControlMessage::EngineConnected { seq, recv, send } => {
                 if let Some(episode) = self.active_episode(seq) {
@@ -280,8 +319,14 @@ impl Control {
                     } else {
                         SessionKind::Manual
                     };
-                    self.spawn_episode(kind, mode_path, dev, dev_stream_id, 0, None)
-                        .await
+                    self.spawn_episode(SpawnSpec {
+                        kind,
+                        mode_path,
+                        dev,
+                        dev_stream_id,
+                        ..Default::default()
+                    })
+                    .await
                 }
             }
             Request::StopSession => {
@@ -293,6 +338,11 @@ impl Control {
             }
             Request::Panic => {
                 self.panic().await;
+                Response::Ok
+            }
+            Request::ResumeSchedule => {
+                self.schedule.clear_cooldown();
+                self.tick_schedule().await;
                 Response::Ok
             }
             Request::ReloadConfig => match shared::user_config::load_config() {
@@ -329,19 +379,26 @@ impl Control {
         }
     }
 
-    async fn spawn_episode(
-        &mut self,
-        kind: SessionKind,
-        mode_path: Option<PathBuf>,
-        dev: bool,
-        dev_stream_id: Option<Uuid>,
-        attempts: u32,
-        rule_id: Option<Uuid>,
-    ) -> Response {
+    async fn spawn_episode(&mut self, spec: SpawnSpec) -> Response {
+        let SpawnSpec {
+            kind,
+            mode_path,
+            dev,
+            dev_stream_id,
+            attempts,
+            rule_id,
+            overrides,
+        } = spec;
         let seq = self.next_seq;
         self.next_seq += 1;
 
-        let cmd = match engine::build_command(seq, mode_path.as_deref(), dev, dev_stream_id) {
+        let cmd = match engine::build_command(
+            seq,
+            mode_path.as_deref(),
+            dev,
+            dev_stream_id,
+            &overrides,
+        ) {
             Ok(cmd) => cmd,
             Err(err) => {
                 return Response::Error {
@@ -358,6 +415,7 @@ impl Control {
                     seq,
                     kind,
                     rule_id,
+                    overrides,
                     mode_path,
                     dev,
                     pid: Some(pid),
@@ -436,8 +494,14 @@ impl Control {
 
         if let Some((mode_path, dev, dev_stream_id)) = episode.pending_restart.take() {
             let kind = if dev { SessionKind::Dev } else { episode.kind };
-            self.spawn_episode(kind, mode_path, dev, dev_stream_id, 0, None)
-                .await;
+            self.spawn_episode(SpawnSpec {
+                kind,
+                mode_path,
+                dev,
+                dev_stream_id,
+                ..Default::default()
+            })
+            .await;
             return;
         }
 
@@ -506,9 +570,18 @@ impl Control {
         let attempts = episode.attempts;
         let dev_stream_id = episode.dev_stream_id;
         let rule_id = episode.rule_id;
+        let overrides = episode.overrides.clone();
 
-        self.spawn_episode(kind, mode_path, dev, dev_stream_id, attempts, rule_id)
-            .await;
+        self.spawn_episode(SpawnSpec {
+            kind,
+            mode_path,
+            dev,
+            dev_stream_id,
+            attempts,
+            rule_id,
+            overrides,
+        })
+        .await;
     }
 
     fn on_idle_timeout(&mut self, seq: Option<u64>) {
@@ -602,14 +675,12 @@ impl Control {
     /// length accounting starts from a session that actually exists.
     async fn spawn_scheduled(&mut self, start: StartRequest) {
         let response = self
-            .spawn_episode(
-                SessionKind::Scheduled,
-                None,
-                false,
-                None,
-                0,
-                Some(start.rule_id),
-            )
+            .spawn_episode(SpawnSpec {
+                kind: SessionKind::Scheduled,
+                rule_id: Some(start.rule_id),
+                overrides: start.overrides.clone(),
+                ..Default::default()
+            })
             .await;
         if matches!(response, Response::Ok) {
             self.schedule
@@ -636,6 +707,107 @@ impl Control {
     /// `&self`, and the schedule query behind it is `&self` too. v1's took `&mut self` and
     /// rerolled a cache on the way past, so a config-app status poll could destroy a session that
     /// had not fired yet. Reading the status must never change what the schedule will do.
+    /// The tray is visible only when it has something to act on: a session is running, or
+    /// scheduling is enabled. Anything else and there is no icon at all -- which is what keeps the
+    /// promise that a user who never touches scheduling never learns the supervisor exists.
+    fn tray_view(&self, status: &StatusInfo) -> TrayView {
+        let running = !matches!(status.session, SessionState::Idle);
+        if !running && !status.schedule.enabled {
+            return TrayView(None);
+        }
+
+        let snapshot = self.schedule.status(Local::now());
+        let cooldown = snapshot
+            .cooldown_until
+            .map(|until| until.format("%H:%M").to_string());
+
+        let tooltip = if running {
+            "Running".to_string()
+        } else if let Some(until) = &cooldown {
+            format!("Paused until {until}")
+        } else if snapshot.budget_total > 0 {
+            format!(
+                "{} of {} left this period",
+                snapshot.budget_remaining, snapshot.budget_total
+            )
+        } else if let Some(at) = snapshot.next_exact_session {
+            format!("Next session {}", at.format("%H:%M"))
+        } else {
+            "Scheduling on".to_string()
+        };
+
+        let mut items = vec![TrayItem::Status(tooltip.clone()), TrayItem::Separator];
+        if running {
+            items.push(TrayItem::Action {
+                label: "Stop session".into(),
+                action: TrayAction::StopSession,
+            });
+            // Panic is offered only against a live session -- idle, the honest equivalent is
+            // "Pause for..." below -- and only when it does something "Stop session" does not.
+            // With scheduling off, or the pause set to zero, the two differ solely in how hard the
+            // engine is killed, which is not a distinction to make a user choose between.
+            let pause = self.schedule.config().panic_cooldown_minutes;
+            if status.schedule.enabled && pause > 0 {
+                items.push(TrayItem::Action {
+                    // The consequence belongs in the label: "Panic" alone reads as "stop", and the
+                    // two-hour hold is the whole reason this item exists next to "Stop session".
+                    label: format!("Panic — pause for {}", humanize_minutes(pause)),
+                    action: TrayAction::Panic,
+                });
+            }
+        } else {
+            items.push(TrayItem::Action {
+                label: "Start session now".into(),
+                action: TrayAction::StartSession,
+            });
+            if cooldown.is_some() {
+                items.push(TrayItem::Action {
+                    label: "Resume schedule".into(),
+                    action: TrayAction::ResumeSchedule,
+                });
+            } else {
+                items.push(pause_submenu());
+            }
+        }
+        items.push(TrayItem::Separator);
+        items.push(TrayItem::Action {
+            label: "Open Lewdware".into(),
+            action: TrayAction::OpenConfig,
+        });
+        // Deliberately no "Quit": quitting while scheduling is enabled silently breaks the
+        // schedule, and the supervisor already self-terminates once it has nothing left to do.
+
+        TrayView(Some(TrayContents { tooltip, items }))
+    }
+
+    async fn on_tray_action(&mut self, action: TrayAction) {
+        match action {
+            TrayAction::StartSession => {
+                self.handle_request(Request::StartSession {
+                    mode_path: None,
+                    dev: false,
+                    dev_stream_id: None,
+                    replace: false,
+                })
+                .await;
+            }
+            TrayAction::StopSession => {
+                self.handle_request(Request::StopSession).await;
+            }
+            TrayAction::Panic => self.panic().await,
+            TrayAction::PauseFor { minutes } => {
+                self.pending_start = None;
+                self.schedule.start_cooldown(Local::now(), minutes);
+                self.tick_schedule().await;
+            }
+            TrayAction::ResumeSchedule => {
+                self.schedule.clear_cooldown();
+                self.tick_schedule().await;
+            }
+            TrayAction::OpenConfig => open_config(),
+        }
+    }
+
     fn status_info(&self) -> StatusInfo {
         let snapshot = self.schedule.status(Local::now());
         let schedule = ScheduleStatus {
@@ -682,6 +854,81 @@ impl Control {
                 schedule,
             },
         }
+    }
+}
+
+/// Launches the config app, or focuses the one already open.
+///
+/// Spawning unconditionally is correct rather than lazy: the config app registers
+/// `tauri-plugin-single-instance`, so a second launch hands its arguments to the instance already
+/// running -- which raises and focuses its window -- and then exits. The supervisor needs no
+/// bookkeeping of its own, and this focuses a window the *user* opened, not just one the tray did.
+fn open_config() {
+    match shared::binaries::find_config_binary() {
+        Some(mut cmd) => {
+            if let Err(err) = cmd.spawn() {
+                tracing::warn!("could not launch the config app: {err}");
+            }
+        }
+        None => tracing::warn!("could not find the config app binary"),
+    }
+}
+
+/// "2 hours" rather than "120 minutes" -- a tray label is read at a glance.
+fn humanize_minutes(minutes: u32) -> String {
+    match minutes {
+        m if m % 1440 == 0 => {
+            let days = m / 1440;
+            if days == 1 {
+                "24 hours".to_string()
+            } else {
+                format!("{days} days")
+            }
+        }
+        m if m % 60 == 0 => {
+            let hours = m / 60;
+            if hours == 1 {
+                "1 hour".to_string()
+            } else {
+                format!("{hours} hours")
+            }
+        }
+        m => format!("{m} minutes"),
+    }
+}
+
+/// Panic's cooldown is a setting; these are the ad-hoc equivalents, and the same mechanism. "Rest
+/// of day" is resolved to minutes here rather than carried as a special case, so the action stays
+/// one shape.
+fn pause_submenu() -> TrayItem {
+    let until_midnight = {
+        let now = Local::now();
+        let midnight = (now + ChronoDuration::days(1))
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .and_then(|naive| naive.and_local_timezone(Local).single());
+        midnight
+            .map(|midnight| (midnight - now).num_minutes().max(1) as u32)
+            .unwrap_or(8 * 60)
+    };
+    TrayItem::Submenu {
+        label: "Pause for".into(),
+        items: vec![
+            TrayItem::Action {
+                label: "30 minutes".into(),
+                action: TrayAction::PauseFor { minutes: 30 },
+            },
+            TrayItem::Action {
+                label: "2 hours".into(),
+                action: TrayAction::PauseFor { minutes: 120 },
+            },
+            TrayItem::Action {
+                label: "The rest of the day".into(),
+                action: TrayAction::PauseFor {
+                    minutes: until_midnight,
+                },
+            },
+        ],
     }
 }
 

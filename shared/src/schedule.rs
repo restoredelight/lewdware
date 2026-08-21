@@ -566,6 +566,25 @@ impl PresenceProfile {
         at.weekday().num_days_from_monday() as usize * 24 + at.hour() as usize
     }
 
+    /// Folds one observation into the profile: `present` held for `interval`, weighted by how
+    /// much of each hour it actually covered. A ten-minute observation moves a bucket a sixth as
+    /// far as an hour-long one, so a busy evening of short ticks does not outweigh a quiet night.
+    pub fn observe(&mut self, interval: Interval, present: bool) {
+        let target = if present { 1.0 } else { 0.0 };
+        let mut updates: Vec<(usize, f64)> = Vec::new();
+        for_each_hour_chunk(interval, |at, minutes| {
+            updates.push((Self::bucket_of(at), (minutes / 60.0).clamp(0.0, 1.0)));
+        });
+        for (bucket, weight) in updates {
+            if self.buckets.len() <= bucket {
+                self.buckets.resize(PRESENCE_BUCKETS, 1.0);
+            }
+            let alpha = PRESENCE_ALPHA * weight;
+            let current = f64::from(self.buckets[bucket]).clamp(0.0, 1.0);
+            self.buckets[bucket] = ((1.0 - alpha) * current + alpha * target) as f32;
+        }
+    }
+
     pub fn p(&self, at: DateTime<Local>) -> f64 {
         self.buckets
             .get(Self::bucket_of(at))
@@ -574,6 +593,29 @@ impl PresenceProfile {
     }
 }
 
+/// Walks `interval` in chunks that each sit inside one hour-of-week bucket, calling `f` with the
+/// chunk's start and its length in minutes. Shared by the two things that care about buckets:
+/// reading the profile, and updating it.
+fn for_each_hour_chunk(interval: Interval, mut f: impl FnMut(DateTime<Local>, f64)) {
+    let mut cursor = interval.start;
+    while cursor < interval.end {
+        // Step to the next whole hour, so each chunk sits in exactly one bucket. Clamped to at
+        // least a minute so a pathological clock can never spin here.
+        let into_hour = i64::from(cursor.minute()) * 60 + i64::from(cursor.second());
+        let step = ChronoDuration::seconds((3600 - into_hour).max(60));
+        let chunk_end = (cursor + step).min(interval.end);
+        let minutes = (chunk_end - cursor).num_seconds().max(0) as f64 / 60.0;
+        if minutes > 0.0 {
+            f(cursor, minutes);
+        }
+        cursor = chunk_end;
+    }
+}
+
+/// How fast the profile follows a change, per full hour of observation. A fortnight of consistent
+/// evidence moves a bucket most of the way; a single odd day barely registers.
+pub const PRESENCE_ALPHA: f64 = 0.15;
+
 /// Expected present minutes across `intervals`, integrating the profile hour by hour.
 ///
 /// This is the only place the adaptation lives: everything else about the rate model is fixed, and
@@ -581,17 +623,7 @@ impl PresenceProfile {
 pub fn expected_present_minutes(intervals: &[Interval], profile: &PresenceProfile) -> f64 {
     let mut total = 0.0;
     for interval in intervals {
-        let mut cursor = interval.start;
-        while cursor < interval.end {
-            // Step to the next whole hour, so each chunk sits in exactly one bucket. Clamped to at
-            // least a minute so a pathological clock can never spin here.
-            let into_hour = i64::from(cursor.minute()) * 60 + i64::from(cursor.second());
-            let step = ChronoDuration::seconds((3600 - into_hour).max(60));
-            let chunk_end = (cursor + step).min(interval.end);
-            let minutes = (chunk_end - cursor).num_seconds().max(0) as f64 / 60.0;
-            total += minutes * profile.p(cursor);
-            cursor = chunk_end;
-        }
+        for_each_hour_chunk(*interval, |at, minutes| total += minutes * profile.p(at));
     }
     total
 }
@@ -1010,6 +1042,115 @@ mod tests {
         profile.buckets[PresenceProfile::bucket_of(dt(2026, 7, 13, 10, 0))] = 0.0;
         // 09:30-10:00 and 11:00-11:30 count; the whole 10:00 hour does not.
         assert_eq!(expected_present_minutes(&[interval], &profile), 60.0);
+    }
+
+    #[test]
+    fn observing_absence_pulls_a_bucket_down_and_leaves_the_others_alone() {
+        let mut profile = PresenceProfile::assume_present();
+        let hour = Interval {
+            start: dt(2026, 7, 13, 3, 0),
+            end: dt(2026, 7, 13, 4, 0),
+        };
+        let bucket = PresenceProfile::bucket_of(dt(2026, 7, 13, 3, 0));
+        let neighbour = PresenceProfile::bucket_of(dt(2026, 7, 13, 5, 0));
+
+        profile.observe(hour, false);
+        assert!((profile.p(hour.start) - (1.0 - PRESENCE_ALPHA)).abs() < 1e-6);
+        // An hour nobody said anything about keeps the prior.
+        assert_eq!(profile.buckets[neighbour], 1.0);
+        assert!(profile.buckets[bucket] < 1.0);
+    }
+
+    #[test]
+    fn repeated_absence_converges_toward_zero_without_overshooting() {
+        let mut profile = PresenceProfile::assume_present();
+        let hour = Interval {
+            start: dt(2026, 7, 13, 3, 0),
+            end: dt(2026, 7, 13, 4, 0),
+        };
+        for _ in 0..200 {
+            profile.observe(hour, false);
+        }
+        let p = profile.p(hour.start);
+        assert!(p < 0.01, "expected near zero, got {p}");
+        assert!(p >= 0.0);
+    }
+
+    #[test]
+    fn a_partial_hour_moves_the_bucket_proportionally() {
+        let mut full = PresenceProfile::assume_present();
+        let mut partial = PresenceProfile::assume_present();
+        let start = dt(2026, 7, 13, 3, 0);
+
+        full.observe(
+            Interval {
+                start,
+                end: dt(2026, 7, 13, 4, 0),
+            },
+            false,
+        );
+        partial.observe(
+            Interval {
+                start,
+                end: dt(2026, 7, 13, 3, 15),
+            },
+            false,
+        );
+        // A quarter-hour observation should move it roughly a quarter as far.
+        let full_delta = 1.0 - full.p(start);
+        let partial_delta = 1.0 - partial.p(start);
+        assert!(partial_delta < full_delta);
+        assert!((partial_delta - full_delta / 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn presence_and_absence_pull_in_opposite_directions() {
+        let mut profile = PresenceProfile::assume_present();
+        let hour = Interval {
+            start: dt(2026, 7, 13, 9, 0),
+            end: dt(2026, 7, 13, 10, 0),
+        };
+        for _ in 0..50 {
+            profile.observe(hour, false);
+        }
+        let after_absence = profile.p(hour.start);
+        for _ in 0..50 {
+            profile.observe(hour, true);
+        }
+        assert!(profile.p(hour.start) > after_absence);
+    }
+
+    #[test]
+    fn observing_across_midnight_lands_in_both_days_buckets() {
+        let mut profile = PresenceProfile::assume_present();
+        profile.observe(
+            Interval {
+                start: dt(2026, 7, 13, 23, 0),
+                end: dt(2026, 7, 14, 1, 0),
+            },
+            false,
+        );
+        assert!(profile.p(dt(2026, 7, 13, 23, 30)) < 1.0);
+        assert!(profile.p(dt(2026, 7, 14, 0, 30)) < 1.0);
+        // 01:00 onwards was never observed.
+        assert_eq!(profile.p(dt(2026, 7, 14, 1, 30)), 1.0);
+    }
+
+    #[test]
+    fn a_learned_profile_shrinks_the_expected_time_it_feeds() {
+        // The point of learning: hours the machine is never on stop counting toward the budget's
+        // denominator, which raises the hazard during the hours it is.
+        let rule = rate_rule(all_days(), Range::AllDay, 1);
+        let remaining = remaining_opportunity(&rule, dt(2026, 7, 13, 0, 0), &[]);
+        let mut profile = PresenceProfile::assume_present();
+        let night = Interval {
+            start: dt(2026, 7, 13, 1, 0),
+            end: dt(2026, 7, 13, 6, 0),
+        };
+        for _ in 0..100 {
+            profile.observe(night, false);
+        }
+        assert!(expected_present_minutes(&remaining, &profile) < total_minutes(&remaining));
     }
 
     #[test]

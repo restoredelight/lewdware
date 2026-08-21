@@ -12,12 +12,15 @@
 //!   IPC, or to display.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
-use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate};
+use chrono::{DateTime, Duration as ChronoDuration, Local};
 use shared::schedule::{
     self, Interval, PresenceProfile, Rule, ScheduleConfig, SessionLength, SessionOverrides, Trigger,
 };
 use uuid::Uuid;
+
+use crate::state::{self, PersistedBudget, PersistedState};
 
 /// How often the engine wakes while a rule's opportunity range is open. A hazard rate has to be
 /// integrated rather than waited out, so unlike v1 there is no single "wake me when it starts".
@@ -31,22 +34,11 @@ fn tick_interval() -> ChronoDuration {
     ChronoDuration::seconds(TICK_SECONDS)
 }
 
-/// A tick delta this much larger than the cadence we asked for means the machine was suspended,
-/// not that the user sat still for hours. Without this, waking from an overnight sleep would
-/// integrate the whole gap's worth of hazard in one tick and fire the moment the lid opened --
-/// precisely the fire-on-wake behaviour the rate model exists to avoid.
-///
-/// This is the minimum viable form of the Tier-0 presence signal (`design/scheduling.md`,
-/// Presence): it stops the gap being *counted*, but does not yet mark the user absent, which is
-/// what the away-timeout needs.
-fn max_credit_minutes() -> f64 {
-    (TICK_SECONDS as f64 / 60.0) * 2.0
-}
-
-/// Where "is the user at the machine" comes from. Tiered per the design doc; the only
-/// implementation today is the Tier-3 fallback, under which the rate model integrates over plain
-/// wall-clock time and firing is uniform-random within the range -- v1's *intent*, minus v1's
-/// bugs. Tiers 0-2 slot in behind this trait without touching the engine.
+/// Where "is the user at the machine" comes from. Tiered per the design doc: `presence.rs` picks
+/// the best backend the platform offers and falls back to [`AssumePresent`] when it has none,
+/// under which the rate model integrates over plain wall-clock time and firing is uniform-random
+/// within the range -- v1's *intent*, minus v1's bugs. Tier 0 is not behind this trait at all: the
+/// gap detection in [`ScheduleEngine::tick`] applies on every platform, whatever the source says.
 pub trait PresenceSource: Send {
     fn is_present(&mut self, now: DateTime<Local>) -> bool;
 }
@@ -82,11 +74,18 @@ impl Rng for SystemRng {
 /// One rule's firings-left, scoped to the period they were granted for. A different `period_key`
 /// means a new period, and a new period always means the full count again -- a shortfall is never
 /// carried, so a machine that was off all day cannot dump three sessions at 21:00.
-#[derive(Clone, Copy, Debug)]
-struct Budget {
-    period_key: NaiveDate,
-    remaining: u32,
+type Budget = PersistedBudget;
+
+/// How long a tick may be late before it is read as the machine having been suspended rather than
+/// simply idle between boundaries.
+fn wake_slack() -> ChronoDuration {
+    ChronoDuration::seconds(TICK_SECONDS * 2)
 }
+
+/// State is written on every meaningful change, and otherwise at most this often -- `last_tick`
+/// and the profile drift continuously, and a write a minute for hours is more disk traffic than
+/// this earns.
+const SAVE_INTERVAL_MINUTES: i64 = 5;
 
 /// The scheduled session currently running, if any. Manual and dev sessions are deliberately not
 /// tracked: length and away-timeout are promises the *schedule* made, and a session the user
@@ -102,10 +101,8 @@ struct RunningSession {
 pub struct StartRequest {
     pub rule_id: Uuid,
     pub length: SessionLength,
-    /// Carried so the episode knows what it was asked for. Not applied yet: the engine takes a
-    /// mode *path* and reads its pack from `config.json`, so honouring a `Mode::Pack` or a pack
-    /// override needs engine flags that do not exist. Deliberately inert rather than
-    /// half-applied, and correspondingly not offered in the config app yet.
+    /// The rule's own pack and mode, passed to the engine as `--pack-path` / `--mode`. Sparse:
+    /// an unset field inherits whatever `config.json` says.
     pub overrides: SessionOverrides,
 }
 
@@ -157,11 +154,29 @@ pub struct ScheduleEngine {
     last_tick: Option<DateTime<Local>>,
     cooldown_until: Option<DateTime<Local>>,
     running: Option<RunningSession>,
+    /// `None` in tests, which must not touch the user's real state file.
+    state_path: Option<PathBuf>,
+    /// The instant the engine asked to be woken at. What separates "the machine was asleep" from
+    /// "there was simply nothing to do until now" -- without it, every long wait between range
+    /// boundaries would be mislearned as the user being away.
+    expected_wake: Option<DateTime<Local>>,
+    last_saved: Option<DateTime<Local>>,
+    /// Something worth not losing changed (a budget spent, a pause started or ended), so the next
+    /// save must not wait for the interval.
+    dirty: bool,
 }
 
 impl ScheduleEngine {
     pub fn new(config: ScheduleConfig) -> Self {
-        Self::with_parts(config, Box::new(AssumePresent), Box::new(SystemRng))
+        let path = state::state_path();
+        let restored = state::load(path.as_ref());
+        let mut engine = Self::with_parts(config, crate::presence::source(), Box::new(SystemRng));
+        engine.budgets = restored.budgets;
+        engine.cooldown_until = restored.cooldown_until;
+        engine.last_tick = restored.last_tick;
+        engine.profile = restored.profile;
+        engine.state_path = path;
+        engine
     }
 
     pub fn with_parts(
@@ -180,7 +195,31 @@ impl ScheduleEngine {
             last_tick: None,
             cooldown_until: None,
             running: None,
+            state_path: None,
+            expected_wake: None,
+            last_saved: None,
+            dirty: false,
         }
+    }
+
+    fn persist(&mut self, now: DateTime<Local>, force: bool) {
+        let due = self
+            .last_saved
+            .is_none_or(|at| now - at >= ChronoDuration::minutes(SAVE_INTERVAL_MINUTES));
+        if !force && !self.dirty && !due {
+            return;
+        }
+        self.last_saved = Some(now);
+        self.dirty = false;
+        state::save(
+            self.state_path.as_ref(),
+            &PersistedState {
+                budgets: self.budgets.clone(),
+                cooldown_until: self.cooldown_until,
+                last_tick: self.last_tick,
+                profile: self.profile.clone(),
+            },
+        );
     }
 
     pub fn config(&self) -> &ScheduleConfig {
@@ -235,6 +274,13 @@ impl ScheduleEngine {
             Some(existing) if existing > until => existing,
             _ => until,
         });
+        self.dirty = true;
+    }
+
+    /// Ends a cooldown early -- the tray's "Resume schedule".
+    pub fn clear_cooldown(&mut self) {
+        self.cooldown_until = None;
+        self.dirty = true;
     }
 
     fn cooling_down(&self, now: DateTime<Local>) -> bool {
@@ -327,15 +373,37 @@ impl ScheduleEngine {
         }
 
         let last = self.last_tick.replace(now);
-        let present = self.presence.is_present(now);
-        let elapsed = last
-            .filter(|&last| now > last)
-            .map(|last| {
-                let minutes = (now - last).num_seconds() as f64 / 60.0;
-                (last, minutes.min(max_credit_minutes()))
-            })
-            .unwrap_or((now, 0.0));
-        let (elapsed_from, elapsed_minutes) = elapsed;
+        let live = self.presence.is_present(now);
+
+        // Did this tick arrive roughly when it asked to? A tick that is merely late by seconds was
+        // a planned wait -- the machine was up, there was just nothing to do. A tick that is
+        // *hours* late, or the first one after startup, means the supervisor was not running:
+        // the machine was suspended, or the user was logged out. That gap is the presence signal,
+        // and the only one available before the platform tiers land.
+        let asleep = match (last, self.expected_wake) {
+            (None, _) => false,
+            (Some(_), None) => true,
+            (Some(_), Some(expected)) => now > expected + wake_slack(),
+        };
+        let present = live && !asleep;
+
+        let (elapsed_from, elapsed_minutes) = match last.filter(|&last| now > last) {
+            // A gap the machine slept through buys no opportunity: crediting it would integrate
+            // hours of hazard in one tick and fire the moment the lid opened.
+            Some(last) if asleep => (last, 0.0),
+            Some(last) => (last, (now - last).num_seconds() as f64 / 60.0),
+            None => (now, 0.0),
+        };
+
+        if let Some(last) = last.filter(|&last| now > last) {
+            self.profile.observe(
+                Interval {
+                    start: last,
+                    end: now,
+                },
+                present,
+            );
+        }
 
         let stop = self.update_running(now, present);
         let start = if session_active || stop.is_some() || self.cooling_down(now) {
@@ -345,6 +413,8 @@ impl ScheduleEngine {
         };
 
         let next_wake = self.next_wake(now);
+        self.expected_wake = next_wake;
+        self.persist(now, false);
         Evaluation {
             start,
             stop,
@@ -409,6 +479,7 @@ impl ScheduleEngine {
                     && let Some(budget) = self.budgets.get_mut(&rule.id)
                 {
                     budget.remaining = budget.remaining.saturating_sub(1);
+                    self.dirty = true;
                 }
                 return Some(StartRequest {
                     rule_id: rule.id,
@@ -563,6 +634,10 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use shared::schedule::{Frequency, QuietHours, Range, TimeOfDay};
+
+    fn ymd(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
 
     fn dt(y: i32, m: u32, d: u32, h: u32, min: u32) -> DateTime<Local> {
         Local.with_ymd_and_hms(y, m, d, h, min, 0).unwrap()
@@ -968,6 +1043,102 @@ mod tests {
         assert_eq!(eval.next_wake, None);
         assert!(eval.start.is_none());
         assert!(!engine.resident_required());
+    }
+
+    // ─── persistence and learning ──────────────────────────────────────────────
+
+    #[test]
+    fn a_restart_restores_budgets_and_pauses() {
+        // What a logout used to undo: budgets back to full ("three times a day" meaning three per
+        // login), and a panic's hold gone the moment the user came back.
+        let (config, id) = one_rule(3);
+        let mut engine = test_engine(config.clone());
+        assert!(run(&mut engine, dt(2026, 7, 13, 9, 0), 30, false).is_some());
+        engine.start_cooldown(dt(2026, 7, 13, 9, 30), 120);
+
+        let saved = PersistedState {
+            budgets: engine.budgets.clone(),
+            cooldown_until: engine.cooldown_until,
+            last_tick: engine.last_tick,
+            profile: engine.profile.clone(),
+        };
+        let json = serde_json::to_string(&saved).unwrap();
+        let restored: PersistedState = serde_json::from_str(&json).unwrap();
+
+        let mut next = test_engine(config);
+        next.budgets = restored.budgets;
+        next.cooldown_until = restored.cooldown_until;
+        next.last_tick = restored.last_tick;
+
+        assert_eq!(next.status(dt(2026, 7, 13, 9, 31)).budget_remaining, 2);
+        assert!(next.status(dt(2026, 7, 13, 9, 31)).cooldown_until.is_some());
+        // ... and the restored pause still suppresses firing.
+        assert!(run(&mut next, dt(2026, 7, 13, 9, 31), 30, false).is_none());
+        assert_eq!(saved.budgets.len(), 1);
+        assert!(saved.budgets.contains_key(&id));
+    }
+
+    #[test]
+    fn a_stale_budget_period_is_reset_rather_than_trusted() {
+        // Yesterday's file must not spend today's allowance.
+        let (config, id) = one_rule(3);
+        let mut engine = test_engine(config);
+        engine.budgets.insert(
+            id,
+            PersistedBudget {
+                period_key: ymd(2026, 7, 12),
+                remaining: 0,
+            },
+        );
+        assert_eq!(engine.status(dt(2026, 7, 13, 9, 0)).budget_remaining, 3);
+    }
+
+    #[test]
+    fn a_gap_the_supervisor_slept_through_is_learned_as_absence() {
+        let (config, _) = one_rule(1);
+        let mut engine = test_engine(config);
+        // First tick establishes a baseline and an expected wake a minute out.
+        engine.tick(dt(2026, 7, 13, 9, 0), false);
+        let before = engine.profile.p(dt(2026, 7, 13, 9, 30));
+        // Waking an hour late means the machine was not running for that hour.
+        engine.tick(dt(2026, 7, 13, 10, 0), false);
+        assert!(
+            engine.profile.p(dt(2026, 7, 13, 9, 30)) < before,
+            "an unplanned gap should be learned as absence"
+        );
+    }
+
+    #[test]
+    fn a_tick_that_arrives_on_schedule_is_not_learned_as_absence() {
+        // The distinction that keeps the profile honest: a long wait between range boundaries is
+        // the engine idling on purpose, not the user being away. Learning those as absence would
+        // teach it that nobody is ever at the machine.
+        let (config, _) = one_rule(1);
+        let mut engine = test_engine(config);
+        let first = engine.tick(dt(2026, 7, 13, 8, 0), false);
+        // It asked to be woken when the range opens; arriving then is punctual, however long the
+        // wait was.
+        let expected = first.next_wake.expect("a shut range schedules its opening");
+        assert_eq!(expected, dt(2026, 7, 13, 9, 0));
+        engine.tick(expected, false);
+        assert_eq!(engine.profile.p(dt(2026, 7, 13, 8, 30)), 1.0);
+    }
+
+    #[test]
+    fn learning_absence_raises_the_hazard_for_the_hours_that_remain() {
+        // The payoff: hours the machine is never on stop padding the denominator.
+        let rule = rate_rule((0, 0), (0, 0), 1);
+        let mut engine = test_engine(config(vec![rule.clone()]));
+        let quiet_hour = Interval {
+            start: dt(2026, 7, 13, 3, 0),
+            end: dt(2026, 7, 13, 6, 0),
+        };
+        for _ in 0..100 {
+            engine.profile.observe(quiet_hour, false);
+        }
+        let opportunity = engine.opportunity(&rule, dt(2026, 7, 13, 0, 0));
+        let expected = schedule::expected_present_minutes(&opportunity, &engine.profile);
+        assert!(expected < schedule::total_minutes(&opportunity));
     }
 
     #[test]

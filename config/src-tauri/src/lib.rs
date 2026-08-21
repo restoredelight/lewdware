@@ -49,6 +49,16 @@ pub fn run() {
         .collect();
 
     tauri::Builder::default()
+        // Must be registered before every other plugin, per the plugin's own docs. A second launch
+        // hands its argv to the instance already running and exits, which is what lets the tray's
+        // "Open Lewdware" focus the window the user already has rather than stacking up new ones.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
@@ -78,6 +88,7 @@ pub fn run() {
             commands::modes::set_mode_option,
             commands::pack::get_pack_metadata,
             commands::pack::pick_pack,
+            commands::pack::pick_pack_path,
             commands::pack::remove_pack,
             commands::modes::upload_mode,
             commands::modes::remove_uploaded_mode,
@@ -87,6 +98,7 @@ pub fn run() {
             commands::schedule::get_schedule_status,
             commands::schedule::set_schedule_enabled,
             commands::schedule::reload_supervisor_schedule,
+            commands::schedule::resume_schedule,
             commands::diagnostics::open_logs,
             commands::diagnostics::get_diagnostics,
             commands::updates::check_for_update,

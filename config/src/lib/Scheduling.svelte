@@ -11,7 +11,8 @@
 	import Popover from '$ui/Popover.svelte';
 	import IconButton from '$ui/IconButton.svelte';
 	import { Icon, QuestionMarkCircle } from '$icons';
-	import type { Frequency, QuietHoursDto, RuleDto, TimeOfDay } from './types';
+	import type { Frequency, ModeId, QuietHoursDto, RuleDto, TimeOfDay } from './types';
+	import { api } from './api';
 	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
 	const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -19,6 +20,17 @@
 	// Attached to the frequency input rather than set out as a panel: it explains one number, and
 	// only matters to someone looking at that number. Deliberately does not restate the randomness
 	// -- the timing section already says that, a few lines above.
+	// Panic's scope, as the one thing a user actually wants to say: "don't come back for...".
+	// Every scope option is a point on this axis, and the far end -- "until I turn it back on" --
+	// is the enable toggle at the top of this page, so only finite durations belong here.
+	const PANIC_COOLDOWNS = [
+		{ value: '0', label: 'Don’t pause' },
+		{ value: '30', label: '30 minutes' },
+		{ value: '120', label: '2 hours' },
+		{ value: '480', label: '8 hours' },
+		{ value: '1440', label: '24 hours' }
+	];
+
 	const RATE_EXPLANATION =
 		'Sometimes you will get fewer sessions than this - Lewdware only starts them while ' +
 		'you’re actually at your computer. It learns which hours you’re usually around, so this ' +
@@ -202,6 +214,52 @@
 		return null;
 	}
 
+	// Which rules have their pack/mode row open. Collapsed by default: most rules want the global
+	// pack and mode, and a rule that does is one line rather than two empty pickers.
+	let expandedOverrides = $state(new Set<string>());
+
+	function toggleOverrides(id: string) {
+		const next = new Set(expandedOverrides);
+		if (!next.delete(id)) next.add(id);
+		expandedOverrides = next;
+	}
+
+	// Pack-embedded modes are deliberately excluded: their id is a row in *that pack's* table, so
+	// pairing one with a different pack override is meaningless. Built-in and uploaded modes work
+	// against any pack.
+	const overridableModes = $derived(
+		store.modeGroups
+			.filter((group) => group.source !== 'pack')
+			.flatMap((group) => group.entries.map((entry) => ({ entry, group })))
+	);
+
+	function modeLabel(mode: ModeId | null): string {
+		if (!mode) return 'Default mode';
+		const match = overridableModes.find(
+			(candidate) => JSON.stringify(candidate.entry.id) === JSON.stringify(mode)
+		);
+		return match?.entry.name ?? 'Default mode';
+	}
+
+	function packLabel(path: string | null): string {
+		if (!path) return 'Default pack';
+		return path.split(/[\\/]/).pop() || path;
+	}
+
+	function overrideSummary(rule: RuleDto): string {
+		if (!rule.overrides.pack_path && !rule.overrides.mode) return 'Uses the default pack and mode';
+		return `${packLabel(rule.overrides.pack_path)} · ${modeLabel(rule.overrides.mode)}`;
+	}
+
+	function setOverrides(rule: RuleDto, patch: Partial<RuleDto['overrides']>) {
+		store.updateRule(rule.id, { overrides: { ...rule.overrides, ...patch } });
+	}
+
+	async function pickRulePack(rule: RuleDto) {
+		const path = await api.pickPackPath().catch(() => null);
+		if (path) setOverrides(rule, { pack_path: path });
+	}
+
 	function confirmRemoval() {
 		const removal = pendingRemoval;
 		pendingRemoval = null;
@@ -288,6 +346,11 @@
 						{/if}
 					</p>
 				</div>
+				{#if status.cooldown_until}
+					<Button size="compact" variant="secondary" onclick={() => store.resumeSchedule()}
+						>Resume now</Button
+					>
+				{/if}
 				<span class="text-xs font-medium {schedule?.enabled ? 'text-text' : 'text-muted'}">
 					{schedule?.enabled ? 'Enabled' : 'Disabled'}
 				</span>
@@ -493,6 +556,57 @@
 								{/if}
 							</div>
 
+							<div class="border-border flex flex-col gap-2 border-t pt-3">
+								<button
+									class="text-muted hover:text-text flex cursor-pointer items-center gap-1.5 self-start text-xs transition-colors"
+									aria-expanded={expandedOverrides.has(rule.id)}
+									onclick={() => toggleOverrides(rule.id)}
+								>
+									<span class="font-mono text-[11px]">{overrideSummary(rule)}</span>
+									<span aria-hidden="true">{expandedOverrides.has(rule.id) ? '▴' : '▾'}</span>
+								</button>
+								{#if expandedOverrides.has(rule.id)}
+									<div class="grid gap-3 sm:grid-cols-2">
+										<div class="flex flex-col gap-1.5">
+											<span class="text-text text-xs font-semibold">Pack</span>
+											<div class="flex items-center gap-2">
+												<Button
+													size="compact"
+													variant="secondary"
+													onclick={() => pickRulePack(rule)}>Choose pack…</Button
+												>
+												{#if rule.overrides.pack_path}
+													<Button
+														size="compact"
+														variant="quiet"
+														onclick={() => setOverrides(rule, { pack_path: null })}
+														>Use default</Button
+													>
+												{/if}
+											</div>
+											<span class="text-muted truncate font-mono text-[11px]"
+												>{packLabel(rule.overrides.pack_path)}</span
+											>
+										</div>
+										<Select
+											label="Mode"
+											size="compact"
+											value={rule.overrides.mode ? JSON.stringify(rule.overrides.mode) : ''}
+											options={[
+												{ value: '', label: 'Default mode' },
+												...overridableModes.map(({ entry, group }) => ({
+													value: JSON.stringify(entry.id),
+													label: entry.name,
+													description: group.label
+												}))
+											]}
+											onchange={(value) =>
+												setOverrides(rule, { mode: value ? (JSON.parse(value) as ModeId) : null })}
+										/>
+									</div>
+								{/if}
+							</div>
+
 							{#if warning}
 								<span class="text-xs text-[var(--ui-warning)]">{warning}</span>
 							{/if}
@@ -592,7 +706,7 @@
 			<section class="border-border flex flex-col gap-3 border-t pt-6">
 				<h2 class="ui-section-title">Pacing</h2>
 				<p class="text-muted text-xs">
-					How scheduled sessions space themselves out, across every rule.
+					How scheduled sessions space themselves out, and how long a panic holds them off.
 				</p>
 				<Card class="flex items-center gap-4 p-4">
 					<div class="min-w-0 flex-1">
@@ -614,6 +728,26 @@
 							if (minutes === null) return;
 							store.setScheduleSettings({ cooldown_minutes: Math.max(1, minutes) });
 						}}
+					/>
+				</Card>
+				<Card class="flex items-center gap-4 p-4">
+					<div class="min-w-0 flex-1">
+						<h3 class="text-text m-0 text-sm font-medium">Pause after a panic</h3>
+						<p class="text-muted m-0 mt-1 text-xs">
+							The panic key always stops the running session. This is how long it also stops
+							scheduled ones from starting again — press it with nothing running to pause
+							pre-emptively.
+						</p>
+					</div>
+					<Select
+						label="Pause after a panic"
+						hideLabel
+						size="compact"
+						class="w-40"
+						value={String(schedule.panic_cooldown_minutes)}
+						options={PANIC_COOLDOWNS}
+						onchange={(value) =>
+							store.setScheduleSettings({ panic_cooldown_minutes: Number(value) })}
 					/>
 				</Card>
 			</section>

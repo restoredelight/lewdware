@@ -10,8 +10,10 @@ mod engine;
 mod engine_link;
 mod ipc_server;
 mod panic_key;
+mod presence;
 mod schedule;
 mod session;
+mod state;
 mod tray;
 mod wallpaper;
 

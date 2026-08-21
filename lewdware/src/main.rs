@@ -60,6 +60,10 @@ fn main() -> Result<()> {
     let mut dev_mode = false;
     let mut control_token = None;
     let mut dev_stream_id = None;
+    // Per-rule overrides from the supervisor (`design/scheduling.md`, SessionOverrides). Absent
+    // for a manual session, which uses whatever `config.json` says.
+    let mut pack_path: Option<PathBuf> = None;
+    let mut mode_override: Option<Mode> = None;
     while let Some(arg) = args.next() {
         if &arg == "--mode-path" {
             mode_path = Some(PathBuf::from(args.next().context("No mode path provided")?));
@@ -75,6 +79,19 @@ fn main() -> Result<()> {
                     .context("No control token provided")?
                     .to_string_lossy()
                     .into_owned(),
+            );
+        }
+
+        if &arg == "--pack-path" {
+            pack_path = Some(PathBuf::from(args.next().context("No pack path provided")?));
+        }
+
+        // JSON rather than a name: `Mode` has four shapes, two of them carrying data, and it
+        // already round-trips through serde everywhere else.
+        if &arg == "--mode" {
+            let raw = args.next().context("No mode provided")?;
+            mode_override = Some(
+                serde_json::from_str(&raw.to_string_lossy()).context("Could not parse --mode")?,
             );
         }
 
@@ -110,6 +127,16 @@ fn main() -> Result<()> {
 
     if let Some(mode_path) = mode_path {
         config.mode = Mode::File { path: mode_path };
+    }
+
+    // Applied after `load_config` so an override beats the stored setting, and before anything
+    // reads either. A pack override changes which `experience_options` apply, since those are
+    // keyed by the pack's own UUID -- which is the intended behaviour, not a side effect.
+    if let Some(path) = pack_path {
+        config.pack_path = Some(path);
+    }
+    if let Some(mode) = mode_override {
+        config.mode = mode;
     }
 
     // Published before any media can start, since it is read once and cached the first time a sink

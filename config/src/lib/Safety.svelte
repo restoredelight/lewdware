@@ -8,7 +8,6 @@
 	import Card from '$ui/Card.svelte';
 	import Button from '$ui/Button.svelte';
 	import RadioGroup from '$ui/RadioGroup.svelte';
-	import Select from '$ui/Select.svelte';
 	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import type { Capabilities, Key, WallpaperSupportDto } from './types';
 
@@ -32,19 +31,6 @@
 	// What the "Change wallpaper" row actually reports. A permission that is switched on but can
 	// never take effect should not claim to be "Allowed".
 	const wallpaperUsable = $derived(canRestoreOriginal || restore.kind === 'image');
-
-	// Panic's scope, expressed as the one thing the user actually wants to say: "don't come back
-	// for...". Every scope option is a point on this axis -- and the far end, "until I turn it back
-	// on", is already the Scheduling tab's master toggle, so this only needs finite durations.
-	const PANIC_COOLDOWNS = [
-		{ value: '0', label: 'Don’t pause' },
-		{ value: '30', label: '30 minutes' },
-		{ value: '120', label: '2 hours' },
-		{ value: '480', label: '8 hours' },
-		{ value: '1440', label: '24 hours' }
-	];
-
-	const panicCooldown = $derived(String(store.config?.schedule.panic_cooldown_minutes ?? 120));
 
 	const panicKeyDisplay = $derived(
 		recording ? 'Press a key…' : store.config ? formatKey(store.config.panic_button) : ''
@@ -228,24 +214,6 @@
 							>{panicKeyDisplay}</kbd
 						>{/if}
 				</button>
-			</Card>
-			<Card class="flex items-center justify-between gap-4 p-4">
-				<div class="min-w-0 flex-1">
-					<h3 class="text-text m-0 text-sm font-medium">Pause scheduling after a panic</h3>
-					<p class="text-muted m-0 mt-1 text-xs">
-						Panic always stops the running session. This is how long it also stops scheduled
-						sessions from starting again — press it with nothing running to pause pre-emptively.
-					</p>
-				</div>
-				<Select
-					label="Pause scheduling after a panic"
-					hideLabel
-					size="compact"
-					class="w-44"
-					value={panicCooldown}
-					options={PANIC_COOLDOWNS}
-					onchange={(value) => store.setScheduleSettings({ panic_cooldown_minutes: Number(value) })}
-				/>
 			</Card>
 		</section>
 
