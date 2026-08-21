@@ -75,6 +75,8 @@ pub fn effective_options(
                 ModeEntry::Option(ModeOption {
                     label: group.label.clone(),
                     description: group.description.clone(),
+                    suffix: None,
+                    logarithmic: false,
                     option_type: OptionType::Boolean {
                         default: group.enabled_by_default,
                     },
@@ -241,6 +243,8 @@ mod tests {
             ModeEntry::Option(ModeOption {
                 label: "Popup frequency".to_string(),
                 description: None,
+                suffix: None,
+                logarithmic: false,
                 option_type: OptionType::Number {
                     default: 1.0,
                     min: None,

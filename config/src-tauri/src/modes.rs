@@ -326,6 +326,8 @@ pub fn get_mode_options_for(config: &AppConfig, state: &AppState) -> ModeOptions
                         key: key.clone(),
                         label: opt.label.clone(),
                         description: opt.description.clone(),
+                        suffix: opt.suffix.clone(),
+                        logarithmic: opt.logarithmic,
                         option_type: opt.option_type.clone(),
                         value,
                         optional: opt.optional,

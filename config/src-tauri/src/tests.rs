@@ -291,6 +291,49 @@ fn mode_groups_include_authored_descriptions() {
     );
 }
 
+#[test]
+fn numeric_presentation_reaches_the_dto() {
+    let mut sandbox = empty_metadata("Sandbox");
+    sandbox.entries.insert(
+        "popup_frequency".to_string(),
+        ModeEntry::Option(mode::ModeOption {
+            label: "Popup frequency".to_string(),
+            description: None,
+            suffix: Some("seconds".to_string()),
+            logarithmic: true,
+            option_type: OptionType::Number {
+                default: 1.0,
+                min: None,
+                max: None,
+                step: None,
+                clamp: false,
+                slider: false,
+            },
+            optional: false,
+            enabled_by_default: false,
+            show_when: None,
+            needs_permissions: Vec::new(),
+        }),
+    );
+
+    let mut state = test_state(None);
+    state.sandbox_mode = sandbox;
+    let dto = get_mode_options_for(
+        &AppConfig {
+            mode: Mode::Sandbox,
+            ..Default::default()
+        },
+        &state,
+    );
+
+    let OptionEntryDto::Option(option) = find_entry(&dto.entries, "popup_frequency").unwrap()
+    else {
+        panic!("expected an option entry");
+    };
+    assert_eq!(option.suffix.as_deref(), Some("seconds"));
+    assert!(option.logarithmic);
+}
+
 fn test_state(pack: Option<LoadedPack>) -> AppState {
     AppState {
         config: Mutex::new(AppConfig::default()),
@@ -337,6 +380,8 @@ fn declared_permissions_reach_the_dto() {
                 ModeEntry::Option(mode::ModeOption {
                     label: "Change wallpaper".to_string(),
                     description: None,
+                    suffix: None,
+                    logarithmic: false,
                     option_type: OptionType::Boolean { default: true },
                     optional: false,
                     enabled_by_default: false,

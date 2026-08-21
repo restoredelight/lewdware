@@ -241,7 +241,7 @@ async fn an_explicit_pairing_replaces_tag_matching() {
                 "popup_audio_enabled".to_string(),
                 OptionValue::Boolean(true),
             );
-            config.insert("popup_volume".to_string(), OptionValue::Number(0.5));
+            config.insert("popup_volume".to_string(), OptionValue::Number(50.0));
 
             let mut harness = Harness::with_pack(
                 &real_default_mode_sources(),
@@ -267,7 +267,7 @@ async fn an_explicit_pairing_replaces_tag_matching() {
                     assert_eq!(*media_id, 3, "the paired sound, never the tag-matched one");
                     assert!(
                         (*volume - 0.25).abs() < f32::EPSILON,
-                        "0.5 user x 0.5 author, got {volume}",
+                        "50% user x 0.5 author, got {volume}",
                     );
                 }
                 other => panic!("expected a sound, got {other:?}"),

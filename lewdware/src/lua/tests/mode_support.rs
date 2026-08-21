@@ -114,12 +114,12 @@ pub(super) fn base_audio_config() -> HashMap<String, OptionValue> {
             "background_audio_enabled".to_string(),
             OptionValue::Boolean(false),
         ),
-        ("background_volume".to_string(), OptionValue::Number(1.0)),
+        ("background_volume".to_string(), OptionValue::Number(100.0)),
         (
             "popup_audio_enabled".to_string(),
             OptionValue::Boolean(false),
         ),
-        ("popup_volume".to_string(), OptionValue::Number(1.0)),
+        ("popup_volume".to_string(), OptionValue::Number(100.0)),
         (
             "popup_audio_layered".to_string(),
             OptionValue::Boolean(false),

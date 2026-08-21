@@ -4,6 +4,39 @@ use shared::user_config::Volume;
 
 use super::{harness::*, mode_support::*, *};
 
+const CLOSE_CHANCE_CAPTURE_WRAP: &str = r#"
+    local spawn = require("lib.spawn")
+    local real_make_spawner = spawn.make_spawner
+    spawn.make_spawner = function(opts)
+        CAPTURED_CLOSE_CHANCE = opts.close_chance
+        return real_make_spawner(opts)
+    end
+"#;
+
+#[tokio::test(start_paused = true)]
+async fn sandbox_normalizes_the_users_spawn_chance_percentage() {
+    LocalSet::new()
+        .run_until(async {
+            let owned = wrapped_default_mode_sources(CLOSE_CHANCE_CAPTURE_WRAP);
+            let sources = as_str_sources(&owned);
+            let mut config = base_default_mode_config();
+            config.insert("close_chance".to_string(), OptionValue::Number(50.0));
+
+            let mut harness = Harness::with_pack(
+                &sources,
+                pack_fixture(true),
+                Content::default(),
+                config,
+                all_capabilities(),
+                Volume::default(),
+            );
+            harness.run_entrypoint("main.lua").unwrap();
+
+            assert_eq!(harness.eval_number("CAPTURED_CLOSE_CHANCE"), 0.5);
+        })
+        .await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn open_popup_sets_title_from_matching_caption() {
     LocalSet::new()
@@ -219,7 +252,7 @@ async fn popup_sounds_play_at_the_users_popup_volume() {
                 "popup_audio_enabled".to_string(),
                 OptionValue::Boolean(true),
             );
-            config.insert("popup_volume".to_string(), OptionValue::Number(0.25));
+            config.insert("popup_volume".to_string(), OptionValue::Number(25.0));
             let media: &[(&str, &[&str])] = &[
                 ("popup.avif", &[]),
                 ("effect.ogg", &[shared::tags::POPUP_AUDIO_TAG]),
@@ -245,7 +278,7 @@ async fn popup_sounds_play_at_the_users_popup_volume() {
                         volume
                     } if (*volume - 0.25).abs() < f32::EPSILON
                 )),
-                "expected the popup sound at the user's 0.25, got {:?}",
+                "expected the popup sound at the user's 25%, got {:?}",
                 harness.recorded()
             );
         })

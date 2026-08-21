@@ -72,6 +72,12 @@ pub struct ModeGroup {
 pub struct ModeOption {
     pub label: String,
     pub description: Option<String>,
+    /// Display-only text shown after a numeric value. Older `.lwmode` files omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suffix: Option<String>,
+    /// Whether the slider maps equal ratios to equal distances. Older `.lwmode` files omit it.
+    #[serde(default)]
+    pub logarithmic: bool,
     pub option_type: OptionType,
     #[serde(default)]
     pub optional: bool,
@@ -433,6 +439,8 @@ mod tests {
         ModeOption {
             label: "test".to_string(),
             description: None,
+            suffix: None,
+            logarithmic: false,
             option_type,
             optional: false,
             enabled_by_default: false,
@@ -449,6 +457,8 @@ mod tests {
             ModeEntry::Option(ModeOption {
                 label: "Count".to_string(),
                 description: None,
+                suffix: None,
+                logarithmic: false,
                 option_type: OptionType::Integer {
                     default: 5,
                     min: Some(1),
@@ -468,6 +478,8 @@ mod tests {
             ModeEntry::Option(ModeOption {
                 label: "Speed".to_string(),
                 description: Some("How fast".to_string()),
+                suffix: Some("seconds".to_string()),
+                logarithmic: true,
                 option_type: OptionType::Number {
                     default: 1.5,
                     min: None,
@@ -487,6 +499,8 @@ mod tests {
             ModeEntry::Option(ModeOption {
                 label: "Label".to_string(),
                 description: None,
+                suffix: None,
+                logarithmic: false,
                 option_type: OptionType::String {
                     default: "hello".to_string(),
                 },
@@ -501,6 +515,8 @@ mod tests {
             ModeEntry::Option(ModeOption {
                 label: "Enabled".to_string(),
                 description: None,
+                suffix: None,
+                logarithmic: false,
                 option_type: OptionType::Boolean { default: true },
                 optional: false,
                 enabled_by_default: false,
@@ -523,6 +539,8 @@ mod tests {
             ModeEntry::Option(ModeOption {
                 label: "Variant".to_string(),
                 description: None,
+                suffix: None,
+                logarithmic: false,
                 option_type: OptionType::Enum {
                     default: "a".to_string(),
                     values,
@@ -590,8 +608,8 @@ mod tests {
         assert_eq!(original, decoded);
     }
 
-    /// Permission declarations were added after the first mode format. Keep that field compatible
-    /// with modes that predate it.
+    /// Permission declarations and numeric presentation fields were added after the first mode
+    /// format. Keep them compatible with modes that predate them.
     #[test]
     fn metadata_without_needs_permissions_still_decodes() {
         #[derive(Serialize)]
@@ -652,13 +670,10 @@ mod tests {
         let decoded =
             Metadata::from_buf(&buf).expect("a pre-`needs_permissions` mode must still decode");
         assert!(decoded.needs_permissions.is_empty());
-        assert!(
-            decoded
-                .get_option("enabled")
-                .unwrap()
-                .needs_permissions
-                .is_empty()
-        );
+        let option = decoded.get_option("enabled").unwrap();
+        assert!(option.needs_permissions.is_empty());
+        assert!(option.suffix.is_none());
+        assert!(!option.logarithmic);
     }
 
     #[test]

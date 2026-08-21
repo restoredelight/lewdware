@@ -391,6 +391,8 @@ pub struct ModeOptionDto {
     pub key: String,
     pub label: String,
     pub description: Option<String>,
+    pub suffix: Option<String>,
+    pub logarithmic: bool,
     pub option_type: OptionType,
     pub value: OptionValue,
     pub optional: bool,

@@ -149,7 +149,16 @@
             "max": { "type": "integer" },
             "step": { "type": "integer" },
             "clamp": { "type": "boolean" },
-            "slider": { "type": "boolean" }
+            "slider": { "type": "boolean" },
+            "logarithmic": {
+              "type": "boolean",
+              "description": "Use logarithmic spacing for the slider. Requires a positive min and a greater max."
+            },
+            "suffix": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Display-only text shown after the numeric value, such as seconds or pixels"
+            }
           },
           "required": ["default"]
         },
@@ -161,7 +170,16 @@
             "max": { "type": "number" },
             "step": { "type": "number" },
             "clamp": { "type": "boolean" },
-            "slider": { "type": "boolean" }
+            "slider": { "type": "boolean" },
+            "logarithmic": {
+              "type": "boolean",
+              "description": "Use logarithmic spacing for the slider. Requires a positive min and a greater max."
+            },
+            "suffix": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Display-only text shown after the numeric value, such as seconds or pixels"
+            }
           },
           "required": ["default"]
         },

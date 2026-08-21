@@ -565,10 +565,15 @@ class AppStore {
 	}
 
 	async setModeOption(key: string, value: unknown) {
+		const previous = this.modeOptions;
+		// Keep controls responsive while their write crosses the IPC boundary. Sliders commit on
+		// release, so this is one optimistic update per gesture rather than a stream of competing
+		// writes whose replies could arrive out of order.
+		this.modeOptions = updateOptionValue(this.modeOptions, key, value as OptionValue);
 		try {
 			await api.setModeOption(key, value as never);
-			this.modeOptions = updateOptionValue(this.modeOptions, key, value as OptionValue);
 		} catch (err) {
+			this.modeOptions = previous;
 			taskFeedback.error('mode-option', `Couldn’t update option: ${String(err)}`);
 		}
 	}

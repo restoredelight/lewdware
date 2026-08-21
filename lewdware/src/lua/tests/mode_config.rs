@@ -182,6 +182,8 @@ fn resolve_mode_config_experience_mode_reads_scoped_experience_options() {
         shared::mode::ModeEntry::Option(shared::mode::ModeOption {
             label: "Pacing".to_string(),
             description: None,
+            suffix: None,
+            logarithmic: false,
             option_type: shared::mode::OptionType::Number {
                 default: 1.0,
                 min: None,

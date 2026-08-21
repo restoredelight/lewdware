@@ -33,19 +33,23 @@
           }
         },
         "popup_frequency": {
-          "label": "Popup frequency (seconds)",
+          "label": "Popup frequency",
           "description": "How often popups appear",
           "type": "number",
+          "suffix": "seconds",
           "default": 1,
           "min": 0.1,
           "max": 60,
           "step": 0.1,
+          "slider": true,
+          "logarithmic": true,
           "show_when": { "spawn_mode": "constant" }
         },
         "start_frequency": {
-          "label": "Starting frequency (seconds)",
+          "label": "Starting frequency",
           "description": "Initial time between popups",
           "type": "number",
+          "suffix": "seconds",
           "default": 5,
           "min": 0.1,
           "step": 0.1,
@@ -62,25 +66,28 @@
           "show_when": { "spawn_mode": "accelerating" }
         },
         "min_frequency": {
-          "label": "Minimum frequency (seconds)",
+          "label": "Minimum frequency",
           "description": "Fastest rate the mode will reach",
           "type": "number",
+          "suffix": "seconds",
           "default": 0.25,
           "min": 0.05,
           "step": 0.05,
           "show_when": { "spawn_mode": "accelerating" }
         },
         "random_min": {
-          "label": "Minimum interval (seconds)",
+          "label": "Minimum interval",
           "type": "number",
+          "suffix": "seconds",
           "default": 0.5,
           "min": 0.05,
           "step": 0.05,
           "show_when": { "spawn_mode": "random" }
         },
         "random_max": {
-          "label": "Maximum interval (seconds)",
+          "label": "Maximum interval",
           "type": "number",
+          "suffix": "seconds",
           "default": 5,
           "min": 0.1,
           "step": 0.1,
@@ -128,10 +135,11 @@
         "background_volume": {
           "label": "Background volume",
           "type": "number",
-          "default": 1,
+          "suffix": "%",
+          "default": 100,
           "min": 0,
-          "max": 1,
-          "step": 0.05,
+          "max": 100,
+          "step": 5,
           "slider": true,
           "show_when": { "background_audio_enabled": true }
         },
@@ -144,10 +152,11 @@
         "popup_volume": {
           "label": "Popup volume",
           "type": "number",
-          "default": 1,
+          "suffix": "%",
+          "default": 100,
           "min": 0,
-          "max": 1,
-          "step": 0.05,
+          "max": 100,
+          "step": 5,
           "slider": true,
           "show_when": { "popup_audio_enabled": true }
         },
@@ -171,29 +180,33 @@
           "default": false
         },
         "active_min": {
-          "label": "Active duration minimum (seconds)",
+          "label": "Active duration minimum",
           "type": "number",
+          "suffix": "seconds",
           "default": 30,
           "min": 1,
           "show_when": { "dormancy_enabled": true }
         },
         "active_max": {
-          "label": "Active duration maximum (seconds)",
+          "label": "Active duration maximum",
           "type": "number",
+          "suffix": "seconds",
           "default": 120,
           "min": 1,
           "show_when": { "dormancy_enabled": true }
         },
         "dormant_min": {
-          "label": "Dormant duration minimum (seconds)",
+          "label": "Dormant duration minimum",
           "type": "number",
+          "suffix": "seconds",
           "default": 120,
           "min": 1,
           "show_when": { "dormancy_enabled": true }
         },
         "dormant_max": {
-          "label": "Dormant duration maximum (seconds)",
+          "label": "Dormant duration maximum",
           "type": "number",
+          "suffix": "seconds",
           "default": 600,
           "min": 1,
           "show_when": { "dormancy_enabled": true }
@@ -211,13 +224,14 @@
           "default": false
         },
         "close_chance": {
-          "label": "Spawn chance (0–1)",
+          "label": "Spawn chance",
           "description": "Probability that closing a popup triggers more popups",
           "type": "number",
-          "default": 0.5,
-          "min": 0.01,
-          "max": 1,
-          "step": 0.01,
+          "suffix": "%",
+          "default": 50,
+          "min": 1,
+          "max": 100,
+          "step": 1,
           "show_when": { "close_trigger_enabled": true }
         },
         "close_count": {
@@ -294,15 +308,17 @@
         "window_opacity": {
           "label": "Popup opacity",
           "type": "number",
-          "default": 1,
-          "min": 0.2,
-          "max": 1,
-          "step": 0.05,
+          "suffix": "%",
+          "default": 100,
+          "min": 20,
+          "max": 100,
+          "step": 5,
           "slider": true
         },
         "auto_close_after": {
-          "label": "Close popups automatically after (seconds)",
+          "label": "Close popups automatically after",
           "type": "number",
+          "suffix": "seconds",
           "optional": true,
           "enabled_by_default": false,
           "default": 10,
@@ -335,9 +351,10 @@
           "needs_permissions": ["send_notifications"]
         },
         "notification_frequency": {
-          "label": "Notification frequency (seconds)",
+          "label": "Notification frequency",
           "description": "How often a notification appears",
           "type": "number",
+          "suffix": "seconds",
           "default": 120,
           "min": 1,
           "step": 1,
@@ -358,9 +375,10 @@
           "needs_permissions": ["open_links"]
         },
         "web_frequency": {
-          "label": "Web link frequency (seconds)",
+          "label": "Web link frequency",
           "description": "How often a web link opens",
           "type": "number",
+          "suffix": "seconds",
           "default": 300,
           "min": 1,
           "step": 1,
@@ -380,8 +398,9 @@
           "default": true
         },
         "prompt_frequency": {
-          "label": "Prompt frequency (seconds)",
+          "label": "Prompt frequency",
           "type": "number",
+          "suffix": "seconds",
           "default": 90,
           "min": 1,
           "step": 1,
@@ -403,6 +422,7 @@
           "max": 3,
           "step": 0.1,
           "slider": true,
+          "logarithmic": true,
           "show_when": { "prompts_enabled": true, "prompt_timeouts_enabled": true }
         },
         "prompt_wrong_answer": {

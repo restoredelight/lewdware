@@ -61,7 +61,7 @@ async fn sandbox_passes_its_window_behaviour_options_to_every_popup() {
                 OptionValue::Boolean(true),
             );
             config.insert("draggable".to_string(), OptionValue::Boolean(true));
-            config.insert("window_opacity".to_string(), OptionValue::Number(0.5));
+            config.insert("window_opacity".to_string(), OptionValue::Number(50.0));
             config.insert(
                 "click_action".to_string(),
                 OptionValue::Enum("nothing".to_string()),

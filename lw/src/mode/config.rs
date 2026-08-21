@@ -34,6 +34,9 @@ pub struct Config {
 pub struct ModeOption {
     pub label: String,
     pub description: Option<String>,
+    pub suffix: Option<String>,
+    #[serde(default)]
+    pub logarithmic: bool,
     #[serde(default)]
     pub optional: bool,
     #[serde(default)]
@@ -154,6 +157,8 @@ fn convert_option(key: &str, option: ModeOption) -> Result<mode::ModeOption> {
     let ModeOption {
         label,
         description,
+        suffix,
+        logarithmic,
         optional,
         enabled_by_default,
         show_when: raw_show_when,
@@ -173,6 +178,42 @@ fn convert_option(key: &str, option: ModeOption) -> Result<mode::ModeOption> {
         bail!("`{label}` has no default value");
     }
 
+    if suffix
+        .as_ref()
+        .is_some_and(|suffix| suffix.trim().is_empty())
+    {
+        bail!("`{label}` has an empty suffix");
+    }
+    if suffix.is_some()
+        && !matches!(
+            option_type,
+            OptionType::Integer { .. } | OptionType::Number { .. }
+        )
+    {
+        bail!("`suffix` is only valid on integer and number options");
+    }
+
+    if logarithmic {
+        let valid = match &option_type {
+            OptionType::Integer {
+                min: Some(min),
+                max: Some(max),
+                slider,
+                ..
+            } => slider.unwrap_or(true) && *min > 0 && max > min,
+            OptionType::Number {
+                min: Some(min),
+                max: Some(max),
+                slider,
+                ..
+            } => slider.unwrap_or(true) && *min > 0.0 && max > min,
+            _ => false,
+        };
+        if !valid {
+            bail!("`logarithmic` requires a slider with a positive `min` and a greater `max`");
+        }
+    }
+
     let option_type = option_type
         .try_into()
         .with_context(|| format!("Error in `{key}`"))?;
@@ -180,6 +221,8 @@ fn convert_option(key: &str, option: ModeOption) -> Result<mode::ModeOption> {
     Ok(mode::ModeOption {
         label,
         description,
+        suffix,
+        logarithmic,
         option_type,
         optional,
         enabled_by_default,
@@ -463,6 +506,65 @@ mod tests {
             panic!("expected a group");
         };
         assert!(group.needs_permissions.is_empty());
+    }
+
+    #[test]
+    fn numeric_presentation_is_preserved() {
+        let raw = serde_json::json!({
+            "frequency": {
+                "label": "Popup frequency",
+                "type": "number",
+                "suffix": "seconds",
+                "logarithmic": true,
+                "default": 1.0,
+                "min": 0.1,
+                "max": 10.0,
+                "slider": true
+            }
+        });
+        let map: IndexMap<String, JsonValue> = serde_json::from_value(raw).unwrap();
+        let entries = parse_entries(map).unwrap();
+
+        let mode::ModeEntry::Option(opt) = &entries["frequency"] else {
+            panic!("expected an option");
+        };
+        assert_eq!(opt.suffix.as_deref(), Some("seconds"));
+        assert!(opt.logarithmic);
+    }
+
+    #[test]
+    fn suffix_is_rejected_on_non_numeric_options() {
+        let raw = serde_json::json!({
+            "enabled": {
+                "label": "Enabled",
+                "type": "boolean",
+                "suffix": "seconds",
+                "default": true
+            }
+        });
+        let map: IndexMap<String, JsonValue> = serde_json::from_value(raw).unwrap();
+        assert!(parse_entries(map).is_err());
+    }
+
+    #[test]
+    fn invalid_logarithmic_sliders_are_rejected() {
+        for option in [
+            serde_json::json!({
+                "label": "Zero minimum", "type": "number", "default": 1,
+                "min": 0, "max": 10, "slider": true, "logarithmic": true
+            }),
+            serde_json::json!({
+                "label": "Not a slider", "type": "number", "default": 1,
+                "min": 0.1, "max": 10, "slider": false, "logarithmic": true
+            }),
+            serde_json::json!({
+                "label": "Not numeric", "type": "boolean", "default": true,
+                "logarithmic": true
+            }),
+        ] {
+            let map = IndexMap::from([("option".to_string(), option)]);
+            assert!(parse_entries(map).is_err());
+        }
     }
 
     /// A typo'd permission is a mode-author mistake worth failing the build over: silently

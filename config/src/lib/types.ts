@@ -487,6 +487,10 @@ export interface ModeOptionDto {
 	key: string;
 	label: string;
 	description: string | null;
+	/** Display-only text shown after an integer or number value. */
+	suffix: string | null;
+	/** Maps equal value ratios to equal distances along a numeric slider. */
+	logarithmic: boolean;
 	option_type: OptionType;
 	value: OptionValue;
 	optional: boolean;

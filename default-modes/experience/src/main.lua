@@ -8,6 +8,7 @@ local spawn = require("lib.spawn")
 local timeline = require("timeline")
 
 local function milliseconds(seconds) return math.max(1, math.floor(seconds * 1000)) end
+local function ratio(percent) return percent / 100 end
 local function is_dormant() return false end
 
 local popup_types = {}
@@ -27,7 +28,7 @@ local open_popup = spawn.make_spawner({
 	max_popups = popup_limit,
 	captions_enabled = config.captions_enabled,
 	popup_audio_enabled = config.popup_audio_enabled,
-	popup_audio_volume = config.popup_volume,
+	popup_audio_volume = ratio(config.popup_volume),
 	popup_audio_layered = config.popup_audio_layered,
 	movement_enabled = config.movement_enabled,
 	movement_speed_min = function() return timeline.movement() and timeline.movement().minimum_speed end,
@@ -84,7 +85,7 @@ local function play_sting()
 	if not config.popup_audio_enabled then return false end
 	local audio = media.random_popup_sting(timeline.tags())
 	if not audio then return false end
-	lewdware.play_audio(audio, media.background_options(audio, config.popup_volume))
+	lewdware.play_audio(audio, media.background_options(audio, ratio(config.popup_volume)))
 	return true
 end
 
@@ -97,7 +98,7 @@ local function prompt_wrong()
 	end
 	if effect.sound and config.popup_audio_enabled then
 		local audio = lewdware.media.get_audio(effect.sound)
-		if audio then lewdware.play_audio(audio, media.background_options(audio, config.popup_volume)) end
+		if audio then lewdware.play_audio(audio, media.background_options(audio, ratio(config.popup_volume))) end
 	end
 end
 
@@ -143,7 +144,7 @@ if config.background_audio_enabled then
 	local function start_track(name, gain)
 		local audio = name and lewdware.media.get_audio(name) or stage_background_audio()
 		if not audio then return nil end
-		local volume = media.background_options(audio, config.background_volume).volume
+		local volume = media.background_options(audio, ratio(config.background_volume)).volume
 		local state = { name=name, volume=volume }
 		state.handle = lewdware.play_audio(audio, { volume=volume * (gain or 1) })
 		state.handle:on_finish(function()
@@ -226,7 +227,7 @@ timeline.on_enter(function(entry)
 	if entry.splash and config.splash_enabled then wallpaper.show_splash(entry.splash) end
 	if entry.sound and config.popup_audio_enabled then
 		local audio = lewdware.media.get_audio(entry.sound)
-		if audio then lewdware.play_audio(audio, media.background_options(audio, config.popup_volume)) end
+		if audio then lewdware.play_audio(audio, media.background_options(audio, ratio(config.popup_volume))) end
 	end
 	if entry.notification and config.notifications_enabled then lewdware.show_notification({ body=entry.notification }) end
 	if entry.popup_burst and #popup_types > 0 then

@@ -18,9 +18,13 @@
 	import Card from '$ui/Card.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import IconButton from '$ui/IconButton.svelte';
+	import NumberField from '$ui/NumberField.svelte';
 
 	type Removal = { kind: 'pack' } | { kind: 'mode'; path: string; name: string };
 	let pendingRemoval = $state<Removal | null>(null);
+	// Slider drags preview locally; committing every pointer movement would queue IPC writes faster
+	// than the backend can acknowledge them. The draft only exists until the gesture ends.
+	let sliderDrafts = $state<Record<string, number>>({});
 
 	function fileName(path: string): string {
 		return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
@@ -146,6 +150,22 @@
 		if (opt.value !== null && typeof opt.value === 'number') return opt.value;
 		const fallback = lastValues.get(opt.key) ?? getInitialValue(opt);
 		return typeof fallback === 'number' ? fallback : 0;
+	}
+
+	function displayedNumberValue(opt: ModeOptionDto): number {
+		return sliderDrafts[opt.key] ?? (opt.value as number);
+	}
+
+	function previewSliderValue(opt: ModeOptionDto, value: number) {
+		// Show precisely the same discrete value that releasing the slider will save. `Slider` keeps
+		// its own position draft while dragging, so snapping this field does not make the thumb or
+		// its painted track jump between steps.
+		sliderDrafts[opt.key] = clampValue(roundToStep(value, uiStep(opt)), opt);
+	}
+
+	function commitSliderValue(opt: ModeOptionDto, value: number, step: number) {
+		delete sliderDrafts[opt.key];
+		handleNumberInput(opt, String(value), step);
 	}
 
 	// The slider passes its own `step`: it snaps to `uiStep`, which may be finer than the mode's
@@ -311,6 +331,25 @@
 	</p>
 {/snippet}
 
+{#snippet numberField(opt: ModeOptionDto, disabled: boolean)}
+	<div class="flex items-center gap-2">
+		<NumberField
+			label={opt.suffix ? `${opt.label} (${opt.suffix})` : opt.label}
+			value={displayedNumberValue(opt)}
+			min={getMin(opt)}
+			max={getMax(opt)}
+			step={uiStep(opt)}
+			size="compact"
+			hideLabel
+			{disabled}
+			oninput={(value) => value !== null && handleNumberInput(opt, String(value))}
+			class="w-24"
+		/>
+		{#if opt.suffix}<span class="text-muted font-mono text-xs" aria-hidden="true">{opt.suffix}</span
+			>{/if}
+	</div>
+{/snippet}
+
 {#snippet optionControl(opt: ModeOptionDto, disabled: boolean = false)}
 	{@const typeKey = optionTypeKey(opt)}
 
@@ -346,39 +385,23 @@
 		/>
 	{:else if typeKey === 'Integer' || typeKey === 'Number'}
 		{#if isSlider(opt)}
-			{@const displayVal = sliderDisplayValue(opt)}
+			{@const displayVal = sliderDrafts[opt.key] ?? sliderDisplayValue(opt)}
 			{@const step = uiStep(opt)}
 			<Slider
-				ariaLabel={opt.label}
+				ariaLabel={opt.suffix ? `${opt.label} (${opt.suffix})` : opt.label}
 				min={getMin(opt) ?? 0}
 				max={getMax(opt) ?? 100}
 				{step}
+				logarithmic={opt.logarithmic}
 				value={displayVal}
 				{disabled}
-				oninput={(value) => handleNumberInput(opt, String(value), step)}
-				class="w-40 sm:w-52"
+				oninput={(value) => previewSliderValue(opt, value)}
+				onchange={(value) => commitSliderValue(opt, value, step)}
+				class="w-56 sm:w-72"
 			/>
-			<input
-				type="number"
-				value={opt.value as number}
-				min={getMin(opt)}
-				max={getMax(opt)}
-				step={uiStep(opt)}
-				{disabled}
-				oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
-				class="border-border bg-bg text-text w-24 rounded-sm border px-2.5 py-1.5 text-sm transition-colors hover:border-[var(--ui-border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
-			/>
+			{@render numberField(opt, disabled)}
 		{:else}
-			<input
-				type="number"
-				value={opt.value as number}
-				min={getMin(opt)}
-				max={getMax(opt)}
-				step={uiStep(opt)}
-				{disabled}
-				oninput={(e) => handleNumberInput(opt, e.currentTarget.value)}
-				class="border-border bg-bg text-text w-24 rounded-sm border px-2.5 py-1.5 text-sm transition-colors hover:border-[var(--ui-border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
-			/>
+			{@render numberField(opt, disabled)}
 		{/if}
 	{/if}
 {/snippet}
