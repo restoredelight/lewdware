@@ -30,6 +30,7 @@ fn media_manager_reads_a_default_document_when_the_pack_has_none() {
 fn empty_default_mode_metadata() -> Metadata {
     Metadata {
         name: "test-mode".to_string(),
+        description: None,
         version: None,
         author: None,
         entrypoint: "main.lua".to_string(),
@@ -197,6 +198,7 @@ fn resolve_mode_config_experience_mode_reads_scoped_experience_options() {
     );
     let metadata = Metadata {
         name: "Experience".to_string(),
+        description: None,
         version: None,
         author: None,
         entrypoint: "main.lua".to_string(),

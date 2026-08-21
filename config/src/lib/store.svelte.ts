@@ -13,6 +13,7 @@ import type {
 	OptionEntryDto,
 	Permission,
 	OptionValue,
+	PackMetadataDto,
 	MonitorDto,
 	MonitorRegion,
 	QuietHoursDto,
@@ -89,6 +90,7 @@ class AppStore {
 	audioDevicesLoading = $state(false);
 	audioDevicesError = $state<string | null>(null);
 	modeGroups = $state<ModeGroupDto[]>([]);
+	packMetadata = $state<PackMetadataDto | null>(null);
 	/** The window looks on offer, read once at load. Static for the life of the app -- it is the
 	 * engine's own catalogue (`shared::theme`), not anything the user can change. */
 	themeCatalogue = $state<ThemeCatalogueDto>({
@@ -185,13 +187,15 @@ class AppStore {
 		// and the Monitors section renders its own loading/error state.
 		void this.loadMonitors();
 		try {
-			const [config, modeGroups, modeOptions, themeCatalogue] = await Promise.all([
+			const [config, packMetadata, modeGroups, modeOptions, themeCatalogue] = await Promise.all([
 				api.getConfig(),
+				api.getPackMetadata(),
 				api.getModeGroups(),
 				api.getModeOptions(),
 				api.getThemeCatalogue()
 			]);
 			this.config = config;
+			this.packMetadata = packMetadata;
 			this.modeGroups = modeGroups;
 			this.applyModeOptions(modeOptions);
 			this.themeCatalogue = themeCatalogue;
@@ -460,6 +464,7 @@ class AppStore {
 			if (!result || !this.config) return;
 			taskFeedback.progress('pack', 'Opening pack…');
 			this.config = { ...this.config, pack_path: result.pack_path };
+			this.packMetadata = result.pack_metadata;
 			if (result.first_mode) await this.setMode(result.first_mode, result.mode_groups);
 			else this.modeGroups = result.mode_groups;
 			taskFeedback.success('pack', 'Pack selected');
@@ -478,6 +483,7 @@ class AppStore {
 			await api.removePack();
 			if (!this.config) return;
 			this.config = { ...this.config, pack_path: null };
+			this.packMetadata = null;
 			const [groups, options] = await Promise.all([api.getModeGroups(), api.getModeOptions()]);
 			this.modeGroups = groups;
 			this.applyModeOptions(options);

@@ -16,6 +16,7 @@ pub struct Config {
     /// build` just copies it into the compiled `.lwmode` header on every build.
     pub id: Uuid,
     pub name: String,
+    pub description: Option<String>,
     pub version: Option<String>,
     pub author: Option<String>,
     pub entrypoint: String,

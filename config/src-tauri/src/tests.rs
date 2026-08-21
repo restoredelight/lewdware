@@ -15,12 +15,13 @@ use uuid::Uuid;
 use std::sync::Mutex;
 
 use crate::dto::{ConfigDto, OptionEntryDto};
-use crate::modes::{apply_config_dto, get_mode_options_for, load_pack};
+use crate::modes::{apply_config_dto, build_mode_groups, get_mode_options_for, load_pack};
 use crate::state::{AppState, LoadedPack, PackModeEntry};
 
 fn empty_metadata(name: &str) -> Metadata {
     Metadata {
         name: name.to_string(),
+        description: None,
         version: None,
         author: None,
         entrypoint: "main.lua".to_string(),
@@ -262,11 +263,32 @@ fn loaded_pack(behaviour: Behaviour, modes: Vec<PackModeEntry>) -> LoadedPack {
     LoadedPack {
         _db_file: NamedTempFile::new().unwrap(),
         id: Uuid::new_v4(),
+        metadata: shared::pack::Metadata::default(),
         modes,
         behaviour,
         referenced_media: HashMap::new(),
         recommended_mode: None,
     }
+}
+
+#[test]
+fn mode_groups_include_authored_descriptions() {
+    let mut metadata = empty_metadata("Described mode");
+    metadata.description = Some("Explains how this mode behaves.".to_string());
+    let pack = loaded_pack(Behaviour::new(), vec![PackModeEntry { id: 7, metadata }]);
+    let state = test_state(Some(pack));
+
+    let groups = build_mode_groups(&state);
+    let entry = groups
+        .iter()
+        .find(|group| group.source == "pack")
+        .and_then(|group| group.entries.first())
+        .expect("the embedded mode is listed");
+
+    assert_eq!(
+        entry.description.as_deref(),
+        Some("Explains how this mode behaves.")
+    );
 }
 
 fn test_state(pack: Option<LoadedPack>) -> AppState {

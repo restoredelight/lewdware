@@ -4,7 +4,10 @@
 use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 use shared::{
-    behaviour::Behaviour, encode::FileType, mode::Metadata, pack::RecommendedMode,
+    behaviour::Behaviour,
+    encode::FileType,
+    mode::Metadata,
+    pack::{Metadata as PackMetadata, RecommendedMode},
     user_config::AppConfig,
 };
 use tempfile::NamedTempFile;
@@ -23,6 +26,7 @@ pub struct UploadedModeEntry {
 pub struct LoadedPack {
     pub _db_file: NamedTempFile,
     pub id: Uuid,
+    pub metadata: PackMetadata,
     pub modes: Vec<PackModeEntry>,
     /// The pack's behaviour.json, if it has one -- `Behaviour::new()` (empty) otherwise. Used
     /// only to synthesize the built-in default modes' content-group toggles (see

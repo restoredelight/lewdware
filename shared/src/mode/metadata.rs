@@ -30,6 +30,8 @@ pub enum Permission {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Metadata {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub version: Option<String>,
     pub author: Option<String>,
     pub entrypoint: String,
@@ -553,6 +555,7 @@ mod tests {
 
         Metadata {
             name: "test-mode".to_string(),
+            description: Some("A mode used in metadata tests".to_string()),
             version: Some("1.0.0".to_string()),
             author: Some("tester".to_string()),
             entrypoint: "main.lua".to_string(),
@@ -574,6 +577,7 @@ mod tests {
     fn metadata_minimal_roundtrip() {
         let original = Metadata {
             name: "min".to_string(),
+            description: None,
             version: None,
             author: None,
             entrypoint: "main.lua".to_string(),
@@ -586,9 +590,8 @@ mod tests {
         assert_eq!(original, decoded);
     }
 
-    /// The real risk in adding `requires`: every `.lwmode` built before it existed has no key for
-    /// it anywhere in its CBOR, and must keep decoding. `#[serde(default)]` is what makes that
-    /// true, so it needs a test that fails if the attribute is ever dropped.
+    /// Permission declarations were added after the first mode format. Keep that field compatible
+    /// with modes that predate it.
     #[test]
     fn metadata_without_needs_permissions_still_decodes() {
         #[derive(Serialize)]
@@ -610,6 +613,7 @@ mod tests {
         #[derive(Serialize)]
         struct OldMetadata {
             name: String,
+            description: Option<String>,
             version: Option<String>,
             author: Option<String>,
             entrypoint: String,
@@ -634,6 +638,7 @@ mod tests {
         into_writer(
             &OldMetadata {
                 name: "old".to_string(),
+                description: None,
                 version: None,
                 author: None,
                 entrypoint: "main.lua".to_string(),

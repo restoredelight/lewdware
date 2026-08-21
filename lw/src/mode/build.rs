@@ -124,6 +124,7 @@ fn create_metadata(
         include: _,
         id: _,
         name,
+        description,
         version,
         author,
         entrypoint,
@@ -157,6 +158,7 @@ fn create_metadata(
 
     Ok(mode::Metadata {
         name,
+        description,
         version,
         author,
         entrypoint,
@@ -191,6 +193,7 @@ mod tests {
             include: ["src"],
             id: "3f6c9b1a-2b4a-4e3a-9c9b-1a2b4a4e3a9c",
             name: "roundtrip-test",
+            description: "Explains what the roundtrip mode does",
             version: "0.1.0",
             author: "tester",
             entrypoint: "src/main.lua",
@@ -205,6 +208,10 @@ mod tests {
         let (_, metadata) = read_mode_metadata(&mut tmp).unwrap();
 
         assert_eq!(metadata.name, "roundtrip-test");
+        assert_eq!(
+            metadata.description.as_deref(),
+            Some("Explains what the roundtrip mode does")
+        );
         assert_eq!(metadata.version.as_deref(), Some("0.1.0"));
         assert_eq!(metadata.author.as_deref(), Some("tester"));
         assert_eq!(metadata.entrypoint, "main.lua");

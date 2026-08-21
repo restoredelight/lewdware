@@ -3,13 +3,14 @@ use shared::pack::RecommendedMode;
 use shared::user_config::Mode;
 use tauri::{AppHandle, Emitter};
 
-use crate::dto::{ModeGroupDto, ModeIdDto};
+use crate::dto::{ModeGroupDto, ModeIdDto, PackMetadataDto};
 use crate::modes::{build_mode_groups, load_pack, save_to_disk};
 use crate::state::State;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PickPackResult {
     pub pack_path: String,
+    pub pack_metadata: PackMetadataDto,
     pub mode_groups: Vec<ModeGroupDto>,
     pub first_mode: Option<ModeIdDto>,
 }
@@ -57,6 +58,7 @@ pub async fn pick_pack(
         }));
 
     let pack_path_str = path.to_string_lossy().into_owned();
+    let pack_metadata = PackMetadataDto::from(&loaded.metadata);
     *state.pack.lock().unwrap() = Some(loaded);
 
     let mut config = state.config.lock().unwrap();
@@ -71,9 +73,20 @@ pub async fn pick_pack(
 
     Ok(Some(PickPackResult {
         pack_path: pack_path_str,
+        pack_metadata,
         mode_groups: groups,
         first_mode,
     }))
+}
+
+#[tauri::command]
+pub fn get_pack_metadata(state: State<'_>) -> Option<PackMetadataDto> {
+    state
+        .pack
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|pack| PackMetadataDto::from(&pack.metadata))
 }
 
 #[tauri::command]

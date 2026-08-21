@@ -58,6 +58,7 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
         anyhow::bail!("Name is required");
     }
     let author = prompt("Author", None)?;
+    let description = prompt("Description", None)?;
     let version = prompt("Version", Some("0.1.0"))?;
 
     let base_path = PathBuf::from(&name);
@@ -75,6 +76,7 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
     if from_default {
         let escaped_name = json_escape(&name);
         let escaped_author = json_escape(&author);
+        let escaped_description = json_escape(&description);
         let escaped_version = json_escape(&version);
 
         let config_content = DEFAULT_CONFIG_JSONC
@@ -84,6 +86,10 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
             )
             .replacen("cd5a36d6-ca1c-4381-97b3-0d2f00d1d401", &id.to_string(), 1)
             .replace("\"Sandbox\"", &format!("\"{}\"", escaped_name))
+            .replace(
+                "Configure popup timing, media, interactions, audio, and other behaviour yourself.",
+                &escaped_description,
+            )
             .replace("\"restoredelight\"", &format!("\"{}\"", escaped_author))
             .replace("\"0.1.0\"", &format!("\"{}\"", escaped_version))
             .replace("[\"../shared\", \"src\"]", "[\"src\"]");
@@ -98,6 +104,7 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
     } else {
         let escaped_name = json_escape(&name);
         let escaped_author = json_escape(&author);
+        let escaped_description = json_escape(&description);
         let escaped_version = json_escape(&version);
 
         let config_content = format!(
@@ -105,6 +112,7 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
   "$schema": "https://lewdware.net/reference/config.schema.json",
   "id": "{id}",
   "name": "{escaped_name}",
+  "description": "{escaped_description}",
   "version": "{escaped_version}",
   "author": "{escaped_author}",
   "include": ["src"],

@@ -4,6 +4,7 @@
   "include": ["../shared", "src"],
   "id": "cd5a36d6-ca1c-4381-97b3-0d2f00d1d401",
   "name": "Sandbox",
+  "description": "Configure popup timing, media, interactions, audio, and other behaviour yourself.",
   "version": "0.1.0",
   "author": "restoredelight",
   "entrypoint": "src/main.lua",

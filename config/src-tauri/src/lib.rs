@@ -76,6 +76,7 @@ pub fn run() {
             commands::modes::get_mode_groups,
             commands::modes::get_mode_options,
             commands::modes::set_mode_option,
+            commands::pack::get_pack_metadata,
             commands::pack::pick_pack,
             commands::pack::remove_pack,
             commands::modes::upload_mode,

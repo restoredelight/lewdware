@@ -10,6 +10,7 @@ import type {
 	ModeId,
 	ModeOptionsDto,
 	MonitorDto,
+	PackMetadataDto,
 	PickPackResult,
 	ScheduleStatusDto,
 	StoredValue,
@@ -49,6 +50,8 @@ export const api = {
 		invoke<TestAudioResult>('test_audio_device', { device }),
 
 	getModeGroups: () => invoke<ModeGroupDto[]>('get_mode_groups'),
+
+	getPackMetadata: () => invoke<PackMetadataDto | null>('get_pack_metadata'),
 
 	getModeOptions: () => invoke<ModeOptionsDto>('get_mode_options'),
 

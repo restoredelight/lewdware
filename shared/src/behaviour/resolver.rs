@@ -224,6 +224,7 @@ mod tests {
     fn empty_mode_schema() -> Metadata {
         Metadata {
             name: "test-mode".to_string(),
+            description: None,
             version: None,
             author: None,
             entrypoint: "main.lua".to_string(),
@@ -256,6 +257,7 @@ mod tests {
         );
         Metadata {
             name: "test-mode".to_string(),
+            description: None,
             version: None,
             author: None,
             entrypoint: "main.lua".to_string(),

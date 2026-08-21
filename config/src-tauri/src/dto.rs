@@ -354,6 +354,26 @@ pub struct MonitorDto {
 pub struct ModeEntryDto {
     pub id: ModeIdDto,
     pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PackMetadataDto {
+    pub name: String,
+    pub creator: Option<String>,
+    pub description: Option<String>,
+    pub version: Option<String>,
+}
+
+impl From<&shared::pack::Metadata> for PackMetadataDto {
+    fn from(metadata: &shared::pack::Metadata) -> Self {
+        Self {
+            name: metadata.name.clone(),
+            creator: metadata.creator.clone(),
+            description: metadata.description.clone(),
+            version: metadata.version.clone(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

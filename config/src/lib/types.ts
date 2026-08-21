@@ -414,6 +414,14 @@ export interface DiagnosticsDto {
 export interface ModeEntryDto {
 	id: ModeId;
 	name: string;
+	description: string | null;
+}
+
+export interface PackMetadataDto {
+	name: string;
+	creator: string | null;
+	description: string | null;
+	version: string | null;
 }
 
 export interface ModeGroupDto {
@@ -516,6 +524,7 @@ export type OptionEntryDto =
 
 export interface PickPackResult {
 	pack_path: string;
+	pack_metadata: PackMetadataDto;
 	mode_groups: ModeGroupDto[];
 	first_mode: ModeId | null;
 }

@@ -40,6 +40,15 @@
 		)
 	);
 
+	const packMetadataLine = $derived(
+		[
+			store.packMetadata?.creator ? `By ${store.packMetadata.creator}` : null,
+			store.packMetadata?.version ? `Version ${store.packMetadata.version}` : null
+		]
+			.filter(Boolean)
+			.join(' · ')
+	);
+
 	function sourceName(source: 'pack' | 'uploaded' | 'builtin'): string {
 		if (source === 'pack') return 'Pack';
 		if (source === 'uploaded') return 'Uploaded';
@@ -390,7 +399,7 @@
 				<p class="text-muted mt-1 mb-0 text-xs">Contains media, captions, prompts, etc.</p>
 			</div>
 			{#if store.config?.pack_path}
-				<Card class="flex items-center gap-4 p-4">
+				<Card class="flex items-start gap-4 p-4">
 					<div
 						class="bg-accent/10 text-accent-foreground grid h-10 w-10 shrink-0 place-items-center rounded-md"
 					>
@@ -398,13 +407,21 @@
 					</div>
 					<div class="min-w-0 flex-1">
 						<p class="text-text m-0 truncate text-sm font-semibold">
-							{fileName(store.config.pack_path)}
+							{store.packMetadata?.name || fileName(store.config.pack_path)}
 						</p>
-						<p class="text-muted m-0 mt-0.5 truncate text-xs" title={store.config.pack_path}>
+						{#if store.packMetadata?.description}
+							<p class="text-muted m-0 mt-1 text-xs leading-relaxed">
+								{store.packMetadata.description}
+							</p>
+						{/if}
+						{#if packMetadataLine}
+							<p class="ui-metadata m-0 mt-1.5">{packMetadataLine}</p>
+						{/if}
+						<p class="ui-metadata m-0 mt-0.5 truncate" title={store.config.pack_path}>
 							{store.config.pack_path}
 						</p>
 					</div>
-					<div class="flex shrink-0 items-center gap-2">
+					<div class="flex shrink-0 items-center gap-2 self-center">
 						<Button
 							size="compact"
 							variant="destructive"
@@ -470,23 +487,31 @@
 									disabled={store.isBusy('mode')}
 									role="radio"
 									aria-checked={selected}
-									class="text-text flex min-h-10 flex-1 cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-left
+									class="text-text flex min-h-10 flex-1 cursor-pointer items-start gap-3 rounded-md px-3 py-2 text-left
                    text-sm transition-colors disabled:cursor-not-allowed
                    {selected
 										? 'bg-surface-2 font-medium shadow-[inset_2px_0_0_var(--ui-accent-hover)]'
 										: 'hover:bg-surface-2'}"
 								>
 									<span
-										class="grid h-4 w-4 shrink-0 place-items-center rounded-full border {selected
+										class="mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border {selected
 											? 'border-accent bg-accent'
 											: 'border-border-strong'}"
 									>
 										{#if selected}<span class="h-2 w-2 text-white"><Icon src={Check} mini /></span
 											>{/if}
 									</span>
-									<span class="min-w-0 flex-1 truncate">{mode.entry.name}</span>
+									<span class="min-w-0 flex-1">
+										<span class="block truncate">{mode.entry.name}</span>
+										{#if mode.entry.description}
+											<span
+												class="text-muted mt-0.5 line-clamp-2 block text-xs leading-relaxed font-normal"
+												title={mode.entry.description}>{mode.entry.description}</span
+											>
+										{/if}
+									</span>
 									<span
-										class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] leading-4 font-semibold {sourceClass(
+										class="mt-px shrink-0 rounded-full border px-2 py-0.5 text-[10px] leading-4 font-semibold {sourceClass(
 											mode.source
 										)}"
 										title={mode.source === 'pack' ? mode.sourceLabel : undefined}

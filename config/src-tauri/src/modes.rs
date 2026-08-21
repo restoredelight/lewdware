@@ -77,6 +77,7 @@ pub fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
     Ok(LoadedPack {
         _db_file: db_file,
         id: header.id,
+        metadata: metadata.clone(),
         modes,
         behaviour,
         referenced_media,
@@ -117,6 +118,7 @@ pub fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
             .map(|m| ModeEntryDto {
                 id: ModeIdDto::Pack { id: m.id },
                 name: m.metadata.name.clone(),
+                description: m.metadata.description.clone(),
             })
             .collect();
 
@@ -142,6 +144,7 @@ pub fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
         let entries = vec![ModeEntryDto {
             id: ModeIdDto::File { path: path_str },
             name: entry.metadata.name.clone(),
+            description: entry.metadata.description.clone(),
         }];
 
         groups.push(ModeGroupDto {
@@ -180,6 +183,7 @@ pub fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
                     &state.sandbox_mode.name,
                     matches!(recommended, Some(RecommendedMode::Sandbox)),
                 ),
+                description: state.sandbox_mode.description.clone(),
             },
             ModeEntryDto {
                 id: ModeIdDto::Experience,
@@ -189,6 +193,7 @@ pub fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
                         .unwrap_or(&state.experience_mode.name),
                     matches!(recommended, Some(RecommendedMode::Experience)),
                 ),
+                description: state.experience_mode.description.clone(),
             },
         ],
     });
