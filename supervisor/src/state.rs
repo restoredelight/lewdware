@@ -8,6 +8,9 @@
 //! `last_tick` is here for a subtler reason. It is the only way to notice that time passed while
 //! the supervisor was *not running* -- and that gap is the presence signal: a machine that was off
 //! is a machine nobody was sitting at. Without persisting it there is nothing to learn from.
+//!
+//! [`LastStop`] is what keeps that inference honest: "the supervisor was not running" has two
+//! quite different causes, and only one of them says anything at all about the user.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,6 +19,33 @@ use chrono::{DateTime, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use shared::schedule::PresenceProfile;
 use uuid::Uuid;
+
+/// Why the previous run ended, which is the only thing that says what the gap since its
+/// `last_tick` means.
+///
+/// The distinction the profile lives or dies by: a supervisor that bowed out on its own leaves a
+/// gap the user was very probably sitting through, while a machine that took the supervisor down
+/// with it leaves a gap nobody could have been at the desk for. Learning the first as absence
+/// teaches the profile that nobody is ever there -- and a schedule that thinks nobody is ever
+/// there stops firing.
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LastStop {
+    /// The process ended without the chance to say so: a crash, a `SIGKILL`, a power cut, or a
+    /// platform whose logout we cannot hook. Read as absence -- the same reading the gap got
+    /// before this field existed, and the right one for the common causes, which all involve the
+    /// machine going away.
+    #[default]
+    Unrecorded,
+    /// The supervisor stopped itself while the machine kept running: the idle self-terminate
+    /// after a session ends, or scheduling being switched off. The user was very likely still
+    /// there, so the gap is not evidence of anything and is learned as nothing at all.
+    Supervisor,
+    /// The session or the machine went away under us -- a logout, a shutdown, a reboot. Learned
+    /// as absence, and unlike [`Unrecorded`](LastStop::Unrecorded) the interval leading up to it
+    /// is recorded too, so the last hour before a shutdown is not swallowed by the gap after it.
+    System,
+}
 
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
 pub struct PersistedBudget {
@@ -32,10 +62,14 @@ pub struct PersistedState {
     /// A pause still running. Restored so a panic outlives a logout.
     #[serde(default)]
     pub cooldown_until: Option<DateTime<Local>>,
-    /// When the engine last ticked. The gap between this and startup is time the supervisor was
-    /// not running.
+    /// When the engine last ticked, or when the previous run recorded its stop. The gap between
+    /// this and startup is time the supervisor was not running; `last_stop` says what that means.
     #[serde(default)]
     pub last_tick: Option<DateTime<Local>>,
+    /// How the previous run ended. Written at a stop we saw coming and cleared on the first tick
+    /// of the next run, so a run that dies without warning leaves the default behind.
+    #[serde(default)]
+    pub last_stop: LastStop,
     #[serde(default)]
     pub profile: PresenceProfile,
 }

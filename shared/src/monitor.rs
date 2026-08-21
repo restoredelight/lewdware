@@ -1,9 +1,7 @@
-//! Since the engine always uses X11, its view of the monitors may be different from
-//! the config app.
-
 use serde::{Deserialize, Serialize};
 
-/// One monitor, as the engine sees it.
+/// Since the engine always uses X11, its view of the monitors may be different from
+/// the config app. Hence, the config app queries the engine to get monitor info.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MonitorInfo {
     pub id: String,
@@ -24,6 +22,7 @@ fn default_scale_factor() -> f64 {
     1.0
 }
 
+/// A region of a monitor (where all values are 0-1)
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MonitorRegion {
     pub x: f64,
@@ -32,19 +31,13 @@ pub struct MonitorRegion {
     pub height: f64,
 }
 
-/// The whole monitor: what every monitor without an entry in `AppConfig::monitor_regions` gets.
 impl Default for MonitorRegion {
     fn default() -> Self {
         Self::FULL
     }
 }
 
-/// The smallest region the engine will act on, in logical pixels.
-///
-/// A region is dragged out by hand, so an accidental one-pixel rectangle is a real possibility --
-/// and a monitor that small has no room for even a decorated empty window, so every popup would
-/// pile up on its origin. Rounding a too-small region up is the recoverable failure; the user can
-/// see what happened and drag it bigger.
+/// Region sizes are rounded up to this value
 pub const MIN_REGION_SIZE: u32 = 100;
 
 /// A [`MonitorRegion`] resolved against a monitor's size.
@@ -97,7 +90,7 @@ fn resolve_axis(offset: f64, extent: f64, total: u32) -> (i32, u32) {
 }
 
 /// Makes the engine print its monitor list as JSON and exit.
-pub const LIST_MONITORS_FLAG: &str = "--list-monitors";
+pub const LIST_MONITORS_COMMAND: &str = "list-monitors";
 
 pub fn geometry_id(width: u32, height: u32, x: i32, y: i32) -> String {
     format!("{width}x{height}+{x}+{y}")

@@ -1,3 +1,5 @@
+//! Read and write the header and metadata of pack files
+
 use std::{
     error, fmt,
     io::{self, Cursor, Read, Seek, SeekFrom, Write},

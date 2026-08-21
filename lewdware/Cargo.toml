@@ -10,6 +10,7 @@ edition = "2024"
 [dependencies]
 shared = { path = "../shared/", features = ["mlua", "ipc"] }
 anyhow = "1.0.99"
+clap = { version = "4.6.1", features = ["derive"] }
 egui = { version = "0.34.2", features = ["serde"] }
 egui-wgpu = "0.34.2"
 egui-winit = "0.34.2"

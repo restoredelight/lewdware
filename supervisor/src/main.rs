@@ -13,6 +13,7 @@ mod panic_key;
 mod presence;
 mod schedule;
 mod session;
+mod shutdown;
 mod state;
 mod tray;
 mod wallpaper;

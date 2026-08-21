@@ -419,7 +419,7 @@ class AppStore {
 		this.saveSchedule();
 	}
 
-	// The scalar schedule settings (cooldown, away timeout, panic cooldown) in one place, since
+	// The scalar schedule settings (cooldown, panic cooldown) in one place, since
 	// each is a single number with identical save handling.
 	setScheduleSettings(patch: Partial<ScheduleDto>) {
 		if (!this.config) return;

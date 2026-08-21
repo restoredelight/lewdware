@@ -144,7 +144,7 @@ pub fn open_sink() -> Result<(MixerDeviceSink, SinkDevice), rodio::DeviceSinkErr
 }
 
 /// Prints this process's view of the output devices as JSON, then exits. Driven by
-/// `shared::audio::LIST_AUDIO_DEVICES_FLAG`.
+/// `shared::audio::LIST_AUDIO_DEVICES_COMMAND`.
 pub fn list_audio_devices() -> Result<()> {
     let host = cpal::default_host();
 
@@ -180,7 +180,7 @@ pub fn list_audio_devices() -> Result<()> {
 const TEST_TONE_AMPLITUDE: f32 = 0.22;
 
 /// Plays a short chime on `device` and returns once it has finished. Driven by
-/// `shared::audio::TEST_AUDIO_FLAG`.
+/// `shared::audio::TEST_AUDIO_COMMAND`.
 pub fn play_test_tone(device: Option<String>) -> Result<()> {
     set_output_device(device);
 

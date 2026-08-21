@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::schedule::{StartRequest, StopReason};
 use crate::session::{self, SessionCommand, SessionExit};
+use crate::state::LastStop;
 use crate::tray::{TrayAction, TrayContents, TrayItem, TrayUpdater, TrayView};
 use crate::{backoff, engine, schedule, wallpaper};
 use shared::schedule::SessionOverrides;
@@ -75,6 +76,12 @@ pub enum ControlMessage {
     /// The grace notification's Cancel action was clicked -- drop this one firing.
     GraceCancelled {
         generation: u64,
+    },
+    /// We are being stopped from outside -- a logout, a shutdown, or somebody pressing Ctrl-C.
+    /// `shutdown.rs` says which, and the whole point of routing it through here is to get it
+    /// written down before the process leaves.
+    Stopping {
+        stop: LastStop,
     },
 }
 
@@ -277,6 +284,7 @@ impl Control {
                     self.tick_schedule().await;
                 }
             }
+            ControlMessage::Stopping { stop } => self.stop_now(stop),
         }
     }
 
@@ -600,8 +608,23 @@ impl Control {
         // true while idle.
         if currently_idle && seq_matches && !self.schedule.resident_required() {
             tracing::info!("no active session for {IDLE_TIMEOUT:?}, exiting");
-            std::process::exit(0);
+            // Recorded as *our* stop, not the machine's: the desktop carries on without us, and
+            // the hours until the next start say nothing about where the user was. Learning them
+            // as absence -- which is what an unrecorded stop means -- would have the profile
+            // conclude that nobody is ever at the machine, since every one of these gaps ends the
+            // moment somebody uses it again.
+            self.stop_now(LastStop::Supervisor);
         }
+    }
+
+    /// Writes down how this run ended and leaves.
+    ///
+    /// Deliberately makes no attempt to end a running session first: at a logout or a shutdown the
+    /// engine is being taken down by the same event we are, and at any other stop the session was
+    /// never ours to end.
+    fn stop_now(&mut self, stop: LastStop) -> ! {
+        self.schedule.note_stopping(Local::now(), stop);
+        std::process::exit(0);
     }
 
     fn arm_idle_timer(&self, seq: Option<u64>) {

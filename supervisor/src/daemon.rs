@@ -78,6 +78,9 @@ async fn run_services(
     tray: crate::tray::TrayUpdater,
 ) {
     crate::panic_key::spawn_panic_thread(control_tx.clone(), config.panic_button);
+    // Before anything else can stop us: the schedule engine reads every gap in its own uptime as
+    // evidence about the user, so a stop that arrives unannounced is a stop that gets misread.
+    crate::shutdown::spawn(control_tx.clone());
 
     // Push side of `Request::Subscribe`: Control publishes, the IPC server streams to
     // subscribers. Seeded with an idle status so a subscriber that connects before Control's

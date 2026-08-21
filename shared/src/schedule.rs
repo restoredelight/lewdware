@@ -1,18 +1,15 @@
-//! Scheduling: the v2 vocabulary (`design/scheduling.md`) and the pure calculation over it.
+//! Scheduling vocabulary and pure calculations.
 //!
-//! Everything here is a total function of its arguments -- no clock is read internally, no
-//! randomness is drawn, no state is kept. The supervisor owns the stateful half (budget counters,
-//! presence accumulation, the RNG draw); keeping the arithmetic here is what makes it assertable
-//! against a fake `now`.
-//!
-//! The central v2 change: a rule no longer names an *instant*. `Trigger::Rate` names an
-//! opportunity range plus how often to fire inside it, and the firing time falls out of a hazard
-//! rate integrated over presence -- so there is no pre-rolled time anywhere to cache, to leak over
-//! IPC, or to display. v1's jitter roll was exactly such a time, and all three of its known
-//! defects were artifacts of caching it.
+//! A rate rule is a fixed-quota point process, not an ordinary Poisson process. Ignoring the cap
+//! and tick discretisation, `remaining / expected_remaining_time` is the conditional hazard of the
+//! next of `remaining` uniformly distributed points. Spending one budget item after a firing gives
+//! the subsequent order statistics, so the budget is a hard upper bound rather than merely an
+//! expected count. The cooldown-derived cap deliberately breaks exact quota completion near the
+//! end of a range: under-delivery is preferable to cramming the remaining sessions together.
 
 use std::path::PathBuf;
 
+use anyhow::Context;
 use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, Local, LocalResult, NaiveDate, TimeZone,
     Timelike,
@@ -26,14 +23,12 @@ use crate::user_config::Mode;
 pub type Days = [bool; 7];
 
 /// How far ahead the supervisor looks for occurrences, and how far back it looks so that an
-/// occurrence anchored yesterday (an overnight range) is still found while it is running.
+/// occurrence started yesterday is still found while it is running.
 pub const HORIZON_DAYS: i64 = 8;
 pub const LOOKBACK_DAYS: i64 = 1;
 
 /// Hour-of-week buckets in a [`PresenceProfile`]: 7 days x 24 hours, Monday 00:00 == 0.
 pub const PRESENCE_BUCKETS: usize = 7 * 24;
-
-// ─── Vocabulary ────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct ScheduleConfig {
@@ -41,18 +36,7 @@ pub struct ScheduleConfig {
     pub rules: Vec<Rule>,
     pub quiet_hours: Vec<QuietHours>,
     pub grace_notification: bool,
-    /// Rate hygiene: no rule may fire for this long after a scheduled session ends, so "3 times a
-    /// day" cannot cluster into three back-to-back. Also the cap on the hazard rate -- see
-    /// [`hazard_per_minute`].
     pub cooldown_minutes: u32,
-    /// Ends a *scheduled* session after this much continuous absence. The only stop condition
-    /// `SessionLength::UntilStopped` has besides quiet hours and the user, and what stops
-    /// autostart plus until-stopped from leaving an engine running on an empty machine.
-    pub away_timeout_minutes: u32,
-    /// How long panic suppresses scheduled firing for. Lives here because the supervisor is fed a
-    /// `ScheduleConfig`, but belongs *beside the panic key* in the UI: it is the one knob for
-    /// "don't come back for...", and every scope option (stop only, skip today, turn it off) is a
-    /// point on it.
     pub panic_cooldown_minutes: u32,
 }
 
@@ -64,7 +48,6 @@ impl Default for ScheduleConfig {
             quiet_hours: Vec::new(),
             grace_notification: true,
             cooldown_minutes: 30,
-            away_timeout_minutes: 10,
             panic_cooldown_minutes: 120,
         }
     }
@@ -72,10 +55,6 @@ impl Default for ScheduleConfig {
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct Rule {
-    /// Stable across list edits. v1 keyed its per-window state by list index, so deleting window 0
-    /// silently re-pointed window 1's state at it; the workaround was to throw all cached state
-    /// away on every edit. An id makes budget counters (and "which rule started this session",
-    /// which panic needs) survive an unrelated edit.
     pub id: Uuid,
     pub days: Days,
     pub trigger: Trigger,
@@ -99,14 +78,7 @@ pub enum Trigger {
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Range {
-    /// `to` at or before `from` (as minutes-of-day) wraps past midnight, exactly as `QuietHours`
-    /// already does. Equal endpoints therefore mean a full 24 hours anchored at `from`, not an
-    /// empty range -- `AllDay` is the way to say "all day", so there is no reason to read equal
-    /// endpoints as zero-width.
-    Between {
-        from: TimeOfDay,
-        to: TimeOfDay,
-    },
+    Between { from: TimeOfDay, to: TimeOfDay },
     AllDay,
 }
 
@@ -134,8 +106,6 @@ pub enum SessionLength {
     UntilStopped,
 }
 
-/// Sparse by design: `None` inherits the global setting. Keeping this to mode and pack is what
-/// stops the Scheduling tab from becoming a second copy of Settings.
 #[derive(Clone, Default, Serialize, Deserialize, Debug, PartialEq)]
 pub struct SessionOverrides {
     #[serde(default)]
@@ -144,9 +114,51 @@ pub struct SessionOverrides {
     pub pack_path: Option<PathBuf>,
 }
 
+/// The environment variable the supervisor hands [`SessionOverrides`] to the engine in, as JSON.
+///
+/// Deliberately not command-line arguments. `/proc/<pid>/cmdline` is world-readable (0444) on
+/// Linux, and any process in the same session can read another's command line on Windows -- so a
+/// `--pack-path` put the name of the loaded pack in front of every process on the machine, which
+/// for this app in particular is not a detail to leak. `/proc/<pid>/environ` is 0400: the owner
+/// only. Neither channel is a secure one, but this one does not broadcast.
+pub const SESSION_OVERRIDES_ENV: &str = "LEWDWARE_SESSION_OVERRIDES";
+
 impl SessionOverrides {
     pub fn is_empty(&self) -> bool {
         self.mode.is_none() && self.pack_path.is_none()
+    }
+
+    /// Encodes these overrides for [`SESSION_OVERRIDES_ENV`]. `None` when there is nothing to
+    /// override, so that the variable is left unset rather than set to an empty object -- an
+    /// engine that sees no variable and one that sees `{}` must behave identically, and not
+    /// setting it is the cheaper way to guarantee that.
+    pub fn to_env_value(&self) -> anyhow::Result<Option<String>> {
+        if self.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(serde_json::to_string(self)?))
+    }
+
+    /// Reads [`SESSION_OVERRIDES_ENV`] back. An unset variable is an ordinary session with no
+    /// overrides, not an error; only a variable that is set and unparseable is.
+    pub fn from_env() -> anyhow::Result<Self> {
+        let Some(raw) = std::env::var_os(SESSION_OVERRIDES_ENV) else {
+            return Ok(Self::default());
+        };
+
+        let raw = raw
+            .to_str()
+            .with_context(|| format!("{SESSION_OVERRIDES_ENV} is not valid UTF-8"))?;
+
+        Self::from_env_value(raw)
+    }
+
+    /// The parsing half of [`Self::from_env`], split out so it can be tested without touching the
+    /// process environment.
+    pub fn from_env_value(raw: &str) -> anyhow::Result<Self> {
+        serde_json::from_str(raw)
+            .with_context(|| format!("could not parse {SESSION_OVERRIDES_ENV}"))
     }
 }
 
@@ -188,9 +200,7 @@ impl TimeOfDay {
     }
 }
 
-// ─── Intervals ─────────────────────────────────────────────────────────────────
-
-/// A half-open `[start, end)` span of wall-clock time.
+/// [start, end)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Interval {
     pub start: DateTime<Local>,
@@ -198,6 +208,10 @@ pub struct Interval {
 }
 
 impl Interval {
+    pub fn new(start: DateTime<Local>, end: DateTime<Local>) -> Self {
+        Self { start, end }
+    }
+
     pub fn contains(&self, at: DateTime<Local>) -> bool {
         self.start <= at && at < self.end
     }
@@ -548,43 +562,44 @@ impl Default for PresenceProfile {
 }
 
 impl PresenceProfile {
-    /// The cold-start prior, and equally the Tier-3 fallback for a platform that supplies no
-    /// presence signal at all: present everywhere. Under it the hazard integrates over plain
-    /// wall-clock time and firing is uniform-random within the range -- which is exactly what v1
-    /// *intended* to do, so a cold start is never worse than v1 rather than merely different.
-    ///
-    /// Note this is 1.0, not 0.5: with no measurement, present-minutes are counted as wall-minutes
-    /// too, and a prior below 1.0 would shrink the denominator without shrinking the numerator and
-    /// front-load every rule.
+    /// The prior - assume the user is always present
     pub fn assume_present() -> Self {
         Self {
             buckets: vec![1.0; PRESENCE_BUCKETS],
         }
     }
 
+    /// Which bucket does a given time fall into?
     pub fn bucket_of(at: DateTime<Local>) -> usize {
         at.weekday().num_days_from_monday() as usize * 24 + at.hour() as usize
     }
 
-    /// Folds one observation into the profile: `present` held for `interval`, weighted by how
-    /// much of each hour it actually covered. A ten-minute observation moves a bucket a sixth as
-    /// far as an hour-long one, so a busy evening of short ticks does not outweigh a quiet night.
+    /// Add an observation to the profile.
     pub fn observe(&mut self, interval: Interval, present: bool) {
         let target = if present { 1.0 } else { 0.0 };
         let mut updates: Vec<(usize, f64)> = Vec::new();
-        for_each_hour_chunk(interval, |at, minutes| {
-            updates.push((Self::bucket_of(at), (minutes / 60.0).clamp(0.0, 1.0)));
+
+        for_each_hour_chunk(interval, |i| {
+            updates.push((
+                Self::bucket_of(i.start),
+                (i.minutes() / 60.0).clamp(0.0, 1.0),
+            ));
         });
+
         for (bucket, weight) in updates {
             if self.buckets.len() <= bucket {
                 self.buckets.resize(PRESENCE_BUCKETS, 1.0);
             }
-            let alpha = PRESENCE_ALPHA * weight;
+            // Scale the EWMA by elapsed time without making the result depend on how that time
+            // was split into observations. Four quarter-hour updates now compose to exactly the
+            // same decay as one full-hour update.
+            let alpha = 1.0 - (1.0 - PRESENCE_ALPHA).powf(weight);
             let current = f64::from(self.buckets[bucket]).clamp(0.0, 1.0);
             self.buckets[bucket] = ((1.0 - alpha) * current + alpha * target) as f32;
         }
     }
 
+    /// Probability of a user being at their computer at a given time
     pub fn p(&self, at: DateTime<Local>) -> f64 {
         self.buckets
             .get(Self::bucket_of(at))
@@ -593,21 +608,22 @@ impl PresenceProfile {
     }
 }
 
-/// Walks `interval` in chunks that each sit inside one hour-of-week bucket, calling `f` with the
-/// chunk's start and its length in minutes. Shared by the two things that care about buckets:
-/// reading the profile, and updating it.
-fn for_each_hour_chunk(interval: Interval, mut f: impl FnMut(DateTime<Local>, f64)) {
+/// Walk `interval` in chunks
+fn for_each_hour_chunk(interval: Interval, mut f: impl FnMut(Interval)) {
     let mut cursor = interval.start;
     while cursor < interval.end {
-        // Step to the next whole hour, so each chunk sits in exactly one bucket. Clamped to at
-        // least a minute so a pathological clock can never spin here.
-        let into_hour = i64::from(cursor.minute()) * 60 + i64::from(cursor.second());
-        let step = ChronoDuration::seconds((3600 - into_hour).max(60));
+        let secs_from_last_hour = i64::from(cursor.minute()) * 60 + i64::from(cursor.second());
+
+        // `.max(1)` makes sure we don't loop forever in strange cases (like a leap second).
+        let step = ChronoDuration::seconds((3600 - secs_from_last_hour).max(1));
         let chunk_end = (cursor + step).min(interval.end);
-        let minutes = (chunk_end - cursor).num_seconds().max(0) as f64 / 60.0;
-        if minutes > 0.0 {
-            f(cursor, minutes);
+
+        let interval = Interval::new(cursor, chunk_end);
+
+        if interval.minutes() > 0.0 {
+            f(interval);
         }
+
         cursor = chunk_end;
     }
 }
@@ -623,7 +639,7 @@ pub const PRESENCE_ALPHA: f64 = 0.15;
 pub fn expected_present_minutes(intervals: &[Interval], profile: &PresenceProfile) -> f64 {
     let mut total = 0.0;
     for interval in intervals {
-        for_each_hour_chunk(*interval, |at, minutes| total += minutes * profile.p(at));
+        for_each_hour_chunk(*interval, |i| total += i.minutes() * profile.p(i.start));
     }
     total
 }
@@ -635,13 +651,14 @@ pub fn expected_present_minutes(intervals: &[Interval], profile: &PresenceProfil
 /// the last seconds of a range.
 const MIN_EXPECTED_MINUTES: f64 = 1.0;
 
-/// Firings per present-minute: `remaining / expected remaining present time`, capped at roughly
-/// one per cooldown.
+/// Conditional intensity per present-minute for the next point in a fixed-quota process:
+/// `remaining / expected remaining present time`, capped at roughly one per cooldown.
 ///
-/// The cap is the honest end of the design. Reaching the end of a range with budget left means
-/// the user was away more than their profile predicted; cramming the remainder into the last few
-/// minutes would deliver the count at the cost of everything the count was for. Under-delivery is
-/// the correct outcome, which is why the UI says "about" three times a day.
+/// Without the cap, this is the hazard of the earliest of `remaining` uniform points in the
+/// remaining opportunity. It rises as that opportunity shrinks, tending to place the whole quota.
+/// The cap is the deliberate escape hatch: when the scheduler is behind, it leaves budget unspent
+/// rather than creating an overly clustered tail. The budget itself—not this cap—prevents
+/// over-delivery, which is why the UI says "about" three times a day.
 pub fn hazard_per_minute(
     remaining_count: u32,
     expected_present_minutes: f64,
@@ -656,10 +673,10 @@ pub fn hazard_per_minute(
     lambda.min(cap)
 }
 
-/// P(fire) over a tick covering `present_minutes` of presence, for a Poisson process of intensity
-/// `hazard`. Memoryless by construction: from the user's chair the chance is the same in any
-/// minute they are actually there, so there is no instant to anticipate and -- unlike a
-/// fire-on-wake catch-up -- no pile-up at the moment they sit down.
+/// P(fire) over a tick covering `present_minutes`, freezing the conditional intensity for that
+/// tick. The exponential survival formula is exact for a fixed intensity. The scheduler recomputes
+/// the intensity from its shrinking opportunity on every tick, making the complete process a
+/// piecewise-constant approximation to the fixed-quota order statistics above.
 pub fn fire_probability(hazard: f64, present_minutes: f64) -> f64 {
     if hazard <= 0.0 || present_minutes <= 0.0 {
         return 0.0;
@@ -670,6 +687,30 @@ pub fn fire_probability(hazard: f64, present_minutes: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The engine parses exactly what the supervisor wrote, in a separate process, so the wire
+    /// shape is load bearing across two binaries.
+    #[test]
+    fn session_overrides_round_trip_through_the_environment() {
+        let overrides = SessionOverrides {
+            mode: Some(Mode::Pack { id: 7 }),
+            pack_path: Some(PathBuf::from("/home/someone/a pack.lwpack")),
+        };
+
+        let encoded = overrides.to_env_value().unwrap().expect("not empty");
+
+        assert_eq!(
+            SessionOverrides::from_env_value(&encoded).unwrap(),
+            overrides
+        );
+    }
+
+    /// Nothing to override means the variable is never set, so the engine's unset path is the one
+    /// an ordinary session actually takes.
+    #[test]
+    fn empty_session_overrides_are_not_encoded() {
+        assert_eq!(SessionOverrides::default().to_env_value().unwrap(), None);
+    }
 
     fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
@@ -1096,11 +1137,32 @@ mod tests {
             },
             false,
         );
-        // A quarter-hour observation should move it roughly a quarter as far.
+        // A partial observation applies the corresponding fraction of the full-hour decay.
         let full_delta = 1.0 - full.p(start);
         let partial_delta = 1.0 - partial.p(start);
         assert!(partial_delta < full_delta);
-        assert!((partial_delta - full_delta / 4.0).abs() < 1e-6);
+        let expected = 1.0 - (1.0 - PRESENCE_ALPHA).powf(0.25);
+        assert!((partial_delta - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn splitting_an_observation_does_not_change_the_ewma() {
+        let start = dt(2026, 7, 13, 3, 0);
+        let mut whole = PresenceProfile::assume_present();
+        let mut split = PresenceProfile::assume_present();
+
+        whole.observe(Interval::new(start, dt(2026, 7, 13, 4, 0)), false);
+        for quarter in 0..4 {
+            split.observe(
+                Interval::new(
+                    start + ChronoDuration::minutes(quarter * 15),
+                    start + ChronoDuration::minutes((quarter + 1) * 15),
+                ),
+                false,
+            );
+        }
+
+        assert!((whole.p(start) - split.p(start)).abs() < 1e-6);
     }
 
     #[test]
@@ -1188,23 +1250,36 @@ mod tests {
     }
 
     #[test]
-    fn fire_probability_integrates_to_the_budget_over_the_whole_range() {
-        // The defining property: over 480 present-minutes at hazard 3/480, the expected number of
-        // firings is 3, so P(at least one) is 1 - e^-3.
+    fn fixed_hazard_probability_matches_exponential_survival() {
+        // This establishes only the local, fixed-intensity conversion used within one tick. The
+        // scheduler-level quota comes from recomputing the intensity and spending budget.
         let hazard = hazard_per_minute(3, 480.0, 30);
         let p = fire_probability(hazard, 480.0);
         assert!((p - (1.0 - (-3.0f64).exp())).abs() < 1e-12);
     }
 
     #[test]
-    fn fire_probability_is_memoryless_across_a_split_tick() {
+    fn fixed_hazard_survival_is_invariant_when_split() {
         let hazard = hazard_per_minute(1, 240.0, 30);
         let whole = fire_probability(hazard, 60.0);
         let first = fire_probability(hazard, 30.0);
         let second = fire_probability(hazard, 30.0);
-        // P(fire in 60) == 1 - P(miss 30)P(miss 30): the split cannot change the outcome, which is
-        // what makes tick cadence a free implementation choice rather than a semantic one.
+        // P(fire in 60) == 1 - P(miss 30)P(miss 30) while the hazard is held fixed. The running
+        // scheduler recomputes it after each piece, so this intentionally makes no claim that its
+        // complete distribution is exactly cadence-independent.
         assert!((whole - (1.0 - (1.0 - first) * (1.0 - second))).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_one_minute_step_is_close_to_the_exact_order_statistic_probability() {
+        let remaining_count = 3;
+        let before = 480.0;
+        let after = 479.0;
+        let exact = 1.0 - f64::powi(after / before, remaining_count as i32);
+        let approximated =
+            fire_probability(hazard_per_minute(remaining_count, after, 1), before - after);
+
+        assert!((exact - approximated).abs() < 1e-5);
     }
 
     #[test]

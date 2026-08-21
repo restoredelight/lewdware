@@ -15,7 +15,9 @@ The daemon is the sole owner of session lifecycle. It:
   in `state.rs`);
 - tracks **presence** — whether anybody is actually at the machine — from screen
   lock, sleep and fast-user-switch events (`presence.rs`), which is the clock the
-  rate-based rules are integrated against;
+  rate-based rules are integrated against, and from the gaps in its own uptime,
+  which is why it records *why* it stopped (`shutdown.rs`): a logout means the
+  user was away, while its own idle self-terminate means nothing at all;
 - owns the **system tray** and the **panic key**;
 - manages the **wallpaper** (applying and restoring it around sessions);
 - serves an **IPC server** that the config app, `lw`, and the CLI client connect

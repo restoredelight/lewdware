@@ -119,10 +119,6 @@ fn default_cooldown_minutes() -> u32 {
     ScheduleConfig::default().cooldown_minutes
 }
 
-fn default_away_timeout_minutes() -> u32 {
-    ScheduleConfig::default().away_timeout_minutes
-}
-
 fn default_panic_cooldown_minutes() -> u32 {
     ScheduleConfig::default().panic_cooldown_minutes
 }
@@ -140,8 +136,6 @@ pub struct ScheduleDto {
     pub grace_notification: bool,
     #[serde(default = "default_cooldown_minutes")]
     pub cooldown_minutes: u32,
-    #[serde(default = "default_away_timeout_minutes")]
-    pub away_timeout_minutes: u32,
     #[serde(default = "default_panic_cooldown_minutes")]
     pub panic_cooldown_minutes: u32,
 }
@@ -154,7 +148,6 @@ impl From<ScheduleConfig> for ScheduleDto {
             quiet_hours: s.quiet_hours,
             grace_notification: s.grace_notification,
             cooldown_minutes: s.cooldown_minutes,
-            away_timeout_minutes: s.away_timeout_minutes,
             panic_cooldown_minutes: s.panic_cooldown_minutes,
         }
     }
@@ -168,7 +161,6 @@ impl From<ScheduleDto> for ScheduleConfig {
             quiet_hours: s.quiet_hours,
             grace_notification: s.grace_notification,
             cooldown_minutes: s.cooldown_minutes,
-            away_timeout_minutes: s.away_timeout_minutes,
             panic_cooldown_minutes: s.panic_cooldown_minutes,
         }
     }

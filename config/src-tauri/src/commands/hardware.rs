@@ -28,7 +28,7 @@ pub async fn get_monitors(state: State<'_>) -> Result<Vec<MonitorDto>, String> {
             .ok_or_else(|| "could not find the lewdware-engine binary".to_string())?,
     );
     command
-        .arg(shared::monitor::LIST_MONITORS_FLAG)
+        .arg(shared::monitor::LIST_MONITORS_COMMAND)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -114,7 +114,7 @@ async fn run_engine_probe(
 #[tauri::command]
 pub async fn get_audio_devices() -> Result<Vec<shared::audio::AudioDeviceInfo>, String> {
     let stdout = run_engine_probe(
-        &[shared::audio::LIST_AUDIO_DEVICES_FLAG],
+        &[shared::audio::LIST_AUDIO_DEVICES_COMMAND],
         std::time::Duration::from_secs(5),
         "list the audio devices",
     )
@@ -133,7 +133,7 @@ pub async fn test_audio_device(
     let device = device.unwrap_or_else(|| shared::audio::TEST_AUDIO_DEFAULT.to_string());
 
     let stdout = run_engine_probe(
-        &[shared::audio::TEST_AUDIO_FLAG, &device],
+        &[shared::audio::TEST_AUDIO_COMMAND, &device],
         std::time::Duration::from_secs(15),
         "play the test sound",
     )

@@ -249,7 +249,6 @@ export interface ScheduleDto {
 	quiet_hours: QuietHoursDto[];
 	grace_notification: boolean;
 	cooldown_minutes: number;
-	away_timeout_minutes: number;
 	panic_cooldown_minutes: number;
 }
 

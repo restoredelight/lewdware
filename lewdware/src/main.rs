@@ -1,10 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{env::args_os, path::PathBuf};
-
-use anyhow::{Context, Result};
+use anyhow::Result;
+use clap::{Parser, Subcommand};
 use pollster::block_on;
-use shared::user_config::{Mode, load_config};
+use shared::{schedule::SessionOverrides, user_config::load_config};
+use uuid::Uuid;
 use winit::event_loop::EventLoop;
 
 use crate::{app::LewdwareApp, utils::report_fatal_startup_error, wgpu::WgpuState};
@@ -23,87 +23,71 @@ mod wgpu;
 mod window;
 mod zero_copy;
 
-/// The argument following `flag`, if the flag was passed at all.
+/// The engine is spawned by the supervisor, never launched by hand, so this is a machine-facing
+/// interface rather than a user-facing one.
 ///
-/// Only used by the probe flags handled before the main argument loop below, which needs to read
-/// its own values from a single pass over the arguments.
-fn flag_value(flag: &str) -> Option<std::ffi::OsString> {
-    let mut args = args_os();
-    args.find(|arg| arg == flag)?;
-    args.next()
+/// Note what is *not* here: the session's pack and mode. Those arrive in
+/// `shared::schedule::SESSION_OVERRIDES_ENV` instead, because a command line is readable by every
+/// process on the machine and the name of the loaded pack is not something to publish -- see that
+/// constant's doc comment.
+#[derive(Parser)]
+#[command(name = "lewdware-engine")]
+struct Cli {
+    #[command(subcommand)]
+    probe: Option<Probe>,
+
+    /// Identifies this session to the supervisor's engine-link socket.
+    #[arg(long)]
+    control_token: Option<String>,
+
+    #[arg(long)]
+    dev: bool,
+
+    /// The `lw dev` stream this session belongs to, which also turns on log forwarding.
+    #[arg(long)]
+    dev_stream_id: Option<Uuid>,
+}
+
+/// Short-lived probes run by the config app to ask the process that will actually open the display
+/// and the audio device what it can see. Each prints JSON to stdout and exits without ever
+/// becoming a session.
+#[derive(Subcommand)]
+enum Probe {
+    #[command(name = shared::monitor::LIST_MONITORS_COMMAND)]
+    ListMonitors,
+    #[command(name = shared::audio::LIST_AUDIO_DEVICES_COMMAND)]
+    ListAudioDevices,
+    #[command(name = shared::audio::TEST_AUDIO_COMMAND)]
+    TestAudio {
+        /// `shared::audio::TEST_AUDIO_DEFAULT` for the system default device. Hyphens are allowed
+        /// through because this is a cpal device id, not something a person types.
+        #[arg(allow_hyphen_values = true)]
+        device: String,
+    },
 }
 
 fn main() -> Result<()> {
-    // Handled before anything else: this is a short-lived probe run by the config app, not a
-    // session. It must not touch the log file, the temp dir or the fd limit of a real engine that
-    // may be running at the same time.
-    if args_os().any(|arg| arg == shared::monitor::LIST_MONITORS_FLAG) {
-        return monitor::list_monitors();
+    let cli = Cli::parse();
+
+    // Handled before anything else: a probe is a short-lived run, not a session. It must not touch
+    // the log file, the temp dir or the fd limit of a real engine that may be running at the same
+    // time.
+    if let Some(probe) = cli.probe {
+        return match probe {
+            Probe::ListMonitors => monitor::list_monitors(),
+            Probe::ListAudioDevices => audio::list_audio_devices(),
+            Probe::TestAudio { device } => audio::play_test_tone(
+                (device != shared::audio::TEST_AUDIO_DEFAULT).then_some(device),
+            ),
+        };
     }
 
-    // The audio equivalents, and short-lived probes for the same reason -- see
-    // `shared::audio::LIST_AUDIO_DEVICES_FLAG`.
-    if args_os().any(|arg| arg == shared::audio::LIST_AUDIO_DEVICES_FLAG) {
-        return audio::list_audio_devices();
-    }
-
-    if let Some(device) = flag_value(shared::audio::TEST_AUDIO_FLAG) {
-        let device = device.to_string_lossy().into_owned();
-        return audio::play_test_tone(
-            (device != shared::audio::TEST_AUDIO_DEFAULT).then_some(device),
-        );
-    }
-
-    let mut args = args_os();
-
-    let mut mode_path = None;
-    let mut dev_mode = false;
-    let mut control_token = None;
-    let mut dev_stream_id = None;
-    // Per-rule overrides from the supervisor (`design/scheduling.md`, SessionOverrides). Absent
-    // for a manual session, which uses whatever `config.json` says.
-    let mut pack_path: Option<PathBuf> = None;
-    let mut mode_override: Option<Mode> = None;
-    while let Some(arg) = args.next() {
-        if &arg == "--mode-path" {
-            mode_path = Some(PathBuf::from(args.next().context("No mode path provided")?));
-        }
-
-        if &arg == "--dev" {
-            dev_mode = true;
-        }
-
-        if &arg == "--control-token" {
-            control_token = Some(
-                args.next()
-                    .context("No control token provided")?
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-        }
-
-        if &arg == "--pack-path" {
-            pack_path = Some(PathBuf::from(args.next().context("No pack path provided")?));
-        }
-
-        // JSON rather than a name: `Mode` has four shapes, two of them carrying data, and it
-        // already round-trips through serde everywhere else.
-        if &arg == "--mode" {
-            let raw = args.next().context("No mode provided")?;
-            mode_override = Some(
-                serde_json::from_str(&raw.to_string_lossy()).context("Could not parse --mode")?,
-            );
-        }
-
-        if &arg == "--dev-stream-id" {
-            dev_stream_id = Some(
-                args.next()
-                    .context("No development stream ID provided")?
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-        }
-    }
+    let Cli {
+        control_token,
+        dev: dev_mode,
+        dev_stream_id,
+        ..
+    } = cli;
 
     let stop_rx = supervisor_link::connect(control_token.clone());
     if dev_mode && dev_stream_id.is_some() {
@@ -125,17 +109,20 @@ fn main() -> Result<()> {
 
     let mut config = load_config().inspect_err(|err| report_fatal_startup_error(err))?;
 
-    if let Some(mode_path) = mode_path {
-        config.mode = Mode::File { path: mode_path };
-    }
+    // Per-rule overrides from the supervisor (`design/scheduling.md`, SessionOverrides). Empty for
+    // a manual session, which uses whatever `config.json` says. Read here rather than at the top of
+    // `main` so that a malformed value is reported the same way a bad config is, over a link that
+    // by now exists.
+    let overrides =
+        SessionOverrides::from_env().inspect_err(|err| report_fatal_startup_error(err))?;
 
     // Applied after `load_config` so an override beats the stored setting, and before anything
     // reads either. A pack override changes which `experience_options` apply, since those are
     // keyed by the pack's own UUID -- which is the intended behaviour, not a side effect.
-    if let Some(path) = pack_path {
+    if let Some(path) = overrides.pack_path {
         config.pack_path = Some(path);
     }
-    if let Some(mode) = mode_override {
+    if let Some(mode) = overrides.mode {
         config.mode = mode;
     }
 

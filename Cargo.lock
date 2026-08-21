@@ -3791,6 +3791,7 @@ dependencies = [
  "anyhow",
  "ash",
  "bytemuck",
+ "clap",
  "dirs",
  "egui",
  "egui-wgpu",
