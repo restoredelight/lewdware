@@ -241,9 +241,9 @@ outline). Sizes: `compact` (32px), `normal` (36px).
 
 **Use `NumberField`, not `Field type="number"`.** `Field` reports what was typed as a
 string, and `Number('')` is `0` rather than `NaN` — so a guard written as
-`Number.isFinite(Number(raw))` accepts an *empty field* as a real zero, and clearing a
+`Number.isFinite(Number(raw))` accepts an _empty field_ as a real zero, and clearing a
 speed writes `0` instead of clearing it. `NumberField` reports `number | null`, where
-`null` is "empty or not a number". What `null` *means* stays the caller's decision — for
+`null` is "empty or not a number". What `null` _means_ stays the caller's decision — for
 most fields it clears the value (the sparse-row rule), for a few it means "keep what was
 there" — but it is now one visible line at the call site.
 
@@ -261,7 +261,7 @@ container in both apps already uses it; use it on any new one.
 Also shared and not a component: **`taskFeedback`**
 (`shared-ui/taskFeedback.svelte.ts`) — the single transient status message an app is
 showing, and the queue behind it. `progress`/`warning`/`error`/`confirm` set one by
-id; `success` *dismisses* rather than showing anything, because a successful outcome
+id; `success` _dismisses_ rather than showing anything, because a successful outcome
 is already visible in the UI. Only the highest-priority message is drawn (error >
 warning > progress > success, then task id, then arrival); the rest are counted, not
 stacked. Each app renders it with its own `TaskStatus.svelte`.

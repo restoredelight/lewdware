@@ -8,10 +8,10 @@
 
 <div class="flex h-dvh min-h-0 flex-col">
 	<UpdateBanner
-			appName="Lewdware Pack Editor"
-			check={() => invoke<string | null>('check_for_update')}
-			open={openUrl}
-		/>
+		appName="Lewdware Pack Editor"
+		check={() => invoke<string | null>('check_for_update')}
+		open={openUrl}
+	/>
 	<div class="min-h-0 flex-1">
 		{@render children()}
 	</div>
