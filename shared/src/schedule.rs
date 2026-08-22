@@ -465,6 +465,22 @@ pub fn subtract(intervals: &[Interval], blockers: &[Interval]) -> Vec<Interval> 
     out
 }
 
+/// Minutes covered by both sets. Both are sorted and internally disjoint, so a plain pairwise
+/// sweep is exact; the sets involved have a handful of entries each.
+pub fn overlap_minutes(a: &[Interval], b: &[Interval]) -> f64 {
+    let mut total = 0.0;
+    for x in a {
+        for y in b {
+            let start = x.start.max(y.start);
+            let end = x.end.min(y.end);
+            if end > start {
+                total += (end - start).num_seconds() as f64 / 60.0;
+            }
+        }
+    }
+    total
+}
+
 /// The parts of `intervals` at or after `from`.
 pub fn clip_from(intervals: &[Interval], from: DateTime<Local>) -> Vec<Interval> {
     intervals
@@ -958,6 +974,32 @@ pub fn hazard_per_minute(
     let lambda = f64::from(remaining_count) / expected;
     let cap = 1.0 / f64::from(cooldown_minutes.max(1));
     lambda.min(cap)
+}
+
+/// Present-minutes that `sessions` further firings will consume rather than leave available to
+/// draw in, given a session length and the cooldown that follows it.
+///
+/// The denominator of the hazard is supposed to be opportunity, and a window is not all
+/// opportunity: every firing takes its own length out of it and then bars the next one for a
+/// cooldown. Counting that time as though a session could still be drawn in it makes the intensity
+/// too low by exactly the fraction of the window the schedule has already spoken for, and the
+/// shortfall compounds as the window closes -- which is precisely when there is no slack left to
+/// absorb it.
+///
+/// The two halves are weighted differently on purpose. A session's own minutes are present minutes
+/// by construction: people do not wander off in the middle of something they are watching. The
+/// cooldown that follows is ordinary time, and only the part of it the user is at the desk for was
+/// ever opportunity, so it is scaled by `presence`.
+pub fn dead_present_minutes(
+    sessions: f64,
+    session_minutes: f64,
+    cooldown_minutes: u32,
+    presence: f64,
+) -> f64 {
+    if sessions <= 0.0 {
+        return 0.0;
+    }
+    sessions * (session_minutes + f64::from(cooldown_minutes) * presence.clamp(0.0, 1.0))
 }
 
 /// Whether [`hazard_per_minute`] is returning its cap rather than `remaining / expected`.
@@ -1639,6 +1681,28 @@ mod tests {
     }
 
     // ─── the rate ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dead_time_charges_a_session_in_full_and_its_cooldown_by_presence() {
+        // Two gaps between three firings: a 20-minute session the user is there for by
+        // construction, then a 30-minute cooldown only half of which they are at the desk for.
+        assert_eq!(dead_present_minutes(2.0, 20.0, 30, 0.5), 2.0 * (20.0 + 15.0));
+        // Present throughout, and the whole 50 minutes is opportunity the schedule has spent.
+        assert_eq!(dead_present_minutes(2.0, 20.0, 30, 1.0), 100.0);
+        // The last firing needs no room after it, so a rule down to one reserves nothing.
+        assert_eq!(dead_present_minutes(0.0, 20.0, 30, 1.0), 0.0);
+    }
+
+    #[test]
+    fn overlap_is_the_time_two_sets_of_intervals_share() {
+        let morning = vec![Interval::new(dt(2026, 7, 13, 9, 0), dt(2026, 7, 13, 12, 0))];
+        let midday = vec![Interval::new(dt(2026, 7, 13, 11, 0), dt(2026, 7, 13, 14, 0))];
+        assert_eq!(overlap_minutes(&morning, &midday), 60.0);
+        assert_eq!(overlap_minutes(&morning, &morning), 180.0);
+
+        let evening = vec![Interval::new(dt(2026, 7, 13, 20, 0), dt(2026, 7, 13, 21, 0))];
+        assert_eq!(overlap_minutes(&morning, &evening), 0.0);
+    }
 
     #[test]
     fn hazard_is_count_over_expected_time() {

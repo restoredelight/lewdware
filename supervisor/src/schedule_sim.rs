@@ -31,6 +31,22 @@ use crate::schedule::{PresenceSource, Rng, ScheduleEngine};
 struct SplitMix64(u64);
 
 impl SplitMix64 {
+    /// Seeds a stream for trial `index`, running the index through the mixer first.
+    ///
+    /// Not `SplitMix64(index * GOLDEN)`, which is the obvious thing and is badly wrong here.
+    /// SplitMix64 advances by adding that same constant, so seeding with a multiple of it makes
+    /// trial `k`'s stream a shifted copy of trial `k + 1`'s: every trial reads an overlapping
+    /// window of one sequence, consecutive trials come out nearly identical, and the effective
+    /// sample size collapses to a fraction of the trial count. It shows up as long runs of the same
+    /// outcome -- a grid reporting a clean 1.000 over 250 trials and 0.957 over 4000.
+    ///
+    /// Mixing first scatters the starting states, so a collision would need two of them to differ
+    /// by an exact small multiple of the constant, which does not happen by accident.
+    fn seeded(index: u64) -> Self {
+        let mut source = Self(index);
+        Self(source.next_u64())
+    }
+
     fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
@@ -140,10 +156,10 @@ fn one_day(scenario: &Scenario, seed: u64) -> u32 {
     let mut engine = ScheduleEngine::with_parts(
         config_for(scenario),
         Box::new(RandomPresence {
-            rng: SplitMix64(seed ^ 0x5DEE_CE66_D0D1_6F5D),
+            rng: SplitMix64::seeded(seed ^ 0x5DEE_CE66_D0D1_6F5D),
             probability: scenario.presence,
         }),
-        Box::new(SeededRng(SplitMix64(seed))),
+        Box::new(SeededRng(SplitMix64::seeded(seed))),
     );
     if let Some(p) = scenario.profile {
         engine.set_flat_profile(p);
@@ -181,12 +197,7 @@ fn simulate(scenario: &Scenario, trials: u32) -> Outcome {
     let mut all = 0u32;
     let mut total = 0u32;
     for trial in 0..trials {
-        // Distinct, well-spread seeds: consecutive integers would give SplitMix64 consecutive
-        // states, which is fine for it but pointlessly close.
-        let delivered = one_day(
-            scenario,
-            u64::from(trial).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1,
-        );
+        let delivered = one_day(scenario, u64::from(trial));
         total += delivered;
         if delivered == scenario.count {
             all += 1;
@@ -219,6 +230,11 @@ const IDEAL: &[Scenario] = &[
     Scenario::plain("8h, 4/day, 20m sessions", 8, 4, 20),
     Scenario::plain("12h, 3/day, 20m sessions", 12, 3, 20),
     Scenario::plain("4h, 3/day, 20m sessions", 4, 3, 20),
+    // Crowded shapes, where the window barely has room for the budget and the model has to work
+    // for it. Six sessions and their cooldowns need five hours of an eight-hour window.
+    Scenario::plain("8h, 6/day, 20m sessions", 8, 6, 20),
+    Scenario::plain("8h, 8/day, 20m sessions", 8, 8, 20),
+    Scenario::plain("3h, 3/day, 20m sessions", 3, 3, 20),
 ];
 
 /// The same window and budget, varying only what the profile believes about a user who is actually
@@ -275,18 +291,27 @@ fn delivery_grid() {
 // the count the user was promised, which is the point: the model under-delivers, these tests say
 // by how much, and a change that quietly makes it worse cannot pass.
 //
-// Measured at 4000 trials, release build (`cargo test --release ... delivery_grid`):
+// Measured at 4000 trials, release build (`cargo test --release ... delivery_grid`). The second
+// column is the same run with the dead-time reserve bypassed, which is what the denominator used
+// to be -- kept here because it is the only honest way to say what the reserve bought:
 //
-//     8h, 3/day, 20m sessions                   P(all) 0.886   E 2.886
-//     8h, 3/day, no session time                       0.936     2.937
-//     8h, 1/day, 20m sessions                          0.980     0.980
-//     8h, 4/day, 20m sessions                          0.741     3.724
-//     12h, 3/day, 20m sessions                         0.953     2.953
-//     4h, 3/day, 20m sessions                          0.592     2.557
-//     half present, nothing learned (cold start)       0.803     2.780
-//     half present, profile sure of 1.00               0.419     2.275
-//     half present, profile sure of 0.70               0.634     2.576
-//     half present, profile sure of 0.50 (converged)   0.804     2.782
+//                                                   P(all)  E[count] | no reserve
+//     8h, 3/day, 20m sessions                        0.909    2.909  |   0.831
+//     8h, 3/day, no session time                     0.919    2.916  |   0.885
+//     8h, 1/day, 20m sessions                        0.980    0.980  |   0.980
+//     8h, 4/day, 20m sessions                        0.856    3.850  |   0.665
+//     12h, 3/day, 20m sessions                       0.945    2.945  |   0.908
+//     4h, 3/day, 20m sessions                        0.730    2.709  |   0.522
+//     8h, 6/day, 20m sessions                        0.651    5.584  |   0.228
+//     8h, 8/day, 20m sessions                        0.080    6.213  |   0.008
+//     3h, 3/day, 20m sessions                        0.478    2.402  |   0.302
+//     half present, nothing learned (cold start)     0.827    2.808  |   0.740
+//     half present, profile sure of 1.00             0.540    2.460  |   0.404
+//     half present, profile sure of 0.70             0.707    2.668  |   0.576
+//     half present, profile sure of 0.50 (converged) 0.827    2.808  |   0.739
+//
+// A single daily firing is untouched by the reserve, which is the sanity check: with one left there
+// is nothing after it to make room for.
 //
 // Raise them as the model improves. A failure here is either a regression or a floor that has
 // earned an increase -- run `delivery_grid` to see which.
@@ -295,13 +320,13 @@ fn delivery_grid() {
 fn the_default_shape_delivers_its_whole_budget_most_days() {
     let outcome = simulate(&IDEAL[0], TRIALS);
     assert!(
-        outcome.all > 0.80,
-        "8h/3-a-day/20m delivered all three on {:.1}% of days (measured 88.6%)",
+        outcome.all > 0.84,
+        "8h/3-a-day/20m delivered all three on {:.1}% of days (measured 90.9%)",
         outcome.all * 100.0
     );
     assert!(
-        outcome.mean > 2.82,
-        "... averaging {:.3} sessions (measured 2.886, promised 3)",
+        outcome.mean > 2.85,
+        "... averaging {:.3} sessions (measured 2.909, promised 3)",
         outcome.mean
     );
 }
@@ -330,15 +355,17 @@ fn a_single_daily_firing_almost_always_lands() {
 fn delivery_degrades_as_the_budget_crowds_the_window() {
     let three = simulate(&IDEAL[0], TRIALS);
     let four = simulate(&IDEAL[3], TRIALS);
+    let six = simulate(&IDEAL[6], TRIALS);
     assert!(
-        four.all < three.all,
-        "four a day ({:.3}) should be harder to deliver than three ({:.3})",
+        six.all < four.all && four.all < three.all,
+        "delivery should fall as the budget crowds the window: 3 -> {:.3}, 4 -> {:.3}, 6 -> {:.3}",
+        three.all,
         four.all,
-        three.all
+        six.all
     );
     assert!(
-        four.all > 0.63,
-        "8h/4-a-day delivered all four on {:.1}% of days (measured 74.1%)",
+        four.all > 0.78,
+        "8h/4-a-day delivered all four on {:.1}% of days (measured 85.6%)",
         four.all * 100.0
     );
 }
@@ -356,8 +383,8 @@ fn a_wider_window_delivers_better_than_a_narrow_one() {
         narrow.all
     );
     assert!(
-        wide.all > 0.90,
-        "12h/3-a-day delivered {:.3} (measured 0.953)",
+        wide.all > 0.89,
+        "12h/3-a-day delivered {:.3} (measured 0.945)",
         wide.all
     );
 }
@@ -369,13 +396,35 @@ fn a_wider_window_delivers_better_than_a_narrow_one() {
 fn a_wrong_presence_profile_costs_delivery() {
     let cold = simulate(&PROFILE_ERROR[1], TRIALS);
     let converged = simulate(&PROFILE_ERROR[3], TRIALS);
-    // Measured: 0.804 against 0.419, so believing the wrong thing confidently costs about 38
+    // Measured: 0.827 against 0.540, so believing the wrong thing confidently costs about 29
     // points of delivery. Being wrong is expensive; the next test is about not having to be.
     assert!(
         converged.all > cold.all + 0.20,
         "a converged profile ({:.3}) should beat a confidently wrong one ({:.3}) by a wide margin",
         converged.all,
         cold.all
+    );
+}
+
+/// The dead-time reserve, where it matters most.
+///
+/// Six sessions and their cooldowns need five of an eight-hour window, so almost every minute the
+/// denominator over-counts is a minute the schedule has already spent. Without the reserve this
+/// shape delivers its whole budget on 23% of days; with it, on 65%. If this regresses toward the
+/// former, the denominator has gone back to counting time the schedule cannot use.
+#[test]
+fn the_reserve_carries_a_budget_that_crowds_its_window() {
+    let outcome = simulate(&IDEAL[6], TRIALS);
+    assert!(
+        outcome.all > 0.56,
+        "8h/6-a-day delivered all six on {:.1}% of days (measured 65.1%, 22.8% without the \
+         reserve)",
+        outcome.all * 100.0
+    );
+    assert!(
+        outcome.mean > 5.4,
+        "... averaging {:.3} sessions (measured 5.584, 4.808 without)",
+        outcome.mean
     );
 }
 
@@ -394,8 +443,8 @@ fn a_cold_start_now_performs_almost_like_a_converged_profile() {
     let cold = simulate(&PROFILE_ERROR[0], TRIALS);
     let converged = simulate(&PROFILE_ERROR[3], TRIALS);
     assert!(
-        cold.all > 0.72,
-        "a cold start delivered all three on {:.1}% of days (measured 80.3%)",
+        cold.all > 0.75,
+        "a cold start delivered all three on {:.1}% of days (measured 82.7%)",
         cold.all * 100.0
     );
     assert!(
@@ -422,10 +471,10 @@ fn residual_run(path: &std::path::Path, days: i64, seed: u64) -> u32 {
     let mut engine = ScheduleEngine::with_parts(
         config_for(&scenario),
         Box::new(RandomPresence {
-            rng: SplitMix64(seed ^ 0x2545_F491_4F6C_DD1D),
+            rng: SplitMix64::seeded(seed ^ 0x2545_F491_4F6C_DD1D),
             probability: 1.0,
         }),
-        Box::new(SeededRng(SplitMix64(seed))),
+        Box::new(SeededRng(SplitMix64::seeded(seed))),
     );
     engine.set_residual_log(crate::residuals::Log::at_path(path.to_path_buf()));
 

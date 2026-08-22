@@ -411,6 +411,97 @@ impl ScheduleEngine {
     }
 
     /// The budget for `rule` as of `now`, resetting it if the period has rolled over.
+    /// Present-minutes of the rule's remaining window that are already spoken for, and so are not
+    /// opportunity to draw in.
+    ///
+    /// Two claims on it. The rule's own remaining firings need `count - 1` gaps between them --
+    /// the last session may run past the window's end, so it needs no room after it. And every
+    /// *other* rate rule's firings block this one too, because the cooldown is global: it is a
+    /// promise about the user's evening rather than about a rule, and three rules each honouring
+    /// their own would still allow three sessions in ten minutes. Their claim is charged in
+    /// proportion to how much of their window overlaps this one, since that is the share of their
+    /// dead time that can land here. All of it is charged, not `count - 1`, because their final
+    /// session's cooldown blocks this rule just as much as any other.
+    fn reserved_minutes(
+        &self,
+        rule: &Rule,
+        remaining_count: u32,
+        remaining: &[Interval],
+        now: DateTime<Local>,
+        expected: f64,
+    ) -> f64 {
+        let span = schedule::total_minutes(remaining);
+        if span <= 0.0 {
+            return 0.0;
+        }
+        // Average presence over what is left, which is the rate cooldown minutes turn into lost
+        // opportunity at.
+        let presence = (expected / span).clamp(0.0, 1.0);
+        let cooldown = self.config.cooldown_minutes;
+
+        let mut reserved = schedule::dead_present_minutes(
+            f64::from(remaining_count.saturating_sub(1)),
+            Self::session_minutes(rule.length),
+            cooldown,
+            presence,
+        );
+
+        for other in &self.config.rules {
+            if other.id == rule.id || !matches!(other.trigger, Trigger::Rate { .. }) {
+                continue;
+            }
+            let Some(count) = self.budget_peek(other, now) else {
+                continue;
+            };
+            if count == 0 {
+                continue;
+            }
+            let theirs = schedule::clip_from(&self.opportunity(other, now), now);
+            let theirs_span = schedule::total_minutes(&theirs);
+            if theirs_span <= 0.0 {
+                continue;
+            }
+            let share = schedule::overlap_minutes(remaining, &theirs) / theirs_span;
+            reserved += schedule::dead_present_minutes(
+                f64::from(count) * share,
+                Self::session_minutes(other.length),
+                cooldown,
+                presence,
+            );
+        }
+        reserved
+    }
+
+    /// How long a firing occupies the window before its cooldown even starts.
+    ///
+    /// `UntilStopped` is zero, not a guess. The reserve is an *anticipation* of a commitment the
+    /// schedule has made, and no commitment has been made about a length only the user decides. The
+    /// retrospective half of the correction still applies -- once a session has actually eaten
+    /// forty minutes, `clip_from` has already shrunk the window and the intensity rises on its own
+    /// at the next eligible tick. The cost is a day where the user leaves one running for hours and
+    /// the rest of the budget goes undelivered, which is the right outcome: they got their session.
+    fn session_minutes(length: SessionLength) -> f64 {
+        match length {
+            SessionLength::Fixed { minutes } => f64::from(minutes),
+            SessionLength::UntilStopped => 0.0,
+        }
+    }
+
+    /// Firings still owed by `rule`, without touching any state.
+    ///
+    /// [`budget`](Self::budget) resets a stale period and can flush a residual as a side effect;
+    /// neither belongs in a question another rule is asking about its neighbour.
+    fn budget_peek(&self, rule: &Rule, now: DateTime<Local>) -> Option<u32> {
+        let Trigger::Rate { frequency, .. } = &rule.trigger else {
+            return None;
+        };
+        let period = schedule::current_period(rule, now)?;
+        Some(match self.budgets.get(&rule.id) {
+            Some(budget) if budget.period_key == period.key() => budget.remaining,
+            _ => frequency.count(),
+        })
+    }
+
     fn budget(&mut self, rule: &Rule, now: DateTime<Local>) -> Option<u32> {
         let Trigger::Rate { frequency, .. } = &rule.trigger else {
             return None;
@@ -711,8 +802,11 @@ impl ScheduleEngine {
 
         let remaining = schedule::clip_from(&opportunity, now);
         let expected = schedule::expected_present_minutes(&remaining, &self.profile);
+        let usable = (expected
+            - self.reserved_minutes(rule, remaining_count, &remaining, now, expected))
+        .max(0.0);
         let hazard =
-            schedule::hazard_per_minute(remaining_count, expected, self.config.cooldown_minutes);
+            schedule::hazard_per_minute(remaining_count, usable, self.config.cooldown_minutes);
 
         // The compensator is the integral of exactly this, over exactly the minutes it applied to.
         // Every early return above is a stretch of zero intensity -- outside the range, budget
@@ -1345,6 +1439,115 @@ mod tests {
         assert!(run(&mut next, dt(2026, 7, 13, 9, 31), 30, false).is_none());
         assert_eq!(next.budgets.len(), 1);
         assert!(next.budgets.contains_key(&id));
+    }
+
+    // ─── the reserve ───────────────────────────────────────────────────────────
+
+    /// `(remaining, expected)` for a rule at `now`, which is what the reserve is measured against.
+    fn window(engine: &ScheduleEngine, rule: &Rule, now: DateTime<Local>) -> (Vec<Interval>, f64) {
+        let remaining = schedule::clip_from(&engine.opportunity(rule, now), now);
+        let expected = schedule::expected_present_minutes(&remaining, &engine.profile);
+        (remaining, expected)
+    }
+
+    #[test]
+    fn the_reserve_is_the_room_the_remaining_sessions_will_take() {
+        let rule = rate_rule((9, 0), (17, 0), 3);
+        let mut engine = test_engine(config(vec![rule.clone()]));
+        engine.set_flat_profile(1.0);
+        let now = dt(2026, 7, 13, 9, 0);
+        let (remaining, expected) = window(&engine, &rule, now);
+
+        // Three firings leave two gaps, each a 20-minute session plus a 30-minute cooldown. Eight
+        // hours of window is only six hours and twenty minutes of opportunity.
+        let reserved = engine.reserved_minutes(&rule, 3, &remaining, now, expected);
+        assert!((reserved - 100.0).abs() < 0.1, "{reserved}");
+    }
+
+    #[test]
+    fn the_last_firing_reserves_nothing_because_it_needs_no_room_after_it() {
+        let rule = rate_rule((9, 0), (17, 0), 3);
+        let mut engine = test_engine(config(vec![rule.clone()]));
+        engine.set_flat_profile(1.0);
+        let now = dt(2026, 7, 13, 9, 0);
+        let (remaining, expected) = window(&engine, &rule, now);
+
+        assert_eq!(
+            engine.reserved_minutes(&rule, 1, &remaining, now, expected),
+            0.0
+        );
+    }
+
+    /// A cooldown the user is only there for half of only costs half as much opportunity.
+    #[test]
+    fn a_cooldown_spent_away_from_the_desk_costs_less_opportunity() {
+        let rule = rate_rule((9, 0), (17, 0), 3);
+        let mut engine = test_engine(config(vec![rule.clone()]));
+        engine.set_flat_profile(0.5);
+        let now = dt(2026, 7, 13, 9, 0);
+        let (remaining, expected) = window(&engine, &rule, now);
+
+        let reserved = engine.reserved_minutes(&rule, 3, &remaining, now, expected);
+        assert!((reserved - 2.0 * (20.0 + 15.0)).abs() < 0.5, "{reserved}");
+    }
+
+    /// The cooldown is global, so a rule has to make room for its neighbours as well as itself.
+    /// Without this, two rules each reserving only their own would both promise themselves time the
+    /// other is going to take, and both would under-deliver.
+    #[test]
+    fn a_rule_reserves_room_for_the_other_rules_sharing_the_cooldown() {
+        let mine = rate_rule((9, 0), (17, 0), 3);
+        let theirs = rate_rule((9, 0), (17, 0), 2);
+        let mut engine = test_engine(config(vec![mine.clone(), theirs]));
+        engine.set_flat_profile(1.0);
+        let now = dt(2026, 7, 13, 9, 0);
+        let (remaining, expected) = window(&engine, &mine, now);
+
+        // Two gaps of my own, plus all two of theirs -- their last session's cooldown shuts me out
+        // exactly as much as any other.
+        let reserved = engine.reserved_minutes(&mine, 3, &remaining, now, expected);
+        assert!((reserved - 200.0).abs() < 0.2, "{reserved}");
+    }
+
+    /// A neighbour spread over a wider window than mine can only spend part of its dead time where
+    /// it shuts me out, so it is charged in proportion to the overlap. Charging all of it would
+    /// have every rule reserving for every other rule's whole day.
+    #[test]
+    fn a_neighbours_claim_is_charged_in_proportion_to_the_overlap() {
+        let mine = rate_rule((9, 0), (13, 0), 1);
+        let theirs = rate_rule((9, 0), (17, 0), 2);
+        let mut engine = test_engine(config(vec![mine.clone(), theirs]));
+        engine.set_flat_profile(1.0);
+        let now = dt(2026, 7, 13, 9, 0);
+        let (remaining, expected) = window(&engine, &mine, now);
+
+        // My four hours are half of their eight, so half of their two sessions' dead time is
+        // expected to land inside my window: 2 * 0.5 * (20 + 30).
+        let reserved = engine.reserved_minutes(&mine, 1, &remaining, now, expected);
+        assert!((reserved - 50.0).abs() < 0.2, "{reserved}");
+
+        // A neighbour whose window does not touch mine at all cannot take anything from it.
+        let elsewhere = rate_rule((18, 0), (22, 0), 3);
+        let mut engine = test_engine(config(vec![mine.clone(), elsewhere]));
+        engine.set_flat_profile(1.0);
+        let (remaining, expected) = window(&engine, &mine, now);
+        assert_eq!(
+            engine.reserved_minutes(&mine, 1, &remaining, now, expected),
+            0.0
+        );
+    }
+
+    #[test]
+    fn an_until_stopped_rule_reserves_its_cooldown_and_nothing_for_a_length_it_cannot_know() {
+        let mut rule = rate_rule((9, 0), (17, 0), 3);
+        rule.length = SessionLength::UntilStopped;
+        let mut engine = test_engine(config(vec![rule.clone()]));
+        engine.set_flat_profile(1.0);
+        let now = dt(2026, 7, 13, 9, 0);
+        let (remaining, expected) = window(&engine, &rule, now);
+
+        let reserved = engine.reserved_minutes(&rule, 3, &remaining, now, expected);
+        assert!((reserved - 60.0).abs() < 0.1, "{reserved}");
     }
 
     #[test]
