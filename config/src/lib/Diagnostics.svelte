@@ -29,7 +29,7 @@
 
 	const sourceOptions = $derived([
 		{ value: 'all', label: 'All components' },
-		...[...new Set(diagnostics?.logs.map((record) => record.component) ?? [])].map((component) => ({
+		...[...new Set(diagnostics?.logs.map((record) => record.program) ?? [])].map((component) => ({
 			value: component,
 			label: sourceLabels[component] ?? component
 		}))
@@ -44,7 +44,7 @@
 	const visibleLogs = $derived.by(() => {
 		const needle = query.trim().toLocaleLowerCase();
 		return (diagnostics?.logs ?? []).filter((record) => {
-			if (source !== 'all' && record.component !== source) return false;
+			if (source !== 'all' && record.program !== source) return false;
 			if (level !== 'all' && record.level !== level) return false;
 			if (!needle) return true;
 			return [
@@ -139,7 +139,7 @@
 	}
 
 	function formatRecord(record: LogRecordDto): string {
-		const source = sourceLabels[record.component] ?? record.component;
+		const source = sourceLabels[record.program] ?? record.program;
 		const location = record.file
 			? ` ${record.file}${record.line ? `:${record.line}` : ''}`
 			: ` ${record.target}`;
@@ -367,8 +367,8 @@
 									>
 										<span class="text-muted tabular-nums">{displayTime(record.timestamp)}</span>
 										<span class={levelClass(record.level)}>{record.level}</span>
-										<span class="text-muted truncate" title={record.component}>
-											{sourceLabels[record.component] ?? record.component}
+										<span class="text-muted truncate" title={record.program}>
+											{sourceLabels[record.program] ?? record.program}
 										</span>
 										<div class="min-w-0">
 											<p class="text-text m-0 break-words whitespace-pre-wrap">{record.message}</p>

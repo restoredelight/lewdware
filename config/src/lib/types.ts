@@ -385,10 +385,10 @@ export function isFullRegion(region: MonitorRegion): boolean {
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'trace';
 
 export interface LogRecordDto {
-	schema: number;
+	schema_version: number;
 	timestamp: string;
 	level: LogLevel;
-	component: string;
+	program: string;
 	target: string;
 	message: string;
 	file: string | null;
