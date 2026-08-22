@@ -808,6 +808,18 @@ impl PresenceProfile {
         mean
     }
 
+    /// Mean and variance of the estimate at `at`.
+    ///
+    /// The variance is the Beta's, `m(1-m)/(strength+1)`, and the strength is the finest rung's own
+    /// evidence plus [`SHRINKAGE`]. That the parent counts for only `SHRINKAGE` here is the point
+    /// rather than a shortcut: however sure the coarse rungs are about 3am in general, `SHRINKAGE`
+    /// is the standing claim about how far one particular hour may still differ from them, so a
+    /// bucket nobody has watched is genuinely uncertain no matter how well the week is known.
+    pub fn estimate(&self, at: DateTime<Local>) -> (f64, f64) {
+        let (mean, strength) = self.posterior(at);
+        (mean, mean * (1.0 - mean) / (strength + 1.0))
+    }
+
     /// How many hours of evidence the finest rung holds about `at`. Nothing in the rate model reads
     /// this yet; it is what a diagnostic or the config app would use to say how well the profile
     /// knows a given hour.
@@ -949,6 +961,58 @@ pub fn expected_present_minutes(intervals: &[Interval], profile: &PresenceProfil
 
 // ─── The rate ──────────────────────────────────────────────────────────────────
 
+/// Ceiling on the dispersion correction in [`usable_present_minutes`], as a squared coefficient
+/// of variation.
+///
+/// The correction is a second-order expansion, and second-order expansions stop being trustworthy
+/// exactly where this one bites hardest: as the last hour of a window closes, the realised present
+/// time genuinely might be zero, `E[1/M]` runs away, and the series has nothing sensible to say.
+/// Capping it holds the denominator's shrinkage to a fifth, which is a correction rather than a
+/// rewrite, and leaves the endgame to the two mechanisms built for it -- the reserve, and the
+/// intensity cap.
+const MAX_DISPERSION: f64 = 0.25;
+
+/// The denominator the intensity actually wants, which is not the one the user is shown.
+///
+/// [`expected_present_minutes`] answers "how much present time is left", and that is the honest
+/// answer for a config app to display. It is the wrong number to divide a budget by, for two
+/// reasons that happen to point the same way.
+///
+/// The first is Jensen's inequality. The intensity that would place the remaining firings correctly
+/// is `k / M`, where `M` is the present time that *actually happens*; what we can compute is
+/// `k / E[M]`. Since `1/x` is convex, `E[k/M] >= k/E[M]`, so the plug-in systematically aims too
+/// low. This is a bias, not noise: it does not shrink as the profile converges, because it is
+/// about `M` being random rather than about `p` being unknown. To second order the gap is a factor
+/// of `1 + Var(M)/E[M]^2`, and dividing by it is this whole function.
+///
+/// The second is that being wrong is not symmetric. Over-estimating presence under-fires, and a
+/// period that closes still owing a session never gets it back; under-estimating merely front-loads
+/// the day, which the budget counter unwinds on its own as it drains. Given a choice of which way
+/// to err, the schedule should err toward firing.
+///
+/// The variance has two sources and both belong. `p(1-p)` is presence itself being a coin -- the
+/// user either is or is not there -- and it is largest exactly where the profile is least decided.
+/// The estimate's own variance is the second, and it is why a cold start is more conservative than
+/// a settled profile without anything having to say so: an unwatched hour carries its uncertainty
+/// into the denominator by itself.
+pub fn usable_present_minutes(intervals: &[Interval], profile: &PresenceProfile) -> f64 {
+    let mut mean = 0.0;
+    let mut variance = 0.0;
+    for interval in intervals {
+        for_each_hour_chunk(*interval, |chunk| {
+            let minutes = chunk.minutes();
+            let (p, spread) = profile.estimate(chunk.start);
+            mean += minutes * p;
+            variance += minutes * minutes * (p * (1.0 - p) + spread);
+        });
+    }
+    if mean <= 0.0 {
+        return 0.0;
+    }
+    let dispersion = (variance / (mean * mean)).min(MAX_DISPERSION);
+    mean / (1.0 + dispersion)
+}
+
 /// Guards the hazard against a vanishing denominator: with less than this much opportunity left,
 /// treat the rule as having this much, so `remaining / expected` cannot run away to infinity in
 /// the last seconds of a range.
@@ -1027,7 +1091,20 @@ pub fn fire_probability(hazard: f64, present_minutes: f64) -> f64 {
     if hazard <= 0.0 || present_minutes <= 0.0 {
         return 0.0;
     }
-    1.0 - (-hazard * present_minutes).exp()
+    any_fire_probability(hazard * present_minutes)
+}
+
+/// P(at least one firing) given an accumulated compensator increment.
+///
+/// The same formula [`fire_probability`] applies to one rule, stated in the form that composes:
+/// independent processes running together have the compensator increments of all of them, because
+/// their survival probabilities multiply and `exp` turns that into a sum. That is what lets several
+/// rules be resolved with a single draw instead of one apiece.
+pub fn any_fire_probability(compensator: f64) -> f64 {
+    if compensator <= 0.0 {
+        return 0.0;
+    }
+    1.0 - (-compensator).exp()
 }
 
 #[cfg(test)]
@@ -1682,11 +1759,94 @@ mod tests {
 
     // ─── the rate ──────────────────────────────────────────────────────────────
 
+    /// A profile that is certain leaves the denominator alone. Both variance terms vanish at
+    /// `p = 1`, so there is nothing to correct and the tier-3 case is untouched.
+    #[test]
+    fn certainty_costs_the_denominator_nothing() {
+        let rule = rate_rule(all_days(), between((9, 0), (17, 0)), 3);
+        let remaining = remaining_opportunity(&rule, dt(2026, 7, 13, 9, 0), &[]);
+        let profile = PresenceProfile::saturated_at(1.0);
+
+        let expected = expected_present_minutes(&remaining, &profile);
+        let usable = usable_present_minutes(&remaining, &profile);
+        assert!((usable - expected).abs() < 1.0, "{usable} vs {expected}");
+    }
+
+    /// The Jensen correction, at the size the algebra predicts. Over `H` hours at `p = 0.5` with a
+    /// settled profile the squared coefficient of variation is close to `1/H`, so eight hours is
+    /// about an eighth and the denominator loses about a ninth of itself.
+    #[test]
+    fn an_uncertain_profile_shrinks_the_denominator_by_about_one_over_the_hours_left() {
+        let rule = rate_rule(all_days(), between((9, 0), (17, 0)), 3);
+        let remaining = remaining_opportunity(&rule, dt(2026, 7, 13, 9, 0), &[]);
+        let profile = PresenceProfile::saturated_at(0.5);
+
+        let expected = expected_present_minutes(&remaining, &profile);
+        let usable = usable_present_minutes(&remaining, &profile);
+        let shade = 1.0 - usable / expected;
+        assert!((0.09..0.15).contains(&shade), "shade = {shade}");
+    }
+
+    /// A bucket nobody has watched carries its own uncertainty into the denominator, so a cold
+    /// start is more conservative than a settled profile at the same estimate without anything
+    /// having to ask for it.
+    #[test]
+    fn an_unwatched_window_is_shaded_harder_than_a_settled_one() {
+        let rule = rate_rule(all_days(), between((9, 0), (17, 0)), 3);
+        let remaining = remaining_opportunity(&rule, dt(2026, 7, 13, 9, 0), &[]);
+
+        let cold = PresenceProfile::default();
+        let settled = PresenceProfile::saturated_at(cold.p(dt(2026, 7, 13, 9, 0)));
+
+        let cold_shade = 1.0
+            - usable_present_minutes(&remaining, &cold)
+                / expected_present_minutes(&remaining, &cold);
+        let settled_shade = 1.0
+            - usable_present_minutes(&remaining, &settled)
+                / expected_present_minutes(&remaining, &settled);
+        assert!(
+            cold_shade > settled_shade,
+            "{cold_shade} vs {settled_shade}"
+        );
+    }
+
+    /// The cap, which exists because the expansion it caps stops meaning anything as the window
+    /// runs out. One hour left at even odds would otherwise ask to halve the denominator.
+    #[test]
+    fn the_dispersion_correction_is_capped_for_a_window_about_to_close() {
+        let rule = rate_rule(all_days(), between((9, 0), (10, 0)), 1);
+        let remaining = remaining_opportunity(&rule, dt(2026, 7, 13, 9, 0), &[]);
+        let profile = PresenceProfile::saturated_at(0.5);
+
+        let usable = usable_present_minutes(&remaining, &profile);
+        let expected = expected_present_minutes(&remaining, &profile);
+        assert!((usable - expected / (1.0 + MAX_DISPERSION)).abs() < 0.01);
+        // Never more than a fifth, whatever the window.
+        assert!(usable > expected * 0.79);
+    }
+
+    /// It only ever shrinks. A denominator larger than the honest expectation would aim the
+    /// intensity the wrong way entirely.
+    #[test]
+    fn the_usable_denominator_never_exceeds_the_expected_one() {
+        let rule = rate_rule(all_days(), Range::AllDay, 3);
+        let remaining = remaining_opportunity(&rule, dt(2026, 7, 13, 0, 0), &[]);
+        for p in [0.0, 0.1, 0.35, 0.5, 0.8, 1.0] {
+            let profile = PresenceProfile::saturated_at(p);
+            let usable = usable_present_minutes(&remaining, &profile);
+            let expected = expected_present_minutes(&remaining, &profile);
+            assert!(usable <= expected + 1e-9, "p = {p}: {usable} > {expected}");
+        }
+    }
+
     #[test]
     fn dead_time_charges_a_session_in_full_and_its_cooldown_by_presence() {
         // Two gaps between three firings: a 20-minute session the user is there for by
         // construction, then a 30-minute cooldown only half of which they are at the desk for.
-        assert_eq!(dead_present_minutes(2.0, 20.0, 30, 0.5), 2.0 * (20.0 + 15.0));
+        assert_eq!(
+            dead_present_minutes(2.0, 20.0, 30, 0.5),
+            2.0 * (20.0 + 15.0)
+        );
         // Present throughout, and the whole 50 minutes is opportunity the schedule has spent.
         assert_eq!(dead_present_minutes(2.0, 20.0, 30, 1.0), 100.0);
         // The last firing needs no room after it, so a rule down to one reserves nothing.
@@ -1696,11 +1856,17 @@ mod tests {
     #[test]
     fn overlap_is_the_time_two_sets_of_intervals_share() {
         let morning = vec![Interval::new(dt(2026, 7, 13, 9, 0), dt(2026, 7, 13, 12, 0))];
-        let midday = vec![Interval::new(dt(2026, 7, 13, 11, 0), dt(2026, 7, 13, 14, 0))];
+        let midday = vec![Interval::new(
+            dt(2026, 7, 13, 11, 0),
+            dt(2026, 7, 13, 14, 0),
+        )];
         assert_eq!(overlap_minutes(&morning, &midday), 60.0);
         assert_eq!(overlap_minutes(&morning, &morning), 180.0);
 
-        let evening = vec![Interval::new(dt(2026, 7, 13, 20, 0), dt(2026, 7, 13, 21, 0))];
+        let evening = vec![Interval::new(
+            dt(2026, 7, 13, 20, 0),
+            dt(2026, 7, 13, 21, 0),
+        )];
         assert_eq!(overlap_minutes(&morning, &evening), 0.0);
     }
 

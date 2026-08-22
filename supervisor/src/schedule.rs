@@ -721,11 +721,27 @@ impl ScheduleEngine {
         }
     }
 
-    /// One pass over the rules, returning the first that fires.
+    /// Decides which rule, if any, fires this tick.
     ///
-    /// Earlier rules get their draw first, which biases collisions toward the top of the list.
-    /// With per-tick probabilities in the thousandths that bias is far below the noise of the
-    /// process itself, and shuffling would buy nothing a user could perceive.
+    /// `At` rules are resolved first and unconditionally. Naming the instant is that trigger's
+    /// entire promise, and unlike a rate rule a missed crossing is simply gone -- the next tick's
+    /// `elapsed_from` is already past it -- whereas a rate rule that loses a tick keeps its budget
+    /// and redistributes it over the rest of the period. So a collision should cost the rate rule a
+    /// minute rather than cost the `At` rule the thing it exists to do.
+    ///
+    /// Rate rules are then resolved as **competing risks** rather than one draw each in list order.
+    /// v1's pass fired the first rule whose own draw came up, which biases collisions toward the top
+    /// of the list; the comment excusing it argued the per-tick probabilities were small enough for
+    /// the bias to be invisible. That stopped being true once the denominator started reserving the
+    /// time sessions consume: the intensity now rises sharply as a window closes, exactly where
+    /// several rules are most likely to want the same minute, and a rule at the bottom of the list
+    /// would be starved precisely when it is running out of chances.
+    ///
+    /// The correct treatment is the standard one for simultaneous Poisson processes. Their
+    /// compensator increments add, so one draw against the total decides *whether* anything fires,
+    /// and a second, proportional to each rule's own increment, decides *which* -- which is exactly
+    /// the probability that a given process owns the first arrival. A single candidate skips the
+    /// second draw, so the common case is bit-for-bit what it was.
     fn draw(
         &mut self,
         now: DateTime<Local>,
@@ -734,32 +750,74 @@ impl ScheduleEngine {
         elapsed_minutes: f64,
     ) -> Option<StartRequest> {
         let rules = self.config.rules.clone();
+
         for rule in &rules {
-            let fires = match &rule.trigger {
-                Trigger::At { .. } => self.at_rule_crossed(rule, now, elapsed_from),
-                Trigger::Rate { .. } => {
-                    present && self.rate_rule_fires(rule, now, elapsed_from, elapsed_minutes)
-                }
-            };
-            if fires {
-                if matches!(rule.trigger, Trigger::Rate { .. })
-                    && let Some(budget) = self.budgets.get_mut(&rule.id)
-                {
-                    let remaining_before = budget.remaining;
-                    budget.remaining = budget.remaining.saturating_sub(1);
-                    self.dirty = true;
-                    // The firing resolves the interval the compensator has been accumulating: this
-                    // is the observation the interarrival test is allowed to use.
-                    self.close_accumulator(now, rule, Outcome::Fired, remaining_before);
-                }
-                return Some(StartRequest {
-                    rule_id: rule.id,
-                    length: rule.length,
-                    overrides: rule.overrides.clone(),
-                });
+            if matches!(rule.trigger, Trigger::At { .. })
+                && self.at_rule_crossed(rule, now, elapsed_from)
+            {
+                return Some(Self::request_for(rule));
             }
         }
-        None
+
+        if !present {
+            return None;
+        }
+
+        // Every eligible rule's intensity is integrated whether or not it goes on to win: losing a
+        // race is not the same as having had no chance, and the residual log has to agree.
+        let mut candidates: Vec<(usize, f64)> = Vec::new();
+        for (index, rule) in rules.iter().enumerate() {
+            if !matches!(rule.trigger, Trigger::Rate { .. }) {
+                continue;
+            }
+            let increment = self.rate_rule_compensator(rule, now, elapsed_from, elapsed_minutes);
+            if increment > 0.0 {
+                candidates.push((index, increment));
+            }
+        }
+
+        // No eligible rule means no coin. Taking one anyway would make the draw sequence depend on
+        // ticks that could never have fired, so every shut-window minute would shift the stream.
+        let total: f64 = candidates.iter().map(|(_, increment)| increment).sum();
+        if total <= 0.0 || self.rng.next_f64() >= schedule::any_fire_probability(total) {
+            return None;
+        }
+
+        let winner = match candidates.as_slice() {
+            [] => return None,
+            [(index, _)] => *index,
+            many => {
+                let mut pick = self.rng.next_f64() * total;
+                let mut chosen = many[many.len() - 1].0;
+                for &(index, increment) in many {
+                    pick -= increment;
+                    if pick <= 0.0 {
+                        chosen = index;
+                        break;
+                    }
+                }
+                chosen
+            }
+        };
+
+        let rule = &rules[winner];
+        if let Some(budget) = self.budgets.get_mut(&rule.id) {
+            let remaining_before = budget.remaining;
+            budget.remaining = budget.remaining.saturating_sub(1);
+            self.dirty = true;
+            // The firing resolves the interval the compensator has been accumulating: this is the
+            // observation the interarrival test is allowed to use.
+            self.close_accumulator(now, rule, Outcome::Fired, remaining_before);
+        }
+        Some(Self::request_for(rule))
+    }
+
+    fn request_for(rule: &Rule) -> StartRequest {
+        StartRequest {
+            rule_id: rule.id,
+            length: rule.length,
+            overrides: rule.overrides.clone(),
+        }
     }
 
     /// An `At` rule fires when its instant falls in the tick just elapsed. Unlike a rate rule it
@@ -775,21 +833,24 @@ impl ScheduleEngine {
             .is_some_and(|at| at <= now)
     }
 
-    fn rate_rule_fires(
+    /// This rule's compensator increment over the tick just elapsed: `intensity * present minutes`,
+    /// and zero wherever the rule had no chance at all. The quantity the draw is taken against, and
+    /// the same one the residual log accumulates.
+    fn rate_rule_compensator(
         &mut self,
         rule: &Rule,
         now: DateTime<Local>,
         elapsed_from: DateTime<Local>,
         elapsed_minutes: f64,
-    ) -> bool {
+    ) -> f64 {
         // Select the period using the beginning of the elapsed tick. At an occurrence's closing
         // edge, `now` already belongs to the next period; using it would discard the final minute
         // (and make a one-minute daily range impossible to fire in).
         let Some(remaining_count) = self.budget(rule, elapsed_from) else {
-            return false;
+            return 0.0;
         };
         if remaining_count == 0 || elapsed_minutes <= 0.0 {
-            return false;
+            return 0.0;
         }
 
         let opportunity = self.opportunity(rule, elapsed_from);
@@ -797,12 +858,17 @@ impl ScheduleEngine {
         // opening edge after hours asleep must not integrate those hours.
         let inside = Self::overlap_minutes(elapsed_from, now, &opportunity).min(elapsed_minutes);
         if inside <= 0.0 {
-            return false;
+            return 0.0;
         }
 
         let remaining = schedule::clip_from(&opportunity, now);
+        // Two different questions about the same window. `expected` is how much present time is
+        // left, which is what the reserve's presence ratio is asking; `usable` is what a budget may
+        // be divided by, which is smaller for reasons that have nothing to do with the reserve. The
+        // reserve is a commitment already made, so it comes off after the correction rather than
+        // being corrected along with it.
         let expected = schedule::expected_present_minutes(&remaining, &self.profile);
-        let usable = (expected
+        let usable = (schedule::usable_present_minutes(&remaining, &self.profile)
             - self.reserved_minutes(rule, remaining_count, &remaining, now, expected))
         .max(0.0);
         let hazard =
@@ -822,7 +888,7 @@ impl ScheduleEngine {
                 .credit(hazard, inside, capped);
         }
 
-        self.rng.next_f64() < schedule::fire_probability(hazard, inside)
+        hazard * inside
     }
 
     /// The soonest instant worth waking at: a tick while a range is open or a session is running,
@@ -1020,6 +1086,31 @@ mod tests {
     impl Rng for FixedDraw {
         fn next_f64(&mut self) -> f64 {
             self.0
+        }
+    }
+
+    /// Returns a scripted sequence, holding the last value once exhausted. What makes the two-draw
+    /// competing-risks path testable: the first value decides whether anything fires and the second
+    /// decides which rule, so a test can name the winner instead of counting frequencies.
+    struct ScriptedRng {
+        draws: Vec<f64>,
+        next: usize,
+    }
+
+    impl ScriptedRng {
+        fn new(draws: &[f64]) -> Self {
+            Self {
+                draws: draws.to_vec(),
+                next: 0,
+            }
+        }
+    }
+
+    impl Rng for ScriptedRng {
+        fn next_f64(&mut self) -> f64 {
+            let value = self.draws[self.next.min(self.draws.len() - 1)];
+            self.next += 1;
+            value
         }
     }
 
@@ -1439,6 +1530,120 @@ mod tests {
         assert!(run(&mut next, dt(2026, 7, 13, 9, 31), 30, false).is_none());
         assert_eq!(next.budgets.len(), 1);
         assert!(next.budgets.contains_key(&id));
+    }
+
+    // ─── collisions ────────────────────────────────────────────────────────────
+
+    fn engine_with(config: ScheduleConfig, rng: Box<dyn Rng>) -> ScheduleEngine {
+        let mut engine = ScheduleEngine::with_parts(config, Box::new(AssumePresent), rng);
+        engine.set_flat_profile(1.0);
+        engine
+    }
+
+    /// Two identical rules have identical intensities, so the second draw alone decides between
+    /// them -- below half the total picks the first, above it picks the second. List order does not
+    /// enter into it, which is the whole point: v1 gave the top of the list first refusal.
+    #[test]
+    fn a_collision_between_rate_rules_is_settled_by_intensity_not_list_order() {
+        let first = rate_rule((9, 0), (17, 0), 3);
+        let second = rate_rule((9, 0), (17, 0), 3);
+        let (first_id, second_id) = (first.id, second.id);
+        let config = config(vec![first, second]);
+
+        for (select, expected) in [(0.9, second_id), (0.1, first_id)] {
+            let mut engine = engine_with(
+                config.clone(),
+                Box::new(ScriptedRng::new(&[0.0, select, 1.0])),
+            );
+            engine.tick(dt(2026, 7, 13, 9, 0), false);
+            let start = engine
+                .tick(dt(2026, 7, 13, 9, 1), false)
+                .start
+                .expect("a draw of 0.0 clears any positive probability");
+            assert_eq!(start.rule_id, expected, "select = {select}");
+        }
+    }
+
+    /// Not merely unbiased -- proportional. A rule with three firings owed has three times the
+    /// intensity of one with a single firing left over the same window, so it must win three
+    /// collisions in four.
+    ///
+    /// The two rules happen to share a denominator here, which is the reserve working: each one
+    /// makes room for the other's dead time as well as its own, so both see the same 330 usable
+    /// minutes and the ratio is exactly their budgets. That puts the boundary at 0.75.
+    #[test]
+    fn a_collision_is_won_in_proportion_to_what_each_rule_still_owes() {
+        let many = rate_rule((9, 0), (17, 0), 3);
+        let one = rate_rule((9, 0), (17, 0), 1);
+        let (many_id, one_id) = (many.id, one.id);
+        let config = config(vec![many, one]);
+
+        for (select, expected) in [(0.7, many_id), (0.8, one_id)] {
+            let mut engine = engine_with(
+                config.clone(),
+                Box::new(ScriptedRng::new(&[0.0, select, 1.0])),
+            );
+            engine.tick(dt(2026, 7, 13, 9, 0), false);
+            let start = engine
+                .tick(dt(2026, 7, 13, 9, 1), false)
+                .start
+                .expect("a draw of 0.0 clears any positive probability");
+            assert_eq!(start.rule_id, expected, "select = {select}");
+        }
+    }
+
+    /// An `At` rule sharing a tick with a rate rule wins it, wherever it sits in the list.
+    ///
+    /// The asymmetry is in what a loss costs. A rate rule that loses a minute keeps its budget and
+    /// redistributes it; an `At` rule that loses its minute has lost the instant it exists to name,
+    /// because the next tick's `elapsed_from` is already past it.
+    #[test]
+    fn an_at_rule_wins_a_tick_it_shares_with_a_rate_rule() {
+        let rate = rate_rule((9, 0), (17, 0), 3);
+        let rate_id = rate.id;
+        let at = at_rule(9, 30);
+        let at_id = at.id;
+
+        let mut engine = engine_with(config(vec![rate, at]), Box::new(AlwaysFires));
+        engine.tick(dt(2026, 7, 13, 9, 29), false);
+        let start = engine
+            .tick(dt(2026, 7, 13, 9, 30), false)
+            .start
+            .expect("the At rule's instant falls in this tick");
+
+        assert_eq!(start.rule_id, at_id);
+        // ... and the rate rule paid nothing for losing.
+        assert!(
+            engine
+                .budgets
+                .get(&rate_id)
+                .is_none_or(|budget| budget.remaining == 3)
+        );
+    }
+
+    /// Losing a race is not the same as never having had a chance, and the compensator has to tell
+    /// the difference -- otherwise `diagnose-schedule`'s martingale check would read every loss as
+    /// time the rule was shut, and quietly report a model that fires more than its intensity allows.
+    #[test]
+    fn every_eligible_rule_integrates_its_intensity_even_when_another_wins() {
+        let first = rate_rule((9, 0), (17, 0), 3);
+        let second = rate_rule((9, 0), (17, 0), 3);
+        let (first_id, second_id) = (first.id, second.id);
+
+        let path =
+            std::env::temp_dir().join(format!("lewdware-collide-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut engine = engine_with(config(vec![first, second]), Box::new(NeverFires));
+        engine.set_residual_log(crate::residuals::Log::at_path(path.clone()));
+
+        engine.tick(dt(2026, 7, 13, 9, 0), false);
+        engine.tick(dt(2026, 7, 13, 9, 1), false);
+        let _ = std::fs::remove_file(&path);
+
+        for id in [first_id, second_id] {
+            let accumulated = engine.accumulators.get(&id).expect("both were eligible");
+            assert!(accumulated.residual > 0.0, "{id}: {accumulated:?}");
+        }
     }
 
     // ─── the reserve ───────────────────────────────────────────────────────────

@@ -122,6 +122,13 @@ struct Outcome {
     all: f64,
     /// E[firings], against `count`.
     mean: f64,
+    /// Mean position of a firing within its window, as a fraction of it.
+    ///
+    /// The delivery figures alone cannot tell an improvement from an over-correction: anything that
+    /// raises the intensity delivers more, and raising it too far simply spends the budget early.
+    /// A fixed quota scattered uniformly averages 0.5, so this is the number that says whether the
+    /// sessions are still unpredictable or merely front-loaded.
+    position: f64,
 }
 
 fn config_for(scenario: &Scenario) -> ScheduleConfig {
@@ -151,8 +158,8 @@ fn config_for(scenario: &Scenario) -> ScheduleConfig {
     }
 }
 
-/// One simulated day. Returns how many sessions the schedule managed to start.
-fn one_day(scenario: &Scenario, seed: u64) -> u32 {
+/// One simulated day: how many sessions started, and where in the window each of them landed.
+fn one_day(scenario: &Scenario, seed: u64) -> (u32, f64) {
     let mut engine = ScheduleEngine::with_parts(
         config_for(scenario),
         Box::new(RandomPresence {
@@ -171,6 +178,7 @@ fn one_day(scenario: &Scenario, seed: u64) -> u32 {
     let ticks = scenario.window_hours * 60 + 2;
 
     let mut delivered = 0;
+    let mut positions = 0.0;
     let mut session_running = false;
 
     for i in 0..ticks {
@@ -186,19 +194,22 @@ fn one_day(scenario: &Scenario, seed: u64) -> u32 {
         }
         if let Some(request) = evaluation.start {
             delivered += 1;
+            positions += i as f64 / ticks as f64;
             session_running = true;
             engine.note_session_started(request.length, now);
         }
     }
-    delivered
+    (delivered, positions)
 }
 
 fn simulate(scenario: &Scenario, trials: u32) -> Outcome {
     let mut all = 0u32;
     let mut total = 0u32;
+    let mut positions = 0.0;
     for trial in 0..trials {
-        let delivered = one_day(scenario, u64::from(trial));
+        let (delivered, where_they_landed) = one_day(scenario, u64::from(trial));
         total += delivered;
+        positions += where_they_landed;
         if delivered == scenario.count {
             all += 1;
         }
@@ -206,6 +217,11 @@ fn simulate(scenario: &Scenario, trials: u32) -> Outcome {
     Outcome {
         all: f64::from(all) / f64::from(trials),
         mean: f64::from(total) / f64::from(trials),
+        position: if total > 0 {
+            positions / f64::from(total)
+        } else {
+            f64::NAN
+        },
     }
 }
 
@@ -273,13 +289,16 @@ const PROFILE_ERROR: &[Scenario] = &[
 #[ignore = "reporting, not asserting"]
 fn delivery_grid() {
     let trials = 4000;
-    println!("\n{:<42} {:>9} {:>10}", "scenario", "P(all n)", "E[count]");
-    println!("{}", "-".repeat(63));
+    println!(
+        "\n{:<42} {:>9} {:>10} {:>10}",
+        "scenario", "P(all n)", "E[count]", "position"
+    );
+    println!("{}", "-".repeat(74));
     for scenario in IDEAL.iter().chain(PROFILE_ERROR) {
         let outcome = simulate(scenario, trials);
         println!(
-            "{:<42} {:>9.3} {:>10.3}",
-            scenario.label, outcome.all, outcome.mean
+            "{:<42} {:>9.3} {:>10.3} {:>10.3}",
+            scenario.label, outcome.all, outcome.mean, outcome.position
         );
     }
     println!();
@@ -291,27 +310,29 @@ fn delivery_grid() {
 // the count the user was promised, which is the point: the model under-delivers, these tests say
 // by how much, and a change that quietly makes it worse cannot pass.
 //
-// Measured at 4000 trials, release build (`cargo test --release ... delivery_grid`). The second
-// column is the same run with the dead-time reserve bypassed, which is what the denominator used
-// to be -- kept here because it is the only honest way to say what the reserve bought:
+// Measured at 4000 trials, release build (`cargo test --release ... delivery_grid`). The trailing
+// columns are the same run with the dead-time reserve, and then the dispersion correction, bypassed
+// -- kept because they are the only honest way to say what each of them bought:
 //
-//                                                   P(all)  E[count] | no reserve
-//     8h, 3/day, 20m sessions                        0.909    2.909  |   0.831
-//     8h, 3/day, no session time                     0.919    2.916  |   0.885
-//     8h, 1/day, 20m sessions                        0.980    0.980  |   0.980
-//     8h, 4/day, 20m sessions                        0.856    3.850  |   0.665
-//     12h, 3/day, 20m sessions                       0.945    2.945  |   0.908
-//     4h, 3/day, 20m sessions                        0.730    2.709  |   0.522
-//     8h, 6/day, 20m sessions                        0.651    5.584  |   0.228
-//     8h, 8/day, 20m sessions                        0.080    6.213  |   0.008
-//     3h, 3/day, 20m sessions                        0.478    2.402  |   0.302
-//     half present, nothing learned (cold start)     0.827    2.808  |   0.740
-//     half present, profile sure of 1.00             0.540    2.460  |   0.404
-//     half present, profile sure of 0.70             0.707    2.668  |   0.576
-//     half present, profile sure of 0.50 (converged) 0.827    2.808  |   0.739
+//                                              P(all)  E[count]  pos | no shade | no reserve
+//     8h, 3/day, 20m sessions                   0.909    2.909  0.488 |   0.909  |   0.831
+//     8h, 3/day, no session time                0.919    2.916  0.490 |   0.919  |   0.885
+//     8h, 1/day, 20m sessions                   0.980    0.980  0.495 |   0.980  |   0.980
+//     8h, 4/day, 20m sessions                   0.856    3.850  0.484 |   0.856  |   0.665
+//     12h, 3/day, 20m sessions                  0.945    2.945  0.493 |   0.945  |   0.908
+//     4h, 3/day, 20m sessions                   0.730    2.709  0.468 |   0.730  |   0.522
+//     8h, 6/day, 20m sessions                   0.651    5.584  0.478 |   0.651  |   0.228
+//     8h, 8/day, 20m sessions                   0.080    6.213  0.487 |   0.080  |   0.008
+//     3h, 3/day, 20m sessions                   0.478    2.402  0.462 |   0.478  |   0.302
+//     half present, cold start                  0.880    2.868  0.421 |   0.827  |   0.740
+//     half present, profile sure of 1.00        0.541    2.461  0.566 |   0.540  |   0.404
+//     half present, profile sure of 0.70        0.763    2.732  0.500 |   0.707  |   0.576
+//     half present, profile sure of 0.50        0.877    2.865  0.426 |   0.827  |   0.739
 //
-// A single daily firing is untouched by the reserve, which is the sanity check: with one left there
-// is nothing after it to make room for.
+// Two sanity checks fall out of the shape of that table. A single daily firing is untouched by the
+// reserve, because with one left there is nothing after it to make room for. And every row with a
+// certain profile is untouched by the dispersion correction, because both of its variance terms
+// vanish at `p = 1` -- it only ever charges for uncertainty that is really there.
 //
 // Raise them as the model improves. A failure here is either a regression or a floor that has
 // earned an increase -- run `delivery_grid` to see which.
@@ -396,7 +417,7 @@ fn a_wider_window_delivers_better_than_a_narrow_one() {
 fn a_wrong_presence_profile_costs_delivery() {
     let cold = simulate(&PROFILE_ERROR[1], TRIALS);
     let converged = simulate(&PROFILE_ERROR[3], TRIALS);
-    // Measured: 0.827 against 0.540, so believing the wrong thing confidently costs about 29
+    // Measured: 0.877 against 0.541, so believing the wrong thing confidently costs about 34
     // points of delivery. Being wrong is expensive; the next test is about not having to be.
     assert!(
         converged.all > cold.all + 0.20,
@@ -428,6 +449,36 @@ fn the_reserve_carries_a_budget_that_crowds_its_window() {
     );
 }
 
+/// The guard on the dispersion correction, and on anything else that raises the intensity.
+///
+/// Delivery figures cannot tell a correction from an over-correction: *any* increase in intensity
+/// delivers more, and too large an increase simply spends the budget early and calls it a success.
+/// A fixed quota scattered uniformly averages halfway through its window, so this is the number
+/// that says whether the sessions are still unpredictable or merely front-loaded -- and it is the
+/// one that would catch a future tuning change buying delivery it has not earned.
+///
+/// The measured values sit a little under 0.5 even with a certain profile, which is the endgame
+/// mechanisms doing their job: the reserve and the intensity cap both bite hardest at the end of a
+/// window, and neither can move a firing later.
+#[test]
+fn firings_stay_spread_across_their_window_rather_than_bunching_early() {
+    let certain = simulate(&IDEAL[0], TRIALS);
+    assert!(
+        (0.44..0.56).contains(&certain.position),
+        "8h/3-a-day fired {:.3} of the way through its window on average (measured 0.488)",
+        certain.position
+    );
+
+    // An uncertain profile is deliberately shaded toward firing, so this one sits earlier -- but
+    // the whole correction is worth about six points of position, not thirty.
+    let uncertain = simulate(&PROFILE_ERROR[3], TRIALS);
+    assert!(
+        uncertain.position > 0.38,
+        "a half-present day fired {:.3} of the way through its window (measured 0.426)",
+        uncertain.position
+    );
+}
+
 /// The presence hierarchy's whole justification, as a number.
 ///
 /// A brand-new install knows nothing, and used to spend months being wrong about it: one estimate
@@ -443,8 +494,8 @@ fn a_cold_start_now_performs_almost_like_a_converged_profile() {
     let cold = simulate(&PROFILE_ERROR[0], TRIALS);
     let converged = simulate(&PROFILE_ERROR[3], TRIALS);
     assert!(
-        cold.all > 0.75,
-        "a cold start delivered all three on {:.1}% of days (measured 82.7%)",
+        cold.all > 0.81,
+        "a cold start delivered all three on {:.1}% of days (measured 88.0%)",
         cold.all * 100.0
     );
     assert!(
