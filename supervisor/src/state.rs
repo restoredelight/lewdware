@@ -74,10 +74,10 @@ pub struct PersistedState {
     pub last_stop: LastStop,
     #[serde(default)]
     pub profile: PresenceProfile,
-    /// Part-accumulated compensator intervals, one per rate rule. Only ever written when
+    /// Part-accumulated calibration intervals, one per rate rule. Only ever written when
     /// diagnostics are on, and `#[serde(default)]` so a state file from a run without them loads
     /// unchanged. Kept across restarts because the supervisor restarts often enough that dropping
-    /// a part-accumulated interval each time would bias `N - L` upward on its own.
+    /// a part-accumulated interval each time would bias `N - Q` upward on its own.
     #[serde(default)]
     pub accumulators: HashMap<Uuid, Accumulator>,
 }

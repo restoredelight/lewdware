@@ -5,7 +5,6 @@ import type {
 	Capabilities,
 	ConditionValue,
 	ConfigDto,
-	CrowdingDto,
 	EngineStatusDto,
 	Key,
 	ModeGroupDto,
@@ -119,7 +118,6 @@ class AppStore {
 	// Kept fresh by the `supervisor:status` push event (see +page.svelte); the initial values
 	// come from one fetch at startup.
 	engineStatus = $state<EngineStatusDto>({ running: false, error: null, warning: null });
-	crowding = $state<CrowdingDto[]>([]);
 
 	scheduleStatus = $state<ScheduleStatusDto>({
 		enabled: false,
@@ -201,7 +199,6 @@ class AppStore {
 				api.getThemeCatalogue()
 			]);
 			this.config = config;
-			this.refreshCrowding();
 			this.packMetadata = packMetadata;
 			this.modeGroups = modeGroups;
 			this.applyModeOptions(modeOptions);
@@ -359,27 +356,7 @@ class AppStore {
 	// by calling this -- except `setScheduleEnabled`, which is the one field that also drives OS
 	// autostart registration and needs its own error handling, so it's never routed through here.
 	async saveSchedule() {
-		// Before the save, not after: the config state is already updated synchronously, the check is
-		// local arithmetic with no supervisor involved, and a warning about the number you just typed
-		// should not wait on a disk write.
-		this.refreshCrowding();
 		if (await this.saveConfig()) await api.reloadSupervisorSchedule().catch(() => {});
-	}
-
-	// Which rate rules are asking for more of their window than can comfortably be placed in it.
-	// Advisory only -- a schedule that crowds its window still runs, it just quietly delivers less
-	// than it promised, which is exactly the failure that is invisible without being told.
-	async refreshCrowding() {
-		if (!this.config) {
-			this.crowding = [];
-			return;
-		}
-		try {
-			this.crowding = await api.scheduleCrowding(this.config.schedule);
-		} catch {
-			// A diagnostic that cannot be computed is not worth interrupting an edit over.
-			this.crowding = [];
-		}
 	}
 
 	// Deliberately not routed through `saveSchedule()`: enabling/disabling also registers/

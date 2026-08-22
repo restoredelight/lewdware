@@ -46,10 +46,11 @@ fn presence_sample_interval() -> ChronoDuration {
 }
 
 /// Where "is the user at the machine" comes from. Tiered per the design doc: `presence.rs` picks
-/// the best backend the platform offers and falls back to [`AssumePresent`] when it has none,
-/// under which the rate model integrates over plain wall-clock time and firing is uniform-random
-/// within the range -- v1's *intent*, minus v1's bugs. Tier 0 is not behind this trait at all: the
-/// gap detection in [`ScheduleEngine::tick`] applies on every platform, whatever the source says.
+/// the best backend the platform offers and falls back to [`AssumePresent`] when it has none. That
+/// source contributes present observations on every awake tick; a fresh learned profile still
+/// starts at its conservative prior and converges toward wall-clock scheduling. Tier 0 is not
+/// behind this trait at all: the gap detection in [`ScheduleEngine::tick`] applies on every
+/// platform, whatever the source says.
 pub trait PresenceSource: Send {
     fn is_present(&mut self, now: DateTime<Local>) -> bool;
 }
@@ -222,10 +223,10 @@ pub struct ScheduleEngine {
     /// Something worth not losing changed (a budget spent, a pause started or ended), so the next
     /// save must not wait for the interval.
     dirty: bool,
-    /// Where compensator residuals go. Disabled unless the user opted in, and the accumulators
+    /// Where discrete calibration records go. Disabled unless the user opted in, and the accumulators
     /// below are only fed when it is -- an off diagnostic costs a branch per tick, not a float.
     residuals: residuals::Log,
-    /// One open compensator interval per rate rule, keyed the same way budgets are. Opened lazily
+    /// One open calibration interval per rate rule, keyed the same way budgets are. Opened lazily
     /// by the first credited tick and closed by whichever comes first: a firing, or the period
     /// turning over with the budget unspent.
     accumulators: HashMap<Uuid, Accumulator>,
@@ -342,6 +343,16 @@ impl ScheduleEngine {
         });
     }
 
+    /// A crashed scheduled process was restarted as a fresh engine session. Preserve its schedule
+    /// ownership and promised length, but measure that length from the replacement process that now
+    /// exists rather than charging it for time spent in crash backoff.
+    pub fn note_session_restarted(&mut self, now: DateTime<Local>) {
+        self.last_tick = Some(now);
+        if let Some(running) = &mut self.running {
+            running.started_at = now;
+        }
+    }
+
     /// A scheduled session has ended, however it ended. Starts the cooldown, which is what stops
     /// "three times a day" from clustering into three back-to-back.
     pub fn note_session_ended(&mut self, now: DateTime<Local>) {
@@ -353,6 +364,34 @@ impl ScheduleEngine {
     /// deliberately not refunded: the user said no to *this* session, and a refund would only make
     /// it come back sooner. The cooldown makes "not now" mean something.
     pub fn note_start_cancelled(&mut self, now: DateTime<Local>) {
+        self.start_cooldown(now, self.config.cooldown_minutes);
+    }
+
+    /// A firing whose engine process could not be created never became a session. Return its budget
+    /// so a transient supervisor/installation failure cannot silently count as delivery. This is
+    /// deliberately different from grace cancellation: there the user saw and declined a real
+    /// firing, so spending it is the consent-preserving behaviour.
+    pub fn note_start_failed(&mut self, rule_id: Uuid, now: DateTime<Local>) {
+        let Some(rule) = self.config.rules.iter().find(|rule| rule.id == rule_id) else {
+            return;
+        };
+        let Trigger::Rate { frequency, .. } = &rule.trigger else {
+            return;
+        };
+        let Some(period) = schedule::current_period(rule, now) else {
+            return;
+        };
+        let Some(budget) = self
+            .budgets
+            .get_mut(&rule_id)
+            .filter(|budget| budget.period_key == period.key())
+        else {
+            return;
+        };
+        budget.remaining = budget.remaining.saturating_add(1).min(frequency.count());
+        self.dirty = true;
+        // A persistent launch failure must not produce a notification and spawn attempt every
+        // minute. The ordinary post-session gap is already the user's chosen spacing policy.
         self.start_cooldown(now, self.config.cooldown_minutes);
     }
 
@@ -536,7 +575,7 @@ impl ScheduleEngine {
         Some(entry.remaining)
     }
 
-    /// Ends one rule's open compensator interval and writes it out. A no-op when nothing has
+    /// Ends one rule's open calibration interval and writes it out. A no-op when nothing has
     /// accumulated -- a rule whose range never opened has no interval to close, and a rule that
     /// already spent its budget closed its last one at the firing.
     fn close_accumulator(
@@ -766,31 +805,57 @@ impl ScheduleEngine {
 
         // Every eligible rule's intensity is integrated whether or not it goes on to win: losing a
         // race is not the same as having had no chance, and the residual log has to agree.
-        let mut candidates: Vec<(usize, f64)> = Vec::new();
+        let mut candidates: Vec<(usize, f64, f64)> = Vec::new();
         for (index, rule) in rules.iter().enumerate() {
             if !matches!(rule.trigger, Trigger::Rate { .. }) {
                 continue;
             }
-            let increment = self.rate_rule_compensator(rule, now, elapsed_from, elapsed_minutes);
+            let (increment, inside) =
+                self.rate_rule_increment(rule, now, elapsed_from, elapsed_minutes);
             if increment > 0.0 {
-                candidates.push((index, increment));
+                candidates.push((index, increment, inside));
             }
         }
 
         // No eligible rule means no coin. Taking one anyway would make the draw sequence depend on
         // ticks that could never have fired, so every shut-window minute would shift the stream.
-        let total: f64 = candidates.iter().map(|(_, increment)| increment).sum();
-        if total <= 0.0 || self.rng.next_f64() >= schedule::any_fire_probability(total) {
+        let total: f64 = candidates.iter().map(|(_, increment, _)| increment).sum();
+        if total <= 0.0 {
+            return None;
+        }
+        let any_probability = schedule::any_fire_probability(total);
+
+        // The implementation makes one Bernoulli draw per tick, not an unbounded Poisson count.
+        // A rule's exact chance of winning is therefore P(any) times its share of the competing
+        // increments. Accumulate that probability and its Bernoulli variance; unlike the raw
+        // compensator this remains calibrated when a closing tick's increment is much larger than
+        // one but the scheduler can still start at most one session.
+        if self.residuals.enabled() {
+            for &(index, increment, inside) in &candidates {
+                let rule = &rules[index];
+                let share = increment / total;
+                self.accumulators
+                    .entry(rule.id)
+                    .or_insert_with(|| Accumulator::starting_at(elapsed_from))
+                    .credit(
+                        any_probability * share,
+                        any_probability * (1.0 - any_probability) * share,
+                        inside,
+                    );
+            }
+        }
+
+        if self.rng.next_f64() >= any_probability {
             return None;
         }
 
         let winner = match candidates.as_slice() {
             [] => return None,
-            [(index, _)] => *index,
+            [(index, _, _)] => *index,
             many => {
                 let mut pick = self.rng.next_f64() * total;
                 let mut chosen = many[many.len() - 1].0;
-                for &(index, increment) in many {
+                for &(index, increment, _) in many {
                     pick -= increment;
                     if pick <= 0.0 {
                         chosen = index;
@@ -806,8 +871,7 @@ impl ScheduleEngine {
             let remaining_before = budget.remaining;
             budget.remaining = budget.remaining.saturating_sub(1);
             self.dirty = true;
-            // The firing resolves the interval the compensator has been accumulating: this is the
-            // observation the interarrival test is allowed to use.
+            // The firing resolves the interval of expected discrete wins accumulated for this rule.
             self.close_accumulator(now, rule, Outcome::Fired, remaining_before);
         }
         Some(Self::request_for(rule))
@@ -834,24 +898,25 @@ impl ScheduleEngine {
             .is_some_and(|at| at <= now)
     }
 
-    /// This rule's compensator increment over the tick just elapsed: `intensity * present minutes`,
-    /// and zero wherever the rule had no chance at all. The quantity the draw is taken against, and
-    /// the same one the residual log accumulates.
-    fn rate_rule_compensator(
+    /// This rule's intensity increment over the tick just elapsed, plus the present minutes it
+    /// covered. Zero wherever the rule had no chance at all. The competing-risks draw uses the
+    /// increment; diagnostics convert all rules' increments into their exact discrete win
+    /// probabilities once the total is known.
+    fn rate_rule_increment(
         &mut self,
         rule: &Rule,
         now: DateTime<Local>,
         elapsed_from: DateTime<Local>,
         elapsed_minutes: f64,
-    ) -> f64 {
+    ) -> (f64, f64) {
         // Select the period using the beginning of the elapsed tick. At an occurrence's closing
         // edge, `now` already belongs to the next period; using it would discard the final minute
         // (and make a one-minute daily range impossible to fire in).
         let Some(remaining_count) = self.budget(rule, elapsed_from) else {
-            return 0.0;
+            return (0.0, 0.0);
         };
         if remaining_count == 0 || elapsed_minutes <= 0.0 {
-            return 0.0;
+            return (0.0, 0.0);
         }
 
         let opportunity = self.opportunity(rule, elapsed_from);
@@ -859,7 +924,7 @@ impl ScheduleEngine {
         // opening edge after hours asleep must not integrate those hours.
         let inside = Self::overlap_minutes(elapsed_from, now, &opportunity).min(elapsed_minutes);
         if inside <= 0.0 {
-            return 0.0;
+            return (0.0, 0.0);
         }
 
         let remaining = schedule::clip_from(&opportunity, now);
@@ -874,19 +939,7 @@ impl ScheduleEngine {
         .max(0.0);
         let hazard = schedule::hazard_per_minute(remaining_count, usable);
 
-        // The compensator is the integral of exactly this, over exactly the minutes it applied to.
-        // Every early return above is a stretch of zero intensity -- outside the range, budget
-        // spent, no elapsed time -- and contributes nothing, which is what makes the accumulated
-        // total the process's own clock rather than wall time. Suppressed ticks (a live session, a
-        // cooldown) never reach here at all, for the same reason.
-        if self.residuals.enabled() {
-            self.accumulators
-                .entry(rule.id)
-                .or_insert_with(|| Accumulator::starting_at(elapsed_from))
-                .credit(hazard, inside);
-        }
-
-        hazard * inside
+        (hazard * inside, inside)
     }
 
     /// The soonest instant worth waking at: a tick while a range is open or a session is running,
@@ -1282,6 +1335,19 @@ mod tests {
     }
 
     #[test]
+    fn a_session_that_cannot_be_spawned_returns_its_budget() {
+        let (config, id) = one_rule(1);
+        let mut engine = test_engine(config);
+        let request = run(&mut engine, dt(2026, 7, 13, 9, 0), 2, false).expect("the rule fired");
+        assert_eq!(engine.status(dt(2026, 7, 13, 9, 1)).budget_remaining, 0);
+
+        engine.note_start_failed(request.rule_id, dt(2026, 7, 13, 9, 1));
+
+        assert_eq!(request.rule_id, id);
+        assert_eq!(engine.status(dt(2026, 7, 13, 9, 1)).budget_remaining, 1);
+    }
+
+    #[test]
     fn a_trigger_during_a_live_session_does_not_spend_the_budget() {
         // The v1 behaviour this replaces: an overlapping trigger was satisfied by the running
         // session and silently evaporated, so "3 times a day" quietly became fewer.
@@ -1406,6 +1472,23 @@ mod tests {
         }
         assert_eq!(
             engine.tick(start + ChronoDuration::minutes(5), true).stop,
+            Some(StopReason::LengthReached)
+        );
+    }
+
+    #[test]
+    fn a_restarted_session_gets_a_fresh_length_window() {
+        let mut engine = test_engine(config(vec![]));
+        let start = dt(2026, 7, 13, 9, 0);
+        engine.note_session_started(SessionLength::Fixed { minutes: 5 }, start);
+        engine.note_session_restarted(start + ChronoDuration::minutes(4));
+
+        assert_eq!(
+            engine.tick(start + ChronoDuration::minutes(8), true).stop,
+            None
+        );
+        assert_eq!(
+            engine.tick(start + ChronoDuration::minutes(9), true).stop,
             Some(StopReason::LengthReached)
         );
     }
@@ -1620,9 +1703,9 @@ mod tests {
         );
     }
 
-    /// Losing a race is not the same as never having had a chance, and the compensator has to tell
-    /// the difference -- otherwise `diagnose-schedule`'s martingale check would read every loss as
-    /// time the rule was shut, and quietly report a model that fires more than its intensity allows.
+    /// Losing a race is not the same as never having had a chance, and calibration has to tell the
+    /// difference -- otherwise `diagnose-schedule` would read every loss as time the rule was shut
+    /// and quietly report a model that fires more than its probabilities allow.
     #[test]
     fn every_eligible_rule_integrates_its_intensity_even_when_another_wins() {
         let first = rate_rule((9, 0), (17, 0), 3);
@@ -1641,8 +1724,19 @@ mod tests {
 
         for id in [first_id, second_id] {
             let accumulated = engine.accumulators.get(&id).expect("both were eligible");
-            assert!(accumulated.residual > 0.0, "{id}: {accumulated:?}");
+            assert!(accumulated.expected_events > 0.0, "{id}: {accumulated:?}");
         }
+        let expected: f64 = engine
+            .accumulators
+            .values()
+            .map(|accumulator| accumulator.expected_events)
+            .sum();
+        let variance: f64 = engine
+            .accumulators
+            .values()
+            .map(|accumulator| accumulator.variance)
+            .sum();
+        assert!((variance - expected * (1.0 - expected)).abs() < 1e-12);
     }
 
     // ─── the reserve ───────────────────────────────────────────────────────────

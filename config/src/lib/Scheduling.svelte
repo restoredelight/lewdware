@@ -11,7 +11,7 @@
 	import Popover from '$ui/Popover.svelte';
 	import IconButton from '$ui/IconButton.svelte';
 	import { Icon, QuestionMarkCircle } from '$icons';
-	import type { CrowdingDto, Frequency, ModeId, QuietHoursDto, RuleDto, TimeOfDay } from './types';
+	import type { Frequency, ModeId, QuietHoursDto, RuleDto, TimeOfDay } from './types';
 	import { api } from './api';
 	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
@@ -205,25 +205,6 @@
 		});
 	}
 
-	// A rule whose budget has run out of room in the range it draws from. Distinct from
-	// `ruleWarning`: that one is about a rule that cannot fire at all, this is about one that fires
-	// *less often than it says*, which is the failure a user has no way of noticing on their own --
-	// the whole promise of a rate rule is that they cannot predict it, so "that felt like fewer than
-	// three" is not evidence of anything. Said when the rule is written, since after that there is
-	// nothing to see.
-	function crowdingNote(rule: RuleDto, crowding: CrowdingDto): string {
-		const asked = rule.trigger.kind === 'rate' ? frequencyWord(rule.trigger.frequency) : '';
-		const times = (count: number) => (count === 1 ? 'once' : `${count} times`);
-		if (crowding.impossible) {
-			const needs = Math.round(crowding.required_minutes);
-			const has = Math.round(crowding.available_minutes);
-			return `${asked} doesn’t fit here: it needs ${needs} minutes of the ${has} this range has, once the gap between sessions is counted. There’s room for ${times(crowding.max_count)}.`;
-		}
-		// It fits, but only just. A panic holds Lewdware off for far longer than an ordinary session
-		// ending does, so the first one of the day is what breaks a range with no slack in it.
-		return `${asked} only just fits this range — one panic would hold sessions off long enough to lose one. ${times(crowding.comfortable_count)} leaves room for that.`;
-	}
-
 	// A rule that can never fire. Worth saying out loud rather than leaving the user to wonder why
 	// nothing happens.
 	function ruleWarning(rule: RuleDto): string | null {
@@ -407,7 +388,6 @@
 					{#each schedule.rules as rule, i (rule.id)}
 						{@const mode = timingMode(rule)}
 						{@const warning = ruleWarning(rule)}
-						{@const crowding = store.crowding.find((c) => c.rule_id === rule.id)}
 						<Card class="flex flex-col gap-4 p-4">
 							<div class="flex items-start justify-between gap-4">
 								<div class="min-w-0">
@@ -569,10 +549,7 @@
 										/>
 									</div>
 								{:else}
-									<p class="text-muted text-xs">
-										Runs until you stop it or quiet hours begin. It also ends on its own if you
-										leave the computer for a while, so nothing is left running at an empty desk.
-									</p>
+									<p class="text-muted text-xs">Runs until you stop it or quiet hours begin.</p>
 								{/if}
 							</div>
 
@@ -629,8 +606,6 @@
 
 							{#if warning}
 								<span class="text-xs text-[var(--ui-warning)]">{warning}</span>
-							{:else if crowding}
-								<span class="text-xs text-[var(--ui-warning)]">{crowdingNote(rule, crowding)}</span>
 							{/if}
 						</Card>
 					{/each}

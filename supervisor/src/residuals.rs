@@ -1,21 +1,19 @@
-//! Compensator residuals: the one end-to-end check on the rate model that does not need to know
-//! the right answer in advance.
+//! Calibration records: the end-to-end check on the rate model that does not need to know the
+//! right answer in advance.
 //!
 //! The unit tests in `schedule.rs` check the pure arithmetic, and `schedule_sim.rs` checks that
 //! the composed engine delivers its counts under a *simulated* week. Neither can say whether the
 //! model matches the user actually sitting at the machine -- the presence profile is learned, so
 //! there is no ground truth to assert against.
 //!
-//! The point process theory supplies one anyway. `hazard_per_minute` is a conditional intensity
-//! and its integral is the process's compensator, so `N_t - L_t` is a martingale. Two consequences,
-//! and this module records what is needed to check both:
-//!
-//! - **Interarrival residuals.** `L` accumulated between consecutive firings is `Exp(1)`,
-//!   independently, whatever the intensity was doing in between (Meyer's random time change).
-//!   Sensitive, but only observable for intervals that ended in a firing -- see [`Outcome`].
-//! - **The martingale identity.** Over any interval, `E[N - L] = 0`. Blunter, but it survives the
-//!   censoring that the interarrival test does not, which makes it the one to trust when the two
-//!   disagree.
+//! The scheduler is discrete: one tick can start at most one session. For a tick whose competing
+//! hazards sum to `T`, rule `i` wins with exact probability
+//! `(1 - exp(-T)) * increment_i / T`. Accumulating those probabilities as `Q` gives the martingale
+//! `N - Q`. The tick's total Bernoulli variance is distributed across its participating rules so
+//! the compact per-rule records add back to the exact global variance. This is deliberately not a continuous-time
+//! compensator residual: once the intensity cap was removed, a closing tick can have a large
+//! increment, and treating that increment as an expected *count* would claim several events from a
+//! tick that can only emit one.
 //!
 //! One thing to know when reading a report: an interval is written when it *ends*, so the period
 //! in progress is always missing from the log. Censoring for the current day shows up tomorrow.
@@ -39,14 +37,8 @@ pub const ENABLE_ENV: &str = "LEWDWARE_SCHEDULE_DIAGNOSTICS";
 /// behaviour, and a residual from three releases ago is describing a different model.
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
-/// How an accumulation interval ended, which is exactly the difference between an observation the
-/// interarrival test may use and one it may not.
-///
-/// A period that closes with budget unspent yields a *censored* interval: the compensator got as
-/// far as it got and no firing resolved it. Dropping those and testing the rest against `Exp(1)`
-/// would condition on the firing having happened, which selects against the long intervals and
-/// biases the sample low -- the under-delivery this whole diagnostic exists to measure would hide
-/// itself. So they are recorded, counted, and kept out of the `Exp(1)` sample deliberately.
+/// How an accumulation interval ended. A period that closes with budget unspent is censored, but
+/// its expected events and variance still belong in the calibration total.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -61,40 +53,52 @@ pub struct Record {
     pub since: DateTime<Local>,
     pub rule_id: Uuid,
     pub outcome: Outcome,
-    /// The compensator increment over `[since, at]`: the sum of `hazard * present_minutes` across
-    /// every tick the rule was actually eligible in. Zero-intensity time -- asleep, away, cooling
-    /// down, mid-session, outside the range -- contributes nothing, which is what makes this the
-    /// right clock rather than wall time.
-    pub residual: f64,
-    /// Present minutes the interval covered, for reading `residual` against.
+    /// Sum of this rule's exact probability of winning each eligible tick.
+    pub expected_events: f64,
+    /// This rule's allocated share of the global Bernoulli variance. Shares from every competing
+    /// rule add to `P(any) * (1 - P(any))` for the tick.
+    pub variance: f64,
+    /// Present minutes the interval covered, useful context when reading the calibration.
     pub present_minutes: f64,
+    pub ticks: u64,
     pub remaining_before: u32,
     pub period_count: u32,
 }
 
 /// The accumulator for one rule's current interval. Lives in the engine and is persisted, because
 /// the supervisor restarts often enough that dropping a part-accumulated interval on every restart
-/// would bias `N - L` upward on its own.
+/// would bias `N - Q` upward on its own.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Accumulator {
     pub since: DateTime<Local>,
-    pub residual: f64,
+    #[serde(default)]
+    pub expected_events: f64,
+    #[serde(default)]
+    pub variance: f64,
+    #[serde(default)]
     pub present_minutes: f64,
+    #[serde(default)]
+    pub ticks: u64,
 }
 
 impl Accumulator {
     pub fn starting_at(now: DateTime<Local>) -> Self {
         Self {
             since: now,
-            residual: 0.0,
+            expected_events: 0.0,
+            variance: 0.0,
             present_minutes: 0.0,
+            ticks: 0,
         }
     }
 
-    /// One tick's worth of intensity.
-    pub fn credit(&mut self, hazard: f64, present_minutes: f64) {
-        self.residual += hazard * present_minutes;
+    /// One tick's exact probability of this rule winning the competing-risks draw.
+    pub fn credit(&mut self, probability: f64, variance: f64, present_minutes: f64) {
+        let probability = probability.clamp(0.0, 1.0);
+        self.expected_events += probability;
+        self.variance += variance.max(0.0);
         self.present_minutes += present_minutes;
+        self.ticks += 1;
     }
 
     pub fn close(
@@ -110,8 +114,10 @@ impl Accumulator {
             since: self.since,
             rule_id,
             outcome,
-            residual: self.residual,
+            expected_events: self.expected_events,
+            variance: self.variance,
             present_minutes: self.present_minutes,
+            ticks: self.ticks,
             remaining_before,
             period_count,
         }
@@ -202,9 +208,10 @@ pub fn read(path: &Path) -> anyhow::Result<Vec<Record>> {
 pub struct Report {
     pub fired: usize,
     pub censored: usize,
-    pub compensator_total: f64,
+    pub expected_events: f64,
+    pub variance: f64,
     pub present_minutes: f64,
-    pub residuals: Vec<f64>,
+    pub ticks: u64,
 }
 
 impl Report {
@@ -212,59 +219,33 @@ impl Report {
         let mut report = Self {
             fired: 0,
             censored: 0,
-            compensator_total: 0.0,
+            expected_events: 0.0,
+            variance: 0.0,
             present_minutes: 0.0,
-            residuals: Vec::new(),
+            ticks: 0,
         };
         for record in records {
-            report.compensator_total += record.residual;
+            report.expected_events += record.expected_events;
+            report.variance += record.variance;
             report.present_minutes += record.present_minutes;
+            report.ticks += record.ticks;
             match record.outcome {
-                Outcome::Fired => {
-                    report.fired += 1;
-                    report.residuals.push(record.residual);
-                }
+                Outcome::Fired => report.fired += 1,
                 Outcome::Censored => report.censored += 1,
             }
         }
-        report.residuals.sort_by(|a, b| a.total_cmp(b));
         report
     }
 
-    /// `N - L`, which is a mean-zero martingale evaluated at the end of the log. Unlike the
-    /// interarrival test this one is unaffected by censoring: a censored interval contributes its
-    /// compensator without a firing, which is exactly what the identity expects.
+    /// Actual minus expected firings across the exact Bernoulli draws the scheduler made.
     pub fn martingale(&self) -> f64 {
-        self.fired as f64 - self.compensator_total
+        self.fired as f64 - self.expected_events
     }
 
-    /// `Var(N - L) = E[L]` for a counting process, so this is the scale `martingale()` should be
-    /// read against. A |z| much past 2 is the model and the machine disagreeing.
+    /// Standardised calibration error. A |z| much past 2 means the recorded probabilities and the
+    /// actual wins disagree beyond ordinary draw noise.
     pub fn martingale_z(&self) -> Option<f64> {
-        (self.compensator_total > 0.0).then(|| self.martingale() / self.compensator_total.sqrt())
-    }
-
-    pub fn mean_residual(&self) -> Option<f64> {
-        (!self.residuals.is_empty())
-            .then(|| self.residuals.iter().sum::<f64>() / self.residuals.len() as f64)
-    }
-
-    /// Kolmogorov-Smirnov against `Exp(1)`. Fully specified -- no parameter is estimated from the
-    /// sample -- so the standard asymptotic critical values apply rather than a Lilliefors table.
-    pub fn ks(&self) -> Option<(f64, f64)> {
-        let n = self.residuals.len();
-        if n < 8 {
-            return None;
-        }
-        let n_f = n as f64;
-        let mut d: f64 = 0.0;
-        for (i, &x) in self.residuals.iter().enumerate() {
-            let cdf = 1.0 - (-x).exp();
-            let below = i as f64 / n_f;
-            let above = (i + 1) as f64 / n_f;
-            d = d.max((cdf - below).abs()).max((above - cdf).abs());
-        }
-        Some((d, kolmogorov_p(d, n_f)))
+        (self.variance > 0.0).then(|| self.martingale() / self.variance.sqrt())
     }
 
     /// The headline number, and the one the presence profile moves: how often a
@@ -273,20 +254,6 @@ impl Report {
         let total = self.fired + self.censored;
         (total > 0).then(|| self.censored as f64 / total as f64)
     }
-}
-
-/// Asymptotic Kolmogorov distribution, with Stephens' small-sample correction to the statistic.
-fn kolmogorov_p(d: f64, n: f64) -> f64 {
-    let lambda = (n.sqrt() + 0.12 + 0.11 / n.sqrt()) * d;
-    if lambda <= 0.0 {
-        return 1.0;
-    }
-    let mut sum = 0.0;
-    for k in 1..=100 {
-        let k = f64::from(k);
-        sum += (-1.0f64).powf(k - 1.0) * (-2.0 * k * k * lambda * lambda).exp();
-    }
-    (2.0 * sum).clamp(0.0, 1.0)
 }
 
 /// Human-readable summary for `lewdware-supervisor diagnose-schedule`.
@@ -317,64 +284,31 @@ pub fn describe(records: &[Record]) -> String {
         report.censored
     );
 
-    let _ = writeln!(
-        out,
-        "martingale identity  E[N - L] = 0   (censoring-robust)"
-    );
+    let _ = writeln!(out, "discrete calibration  E[N - Q] = 0");
     let _ = writeln!(out, "  firings N          {}", report.fired);
-    let _ = writeln!(out, "  compensator L      {:.3}", report.compensator_total);
+    let _ = writeln!(out, "  expected Q         {:.3}", report.expected_events);
+    let _ = writeln!(out, "  eligible ticks     {}", report.ticks);
     match report.martingale_z() {
         Some(z) => {
-            let _ = writeln!(out, "  N - L              {:+.3}", report.martingale());
+            let _ = writeln!(out, "  N - Q              {:+.3}", report.martingale());
             let _ = writeln!(
                 out,
                 "  z                  {z:+.2}    {}",
                 if z.abs() < 2.0 {
                     "consistent"
                 } else if z > 0.0 {
-                    "firing more than the intensity accounts for"
+                    "firing more than the recorded probabilities predict"
                 } else {
-                    "firing less than the intensity promises"
+                    "firing less than the recorded probabilities predict"
                 }
             );
         }
         None => {
             let _ = writeln!(
                 out,
-                "  z                  --      no compensator accumulated"
+                "  z                  --      no draw variance accumulated"
             );
         }
-    }
-
-    let _ = writeln!(out, "\ninterarrival residuals   target Exp(1)");
-    match (report.mean_residual(), report.ks()) {
-        (Some(mean), Some((d, p))) => {
-            let _ = writeln!(out, "  n                  {}", report.residuals.len());
-            let _ = writeln!(out, "  mean               {mean:.3}   (1.000)");
-            let _ = writeln!(out, "  KS D               {d:.3}");
-            let _ = writeln!(
-                out,
-                "  p                  {p:.3}   {}",
-                if p < 0.05 { "<- rejects" } else { "" }
-            );
-        }
-        (Some(mean), None) => {
-            let _ = writeln!(
-                out,
-                "  n                  {} (too few for KS)",
-                report.residuals.len()
-            );
-            let _ = writeln!(out, "  mean               {mean:.3}   (1.000)");
-        }
-        _ => {
-            let _ = writeln!(out, "  no completed intervals yet");
-        }
-    }
-    if report.censored > 0 {
-        let _ = writeln!(
-            out,
-            "  note               censored intervals are excluded; this sample is biased low"
-        );
     }
 
     if let Some(f) = report.censored_fraction() {
@@ -409,9 +343,9 @@ pub fn describe_by_rule(records: &[Record]) -> String {
         let group = &by_rule[&id];
         let report = Report::build(group);
         out.push_str(&format!(
-            "  {id}  n={:<4} L={:<8.2} N-L={:+.2}  censored {:.0}%\n",
+            "  {id}  n={:<4} Q={:<8.2} N-Q={:+.2}  censored {:.0}%\n",
             report.fired,
-            report.compensator_total,
+            report.expected_events,
             report.martingale(),
             report.censored_fraction().unwrap_or(0.0) * 100.0
         ));
@@ -424,66 +358,70 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    fn record(residual: f64, outcome: Outcome) -> Record {
+    fn record(expected_events: f64, variance: f64, outcome: Outcome) -> Record {
         Record {
             at: Local.with_ymd_and_hms(2026, 8, 21, 10, 0, 0).unwrap(),
             since: Local.with_ymd_and_hms(2026, 8, 21, 9, 0, 0).unwrap(),
             rule_id: Uuid::nil(),
             outcome,
-            residual,
+            expected_events,
+            variance,
             present_minutes: 60.0,
+            ticks: 60,
             remaining_before: 1,
             period_count: 3,
         }
     }
 
-    /// The identity the whole diagnostic rests on: feed it a sample whose compensator matches its
-    /// firings and the martingale term is zero.
+    /// The identity the diagnostic rests on: actual and expected firings agree in aggregate.
     #[test]
     fn a_balanced_sample_has_a_zero_martingale_term() {
-        let records: Vec<Record> = (0..10).map(|_| record(1.0, Outcome::Fired)).collect();
+        let records: Vec<Record> = (0..10).map(|_| record(1.0, 0.25, Outcome::Fired)).collect();
         let report = Report::build(&records);
         assert!((report.martingale()).abs() < 1e-9);
     }
 
-    /// Under-delivery is exactly the case the interarrival test cannot see and this one can: the
-    /// compensator kept accumulating with no firing to resolve it.
+    /// A censored interval still contributes all the expected events accumulated before it closed.
     #[test]
     fn censored_intervals_pull_the_martingale_term_negative() {
-        let mut records: Vec<Record> = (0..5).map(|_| record(1.0, Outcome::Fired)).collect();
-        records.extend((0..5).map(|_| record(1.0, Outcome::Censored)));
+        let mut records: Vec<Record> = (0..5).map(|_| record(1.0, 0.25, Outcome::Fired)).collect();
+        records.extend((0..5).map(|_| record(1.0, 0.25, Outcome::Censored)));
         let report = Report::build(&records);
         assert!(report.martingale() < -4.9);
         assert_eq!(report.censored_fraction(), Some(0.5));
-        // ... and the Exp(1) sample is untouched by them, which is why it reads as fine.
-        assert_eq!(report.residuals.len(), 5);
     }
 
     #[test]
-    fn ks_accepts_a_unit_exponential_sample() {
-        // Inverse-transform of an even grid: as close to Exp(1) as a finite sample gets.
-        let n = 200;
-        let records: Vec<Record> = (1..=n)
-            .map(|i| {
-                let u = (i as f64 - 0.5) / n as f64;
-                record(-(1.0 - u).ln(), Outcome::Fired)
-            })
-            .collect();
-        let (d, p) = Report::build(&records).ks().unwrap();
-        assert!(d < 0.05, "D = {d}");
-        assert!(p > 0.5, "p = {p}");
+    fn z_uses_the_variance_of_the_actual_bernoulli_draws() {
+        let records = vec![record(0.5, 0.25, Outcome::Fired)];
+        let report = Report::build(&records);
+        assert_eq!(report.martingale_z(), Some(1.0));
     }
 
     #[test]
-    fn ks_rejects_a_sample_that_is_half_the_rate_it_should_be() {
-        let n = 200;
-        let records: Vec<Record> = (1..=n)
-            .map(|i| {
-                let u = (i as f64 - 0.5) / n as f64;
-                record(-0.5 * (1.0 - u).ln(), Outcome::Fired)
-            })
-            .collect();
-        let (_, p) = Report::build(&records).ks().unwrap();
-        assert!(p < 0.01, "p = {p}");
+    fn a_large_intensity_tick_expects_at_most_one_discrete_firing() {
+        let probability = shared::schedule::any_fire_probability(3.0);
+        let mut accumulator =
+            Accumulator::starting_at(Local.with_ymd_and_hms(2026, 8, 21, 9, 0, 0).unwrap());
+        accumulator.credit(probability, probability * (1.0 - probability), 1.0);
+
+        assert!((accumulator.expected_events - 0.950_212_931_6).abs() < 1e-9);
+        assert!(accumulator.expected_events < 1.0);
+        assert!((accumulator.variance - probability * (1.0 - probability)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_pre_calibration_accumulator_does_not_invalidate_the_whole_state_file() {
+        let legacy = r#"{
+            "since":"2026-08-21T09:00:00+01:00",
+            "residual":2.5,
+            "present_minutes":30.0
+        }"#;
+        let accumulator: Accumulator = serde_json::from_str(legacy).unwrap();
+
+        assert_eq!(accumulator.expected_events, 0.0);
+        assert_eq!(accumulator.variance, 0.0);
+        assert_eq!(accumulator.present_minutes, 30.0);
+        assert_eq!(accumulator.ticks, 0);
     }
 }

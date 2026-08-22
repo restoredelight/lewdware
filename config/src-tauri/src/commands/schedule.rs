@@ -1,8 +1,5 @@
-use chrono::Local;
 use serde::Serialize;
-use uuid::Uuid;
 
-use crate::dto::ScheduleDto;
 use crate::modes::save_to_disk;
 use crate::state::State;
 
@@ -57,6 +54,7 @@ pub async fn get_schedule_status() -> ScheduleStatusDto {
 /// or just reloading a reachable one (never spawning one solely to tell it to stop) if disabling.
 #[tauri::command]
 pub async fn set_schedule_enabled(state: State<'_>, enabled: bool) -> Result<(), String> {
+    let previous = state.config.lock().unwrap().schedule.enabled;
     let result = if enabled {
         crate::autostart::enable()
     } else {
@@ -64,11 +62,32 @@ pub async fn set_schedule_enabled(state: State<'_>, enabled: bool) -> Result<(),
     };
     result.map_err(|e| e.to_string())?;
 
-    {
+    let save_result = {
         let mut config = state.config.lock().unwrap();
         config.schedule.enabled = enabled;
         let uploaded = state.uploaded.lock().unwrap();
-        save_to_disk(&config, &uploaded).map_err(|e| e.to_string())?;
+        let result = save_to_disk(&config, &uploaded);
+        if result.is_err() {
+            config.schedule.enabled = previous;
+        }
+        result
+    };
+
+    if let Err(save_error) = save_result {
+        // The OS registration and config bit are one setting. Put the registration back if the
+        // durable half failed, otherwise the UI and next login would disagree about whether
+        // scheduling is enabled.
+        let rollback = if previous {
+            crate::autostart::enable()
+        } else {
+            crate::autostart::disable()
+        };
+        return Err(match rollback {
+            Ok(()) => save_error.to_string(),
+            Err(rollback_error) => format!(
+                "{save_error}; also failed to restore autostart after the save failed: {rollback_error}"
+            ),
+        });
     }
 
     if enabled {
@@ -116,49 +135,4 @@ pub async fn reload_supervisor_schedule(state: State<'_>) -> Result<(), String> 
         shared::ipc::control::Response::Error { message } => Err(message),
         _ => Ok(()),
     }
-}
-
-/// A rate rule with no room left in the window it draws from.
-///
-/// Two quite different problems, and the UI says them differently. `impossible` is arithmetic: the
-/// budget does not fit and never will. Otherwise it fits, but with so little to spare that a single
-/// panicked session breaks it -- a panic trades the ordinary cooldown for the panic one, so it
-/// costs the window more than a completed session, not less. See `shared::schedule::Crowding`.
-#[derive(Serialize, Clone)]
-pub struct CrowdingDto {
-    pub rule_id: Uuid,
-    /// Share of the window the budget claims, `required / available`.
-    pub occupancy: f64,
-    /// No arrangement fits at all, rather than merely one with no slack.
-    pub impossible: bool,
-    /// The largest count that fits with room for one panic -- what to suggest in place of the
-    /// number the user typed.
-    pub comfortable_count: u32,
-    /// The largest count that fits the window at all.
-    pub max_count: u32,
-    pub required_minutes: f64,
-    pub available_minutes: f64,
-}
-
-/// Which rules have run out of room, given a schedule the user is *currently editing*.
-///
-/// Takes the schedule rather than reading the saved one on purpose: the point of the check is to
-/// answer while the rule is being written, not after it has been saved and quietly under-delivered
-/// for a month.
-#[tauri::command]
-pub fn schedule_crowding(schedule: ScheduleDto) -> Vec<CrowdingDto> {
-    let config: shared::schedule::ScheduleConfig = schedule.into();
-    shared::schedule::rule_crowding(&config, Local::now())
-        .into_iter()
-        .filter(shared::schedule::Crowding::needs_warning)
-        .map(|crowding| CrowdingDto {
-            rule_id: crowding.rule_id,
-            occupancy: crowding.occupancy(),
-            impossible: crowding.is_impossible(),
-            comfortable_count: crowding.comfortable_count(),
-            max_count: crowding.max_count(),
-            required_minutes: crowding.required_minutes,
-            available_minutes: crowding.available_minutes,
-        })
-        .collect()
 }

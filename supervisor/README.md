@@ -45,17 +45,17 @@ cargo test --release -p lewdware-supervisor delivery_grid -- --ignored --nocaptu
 ```
 
 For a *live* install, set `LEWDWARE_SCHEDULE_DIAGNOSTICS=1` and the supervisor logs
-one line per firing to `schedule-residuals.jsonl` beside its state: the integral of
-the conditional intensity since the previous firing. Read it back with:
+one line per firing or censored period to `schedule-residuals.jsonl` beside its
+state. Each record accumulates the exact probability of that rule winning each
+discrete scheduler tick, plus an allocated share of the tick's Bernoulli variance
+that adds back to the exact global variance. Read it with:
 
 ```
 lewdware-supervisor diagnose-schedule
 ```
 
-Two checks come out of it. The compensator increments between firings should be
-i.i.d. `Exp(1)` — that is Meyer's random time change, and it holds whatever the
-intensity was doing in between. And `N - Λ` should be zero on average, which is
-blunter but survives the censoring that the first test does not: a period that ends
-with budget unspent has no firing to close its interval, so it drops out of the
-`Exp(1)` sample while still counting in full here. When the two disagree, trust the
-second. Details in `residuals.rs`.
+The report checks `N - Q`: actual firings minus the sum of their exact tick-level
+probabilities. That quantity should be zero on average, with variance
+`sum(q * (1 - q))`. This discrete calibration remains valid when a closing tick has
+a large intensity but can still start at most one session. Details are in
+`residuals.rs`.

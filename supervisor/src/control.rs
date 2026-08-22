@@ -513,15 +513,16 @@ impl Control {
             return;
         }
 
-        // A scheduled session ending is what starts the cooldown, whether it ended on its length,
-        // on quiet hours, on panic or on the user. Manual and dev episodes are not the schedule's
-        // business.
+        // A scheduled session ending is what starts the cooldown. A crash that will be retried is
+        // not an ending: keeping the schedule's running record alive lets its length limit and
+        // quiet hours cancel a pending restart. A successful replacement gets a fresh length
+        // window; the record is cleared only on an intentional stop or once retry gives up.
         let was_scheduled = episode.kind == SessionKind::Scheduled;
-        if was_scheduled {
-            self.schedule.note_session_ended(Local::now());
-        }
 
         if episode.intent != Intent::None {
+            if was_scheduled {
+                self.schedule.note_session_ended(Local::now());
+            }
             // An intentional stop/panic -- no auto-restart, regardless of exit status.
             self.arm_idle_timer(None);
             if was_scheduled {
@@ -549,6 +550,9 @@ impl Control {
                 });
             }
             backoff::Outcome::GiveUp => {
+                if was_scheduled {
+                    self.schedule.note_session_ended(Local::now());
+                }
                 let message = error_from(&last_exit)
                     .unwrap_or_else(|| "crashed repeatedly and was not restarted".to_string());
                 notify_gave_up(&message);
@@ -580,16 +584,39 @@ impl Control {
         let rule_id = episode.rule_id;
         let overrides = episode.overrides.clone();
 
-        self.spawn_episode(SpawnSpec {
-            kind,
-            mode_path,
-            dev,
-            dev_stream_id,
-            attempts,
-            rule_id,
-            overrides,
-        })
-        .await;
+        let response = self
+            .spawn_episode(SpawnSpec {
+                kind,
+                mode_path,
+                dev,
+                dev_stream_id,
+                attempts,
+                rule_id,
+                overrides,
+            })
+            .await;
+        match response {
+            Response::Ok if kind == SessionKind::Scheduled => {
+                self.schedule.note_session_restarted(Local::now());
+            }
+            Response::Error { message } => {
+                if kind == SessionKind::Scheduled {
+                    self.schedule.note_session_ended(Local::now());
+                }
+                notify_gave_up(&message);
+                if let Some(episode) = self.episode.as_mut().filter(|episode| episode.seq == seq) {
+                    episode.phase = Phase::GaveUp;
+                    episode.attempts += 1;
+                    episode.last_exit = Some(ExitInfo {
+                        code: None,
+                        classification: ExitClassification::Crashed,
+                        error: Some(message),
+                    });
+                }
+                self.arm_idle_timer(Some(seq));
+            }
+            _ => {}
+        }
     }
 
     fn on_idle_timeout(&mut self, seq: Option<u64>) {
@@ -697,6 +724,7 @@ impl Control {
     /// Spawns a session a rule asked for, telling the engine only once the spawn succeeded --
     /// length accounting starts from a session that actually exists.
     async fn spawn_scheduled(&mut self, start: StartRequest) {
+        let rule_id = start.rule_id;
         let response = self
             .spawn_episode(SpawnSpec {
                 kind: SessionKind::Scheduled,
@@ -705,9 +733,15 @@ impl Control {
                 ..Default::default()
             })
             .await;
-        if matches!(response, Response::Ok) {
-            self.schedule
-                .note_session_started(start.length, Local::now());
+        match response {
+            Response::Ok => self
+                .schedule
+                .note_session_started(start.length, Local::now()),
+            Response::Error { message } => {
+                self.schedule.note_start_failed(rule_id, Local::now());
+                tracing::warn!("scheduled session could not start: {message}");
+            }
+            _ => self.schedule.note_start_failed(rule_id, Local::now()),
         }
     }
 
@@ -715,6 +749,16 @@ impl Control {
     /// to whoever started it", and a user launching during their own quiet hours is the user
     /// overriding the user.
     async fn stop_scheduled_session(&mut self, reason: StopReason) {
+        if self.episode.as_ref().is_some_and(|episode| {
+            episode.kind == SessionKind::Scheduled
+                && matches!(episode.phase, Phase::RestartPending { .. })
+        }) {
+            tracing::info!("cancelling scheduled restart: {reason:?}");
+            self.episode = None;
+            self.schedule.note_session_ended(Local::now());
+            self.arm_idle_timer(None);
+            return;
+        }
         let Some(episode) = self
             .episode
             .as_mut()

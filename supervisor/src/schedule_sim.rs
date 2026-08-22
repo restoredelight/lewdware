@@ -587,16 +587,16 @@ fn scratch_path(name: &str) -> std::path::PathBuf {
     path
 }
 
-/// The end-to-end check on the diagnostic itself: `N - L` is a mean-zero martingale, so over a
+/// The end-to-end check on the diagnostic itself: `N - Q` is a mean-zero martingale, so over a
 /// couple of months of simulated days the firings the engine actually produced must match the
-/// intensity it recorded having integrated.
+/// exact discrete win probabilities it recorded.
 ///
-/// This is the test that would catch the compensator being credited over the wrong minutes -- the
+/// This is the test that would catch probability being credited over the wrong minutes -- the
 /// failure mode that would make every field report from `diagnose-schedule` quietly wrong while
 /// every other test in the suite still passed.
 #[test]
-fn the_compensator_accounts_for_the_firings_it_produced() {
-    let path = scratch_path("compensator");
+fn the_discrete_calibration_accounts_for_the_firings_it_produced() {
+    let path = scratch_path("calibration");
     let delivered = residual_run(&path, 120, 0xC0FF_EE12_3456_789A, 1.0);
 
     let records = crate::residuals::read(&path).expect("log is readable");
@@ -608,19 +608,17 @@ fn the_compensator_accounts_for_the_firings_it_produced() {
         "every session started should have closed an interval"
     );
 
-    let z = report.martingale_z().expect("compensator accumulated");
+    let z = report.martingale_z().expect("draw variance accumulated");
     assert!(
         z.abs() < 3.0,
-        "N - L = {:+.2} over L = {:.2} gives z = {z:+.2}; the compensator and the coin disagree",
+        "N - Q = {:+.2} over Q = {:.2} gives z = {z:+.2}; the recorded probabilities and the coin disagree",
         report.martingale(),
-        report.compensator_total,
+        report.expected_events,
     );
 }
 
-/// A user who is rarely at the desk misses often enough to exercise the case the interarrival
-/// residuals cannot see. Both halves of the diagnostic are asserted here: the censored intervals
-/// are counted and kept out of the `Exp(1)` sample, and the shortfall they represent is the same
-/// shortfall the delivery count shows.
+/// A user who is rarely at the desk misses often enough to exercise censored intervals. They must
+/// remain in the calibration total, and the shortfall they represent must agree with delivery.
 ///
 /// Absence is what drives this now. It used to be the intensity cap, which left budget unspent by
 /// design; with the cap gone, a range that closes still owing a session is a range the user was
@@ -648,5 +646,4 @@ fn a_period_that_ends_owing_a_firing_is_recorded_as_censored() {
         report.fired + report.censored
     );
     assert_eq!(report.fired, delivered as usize);
-    assert_eq!(report.residuals.len(), report.fired);
 }

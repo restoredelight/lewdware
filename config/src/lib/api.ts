@@ -3,7 +3,6 @@ import { listen } from '@tauri-apps/api/event';
 import type {
 	AudioDeviceInfo,
 	ConfigDto,
-	CrowdingDto,
 	DiagnosticsDto,
 	EngineStatusDto,
 	Key,
@@ -13,7 +12,6 @@ import type {
 	MonitorDto,
 	PackMetadataDto,
 	PickPackResult,
-	ScheduleDto,
 	ScheduleStatusDto,
 	StoredValue,
 	TestAudioResult,
@@ -86,10 +84,6 @@ export const api = {
 	lewdwareRunning: () => invoke<EngineStatusDto>('lewdware_running'),
 
 	getScheduleStatus: () => invoke<ScheduleStatusDto>('get_schedule_status'),
-	// Takes the schedule being edited rather than reading the saved one: the point is to answer
-	// while the rule is being written, not after it has under-delivered for a month.
-	scheduleCrowding: (schedule: ScheduleDto) =>
-		invoke<CrowdingDto[]>('schedule_crowding', { schedule }),
 
 	setScheduleEnabled: (enabled: boolean) => invoke<void>('set_schedule_enabled', { enabled }),
 
