@@ -254,8 +254,9 @@ impl ScheduleEngine {
         Self {
             config,
             // Until a presence source actually measures anything, the prior *is* the model. See
-            // `PresenceProfile::assume_present` for why it is 1.0 rather than 0.5.
-            profile: PresenceProfile::assume_present(),
+            // `PRIOR_MEAN` for why knowing nothing is worth saying out loud rather than assuming
+            // the user is always there.
+            profile: PresenceProfile::default(),
             presence,
             rng,
             budgets: HashMap::new(),
@@ -311,10 +312,8 @@ impl ScheduleEngine {
     /// Test-only: nothing in the running supervisor may set the profile, which is learned or it is
     /// nothing.
     #[cfg(test)]
-    pub(crate) fn set_flat_profile(&mut self, p: f32) {
-        self.profile = PresenceProfile {
-            buckets: vec![p; shared::schedule::PRESENCE_BUCKETS],
-        };
+    pub(crate) fn set_flat_profile(&mut self, p: f64) {
+        self.profile = PresenceProfile::saturated_at(p);
     }
 
     /// Rules are keyed by id, so an unrelated edit no longer throws every counter away -- v1
@@ -851,6 +850,12 @@ mod tests {
         TimeOfDay::new(hour, minute)
     }
 
+    /// What the profile says about an instant it knows nothing about. Tests compare against this
+    /// rather than a literal, so the prior stays one decision made in one place.
+    fn prior_at(at: DateTime<Local>) -> f64 {
+        PresenceProfile::default().p(at)
+    }
+
     fn rate_rule(from: (u32, u32), to: (u32, u32), count: u32) -> Rule {
         Rule {
             id: Uuid::new_v4(),
@@ -1357,8 +1362,8 @@ mod tests {
         let mut next = restart(&engine, config);
         next.tick(dt(2026, 7, 13, 17, 0), false);
         assert_eq!(
-            next.profile.p(dt(2026, 7, 13, 12, 0)),
-            1.0,
+            next.profile.evidence(dt(2026, 7, 13, 12, 0)),
+            0.0,
             "a gap the supervisor chose to be absent for is not evidence about the user"
         );
     }
@@ -1374,7 +1379,7 @@ mod tests {
 
         let mut next = restart(&engine, config);
         next.tick(dt(2026, 7, 13, 17, 0), false);
-        assert!(next.profile.p(dt(2026, 7, 13, 12, 0)) < 1.0);
+        assert!(next.profile.p(dt(2026, 7, 13, 12, 0)) < prior_at(dt(2026, 7, 13, 12, 0)));
     }
 
     #[test]
@@ -1389,7 +1394,7 @@ mod tests {
         let mut next = restart(&engine, config);
         assert_eq!(next.last_stop, LastStop::Unrecorded);
         next.tick(dt(2026, 7, 13, 17, 0), false);
-        assert!(next.profile.p(dt(2026, 7, 13, 12, 0)) < 1.0);
+        assert!(next.profile.p(dt(2026, 7, 13, 12, 0)) < prior_at(dt(2026, 7, 13, 12, 0)));
     }
 
     #[test]
@@ -1405,11 +1410,12 @@ mod tests {
         let mut next = restart(&engine, config);
         next.tick(dt(2026, 7, 14, 8, 0), false);
         assert_eq!(
-            next.profile.p(dt(2026, 7, 13, 20, 0)),
-            1.0,
+            next.profile.evidence(dt(2026, 7, 13, 20, 0)),
+            0.0,
             "the evening before the shutdown is not part of the gap after it"
         );
-        assert!(next.profile.p(dt(2026, 7, 14, 3, 0)) < 1.0);
+        assert!(next.profile.evidence(dt(2026, 7, 14, 3, 0)) > 0.0);
+        assert!(next.profile.p(dt(2026, 7, 14, 3, 0)) < prior_at(dt(2026, 7, 14, 3, 0)));
     }
 
     #[test]
@@ -1483,7 +1489,9 @@ mod tests {
             .expect("an enabled schedule keeps sampling presence");
         assert_eq!(expected, dt(2026, 7, 13, 8, 5));
         engine.tick(expected, false);
-        assert_eq!(engine.profile.p(dt(2026, 7, 13, 8, 2)), 1.0);
+        let sampled = dt(2026, 7, 13, 8, 2);
+        assert!(engine.profile.evidence(sampled) > 0.0);
+        assert!(engine.profile.p(sampled) > prior_at(sampled));
     }
 
     #[test]

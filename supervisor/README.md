@@ -31,3 +31,31 @@ Running the binary directly gives you a set of **diagnostic CLI subcommands**
 (`status`, `start`, etc.): a thin one-shot client against an already-running daemon.
 It deliberately does *not* auto-spawn a daemon; that bootstrap belongs to the real
 callers.
+
+## Checking the rate model against reality
+
+Rate-based rules promise a *frequency*, so whether they keep that promise is a
+distributional question — no single session is right or wrong. Two tools answer it.
+
+`schedule_sim.rs` runs the real engine over thousands of simulated days and asserts
+how often it delivers a rule's whole budget. Run the reporting grid with:
+
+```
+cargo test --release -p lewdware-supervisor delivery_grid -- --ignored --nocapture
+```
+
+For a *live* install, set `LEWDWARE_SCHEDULE_DIAGNOSTICS=1` and the supervisor logs
+one line per firing to `schedule-residuals.jsonl` beside its state: the integral of
+the conditional intensity since the previous firing. Read it back with:
+
+```
+lewdware-supervisor diagnose-schedule
+```
+
+Two checks come out of it. The compensator increments between firings should be
+i.i.d. `Exp(1)` — that is Meyer's random time change, and it holds whatever the
+intensity was doing in between. And `N - Λ` should be zero on average, which is
+blunter but survives the censoring that the first test does not: a period that ends
+with budget unspent has no firing to close its interval, so it drops out of the
+`Exp(1)` sample while still counting in full here. When the two disagree, trust the
+second. Details in `residuals.rs`.

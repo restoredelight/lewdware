@@ -76,9 +76,10 @@ struct Scenario {
     session_minutes: u32,
     /// P(the user is at the machine), truth.
     presence: f64,
-    /// What the learned profile believes. Equal to `presence` means a converged profile; 1.0 is
-    /// the cold-start prior.
-    profile: f32,
+    /// What the profile is seeded to believe, with enough evidence behind it to be confident.
+    /// `None` is a genuine cold start: the prior, nothing learned, and the rungs filling up as the
+    /// day runs -- which is what a new install actually looks like.
+    profile: Option<f64>,
 }
 
 impl Scenario {
@@ -95,7 +96,7 @@ impl Scenario {
             cooldown: 30,
             session_minutes,
             presence: 1.0,
-            profile: 1.0,
+            profile: Some(1.0),
         }
     }
 }
@@ -144,7 +145,9 @@ fn one_day(scenario: &Scenario, seed: u64) -> u32 {
         }),
         Box::new(SeededRng(SplitMix64(seed))),
     );
-    engine.set_flat_profile(scenario.profile);
+    if let Some(p) = scenario.profile {
+        engine.set_flat_profile(p);
+    }
 
     // A minute before the range opens, so the first tick -- which credits no elapsed time and can
     // never fire -- is spent outside the window rather than wasting the first real minute.
@@ -223,21 +226,27 @@ const IDEAL: &[Scenario] = &[
 /// worth -- and, given how long it takes to converge, what a new user does without.
 const PROFILE_ERROR: &[Scenario] = &[
     Scenario {
-        label: "half present, profile 1.00 (cold start)",
+        label: "half present, nothing learned (cold start)",
         presence: 0.5,
-        profile: 1.00,
+        profile: None,
         ..Scenario::plain("", 8, 3, 20)
     },
     Scenario {
-        label: "half present, profile 0.70",
+        label: "half present, profile sure of 1.00",
         presence: 0.5,
-        profile: 0.70,
+        profile: Some(1.00),
         ..Scenario::plain("", 8, 3, 20)
     },
     Scenario {
-        label: "half present, profile 0.50 (converged)",
+        label: "half present, profile sure of 0.70",
         presence: 0.5,
-        profile: 0.50,
+        profile: Some(0.70),
+        ..Scenario::plain("", 8, 3, 20)
+    },
+    Scenario {
+        label: "half present, profile sure of 0.50 (converged)",
+        presence: 0.5,
+        profile: Some(0.50),
         ..Scenario::plain("", 8, 3, 20)
     },
 ];
@@ -274,9 +283,10 @@ fn delivery_grid() {
 //     8h, 4/day, 20m sessions                          0.741     3.724
 //     12h, 3/day, 20m sessions                         0.953     2.953
 //     4h, 3/day, 20m sessions                          0.592     2.557
-//     half present, profile 1.00 (cold start)          0.420     2.276
-//     half present, profile 0.70                       0.635     2.577
-//     half present, profile 0.50 (converged)           0.804     2.782
+//     half present, nothing learned (cold start)       0.803     2.780
+//     half present, profile sure of 1.00               0.419     2.275
+//     half present, profile sure of 0.70               0.634     2.576
+//     half present, profile sure of 0.50 (converged)   0.804     2.782
 //
 // Raise them as the model improves. A failure here is either a regression or a floor that has
 // earned an increase -- run `delivery_grid` to see which.
@@ -357,15 +367,42 @@ fn a_wider_window_delivers_better_than_a_narrow_one() {
 /// argument for how quickly the profile ought to converge.
 #[test]
 fn a_wrong_presence_profile_costs_delivery() {
-    let cold = simulate(&PROFILE_ERROR[0], TRIALS);
-    let converged = simulate(&PROFILE_ERROR[2], TRIALS);
-    // Measured: 0.804 converged against 0.420 cold, so the profile is worth about 38 points of
-    // delivery -- and `PRESENCE_ALPHA` takes a month of half-lives to earn them.
+    let cold = simulate(&PROFILE_ERROR[1], TRIALS);
+    let converged = simulate(&PROFILE_ERROR[3], TRIALS);
+    // Measured: 0.804 against 0.419, so believing the wrong thing confidently costs about 38
+    // points of delivery. Being wrong is expensive; the next test is about not having to be.
     assert!(
         converged.all > cold.all + 0.20,
-        "a converged profile ({:.3}) should beat the cold-start prior ({:.3}) by a wide margin",
+        "a converged profile ({:.3}) should beat a confidently wrong one ({:.3}) by a wide margin",
         converged.all,
         cold.all
+    );
+}
+
+/// The presence hierarchy's whole justification, as a number.
+///
+/// A brand-new install knows nothing, and used to spend months being wrong about it: one estimate
+/// per hour-of-week bucket, each fed an hour a week, so a bucket needed about fourteen weeks to
+/// settle and until then every answer was the prior -- which was 1.0, the expensive direction. With
+/// the rungs, the global estimate settles within hours of first run and the finer ones inherit it
+/// until they have earned their own weight, so a cold start performs like a profile that is already
+/// right.
+///
+/// If this regresses toward the `sure of 1.00` row, the pooling has stopped working.
+#[test]
+fn a_cold_start_now_performs_almost_like_a_converged_profile() {
+    let cold = simulate(&PROFILE_ERROR[0], TRIALS);
+    let converged = simulate(&PROFILE_ERROR[3], TRIALS);
+    assert!(
+        cold.all > 0.72,
+        "a cold start delivered all three on {:.1}% of days (measured 80.3%)",
+        cold.all * 100.0
+    );
+    assert!(
+        cold.all > converged.all - 0.08,
+        "a cold start ({:.3}) should be close to a converged profile ({:.3})",
+        cold.all,
+        converged.all
     );
 }
 

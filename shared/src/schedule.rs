@@ -27,9 +27,6 @@ pub type Days = [bool; 7];
 pub const HORIZON_DAYS: i64 = 8;
 pub const LOOKBACK_DAYS: i64 = 1;
 
-/// Hour-of-week buckets in a [`PresenceProfile`]: 7 days x 24 hours, Monday 00:00 == 0.
-pub const PRESENCE_BUCKETS: usize = 7 * 24;
-
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct ScheduleConfig {
     pub enabled: bool,
@@ -545,66 +542,360 @@ pub fn next_at_firing(
 
 // ─── Presence ──────────────────────────────────────────────────────────────────
 
-/// P(the user is at the machine) per hour-of-week bucket, Monday 00:00 == bucket 0.
+/// How long evidence takes to lose half its weight, wherever it sits in the hierarchy.
 ///
-/// Held as a `Vec` rather than `[f32; 168]` because serde only derives for arrays up to 32; the
-/// accessor tolerates a short or empty vec so a truncated file degrades to the prior rather than
-/// panicking.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct PresenceProfile {
-    pub buckets: Vec<f32>,
+/// One horizon for every rung, because "how far back is still relevant" is a fact about the user's
+/// life rather than about the bucketing. What differs between rungs is how much evidence each one
+/// gathers inside that horizon, and that difference is the entire point of having rungs.
+pub const PRESENCE_HALF_LIFE_DAYS: f64 = 28.0;
+
+/// Decay per hour of wall time, wherever it is applied.
+///
+/// One constant, not one per rung. Evidence ages on the calendar, so every bucket is aged on every
+/// observation and only the bucket the hour belongs to is credited. The confidence ladder then
+/// falls out of how often a bucket comes round rather than being tuned into each rung: a global
+/// bucket is credited every hour and settles at about 970 hours of evidence, an hour-of-week bucket
+/// once a week and settles at 6.3. Keeping the rate common is also what makes one rung's counts
+/// subtractable from another's, which [`PresenceProfile::posterior`] depends on.
+///
+/// At the finest rung this reproduces the old hand-picked 0.15 per weekly observation, which is
+/// reassuring: the constant was about right, it just had no derivation and no way to say that the
+/// same horizon means something very different one rung up.
+fn presence_alpha() -> f64 {
+    1.0 - 0.5_f64.powf(1.0 / (24.0 * PRESENCE_HALF_LIFE_DAYS))
 }
 
-impl Default for PresenceProfile {
-    fn default() -> Self {
-        Self::assume_present()
+/// The estimate every rung starts from before anything has been observed.
+///
+/// Deliberately not 1.0. Over-estimating presence inflates the hazard's denominator, which
+/// under-fires, which is the failure the schedule cannot recover from -- a period that ends owing
+/// a session never gets it back. Under-estimating merely front-loads the day, and the budget
+/// counter corrects that on its own as it drains. The prior is set on the cheap side of that
+/// asymmetry.
+///
+/// It is not the same question as what [`expected_present_minutes`] should do on a platform with
+/// no presence backend at all; see [`PresenceProfile::saturated_at`].
+const PRIOR_MEAN: f64 = 0.5;
+
+/// How much direct evidence a rung needs before it stops deferring to the rung above it.
+///
+/// In the units the counts are kept in -- hours of observation -- so this reads as "one hour of
+/// evidence about *this* bucket is worth as much as everything the coarser rung has to say". Also
+/// the strength of [`PRIOR_MEAN`] at the root, which is the same quantity: the prior is just the
+/// parent of the coarsest rung.
+const SHRINKAGE: f64 = 1.0;
+
+/// One rung of the presence hierarchy, coarsest first.
+///
+/// All four ask the same question -- was the user here? -- at different resolutions, and every
+/// observation updates all of them. A rung's bucket is hit as often as its resolution is coarse:
+/// the global bucket sees every hour, an hour-of-week bucket sees one hour a week. Since evidence
+/// decays on a fixed wall-clock horizon, that difference is exactly a difference in how much
+/// evidence a bucket holds once it has settled, which is what lets a confident coarse rung stand
+/// in for a fine one that has not seen enough yet.
+///
+/// This is what fixes the cold start. The old single-rung profile needed about fourteen weeks to
+/// learn an hour-of-week bucket, and until then every estimate was the prior. The global rung here
+/// settles within a day and the hour-of-day rung within a fortnight, so a new install has a usable
+/// estimate almost immediately and refines it as the finer rungs earn their weight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rung {
+    /// Is this user at their machine at all, ever? Settles in hours.
+    Global,
+    /// The daily rhythm, pooled across the week. The single biggest real effect.
+    HourOfDay,
+    /// Weekday against weekend, which is the second biggest and the one hour-of-day cannot see.
+    DayTypeHour,
+    /// The full week. Only rung that can learn a Tuesday-specific habit, and the slowest by far.
+    HourOfWeek,
+}
+
+const RUNGS: [Rung; 4] = [
+    Rung::Global,
+    Rung::HourOfDay,
+    Rung::DayTypeHour,
+    Rung::HourOfWeek,
+];
+
+impl Rung {
+    const fn buckets(self) -> usize {
+        match self {
+            Rung::Global => 1,
+            Rung::HourOfDay => 24,
+            Rung::DayTypeHour => 2 * 24,
+            Rung::HourOfWeek => PRESENCE_BUCKETS,
+        }
     }
+
+    /// Wall hours between consecutive visits to one of this rung's buckets, on a machine watched
+    /// around the clock. What decides how much evidence a bucket holds once it has settled.
+    ///
+    /// The weekday/weekend rung is quoted at its weekday rate: its two halves genuinely are visited
+    /// at different rates (five days against two), so weekend buckets settle lower. That is a real
+    /// asymmetry and not worth a fifth rung to remove -- a weekend bucket holding less evidence
+    /// simply leans a little harder on hour-of-day, which is the correct response to knowing less.
+    const fn period_hours(self) -> f64 {
+        match self {
+            Rung::Global => 1.0,
+            Rung::HourOfDay => 24.0,
+            Rung::DayTypeHour => 168.0 / 5.0,
+            Rung::HourOfWeek => 168.0,
+        }
+    }
+
+    /// Evidence one of this rung's buckets holds once it has settled: the geometric sum of one hour
+    /// credited every [`period_hours`](Rung::period_hours), aged at [`presence_alpha`].
+    fn settled_evidence(self) -> f64 {
+        1.0 / (1.0 - (1.0 - presence_alpha()).powf(self.period_hours()))
+    }
+
+    fn bucket_of(self, at: DateTime<Local>) -> usize {
+        let hour = at.hour() as usize;
+        let weekday = at.weekday().num_days_from_monday() as usize;
+        match self {
+            Rung::Global => 0,
+            Rung::HourOfDay => hour,
+            Rung::DayTypeHour => usize::from(weekday >= 5) * 24 + hour,
+            Rung::HourOfWeek => weekday * 24 + hour,
+        }
+    }
+}
+
+/// Hour-of-week buckets in the finest rung: 7 days x 24 hours, Monday 00:00 == 0.
+pub const PRESENCE_BUCKETS: usize = 7 * 24;
+
+/// Decayed Beta counts for one rung: evidence for "present", and evidence in total.
+///
+/// Held apart rather than as a single mean because the mean alone cannot say how much it is worth.
+/// That distinction is what the old representation was missing, and it is load bearing three times
+/// over -- it is the shrinkage weight between rungs, it is what a prior can be expressed in, and
+/// it is the posterior spread the denominator ought to be read against.
+///
+/// Both decay on the same clock, so their ratio is an estimate and `total` alone is a confidence.
+/// `total` settles at `1 / alpha`: about 970 hours for the global rung, 6.3 for hour-of-week.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+struct Counts {
+    present: Vec<f32>,
+    total: Vec<f32>,
+}
+
+impl Counts {
+    fn saturated(rung: Rung, p: f64) -> Self {
+        let total = rung.settled_evidence();
+        Self {
+            present: vec![(total * p.clamp(0.0, 1.0)) as f32; rung.buckets()],
+            total: vec![total as f32; rung.buckets()],
+        }
+    }
+
+    /// `(present, total)` for a bucket, or `(0, 0)` when the rung has never been written or the
+    /// file was truncated. Zero evidence makes the rung a no-op in the chain rather than an error.
+    fn at(&self, bucket: usize) -> (f64, f64) {
+        match (self.present.get(bucket), self.total.get(bucket)) {
+            (Some(&present), Some(&total)) if total.is_finite() && present.is_finite() => {
+                (f64::from(present).max(0.0), f64::from(total).max(0.0))
+            }
+            _ => (0.0, 0.0),
+        }
+    }
+
+    /// Ages *every* bucket by `weight` hours and credits `bucket` with the observation.
+    ///
+    /// Ageing all of them, rather than only the one that was seen, is what puts every count on the
+    /// same clock: a bucket's evidence then measures hours-of-observation-within-the-horizon, which
+    /// is comparable across rungs and therefore subtractable between them. It also means a habit
+    /// that stops being practised fades on the calendar instead of sitting untouched until the hour
+    /// next comes round.
+    ///
+    /// The gain is `(1 - decay) / alpha` rather than `weight` so that splitting an observation
+    /// cannot change the result: twelve five-minute samples compose to exactly one hourly one,
+    /// which matters because the scheduler is free to change how often it samples.
+    fn observe(&mut self, rung: Rung, bucket: usize, weight: f64, target: f64) {
+        if self.total.len() != rung.buckets() {
+            self.present.resize(rung.buckets(), 0.0);
+            self.total.resize(rung.buckets(), 0.0);
+        }
+        let alpha = presence_alpha();
+        let decay = (1.0 - alpha).powf(weight);
+        let gain = (1.0 - decay) / alpha;
+        for value in self.present.iter_mut().chain(self.total.iter_mut()) {
+            *value = (f64::from(*value) * decay) as f32;
+        }
+        let (present, total) = self.at(bucket);
+        self.present[bucket] = (present + gain * target) as f32;
+        self.total[bucket] = (total + gain) as f32;
+    }
+}
+
+/// P(the user is at the machine), estimated at four resolutions at once and pooled.
+///
+/// Reading an estimate walks the rungs coarse to fine, each one shrinking toward what the rung
+/// above concluded:
+///
+/// ```text
+/// mean = PRIOR_MEAN
+/// for rung in coarse..fine:
+///     mean = (present + SHRINKAGE * mean) / (total + SHRINKAGE)
+/// ```
+///
+/// which is one Beta update per rung, with the parent's posterior as the child's prior. A bucket
+/// with no evidence returns its parent unchanged; a bucket with plenty returns its own ratio. No
+/// separate blending weight is needed because the counts already are the weight.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "StoredProfile", into = "StoredProfile")]
+pub struct PresenceProfile {
+    rungs: [Counts; RUNGS.len()],
 }
 
 impl PresenceProfile {
-    /// The prior - assume the user is always present
-    pub fn assume_present() -> Self {
+    /// A profile that already believes `p` everywhere, with enough evidence behind it that fresh
+    /// observations move it at the ordinary rate rather than swamping it.
+    ///
+    /// `saturated_at(1.0)` is what a platform with no presence backend wants: the rate model then
+    /// integrates over plain wall-clock time, which is the documented tier-3 behaviour. It is a
+    /// different question from [`PRIOR_MEAN`], which is what to believe when nothing is known --
+    /// there, knowing nothing is exactly the point.
+    pub fn saturated_at(p: f64) -> Self {
         Self {
-            buckets: vec![1.0; PRESENCE_BUCKETS],
+            rungs: RUNGS.map(|rung| Counts::saturated(rung, p)),
         }
     }
 
-    /// Which bucket does a given time fall into?
+    /// The hour-of-week bucket, Monday 00:00 == 0. The finest rung's index, kept public because it
+    /// is the one bucketing the config app talks about.
     pub fn bucket_of(at: DateTime<Local>) -> usize {
-        at.weekday().num_days_from_monday() as usize * 24 + at.hour() as usize
+        Rung::HourOfWeek.bucket_of(at)
     }
 
-    /// Add an observation to the profile.
+    /// Adds an observation. Every rung sees it: one hour of evidence is one hour of evidence at
+    /// any resolution, and the rungs differ only in how often their bucket comes round again.
     pub fn observe(&mut self, interval: Interval, present: bool) {
         let target = if present { 1.0 } else { 0.0 };
-        let mut updates: Vec<(usize, f64)> = Vec::new();
-
+        let mut chunks: Vec<(DateTime<Local>, f64)> = Vec::new();
         for_each_hour_chunk(interval, |i| {
-            updates.push((
-                Self::bucket_of(i.start),
-                (i.minutes() / 60.0).clamp(0.0, 1.0),
-            ));
+            chunks.push((i.start, (i.minutes() / 60.0).clamp(0.0, 1.0)));
         });
 
-        for (bucket, weight) in updates {
-            if self.buckets.len() <= bucket {
-                self.buckets.resize(PRESENCE_BUCKETS, 1.0);
+        for (at, weight) in chunks {
+            if weight <= 0.0 {
+                continue;
             }
-            // Scale the EWMA by elapsed time without making the result depend on how that time
-            // was split into observations. Four quarter-hour updates now compose to exactly the
-            // same decay as one full-hour update.
-            let alpha = 1.0 - (1.0 - PRESENCE_ALPHA).powf(weight);
-            let current = f64::from(self.buckets[bucket]).clamp(0.0, 1.0);
-            self.buckets[bucket] = ((1.0 - alpha) * current + alpha * target) as f32;
+            for (rung, counts) in RUNGS.iter().zip(self.rungs.iter_mut()) {
+                counts.observe(*rung, rung.bucket_of(at), weight, target);
+            }
         }
     }
 
-    /// Probability of a user being at their computer at a given time
+    /// The pooled estimate: what the profile believes about `at`.
     pub fn p(&self, at: DateTime<Local>) -> f64 {
-        self.buckets
-            .get(Self::bucket_of(at))
-            .map(|&p| f64::from(p).clamp(0.0, 1.0))
-            .unwrap_or(1.0)
+        let (mean, _) = self.posterior(at);
+        mean
+    }
+
+    /// How many hours of evidence the finest rung holds about `at`. Nothing in the rate model reads
+    /// this yet; it is what a diagnostic or the config app would use to say how well the profile
+    /// knows a given hour.
+    pub fn evidence(&self, at: DateTime<Local>) -> f64 {
+        self.rungs[RUNGS.len() - 1]
+            .at(Rung::HourOfWeek.bucket_of(at))
+            .1
+    }
+
+    /// Pooled mean and the Beta strength behind it, which is the pair a variance needs.
+    ///
+    /// Walks coarse to fine, each rung shrinking toward what the rung above concluded -- but on
+    /// that rung's *siblings* rather than on everything it holds. The rungs are nested: for a given
+    /// instant, the hour-of-week bucket's evidence is also inside the day-type bucket, which is
+    /// inside hour-of-day, which is inside global. Feeding a rung's total to its child would
+    /// therefore count the same hour again at every step, and four rungs of that turns a couple of
+    /// hours of evidence into apparent certainty -- worst exactly when data is scarce, which is the
+    /// case the hierarchy exists for.
+    ///
+    /// Subtracting the child's counts leaves what the siblings say, which is the only thing a
+    /// coarse rung is here to lend. Every observation is then used exactly once across the chain.
+    /// The subtraction is exact rather than approximate because [`presence_alpha`] is common to all
+    /// rungs, so their counts are in the same units.
+    fn posterior(&self, at: DateTime<Local>) -> (f64, f64) {
+        let held: [(f64, f64); RUNGS.len()] =
+            std::array::from_fn(|i| self.rungs[i].at(RUNGS[i].bucket_of(at)));
+
+        let mut mean = PRIOR_MEAN;
+        let mut strength = SHRINKAGE;
+        for (index, &(present, total)) in held.iter().enumerate() {
+            let (present, total) = match held.get(index + 1) {
+                Some(&(child_present, child_total)) => (
+                    (present - child_present).max(0.0),
+                    (total - child_total).max(0.0),
+                ),
+                None => (present, total),
+            };
+            mean = ((present + SHRINKAGE * mean) / (total + SHRINKAGE)).clamp(0.0, 1.0);
+            strength = total + SHRINKAGE;
+        }
+        (mean, strength)
+    }
+}
+
+/// The on-disk shape, and the only place the old format is still spoken.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct StoredProfile {
+    #[serde(default)]
+    global: Counts,
+    #[serde(default)]
+    hour_of_day: Counts,
+    #[serde(default)]
+    day_type_hour: Counts,
+    #[serde(default)]
+    hour_of_week: Counts,
+    /// What the profile used to be: one mean per hour-of-week bucket, with no way to tell a
+    /// well-evidenced 0.3 from the prior. Read once and then dropped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    buckets: Vec<f32>,
+}
+
+/// How much evidence a migrated bucket is credited with, in hours.
+///
+/// Deliberately meagre -- about a sixth of what an hour-of-week bucket settles at. The old format
+/// cannot say whether a stored mean was hard-won or simply the 1.0 it was initialised to, and
+/// importing a prior as though it were data is exactly the mistake the new representation exists to
+/// make impossible. A sixth is enough to carry a real pattern across the upgrade and light enough
+/// that a few weeks of real observation overrules it.
+const MIGRATION_EVIDENCE: f64 = 1.0;
+
+impl From<StoredProfile> for PresenceProfile {
+    fn from(stored: StoredProfile) -> Self {
+        let mut profile = Self {
+            rungs: [
+                stored.global,
+                stored.hour_of_day,
+                stored.day_type_hour,
+                stored.hour_of_week,
+            ],
+        };
+        let finest = RUNGS.len() - 1;
+        if !stored.buckets.is_empty() && profile.rungs[finest].total.is_empty() {
+            let counts = &mut profile.rungs[finest];
+            counts.present = stored
+                .buckets
+                .iter()
+                .map(|&p| (f64::from(p).clamp(0.0, 1.0) * MIGRATION_EVIDENCE) as f32)
+                .collect();
+            counts.total = vec![MIGRATION_EVIDENCE as f32; counts.present.len()];
+        }
+        profile
+    }
+}
+
+impl From<PresenceProfile> for StoredProfile {
+    fn from(profile: PresenceProfile) -> Self {
+        let [global, hour_of_day, day_type_hour, hour_of_week] = profile.rungs;
+        Self {
+            global,
+            hour_of_day,
+            day_type_hour,
+            hour_of_week,
+            buckets: Vec::new(),
+        }
     }
 }
 
@@ -627,10 +918,6 @@ fn for_each_hour_chunk(interval: Interval, mut f: impl FnMut(Interval)) {
         cursor = chunk_end;
     }
 }
-
-/// How fast the profile follows a change, per full hour of observation. A fortnight of consistent
-/// evidence moves a bucket most of the way; a single odd day barely registers.
-pub const PRESENCE_ALPHA: f64 = 0.15;
 
 /// Expected present minutes across `intervals`, integrating the profile hour by hour.
 ///
@@ -1060,14 +1347,60 @@ mod tests {
 
     // ─── presence ──────────────────────────────────────────────────────────────
 
+    /// Walks `days` of wall time from `start`, observing every hour of it, which is what the
+    /// supervisor actually does -- it samples presence on a five-minute cadence whether or not
+    /// anything is scheduled.
+    ///
+    /// Tests must observe time this way rather than poking only the hour they care about: evidence
+    /// is aged by observed time, so a test that observes one hour a week ages the profile a hundred
+    /// and sixty-eight times too slowly and every number it produces is meaningless.
+    fn observe_days(
+        profile: &mut PresenceProfile,
+        start: DateTime<Local>,
+        days: i64,
+        present: impl Fn(DateTime<Local>) -> bool,
+    ) {
+        for hour in 0..(days * 24) {
+            let at = start + ChronoDuration::hours(hour);
+            profile.observe(
+                Interval::new(at, at + ChronoDuration::hours(1)),
+                present(at),
+            );
+        }
+    }
+
+    /// Monday 2026-07-13 00:00, the start of a week, for tests that care which day it is.
+    fn monday() -> DateTime<Local> {
+        dt(2026, 7, 13, 0, 0)
+    }
+
+    /// Away in the small hours, at the desk otherwise.
+    fn away_at_three(at: DateTime<Local>) -> bool {
+        at.hour() != 3
+    }
+
     #[test]
-    fn the_default_profile_makes_expected_present_time_equal_wall_time() {
+    fn the_default_profile_is_the_prior_rather_than_an_assumption_of_presence() {
+        // v1 started every bucket at 1.0, which is the expensive direction to be wrong in: it
+        // inflates the hazard's denominator and under-fires, and a period that ends owing a session
+        // never gets it back. Under-estimating merely front-loads the day, which the budget counter
+        // corrects on its own.
+        assert_eq!(
+            PresenceProfile::default().p(dt(2026, 7, 13, 10, 0)),
+            PRIOR_MEAN
+        );
+    }
+
+    #[test]
+    fn a_saturated_profile_makes_expected_present_time_equal_wall_time() {
+        // What a platform with no presence backend asks for: integrate over plain wall time.
         let rule = rate_rule(all_days(), between((9, 0), (17, 0)), 3);
         let remaining = remaining_opportunity(&rule, dt(2026, 7, 13, 9, 0), &[]);
-        let profile = PresenceProfile::default();
-        assert_eq!(
-            expected_present_minutes(&remaining, &profile),
-            total_minutes(&remaining)
+        let profile = PresenceProfile::saturated_at(1.0);
+        let expected = expected_present_minutes(&remaining, &profile);
+        assert!(
+            (expected - total_minutes(&remaining)).abs() < 1.0,
+            "{expected}"
         );
     }
 
@@ -1076,13 +1409,17 @@ mod tests {
         let rule = rate_rule(all_days(), between((9, 0), (17, 0)), 3);
         let remaining = remaining_opportunity(&rule, dt(2026, 7, 13, 9, 0), &[]);
 
-        // Away every weekday morning: zero out Monday 09:00-12:00.
-        let mut profile = PresenceProfile::assume_present();
-        for hour in 9..12 {
-            profile.buckets[hour] = 0.0;
-        }
+        // Out every morning for two months.
+        let mut profile = PresenceProfile::default();
+        observe_days(&mut profile, monday(), 60, |at| {
+            !(9..12).contains(&at.hour())
+        });
+
         let expected = expected_present_minutes(&remaining, &profile);
-        assert_eq!(expected, 5.0 * 60.0);
+        assert!(
+            expected < total_minutes(&remaining) * 0.7,
+            "three of the eight hours learned as absent should shrink the denominator: {expected}"
+        );
 
         // ... and so raises the hazard, which is the whole point of the adaptation.
         let uninformed = hazard_per_minute(3, total_minutes(&remaining), 30);
@@ -1091,117 +1428,128 @@ mod tests {
     }
 
     #[test]
-    fn partial_hours_are_attributed_to_the_right_bucket() {
-        let interval = Interval {
-            start: dt(2026, 7, 13, 9, 30),
-            end: dt(2026, 7, 13, 11, 30),
-        };
-        let mut profile = PresenceProfile::assume_present();
-        profile.buckets[PresenceProfile::bucket_of(dt(2026, 7, 13, 10, 0))] = 0.0;
-        // 09:30-10:00 and 11:00-11:30 count; the whole 10:00 hour does not.
-        assert_eq!(expected_present_minutes(&[interval], &profile), 60.0);
+    fn observing_absence_moves_the_hour_it_saw_and_leaves_the_rest_high() {
+        let mut profile = PresenceProfile::default();
+        observe_days(&mut profile, monday(), 60, away_at_three);
+
+        assert!(profile.p(dt(2026, 7, 13, 3, 30)) < 0.05);
+        assert!(profile.p(dt(2026, 7, 14, 3, 30)) < 0.05);
+        assert!(profile.p(dt(2026, 7, 13, 15, 30)) > 0.95);
     }
 
+    /// The cold-start fix, stated as a test: a bucket that has never been observed still gets a
+    /// useful estimate, because coarser rungs have seen the same hour on other days.
     #[test]
-    fn observing_absence_pulls_a_bucket_down_and_leaves_the_others_alone() {
-        let mut profile = PresenceProfile::assume_present();
-        let hour = Interval {
-            start: dt(2026, 7, 13, 3, 0),
-            end: dt(2026, 7, 13, 4, 0),
-        };
-        let bucket = PresenceProfile::bucket_of(dt(2026, 7, 13, 3, 0));
-        let neighbour = PresenceProfile::bucket_of(dt(2026, 7, 13, 5, 0));
+    fn a_coarse_rung_stands_in_for_a_fine_one_that_has_seen_nothing() {
+        // Six days only, so no Sunday is ever observed.
+        let mut profile = PresenceProfile::default();
+        observe_days(&mut profile, monday(), 6, away_at_three);
 
-        profile.observe(hour, false);
-        assert!((profile.p(hour.start) - (1.0 - PRESENCE_ALPHA)).abs() < 1e-6);
-        // An hour nobody said anything about keeps the prior.
-        assert_eq!(profile.buckets[neighbour], 1.0);
-        assert!(profile.buckets[bucket] < 1.0);
+        let sunday_night = dt(2026, 7, 19, 3, 30);
+        assert_eq!(
+            profile.evidence(sunday_night),
+            0.0,
+            "the finest rung must have nothing to go on"
+        );
+        assert!(
+            profile.p(sunday_night) < 0.25,
+            "an unobserved bucket should inherit its parent, got {}",
+            profile.p(sunday_night)
+        );
+        // ... and it is the hour that is inherited, not a flat average of the week.
+        assert!(profile.p(dt(2026, 7, 19, 15, 30)) > 0.7);
+    }
+
+    /// Why the rungs exist. A fortnight is nowhere near enough for an hour-of-week bucket -- it has
+    /// seen two hours -- and yet the estimate is already all but settled, because the rungs above it
+    /// have seen the same hour fourteen times.
+    #[test]
+    fn a_settled_estimate_arrives_long_before_the_finest_rung_has_the_evidence_for_it() {
+        let mut profile = PresenceProfile::default();
+        observe_days(&mut profile, monday(), 14, away_at_three);
+
+        let at = dt(2026, 7, 13, 3, 30);
+        assert!(
+            profile.evidence(at) < 2.5,
+            "hour-of-week should still be nearly empty: {}",
+            profile.evidence(at)
+        );
+        assert!(
+            profile.p(at) < 0.1,
+            "and the estimate should already be confident: {}",
+            profile.p(at)
+        );
+    }
+
+    /// The nesting the leave-one-out subtraction exists for: without it, one hour of evidence would
+    /// be counted once per rung and a couple of days would look like certainty.
+    #[test]
+    fn evidence_seen_once_is_counted_once_however_many_rungs_hold_it() {
+        // A single hour of absence and nothing else, so all four rungs hold exactly the same one
+        // hour and every sibling difference is empty.
+        let mut profile = PresenceProfile::default();
+        let at = dt(2026, 7, 13, 3, 0);
+        profile.observe(Interval::new(at, at + ChronoDuration::hours(1)), false);
+
+        // One hour of absence against a prior of 0.5 at strength one: 0.5 / (1 + 1). Feeding each
+        // rung's total to its child instead of its siblings' would apply that division four times
+        // over and land near 0.03 -- one hour of evidence wearing the confidence of four.
+        let p = profile.p(at + ChronoDuration::minutes(30));
+        assert!(
+            (p - 0.25).abs() < 0.01,
+            "one hour of evidence should read as one hour of evidence, got {p}"
+        );
     }
 
     #[test]
     fn repeated_absence_converges_toward_zero_without_overshooting() {
-        let mut profile = PresenceProfile::assume_present();
-        let hour = Interval {
-            start: dt(2026, 7, 13, 3, 0),
-            end: dt(2026, 7, 13, 4, 0),
-        };
-        for _ in 0..200 {
-            profile.observe(hour, false);
-        }
-        let p = profile.p(hour.start);
-        assert!(p < 0.01, "expected near zero, got {p}");
+        let mut profile = PresenceProfile::default();
+        observe_days(&mut profile, monday(), 120, away_at_three);
+        let p = profile.p(dt(2026, 7, 13, 3, 30));
+        assert!(p < 0.02, "expected near zero, got {p}");
         assert!(p >= 0.0);
     }
 
+    /// Load bearing across the whole design: presence is a sampled signal and the scheduler is free
+    /// to change how often it samples, so the cadence must not be able to change what is learned.
     #[test]
-    fn a_partial_hour_moves_the_bucket_proportionally() {
-        let mut full = PresenceProfile::assume_present();
-        let mut partial = PresenceProfile::assume_present();
+    fn splitting_an_observation_does_not_change_the_estimate() {
         let start = dt(2026, 7, 13, 3, 0);
-
-        full.observe(
-            Interval {
-                start,
-                end: dt(2026, 7, 13, 4, 0),
-            },
-            false,
-        );
-        partial.observe(
-            Interval {
-                start,
-                end: dt(2026, 7, 13, 3, 15),
-            },
-            false,
-        );
-        // A partial observation applies the corresponding fraction of the full-hour decay.
-        let full_delta = 1.0 - full.p(start);
-        let partial_delta = 1.0 - partial.p(start);
-        assert!(partial_delta < full_delta);
-        let expected = 1.0 - (1.0 - PRESENCE_ALPHA).powf(0.25);
-        assert!((partial_delta - expected).abs() < 1e-6);
-    }
-
-    #[test]
-    fn splitting_an_observation_does_not_change_the_ewma() {
-        let start = dt(2026, 7, 13, 3, 0);
-        let mut whole = PresenceProfile::assume_present();
-        let mut split = PresenceProfile::assume_present();
+        let mut whole = PresenceProfile::default();
+        let mut split = PresenceProfile::default();
 
         whole.observe(Interval::new(start, dt(2026, 7, 13, 4, 0)), false);
-        for quarter in 0..4 {
+        for twelfth in 0..12 {
             split.observe(
                 Interval::new(
-                    start + ChronoDuration::minutes(quarter * 15),
-                    start + ChronoDuration::minutes((quarter + 1) * 15),
+                    start + ChronoDuration::minutes(twelfth * 5),
+                    start + ChronoDuration::minutes((twelfth + 1) * 5),
                 ),
                 false,
             );
         }
 
         assert!((whole.p(start) - split.p(start)).abs() < 1e-6);
+        assert!((whole.evidence(start) - split.evidence(start)).abs() < 1e-6);
     }
 
     #[test]
     fn presence_and_absence_pull_in_opposite_directions() {
-        let mut profile = PresenceProfile::assume_present();
-        let hour = Interval {
-            start: dt(2026, 7, 13, 9, 0),
-            end: dt(2026, 7, 13, 10, 0),
-        };
-        for _ in 0..50 {
-            profile.observe(hour, false);
-        }
-        let after_absence = profile.p(hour.start);
-        for _ in 0..50 {
-            profile.observe(hour, true);
-        }
-        assert!(profile.p(hour.start) > after_absence);
+        let mut profile = PresenceProfile::default();
+        observe_days(&mut profile, monday(), 30, away_at_three);
+        let after_absence = profile.p(dt(2026, 7, 13, 3, 30));
+        observe_days(
+            &mut profile,
+            monday() + ChronoDuration::days(30),
+            30,
+            |_| true,
+        );
+        assert!(profile.p(dt(2026, 7, 13, 3, 30)) > after_absence);
     }
 
     #[test]
     fn observing_across_midnight_lands_in_both_days_buckets() {
-        let mut profile = PresenceProfile::assume_present();
+        let mut profile = PresenceProfile::default();
         profile.observe(
             Interval {
                 start: dt(2026, 7, 13, 23, 0),
@@ -1209,10 +1557,14 @@ mod tests {
             },
             false,
         );
-        assert!(profile.p(dt(2026, 7, 13, 23, 30)) < 1.0);
-        assert!(profile.p(dt(2026, 7, 14, 0, 30)) < 1.0);
-        // 01:00 onwards was never observed.
-        assert_eq!(profile.p(dt(2026, 7, 14, 1, 30)), 1.0);
+        assert!(profile.evidence(dt(2026, 7, 13, 23, 30)) > 0.0);
+        assert!(profile.evidence(dt(2026, 7, 14, 0, 30)) > 0.0);
+        assert!(profile.p(dt(2026, 7, 13, 23, 30)) < PRIOR_MEAN);
+        assert!(profile.p(dt(2026, 7, 14, 0, 30)) < PRIOR_MEAN);
+        // 01:00 onwards was never seen, so it keeps whatever the coarse rungs make of it -- which
+        // after a single observation is very little.
+        assert_eq!(profile.evidence(dt(2026, 7, 14, 1, 30)), 0.0);
+        assert!(profile.p(dt(2026, 7, 14, 1, 30)) > profile.p(dt(2026, 7, 14, 0, 30)));
     }
 
     #[test]
@@ -1221,21 +1573,69 @@ mod tests {
         // denominator, which raises the hazard during the hours it is.
         let rule = rate_rule(all_days(), Range::AllDay, 1);
         let remaining = remaining_opportunity(&rule, dt(2026, 7, 13, 0, 0), &[]);
-        let mut profile = PresenceProfile::assume_present();
-        let night = Interval {
-            start: dt(2026, 7, 13, 1, 0),
-            end: dt(2026, 7, 13, 6, 0),
-        };
-        for _ in 0..100 {
-            profile.observe(night, false);
-        }
+        let mut profile = PresenceProfile::default();
+        observe_days(&mut profile, monday(), 60, |at| {
+            !(1..6).contains(&at.hour())
+        });
         assert!(expected_present_minutes(&remaining, &profile) < total_minutes(&remaining));
     }
 
     #[test]
     fn a_truncated_profile_degrades_to_the_prior_instead_of_panicking() {
-        let profile = PresenceProfile { buckets: vec![] };
-        assert_eq!(profile.p(dt(2026, 7, 13, 10, 0)), 1.0);
+        let profile: PresenceProfile =
+            serde_json::from_str(r#"{"hour_of_week":{"present":[0.0],"total":[]}}"#)
+                .expect("a short rung is not a parse error");
+        assert_eq!(profile.p(dt(2026, 7, 13, 10, 0)), PRIOR_MEAN);
+    }
+
+    /// The upgrade path. A v1 file has means and no counts, so it is read in at deliberately low
+    /// confidence: enough to carry the pattern across, light enough that real evidence overrules it.
+    #[test]
+    fn a_legacy_profile_is_migrated_at_low_confidence() {
+        let mut buckets = vec![1.0f32; PRESENCE_BUCKETS];
+        buckets[PresenceProfile::bucket_of(dt(2026, 7, 13, 3, 0))] = 0.0;
+        let json = serde_json::to_string(&serde_json::json!({ "buckets": buckets })).unwrap();
+
+        let mut profile: PresenceProfile = serde_json::from_str(&json).unwrap();
+        let at = dt(2026, 7, 13, 3, 30);
+        assert!(
+            profile.p(at) < PRIOR_MEAN,
+            "the old pattern should survive the upgrade: {}",
+            profile.p(at)
+        );
+        assert_eq!(profile.evidence(at), MIGRATION_EVIDENCE);
+
+        // ... and a month of the opposite overrules it.
+        observe_days(&mut profile, monday(), 28, |_| true);
+        assert!(profile.p(at) > 0.85, "{}", profile.p(at));
+    }
+
+    #[test]
+    fn the_stored_profile_round_trips_and_drops_the_legacy_field() {
+        let mut profile = PresenceProfile::default();
+        observe_days(&mut profile, monday(), 3, away_at_three);
+        let json = serde_json::to_string(&profile).unwrap();
+        assert!(!json.contains("buckets"), "{json}");
+        let restored: PresenceProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, profile);
+    }
+
+    /// The constants are derived, not chosen, so the derivation is worth pinning down.
+    #[test]
+    fn evidence_halves_on_the_stated_horizon_and_the_ladder_runs_the_right_way() {
+        let hours = 24.0 * PRESENCE_HALF_LIFE_DAYS;
+        let remaining = (1.0 - presence_alpha()).powf(hours);
+        assert!((remaining - 0.5).abs() < 1e-9, "{remaining}");
+
+        // A coarse bucket comes round more often, so it settles holding more -- which is the only
+        // reason a coarse rung can speak for a fine one.
+        let settled: Vec<f64> = RUNGS.iter().map(|r| r.settled_evidence()).collect();
+        assert!(settled.windows(2).all(|w| w[0] > w[1]), "{settled:?}");
+        // The finest rung settling near six hours is what a 0.159-per-week decay means.
+        assert!(
+            (settled[RUNGS.len() - 1] - 6.29).abs() < 0.05,
+            "{settled:?}"
+        );
     }
 
     // ─── the rate ──────────────────────────────────────────────────────────────
