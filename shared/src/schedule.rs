@@ -673,6 +673,23 @@ pub fn hazard_per_minute(
     lambda.min(cap)
 }
 
+/// Whether [`hazard_per_minute`] is returning its cap rather than `remaining / expected`.
+///
+/// Only the diagnostics care, and they care a lot: the cap is the escape hatch that leaves budget
+/// unspent, so how much present time is spent against it separates "the user was away more than
+/// their profile predicted" from "the cap is set too tight".
+pub fn hazard_is_capped(
+    remaining_count: u32,
+    expected_present_minutes: f64,
+    cooldown_minutes: u32,
+) -> bool {
+    if remaining_count == 0 {
+        return false;
+    }
+    let expected = expected_present_minutes.max(MIN_EXPECTED_MINUTES);
+    f64::from(remaining_count) / expected > 1.0 / f64::from(cooldown_minutes.max(1))
+}
+
 /// P(fire) over a tick covering `present_minutes`, freezing the conditional intensity for that
 /// tick. The exponential survival formula is exact for a fixed intensity. The scheduler recomputes
 /// the intensity from its shrinking opportunity on every tick, making the complete process a
@@ -1233,6 +1250,15 @@ mod tests {
     #[test]
     fn hazard_is_zero_once_the_budget_is_spent() {
         assert_eq!(hazard_per_minute(0, 480.0, 30), 0.0);
+    }
+
+    #[test]
+    fn the_cap_flag_agrees_with_the_cap() {
+        // Three firings owed with five present-minutes left is far past one per cooldown ...
+        assert!(hazard_is_capped(3, 5.0, 30));
+        // ... and three across a whole working day is nowhere near it.
+        assert!(!hazard_is_capped(3, 480.0, 30));
+        assert!(!hazard_is_capped(0, 1.0, 30));
     }
 
     #[test]

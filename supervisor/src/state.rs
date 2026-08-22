@@ -18,6 +18,8 @@ use std::path::PathBuf;
 use chrono::{DateTime, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use shared::schedule::PresenceProfile;
+
+use crate::residuals::Accumulator;
 use uuid::Uuid;
 
 /// Why the previous run ended, which is the only thing that says what the gap since its
@@ -72,6 +74,12 @@ pub struct PersistedState {
     pub last_stop: LastStop,
     #[serde(default)]
     pub profile: PresenceProfile,
+    /// Part-accumulated compensator intervals, one per rate rule. Only ever written when
+    /// diagnostics are on, and `#[serde(default)]` so a state file from a run without them loads
+    /// unchanged. Kept across restarts because the supervisor restarts often enough that dropping
+    /// a part-accumulated interval each time would bias `N - L` upward on its own.
+    #[serde(default)]
+    pub accumulators: HashMap<Uuid, Accumulator>,
 }
 
 /// Beside the wallpaper snapshot, not in the config directory: this is state the supervisor owns,

@@ -20,6 +20,7 @@ use shared::schedule::{
 };
 use uuid::Uuid;
 
+use crate::residuals::{self, Accumulator, Outcome};
 use crate::state::{self, LastStop, PersistedBudget, PersistedState};
 
 /// How often the engine wakes while a rule's opportunity range is open. A hazard rate has to be
@@ -220,6 +221,13 @@ pub struct ScheduleEngine {
     /// Something worth not losing changed (a budget spent, a pause started or ended), so the next
     /// save must not wait for the interval.
     dirty: bool,
+    /// Where compensator residuals go. Disabled unless the user opted in, and the accumulators
+    /// below are only fed when it is -- an off diagnostic costs a branch per tick, not a float.
+    residuals: residuals::Log,
+    /// One open compensator interval per rate rule, keyed the same way budgets are. Opened lazily
+    /// by the first credited tick and closed by whichever comes first: a firing, or the period
+    /// turning over with the budget unspent.
+    accumulators: HashMap<Uuid, Accumulator>,
 }
 
 impl ScheduleEngine {
@@ -232,6 +240,8 @@ impl ScheduleEngine {
         engine.last_tick = restored.last_tick;
         engine.last_stop = restored.last_stop;
         engine.profile = restored.profile;
+        engine.accumulators = restored.accumulators;
+        engine.residuals = residuals::Log::new(path.as_deref().and_then(|p| p.parent()));
         engine.state_path = path;
         engine
     }
@@ -258,6 +268,8 @@ impl ScheduleEngine {
             expected_wake: None,
             last_saved: None,
             dirty: false,
+            residuals: residuals::Log::disabled(),
+            accumulators: HashMap::new(),
         }
     }
 
@@ -278,12 +290,31 @@ impl ScheduleEngine {
                 last_tick: self.last_tick,
                 last_stop: self.last_stop,
                 profile: self.profile.clone(),
+                accumulators: self.accumulators.clone(),
             },
         );
     }
 
     pub fn config(&self) -> &ScheduleConfig {
         &self.config
+    }
+
+    /// Points the residual log at a file of the test's choosing, since the real one is opt-in via
+    /// the environment and writes beside the user's state.
+    #[cfg(test)]
+    pub(crate) fn set_residual_log(&mut self, log: residuals::Log) {
+        self.residuals = log;
+    }
+
+    /// Seeds the learned profile flat, so a simulation can ask "given the profile believes *this*,
+    /// how does the schedule behave" without waiting weeks of simulated time for it to converge.
+    /// Test-only: nothing in the running supervisor may set the profile, which is learned or it is
+    /// nothing.
+    #[cfg(test)]
+    pub(crate) fn set_flat_profile(&mut self, p: f32) {
+        self.profile = PresenceProfile {
+            buckets: vec![p; shared::schedule::PRESENCE_BUCKETS],
+        };
     }
 
     /// Rules are keyed by id, so an unrelated edit no longer throws every counter away -- v1
@@ -387,17 +418,61 @@ impl ScheduleEngine {
         };
         let period = schedule::current_period(rule, now)?;
         let key = period.key();
+        let count = frequency.count();
+
+        // A period turning over with firings still owed is under-delivery, and it is the one thing
+        // the interarrival residuals cannot see -- there is no firing to end the interval with. Log
+        // it as censored before the counter is reset, while the shortfall is still readable.
+        let owed = self
+            .budgets
+            .get(&rule.id)
+            .filter(|existing| existing.period_key != key)
+            .map(|existing| existing.remaining);
+        if let Some(owed) = owed.filter(|&owed| owed > 0) {
+            self.close_accumulator(now, rule, Outcome::Censored, owed);
+        }
+
         let entry = self.budgets.entry(rule.id).or_insert(Budget {
             period_key: key,
-            remaining: frequency.count(),
+            remaining: count,
         });
         if entry.period_key != key {
             *entry = Budget {
                 period_key: key,
-                remaining: frequency.count(),
+                remaining: count,
             };
         }
         Some(entry.remaining)
+    }
+
+    /// Ends one rule's open compensator interval and writes it out. A no-op when nothing has
+    /// accumulated -- a rule whose range never opened has no interval to close, and a rule that
+    /// already spent its budget closed its last one at the firing.
+    fn close_accumulator(
+        &mut self,
+        now: DateTime<Local>,
+        rule: &Rule,
+        outcome: Outcome,
+        remaining_before: u32,
+    ) {
+        let Some(accumulator) = self.accumulators.remove(&rule.id) else {
+            return;
+        };
+        self.dirty = true;
+        if !self.residuals.enabled() {
+            return;
+        }
+        let period_count = match &rule.trigger {
+            Trigger::Rate { frequency, .. } => frequency.count(),
+            Trigger::At { .. } => 0,
+        };
+        self.residuals.append(&accumulator.close(
+            now,
+            rule.id,
+            outcome,
+            remaining_before,
+            period_count,
+        ));
     }
 
     /// The budget without creating or resetting an entry -- the `&self` half, for `status`.
@@ -580,8 +655,12 @@ impl ScheduleEngine {
                 if matches!(rule.trigger, Trigger::Rate { .. })
                     && let Some(budget) = self.budgets.get_mut(&rule.id)
                 {
+                    let remaining_before = budget.remaining;
                     budget.remaining = budget.remaining.saturating_sub(1);
                     self.dirty = true;
+                    // The firing resolves the interval the compensator has been accumulating: this
+                    // is the observation the interarrival test is allowed to use.
+                    self.close_accumulator(now, rule, Outcome::Fired, remaining_before);
                 }
                 return Some(StartRequest {
                     rule_id: rule.id,
@@ -635,6 +714,21 @@ impl ScheduleEngine {
         let expected = schedule::expected_present_minutes(&remaining, &self.profile);
         let hazard =
             schedule::hazard_per_minute(remaining_count, expected, self.config.cooldown_minutes);
+
+        // The compensator is the integral of exactly this, over exactly the minutes it applied to.
+        // Every early return above is a stretch of zero intensity -- outside the range, budget
+        // spent, no elapsed time -- and contributes nothing, which is what makes the accumulated
+        // total the process's own clock rather than wall time. Suppressed ticks (a live session, a
+        // cooldown) never reach here at all, for the same reason.
+        if self.residuals.enabled() {
+            let capped =
+                schedule::hazard_is_capped(remaining_count, expected, self.config.cooldown_minutes);
+            self.accumulators
+                .entry(rule.id)
+                .or_insert_with(|| Accumulator::starting_at(elapsed_from))
+                .credit(hazard, inside, capped);
+        }
+
         self.rng.next_f64() < schedule::fire_probability(hazard, inside)
     }
 
@@ -866,6 +960,7 @@ mod tests {
             last_tick: engine.last_tick,
             last_stop: engine.last_stop,
             profile: engine.profile.clone(),
+            accumulators: engine.accumulators.clone(),
         };
         let json = serde_json::to_string(&saved).unwrap();
         let restored: PersistedState = serde_json::from_str(&json).unwrap();
@@ -876,6 +971,7 @@ mod tests {
         next.last_tick = restored.last_tick;
         next.last_stop = restored.last_stop;
         next.profile = restored.profile;
+        next.accumulators = restored.accumulators;
         next
     }
 

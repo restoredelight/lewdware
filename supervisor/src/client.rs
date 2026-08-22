@@ -25,6 +25,12 @@ pub fn run(command: Command) -> Result<()> {
             },
             Command::Stop => Request::StopSession,
             Command::Panic => Request::Panic,
+            // `main` routes this one before we are reached: it reads a local file and has nothing
+            // to ask a daemon. Bailing rather than `unreachable!` keeps a future reordering of
+            // that match an error message instead of a panic.
+            Command::DiagnoseSchedule { .. } => {
+                anyhow::bail!("diagnose-schedule is handled locally, not by the daemon")
+            }
         };
 
         let response = shared::ipc::control::request(&req).await?;
