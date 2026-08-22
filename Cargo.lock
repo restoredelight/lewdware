@@ -3839,6 +3839,7 @@ dependencies = [
  "anyhow",
  "auto-launch",
  "base64 0.22.1",
+ "chrono",
  "dirs",
  "indexmap 2.14.0",
  "r2d2",

@@ -1,5 +1,8 @@
+use chrono::Local;
 use serde::Serialize;
+use uuid::Uuid;
 
+use crate::dto::ScheduleDto;
 use crate::modes::save_to_disk;
 use crate::state::State;
 
@@ -113,4 +116,47 @@ pub async fn reload_supervisor_schedule(state: State<'_>) -> Result<(), String> 
         shared::ipc::control::Response::Error { message } => Err(message),
         _ => Ok(()),
     }
+}
+
+/// A rate rule asking for more of its window than the rate model can comfortably place in it.
+///
+/// The measure is deliberately not "does the budget fit". Eight sessions a day in an eight-hour
+/// range fits -- it needs 370 of 480 minutes -- and delivers its whole budget on about 8% of days,
+/// because the schedule is not choosing an arrangement, it is scattering a fixed quota at random
+/// and refusing to place two within a cooldown of each other. See `shared::schedule::Crowding`.
+#[derive(Serialize, Clone)]
+pub struct CrowdingDto {
+    pub rule_id: Uuid,
+    /// Share of the window the budget claims, `required / available`.
+    pub occupancy: f64,
+    /// No arrangement fits at all, rather than merely an uncomfortable one. Worth saying
+    /// differently in the UI: one is a warning, the other is arithmetic.
+    pub impossible: bool,
+    /// The largest count that would sit comfortably in this window -- what to suggest in place of
+    /// the number the user typed.
+    pub comfortable_count: u32,
+    pub required_minutes: f64,
+    pub available_minutes: f64,
+}
+
+/// Which rules are over-committed, given a schedule the user is *currently editing*.
+///
+/// Takes the schedule rather than reading the saved one on purpose: the point of the check is to
+/// answer while the rule is being written, not after it has been saved and quietly under-delivered
+/// for a month.
+#[tauri::command]
+pub fn schedule_crowding(schedule: ScheduleDto) -> Vec<CrowdingDto> {
+    let config: shared::schedule::ScheduleConfig = schedule.into();
+    shared::schedule::rule_crowding(&config, Local::now())
+        .into_iter()
+        .filter(|crowding| crowding.occupancy() >= shared::schedule::CROWDED_OCCUPANCY)
+        .map(|crowding| CrowdingDto {
+            rule_id: crowding.rule_id,
+            occupancy: crowding.occupancy(),
+            impossible: crowding.is_impossible(),
+            comfortable_count: crowding.count_within(shared::schedule::CROWDED_OCCUPANCY),
+            required_minutes: crowding.required_minutes,
+            available_minutes: crowding.available_minutes,
+        })
+        .collect()
 }

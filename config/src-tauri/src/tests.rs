@@ -559,3 +559,84 @@ fn default_mode_with_no_pack_loaded_has_no_content_checklist() {
 
     assert!(find_entry(&entries, "content_groups").is_none());
 }
+
+// ─── crowding ──────────────────────────────────────────────────────────────────
+
+fn rate_rule_dto(
+    from: (u32, u32),
+    to: (u32, u32),
+    count: u32,
+    minutes: u32,
+) -> crate::dto::RuleDto {
+    use shared::schedule::{Frequency, Range, SessionLength, TimeOfDay, Trigger};
+    crate::dto::RuleDto {
+        id: Uuid::new_v4(),
+        days: [true; 7],
+        trigger: Trigger::Rate {
+            range: Range::Between {
+                from: TimeOfDay::new(from.0, from.1),
+                to: TimeOfDay::new(to.0, to.1),
+            },
+            frequency: Frequency::PerDay { count },
+        },
+        length: SessionLength::Fixed { minutes },
+        overrides: Default::default(),
+    }
+}
+
+fn schedule_dto(rules: Vec<crate::dto::RuleDto>, cooldown_minutes: u32) -> crate::dto::ScheduleDto {
+    crate::dto::ScheduleDto {
+        enabled: true,
+        rules,
+        quiet_hours: Vec::new(),
+        grace_notification: false,
+        cooldown_minutes,
+        panic_cooldown_minutes: 120,
+    }
+}
+
+/// A comfortable rule says nothing at all. The check is advisory, and an advisory that fires on
+/// ordinary configurations is noise the user learns to ignore.
+#[test]
+fn a_comfortable_rule_is_not_reported() {
+    let schedule = schedule_dto(vec![rate_rule_dto((9, 0), (17, 0), 3, 20)], 30);
+    assert!(crate::commands::schedule::schedule_crowding(schedule).is_empty());
+}
+
+/// The shape the delivery grid measured at 8%: it *fits* -- 370 minutes of 480 -- and is still
+/// hopeless, so a check that only asked whether it fitted would say nothing.
+#[test]
+fn a_budget_that_fits_but_crowds_is_reported_without_calling_it_impossible() {
+    let schedule = schedule_dto(vec![rate_rule_dto((9, 0), (17, 0), 8, 20)], 30);
+    let reported = crate::commands::schedule::schedule_crowding(schedule);
+
+    assert_eq!(reported.len(), 1);
+    assert!(!reported[0].impossible);
+    assert!((reported[0].occupancy - 370.0 / 480.0).abs() < 1e-9);
+    assert!(reported[0].comfortable_count < 8);
+}
+
+#[test]
+fn a_budget_larger_than_its_window_is_reported_as_impossible() {
+    let schedule = schedule_dto(vec![rate_rule_dto((9, 0), (11, 0), 6, 20)], 30);
+    let reported = crate::commands::schedule::schedule_crowding(schedule);
+
+    assert_eq!(reported.len(), 1);
+    assert!(reported[0].impossible);
+    // 6 * 20 + 5 * 30 = 270 minutes wanted, and the range holds 120.
+    assert_eq!(reported[0].required_minutes, 270.0);
+    assert_eq!(reported[0].available_minutes, 120.0);
+}
+
+/// One entry per crowded rule, so the warning can attach to the rule the user would edit.
+#[test]
+fn each_crowded_rule_is_reported_against_its_own_id() {
+    let tight = rate_rule_dto((9, 0), (11, 0), 6, 20);
+    let roomy = rate_rule_dto((9, 0), (17, 0), 2, 20);
+    let tight_id = tight.id;
+
+    let reported =
+        crate::commands::schedule::schedule_crowding(schedule_dto(vec![roomy, tight], 30));
+    assert_eq!(reported.len(), 1);
+    assert_eq!(reported[0].rule_id, tight_id);
+}

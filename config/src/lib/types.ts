@@ -252,6 +252,24 @@ export interface ScheduleDto {
 	panic_cooldown_minutes: number;
 }
 
+/** A rate rule asking for more of its window than the rate model can comfortably place in it.
+ *
+ * Not "does the budget fit": eight sessions a day in an eight-hour range does fit -- it needs 370
+ * of 480 minutes -- and delivers its whole budget on about 8% of days. The schedule is not choosing
+ * an arrangement, it is scattering a fixed quota at random and refusing to place two within a
+ * cooldown of each other, so what matters is the share of the window claimed. */
+export interface CrowdingDto {
+	rule_id: string;
+	/** `required / available`. Above 1 nothing can fit; the warning starts well below that. */
+	occupancy: number;
+	/** No arrangement fits at all, rather than merely an uncomfortable one. */
+	impossible: boolean;
+	/** The largest count that would sit comfortably -- what to suggest instead. */
+	comfortable_count: number;
+	required_minutes: number;
+	available_minutes: number;
+}
+
 /** What the Scheduling tab may show. There is deliberately no firing time for a rate rule, and
  * could not be: under the rate model a firing does not exist until the tick it happens in. */
 export interface ScheduleStatusDto {

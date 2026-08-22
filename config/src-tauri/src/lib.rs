@@ -99,6 +99,7 @@ pub fn run() {
             commands::schedule::set_schedule_enabled,
             commands::schedule::reload_supervisor_schedule,
             commands::schedule::resume_schedule,
+            commands::schedule::schedule_crowding,
             commands::diagnostics::open_logs,
             commands::diagnostics::get_diagnostics,
             commands::updates::check_for_update,

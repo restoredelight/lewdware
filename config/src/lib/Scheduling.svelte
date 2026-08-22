@@ -11,7 +11,7 @@
 	import Popover from '$ui/Popover.svelte';
 	import IconButton from '$ui/IconButton.svelte';
 	import { Icon, QuestionMarkCircle } from '$icons';
-	import type { Frequency, ModeId, QuietHoursDto, RuleDto, TimeOfDay } from './types';
+	import type { CrowdingDto, Frequency, ModeId, QuietHoursDto, RuleDto, TimeOfDay } from './types';
 	import { api } from './api';
 	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 
@@ -205,6 +205,23 @@
 		});
 	}
 
+	// A rule whose budget crowds the range it draws from. Distinct from `ruleWarning`: that one is
+	// about a rule that cannot fire at all, this is about one that fires *less often than it says*,
+	// which is the failure a user has no way of noticing on their own -- the whole promise of a rate
+	// rule is that they cannot predict it, so "that felt like fewer than three" is not evidence of
+	// anything. Said when the rule is written, since after that there is nothing to see.
+	function crowdingNote(rule: RuleDto, crowding: CrowdingDto): string {
+		const asked = rule.trigger.kind === 'rate' ? frequencyWord(rule.trigger.frequency) : '';
+		const room = crowding.comfortable_count === 1 ? 'once' : `${crowding.comfortable_count} times`;
+		if (crowding.impossible) {
+			const needs = Math.round(crowding.required_minutes);
+			const has = Math.round(crowding.available_minutes);
+			return `${asked} doesn’t fit here: it needs ${needs} minutes of the ${has} this range has, once the gap between sessions is counted. There’s room for about ${room}.`;
+		}
+		const share = Math.round(crowding.occupancy * 100);
+		return `${asked} is a tight fit — it claims ${share}% of this range, so some days will deliver fewer. About ${room} sits comfortably.`;
+	}
+
 	// A rule that can never fire. Worth saying out loud rather than leaving the user to wonder why
 	// nothing happens.
 	function ruleWarning(rule: RuleDto): string | null {
@@ -388,6 +405,7 @@
 					{#each schedule.rules as rule, i (rule.id)}
 						{@const mode = timingMode(rule)}
 						{@const warning = ruleWarning(rule)}
+						{@const crowding = store.crowding.find((c) => c.rule_id === rule.id)}
 						<Card class="flex flex-col gap-4 p-4">
 							<div class="flex items-start justify-between gap-4">
 								<div class="min-w-0">
@@ -526,8 +544,8 @@
 								{@render segmented(
 									`Session length for rule ${i + 1}`,
 									[
-										{ value: 'fixed', label: 'For a set time' },
-										{ value: 'until_stopped', label: 'Until I stop it' }
+										{ value: 'until_stopped', label: 'Until I stop it' },
+										{ value: 'fixed', label: 'For a set time' }
 									],
 									rule.length.kind,
 									(value) => setLengthMode(rule, value === 'fixed')
@@ -609,6 +627,8 @@
 
 							{#if warning}
 								<span class="text-xs text-[var(--ui-warning)]">{warning}</span>
+							{:else if crowding}
+								<span class="text-xs text-[var(--ui-warning)]">{crowdingNote(rule, crowding)}</span>
 							{/if}
 						</Card>
 					{/each}

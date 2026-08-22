@@ -507,7 +507,20 @@ pub fn remaining_opportunity(
     now: DateTime<Local>,
     quiet_hours: &[QuietHours],
 ) -> Vec<Interval> {
-    let Some(period) = current_period(rule, now) else {
+    clip_from(&period_opportunity(rule, now, quiet_hours), now)
+}
+
+/// Every minute `rule` may draw in across the whole budget period covering `at`, quiet hours
+/// removed. [`remaining_opportunity`] is this clipped to what is still ahead.
+///
+/// The unclipped form is what a feasibility question needs: whether a budget fits is a fact about
+/// the period, not about how much of it happens to be left when somebody asks.
+pub fn period_opportunity(
+    rule: &Rule,
+    at: DateTime<Local>,
+    quiet_hours: &[QuietHours],
+) -> Vec<Interval> {
+    let Some(period) = current_period(rule, at) else {
         return Vec::new();
     };
     let intervals: Vec<Interval> = occurrences_in_period(rule, period)
@@ -519,7 +532,7 @@ pub fn remaining_opportunity(
         period.first,
         period.last + ChronoDuration::days(1),
     );
-    subtract(&clip_from(&intervals, now), &blockers)
+    subtract(&intervals, &blockers)
 }
 
 /// The interval `now` falls inside, if any -- i.e. whether the rule may fire at all right now.
@@ -960,6 +973,138 @@ pub fn expected_present_minutes(intervals: &[Interval], profile: &PresenceProfil
 }
 
 // ─── The rate ──────────────────────────────────────────────────────────────────
+
+/// The least opportunity a budget of `count` firings can possibly need: every session's own time,
+/// plus a cooldown between each pair of them.
+///
+/// `count - 1` cooldowns rather than `count`, because the last session's cooldown may run past the
+/// end of the window without costing anything. And an `UntilStopped` rule contributes zero session
+/// minutes, which is the honest floor -- even an instantaneous session still has to wait out the
+/// cooldown before the next one.
+///
+/// Deliberately the *minimum*. A panic makes a session dearer rather than cheaper, since it trades
+/// the ordinary cooldown for `panic_cooldown_minutes` -- two hours against thirty, by default -- so
+/// reality only ever needs more room than this. That is what makes it safe to warn on: a schedule
+/// this says cannot fit really cannot, whatever happens on the day.
+pub fn required_minutes(count: u32, session_minutes: f64, cooldown_minutes: u32) -> f64 {
+    if count == 0 {
+        return 0.0;
+    }
+    f64::from(count) * session_minutes + f64::from(count - 1) * f64::from(cooldown_minutes)
+}
+
+/// How much of its window a rate rule's budget is asking for.
+///
+/// The obvious check -- does the budget *fit* -- turns out to be far too permissive. Eight sessions
+/// a day in an eight-hour range needs 370 of its 480 minutes and so fits comfortably, yet the
+/// delivery grid puts it at 8%. Fitting is a statement that some valid arrangement exists; the
+/// schedule is not choosing an arrangement, it is scattering a fixed quota at random and refusing
+/// to place two within a cooldown of each other. Once the exclusion zones cover much of the window,
+/// almost no random scatter avoids them, and the budget goes undelivered while every minute of it
+/// was theoretically available.
+///
+/// So what matters is the ratio, and it tracks the measured delivery rate closely:
+///
+/// ```text
+///     rule          occupancy   delivered
+///     12h, 3/day        0.167       0.945
+///     8h,  3/day        0.250       0.909
+///     8h,  4/day        0.354       0.856
+///     4h,  3/day        0.500       0.730
+///     8h,  6/day        0.562       0.651
+///     3h,  3/day        0.667       0.478
+///     8h,  8/day        0.771       0.080
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Crowding {
+    pub rule_id: Uuid,
+    pub count: u32,
+    /// The least opportunity this budget could need.
+    pub required_minutes: f64,
+    /// What the window actually holds, quiet hours removed.
+    pub available_minutes: f64,
+    session_minutes: f64,
+    cooldown_minutes: u32,
+}
+
+/// Where a budget stops being comfortably placeable. Read off the table on [`Crowding`]: delivery
+/// is still above 85% at a third of the window and has fallen to three-quarters by half of it.
+pub const CROWDED_OCCUPANCY: f64 = 0.5;
+
+impl Crowding {
+    /// The share of the window the budget claims. Above 1.0 the schedule is impossible; well below
+    /// it, comfortable.
+    pub fn occupancy(&self) -> f64 {
+        if self.available_minutes <= 0.0 {
+            return f64::INFINITY;
+        }
+        self.required_minutes / self.available_minutes
+    }
+
+    /// No arrangement of this budget fits, so the shortfall is arithmetic rather than bad luck.
+    pub fn is_impossible(&self) -> bool {
+        self.occupancy() > 1.0
+    }
+
+    /// The largest budget whose occupancy would stay at or under `target` -- what to suggest in
+    /// place of the number the user typed. Never above the count they asked for.
+    pub fn count_within(&self, target: f64) -> u32 {
+        let per_session = self.session_minutes + f64::from(self.cooldown_minutes);
+        if per_session <= 0.0 {
+            return self.count;
+        }
+        let room = target * self.available_minutes + f64::from(self.cooldown_minutes);
+        let fits = (room / per_session)
+            .floor()
+            .clamp(0.0, f64::from(self.count));
+        fits as u32
+    }
+}
+
+/// How hard each rate rule is leaning on its window, worst first.
+///
+/// This is the one shortfall no amount of work on the intensity can fix. Everything else in the
+/// rate model is about *placing* a budget well; if the budget crowds its window, the only honest
+/// outcomes are a smaller number, a wider range or a shorter cooldown, and the user is the only one
+/// who can choose between them. Saying so when the rule is written beats discovering it months
+/// later as a vague sense that "six times a day" has been meaning four.
+///
+/// Reported per rule rather than across the set. Rules do also compete for one another's room --
+/// the cooldown is global -- but a warning has to attach to something a user can edit, and "these
+/// three rules together are too much" points at no single rule.
+pub fn rule_crowding(config: &ScheduleConfig, at: DateTime<Local>) -> Vec<Crowding> {
+    let mut found: Vec<Crowding> = config
+        .rules
+        .iter()
+        .filter_map(|rule| {
+            let Trigger::Rate { frequency, .. } = &rule.trigger else {
+                return None;
+            };
+            let count = frequency.count();
+            if count == 0 {
+                return None;
+            }
+            let session_minutes = match rule.length {
+                SessionLength::Fixed { minutes } => f64::from(minutes),
+                SessionLength::UntilStopped => 0.0,
+            };
+            Some(Crowding {
+                rule_id: rule.id,
+                count,
+                required_minutes: required_minutes(count, session_minutes, config.cooldown_minutes),
+                available_minutes: total_minutes(&period_opportunity(
+                    rule,
+                    at,
+                    &config.quiet_hours,
+                )),
+                session_minutes,
+                cooldown_minutes: config.cooldown_minutes,
+            })
+        })
+        .collect();
+    found.sort_by(|a, b| b.occupancy().total_cmp(&a.occupancy()));
+    found
+}
 
 /// Ceiling on the dispersion correction in [`usable_present_minutes`], as a squared coefficient
 /// of variation.
@@ -1758,6 +1903,168 @@ mod tests {
     }
 
     // ─── the rate ──────────────────────────────────────────────────────────────
+
+    // ─── crowding ──────────────────────────────────────────────────────────────
+
+    fn schedule_with(rules: Vec<Rule>, cooldown_minutes: u32) -> ScheduleConfig {
+        ScheduleConfig {
+            enabled: true,
+            rules,
+            quiet_hours: Vec::new(),
+            grace_notification: false,
+            cooldown_minutes,
+            panic_cooldown_minutes: 120,
+        }
+    }
+
+    fn crowding_of(rule: Rule, cooldown_minutes: u32) -> Crowding {
+        let config = schedule_with(vec![rule], cooldown_minutes);
+        rule_crowding(&config, dt(2026, 7, 13, 12, 0))
+            .into_iter()
+            .next()
+            .expect("a rate rule always reports")
+    }
+
+    #[test]
+    fn required_room_is_every_session_plus_a_cooldown_between_each_pair() {
+        // Three 20-minute sessions and the two cooldowns that must separate them.
+        assert_eq!(required_minutes(3, 20.0, 30), 3.0 * 20.0 + 2.0 * 30.0);
+        // The last cooldown may run past the window's end, so one firing needs only itself.
+        assert_eq!(required_minutes(1, 20.0, 30), 20.0);
+        // An `UntilStopped` rule still has to wait out the cooldowns.
+        assert_eq!(required_minutes(3, 0.0, 30), 60.0);
+        assert_eq!(required_minutes(0, 20.0, 30), 0.0);
+    }
+
+    /// The row the whole measure exists for. Eight a day *fits* -- 370 minutes of 480 -- and is
+    /// still hopeless, because the exclusion zones cover so much of the window that hardly any
+    /// random scatter avoids them. A check that only asked whether the budget fitted would wave
+    /// this through.
+    #[test]
+    fn a_budget_can_fit_its_window_and_still_crowd_it() {
+        let crowding = crowding_of(rate_rule(all_days(), between((9, 0), (17, 0)), 8), 30);
+        assert_eq!(crowding.required_minutes, 370.0);
+        assert_eq!(crowding.available_minutes, 480.0);
+        assert!(!crowding.is_impossible());
+        assert!(
+            crowding.occupancy() > CROWDED_OCCUPANCY,
+            "{}",
+            crowding.occupancy()
+        );
+    }
+
+    /// The measured delivery rates run the other way from occupancy, and the ordering is what the
+    /// threshold is calibrated against.
+    #[test]
+    fn occupancy_ranks_the_shapes_the_delivery_grid_ranks() {
+        let occupancies: Vec<f64> = [
+            (720, 3), // 12h, delivered 0.945
+            (480, 3), //  8h, delivered 0.909
+            (480, 4), //  8h, delivered 0.856
+            (240, 3), //  4h, delivered 0.730
+            (480, 6), //  8h, delivered 0.651
+            (180, 3), //  3h, delivered 0.478
+            (480, 8), //  8h, delivered 0.080
+        ]
+        .into_iter()
+        .map(|(minutes, count)| {
+            let end = 9 * 60 + minutes;
+            let rule = rate_rule(
+                all_days(),
+                between((9, 0), (end as u32 / 60, end as u32 % 60)),
+                count,
+            );
+            crowding_of(rule, 30).occupancy()
+        })
+        .collect();
+
+        assert!(
+            occupancies.windows(2).all(|w| w[0] < w[1]),
+            "occupancy should rise as delivery falls: {occupancies:?}"
+        );
+        // And the threshold falls where delivery starts dropping below three-quarters.
+        assert!(occupancies[2] < CROWDED_OCCUPANCY, "{occupancies:?}");
+        assert!(occupancies[3] >= CROWDED_OCCUPANCY, "{occupancies:?}");
+    }
+
+    #[test]
+    fn a_budget_larger_than_its_window_is_impossible_and_says_what_would_fit() {
+        let crowding = crowding_of(rate_rule(all_days(), between((9, 0), (17, 0)), 8), 60);
+        // 8 * 20 + 7 * 60 = 580 wanted against 480 available.
+        assert_eq!(crowding.required_minutes, 580.0);
+        assert!(crowding.is_impossible());
+        // 20 + 60 per session, and the trailing cooldown is free: floor(540 / 80) = 6.
+        assert_eq!(crowding.count_within(1.0), 6);
+        // Comfortably placeable is a good deal fewer than merely possible.
+        assert_eq!(crowding.count_within(CROWDED_OCCUPANCY), 3);
+    }
+
+    #[test]
+    fn a_suggested_count_never_exceeds_the_one_that_was_asked_for() {
+        let crowding = crowding_of(rate_rule(all_days(), between((0, 0), (0, 0)), 2), 30);
+        assert!(crowding.occupancy() < 0.05, "{}", crowding.occupancy());
+        assert_eq!(crowding.count_within(CROWDED_OCCUPANCY), 2);
+    }
+
+    /// Whether a budget crowds its window is a fact about the period, not about how much of it is
+    /// left when somebody happens to open the config app.
+    #[test]
+    fn crowding_does_not_depend_on_the_time_of_day_it_is_asked() {
+        let rule = rate_rule(all_days(), between((9, 0), (17, 0)), 6);
+        let config = schedule_with(vec![rule], 30);
+        assert_eq!(
+            rule_crowding(&config, dt(2026, 7, 13, 9, 1)),
+            rule_crowding(&config, dt(2026, 7, 13, 16, 30))
+        );
+    }
+
+    /// Quiet hours come out of the opportunity, so they can crowd a budget that would otherwise sit
+    /// comfortably -- which is exactly the surprise worth surfacing.
+    #[test]
+    fn quiet_hours_can_crowd_a_budget_that_would_otherwise_be_comfortable() {
+        // Five a day across eight hours wants 220 of 480 minutes -- comfortable.
+        let rule = rate_rule(all_days(), between((9, 0), (17, 0)), 5);
+        assert!(crowding_of(rule.clone(), 30).occupancy() < CROWDED_OCCUPANCY);
+
+        let mut config = schedule_with(vec![rule], 30);
+        config.quiet_hours = vec![QuietHours {
+            days: all_days(),
+            start: tod(11, 0),
+            end: tod(16, 0),
+        }];
+        // Five hours of it are now off limits, leaving 180 -- and 220 does not fit in 180.
+        let crowding = rule_crowding(&config, dt(2026, 7, 13, 12, 0))[0];
+        assert_eq!(crowding.available_minutes, 180.0);
+        assert!(crowding.is_impossible());
+        assert_eq!(crowding.count_within(1.0), 4);
+    }
+
+    /// An `UntilStopped` rule is measured on its cooldowns alone. That is the floor rather than a
+    /// guess -- the length is the user's to decide -- and it stays a safe floor because a panic
+    /// trades the ordinary cooldown for the much longer panic one, so reality only ever needs more
+    /// room than this says.
+    #[test]
+    fn an_until_stopped_rule_is_measured_on_its_cooldowns_alone() {
+        let mut rule = rate_rule(all_days(), between((9, 0), (11, 0)), 5);
+        rule.length = SessionLength::UntilStopped;
+        let crowding = crowding_of(rule, 30);
+        assert_eq!(crowding.required_minutes, 120.0);
+        assert_eq!(crowding.available_minutes, 120.0);
+        assert!(!crowding.is_impossible());
+    }
+
+    #[test]
+    fn an_at_rule_has_no_budget_to_crowd_anything_with() {
+        let rule = Rule {
+            id: Uuid::new_v4(),
+            days: all_days(),
+            trigger: Trigger::At { time: tod(9, 0) },
+            length: SessionLength::Fixed { minutes: 600 },
+            overrides: SessionOverrides::default(),
+        };
+        let config = schedule_with(vec![rule], 30);
+        assert!(rule_crowding(&config, dt(2026, 7, 13, 12, 0)).is_empty());
+    }
 
     /// A profile that is certain leaves the denominator alone. Both variance terms vanish at
     /// `p = 1`, so there is nothing to correct and the tier-3 case is untouched.
