@@ -7,9 +7,8 @@
 //!   unconditionally at startup and then leaked it with `std::mem::forget`, so it could never be
 //!   removed; opening the config app planted a tray icon for a feature the user had not enabled.
 //! - **The menu is a function of state**, rebuilt on every change rather than fixed at startup.
-//! - **Panic appears only while a session is running.** With nothing running the equivalent is
-//!   *Pause for…*, which is the same cooldown mechanism under an honest name: a destructive verb
-//!   for something that is not happening reads as a threat rather than an escape hatch.
+//! - **Stopping and pausing are separate actions.** The tray stops a running session gracefully;
+//!   while idle, scheduling can be paused explicitly for a chosen duration.
 //!
 //! `Control` owns the state and pushes a [`TrayView`] whenever it changes; the backend diffs
 //! nothing and simply applies it.
@@ -24,7 +23,6 @@ use crate::control::ControlMessage;
 pub enum TrayAction {
     StartSession,
     StopSession,
-    Panic,
     PauseFor { minutes: u32 },
     ResumeSchedule,
     OpenConfig,

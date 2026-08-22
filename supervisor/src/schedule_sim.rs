@@ -154,7 +154,6 @@ fn config_for(scenario: &Scenario) -> ScheduleConfig {
         quiet_hours: Vec::new(),
         grace_notification: false,
         cooldown_minutes: scenario.cooldown,
-        panic_cooldown_minutes: 120,
     }
 }
 

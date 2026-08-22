@@ -24,7 +24,7 @@ pub fn run(command: Command) -> Result<()> {
                 replace: true,
             },
             Command::Stop => Request::StopSession,
-            Command::Panic => Request::Panic,
+            Command::StopImmediately => Request::StopImmediately,
             // `main` routes this one before we are reached: it reads a local file and has nothing
             // to ask a daemon. Bailing rather than `unreachable!` keeps a future reordering of
             // that match an error message instead of a panic.

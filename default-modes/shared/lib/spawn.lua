@@ -143,7 +143,7 @@ end
 --- @field click_through boolean|nil Whether clicks pass through popups to whatever is beneath.
 ---   Absent = false. This disables the *whole* window's hit-testing, header included, so a
 ---   click-through popup cannot be closed by hand at all -- only by `auto_close_ms`, by dormancy,
----   or by the panic key. Also makes `draggable` and `click_to_close` inert (the engine never
+---   or by the stop shortcut. Also makes `draggable` and `click_to_close` inert (the engine never
 ---   delivers the events).
 --- @field click_to_close boolean|nil Whether clicking a popup's content closes it. Absent = false.
 ---   Clicks on the header/close button are excluded by the engine, so this composes with

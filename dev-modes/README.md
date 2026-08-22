@@ -12,7 +12,7 @@ cargo run -p lw -- mode dev
 ```
 
 That builds the mode, asks the supervisor to run it (starting the supervisor if needed), and
-rebuilds/restarts on every file change. `Shift+Escape` (the default panic key) ends the session.
+rebuilds/restarts on every file change. `Shift+Escape` (the default stop shortcut) ends the session.
 
 | Mode | What it is for |
 | --- | --- |

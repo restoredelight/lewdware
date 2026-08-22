@@ -119,10 +119,6 @@ fn default_cooldown_minutes() -> u32 {
     ScheduleConfig::default().cooldown_minutes
 }
 
-fn default_panic_cooldown_minutes() -> u32 {
-    ScheduleConfig::default().panic_cooldown_minutes
-}
-
 /// Mirrors `shared::schedule::ScheduleConfig` 1:1. Round-trips through the ordinary
 /// `get_config`/`save_config` commands exactly like `capabilities`/`volume` do -- see `ConfigDto`'s
 /// own doc comment on `schedule` for why this matters (it's load-bearing, not polish).
@@ -136,8 +132,6 @@ pub struct ScheduleDto {
     pub grace_notification: bool,
     #[serde(default = "default_cooldown_minutes")]
     pub cooldown_minutes: u32,
-    #[serde(default = "default_panic_cooldown_minutes")]
-    pub panic_cooldown_minutes: u32,
 }
 
 impl From<ScheduleConfig> for ScheduleDto {
@@ -148,7 +142,6 @@ impl From<ScheduleConfig> for ScheduleDto {
             quiet_hours: s.quiet_hours,
             grace_notification: s.grace_notification,
             cooldown_minutes: s.cooldown_minutes,
-            panic_cooldown_minutes: s.panic_cooldown_minutes,
         }
     }
 }
@@ -161,7 +154,6 @@ impl From<ScheduleDto> for ScheduleConfig {
             quiet_hours: s.quiet_hours,
             grace_notification: s.grace_notification,
             cooldown_minutes: s.cooldown_minutes,
-            panic_cooldown_minutes: s.panic_cooldown_minutes,
         }
     }
 }
@@ -196,7 +188,7 @@ pub struct ConfigDto {
     pub theme: String,
     #[serde(default = "default_appearance_dto")]
     pub appearance: String,
-    pub panic_button: Key,
+    pub stop_button: Key,
     pub disabled_monitors: Vec<String>,
     /// Round-tripped for the same reason `wallpaper` and `schedule` are: `save_config` rebuilds a
     /// whole `AppConfig` from this DTO, so a region left out here would be wiped by any unrelated
@@ -232,7 +224,7 @@ impl From<AppConfig> for ConfigDto {
             mode: c.mode.into(),
             theme: c.theme,
             appearance: c.appearance,
-            panic_button: c.panic_button,
+            stop_button: c.stop_button,
             disabled_monitors: c.disabled_monitors,
             monitor_regions: c.monitor_regions,
             capabilities: c.capabilities,
@@ -256,7 +248,7 @@ impl From<ConfigDto> for AppConfig {
             experience_options: HashMap::new(),
             theme: dto.theme,
             appearance: dto.appearance,
-            panic_button: dto.panic_button,
+            stop_button: dto.stop_button,
             disabled_monitors: dto.disabled_monitors,
             monitor_regions: dto.monitor_regions,
             capabilities: dto.capabilities,

@@ -32,8 +32,8 @@
 	// never take effect should not claim to be "Allowed".
 	const wallpaperUsable = $derived(canRestoreOriginal || restore.kind === 'image');
 
-	const panicKeyDisplay = $derived(
-		recording ? 'Press a key…' : store.config ? formatKey(store.config.panic_button) : ''
+	const stopKeyDisplay = $derived(
+		recording ? 'Press a key…' : store.config ? formatKey(store.config.stop_button) : ''
 	);
 
 	onMount(async () => {
@@ -96,7 +96,7 @@
 
 		e.preventDefault();
 
-		store.setPanicButton({
+		store.setStopButton({
 			name: e.key === ' ' ? 'Space' : e.key,
 			code: e.code,
 			modifiers: {
@@ -160,16 +160,18 @@
 			</p>
 		</header>
 
-		<!-- Panic key -->
+		<!-- Stop shortcut -->
 		<section class="flex flex-col gap-2">
-			<h2 class="ui-section-title">Panic key</h2>
-			<p class="text-muted text-xs">Pressing this key combination closes the app immediately.</p>
+			<h2 class="ui-section-title">Stop shortcut</h2>
+			<p class="text-muted text-xs">
+				Pressing this key combination stops a running session immediately.
+			</p>
 			{#if !inputMonitoringGranted}
 				<div
 					class="flex flex-col gap-2 rounded-md border border-[var(--ui-warning-border)] bg-[var(--ui-warning-bg)] px-3 py-2 text-sm text-[var(--ui-warning)]"
 				>
 					<div class="flex items-center gap-3">
-						<span>The panic key requires Input Monitoring permission.</span>
+						<span>The stop shortcut requires Input Monitoring permission.</span>
 						<Button
 							size="compact"
 							variant="secondary"
@@ -200,8 +202,8 @@
 				<button
 					type="button"
 					aria-label={recording
-						? 'Recording panic key'
-						: `Change panic key, currently ${panicKeyDisplay}`}
+						? 'Recording stop shortcut'
+						: `Change stop shortcut, currently ${stopKeyDisplay}`}
 					class="min-w-40 cursor-pointer rounded-md border-2 px-4 py-2 text-sm font-semibold transition-colors select-none
              {recording
 						? 'bg-accent/10 border-accent text-accent-foreground'
@@ -211,7 +213,7 @@
 					onblur={() => (recording = false)}
 				>
 					{#if recording}<span class="font-normal italic">Press a key…</span>{:else}<kbd
-							>{panicKeyDisplay}</kbd
+							>{stopKeyDisplay}</kbd
 						>{/if}
 				</button>
 			</Card>

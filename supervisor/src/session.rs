@@ -15,7 +15,7 @@ pub enum SessionCommand {
     /// Ask the engine to stop via the engine-link connection, escalating to a hard kill if it
     /// doesn't exit within the grace period.
     Terminate,
-    /// Hard-kill immediately, no grace period (panic: "stop now," not "ask nicely").
+    /// Hard-kill immediately, with no grace period (the global stop shortcut).
     Kill,
     /// Handed off by `engine_link` once the spawned engine's `Hello` has been matched to this
     /// session.
@@ -23,7 +23,7 @@ pub enum SessionCommand {
 }
 
 /// What actually happened when the child exited -- `control.rs` (not this module) decides what
-/// it *means* (crash-restart vs. intentional stop vs. panic), since that policy depends on the
+/// it *means* (crash-restart vs. graceful or immediate stop), since that policy depends on the
 /// `Episode`'s own `intent`, which only `control.rs` tracks.
 pub struct SessionExit {
     pub status: Option<std::process::ExitStatus>,

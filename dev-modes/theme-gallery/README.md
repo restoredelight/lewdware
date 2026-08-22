@@ -36,7 +36,7 @@ Set these in the config app's mode options, or by editing them into your config.
 | Palettes | Light and dark | `auto` follows the desktop's own setting, which is also what a window whose mode names no palette gets |
 | Include native aliases | off | Adds `native`/`native-retro`, revealing what they resolve to on *this* machine |
 | Columns | auto | Auto keeps grid cells as close to square as the screen allows |
-| Show close buttons | on | Off shows each header bare, as an undismissable popup draws it. The panic key still ends the session |
+| Show close buttons | on | Off shows each header bare, as an undismissable popup draws it. The stop shortcut still ends the session |
 
 `platinum` has no dark variant and draws light in either palette — that is the theme, not a bug.
 

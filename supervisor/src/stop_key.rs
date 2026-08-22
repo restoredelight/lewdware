@@ -6,14 +6,14 @@ use tokio::sync::mpsc;
 
 use crate::control::ControlMessage;
 
-/// Spawn a thread that listens for the panic key being pressed, sending
-/// [ControlMessage::PanicKeyPressed] on match. Moved here wholesale from the engine (which used
-/// to own this thread directly) -- the supervisor is now the sole owner of the panic key, alive
+/// Spawn a thread that listens for the stop shortcut being pressed, sending
+/// [ControlMessage::StopKeyPressed] on match. Moved here wholesale from the engine (which used
+/// to own this thread directly) -- the supervisor is now the sole owner of the shortcut, alive
 /// even if a session hangs.
-pub fn spawn_panic_thread(control_tx: mpsc::Sender<ControlMessage>, target_key: Key) {
-    tracing::info!("Spawning panic thread");
+pub fn spawn_stop_thread(control_tx: mpsc::Sender<ControlMessage>, target_key: Key) {
+    tracing::info!("Spawning stop-shortcut thread");
     thread::spawn(move || {
-        tracing::info!("Panic thread started");
+        tracing::info!("Stop-shortcut thread started");
 
         // On Windows, rdev installs a WH_KEYBOARD_LL hook whose callback is called as a
         // sent message to this thread. Windows will silently remove the hook if the
@@ -26,8 +26,8 @@ pub fn spawn_panic_thread(control_tx: mpsc::Sender<ControlMessage>, target_key: 
                 GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
             };
             match SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) {
-                Ok(()) => tracing::info!("Panic thread priority set to TIME_CRITICAL"),
-                Err(e) => tracing::error!("Failed to set panic thread priority: {e}"),
+                Ok(()) => tracing::info!("Stop-shortcut thread priority set to TIME_CRITICAL"),
+                Err(e) => tracing::error!("Failed to set stop-shortcut thread priority: {e}"),
             }
         }
 
@@ -40,7 +40,7 @@ pub fn spawn_panic_thread(control_tx: mpsc::Sender<ControlMessage>, target_key: 
         };
 
         tracing::info!(
-            "Panic listener starting: watching for {:?} with modifiers {:?}",
+            "Stop-shortcut listener starting: watching for {:?} with modifiers {:?}",
             rdev_key,
             target_key.modifiers
         );
@@ -55,9 +55,9 @@ pub fn spawn_panic_thread(control_tx: mpsc::Sender<ControlMessage>, target_key: 
                     let modifiers = rdev_keys_to_modifiers(&keys);
 
                     if modifier_matches(&modifiers, &target_key.modifiers)
-                        && let Err(err) = control_tx.blocking_send(ControlMessage::PanicKeyPressed)
+                        && let Err(err) = control_tx.blocking_send(ControlMessage::StopKeyPressed)
                     {
-                        tracing::error!("Could not send panic button event: {}", err);
+                        tracing::error!("Could not send stop-shortcut event: {}", err);
                     }
                 }
             } else if let rdev::EventType::KeyRelease(key) = event.event_type {
@@ -66,11 +66,11 @@ pub fn spawn_panic_thread(control_tx: mpsc::Sender<ControlMessage>, target_key: 
         }) {
             #[cfg(target_vendor = "apple")]
             tracing::error!(
-                "Panic key listener failed (this usually means accessibility permission was not granted): {:?}",
+                "Stop shortcut listener failed (this usually means accessibility permission was not granted): {:?}",
                 err
             );
             #[cfg(not(target_vendor = "apple"))]
-            tracing::error!("Panic key listener failed: {:?}", err);
+            tracing::error!("Stop shortcut listener failed: {:?}", err);
         }
     });
 }
@@ -122,7 +122,7 @@ fn rdev_keys_to_modifiers<'a>(keys: impl IntoIterator<Item = &'a rdev::Key>) -> 
     modifiers
 }
 
-/// When registering a panic button, we get given a string (the key code, as recognized by the
+/// When registering a stop shortcut, we get given a string (the key code, as recognized by the
 /// browser), which we need to turn into an [rdev::Key] in order to be able to listen for the key
 /// properly.
 pub fn key_to_rdev(key: &Key) -> Option<rdev::Key> {

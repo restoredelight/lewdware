@@ -34,8 +34,8 @@ pub enum Request {
         replace: bool,
     },
     StopSession,
-    Panic,
-    /// Ends a running pause -- a panic cooldown, or one set from the tray -- early.
+    StopImmediately,
+    /// Ends a running schedule pause early.
     ///
     /// The pause lives on the schedule engine rather than in `config.json`, so it survives a
     /// config edit and even toggling scheduling off and on. That makes an explicit way to end it
@@ -94,7 +94,7 @@ pub struct ScheduleStatus {
     /// "2 of 3 remaining today".
     pub budget_remaining: u32,
     pub budget_total: u32,
-    /// Set while a post-session or panic cooldown is suppressing firing.
+    /// Set while a post-session or explicit pause is suppressing firing.
     pub cooldown_until: Option<DateTime<Utc>>,
 }
 
@@ -306,7 +306,7 @@ mod tests {
             replace: false,
         });
         roundtrip(Request::StopSession);
-        roundtrip(Request::Panic);
+        roundtrip(Request::StopImmediately);
         roundtrip(Request::ReloadConfig);
     }
 

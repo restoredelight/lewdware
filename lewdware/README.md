@@ -18,7 +18,7 @@ rendering and updating windows. We spawn some other threads:
 - Since video and audio files require continuous decoding, each video file gets
   its own decoding thread (`video.rs`), and so does each audio file
   (`audio.rs`). A video file that plays audio therefore spawns two threads.
-- We also spawn some miscellaneous threads (e.g. to listen for the panic key).
+- We also spawn some miscellaneous threads (e.g. to listen for the global stop shortcut).
 
 So, if the Lua mode runs `lewdware.spawn_video_popup(video_object)`, the
 following steps are taken (assuming the video is valid):

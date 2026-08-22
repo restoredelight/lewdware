@@ -7,7 +7,7 @@ use crate::commands::schedule::{schedule_status_from, ScheduleStatusDto};
 //
 // The config app no longer owns the engine `Child` directly -- it talks to the resident
 // supervisor over IPC (starting it on demand), which is now the sole owner of session
-// lifecycle, wallpaper safety, and the panic key. See `design/scheduling.md`.
+// lifecycle, wallpaper safety, and the stop shortcut. See `design/scheduling.md`.
 
 #[tauri::command]
 pub async fn launch_lewdware() -> Result<(), String> {

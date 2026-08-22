@@ -142,7 +142,7 @@ impl Snapshot {
 ///
 /// A wallpaper we set ourselves counts as unreadable, not as the user's -- see
 /// [`is_our_own_wallpaper`]. Without that, one episode that ended without restoring (a crash, a
-/// kill, a panic-key exit) poisons every episode after it: the next snapshot records our image as
+/// kill, an immediate-stop exit) poisons every episode after it: the next snapshot records our image as
 /// "the user's wallpaper", restores to it, and re-records it again next time.
 pub fn snapshot(fallback: Option<&Path>) -> Snapshot {
     let read = platform::snapshot().and_then(|snapshot| {
@@ -287,7 +287,7 @@ fn run(command: &'static str, args: &[&str]) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// An episode that ends without restoring -- a crash, a kill, the panic key -- leaves our own
+    /// An episode that ends without restoring -- a crash, a kill, the stop shortcut -- leaves our own
     /// image on the desktop. The next snapshot must not record that as the user's wallpaper, or
     /// every episode after it restores to a file we extracted and then deleted, and re-records it
     /// again on the way out. That is a state nothing recovers from on its own.

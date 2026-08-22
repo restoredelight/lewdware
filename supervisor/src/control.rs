@@ -37,9 +37,9 @@ pub enum ControlMessage {
         req: Request,
         respond_to: oneshot::Sender<Response>,
     },
-    PanicKeyPressed,
+    StopKeyPressed,
     /// A tray menu item was clicked. One variant for every item, rather than v1's single
-    /// "panic was clicked" -- see `tray.rs` on why the id lookup matters.
+    /// "the menu was clicked" -- see `tray.rs` on why the id lookup matters.
     TrayAction {
         action: TrayAction,
     },
@@ -91,9 +91,9 @@ enum Intent {
     None,
     /// An explicit `StopSession`/`RestartSession` asked this episode to end.
     Stopping,
-    /// A panic (hotkey or tray) asked this episode to end -- like `Stopping`, but reported as
+    /// The global stop shortcut asked this episode to end immediately, so it is reported as
     /// `Killed` rather than `Graceful`.
-    Panicking,
+    StoppingImmediately,
 }
 
 enum Phase {
@@ -133,8 +133,8 @@ impl Default for SpawnSpec {
 struct Episode {
     seq: u64,
     kind: SessionKind,
-    /// Which schedule rule opened this session, for a `Scheduled` episode. v1 recorded nothing
-    /// here, which is why panic had nothing to attribute a skip to and so cancelled nothing.
+    /// Which schedule rule opened this session, for a `Scheduled` episode. Kept so accounting and
+    /// diagnostics can attribute the result to the firing that produced it.
     rule_id: Option<Uuid>,
     /// Kept so a restart after a crash comes back as the same session the rule asked for, rather
     /// than silently falling back to the global pack and mode.
@@ -251,7 +251,7 @@ impl Control {
                 let response = self.handle_request(req).await;
                 let _ = respond_to.send(response);
             }
-            ControlMessage::PanicKeyPressed => self.panic().await,
+            ControlMessage::StopKeyPressed => self.stop_immediately().await,
             ControlMessage::TrayAction { action } => self.on_tray_action(action).await,
             ControlMessage::SessionExited { seq, exit } => self.on_session_exited(seq, exit).await,
             ControlMessage::EngineConnected { seq, recv, send } => {
@@ -344,8 +344,8 @@ impl Control {
                 }
                 Response::Ok
             }
-            Request::Panic => {
-                self.panic().await;
+            Request::StopImmediately => {
+                self.stop_immediately().await;
                 Response::Ok
             }
             Request::ResumeSchedule => {
@@ -366,23 +366,19 @@ impl Control {
         }
     }
 
-    /// Panic stops the session *and* suppresses scheduled firing for a while. v1 only did the
-    /// first half: it claimed to cancel the rest of the window but nothing ever recorded the skip,
-    /// so any mid-window re-evaluation (a `ReloadConfig` from the config app, a quiet-hours edge)
-    /// restarted the session minutes later. Expressing the scope as a duration is what makes the
-    /// promise checkable.
-    ///
-    /// Also meaningful with nothing running: a pre-emptive "not for a while".
-    async fn panic(&mut self) {
-        let now = Local::now();
-        self.pending_start = None;
-        self.schedule
-            .start_cooldown(now, self.schedule.config().panic_cooldown_minutes);
+    /// The global stop shortcut is the immediate counterpart to `StopSession`: it skips the
+    /// graceful shutdown request but has no separate scheduling meaning. A scheduled session will
+    /// start the same post-session gap when its exit is observed; with nothing running this is a
+    /// no-op. During a grace notification it is the immediate equivalent of Cancel, so that
+    /// already-spent firing starts the ordinary gap too.
+    async fn stop_immediately(&mut self) {
+        let cancelled_start = self.pending_start.take().is_some();
 
         if let Some(episode) = self.episode.as_mut().filter(|e| e.is_active()) {
-            episode.intent = Intent::Panicking;
+            episode.intent = Intent::StoppingImmediately;
             let _ = episode.to_session.send(SessionCommand::Kill).await;
-        } else {
+        } else if cancelled_start {
+            self.schedule.note_start_cancelled(Local::now());
             self.tick_schedule().await;
         }
     }
@@ -480,7 +476,7 @@ impl Control {
 
         wallpaper::restore(&episode.wallpaper_snapshot);
 
-        let classification = if episode.intent == Intent::Panicking {
+        let classification = if episode.intent == Intent::StoppingImmediately {
             ExitClassification::Killed
         } else if exit.we_commanded_stop {
             ExitClassification::Graceful
@@ -523,7 +519,7 @@ impl Control {
             if was_scheduled {
                 self.schedule.note_session_ended(Local::now());
             }
-            // An intentional stop/panic -- no auto-restart, regardless of exit status.
+            // An intentional stop -- no auto-restart, regardless of exit status.
             self.arm_idle_timer(None);
             if was_scheduled {
                 self.tick_schedule().await;
@@ -809,19 +805,6 @@ impl Control {
                 label: "Stop session".into(),
                 action: TrayAction::StopSession,
             });
-            // Panic is offered only against a live session -- idle, the honest equivalent is
-            // "Pause for..." below -- and only when it does something "Stop session" does not.
-            // With scheduling off, or the pause set to zero, the two differ solely in how hard the
-            // engine is killed, which is not a distinction to make a user choose between.
-            let pause = self.schedule.config().panic_cooldown_minutes;
-            if status.schedule.enabled && pause > 0 {
-                items.push(TrayItem::Action {
-                    // The consequence belongs in the label: "Panic" alone reads as "stop", and the
-                    // two-hour hold is the whole reason this item exists next to "Stop session".
-                    label: format!("Panic — pause for {}", humanize_minutes(pause)),
-                    action: TrayAction::Panic,
-                });
-            }
         } else {
             items.push(TrayItem::Action {
                 label: "Start session now".into(),
@@ -861,7 +844,6 @@ impl Control {
             TrayAction::StopSession => {
                 self.handle_request(Request::StopSession).await;
             }
-            TrayAction::Panic => self.panic().await,
             TrayAction::PauseFor { minutes } => {
                 self.pending_start = None;
                 self.schedule.start_cooldown(Local::now(), minutes);
@@ -941,32 +923,8 @@ fn open_config() {
     }
 }
 
-/// "2 hours" rather than "120 minutes" -- a tray label is read at a glance.
-fn humanize_minutes(minutes: u32) -> String {
-    match minutes {
-        m if m % 1440 == 0 => {
-            let days = m / 1440;
-            if days == 1 {
-                "24 hours".to_string()
-            } else {
-                format!("{days} days")
-            }
-        }
-        m if m % 60 == 0 => {
-            let hours = m / 60;
-            if hours == 1 {
-                "1 hour".to_string()
-            } else {
-                format!("{hours} hours")
-            }
-        }
-        m => format!("{m} minutes"),
-    }
-}
-
-/// Panic's cooldown is a setting; these are the ad-hoc equivalents, and the same mechanism. "Rest
-/// of day" is resolved to minutes here rather than carried as a special case, so the action stays
-/// one shape.
+/// Explicit schedule pauses. "Rest of day" is resolved to minutes here rather than carried as a
+/// special case, so the action stays one shape.
 fn pause_submenu() -> TrayItem {
     let until_midnight = {
         let now = Local::now();

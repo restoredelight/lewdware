@@ -40,7 +40,7 @@ click *Launch* to start Lewdware.
 ## Stopping Lewdware
 
 At any point, you can stop Lewdware, by pressing *Stop* in the config window,
-by pressing a _panic key_ (which is <kbd>Ctrl</kbd> + <kbd>Esc</kbd> by
+by pressing the global _stop shortcut_ (which is <kbd>Shift</kbd> + <kbd>Esc</kbd> by
 default), or by using the tray icon. Note that closing the config window will
 _not_ stop Lewdware, allowing you to keep it running without having to keep the
 config window open.

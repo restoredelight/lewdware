@@ -19,7 +19,7 @@ docs site.
 | `config/` | The user-facing app: configure the engine, pick pack/mode, launch/stop, updates. Tauri + Svelte. | [link](config/README.md) |
 | `pack-editor/` | GUI for creating/editing packs; compresses media via the ffmpeg CLI. Tauri + Svelte. Distributed separately. | [link](pack-editor/README.md) |
 | `lw/` | CLI for creating/editing/building modes. | [link](lw/README.md) |
-| `supervisor/` | Background daemon owning session lifecycle, scheduling, tray, panic key, wallpaper. Config talks to it; it spawns the engine. | [link](supervisor/README.md) |
+| `supervisor/` | Background daemon owning session lifecycle, scheduling, tray, stop shortcut, wallpaper. Config talks to it; it spawns the engine. | [link](supervisor/README.md) |
 | `shared/` | Library crate shared by all of the above: pack reading, `behaviour.json`, the Lua API (`lua/api.lua`), config, IPC, scheduling, wallpaper. | [link](shared/README.md) |
 | `converter/` | Converts Edgeware/Edgeware++ packs into `.lwpack` pieces. Used by the pack editor. | [link](converter/README.md) |
 | `docs/` | The website (<https://lewdware.net>), Astro + Starlight. Hosts the Lua API reference and version manifests. | [link](docs/README.md) |

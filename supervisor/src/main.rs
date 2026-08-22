@@ -9,7 +9,6 @@ mod daemon;
 mod engine;
 mod engine_link;
 mod ipc_server;
-mod panic_key;
 mod presence;
 mod residuals;
 mod schedule;
@@ -18,6 +17,7 @@ mod schedule_sim;
 mod session;
 mod shutdown;
 mod state;
+mod stop_key;
 mod tray;
 mod wallpaper;
 
@@ -49,7 +49,7 @@ pub enum Command {
         dev: bool,
     },
     Stop,
-    Panic,
+    StopImmediately,
     /// Not a client command: reads the residual log this machine wrote and reports whether the
     /// rate model matches what actually happened. See `residuals.rs`.
     DiagnoseSchedule {

@@ -1,7 +1,7 @@
 //! The supervisor's wallpaper safety net.
 //!
 //! The engine restores the wallpaper itself when an episode ends cleanly. This is the backstop for
-//! when it doesn't -- a crash, a kill, a panic-key exit -- so the user is never left staring at
+//! when it doesn't -- a crash, a kill, an immediate-stop exit -- so the user is never left staring at
 //! whatever the pack put on their desktop.
 //!
 //! Because the supervisor can itself be killed, the snapshot is written to disk rather than only

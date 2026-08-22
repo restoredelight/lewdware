@@ -16,7 +16,7 @@ pub struct ScheduleStatusDto {
     pub next_opportunity: Option<String>,
     pub budget_remaining: u32,
     pub budget_total: u32,
-    /// RFC3339, or `null`. Set while a post-session or panic cooldown is suppressing firing.
+    /// RFC3339, or `null`. Set while a post-session or explicit pause is suppressing firing.
     pub cooldown_until: Option<String>,
 }
 
@@ -98,7 +98,7 @@ pub async fn set_schedule_enabled(state: State<'_>, enabled: bool) -> Result<(),
     Ok(())
 }
 
-/// Ends a running pause (a panic cooldown, or one set from the tray) early. Best-effort by
+/// Ends a running schedule pause early. Best-effort by
 /// design: no resident supervisor means nothing is paused, so there is nothing to end -- and
 /// starting one just to tell it that would be absurd.
 #[tauri::command]

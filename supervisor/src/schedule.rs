@@ -395,8 +395,8 @@ impl ScheduleEngine {
         self.start_cooldown(now, self.config.cooldown_minutes);
     }
 
-    /// Panic's suppression window. Same mechanism as the post-session cooldown at a different
-    /// duration -- which is exactly why panic's scope is expressed as a duration.
+    /// Starts or extends the global scheduling pause. Used both for the configured post-session
+    /// gap and for an explicit pause chosen from the tray.
     pub fn start_cooldown(&mut self, now: DateTime<Local>, minutes: u32) {
         let until = now + ChronoDuration::minutes(i64::from(minutes));
         self.cooldown_until = Some(match self.cooldown_until {
@@ -1102,7 +1102,6 @@ mod tests {
             quiet_hours: Vec::new(),
             grace_notification: false,
             cooldown_minutes: 30,
-            panic_cooldown_minutes: 120,
         }
     }
 
@@ -1598,7 +1597,7 @@ mod tests {
     #[test]
     fn a_restart_restores_budgets_and_pauses() {
         // What a logout used to undo: budgets back to full ("three times a day" meaning three per
-        // login), and a panic's hold gone the moment the user came back.
+        // login), and an explicit pause gone the moment the user came back.
         let (config, id) = one_rule(3);
         let mut engine = test_engine(config.clone());
         assert!(run(&mut engine, dt(2026, 7, 13, 9, 0), 30, false).is_some());

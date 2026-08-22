@@ -9,7 +9,7 @@
 
 	const running = $derived(store.engineStatus.running);
 	const hasPack = $derived(!!store.config?.pack_path);
-	const panicKey = $derived(store.config ? formatKey(store.config.panic_button, '+') : null);
+	const stopKey = $derived(store.config ? formatKey(store.config.stop_button, '+') : null);
 	const packName = $derived(store.config?.pack_path?.split(/[\\/]/).filter(Boolean).at(-1) ?? null);
 	const modeName = $derived(
 		store.modeGroups.flatMap((group) => group.entries).find((mode) => store.isModeSelected(mode.id))
@@ -113,15 +113,15 @@
 		</button>
 	{/if}
 
-	{#if panicKey}
+	{#if stopKey}
 		<button
 			type="button"
 			class="group -mx-1 flex min-w-0 cursor-pointer flex-col gap-0.5 rounded-sm px-1 py-0.5 text-left"
-			title={`Change panic key, currently ${formatKey(store.config!.panic_button)}`}
+			title={`Change stop shortcut, currently ${formatKey(store.config!.stop_button)}`}
 			onclick={() => (store.activeTab = 'safety')}
 		>
-			<span class="text-muted text-[10px]">Panic key</span>
-			<span class="text-text truncate font-mono text-[11px]">{panicKey}</span>
+			<span class="text-muted text-[10px]">Stop shortcut</span>
+			<span class="text-text truncate font-mono text-[11px]">{stopKey}</span>
 		</button>
 	{/if}
 

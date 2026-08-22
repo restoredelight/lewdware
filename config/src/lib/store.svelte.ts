@@ -40,7 +40,7 @@ function defaultRule(): RuleDto {
 			frequency: { kind: 'per_day', count: 1 }
 		},
 		// No time limit by default. Lewdware is built to gradually take a machine over, so a session
-		// far more often ends with the user reaching for panic than with a clock running out -- and a
+		// far more often ends with the user using the stop shortcut than with a clock running out -- and a
 		// fixed length that is never reached is a promise the schedule keeps making and breaking.
 		length: { kind: 'until_stopped' },
 		overrides: { mode: null, pack_path: null }
@@ -256,9 +256,9 @@ class AppStore {
 		}
 	}
 
-	setPanicButton(key: Key) {
+	setStopButton(key: Key) {
 		if (!this.config) return;
-		this.config = { ...this.config, panic_button: key };
+		this.config = { ...this.config, stop_button: key };
 		this.saveConfig();
 	}
 
@@ -423,8 +423,7 @@ class AppStore {
 		this.saveSchedule();
 	}
 
-	// The scalar schedule settings (cooldown, panic cooldown) in one place, since
-	// each is a single number with identical save handling.
+	// Scalar schedule settings share the same save handling as rule edits.
 	setScheduleSettings(patch: Partial<ScheduleDto>) {
 		if (!this.config) return;
 		this.config = { ...this.config, schedule: { ...this.config.schedule, ...patch } };

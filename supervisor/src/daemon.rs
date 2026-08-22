@@ -21,7 +21,7 @@ pub fn run() -> Result<()> {
     // If a previous run died mid-episode it may have left a pack's wallpaper on the desktop.
     crate::wallpaper::recover_stranded();
 
-    // Loaded once, synchronously, before the tokio runtime exists -- both the panic key
+    // Loaded once, synchronously, before the tokio runtime exists -- both the stop shortcut
     // (unchanged) and the schedule engine (new) need their initial values before anything else
     // spins up.
     let config = shared::user_config::load_config().unwrap_or_else(|err| {
@@ -77,7 +77,7 @@ async fn run_services(
     config: AppConfig,
     tray: crate::tray::TrayUpdater,
 ) {
-    crate::panic_key::spawn_panic_thread(control_tx.clone(), config.panic_button);
+    crate::stop_key::spawn_stop_thread(control_tx.clone(), config.stop_button);
     // Before anything else can stop us: the schedule engine reads every gap in its own uptime as
     // evidence about the user, so a stop that arrives unannounced is a stop that gets misread.
     crate::shutdown::spawn(control_tx.clone());

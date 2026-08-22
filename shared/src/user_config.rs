@@ -47,7 +47,7 @@ pub struct AppConfig {
     /// follow the desktop's own setting. Same string-not-enum reasoning as `theme`.
     #[serde(default = "default_appearance")]
     pub appearance: String,
-    pub panic_button: Key,
+    pub stop_button: Key,
     pub disabled_monitors: Vec<String>,
     /// The sub-area of each monitor popups are confined to, keyed exactly like
     /// `disabled_monitors` (see `shared::monitor`) -- a monitor with no entry gets the whole
@@ -284,7 +284,7 @@ impl Default for AppConfig {
             experience_options: HashMap::new(),
             theme: default_theme(),
             appearance: default_appearance(),
-            panic_button: Key {
+            stop_button: Key {
                 name: "Escape".to_string(),
                 code: "Escape".to_string(),
                 modifiers: Modifiers {
@@ -440,7 +440,7 @@ mod tests {
         let json = serde_json::json!({
             "pack_path": null, "uploaded_modes": [], "mode": "Sandbox",
             "mode_options": [], "experience_options": [],
-            "panic_button": {
+            "stop_button": {
                 "name": "Escape", "code": "Escape",
                 "modifiers": { "alt": false, "ctrl": false, "shift": true, "meta": false }
             },
@@ -460,7 +460,7 @@ mod tests {
         let json = serde_json::json!({
             "pack_path": null, "uploaded_modes": [], "mode": "Sandbox",
             "mode_options": [], "experience_options": [],
-            "panic_button": {
+            "stop_button": {
                 "name": "Escape", "code": "Escape",
                 "modifiers": { "alt": false, "ctrl": false, "shift": true, "meta": false }
             },
@@ -498,11 +498,11 @@ mod tests {
     }
 
     #[test]
-    fn default_panic_button_is_shift_escape() {
+    fn default_stop_button_is_shift_escape() {
         let config = AppConfig::default();
-        assert_eq!(config.panic_button.code, "Escape");
-        assert!(config.panic_button.modifiers.shift);
-        assert!(!config.panic_button.modifiers.ctrl);
+        assert_eq!(config.stop_button.code, "Escape");
+        assert!(config.stop_button.modifiers.shift);
+        assert!(!config.stop_button.modifiers.ctrl);
     }
 
     #[test]
@@ -524,7 +524,7 @@ mod tests {
             "mode": "Sandbox",
             "mode_options": [],
             "experience_options": [],
-            "panic_button": {
+            "stop_button": {
                 "name": "Escape",
                 "code": "Escape",
                 "modifiers": { "alt": false, "ctrl": false, "shift": true, "meta": false }
@@ -550,7 +550,7 @@ mod wallpaper_config_tests {
     fn config_without_a_wallpaper_key_still_loads() {
         let json = r#"{
             "pack_path": null, "uploaded_modes": [], "mode": "Sandbox",
-            "mode_options": [], "panic_button": {"name":"Escape","code":"Escape",
+            "mode_options": [], "stop_button": {"name":"Escape","code":"Escape",
             "modifiers":{"alt":false,"ctrl":false,"shift":false,"meta":false}},
             "disabled_monitors": [],
             "capabilities": {"set_wallpaper": true, "open_links": true, "send_notifications": true},

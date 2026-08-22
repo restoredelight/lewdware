@@ -20,17 +20,6 @@
 	// Attached to the frequency input rather than set out as a panel: it explains one number, and
 	// only matters to someone looking at that number. Deliberately does not restate the randomness
 	// -- the timing section already says that, a few lines above.
-	// Panic's scope, as the one thing a user actually wants to say: "don't come back for...".
-	// Every scope option is a point on this axis, and the far end -- "until I turn it back on" --
-	// is the enable toggle at the top of this page, so only finite durations belong here.
-	const PANIC_COOLDOWNS = [
-		{ value: '0', label: 'Don’t pause' },
-		{ value: '30', label: '30 minutes' },
-		{ value: '120', label: '2 hours' },
-		{ value: '480', label: '8 hours' },
-		{ value: '1440', label: '24 hours' }
-	];
-
 	const RATE_EXPLANATION =
 		'Sometimes you will get fewer sessions than this - Lewdware only starts them while ' +
 		'you’re actually at your computer. It learns which hours you’re usually around, so this ' +
@@ -703,17 +692,18 @@
 			<section class="border-border flex flex-col gap-3 border-t pt-6">
 				<h2 class="ui-section-title">Pacing</h2>
 				<p class="text-muted text-xs">
-					How scheduled sessions space themselves out, and how long a panic holds them off.
+					How long Lewdware waits before another scheduled session may start.
 				</p>
 				<Card class="flex items-center gap-4 p-4">
 					<div class="min-w-0 flex-1">
-						<h3 class="text-text m-0 text-sm font-medium">Minimum gap between sessions</h3>
+						<h3 class="text-text m-0 text-sm font-medium">Gap before the next session</h3>
 						<p class="text-muted m-0 mt-1 text-xs">
-							Stops “3 times a day” from arriving as three in a row.
+							Follows every scheduled session, however it ends, and keeps “3 times a day” from
+							arriving as three in a row. Cancelling a grace notification starts the same gap.
 						</p>
 					</div>
 					<NumberField
-						label="Minimum gap between sessions"
+						label="Gap before the next session"
 						hideLabel
 						size="compact"
 						class="w-28"
@@ -725,26 +715,6 @@
 							if (minutes === null) return;
 							store.setScheduleSettings({ cooldown_minutes: Math.max(1, minutes) });
 						}}
-					/>
-				</Card>
-				<Card class="flex items-center gap-4 p-4">
-					<div class="min-w-0 flex-1">
-						<h3 class="text-text m-0 text-sm font-medium">Pause after a panic</h3>
-						<p class="text-muted m-0 mt-1 text-xs">
-							The panic key always stops the running session. This is how long it also stops
-							scheduled ones from starting again — press it with nothing running to pause
-							pre-emptively.
-						</p>
-					</div>
-					<Select
-						label="Pause after a panic"
-						hideLabel
-						size="compact"
-						class="w-40"
-						value={String(schedule.panic_cooldown_minutes)}
-						options={PANIC_COOLDOWNS}
-						onchange={(value) =>
-							store.setScheduleSettings({ panic_cooldown_minutes: Number(value) })}
 					/>
 				</Card>
 			</section>

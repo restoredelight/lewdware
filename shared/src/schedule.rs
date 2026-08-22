@@ -38,7 +38,6 @@ pub struct ScheduleConfig {
     pub quiet_hours: Vec<QuietHours>,
     pub grace_notification: bool,
     pub cooldown_minutes: u32,
-    pub panic_cooldown_minutes: u32,
 }
 
 impl Default for ScheduleConfig {
@@ -49,7 +48,6 @@ impl Default for ScheduleConfig {
             quiet_hours: Vec::new(),
             grace_notification: true,
             cooldown_minutes: 30,
-            panic_cooldown_minutes: 120,
         }
     }
 }

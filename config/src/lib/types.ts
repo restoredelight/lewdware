@@ -19,7 +19,7 @@ export interface ConfigDto {
 	theme: string;
 	/** The palette that look is drawn in: `auto`, `light` or `dark`. */
 	appearance: string;
-	panic_button: Key;
+	stop_button: Key;
 	disabled_monitors: string[];
 	/** Per-monitor popup areas, keyed by `MonitorDto.id`. A monitor with no entry gets the whole
 	 * screen. */
@@ -249,7 +249,6 @@ export interface ScheduleDto {
 	quiet_hours: QuietHoursDto[];
 	grace_notification: boolean;
 	cooldown_minutes: number;
-	panic_cooldown_minutes: number;
 }
 
 /** What the Scheduling tab may show. There is deliberately no firing time for a rate rule, and
@@ -263,7 +262,7 @@ export interface ScheduleStatusDto {
 	next_opportunity: string | null;
 	budget_remaining: number;
 	budget_total: number;
-	/** RFC3339, or null. Set while a post-session or panic cooldown is suppressing firing. */
+	/** RFC3339, or null. Set while a post-session or explicit pause is suppressing firing. */
 	cooldown_until: string | null;
 }
 

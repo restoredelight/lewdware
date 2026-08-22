@@ -1,9 +1,8 @@
 //! The schedule engine's state, kept across restarts.
 //!
 //! Everything here used to live only in memory, which meant a logout quietly undid it: budgets
-//! reset to a full allowance, so "three times a day" became three *per login*; and a panic's
-//! two-hour hold ended the moment the user logged back in, which is the opposite of what panic
-//! promises.
+//! reset to a full allowance, so "three times a day" became three *per login*; and an explicit
+//! schedule pause ended the moment the user logged back in.
 //!
 //! `last_tick` is here for a subtler reason. It is the only way to notice that time passed while
 //! the supervisor was *not running* -- and that gap is the presence signal: a machine that was off
@@ -61,7 +60,7 @@ pub struct PersistedState {
     /// expires on its own: a period key that no longer matches is reset rather than trusted.
     #[serde(default)]
     pub budgets: HashMap<Uuid, PersistedBudget>,
-    /// A pause still running. Restored so a panic outlives a logout.
+    /// A pause still running. Restored so it outlives a logout.
     #[serde(default)]
     pub cooldown_until: Option<DateTime<Local>>,
     /// When the engine last ticked, or when the previous run recorded its stop. The gap between

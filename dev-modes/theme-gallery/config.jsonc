@@ -35,7 +35,7 @@
     },
     "closeable": {
       "label": "Show close buttons",
-      "description": "Turn off to see each header without its buttons, as an undismissable popup does. The panic key still ends the session",
+      "description": "Turn off to see each header without its buttons, as an undismissable popup does. The stop shortcut still ends the session",
       "type": "boolean",
       "default": true
     }
