@@ -205,21 +205,23 @@
 		});
 	}
 
-	// A rule whose budget crowds the range it draws from. Distinct from `ruleWarning`: that one is
-	// about a rule that cannot fire at all, this is about one that fires *less often than it says*,
-	// which is the failure a user has no way of noticing on their own -- the whole promise of a rate
-	// rule is that they cannot predict it, so "that felt like fewer than three" is not evidence of
-	// anything. Said when the rule is written, since after that there is nothing to see.
+	// A rule whose budget has run out of room in the range it draws from. Distinct from
+	// `ruleWarning`: that one is about a rule that cannot fire at all, this is about one that fires
+	// *less often than it says*, which is the failure a user has no way of noticing on their own --
+	// the whole promise of a rate rule is that they cannot predict it, so "that felt like fewer than
+	// three" is not evidence of anything. Said when the rule is written, since after that there is
+	// nothing to see.
 	function crowdingNote(rule: RuleDto, crowding: CrowdingDto): string {
 		const asked = rule.trigger.kind === 'rate' ? frequencyWord(rule.trigger.frequency) : '';
-		const room = crowding.comfortable_count === 1 ? 'once' : `${crowding.comfortable_count} times`;
+		const times = (count: number) => (count === 1 ? 'once' : `${count} times`);
 		if (crowding.impossible) {
 			const needs = Math.round(crowding.required_minutes);
 			const has = Math.round(crowding.available_minutes);
-			return `${asked} doesn’t fit here: it needs ${needs} minutes of the ${has} this range has, once the gap between sessions is counted. There’s room for about ${room}.`;
+			return `${asked} doesn’t fit here: it needs ${needs} minutes of the ${has} this range has, once the gap between sessions is counted. There’s room for ${times(crowding.max_count)}.`;
 		}
-		const share = Math.round(crowding.occupancy * 100);
-		return `${asked} is a tight fit — it claims ${share}% of this range, so some days will deliver fewer. About ${room} sits comfortably.`;
+		// It fits, but only just. A panic holds Lewdware off for far longer than an ordinary session
+		// ending does, so the first one of the day is what breaks a range with no slack in it.
+		return `${asked} only just fits this range — one panic would hold sessions off long enough to lose one. ${times(crowding.comfortable_count)} leaves room for that.`;
 	}
 
 	// A rule that can never fire. Worth saying out loud rather than leaving the user to wonder why

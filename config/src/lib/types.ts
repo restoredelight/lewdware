@@ -252,20 +252,22 @@ export interface ScheduleDto {
 	panic_cooldown_minutes: number;
 }
 
-/** A rate rule asking for more of its window than the rate model can comfortably place in it.
+/** A rate rule with no room left in the window it draws from.
  *
- * Not "does the budget fit": eight sessions a day in an eight-hour range does fit -- it needs 370
- * of 480 minutes -- and delivers its whole budget on about 8% of days. The schedule is not choosing
- * an arrangement, it is scattering a fixed quota at random and refusing to place two within a
- * cooldown of each other, so what matters is the share of the window claimed. */
+ * Two different problems, said differently in the UI. `impossible` is arithmetic: the budget does
+ * not fit and never will. Otherwise it fits, but with so little to spare that one panicked session
+ * breaks it -- a panic trades the ordinary cooldown for the much longer panic one, so it costs the
+ * window more than a completed session, not less. */
 export interface CrowdingDto {
 	rule_id: string;
-	/** `required / available`. Above 1 nothing can fit; the warning starts well below that. */
+	/** `required / available`. Above 1 nothing can fit. */
 	occupancy: number;
-	/** No arrangement fits at all, rather than merely an uncomfortable one. */
+	/** No arrangement fits at all, rather than merely one with no slack. */
 	impossible: boolean;
-	/** The largest count that would sit comfortably -- what to suggest instead. */
+	/** The largest count that fits with room for one panic -- what to suggest instead. */
 	comfortable_count: number;
+	/** The largest count that fits the window at all. */
+	max_count: number;
 	required_minutes: number;
 	available_minutes: number;
 }

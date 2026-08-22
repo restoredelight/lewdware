@@ -603,17 +603,24 @@ fn a_comfortable_rule_is_not_reported() {
     assert!(crate::commands::schedule::schedule_crowding(schedule).is_empty());
 }
 
-/// The shape the delivery grid measured at 8%: it *fits* -- 370 minutes of 480 -- and is still
-/// hopeless, so a check that only asked whether it fitted would say nothing.
+/// Eight a day needs 370 of an eight-hour range's 480 minutes, and the 110 left over covers one
+/// panic's surcharge. It delivers 98.5% of the time, so saying anything would be crying wolf.
 #[test]
-fn a_budget_that_fits_but_crowds_is_reported_without_calling_it_impossible() {
+fn a_budget_with_room_for_one_panic_is_not_reported() {
     let schedule = schedule_dto(vec![rate_rule_dto((9, 0), (17, 0), 8, 20)], 30);
+    assert!(crate::commands::schedule::schedule_crowding(schedule).is_empty());
+}
+
+/// Nine a day still fits, with an hour to spare -- but a panicked session costs ninety minutes more
+/// than a completed one, so the first panic of the day breaks it.
+#[test]
+fn a_budget_with_no_slack_for_a_panic_is_reported_without_calling_it_impossible() {
+    let schedule = schedule_dto(vec![rate_rule_dto((9, 0), (17, 0), 9, 20)], 30);
     let reported = crate::commands::schedule::schedule_crowding(schedule);
 
     assert_eq!(reported.len(), 1);
     assert!(!reported[0].impossible);
-    assert!((reported[0].occupancy - 370.0 / 480.0).abs() < 1e-9);
-    assert!(reported[0].comfortable_count < 8);
+    assert_eq!(reported[0].comfortable_count, 8);
 }
 
 #[test]
@@ -626,11 +633,13 @@ fn a_budget_larger_than_its_window_is_reported_as_impossible() {
     // 6 * 20 + 5 * 30 = 270 minutes wanted, and the range holds 120.
     assert_eq!(reported[0].required_minutes, 270.0);
     assert_eq!(reported[0].available_minutes, 120.0);
+    // Three fit exactly: 3 * 20 + 2 * 30 = 120, the whole range.
+    assert_eq!(reported[0].max_count, 3);
 }
 
-/// One entry per crowded rule, so the warning can attach to the rule the user would edit.
+/// One entry per rule in trouble, so the warning can attach to the rule the user would edit.
 #[test]
-fn each_crowded_rule_is_reported_against_its_own_id() {
+fn each_rule_in_trouble_is_reported_against_its_own_id() {
     let tight = rate_rule_dto((9, 0), (11, 0), 6, 20);
     let roomy = rate_rule_dto((9, 0), (17, 0), 2, 20);
     let tight_id = tight.id;

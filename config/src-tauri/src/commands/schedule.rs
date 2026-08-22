@@ -118,28 +118,29 @@ pub async fn reload_supervisor_schedule(state: State<'_>) -> Result<(), String> 
     }
 }
 
-/// A rate rule asking for more of its window than the rate model can comfortably place in it.
+/// A rate rule with no room left in the window it draws from.
 ///
-/// The measure is deliberately not "does the budget fit". Eight sessions a day in an eight-hour
-/// range fits -- it needs 370 of 480 minutes -- and delivers its whole budget on about 8% of days,
-/// because the schedule is not choosing an arrangement, it is scattering a fixed quota at random
-/// and refusing to place two within a cooldown of each other. See `shared::schedule::Crowding`.
+/// Two quite different problems, and the UI says them differently. `impossible` is arithmetic: the
+/// budget does not fit and never will. Otherwise it fits, but with so little to spare that a single
+/// panicked session breaks it -- a panic trades the ordinary cooldown for the panic one, so it
+/// costs the window more than a completed session, not less. See `shared::schedule::Crowding`.
 #[derive(Serialize, Clone)]
 pub struct CrowdingDto {
     pub rule_id: Uuid,
     /// Share of the window the budget claims, `required / available`.
     pub occupancy: f64,
-    /// No arrangement fits at all, rather than merely an uncomfortable one. Worth saying
-    /// differently in the UI: one is a warning, the other is arithmetic.
+    /// No arrangement fits at all, rather than merely one with no slack.
     pub impossible: bool,
-    /// The largest count that would sit comfortably in this window -- what to suggest in place of
-    /// the number the user typed.
+    /// The largest count that fits with room for one panic -- what to suggest in place of the
+    /// number the user typed.
     pub comfortable_count: u32,
+    /// The largest count that fits the window at all.
+    pub max_count: u32,
     pub required_minutes: f64,
     pub available_minutes: f64,
 }
 
-/// Which rules are over-committed, given a schedule the user is *currently editing*.
+/// Which rules have run out of room, given a schedule the user is *currently editing*.
 ///
 /// Takes the schedule rather than reading the saved one on purpose: the point of the check is to
 /// answer while the rule is being written, not after it has been saved and quietly under-delivered
@@ -149,12 +150,13 @@ pub fn schedule_crowding(schedule: ScheduleDto) -> Vec<CrowdingDto> {
     let config: shared::schedule::ScheduleConfig = schedule.into();
     shared::schedule::rule_crowding(&config, Local::now())
         .into_iter()
-        .filter(|crowding| crowding.occupancy() >= shared::schedule::CROWDED_OCCUPANCY)
+        .filter(shared::schedule::Crowding::needs_warning)
         .map(|crowding| CrowdingDto {
             rule_id: crowding.rule_id,
             occupancy: crowding.occupancy(),
             impossible: crowding.is_impossible(),
-            comfortable_count: crowding.count_within(shared::schedule::CROWDED_OCCUPANCY),
+            comfortable_count: crowding.comfortable_count(),
+            max_count: crowding.max_count(),
             required_minutes: crowding.required_minutes,
             available_minutes: crowding.available_minutes,
         })

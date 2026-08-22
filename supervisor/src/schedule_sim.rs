@@ -311,28 +311,32 @@ fn delivery_grid() {
 // by how much, and a change that quietly makes it worse cannot pass.
 //
 // Measured at 4000 trials, release build (`cargo test --release ... delivery_grid`). The trailing
-// columns are the same run with the dead-time reserve, and then the dispersion correction, bypassed
-// -- kept because they are the only honest way to say what each of them bought:
+// column is the same run with the intensity cap still in place, which is what these shapes used to
+// deliver:
 //
-//                                              P(all)  E[count]  pos | no shade | no reserve
-//     8h, 3/day, 20m sessions                   0.909    2.909  0.488 |   0.909  |   0.831
-//     8h, 3/day, no session time                0.919    2.916  0.490 |   0.919  |   0.885
-//     8h, 1/day, 20m sessions                   0.980    0.980  0.495 |   0.980  |   0.980
-//     8h, 4/day, 20m sessions                   0.856    3.850  0.484 |   0.856  |   0.665
-//     12h, 3/day, 20m sessions                  0.945    2.945  0.493 |   0.945  |   0.908
-//     4h, 3/day, 20m sessions                   0.730    2.709  0.468 |   0.730  |   0.522
-//     8h, 6/day, 20m sessions                   0.651    5.584  0.478 |   0.651  |   0.228
-//     8h, 8/day, 20m sessions                   0.080    6.213  0.487 |   0.080  |   0.008
-//     3h, 3/day, 20m sessions                   0.478    2.402  0.462 |   0.478  |   0.302
-//     half present, cold start                  0.880    2.868  0.421 |   0.827  |   0.740
-//     half present, profile sure of 1.00        0.541    2.461  0.566 |   0.540  |   0.404
-//     half present, profile sure of 0.70        0.763    2.732  0.500 |   0.707  |   0.576
-//     half present, profile sure of 0.50        0.877    2.865  0.426 |   0.827  |   0.739
+//                                              P(all)  E[count]  pos | with the cap
+//     8h, 3/day, 20m sessions                   0.999    2.999  0.502 |    0.909
+//     8h, 3/day, no session time                0.999    2.999  0.503 |    0.919
+//     8h, 1/day, 20m sessions                   1.000    1.000  0.505 |    0.980
+//     8h, 4/day, 20m sessions                   0.996    3.996  0.500 |    0.856
+//     12h, 3/day, 20m sessions                  0.999    2.999  0.501 |    0.945
+//     4h, 3/day, 20m sessions                   0.994    2.994  0.502 |    0.730
+//     8h, 6/day, 20m sessions                   0.995    5.995  0.500 |    0.651
+//     8h, 8/day, 20m sessions                   0.986    7.986  0.498 |    0.080
+//     3h, 3/day, 20m sessions                   0.992    2.991  0.500 |    0.478
+//     half present, cold start                  0.999    2.999  0.431 |    0.880
+//     half present, profile sure of 1.00        0.921    2.921  0.623 |    0.541
+//     half present, profile sure of 0.70        0.992    2.992  0.531 |    0.763
+//     half present, profile sure of 0.50        0.999    2.999  0.437 |    0.877
 //
-// Two sanity checks fall out of the shape of that table. A single daily firing is untouched by the
-// reserve, because with one left there is nothing after it to make room for. And every row with a
-// certain profile is untouched by the dispersion correction, because both of its variance terms
-// vanish at `p = 1` -- it only ever charges for uncertainty that is really there.
+// The position column is the one worth reading twice. Removing the cap was supposed to risk
+// bunching sessions at the end of a range; instead every certain-profile row moved *toward* 0.500.
+// The cap had been truncating the late-window intensity, which suppressed the firings that should
+// have landed late and skewed the survivors early. It was causing the front-loading it was there to
+// prevent.
+//
+// What is left of under-delivery is almost entirely about presence: the rows that still fall short
+// are the ones where the user is away half the time and the profile has not learned it.
 //
 // Raise them as the model improves. A failure here is either a regression or a floor that has
 // earned an increase -- run `delivery_grid` to see which.
@@ -341,13 +345,13 @@ fn delivery_grid() {
 fn the_default_shape_delivers_its_whole_budget_most_days() {
     let outcome = simulate(&IDEAL[0], TRIALS);
     assert!(
-        outcome.all > 0.84,
-        "8h/3-a-day/20m delivered all three on {:.1}% of days (measured 90.9%)",
+        outcome.all > 0.98,
+        "8h/3-a-day/20m delivered all three on {:.1}% of days (measured 99.9%)",
         outcome.all * 100.0
     );
     assert!(
-        outcome.mean > 2.85,
-        "... averaging {:.3} sessions (measured 2.909, promised 3)",
+        outcome.mean > 2.97,
+        "... averaging {:.3} sessions (measured 2.999, promised 3)",
         outcome.mean
     );
 }
@@ -355,16 +359,23 @@ fn the_default_shape_delivers_its_whole_budget_most_days() {
 /// A single firing over a long window is the case with the most room to succeed, and the one the
 /// `Rng` trait's doc comment quotes a miss rate for.
 ///
-/// It is also the one case with a closed form. Below the cap the intensity is `1 / (T - t)`, so
-/// survival to the point where the cap takes over is `c / W`, and the capped tail contributes
-/// `exp(-1)` on top: P(miss) = `(c / W) / e`, or 2.3% for a 30-minute cooldown across eight hours.
-/// The engine measures 2.0%, which is the discrete tick against the continuous formula.
+/// It is also the one case with a closed form, and the form changed when the intensity cap went.
+/// The intensity is `1 / (T - t)` throughout now, so the compensator accumulated across a window of
+/// `W` present-minutes is the harmonic sum `H(W-1) + 1` -- the `+1` being the closing tick, where
+/// the denominator's one-minute floor is all that stops it diverging. Survival is its exponential:
+///
+/// ```text
+///     P(miss) = exp(-(H(W-1) + 1)) ~ e^-(1 + gamma) / W ~ 0.21 / W
+/// ```
+///
+/// About one run in 2300 across eight hours, against one in 43 while the cap was in place: the cap
+/// was very nearly the *only* reason a single daily firing was ever missed.
 #[test]
 fn a_single_daily_firing_almost_always_lands() {
     let outcome = simulate(&IDEAL[2], TRIALS);
     assert!(
-        outcome.all > 0.94,
-        "8h/1-a-day delivered on {:.1}% of days (measured 98.0%)",
+        outcome.all > 0.99,
+        "8h/1-a-day delivered on {:.1}% of days (measured 100.0%)",
         outcome.all * 100.0
     );
 }
@@ -375,19 +386,20 @@ fn a_single_daily_firing_almost_always_lands() {
 #[test]
 fn delivery_degrades_as_the_budget_crowds_the_window() {
     let three = simulate(&IDEAL[0], TRIALS);
-    let four = simulate(&IDEAL[3], TRIALS);
-    let six = simulate(&IDEAL[6], TRIALS);
+    let eight = simulate(&IDEAL[7], TRIALS);
     assert!(
-        six.all < four.all && four.all < three.all,
-        "delivery should fall as the budget crowds the window: 3 -> {:.3}, 4 -> {:.3}, 6 -> {:.3}",
-        three.all,
-        four.all,
-        six.all
+        eight.all < three.all,
+        "eight a day ({:.3}) should still be harder than three ({:.3})",
+        eight.all,
+        three.all
     );
+    // Eight a day claims 370 of an eight-hour range's 480 minutes and is still delivered almost
+    // every day -- which is why the config app's warning is about running out of *room*, not about
+    // crowding: below capacity the schedule simply packs the window.
     assert!(
-        four.all > 0.78,
-        "8h/4-a-day delivered all four on {:.1}% of days (measured 85.6%)",
-        four.all * 100.0
+        eight.all > 0.95,
+        "8h/8-a-day delivered all eight on {:.1}% of days (measured 98.6%)",
+        eight.all * 100.0
     );
 }
 
@@ -396,17 +408,22 @@ fn delivery_degrades_as_the_budget_crowds_the_window() {
 #[test]
 fn a_wider_window_delivers_better_than_a_narrow_one() {
     let wide = simulate(&IDEAL[4], TRIALS);
-    let narrow = simulate(&IDEAL[5], TRIALS);
+    let narrow = simulate(&IDEAL[8], TRIALS);
     assert!(
-        wide.all > narrow.all,
-        "12h ({:.3}) should beat 4h ({:.3})",
+        wide.all >= narrow.all,
+        "12h ({:.3}) should not do worse than 3h ({:.3})",
         wide.all,
         narrow.all
     );
     assert!(
-        wide.all > 0.89,
-        "12h/3-a-day delivered {:.3} (measured 0.945)",
+        wide.all > 0.98,
+        "12h/3-a-day delivered {:.3} (measured 0.999)",
         wide.all
+    );
+    assert!(
+        narrow.all > 0.96,
+        "3h/3-a-day delivered {:.3} (measured 0.992)",
+        narrow.all
     );
 }
 
@@ -417,10 +434,10 @@ fn a_wider_window_delivers_better_than_a_narrow_one() {
 fn a_wrong_presence_profile_costs_delivery() {
     let cold = simulate(&PROFILE_ERROR[1], TRIALS);
     let converged = simulate(&PROFILE_ERROR[3], TRIALS);
-    // Measured: 0.877 against 0.541, so believing the wrong thing confidently costs about 34
-    // points of delivery. Being wrong is expensive; the next test is about not having to be.
+    // Measured: 0.999 against 0.921. Presence is now nearly the whole of what is left of
+    // under-delivery, so this margin is much smaller than it was -- but it is the same effect.
     assert!(
-        converged.all > cold.all + 0.20,
+        converged.all > cold.all + 0.03,
         "a converged profile ({:.3}) should beat a confidently wrong one ({:.3}) by a wide margin",
         converged.all,
         cold.all
@@ -431,20 +448,19 @@ fn a_wrong_presence_profile_costs_delivery() {
 ///
 /// Six sessions and their cooldowns need five of an eight-hour window, so almost every minute the
 /// denominator over-counts is a minute the schedule has already spent. Without the reserve this
-/// shape delivers its whole budget on 23% of days; with it, on 65%. If this regresses toward the
-/// former, the denominator has gone back to counting time the schedule cannot use.
+/// shape delivered its whole budget on 23% of days. If this regresses, the denominator has gone
+/// back to counting time the schedule cannot use.
 #[test]
 fn the_reserve_carries_a_budget_that_crowds_its_window() {
     let outcome = simulate(&IDEAL[6], TRIALS);
     assert!(
-        outcome.all > 0.56,
-        "8h/6-a-day delivered all six on {:.1}% of days (measured 65.1%, 22.8% without the \
-         reserve)",
+        outcome.all > 0.96,
+        "8h/6-a-day delivered all six on {:.1}% of days (measured 99.5%)",
         outcome.all * 100.0
     );
     assert!(
-        outcome.mean > 5.4,
-        "... averaging {:.3} sessions (measured 5.584, 4.808 without)",
+        outcome.mean > 5.9,
+        "... averaging {:.3} sessions (measured 5.995)",
         outcome.mean
     );
 }
@@ -457,24 +473,25 @@ fn the_reserve_carries_a_budget_that_crowds_its_window() {
 /// that says whether the sessions are still unpredictable or merely front-loaded -- and it is the
 /// one that would catch a future tuning change buying delivery it has not earned.
 ///
-/// The measured values sit a little under 0.5 even with a certain profile, which is the endgame
-/// mechanisms doing their job: the reserve and the intensity cap both bite hardest at the end of a
-/// window, and neither can move a firing later.
+/// With a profile that is right, the measured value is 0.502 -- uniform to within noise, which is
+/// what a fixed quota scattered at random is supposed to look like. It only became that once the
+/// intensity cap was removed: the cap truncated the late-window intensity, suppressing the firings
+/// that should have landed late and pulling the average down to 0.488.
 #[test]
 fn firings_stay_spread_across_their_window_rather_than_bunching_early() {
     let certain = simulate(&IDEAL[0], TRIALS);
     assert!(
-        (0.44..0.56).contains(&certain.position),
-        "8h/3-a-day fired {:.3} of the way through its window on average (measured 0.488)",
+        (0.46..0.54).contains(&certain.position),
+        "8h/3-a-day fired {:.3} of the way through its window on average (measured 0.502)",
         certain.position
     );
 
     // An uncertain profile is deliberately shaded toward firing, so this one sits earlier -- but
-    // the whole correction is worth about six points of position, not thirty.
+    // the whole correction is worth a few points of position, not thirty.
     let uncertain = simulate(&PROFILE_ERROR[3], TRIALS);
     assert!(
         uncertain.position > 0.38,
-        "a half-present day fired {:.3} of the way through its window (measured 0.426)",
+        "a half-present day fired {:.3} of the way through its window (measured 0.437)",
         uncertain.position
     );
 }
@@ -494,8 +511,8 @@ fn a_cold_start_now_performs_almost_like_a_converged_profile() {
     let cold = simulate(&PROFILE_ERROR[0], TRIALS);
     let converged = simulate(&PROFILE_ERROR[3], TRIALS);
     assert!(
-        cold.all > 0.81,
-        "a cold start delivered all three on {:.1}% of days (measured 88.0%)",
+        cold.all > 0.98,
+        "a cold start delivered all three on {:.1}% of days (measured 99.9%)",
         cold.all * 100.0
     );
     assert!(
@@ -514,16 +531,17 @@ fn a_cold_start_now_performs_almost_like_a_converged_profile() {
 /// Only the minutes around each range are ticked, and the jump between days is a real gap the
 /// engine classifies as a suspend -- which is what a machine that sleeps overnight looks like, and
 /// what makes the budget roll over the way it does in the field.
-fn residual_run(path: &std::path::Path, days: i64, seed: u64) -> u32 {
+fn residual_run(path: &std::path::Path, days: i64, seed: u64, presence: f64) -> u32 {
     let scenario = Scenario {
         cooldown: 30,
+        presence,
         ..Scenario::plain("residuals", 1, 1, 10)
     };
     let mut engine = ScheduleEngine::with_parts(
         config_for(&scenario),
         Box::new(RandomPresence {
             rng: SplitMix64::seeded(seed ^ 0x2545_F491_4F6C_DD1D),
-            probability: 1.0,
+            probability: presence,
         }),
         Box::new(SeededRng(SplitMix64::seeded(seed))),
     );
@@ -535,9 +553,14 @@ fn residual_run(path: &std::path::Path, days: i64, seed: u64) -> u32 {
     for day in 0..days {
         // 08:00-09:00 is the range; the first tick of each day is the one that carries the
         // overnight gap, so start a couple of minutes early and let it be spent outside the window.
+        //
+        // Ticking well past the range is not padding. A session drawn in its last minute runs on
+        // past the close and takes its cooldown with it, so a day cut off at 09:00 would carry a
+        // live session into the next one and suppress its opening -- an artefact of the harness
+        // rather than of the schedule, and one that quietly loses days from the accounting.
         let open =
             Local.with_ymd_and_hms(2026, 8, 3, 7, 58, 0).unwrap() + ChronoDuration::days(day);
-        for minute in 0..=64 {
+        for minute in 0..=110 {
             let now = open + ChronoDuration::minutes(minute);
             let evaluation = engine.tick(now, session_running);
             if evaluation.stop.is_some() && session_running {
@@ -574,7 +597,7 @@ fn scratch_path(name: &str) -> std::path::PathBuf {
 #[test]
 fn the_compensator_accounts_for_the_firings_it_produced() {
     let path = scratch_path("compensator");
-    let delivered = residual_run(&path, 120, 0xC0FF_EE12_3456_789A);
+    let delivered = residual_run(&path, 120, 0xC0FF_EE12_3456_789A, 1.0);
 
     let records = crate::residuals::read(&path).expect("log is readable");
     let report = crate::residuals::Report::build(&records);
@@ -594,14 +617,19 @@ fn the_compensator_accounts_for_the_firings_it_produced() {
     );
 }
 
-/// A one-per-day budget over a one-hour range misses often enough to exercise the case the
-/// interarrival residuals cannot see. Both halves of the diagnostic are asserted here: the
-/// censored intervals are counted and kept out of the `Exp(1)` sample, and the shortfall they
-/// represent is the same shortfall the delivery count shows.
+/// A user who is rarely at the desk misses often enough to exercise the case the interarrival
+/// residuals cannot see. Both halves of the diagnostic are asserted here: the censored intervals
+/// are counted and kept out of the `Exp(1)` sample, and the shortfall they represent is the same
+/// shortfall the delivery count shows.
+///
+/// Absence is what drives this now. It used to be the intensity cap, which left budget unspent by
+/// design; with the cap gone, a range that closes still owing a session is a range the user was
+/// hardly present for -- which is the honest reason to under-deliver and the one the profile
+/// exists to anticipate.
 #[test]
 fn a_period_that_ends_owing_a_firing_is_recorded_as_censored() {
     let path = scratch_path("censored");
-    let delivered = residual_run(&path, 120, 0x1234_5678_9ABC_DEF0);
+    let delivered = residual_run(&path, 120, 0x1234_5678_9ABC_DEF0, 0.25);
 
     let records = crate::residuals::read(&path).expect("log is readable");
     let report = crate::residuals::Report::build(&records);
@@ -609,7 +637,7 @@ fn a_period_that_ends_owing_a_firing_is_recorded_as_censored() {
 
     assert!(
         report.censored > 0,
-        "a 30-minute cooldown across a one-hour range should miss sometimes"
+        "a user present a quarter of the time should miss sometimes"
     );
     // The two ways of counting the same shortfall have to agree. One interval short of the day
     // count, because the final day's is still open: an interval is written when it *ends*, and
@@ -621,10 +649,4 @@ fn a_period_that_ends_owing_a_firing_is_recorded_as_censored() {
     );
     assert_eq!(report.fired, delivered as usize);
     assert_eq!(report.residuals.len(), report.fired);
-
-    // ... and the cap is what does the missing, so it must have been binding some of the time.
-    assert!(
-        report.capped_fraction().is_some_and(|f| f > 0.0),
-        "the cap never bound, so something other than the cap caused the misses"
-    );
 }

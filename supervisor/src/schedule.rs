@@ -27,9 +27,10 @@ use crate::state::{self, LastStop, PersistedBudget, PersistedState};
 /// integrated rather than waited out, so unlike v1 there is no single "wake me when it starts".
 ///
 /// `fire_probability` is exact for the conditional intensity frozen within one tick. Recomputing
-/// that intensity after each tick makes this cadence a small approximation choice; one minute
-/// keeps the error small, and the cooldown-derived cap takes over where the ideal intensity would
-/// otherwise diverge near a range's end.
+/// that intensity after each tick makes this cadence a small approximation choice; one minute keeps
+/// the error small. The tick is also what bounds the endgame: the intensity is left free to diverge
+/// as a range closes, and a one-minute step against a denominator floored at one minute makes the
+/// last tick worth `remaining` firings per minute rather than an infinity.
 const TICK_SECONDS: i64 = 60;
 
 /// Presence is a sampled signal. Even while every rule is shut, wake this often so one reading
@@ -64,9 +65,9 @@ impl PresenceSource for AssumePresent {
 
 /// The coin the hazard is compared against, injectable so the engine is deterministic under test.
 ///
-/// Worth the indirection: the capped fixed-quota process deliberately retains a non-zero chance of
-/// under-delivery. Any test that waits for a real draw would therefore be flaky at exactly the rate
-/// that hides real regressions.
+/// Worth the indirection: a fixed-quota process still has a non-zero chance of under-delivering --
+/// a range can close on a user who was hardly there -- so any test that waits for a real draw would
+/// be flaky at exactly the rate that hides real regressions.
 pub trait Rng: Send {
     /// Uniform in `[0, 1)`.
     fn next_f64(&mut self) -> f64;
@@ -871,8 +872,7 @@ impl ScheduleEngine {
         let usable = (schedule::usable_present_minutes(&remaining, &self.profile)
             - self.reserved_minutes(rule, remaining_count, &remaining, now, expected))
         .max(0.0);
-        let hazard =
-            schedule::hazard_per_minute(remaining_count, usable, self.config.cooldown_minutes);
+        let hazard = schedule::hazard_per_minute(remaining_count, usable);
 
         // The compensator is the integral of exactly this, over exactly the minutes it applied to.
         // Every early return above is a stretch of zero intensity -- outside the range, budget
@@ -880,12 +880,10 @@ impl ScheduleEngine {
         // total the process's own clock rather than wall time. Suppressed ticks (a live session, a
         // cooldown) never reach here at all, for the same reason.
         if self.residuals.enabled() {
-            let capped =
-                schedule::hazard_is_capped(remaining_count, expected, self.config.cooldown_minutes);
             self.accumulators
                 .entry(rule.id)
                 .or_insert_with(|| Accumulator::starting_at(elapsed_from))
-                .credit(hazard, inside, capped);
+                .credit(hazard, inside);
         }
 
         hazard * inside
@@ -1221,8 +1219,8 @@ mod tests {
     #[test]
     fn available_ticks_can_spend_the_quota_but_never_more() {
         let (mut config, id) = one_rule(3);
-        // Keep the intensity cap out of the way for this test. AlwaysFires then reveals the
-        // fixed-quota state transition directly: 3 -> 2 -> 1 -> 0.
+        // A one-minute cooldown keeps the dead-time reserve small, so the denominator stays wide
+        // and AlwaysFires reveals the fixed-quota state transition directly: 3 -> 2 -> 1 -> 0.
         config.cooldown_minutes = 1;
         let mut engine = test_engine(config);
         engine.tick(dt(2026, 7, 13, 9, 0), false);
@@ -1243,32 +1241,34 @@ mod tests {
         );
     }
 
+    /// The inverse of the test this replaces, and the whole point of dropping the cap.
+    ///
+    /// A one-firing rule over a five-minute range used to close with its budget unspent against a
+    /// draw of 0.05, because the cap held every tick at `1 - e^(-1/30)`, about 0.033. Now the
+    /// shrinking denominator does what it is there for: by the closing edge a tick is worth the
+    /// whole remaining quota, so the firing lands instead of being forfeited.
     #[test]
-    fn the_intensity_cap_can_deliberately_leave_budget_unspent() {
+    fn a_closing_range_raises_the_intensity_until_the_budget_is_placed() {
         let rule = rate_rule((9, 0), (9, 5), 1);
         let id = rule.id;
         let mut engine = ScheduleEngine::with_parts(
             config(vec![rule]),
             Box::new(AssumePresent),
-            // With a 30-minute cap, every one-minute tick has P(fire) <= 1-e^(-1/30), about
-            // 0.0328. A draw of 0.05 therefore misses even at the closing edge. Without the cap,
-            // the shrinking-denominator intensity would rise enough to accept it.
             Box::new(FixedDraw(0.05)),
         );
 
         engine.tick(dt(2026, 7, 13, 9, 0), false);
-        for minute in 1..=5 {
-            assert!(
-                engine
-                    .tick(dt(2026, 7, 13, 9, minute), false)
-                    .start
-                    .is_none()
-            );
-        }
+        let fired = (1..=5).any(|minute| {
+            engine
+                .tick(dt(2026, 7, 13, 9, minute), false)
+                .start
+                .is_some()
+        });
 
+        assert!(fired, "the range closed still owing its only session");
         assert_eq!(
             engine.budgets.get(&id).map(|budget| budget.remaining),
-            Some(1)
+            Some(0)
         );
     }
 
@@ -1328,11 +1328,10 @@ mod tests {
         // Tier 0 in its minimum form, and the anti-catch-up guarantee: a long gap between ticks is
         // the machine having been asleep, not hours of opportunity to integrate.
         //
-        // The draw of 0.5 is the threshold that separates the two behaviours. Clamped, the tick
-        // credits ~2 minutes against a hazard capped at 1/30 per minute, so P(fire) ~ 3% and 0.5
-        // does not clear it. Unclamped it would credit the full 55 minutes, P(fire) ~ 84%, and the
-        // session would start the instant the lid opened -- the one behaviour the rate model
-        // exists to avoid.
+        // A gap this long is read as a suspend, which credits no opportunity at all, so the draw
+        // never happens. Were the gap credited instead, 55 minutes would be integrated in one tick
+        // and the session would start the instant the lid opened -- the one behaviour the rate
+        // model exists to avoid.
         let (config, _) = one_rule(1);
         let mut engine =
             ScheduleEngine::with_parts(config, Box::new(AssumePresent), Box::new(FixedDraw(0.5)));

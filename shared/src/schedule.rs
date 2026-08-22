@@ -1,11 +1,15 @@
 //! Scheduling vocabulary and pure calculations.
 //!
-//! A rate rule is a fixed-quota point process, not an ordinary Poisson process. Ignoring the cap
-//! and tick discretisation, `remaining / expected_remaining_time` is the conditional hazard of the
-//! next of `remaining` uniformly distributed points. Spending one budget item after a firing gives
-//! the subsequent order statistics, so the budget is a hard upper bound rather than merely an
-//! expected count. The cooldown-derived cap deliberately breaks exact quota completion near the
-//! end of a range: under-delivery is preferable to cramming the remaining sessions together.
+//! A rate rule is a fixed-quota point process, not an ordinary Poisson process. Ignoring tick
+//! discretisation, `remaining / expected_remaining_time` is the conditional hazard of the next of
+//! `remaining` uniformly distributed points. Spending one budget item after a firing gives the
+//! subsequent order statistics, so the budget is a hard upper bound rather than merely an expected
+//! count.
+//!
+//! The intensity is deliberately left to diverge as a range closes, because that divergence is what
+//! places the last of the quota. Spacing is not its job: the cooldown enforces the minimum gap
+//! between sessions exactly, as a hard suppression the intensity cannot argue with, so a second,
+//! softer version of the same constraint here would only cost delivery.
 
 use std::path::PathBuf;
 
@@ -993,28 +997,35 @@ pub fn required_minutes(count: u32, session_minutes: f64, cooldown_minutes: u32)
     f64::from(count) * session_minutes + f64::from(count - 1) * f64::from(cooldown_minutes)
 }
 
-/// How much of its window a rate rule's budget is asking for.
+/// How much of its window a rate rule's budget is asking for, and whether it has any slack left.
 ///
-/// The obvious check -- does the budget *fit* -- turns out to be far too permissive. Eight sessions
-/// a day in an eight-hour range needs 370 of its 480 minutes and so fits comfortably, yet the
-/// delivery grid puts it at 8%. Fitting is a statement that some valid arrangement exists; the
-/// schedule is not choosing an arrangement, it is scattering a fixed quota at random and refusing
-/// to place two within a cooldown of each other. Once the exclusion zones cover much of the window,
-/// almost no random scatter avoids them, and the budget goes undelivered while every minute of it
-/// was theoretically available.
-///
-/// So what matters is the ratio, and it tracks the measured delivery rate closely:
+/// The relationship between the two is a cliff rather than a slope. With the intensity free to rise
+/// as a range closes, the schedule packs a window right up to its physical capacity and then stops
+/// dead:
 ///
 /// ```text
-///     rule          occupancy   delivered
-///     12h, 3/day        0.167       0.945
-///     8h,  3/day        0.250       0.909
-///     8h,  4/day        0.354       0.856
-///     4h,  3/day        0.500       0.730
-///     8h,  6/day        0.562       0.651
-///     3h,  3/day        0.667       0.478
-///     8h,  8/day        0.771       0.080
+///     8h range      occupancy   delivered   E[count]
+///     6 a day           0.562       0.996      5.996
+///     8 a day           0.771       0.985      7.985
+///     9 a day           0.875       0.977      8.976
+///    10 a day           0.979       0.946      9.945
+///    11 a day           1.083       0.000     10.000
+///    14 a day           1.396       0.000     10.000
 /// ```
+///
+/// Everything that fits is delivered; nothing that does not fit ever is, and the day settles on the
+/// most sessions the window can physically hold. So the question worth asking a user really is
+/// "does this fit", which is the plain arithmetic it looks like.
+///
+/// This was not true while [`hazard_per_minute`] carried a cap. Under the cap a budget could fit on
+/// paper and still go undelivered -- eight a day needs 370 of 480 minutes and used to arrive on 8%
+/// of days -- because the intensity was not allowed to rise enough to place the tail. Removing the
+/// cap removed the gap between fitting and happening.
+///
+/// What is left is that fitting *exactly* is not much comfort, which is where [`panics_absorbed`]
+/// comes in.
+///
+/// [`panics_absorbed`]: Crowding::panics_absorbed
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Crowding {
     pub rule_id: Uuid,
@@ -1025,15 +1036,13 @@ pub struct Crowding {
     pub available_minutes: f64,
     session_minutes: f64,
     cooldown_minutes: u32,
+    /// What a panicked session costs over one that simply ends.
+    panic_surcharge: f64,
 }
 
-/// Where a budget stops being comfortably placeable. Read off the table on [`Crowding`]: delivery
-/// is still above 85% at a third of the window and has fallen to three-quarters by half of it.
-pub const CROWDED_OCCUPANCY: f64 = 0.5;
-
 impl Crowding {
-    /// The share of the window the budget claims. Above 1.0 the schedule is impossible; well below
-    /// it, comfortable.
+    /// The share of the window the budget claims. At or below 1.0 the schedule delivers it; above,
+    /// it never can.
     pub fn occupancy(&self) -> f64 {
         if self.available_minutes <= 0.0 {
             return f64::INFINITY;
@@ -1041,38 +1050,72 @@ impl Crowding {
         self.required_minutes / self.available_minutes
     }
 
-    /// No arrangement of this budget fits, so the shortfall is arithmetic rather than bad luck.
+    /// No arrangement of this budget fits the window, so the shortfall is arithmetic rather than
+    /// bad luck and no amount of work on the intensity can reach it.
     pub fn is_impossible(&self) -> bool {
-        self.occupancy() > 1.0
+        self.required_minutes > self.available_minutes
     }
 
-    /// The largest budget whose occupancy would stay at or under `target` -- what to suggest in
-    /// place of the number the user typed. Never above the count they asked for.
-    pub fn count_within(&self, target: f64) -> u32 {
+    /// How many panicked sessions the day's slack can absorb before the budget stops fitting.
+    ///
+    /// A panic is not a session ending early, whatever it looks like from the chair: it trades the
+    /// ordinary cooldown for the panic one -- two hours against thirty minutes by default -- so a
+    /// panicked session costs the window *more* than a completed one, not less. A schedule with no
+    /// slack therefore under-delivers the first time the user reaches for the panic key, which for
+    /// this app in particular is not a rare event to design around.
+    ///
+    /// `None` when a panic costs nothing extra, which is what a panic pause of zero means.
+    pub fn panics_absorbed(&self) -> Option<u32> {
+        if self.panic_surcharge <= 0.0 {
+            return None;
+        }
+        let slack = self.available_minutes - self.required_minutes;
+        Some((slack / self.panic_surcharge).floor().max(0.0) as u32)
+    }
+
+    /// Whether this rule is worth saying something about: it cannot fit at all, or it fits with so
+    /// little to spare that one panic breaks it.
+    pub fn needs_warning(&self) -> bool {
+        self.is_impossible() || self.panics_absorbed() == Some(0)
+    }
+
+    /// The largest budget that fits the window at all.
+    pub fn max_count(&self) -> u32 {
+        self.count_needing(0.0)
+    }
+
+    /// The largest budget that fits with room for one panic -- what to suggest in place of the
+    /// number the user typed.
+    pub fn comfortable_count(&self) -> u32 {
+        self.count_needing(self.panic_surcharge.max(0.0))
+    }
+
+    fn count_needing(&self, spare: f64) -> u32 {
         let per_session = self.session_minutes + f64::from(self.cooldown_minutes);
         if per_session <= 0.0 {
             return self.count;
         }
-        let room = target * self.available_minutes + f64::from(self.cooldown_minutes);
-        let fits = (room / per_session)
+        let room = self.available_minutes - spare + f64::from(self.cooldown_minutes);
+        (room / per_session)
             .floor()
-            .clamp(0.0, f64::from(self.count));
-        fits as u32
+            .clamp(0.0, f64::from(self.count)) as u32
     }
 }
 
 /// How hard each rate rule is leaning on its window, worst first.
 ///
 /// This is the one shortfall no amount of work on the intensity can fix. Everything else in the
-/// rate model is about *placing* a budget well; if the budget crowds its window, the only honest
-/// outcomes are a smaller number, a wider range or a shorter cooldown, and the user is the only one
-/// who can choose between them. Saying so when the rule is written beats discovering it months
-/// later as a vague sense that "six times a day" has been meaning four.
+/// rate model is about *placing* a budget well; if the budget does not fit its window, the only
+/// honest outcomes are a smaller number, a wider range or a shorter cooldown, and the user is the
+/// only one who can choose between them. Saying so when the rule is written beats discovering it
+/// months later as a vague sense that "six times a day" has been meaning four.
 ///
 /// Reported per rule rather than across the set. Rules do also compete for one another's room --
 /// the cooldown is global -- but a warning has to attach to something a user can edit, and "these
 /// three rules together are too much" points at no single rule.
 pub fn rule_crowding(config: &ScheduleConfig, at: DateTime<Local>) -> Vec<Crowding> {
+    let panic_surcharge =
+        f64::from(config.panic_cooldown_minutes) - f64::from(config.cooldown_minutes);
     let mut found: Vec<Crowding> = config
         .rules
         .iter()
@@ -1099,6 +1142,7 @@ pub fn rule_crowding(config: &ScheduleConfig, at: DateTime<Local>) -> Vec<Crowdi
                 )),
                 session_minutes,
                 cooldown_minutes: config.cooldown_minutes,
+                panic_surcharge,
             })
         })
         .collect();
@@ -1113,8 +1157,8 @@ pub fn rule_crowding(config: &ScheduleConfig, at: DateTime<Local>) -> Vec<Crowdi
 /// exactly where this one bites hardest: as the last hour of a window closes, the realised present
 /// time genuinely might be zero, `E[1/M]` runs away, and the series has nothing sensible to say.
 /// Capping it holds the denominator's shrinkage to a fifth, which is a correction rather than a
-/// rewrite, and leaves the endgame to the two mechanisms built for it -- the reserve, and the
-/// intensity cap.
+/// rewrite, and leaves the endgame to the mechanism built for it: the reserve, which empties the
+/// denominator early enough for the intensity to place what is left.
 const MAX_DISPERSION: f64 = 0.25;
 
 /// The denominator the intensity actually wants, which is not the one the user is shown.
@@ -1158,31 +1202,34 @@ pub fn usable_present_minutes(intervals: &[Interval], profile: &PresenceProfile)
     mean / (1.0 + dispersion)
 }
 
-/// Guards the hazard against a vanishing denominator: with less than this much opportunity left,
-/// treat the rule as having this much, so `remaining / expected` cannot run away to infinity in
-/// the last seconds of a range.
+/// The floor on the denominator, and now the only thing bounding the intensity at all.
+///
+/// One minute is a tick, so the most a firing can be worth in the last one is `remaining` per
+/// minute -- a probability of `1 - exp(-remaining)`, near certainty for a quota with anything left.
+/// That is the intended endgame: the range is closing and the budget is owed.
 const MIN_EXPECTED_MINUTES: f64 = 1.0;
 
 /// Conditional intensity per present-minute for the next point in a fixed-quota process:
-/// `remaining / expected remaining present time`, capped at roughly one per cooldown.
+/// `remaining / expected remaining present time`.
 ///
-/// Without the cap, this is the hazard of the earliest of `remaining` uniform points in the
-/// remaining opportunity. It rises as that opportunity shrinks, tending to place the whole quota.
-/// The cap is the deliberate escape hatch: when the scheduler is behind, it leaves budget unspent
-/// rather than creating an overly clustered tail. The budget itself—not this cap—prevents
-/// over-delivery, which is why the UI says "about" three times a day.
-pub fn hazard_per_minute(
-    remaining_count: u32,
-    expected_present_minutes: f64,
-    cooldown_minutes: u32,
-) -> f64 {
+/// This is the hazard of the earliest of `remaining` uniform points in the remaining opportunity.
+/// It rises as that opportunity shrinks, and is allowed to keep rising, because that is exactly how
+/// a fixed quota gets placed: truncate the divergence and the last firings are the ones that go
+/// undelivered.
+///
+/// There used to be a cap here of one firing per cooldown, meant to stop a schedule that had fallen
+/// behind from cramming its remainder into the last few minutes. It was a second, softer copy of a
+/// constraint the engine already enforces exactly -- `cooling_down` suppresses firing outright, so
+/// two sessions cannot fall within a cooldown of each other whatever this returns -- and being the
+/// soft copy, it was the one that lost delivery: about nine points on an ordinary day. Removing it
+/// leaves one mechanism doing the spacing and one doing the placing.
+///
+/// The budget counter, not any cap, is what prevents over-delivery.
+pub fn hazard_per_minute(remaining_count: u32, expected_present_minutes: f64) -> f64 {
     if remaining_count == 0 {
         return 0.0;
     }
-    let expected = expected_present_minutes.max(MIN_EXPECTED_MINUTES);
-    let lambda = f64::from(remaining_count) / expected;
-    let cap = 1.0 / f64::from(cooldown_minutes.max(1));
-    lambda.min(cap)
+    f64::from(remaining_count) / expected_present_minutes.max(MIN_EXPECTED_MINUTES)
 }
 
 /// Present-minutes that `sessions` further firings will consume rather than leave available to
@@ -1209,23 +1256,6 @@ pub fn dead_present_minutes(
         return 0.0;
     }
     sessions * (session_minutes + f64::from(cooldown_minutes) * presence.clamp(0.0, 1.0))
-}
-
-/// Whether [`hazard_per_minute`] is returning its cap rather than `remaining / expected`.
-///
-/// Only the diagnostics care, and they care a lot: the cap is the escape hatch that leaves budget
-/// unspent, so how much present time is spent against it separates "the user was away more than
-/// their profile predicted" from "the cap is set too tight".
-pub fn hazard_is_capped(
-    remaining_count: u32,
-    expected_present_minutes: f64,
-    cooldown_minutes: u32,
-) -> bool {
-    if remaining_count == 0 {
-        return false;
-    }
-    let expected = expected_present_minutes.max(MIN_EXPECTED_MINUTES);
-    f64::from(remaining_count) / expected > 1.0 / f64::from(cooldown_minutes.max(1))
 }
 
 /// P(fire) over a tick covering `present_minutes`, freezing the conditional intensity for that
@@ -1686,8 +1716,8 @@ mod tests {
         );
 
         // ... and so raises the hazard, which is the whole point of the adaptation.
-        let uninformed = hazard_per_minute(3, total_minutes(&remaining), 30);
-        let informed = hazard_per_minute(3, expected, 30);
+        let uninformed = hazard_per_minute(3, total_minutes(&remaining));
+        let informed = hazard_per_minute(3, expected);
         assert!(informed > uninformed);
     }
 
@@ -1936,55 +1966,13 @@ mod tests {
         assert_eq!(required_minutes(0, 20.0, 30), 0.0);
     }
 
-    /// The row the whole measure exists for. Eight a day *fits* -- 370 minutes of 480 -- and is
-    /// still hopeless, because the exclusion zones cover so much of the window that hardly any
-    /// random scatter avoids them. A check that only asked whether the budget fitted would wave
-    /// this through.
     #[test]
-    fn a_budget_can_fit_its_window_and_still_crowd_it() {
-        let crowding = crowding_of(rate_rule(all_days(), between((9, 0), (17, 0)), 8), 30);
-        assert_eq!(crowding.required_minutes, 370.0);
-        assert_eq!(crowding.available_minutes, 480.0);
+    fn a_comfortable_rule_needs_no_warning() {
+        let crowding = crowding_of(rate_rule(all_days(), between((9, 0), (17, 0)), 3), 30);
         assert!(!crowding.is_impossible());
-        assert!(
-            crowding.occupancy() > CROWDED_OCCUPANCY,
-            "{}",
-            crowding.occupancy()
-        );
-    }
-
-    /// The measured delivery rates run the other way from occupancy, and the ordering is what the
-    /// threshold is calibrated against.
-    #[test]
-    fn occupancy_ranks_the_shapes_the_delivery_grid_ranks() {
-        let occupancies: Vec<f64> = [
-            (720, 3), // 12h, delivered 0.945
-            (480, 3), //  8h, delivered 0.909
-            (480, 4), //  8h, delivered 0.856
-            (240, 3), //  4h, delivered 0.730
-            (480, 6), //  8h, delivered 0.651
-            (180, 3), //  3h, delivered 0.478
-            (480, 8), //  8h, delivered 0.080
-        ]
-        .into_iter()
-        .map(|(minutes, count)| {
-            let end = 9 * 60 + minutes;
-            let rule = rate_rule(
-                all_days(),
-                between((9, 0), (end as u32 / 60, end as u32 % 60)),
-                count,
-            );
-            crowding_of(rule, 30).occupancy()
-        })
-        .collect();
-
-        assert!(
-            occupancies.windows(2).all(|w| w[0] < w[1]),
-            "occupancy should rise as delivery falls: {occupancies:?}"
-        );
-        // And the threshold falls where delivery starts dropping below three-quarters.
-        assert!(occupancies[2] < CROWDED_OCCUPANCY, "{occupancies:?}");
-        assert!(occupancies[3] >= CROWDED_OCCUPANCY, "{occupancies:?}");
+        assert!(!crowding.needs_warning());
+        // 480 available against 120 required leaves room for four panicked sessions.
+        assert_eq!(crowding.panics_absorbed(), Some(4));
     }
 
     #[test]
@@ -1993,21 +1981,40 @@ mod tests {
         // 8 * 20 + 7 * 60 = 580 wanted against 480 available.
         assert_eq!(crowding.required_minutes, 580.0);
         assert!(crowding.is_impossible());
+        assert!(crowding.needs_warning());
+        assert_eq!(crowding.panics_absorbed(), Some(0));
         // 20 + 60 per session, and the trailing cooldown is free: floor(540 / 80) = 6.
-        assert_eq!(crowding.count_within(1.0), 6);
-        // Comfortably placeable is a good deal fewer than merely possible.
-        assert_eq!(crowding.count_within(CROWDED_OCCUPANCY), 3);
+        assert_eq!(crowding.max_count(), 6);
     }
 
+    /// The tier that exists because of what a panic costs. Nine a day fits an eight-hour range with
+    /// an hour to spare, and delivers 97.7% of the time -- but one panicked session trades a
+    /// half-hour cooldown for a two-hour one, and the hour of slack cannot absorb it.
     #[test]
-    fn a_suggested_count_never_exceeds_the_one_that_was_asked_for() {
-        let crowding = crowding_of(rate_rule(all_days(), between((0, 0), (0, 0)), 2), 30);
-        assert!(crowding.occupancy() < 0.05, "{}", crowding.occupancy());
-        assert_eq!(crowding.count_within(CROWDED_OCCUPANCY), 2);
+    fn a_budget_with_no_room_for_a_single_panic_is_warned_about_even_though_it_fits() {
+        let crowding = crowding_of(rate_rule(all_days(), between((9, 0), (17, 0)), 9), 30);
+        assert!(!crowding.is_impossible());
+        assert_eq!(crowding.panics_absorbed(), Some(0));
+        assert!(crowding.needs_warning());
+        // Eight fits with 110 minutes spare, which covers the 90-minute surcharge exactly once.
+        assert_eq!(crowding.comfortable_count(), 8);
     }
 
-    /// Whether a budget crowds its window is a fact about the period, not about how much of it is
-    /// left when somebody happens to open the config app.
+    /// A panic pause of zero means a panic costs nothing a normal ending does not, so there is no
+    /// slack tier to speak of -- only whether the budget fits.
+    #[test]
+    fn a_zero_panic_pause_leaves_only_the_question_of_whether_it_fits() {
+        let mut config =
+            schedule_with(vec![rate_rule(all_days(), between((9, 0), (17, 0)), 9)], 30);
+        config.panic_cooldown_minutes = 0;
+        let crowding = rule_crowding(&config, dt(2026, 7, 13, 12, 0))[0];
+
+        assert_eq!(crowding.panics_absorbed(), None);
+        assert!(!crowding.needs_warning());
+    }
+
+    /// Whether a budget fits its window is a fact about the period, not about how much of it is left
+    /// when somebody happens to open the config app.
     #[test]
     fn crowding_does_not_depend_on_the_time_of_day_it_is_asked() {
         let rule = rate_rule(all_days(), between((9, 0), (17, 0)), 6);
@@ -2018,13 +2025,12 @@ mod tests {
         );
     }
 
-    /// Quiet hours come out of the opportunity, so they can crowd a budget that would otherwise sit
+    /// Quiet hours come out of the opportunity, so they can break a budget that would otherwise sit
     /// comfortably -- which is exactly the surprise worth surfacing.
     #[test]
-    fn quiet_hours_can_crowd_a_budget_that_would_otherwise_be_comfortable() {
-        // Five a day across eight hours wants 220 of 480 minutes -- comfortable.
+    fn quiet_hours_can_break_a_budget_that_would_otherwise_be_comfortable() {
         let rule = rate_rule(all_days(), between((9, 0), (17, 0)), 5);
-        assert!(crowding_of(rule.clone(), 30).occupancy() < CROWDED_OCCUPANCY);
+        assert!(!crowding_of(rule.clone(), 30).needs_warning());
 
         let mut config = schedule_with(vec![rule], 30);
         config.quiet_hours = vec![QuietHours {
@@ -2036,13 +2042,12 @@ mod tests {
         let crowding = rule_crowding(&config, dt(2026, 7, 13, 12, 0))[0];
         assert_eq!(crowding.available_minutes, 180.0);
         assert!(crowding.is_impossible());
-        assert_eq!(crowding.count_within(1.0), 4);
+        assert_eq!(crowding.max_count(), 4);
     }
 
     /// An `UntilStopped` rule is measured on its cooldowns alone. That is the floor rather than a
     /// guess -- the length is the user's to decide -- and it stays a safe floor because a panic
-    /// trades the ordinary cooldown for the much longer panic one, so reality only ever needs more
-    /// room than this says.
+    /// makes a session dearer, never cheaper.
     #[test]
     fn an_until_stopped_rule_is_measured_on_its_cooldowns_alone() {
         let mut rule = rate_rule(all_days(), between((9, 0), (11, 0)), 5);
@@ -2051,6 +2056,8 @@ mod tests {
         assert_eq!(crowding.required_minutes, 120.0);
         assert_eq!(crowding.available_minutes, 120.0);
         assert!(!crowding.is_impossible());
+        // It fits exactly, which is precisely the case with nothing left for a panic.
+        assert!(crowding.needs_warning());
     }
 
     #[test]
@@ -2179,51 +2186,47 @@ mod tests {
 
     #[test]
     fn hazard_is_count_over_expected_time() {
-        // 3 firings across 480 present-minutes, cooldown far below the cap.
-        let hazard = hazard_per_minute(3, 480.0, 30);
+        let hazard = hazard_per_minute(3, 480.0);
         assert!((hazard - 3.0 / 480.0).abs() < 1e-12);
     }
 
     #[test]
     fn hazard_is_zero_once_the_budget_is_spent() {
-        assert_eq!(hazard_per_minute(0, 480.0, 30), 0.0);
+        assert_eq!(hazard_per_minute(0, 480.0), 0.0);
     }
 
+    /// The divergence is the point, not an oversight. Three firings owed with five minutes left is
+    /// 0.6 a minute, and it needs to be: anything less leaves the quota undelivered. Spacing is the
+    /// cooldown's job, and the cooldown enforces it by suppression rather than by argument.
     #[test]
-    fn the_cap_flag_agrees_with_the_cap() {
-        // Three firings owed with five present-minutes left is far past one per cooldown ...
-        assert!(hazard_is_capped(3, 5.0, 30));
-        // ... and three across a whole working day is nowhere near it.
-        assert!(!hazard_is_capped(3, 480.0, 30));
-        assert!(!hazard_is_capped(0, 1.0, 30));
+    fn the_intensity_is_allowed_to_run_up_as_a_range_closes() {
+        assert_eq!(hazard_per_minute(3, 5.0), 0.6);
+        assert!(hazard_per_minute(3, 1.0) > hazard_per_minute(3, 5.0));
     }
 
-    #[test]
-    fn hazard_is_capped_at_one_per_cooldown_rather_than_cramming() {
-        // 3 firings and 5 minutes left: uncapped this would be 0.6/min.
-        let hazard = hazard_per_minute(3, 5.0, 30);
-        assert_eq!(hazard, 1.0 / 30.0);
-    }
-
+    /// It may run up, but not away: the denominator has a floor, so the worst case is the whole
+    /// remaining quota in one tick rather than an infinity.
     #[test]
     fn a_vanishing_denominator_cannot_run_away() {
-        let hazard = hazard_per_minute(1, 0.0, 1);
+        let hazard = hazard_per_minute(1, 0.0);
         assert!(hazard.is_finite());
         assert_eq!(hazard, 1.0);
+        assert_eq!(hazard_per_minute(3, -5.0), 3.0);
+        assert!(fire_probability(hazard_per_minute(3, 0.0), 1.0) < 1.0);
     }
 
     #[test]
     fn fixed_hazard_probability_matches_exponential_survival() {
         // This establishes only the local, fixed-intensity conversion used within one tick. The
         // scheduler-level quota comes from recomputing the intensity and spending budget.
-        let hazard = hazard_per_minute(3, 480.0, 30);
+        let hazard = hazard_per_minute(3, 480.0);
         let p = fire_probability(hazard, 480.0);
         assert!((p - (1.0 - (-3.0f64).exp())).abs() < 1e-12);
     }
 
     #[test]
     fn fixed_hazard_survival_is_invariant_when_split() {
-        let hazard = hazard_per_minute(1, 240.0, 30);
+        let hazard = hazard_per_minute(1, 240.0);
         let whole = fire_probability(hazard, 60.0);
         let first = fire_probability(hazard, 30.0);
         let second = fire_probability(hazard, 30.0);
@@ -2240,7 +2243,7 @@ mod tests {
         let after = 479.0;
         let exact = 1.0 - f64::powi(after / before, remaining_count as i32);
         let approximated =
-            fire_probability(hazard_per_minute(remaining_count, after, 1), before - after);
+            fire_probability(hazard_per_minute(remaining_count, after), before - after);
 
         assert!((exact - approximated).abs() < 1e-5);
     }

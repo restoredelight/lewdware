@@ -68,9 +68,6 @@ pub struct Record {
     pub residual: f64,
     /// Present minutes the interval covered, for reading `residual` against.
     pub present_minutes: f64,
-    /// Of those, how many were spent with `hazard_per_minute`'s cap binding. The cap is the
-    /// deliberate under-delivery valve, and this is how often it actually opened.
-    pub capped_minutes: f64,
     pub remaining_before: u32,
     pub period_count: u32,
 }
@@ -83,7 +80,6 @@ pub struct Accumulator {
     pub since: DateTime<Local>,
     pub residual: f64,
     pub present_minutes: f64,
-    pub capped_minutes: f64,
 }
 
 impl Accumulator {
@@ -92,18 +88,13 @@ impl Accumulator {
             since: now,
             residual: 0.0,
             present_minutes: 0.0,
-            capped_minutes: 0.0,
         }
     }
 
-    /// One tick's worth of intensity. `capped` is whether `hazard_per_minute` returned its cap
-    /// rather than `remaining / expected`.
-    pub fn credit(&mut self, hazard: f64, present_minutes: f64, capped: bool) {
+    /// One tick's worth of intensity.
+    pub fn credit(&mut self, hazard: f64, present_minutes: f64) {
         self.residual += hazard * present_minutes;
         self.present_minutes += present_minutes;
-        if capped {
-            self.capped_minutes += present_minutes;
-        }
     }
 
     pub fn close(
@@ -121,7 +112,6 @@ impl Accumulator {
             outcome,
             residual: self.residual,
             present_minutes: self.present_minutes,
-            capped_minutes: self.capped_minutes,
             remaining_before,
             period_count,
         }
@@ -214,7 +204,6 @@ pub struct Report {
     pub censored: usize,
     pub compensator_total: f64,
     pub present_minutes: f64,
-    pub capped_minutes: f64,
     pub residuals: Vec<f64>,
 }
 
@@ -225,13 +214,11 @@ impl Report {
             censored: 0,
             compensator_total: 0.0,
             present_minutes: 0.0,
-            capped_minutes: 0.0,
             residuals: Vec::new(),
         };
         for record in records {
             report.compensator_total += record.residual;
             report.present_minutes += record.present_minutes;
-            report.capped_minutes += record.capped_minutes;
             match record.outcome {
                 Outcome::Fired => {
                     report.fired += 1;
@@ -280,11 +267,7 @@ impl Report {
         Some((d, kolmogorov_p(d, n_f)))
     }
 
-    pub fn capped_fraction(&self) -> Option<f64> {
-        (self.present_minutes > 0.0).then(|| self.capped_minutes / self.present_minutes)
-    }
-
-    /// The headline number, and the one the cap and the presence profile both move: how often a
+    /// The headline number, and the one the presence profile moves: how often a
     /// budget period ended with a firing still owed.
     pub fn censored_fraction(&self) -> Option<f64> {
         let total = self.fired + self.censored;
@@ -394,18 +377,11 @@ pub fn describe(records: &[Record]) -> String {
         );
     }
 
-    let _ = writeln!(out, "\ndelivery and the cap");
     if let Some(f) = report.censored_fraction() {
+        let _ = writeln!(out, "\ndelivery");
         let _ = writeln!(
             out,
             "  periods ending owed  {:.1}%   (budget unspent when the range closed)",
-            f * 100.0
-        );
-    }
-    if let Some(f) = report.capped_fraction() {
-        let _ = writeln!(
-            out,
-            "  present time capped  {:.1}%   (hazard held at 1/cooldown)",
             f * 100.0
         );
     }
@@ -456,7 +432,6 @@ mod tests {
             outcome,
             residual,
             present_minutes: 60.0,
-            capped_minutes: 0.0,
             remaining_before: 1,
             period_count: 3,
         }
