@@ -28,31 +28,31 @@ pub fn get_mode_options(state: State<'_>) -> ModeOptionsDto {
 #[tauri::command]
 pub fn set_mode_option(state: State<'_>, key: String, value: JsonValue) -> Result<(), String> {
     let mut config = state.config.lock().unwrap();
-    let mode = config.mode.clone();
+    let mut mode = config.mode.clone();
 
     let typed_value: StoredValue =
         serde_json::from_value(value).map_err(|_| "invalid option value".to_string())?;
 
-    if matches!(mode, Mode::Experience) {
-        let pack_id = state
-            .pack
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|p| p.id)
-            .ok_or_else(|| "no pack loaded".to_string())?;
-        config
-            .experience_options
-            .entry(pack_id)
-            .or_default()
-            .insert(key, typed_value);
-    } else {
-        config
-            .mode_options
-            .entry(mode)
-            .or_default()
-            .insert(key, typed_value);
+    if let Mode::Experience { ref mut pack } = mode {
+        if pack.is_none() {
+            let pack_id = state
+                .pack
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|p| p.id)
+                .ok_or_else(|| "no pack loaded".to_string())?;
+            *pack = Some(pack_id);
+            config.mode = mode.clone();
+        }
     }
+
+    config
+        .mode_options
+        .entry(mode)
+        .or_default()
+        .insert(key, typed_value);
+
     let uploaded = state.uploaded.lock().unwrap();
     save_to_disk(&config, &uploaded).map_err(|e| e.to_string())
 }

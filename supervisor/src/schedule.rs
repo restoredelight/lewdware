@@ -16,7 +16,8 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Duration as ChronoDuration, Local};
 use shared::schedule::{
-    self, Interval, PresenceProfile, Rule, ScheduleConfig, SessionLength, SessionOverrides, Trigger,
+    self, Interval, PresenceProfile, Resolution, Rule, ScheduleConfig, SessionLength,
+    SessionOverrides, Trigger,
 };
 use uuid::Uuid;
 
@@ -26,9 +27,9 @@ use crate::state::{self, LastStop, PersistedBudget, PersistedState};
 /// How often the engine wakes while a rule's opportunity range is open. A hazard rate has to be
 /// integrated rather than waited out, so unlike v1 there is no single "wake me when it starts".
 ///
-/// `fire_probability` is exact for the conditional intensity frozen within one tick. Recomputing
-/// that intensity after each tick makes this cadence a small approximation choice; one minute keeps
-/// the error small. The tick is also what bounds the endgame: the intensity is left free to diverge
+/// `fire_probability` is exact for the hazard frozen within one tick. Recomputing
+/// that hazard after each tick makes this cadence a small approximation choice; one minute keeps
+/// the error small. The tick is also what bounds the endgame: the hazard is left free to diverge
 /// as a range closes, and a one-minute step against a denominator floored at one minute makes the
 /// last tick worth `remaining` firings per minute rather than an infinity.
 const TICK_SECONDS: i64 = 60;
@@ -416,24 +417,6 @@ impl ScheduleEngine {
         self.cooldown_until.is_some_and(|until| now < until)
     }
 
-    /// The quiet-subtracted opportunity intervals for `rule`'s current budget period, unclipped --
-    /// the tick needs the part just elapsed as well as the part still to come.
-    fn opportunity(&self, rule: &Rule, now: DateTime<Local>) -> Vec<Interval> {
-        let Some(period) = schedule::current_period(rule, now) else {
-            return Vec::new();
-        };
-        let intervals: Vec<Interval> = schedule::occurrences_in_period(rule, period)
-            .into_iter()
-            .map(|o| o.interval)
-            .collect();
-        let blockers = schedule::quiet_intervals(
-            &self.config.quiet_hours,
-            period.first,
-            period.last + ChronoDuration::days(1),
-        );
-        schedule::subtract(&intervals, &blockers)
-    }
-
     /// Minutes of `[from, to)` that fall inside `intervals`.
     fn overlap_minutes(from: DateTime<Local>, to: DateTime<Local>, intervals: &[Interval]) -> f64 {
         intervals
@@ -479,7 +462,7 @@ impl ScheduleEngine {
         let presence = (expected / span).clamp(0.0, 1.0);
         let cooldown = self.config.cooldown_minutes;
 
-        let mut reserved = schedule::dead_present_minutes(
+        let mut reserved = schedule::reserved_present_minutes(
             f64::from(remaining_count.saturating_sub(1)),
             Self::session_minutes(rule.length),
             cooldown,
@@ -496,13 +479,13 @@ impl ScheduleEngine {
             if count == 0 {
                 continue;
             }
-            let theirs = schedule::clip_from(&self.opportunity(other, now), now);
+            let theirs = schedule::remaining_opportunity(other, now, &self.config.quiet_hours);
             let theirs_span = schedule::total_minutes(&theirs);
             if theirs_span <= 0.0 {
                 continue;
             }
             let share = schedule::overlap_minutes(remaining, &theirs) / theirs_span;
-            reserved += schedule::dead_present_minutes(
+            reserved += schedule::reserved_present_minutes(
                 f64::from(count) * share,
                 Self::session_minutes(other.length),
                 cooldown,
@@ -517,7 +500,7 @@ impl ScheduleEngine {
     /// `UntilStopped` is zero, not a guess. The reserve is an *anticipation* of a commitment the
     /// schedule has made, and no commitment has been made about a length only the user decides. The
     /// retrospective half of the correction still applies -- once a session has actually eaten
-    /// forty minutes, `clip_from` has already shrunk the window and the intensity rises on its own
+    /// forty minutes, `clip_from` has already shrunk the window and the hazard rises on its own
     /// at the next eligible tick. The cost is a day where the user leaves one running for hours and
     /// the rest of the budget goes undelivered, which is the right outcome: they got their session.
     fn session_minutes(length: SessionLength) -> f64 {
@@ -773,7 +756,7 @@ impl ScheduleEngine {
     /// v1's pass fired the first rule whose own draw came up, which biases collisions toward the top
     /// of the list; the comment excusing it argued the per-tick probabilities were small enough for
     /// the bias to be invisible. That stopped being true once the denominator started reserving the
-    /// time sessions consume: the intensity now rises sharply as a window closes, exactly where
+    /// time sessions consume: the hazard now rises sharply as a window closes, exactly where
     /// several rules are most likely to want the same minute, and a rule at the bottom of the list
     /// would be starved precisely when it is running out of chances.
     ///
@@ -803,32 +786,32 @@ impl ScheduleEngine {
             return None;
         }
 
-        // Every eligible rule's intensity is integrated whether or not it goes on to win: losing a
+        // Every eligible rule's hazard is integrated whether or not it goes on to win: losing a
         // race is not the same as having had no chance, and the residual log has to agree.
         let mut candidates: Vec<(usize, f64, f64)> = Vec::new();
         for (index, rule) in rules.iter().enumerate() {
             if !matches!(rule.trigger, Trigger::Rate { .. }) {
                 continue;
             }
-            let (increment, inside) =
+            let (hazard, inside) =
                 self.rate_rule_increment(rule, now, elapsed_from, elapsed_minutes);
-            if increment > 0.0 {
-                candidates.push((index, increment, inside));
+            if hazard > 0.0 {
+                candidates.push((index, hazard, inside));
             }
         }
 
         // No eligible rule means no coin. Taking one anyway would make the draw sequence depend on
         // ticks that could never have fired, so every shut-window minute would shift the stream.
-        let total: f64 = candidates.iter().map(|(_, increment, _)| increment).sum();
+        let total: f64 = candidates.iter().map(|(_, hazard, _)| hazard).sum();
         if total <= 0.0 {
             return None;
         }
-        let any_probability = schedule::any_fire_probability(total);
+        let any_probability = schedule::fire_probability(total);
 
         // The implementation makes one Bernoulli draw per tick, not an unbounded Poisson count.
         // A rule's exact chance of winning is therefore P(any) times its share of the competing
-        // increments. Accumulate that probability and its Bernoulli variance; unlike the raw
-        // compensator this remains calibrated when a closing tick's increment is much larger than
+        // hazards. Accumulate that probability and its Bernoulli variance; unlike the raw
+        // compensator this remains calibrated when a closing tick's hazard is much larger than
         // one but the scheduler can still start at most one session.
         if self.residuals.enabled() {
             for &(index, increment, inside) in &candidates {
@@ -898,7 +881,7 @@ impl ScheduleEngine {
             .is_some_and(|at| at <= now)
     }
 
-    /// This rule's intensity increment over the tick just elapsed, plus the present minutes it
+    /// This rule's hazard increment over the tick just elapsed, plus the present minutes it
     /// covered. Zero wherever the rule had no chance at all. The competing-risks draw uses the
     /// increment; diagnostics convert all rules' increments into their exact discrete win
     /// probabilities once the total is known.
@@ -919,7 +902,8 @@ impl ScheduleEngine {
             return (0.0, 0.0);
         }
 
-        let opportunity = self.opportunity(rule, elapsed_from);
+        let opportunity =
+            schedule::period_opportunity(rule, elapsed_from, &self.config.quiet_hours);
         // Only the part of the tick that actually fell inside the range counts. Waking at a range's
         // opening edge after hours asleep must not integrate those hours.
         let inside = Self::overlap_minutes(elapsed_from, now, &opportunity).min(elapsed_minutes);
@@ -928,11 +912,7 @@ impl ScheduleEngine {
         }
 
         let remaining = schedule::clip_from(&opportunity, now);
-        // Two different questions about the same window. `expected` is how much present time is
-        // left, which is what the reserve's presence ratio is asking; `usable` is what a budget may
-        // be divided by, which is smaller for reasons that have nothing to do with the reserve. The
-        // reserve is a commitment already made, so it comes off after the correction rather than
-        // being corrected along with it.
+
         let expected = schedule::expected_present_minutes(&remaining, &self.profile);
         let usable = (schedule::usable_present_minutes(&remaining, &self.profile)
             - self.reserved_minutes(rule, remaining_count, &remaining, now, expected))
@@ -973,7 +953,8 @@ impl ScheduleEngine {
                     }
                 }
                 Trigger::Rate { .. } => {
-                    let opportunity = self.opportunity(rule, now);
+                    let opportunity =
+                        schedule::period_opportunity(rule, now, &self.config.quiet_hours);
                     let exhausted = self.budget_readonly(rule, now) == Some(0);
                     let open = schedule::current_interval(now, &opportunity).is_some();
                     if open && !exhausted {
@@ -1017,7 +998,8 @@ impl ScheduleEngine {
                     budget_total += frequency.count();
                     budget_remaining += self.budget_readonly(rule, now).unwrap_or(0);
 
-                    let opportunity = self.opportunity(rule, now);
+                    let opportunity =
+                        schedule::period_opportunity(rule, now, &self.config.quiet_hours);
                     if schedule::current_interval(now, &opportunity).is_none()
                         && let Some(edge) = opportunity
                             .iter()
@@ -1264,7 +1246,7 @@ mod tests {
         assert!(run(&mut engine, dt(2026, 7, 13, 9, 0), 30, false).is_some());
         assert_eq!(engine.status(dt(2026, 7, 13, 9, 30)).budget_remaining, 0);
         // Even an RNG that accepts every non-zero probability cannot exceed the configured count:
-        // at zero budget the conditional intensity itself is zero.
+        // at zero budget the hazard itself is zero.
         assert!(run(&mut engine, dt(2026, 7, 13, 9, 30), 30, false).is_none());
     }
 
@@ -1300,7 +1282,7 @@ mod tests {
     /// shrinking denominator does what it is there for: by the closing edge a tick is worth the
     /// whole remaining quota, so the firing lands instead of being forfeited.
     #[test]
-    fn a_closing_range_raises_the_intensity_until_the_budget_is_placed() {
+    fn a_closing_range_raises_the_hazard_until_the_budget_is_placed() {
         let rule = rate_rule((9, 0), (9, 5), 1);
         let id = rule.id;
         let mut engine = ScheduleEngine::with_parts(
@@ -1621,11 +1603,11 @@ mod tests {
         engine
     }
 
-    /// Two identical rules have identical intensities, so the second draw alone decides between
+    /// Two identical rules have identical hazards, so the second draw alone decides between
     /// them -- below half the total picks the first, above it picks the second. List order does not
     /// enter into it, which is the whole point: v1 gave the top of the list first refusal.
     #[test]
-    fn a_collision_between_rate_rules_is_settled_by_intensity_not_list_order() {
+    fn a_collision_between_rate_rules_is_settled_by_hazard_not_list_order() {
         let first = rate_rule((9, 0), (17, 0), 3);
         let second = rate_rule((9, 0), (17, 0), 3);
         let (first_id, second_id) = (first.id, second.id);
@@ -1646,7 +1628,7 @@ mod tests {
     }
 
     /// Not merely unbiased -- proportional. A rule with three firings owed has three times the
-    /// intensity of one with a single firing left over the same window, so it must win three
+    /// hazard of one with a single firing left over the same window, so it must win three
     /// collisions in four.
     ///
     /// The two rules happen to share a denominator here, which is the reserve working: each one
@@ -1706,7 +1688,7 @@ mod tests {
     /// difference -- otherwise `diagnose-schedule` would read every loss as time the rule was shut
     /// and quietly report a model that fires more than its probabilities allow.
     #[test]
-    fn every_eligible_rule_integrates_its_intensity_even_when_another_wins() {
+    fn every_eligible_rule_integrates_its_hazard_even_when_another_wins() {
         let first = rate_rule((9, 0), (17, 0), 3);
         let second = rate_rule((9, 0), (17, 0), 3);
         let (first_id, second_id) = (first.id, second.id);
@@ -1742,7 +1724,7 @@ mod tests {
 
     /// `(remaining, expected)` for a rule at `now`, which is what the reserve is measured against.
     fn window(engine: &ScheduleEngine, rule: &Rule, now: DateTime<Local>) -> (Vec<Interval>, f64) {
-        let remaining = schedule::clip_from(&engine.opportunity(rule, now), now);
+        let remaining = schedule::remaining_opportunity(rule, now, &engine.config.quiet_hours);
         let expected = schedule::expected_present_minutes(&remaining, &engine.profile);
         (remaining, expected)
     }
@@ -1862,7 +1844,8 @@ mod tests {
         let mut next = restart(&engine, config);
         next.tick(dt(2026, 7, 13, 17, 0), false);
         assert_eq!(
-            next.profile.evidence(dt(2026, 7, 13, 12, 0)),
+            next.profile
+                .evidence(Resolution::HourOfWeek, dt(2026, 7, 13, 12, 0)),
             0.0,
             "a gap the supervisor chose to be absent for is not evidence about the user"
         );
@@ -1910,11 +1893,16 @@ mod tests {
         let mut next = restart(&engine, config);
         next.tick(dt(2026, 7, 14, 8, 0), false);
         assert_eq!(
-            next.profile.evidence(dt(2026, 7, 13, 20, 0)),
+            next.profile
+                .evidence(Resolution::HourOfWeek, dt(2026, 7, 13, 20, 0)),
             0.0,
             "the evening before the shutdown is not part of the gap after it"
         );
-        assert!(next.profile.evidence(dt(2026, 7, 14, 3, 0)) > 0.0);
+        assert!(
+            next.profile
+                .evidence(Resolution::HourOfWeek, dt(2026, 7, 14, 3, 0))
+                > 0.0
+        );
         assert!(next.profile.p(dt(2026, 7, 14, 3, 0)) < prior_at(dt(2026, 7, 14, 3, 0)));
     }
 
@@ -1990,7 +1978,7 @@ mod tests {
         assert_eq!(expected, dt(2026, 7, 13, 8, 5));
         engine.tick(expected, false);
         let sampled = dt(2026, 7, 13, 8, 2);
-        assert!(engine.profile.evidence(sampled) > 0.0);
+        assert!(engine.profile.evidence(Resolution::HourOfWeek, sampled) > 0.0);
         assert!(engine.profile.p(sampled) > prior_at(sampled));
     }
 
@@ -2006,7 +1994,8 @@ mod tests {
         for _ in 0..100 {
             engine.profile.observe(quiet_hour, false);
         }
-        let opportunity = engine.opportunity(&rule, dt(2026, 7, 13, 0, 0));
+        let opportunity =
+            schedule::period_opportunity(&rule, dt(2026, 7, 13, 0, 0), &engine.config.quiet_hours);
         let expected = schedule::expected_present_minutes(&opportunity, &engine.profile);
         assert!(expected < schedule::total_minutes(&opportunity));
     }

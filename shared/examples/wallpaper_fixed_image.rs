@@ -15,7 +15,7 @@ fn main() {
     let fallback = std::env::args()
         .nth(2)
         .map(PathBuf::from)
-        .unwrap_or_else(|| shared::wallpaper::default_restore_image().unwrap());
+        .unwrap_or_else(|| shared::wallpaper::default_restore_image_path().unwrap());
 
     let real = shared::wallpaper::snapshot(None);
     println!("real snapshot (put back at the end) = {real:?}\n");

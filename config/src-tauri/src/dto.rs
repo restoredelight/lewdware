@@ -6,7 +6,8 @@ use shared::{
     mode::{OptionType, OptionValue, Permission, ShowWhen},
     monitor::MonitorRegion,
     schedule::{QuietHours, Rule, ScheduleConfig, SessionLength, SessionOverrides, Trigger},
-    user_config::{AppConfig, AudioDeviceChoice, Capabilities, Key, Mode, Volume, WallpaperConfig},
+    theme::{AppearanceChoice, ThemeChoice},
+    user_config::{AppConfig, AudioDeviceChoice, Permissions, Key, Mode, Volume, WallpaperConfig},
 };
 use uuid::Uuid;
 
@@ -23,7 +24,7 @@ impl From<Mode> for ModeIdDto {
     fn from(m: Mode) -> Self {
         match m {
             Mode::Sandbox => ModeIdDto::Sandbox,
-            Mode::Experience => ModeIdDto::Experience,
+            Mode::Experience { .. } => ModeIdDto::Experience,
             Mode::Pack { id } => ModeIdDto::Pack { id },
             Mode::File { path } => ModeIdDto::File {
                 path: path.to_string_lossy().into_owned(),
@@ -36,7 +37,7 @@ impl From<ModeIdDto> for Mode {
     fn from(dto: ModeIdDto) -> Self {
         match dto {
             ModeIdDto::Sandbox => Mode::Sandbox,
-            ModeIdDto::Experience => Mode::Experience,
+            ModeIdDto::Experience => Mode::Experience { pack: None },
             ModeIdDto::Pack { id } => Mode::Pack { id },
             ModeIdDto::File { path } => Mode::File {
                 path: PathBuf::from(path),
@@ -159,12 +160,12 @@ impl From<ScheduleDto> for ScheduleConfig {
 }
 
 /// A frontend that predates these fields (or a partial payload) must not silently reset the
-/// user's look, so both mirror `AppConfig`'s own defaults rather than falling back to `String`'s.
-pub fn default_theme_dto() -> String {
+/// user's look, so both mirror `AppConfig`'s own defaults.
+pub fn default_theme_dto() -> ThemeChoice {
     AppConfig::default().theme
 }
 
-pub fn default_appearance_dto() -> String {
+pub fn default_appearance_dto() -> AppearanceChoice {
     AppConfig::default().appearance
 }
 
@@ -185,9 +186,9 @@ pub struct ConfigDto {
     /// and `appearance` round-trip like every other field here, for the reason `wallpaper`
     /// documents below.
     #[serde(default = "default_theme_dto")]
-    pub theme: String,
+    pub theme: ThemeChoice,
     #[serde(default = "default_appearance_dto")]
-    pub appearance: String,
+    pub appearance: AppearanceChoice,
     pub stop_button: Key,
     pub disabled_monitors: Vec<String>,
     /// Round-tripped for the same reason `wallpaper` and `schedule` are: `save_config` rebuilds a
@@ -195,7 +196,7 @@ pub struct ConfigDto {
     /// save.
     #[serde(default)]
     pub monitor_regions: HashMap<String, MonitorRegion>,
-    pub capabilities: Capabilities,
+    pub capabilities: Permissions,
     /// Carried here for the same reason `schedule` is: `save_config` rebuilds a whole fresh
     /// `AppConfig` from this DTO, so a field that isn't round-tripped is silently reset. Leaving it
     /// out would wipe the user's chosen restore image on any unrelated save.
@@ -227,7 +228,7 @@ impl From<AppConfig> for ConfigDto {
             stop_button: c.stop_button,
             disabled_monitors: c.disabled_monitors,
             monitor_regions: c.monitor_regions,
-            capabilities: c.capabilities,
+            capabilities: c.permissions,
             wallpaper: c.wallpaper,
             volume: c.volume,
             audio_device: c.audio_device,
@@ -245,13 +246,12 @@ impl From<ConfigDto> for AppConfig {
             uploaded_modes: Vec::new(),
             mode: dto.mode.into(),
             mode_options: HashMap::new(),
-            experience_options: HashMap::new(),
             theme: dto.theme,
             appearance: dto.appearance,
             stop_button: dto.stop_button,
             disabled_monitors: dto.disabled_monitors,
             monitor_regions: dto.monitor_regions,
-            capabilities: dto.capabilities,
+            permissions: dto.capabilities,
             wallpaper: dto.wallpaper,
             volume: dto.volume,
             audio_device: dto.audio_device,

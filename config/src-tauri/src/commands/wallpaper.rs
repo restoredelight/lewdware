@@ -120,7 +120,7 @@ pub async fn pick_restore_image(app_handle: AppHandle) -> Result<Option<String>,
 /// Offered as the starting point so the restore image is never left unset once the user opts in.
 #[tauri::command]
 pub async fn default_restore_image() -> Result<String, String> {
-    tokio::task::spawn_blocking(shared::wallpaper::default_restore_image)
+    tokio::task::spawn_blocking(shared::wallpaper::default_restore_image_path)
         .await
         .map_err(|e| e.to_string())?
         .map(|path| path.to_string_lossy().into_owned())

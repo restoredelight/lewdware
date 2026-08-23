@@ -4,6 +4,7 @@ pub fn temp_dir() -> PathBuf {
     std::env::temp_dir().join("lewdware-tmp")
 }
 
+/// I hate AppImages
 #[cfg(target_os = "linux")]
 pub fn sanitize_child_env(cmd: &mut std::process::Command) {
     let is_appimage = std::env::var("APPIMAGE").is_ok() || std::env::var("APPDIR").is_ok();

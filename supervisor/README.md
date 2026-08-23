@@ -57,5 +57,5 @@ lewdware-supervisor diagnose-schedule
 The report checks `N - Q`: actual firings minus the sum of their exact tick-level
 probabilities. That quantity should be zero on average, with variance
 `sum(q * (1 - q))`. This discrete calibration remains valid when a closing tick has
-a large intensity but can still start at most one session. Details are in
+a large hazard but can still start at most one session. Details are in
 `residuals.rs`.

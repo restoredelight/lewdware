@@ -18,7 +18,7 @@ use std::{env, fs, path::PathBuf, process::Command};
 
 use anyhow::{Context, Result, bail};
 
-use super::{AwwwContent, AwwwOutput, Snapshot, run, stdout_of};
+use super::{AwwwContent, AwwwOutput, Snapshot, run_cmd, stdout_of};
 use crate::utils::sanitize_child_env;
 
 /// The daemon-backed strategies, in the order they are probed.
@@ -181,11 +181,11 @@ pub fn set(path: &str) -> Result<()> {
     match detect().context("no usable wallpaper tool found for this compositor")? {
         Daemon::Awww => {
             let binary = awww_binary().context("awww disappeared between probe and set")?;
-            run(binary, &["img", "--resize", "crop", path])
+            run_cmd(binary, &["img", "--resize", "crop", path])
         }
         Daemon::Hyprpaper => {
-            run("hyprctl", &["hyprpaper", "preload", path])?;
-            run("hyprctl", &["hyprpaper", "wallpaper", &format!(",{path}")])
+            run_cmd("hyprctl", &["hyprpaper", "preload", path])?;
+            run_cmd("hyprctl", &["hyprpaper", "wallpaper", &format!(",{path}")])
         }
         Daemon::Swaybg => spawn_swaybg(&[
             "swaybg".to_owned(),
@@ -194,12 +194,12 @@ pub fn set(path: &str) -> Result<()> {
             "-m".to_owned(),
             "fill".to_owned(),
         ]),
-        Daemon::Feh => run("feh", &["--bg-fill", path]),
-        Daemon::Nitrogen => run("nitrogen", &["--set-zoom-fill", "--save", path]),
+        Daemon::Feh => run_cmd("feh", &["--bg-fill", path]),
+        Daemon::Nitrogen => run_cmd("nitrogen", &["--set-zoom-fill", "--save", path]),
         Daemon::SetOnly(binary) => {
             let args = setter_args(binary, path);
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            run(binary, &args)
+            run_cmd(binary, &args)
         }
     }
 }
@@ -211,10 +211,10 @@ pub fn restore(snapshot: &Snapshot) -> Result<()> {
             for output in outputs {
                 match &output.content {
                     AwwwContent::Image { path } => {
-                        run(binary, &["img", "--outputs", &output.name, path])?
+                        run_cmd(binary, &["img", "--outputs", &output.name, path])?
                     }
                     AwwwContent::Color { rgb } => {
-                        run(binary, &["clear", "--outputs", &output.name, rgb])?
+                        run_cmd(binary, &["clear", "--outputs", &output.name, rgb])?
                     }
                 }
             }
@@ -222,8 +222,8 @@ pub fn restore(snapshot: &Snapshot) -> Result<()> {
         }
         Snapshot::Hyprpaper { entries } => {
             for (monitor, path) in entries {
-                run("hyprctl", &["hyprpaper", "preload", path])?;
-                run(
+                run_cmd("hyprctl", &["hyprpaper", "preload", path])?;
+                run_cmd(
                     "hyprctl",
                     &["hyprpaper", "wallpaper", &format!("{monitor},{path}")],
                 )?;
@@ -233,7 +233,7 @@ pub fn restore(snapshot: &Snapshot) -> Result<()> {
         Snapshot::Swaybg { instances } => {
             // Kill everything, ours included, then put back exactly what was running before. If
             // nothing was, killing ours is the whole restore.
-            let _ = run("pkill", &["-x", "swaybg"]);
+            let _ = run_cmd("pkill", &["-x", "swaybg"]);
 
             for argv in instances {
                 spawn_swaybg(argv)?;
@@ -246,7 +246,7 @@ pub fn restore(snapshot: &Snapshot) -> Result<()> {
             let path = fehbg_path().context("could not locate ~/.fehbg")?;
             fs::write(&path, script)
                 .with_context(|| format!("could not write {}", path.display()))?;
-            run(
+            run_cmd(
                 "sh",
                 &[path.to_str().context("~/.fehbg path is not UTF-8")?],
             )
@@ -255,7 +255,7 @@ pub fn restore(snapshot: &Snapshot) -> Result<()> {
             let path = nitrogen_config().context("could not locate nitrogen's config")?;
             fs::write(&path, config)
                 .with_context(|| format!("could not write {}", path.display()))?;
-            run("nitrogen", &["--restore"])
+            run_cmd("nitrogen", &["--restore"])
         }
         _ => bail!("this wallpaper snapshot was not taken by a wallpaper daemon"),
     }

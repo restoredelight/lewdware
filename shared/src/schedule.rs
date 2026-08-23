@@ -1,21 +1,15 @@
 //! Scheduling vocabulary and pure calculations.
 //!
-//! A rate rule is a fixed-quota point process, not an ordinary Poisson process. Ignoring tick
-//! discretisation, `remaining / expected_remaining_time` is the conditional hazard of the next of
-//! `remaining` uniformly distributed points. Spending one budget item after a firing gives the
-//! subsequent order statistics, so the budget is a hard upper bound rather than merely an expected
-//! count.
-//!
-//! The intensity is deliberately left to diverge as a range closes, because that divergence is what
-//! places the last of the quota. Spacing is not its job: the cooldown enforces the minimum gap
-//! between sessions exactly, as a hard suppression the intensity cannot argue with, so a second,
-//! softer version of the same constraint here would only cost delivery.
+//! A rate rule is a fixed-quota point process. Ignoring tick discretisation, `remaining /
+//! expected_remaining_time` is the conditional hazard of the next of `remaining` uniformly
+//! distributed points. Spending one budget item after a firing gives the subsequent order
+//! statistics, so the budget is a hard upper bound rather than merely an expected count.
 
 use std::path::PathBuf;
 
 use anyhow::Context;
 use chrono::{
-    DateTime, Datelike, Duration as ChronoDuration, Local, LocalResult, NaiveDate, TimeZone,
+    DateTime, Datelike, TimeDelta, Local, LocalResult, NaiveDate, TimeZone,
     Timelike,
 };
 use serde::{Deserialize, Serialize};
@@ -62,9 +56,6 @@ pub struct Rule {
     pub overrides: SessionOverrides,
 }
 
-/// The two promises a user can ask for. `At` promises a clock time and accepts that it may fire at
-/// an empty desk -- that is what "at 09:00" means. `Rate` promises a frequency and refuses to say
-/// when -- that is what "three times a day" means. v1 conflated them and kept neither.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Trigger {
@@ -72,8 +63,6 @@ pub enum Trigger {
     Rate { range: Range, frequency: Frequency },
 }
 
-/// The daily span a `Rate` rule may fire in. `AllDay` is a variant rather than the coincidence it
-/// was in v1 (a `jitter_minutes` of exactly 1440).
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Range {
@@ -99,9 +88,7 @@ impl Frequency {
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionLength {
-    /// Plain wall-clock minutes from the moment the session starts.
     Fixed { minutes: u32 },
-    /// The default behaviour of a manual session, which v1 could not express for a scheduled one.
     UntilStopped,
 }
 
@@ -114,12 +101,6 @@ pub struct SessionOverrides {
 }
 
 /// The environment variable the supervisor hands [`SessionOverrides`] to the engine in, as JSON.
-///
-/// Deliberately not command-line arguments. `/proc/<pid>/cmdline` is world-readable (0444) on
-/// Linux, and any process in the same session can read another's command line on Windows -- so a
-/// `--pack-path` put the name of the loaded pack in front of every process on the machine, which
-/// for this app in particular is not a detail to leak. `/proc/<pid>/environ` is 0400: the owner
-/// only. Neither channel is a secure one, but this one does not broadcast.
 pub const SESSION_OVERRIDES_ENV: &str = "LEWDWARE_SESSION_OVERRIDES";
 
 impl SessionOverrides {
@@ -127,10 +108,6 @@ impl SessionOverrides {
         self.mode.is_none() && self.pack_path.is_none()
     }
 
-    /// Encodes these overrides for [`SESSION_OVERRIDES_ENV`]. `None` when there is nothing to
-    /// override, so that the variable is left unset rather than set to an empty object -- an
-    /// engine that sees no variable and one that sees `{}` must behave identically, and not
-    /// setting it is the cheaper way to guarantee that.
     pub fn to_env_value(&self) -> anyhow::Result<Option<String>> {
         if self.is_empty() {
             return Ok(None);
@@ -139,8 +116,6 @@ impl SessionOverrides {
         Ok(Some(serde_json::to_string(self)?))
     }
 
-    /// Reads [`SESSION_OVERRIDES_ENV`] back. An unset variable is an ordinary session with no
-    /// overrides, not an error; only a variable that is set and unparseable is.
     pub fn from_env() -> anyhow::Result<Self> {
         let Some(raw) = std::env::var_os(SESSION_OVERRIDES_ENV) else {
             return Ok(Self::default());
@@ -153,17 +128,12 @@ impl SessionOverrides {
         Self::from_env_value(raw)
     }
 
-    /// The parsing half of [`Self::from_env`], split out so it can be tested without touching the
-    /// process environment.
     pub fn from_env_value(raw: &str) -> anyhow::Result<Self> {
         serde_json::from_str(raw)
             .with_context(|| format!("could not parse {SESSION_OVERRIDES_ENV}"))
     }
 }
 
-/// `end` strictly before `start` (as minutes-of-day) means an overnight wrap (e.g. 21:00-05:00);
-/// equal start/end is a zero-width no-op (fails open, toward "scheduling still works"), not a 24h
-/// block. Unchanged from v1.
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct QuietHours {
     pub days: Days,
@@ -187,13 +157,11 @@ impl TimeOfDay {
         }
     }
 
-    /// Minutes since local midnight. Clamps an out-of-range hour/minute rather than propagating a
-    /// corrupt-config panic -- a pure function should stay total.
+    /// Minutes since midnight
     pub fn minutes_of_day(self) -> u32 {
         self.hour.min(23) * 60 + self.minute.min(59)
     }
 
-    /// The local instant this time-of-day names on `date`. `None` in a DST spring-forward gap.
     pub fn on(self, date: NaiveDate) -> Option<DateTime<Local>> {
         local_dt(date, self.hour, self.minute)
     }
@@ -224,17 +192,12 @@ impl Interval {
     }
 }
 
-/// One occurrence of a rule's opportunity range, tagged with the date it is anchored to. The
-/// anchor matters for wrapping ranges: the 02:00 tail of a 22:00-06:00 rule belongs to the budget
-/// period of the day it *started*, not the day it happens to end on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Occurrence {
     pub anchor: NaiveDate,
     pub interval: Interval,
 }
 
-/// The span of anchor dates one budget's worth of firings is drawn from: a single day for
-/// `PerDay`, a Monday-to-Sunday week for `PerWeek`. Both ends inclusive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Period {
     pub first: NaiveDate,
@@ -242,9 +205,6 @@ pub struct Period {
 }
 
 impl Period {
-    /// The identity a stored budget counter is compared against. A different key means a new
-    /// period, which means reset to the full count -- never carry a shortfall forward, or a
-    /// machine that was off all day would dump its whole budget at 21:00.
     pub fn key(&self) -> NaiveDate {
         self.first
     }
@@ -254,14 +214,12 @@ impl Period {
     }
 }
 
-/// Resolves `hour`/`minute` on `date` to an aware local instant, clamping defensively. DST
-/// spring-forward gap (the naive time doesn't exist) -> `None`; fall-back ambiguity -> the earlier
-/// of the two instants.
+/// Resolves `hour`/`minute` on `date` to a local datetime
 fn local_dt(date: NaiveDate, hour: u32, minute: u32) -> Option<DateTime<Local>> {
     let naive = date.and_hms_opt(hour.min(23), minute.min(59), 0)?;
     match Local.from_local_datetime(&naive) {
         LocalResult::Single(dt) => Some(dt),
-        LocalResult::Ambiguous(a, b) => Some(a.min(b)),
+        LocalResult::Ambiguous(earliest, _) => Some(earliest),
         LocalResult::None => None,
     }
 }
@@ -278,19 +236,18 @@ pub fn occurrence_dates(
     horizon_days: i64,
 ) -> Vec<NaiveDate> {
     let mut dates = Vec::new();
-    let mut d = from - ChronoDuration::days(lookback_days);
-    let end = from + ChronoDuration::days(horizon_days);
+    let mut d = from - TimeDelta::days(lookback_days);
+    let end = from + TimeDelta::days(horizon_days);
     while d <= end {
         if days[d.weekday().num_days_from_monday() as usize] {
             dates.push(d);
         }
-        d += ChronoDuration::days(1);
+        d += TimeDelta::days(1);
     }
     dates
 }
 
-/// The opportunity interval a `Rate` rule's range names when anchored on `date`. `None` for an
-/// `At` rule (an instant is not a range) or when a boundary lands in a DST gap.
+/// The interval a `Rule` spans on `date`, if there is one.
 pub fn occurrence_on(rule: &Rule, date: NaiveDate) -> Option<Occurrence> {
     let Trigger::Rate { range, .. } = &rule.trigger else {
         return None;
@@ -301,14 +258,13 @@ pub fn occurrence_on(rule: &Rule, date: NaiveDate) -> Option<Occurrence> {
     let interval = match *range {
         Range::AllDay => Interval {
             start: local_dt(date, 0, 0)?,
-            end: local_dt(date + ChronoDuration::days(1), 0, 0)?,
+            end: local_dt(date + TimeDelta::days(1), 0, 0)?,
         },
         Range::Between { from, to } => {
             let start = from.on(date)?;
-            // Equal endpoints mean a full day anchored at `from`; `AllDay` covers the midnight
-            // case, so there is nothing an empty reading would usefully express.
+
             let end_date = if to.minutes_of_day() <= from.minutes_of_day() {
-                date + ChronoDuration::days(1)
+                date + TimeDelta::days(1)
             } else {
                 date
             };
@@ -324,7 +280,7 @@ pub fn occurrence_on(rule: &Rule, date: NaiveDate) -> Option<Occurrence> {
     })
 }
 
-/// Every occurrence of `rule` anchored on a date within `period`.
+/// Every occurrence of `rule` within a date range
 pub fn occurrences_in_period(rule: &Rule, period: Period) -> Vec<Occurrence> {
     let mut out = Vec::new();
     let mut date = period.first;
@@ -332,29 +288,24 @@ pub fn occurrences_in_period(rule: &Rule, period: Period) -> Vec<Occurrence> {
         if let Some(occurrence) = occurrence_on(rule, date) {
             out.push(occurrence);
         }
-        date += ChronoDuration::days(1);
+        date += TimeDelta::days(1);
     }
     out
 }
 
-/// The anchor date of the occurrence that is either running at `now` or is the next to start.
-/// `None` if the rule has no occurrence within the horizon (no days selected, or an `At` rule).
-///
-/// This is the v1 "which occurrence is still relevant" question, asked correctly: v1 asked it
-/// against an *unjittered* end, which declared a window finished up to `jitter_minutes` early and
-/// discarded a roll that had not fired yet. Here the interval is the whole truth, so there is
-/// nothing to be early about.
+/// The date of the occurrence that is either running at `now` or is the next to start.
+/// `None` if the rule has no occurrence within the horizon.
 pub fn active_or_next_anchor(rule: &Rule, now: DateTime<Local>) -> Option<NaiveDate> {
     let today = now.date_naive();
-    let mut date = today - ChronoDuration::days(LOOKBACK_DAYS);
-    let last = today + ChronoDuration::days(HORIZON_DAYS);
+    let mut date = today - TimeDelta::days(LOOKBACK_DAYS);
+    let last = today + TimeDelta::days(HORIZON_DAYS);
     while date <= last {
         if let Some(occurrence) = occurrence_on(rule, date)
             && occurrence.interval.end > now
         {
             return Some(date);
         }
-        date += ChronoDuration::days(1);
+        date += TimeDelta::days(1);
     }
     None
 }
@@ -372,18 +323,16 @@ pub fn current_period(rule: &Rule, now: DateTime<Local>) -> Option<Period> {
         },
         Frequency::PerWeek { .. } => {
             let monday =
-                anchor - ChronoDuration::days(anchor.weekday().num_days_from_monday() as i64);
+                anchor - TimeDelta::days(anchor.weekday().num_days_from_monday() as i64);
             Period {
                 first: monday,
-                last: monday + ChronoDuration::days(6),
+                last: monday + TimeDelta::days(6),
             }
         }
     })
 }
 
-/// Every `[start, end)` a quiet-hours entry covers, anchored on any date in
-/// `[from - 1, to]` -- the extra day back catches an overnight period anchored yesterday that is
-/// still running.
+/// Every interval a quiet-hours entry covers, on any date in `[from - 1, to]`.
 pub fn quiet_intervals(
     quiet_hours: &[QuietHours],
     from: NaiveDate,
@@ -391,7 +340,7 @@ pub fn quiet_intervals(
 ) -> Vec<Interval> {
     let mut out = Vec::new();
     for q in quiet_hours {
-        let mut date = from - ChronoDuration::days(1);
+        let mut date = from - TimeDelta::days(1);
         while date <= to {
             if day_selected(&q.days, date)
                 && let Some(interval) = quiet_interval(date, q)
@@ -399,18 +348,17 @@ pub fn quiet_intervals(
             {
                 out.push(interval);
             }
-            date += ChronoDuration::days(1);
+            date += TimeDelta::days(1);
         }
     }
     out
 }
 
-/// The `[start, end)` of one quiet-hours entry anchored at `date`. Equal start/end resolves to an
-/// empty range (checked by the caller) rather than needing a special case.
+/// The interval of one quiet-hours entry at `date`. May return an empty interval.
 fn quiet_interval(date: NaiveDate, q: &QuietHours) -> Option<Interval> {
     let start = q.start.on(date)?;
     let end_date = if q.end.minutes_of_day() < q.start.minutes_of_day() {
-        date + ChronoDuration::days(1)
+        date + TimeDelta::days(1)
     } else {
         date
     };
@@ -424,7 +372,7 @@ fn quiet_interval(date: NaiveDate, q: &QuietHours) -> Option<Interval> {
 pub fn is_quiet(now: DateTime<Local>, quiet_hours: &[QuietHours]) -> bool {
     let today = now.date_naive();
     quiet_hours.iter().any(|q| {
-        [today - ChronoDuration::days(1), today]
+        [today - TimeDelta::days(1), today]
             .into_iter()
             .any(|anchor| {
                 day_selected(&q.days, anchor)
@@ -433,14 +381,12 @@ pub fn is_quiet(now: DateTime<Local>, quiet_hours: &[QuietHours]) -> bool {
     })
 }
 
-/// `intervals` minus `blockers`, sorted by start. The class-1 veto in interval form: quiet hours
-/// do not merely stop a session, they remove the time from the opportunity budget entirely, so a
-/// rule cannot plan to fire in a period it is forbidden from.
-pub fn subtract(intervals: &[Interval], blockers: &[Interval]) -> Vec<Interval> {
+/// `include \ exclude`. Returned as a list of intervals, sorted by `start`.
+pub fn subtract(include: &[Interval], exclude: &[Interval]) -> Vec<Interval> {
     let mut out: Vec<Interval> = Vec::new();
-    for interval in intervals {
+    for interval in include {
         let mut pieces = vec![*interval];
-        for blocker in blockers {
+        for blocker in exclude {
             let mut next = Vec::with_capacity(pieces.len());
             for piece in pieces {
                 if piece.start < blocker.start {
@@ -467,8 +413,7 @@ pub fn subtract(intervals: &[Interval], blockers: &[Interval]) -> Vec<Interval> 
     out
 }
 
-/// Minutes covered by both sets. Both are sorted and internally disjoint, so a plain pairwise
-/// sweep is exact; the sets involved have a handful of entries each.
+/// Minutes covered by both sets. Assumes that both are sorted and disjoint.
 pub fn overlap_minutes(a: &[Interval], b: &[Interval]) -> f64 {
     let mut total = 0.0;
     for x in a {
@@ -512,11 +457,7 @@ pub fn remaining_opportunity(
     clip_from(&period_opportunity(rule, now, quiet_hours), now)
 }
 
-/// Every minute `rule` may draw in across the whole budget period covering `at`, quiet hours
-/// removed. [`remaining_opportunity`] is this clipped to what is still ahead.
-///
-/// The unclipped form is what a feasibility question needs: whether a budget fits is a fact about
-/// the period, not about how much of it happens to be left when somebody asks.
+/// The intervals `rule` may cover in a day.
 pub fn period_opportunity(
     rule: &Rule,
     at: DateTime<Local>,
@@ -532,19 +473,17 @@ pub fn period_opportunity(
     let blockers = quiet_intervals(
         quiet_hours,
         period.first,
-        period.last + ChronoDuration::days(1),
+        period.last + TimeDelta::days(1),
     );
     subtract(&intervals, &blockers)
 }
 
-/// The interval `now` falls inside, if any -- i.e. whether the rule may fire at all right now.
+/// The interval `now` falls inside, if any.
 pub fn current_interval(now: DateTime<Local>, intervals: &[Interval]) -> Option<Interval> {
     intervals.iter().copied().find(|i| i.contains(now))
 }
 
-/// The next instant after `now` at which the set of open intervals changes -- an interval opening
-/// or closing. What the supervisor sleeps until when nothing is open; while something *is* open it
-/// also ticks, because a hazard rate has to be integrated rather than waited out.
+/// The next interval after `now`.
 pub fn next_edge(now: DateTime<Local>, intervals: &[Interval]) -> Option<DateTime<Local>> {
     intervals
         .iter()
@@ -553,10 +492,7 @@ pub fn next_edge(now: DateTime<Local>, intervals: &[Interval]) -> Option<DateTim
         .min()
 }
 
-/// The next instant a `Trigger::At` rule fires: the earliest matching day/time strictly after
-/// `now` that is not vetoed by quiet hours. Unlike a `Rate` rule this *is* a pre-rolled instant --
-/// deliberately, because naming the instant is the whole promise -- so it is also the one thing
-/// the UI may display.
+/// The next instant a `Trigger::At` rule fires.
 pub fn next_at_firing(
     rule: &Rule,
     now: DateTime<Local>,
@@ -565,241 +501,197 @@ pub fn next_at_firing(
     let Trigger::At { time } = &rule.trigger else {
         return None;
     };
+
     occurrence_dates(&rule.days, now.date_naive(), 0, HORIZON_DAYS)
         .into_iter()
         .filter_map(|date| time.on(date))
         .find(|&at| at > now && !is_quiet(at, quiet_hours))
 }
 
-// ─── Presence ──────────────────────────────────────────────────────────────────
-
 /// How long evidence takes to lose half its weight, wherever it sits in the hierarchy.
-///
-/// One horizon for every rung, because "how far back is still relevant" is a fact about the user's
-/// life rather than about the bucketing. What differs between rungs is how much evidence each one
-/// gathers inside that horizon, and that difference is the entire point of having rungs.
 pub const PRESENCE_HALF_LIFE_DAYS: f64 = 28.0;
 
-/// Decay per hour of wall time, wherever it is applied.
-///
-/// One constant, not one per rung. Evidence ages on the calendar, so every bucket is aged on every
-/// observation and only the bucket the hour belongs to is credited. The confidence ladder then
-/// falls out of how often a bucket comes round rather than being tuned into each rung: a global
-/// bucket is credited every hour and settles at about 970 hours of evidence, an hour-of-week bucket
-/// once a week and settles at 6.3. Keeping the rate common is also what makes one rung's counts
-/// subtractable from another's, which [`PresenceProfile::posterior`] depends on.
-///
-/// At the finest rung this reproduces the old hand-picked 0.15 per weekly observation, which is
-/// reassuring: the constant was about right, it just had no derivation and no way to say that the
-/// same horizon means something very different one rung up.
+/// Decay per hour of wall time
 fn presence_alpha() -> f64 {
     1.0 - 0.5_f64.powf(1.0 / (24.0 * PRESENCE_HALF_LIFE_DAYS))
 }
 
-/// The estimate every rung starts from before anything has been observed.
-///
-/// Deliberately not 1.0. Over-estimating presence inflates the hazard's denominator, which
-/// under-fires, which is the failure the schedule cannot recover from -- a period that ends owing
-/// a session never gets it back. Under-estimating merely front-loads the day, and the budget
-/// counter corrects that on its own as it drains. The prior is set on the cheap side of that
-/// asymmetry.
-///
-/// It is not the same question as what [`expected_present_minutes`] should do on a platform with
-/// no presence backend at all; see [`PresenceProfile::saturated_at`].
 const PRIOR_MEAN: f64 = 0.5;
 
-/// How much direct evidence a rung needs before it stops deferring to the rung above it.
-///
-/// In the units the counts are kept in -- hours of observation -- so this reads as "one hour of
-/// evidence about *this* bucket is worth as much as everything the coarser rung has to say". Also
-/// the strength of [`PRIOR_MEAN`] at the root, which is the same quantity: the prior is just the
-/// parent of the coarsest rung.
+/// How much direct evidence a resolution needs before it stops deferring to the resolution above it.
 const SHRINKAGE: f64 = 1.0;
 
-/// One rung of the presence hierarchy, coarsest first.
+/// One resolution of the presence hierarchy, coarsest first.
 ///
-/// All four ask the same question -- was the user here? -- at different resolutions, and every
-/// observation updates all of them. A rung's bucket is hit as often as its resolution is coarse:
-/// the global bucket sees every hour, an hour-of-week bucket sees one hour a week. Since evidence
-/// decays on a fixed wall-clock horizon, that difference is exactly a difference in how much
-/// evidence a bucket holds once it has settled, which is what lets a confident coarse rung stand
-/// in for a fine one that has not seen enough yet.
-///
-/// This is what fixes the cold start. The old single-rung profile needed about fourteen weeks to
-/// learn an hour-of-week bucket, and until then every estimate was the prior. The global rung here
-/// settles within a day and the hour-of-day rung within a fortnight, so a new install has a usable
-/// estimate almost immediately and refines it as the finer rungs earn their weight.
+/// Finer resolutions are more informative, but slower to gather evidence for and adapt to new
+/// information.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Rung {
+pub enum Resolution {
     /// Is this user at their machine at all, ever? Settles in hours.
-    Global,
+    Global = 0,
     /// The daily rhythm, pooled across the week. The single biggest real effect.
-    HourOfDay,
+    HourOfDay = 1,
     /// Weekday against weekend, which is the second biggest and the one hour-of-day cannot see.
-    DayTypeHour,
-    /// The full week. Only rung that can learn a Tuesday-specific habit, and the slowest by far.
-    HourOfWeek,
+    DayTypeHour = 2,
+    /// The full week.
+    HourOfWeek = 3,
 }
 
-const RUNGS: [Rung; 4] = [
-    Rung::Global,
-    Rung::HourOfDay,
-    Rung::DayTypeHour,
-    Rung::HourOfWeek,
+const RESOLUTIONS: [Resolution; 4] = [
+    Resolution::Global,
+    Resolution::HourOfDay,
+    Resolution::DayTypeHour,
+    Resolution::HourOfWeek,
 ];
 
-impl Rung {
+impl Resolution {
     const fn buckets(self) -> usize {
         match self {
-            Rung::Global => 1,
-            Rung::HourOfDay => 24,
-            Rung::DayTypeHour => 2 * 24,
-            Rung::HourOfWeek => PRESENCE_BUCKETS,
+            Resolution::Global => 1,
+            Resolution::HourOfDay => 24,
+            Resolution::DayTypeHour => 2 * 24,
+            Resolution::HourOfWeek => 7 * 24,
         }
     }
 
-    /// Wall hours between consecutive visits to one of this rung's buckets, on a machine watched
-    /// around the clock. What decides how much evidence a bucket holds once it has settled.
+    /// Evidence one of this resolution's buckets holds once it has settled: the geometric sum of one hour
+    /// credited every period (1h global, 24h daily, ~33.6h weekday/weekend, 168h weekly), aged at [`presence_alpha`].
     ///
-    /// The weekday/weekend rung is quoted at its weekday rate: its two halves genuinely are visited
-    /// at different rates (five days against two), so weekend buckets settle lower. That is a real
-    /// asymmetry and not worth a fifth rung to remove -- a weekend bucket holding less evidence
-    /// simply leans a little harder on hour-of-day, which is the correct response to knowing less.
-    const fn period_hours(self) -> f64 {
-        match self {
-            Rung::Global => 1.0,
-            Rung::HourOfDay => 24.0,
-            Rung::DayTypeHour => 168.0 / 5.0,
-            Rung::HourOfWeek => 168.0,
-        }
-    }
-
-    /// Evidence one of this rung's buckets holds once it has settled: the geometric sum of one hour
-    /// credited every [`period_hours`](Rung::period_hours), aged at [`presence_alpha`].
+    /// Used for testing.
     fn settled_evidence(self) -> f64 {
-        1.0 / (1.0 - (1.0 - presence_alpha()).powf(self.period_hours()))
+        let period = match self {
+            Resolution::Global => 1.0,
+            Resolution::HourOfDay => 24.0,
+            Resolution::DayTypeHour => 168.0 / 5.0,
+            Resolution::HourOfWeek => 168.0,
+        };
+        1.0 / (1.0 - (1.0 - presence_alpha()).powf(period))
     }
 
+    // The bucket index of a datetime
     fn bucket_of(self, at: DateTime<Local>) -> usize {
         let hour = at.hour() as usize;
         let weekday = at.weekday().num_days_from_monday() as usize;
         match self {
-            Rung::Global => 0,
-            Rung::HourOfDay => hour,
-            Rung::DayTypeHour => usize::from(weekday >= 5) * 24 + hour,
-            Rung::HourOfWeek => weekday * 24 + hour,
+            Resolution::Global => 0,
+            Resolution::HourOfDay => hour,
+            Resolution::DayTypeHour => usize::from(weekday >= 5) * 24 + hour,
+            Resolution::HourOfWeek => weekday * 24 + hour,
         }
     }
 }
 
-/// Hour-of-week buckets in the finest rung: 7 days x 24 hours, Monday 00:00 == 0.
-pub const PRESENCE_BUCKETS: usize = 7 * 24;
+/// One bucket's decayed Beta counts: evidence for "present", and evidence in total.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct Bucket {
+    pub present: f32,
+    pub total: f32,
+}
 
-/// Decayed Beta counts for one rung: evidence for "present", and evidence in total.
+impl Bucket {
+    pub const fn new(present: f32, total: f32) -> Self {
+        Self { present, total }
+    }
+
+    /// Clamps fields to valid non-negative numbers, or defaults to 0.0.
+    fn sanitized(self) -> Self {
+        if self.total.is_finite() && self.present.is_finite() {
+            Self {
+                present: self.present.max(0.0),
+                total: self.total.max(0.0),
+            }
+        } else {
+            Self::default()
+        }
+    }
+}
+
+/// Decayed Beta counts for one resolution: a slice of [`Bucket`]s indexed by that resolution's period.
 ///
-/// Held apart rather than as a single mean because the mean alone cannot say how much it is worth.
-/// That distinction is what the old representation was missing, and it is load bearing three times
-/// over -- it is the shrinkage weight between rungs, it is what a prior can be expressed in, and
-/// it is the posterior spread the denominator ought to be read against.
-///
-/// Both decay on the same clock, so their ratio is an estimate and `total` alone is a confidence.
-/// `total` settles at `1 / alpha`: about 970 hours for the global rung, 6.3 for hour-of-week.
+/// `total` settles at `1 / alpha`: about 970 hours for the global resolution, 6.3 for hour-of-week.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 struct Counts {
-    present: Vec<f32>,
-    total: Vec<f32>,
+    buckets: Vec<Bucket>,
 }
 
 impl Counts {
-    fn saturated(rung: Rung, p: f64) -> Self {
-        let total = rung.settled_evidence();
-        Self {
-            present: vec![(total * p.clamp(0.0, 1.0)) as f32; rung.buckets()],
-            total: vec![total as f32; rung.buckets()],
-        }
-    }
-
-    /// `(present, total)` for a bucket, or `(0, 0)` when the rung has never been written or the
-    /// file was truncated. Zero evidence makes the rung a no-op in the chain rather than an error.
-    fn at(&self, bucket: usize) -> (f64, f64) {
-        match (self.present.get(bucket), self.total.get(bucket)) {
-            (Some(&present), Some(&total)) if total.is_finite() && present.is_finite() => {
-                (f64::from(present).max(0.0), f64::from(total).max(0.0))
-            }
-            _ => (0.0, 0.0),
-        }
+    /// The [`Bucket`] at `bucket`, or [`Bucket::default()`] if missing or non-finite.
+    fn get(&self, bucket: usize) -> Bucket {
+        self.buckets
+            .get(bucket)
+            .copied()
+            .map_or(Bucket::default(), Bucket::sanitized)
     }
 
     /// Ages *every* bucket by `weight` hours and credits `bucket` with the observation.
     ///
-    /// Ageing all of them, rather than only the one that was seen, is what puts every count on the
-    /// same clock: a bucket's evidence then measures hours-of-observation-within-the-horizon, which
-    /// is comparable across rungs and therefore subtractable between them. It also means a habit
-    /// that stops being practised fades on the calendar instead of sitting untouched until the hour
-    /// next comes round.
-    ///
     /// The gain is `(1 - decay) / alpha` rather than `weight` so that splitting an observation
-    /// cannot change the result: twelve five-minute samples compose to exactly one hourly one,
+    /// cannot change the result: twelve five-minute samples is the same as one hourly one,
     /// which matters because the scheduler is free to change how often it samples.
-    fn observe(&mut self, rung: Rung, bucket: usize, weight: f64, target: f64) {
-        if self.total.len() != rung.buckets() {
-            self.present.resize(rung.buckets(), 0.0);
-            self.total.resize(rung.buckets(), 0.0);
+    fn observe(&mut self, resolution: Resolution, bucket: usize, weight: f64, target: f64) {
+        if self.buckets.len() != resolution.buckets() {
+            self.buckets.resize(resolution.buckets(), Bucket::default());
         }
+
         let alpha = presence_alpha();
         let decay = (1.0 - alpha).powf(weight);
         let gain = (1.0 - decay) / alpha;
-        for value in self.present.iter_mut().chain(self.total.iter_mut()) {
-            *value = (f64::from(*value) * decay) as f32;
+        for b in &mut self.buckets {
+            b.present = (f64::from(b.present) * decay) as f32;
+            b.total = (f64::from(b.total) * decay) as f32;
         }
-        let (present, total) = self.at(bucket);
-        self.present[bucket] = (present + gain * target) as f32;
-        self.total[bucket] = (total + gain) as f32;
+
+        let prior = self.get(bucket);
+        self.buckets[bucket].present = prior.present + (gain * target) as f32;
+        self.buckets[bucket].total = prior.total + gain as f32;
     }
 }
 
-/// P(the user is at the machine), estimated at four resolutions at once and pooled.
+/// Aims to predict P(the user is at the machine) based on previous observations. We record data at
+/// four resolutions (see [Resolution]). 
 ///
-/// Reading an estimate walks the rungs coarse to fine, each one shrinking toward what the rung
+/// Reading an estimate walks the resolutions coarse to fine, each one shrinking toward what the resolution
 /// above concluded:
 ///
 /// ```text
 /// mean = PRIOR_MEAN
-/// for rung in coarse..fine:
-///     mean = (present + SHRINKAGE * mean) / (total + SHRINKAGE)
+/// for resolution in coarse..fine:
+///     mean = (resolution.present + SHRINKAGE * mean) / (resolution.total + SHRINKAGE)
 /// ```
 ///
-/// which is one Beta update per rung, with the parent's posterior as the child's prior. A bucket
-/// with no evidence returns its parent unchanged; a bucket with plenty returns its own ratio. No
-/// separate blending weight is needed because the counts already are the weight.
+/// which is one Beta update per resolution, with the parent's posterior as the child's prior. A bucket
+/// with no evidence returns its parent unchanged; a bucket with plenty returns its own ratio.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(from = "StoredProfile", into = "StoredProfile")]
 pub struct PresenceProfile {
-    rungs: [Counts; RUNGS.len()],
+    resolutions: [Counts; RESOLUTIONS.len()],
 }
 
 impl PresenceProfile {
-    /// A profile that already believes `p` everywhere, with enough evidence behind it that fresh
-    /// observations move it at the ordinary rate rather than swamping it.
+    /// A profile that already believes `p` everywhere with settled steady-state evidence.
     ///
-    /// `saturated_at(1.0)` is what a platform with no presence backend wants: the rate model then
-    /// integrates over plain wall-clock time, which is the documented tier-3 behaviour. It is a
-    /// different question from [`PRIOR_MEAN`], which is what to believe when nothing is known --
-    /// there, knowing nothing is exactly the point.
+    /// Used in tests and schedule simulations so scenarios can test converged behaviour without
+    /// waiting weeks of simulated time.
     pub fn saturated_at(p: f64) -> Self {
+        let p = p.clamp(0.0, 1.0);
         Self {
-            rungs: RUNGS.map(|rung| Counts::saturated(rung, p)),
+            resolutions: RESOLUTIONS.map(|res| {
+                let total = res.settled_evidence();
+                let present = total * p;
+                Counts {
+                    buckets: vec![
+                        Bucket {
+                            present: present as f32,
+                            total: total as f32,
+                        };
+                        res.buckets()
+                    ],
+                }
+            }),
         }
     }
 
-    /// The hour-of-week bucket, Monday 00:00 == 0. The finest rung's index, kept public because it
-    /// is the one bucketing the config app talks about.
-    pub fn bucket_of(at: DateTime<Local>) -> usize {
-        Rung::HourOfWeek.bucket_of(at)
-    }
-
-    /// Adds an observation. Every rung sees it: one hour of evidence is one hour of evidence at
-    /// any resolution, and the rungs differ only in how often their bucket comes round again.
+    /// Add an observation.
     pub fn observe(&mut self, interval: Interval, present: bool) {
         let target = if present { 1.0 } else { 0.0 };
         let mut chunks: Vec<(DateTime<Local>, f64)> = Vec::new();
@@ -811,75 +703,61 @@ impl PresenceProfile {
             if weight <= 0.0 {
                 continue;
             }
-            for (rung, counts) in RUNGS.iter().zip(self.rungs.iter_mut()) {
-                counts.observe(*rung, rung.bucket_of(at), weight, target);
+            for (res, counts) in RESOLUTIONS.iter().zip(self.resolutions.iter_mut()) {
+                counts.observe(*res, res.bucket_of(at), weight, target);
             }
         }
     }
 
-    /// The pooled estimate: what the profile believes about `at`.
+    /// Estimate the probability at `at`.
     pub fn p(&self, at: DateTime<Local>) -> f64 {
         let (mean, _) = self.posterior(at);
         mean
     }
 
     /// Mean and variance of the estimate at `at`.
-    ///
-    /// The variance is the Beta's, `m(1-m)/(strength+1)`, and the strength is the finest rung's own
-    /// evidence plus [`SHRINKAGE`]. That the parent counts for only `SHRINKAGE` here is the point
-    /// rather than a shortcut: however sure the coarse rungs are about 3am in general, `SHRINKAGE`
-    /// is the standing claim about how far one particular hour may still differ from them, so a
-    /// bucket nobody has watched is genuinely uncertain no matter how well the week is known.
     pub fn estimate(&self, at: DateTime<Local>) -> (f64, f64) {
         let (mean, strength) = self.posterior(at);
         (mean, mean * (1.0 - mean) / (strength + 1.0))
     }
 
-    /// How many hours of evidence the finest rung holds about `at`. Nothing in the rate model reads
-    /// this yet; it is what a diagnostic or the config app would use to say how well the profile
-    /// knows a given hour.
-    pub fn evidence(&self, at: DateTime<Local>) -> f64 {
-        self.rungs[RUNGS.len() - 1]
-            .at(Rung::HourOfWeek.bucket_of(at))
-            .1
+    /// How many hours of evidence `resolution` holds about `at`.
+    pub fn evidence(&self, resolution: Resolution, at: DateTime<Local>) -> f64 {
+        f64::from(
+            self.resolutions[resolution as usize]
+                .get(resolution.bucket_of(at))
+                .total,
+        )
     }
 
-    /// Pooled mean and the Beta strength behind it, which is the pair a variance needs.
-    ///
-    /// Walks coarse to fine, each rung shrinking toward what the rung above concluded -- but on
-    /// that rung's *siblings* rather than on everything it holds. The rungs are nested: for a given
-    /// instant, the hour-of-week bucket's evidence is also inside the day-type bucket, which is
-    /// inside hour-of-day, which is inside global. Feeding a rung's total to its child would
-    /// therefore count the same hour again at every step, and four rungs of that turns a couple of
-    /// hours of evidence into apparent certainty -- worst exactly when data is scarce, which is the
-    /// case the hierarchy exists for.
-    ///
-    /// Subtracting the child's counts leaves what the siblings say, which is the only thing a
-    /// coarse rung is here to lend. Every observation is then used exactly once across the chain.
-    /// The subtraction is exact rather than approximate because [`presence_alpha`] is common to all
-    /// rungs, so their counts are in the same units.
+    /// Pooled mean and the Beta strength behind it.
     fn posterior(&self, at: DateTime<Local>) -> (f64, f64) {
-        let held: [(f64, f64); RUNGS.len()] =
-            std::array::from_fn(|i| self.rungs[i].at(RUNGS[i].bucket_of(at)));
+        let held: [Bucket; RESOLUTIONS.len()] =
+            std::array::from_fn(|i| self.resolutions[i].get(RESOLUTIONS[i].bucket_of(at)));
 
+        // Each posterior serves as the next prior.
         let mut mean = PRIOR_MEAN;
         let mut strength = SHRINKAGE;
-        for (index, &(present, total)) in held.iter().enumerate() {
+        for (index, &bucket) in held.iter().enumerate() {
             let (present, total) = match held.get(index + 1) {
-                Some(&(child_present, child_total)) => (
-                    (present - child_present).max(0.0),
-                    (total - child_total).max(0.0),
+                Some(&child) => (
+                    // Every observation made in a finer bucket is also in all of the coarser ones,
+                    // so we prevent counting that observation multiple times.
+                    (f64::from(bucket.present) - f64::from(child.present)).max(0.0),
+                    (f64::from(bucket.total) - f64::from(child.total)).max(0.0),
                 ),
-                None => (present, total),
+                None => (f64::from(bucket.present), f64::from(bucket.total)),
             };
+
             mean = ((present + SHRINKAGE * mean) / (total + SHRINKAGE)).clamp(0.0, 1.0);
             strength = total + SHRINKAGE;
         }
+
         (mean, strength)
     }
 }
 
-/// The on-disk shape, and the only place the old format is still spoken.
+/// The on-disk shape for persisted presence profiles.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct StoredProfile {
     #[serde(default)]
@@ -890,54 +768,29 @@ struct StoredProfile {
     day_type_hour: Counts,
     #[serde(default)]
     hour_of_week: Counts,
-    /// What the profile used to be: one mean per hour-of-week bucket, with no way to tell a
-    /// well-evidenced 0.3 from the prior. Read once and then dropped.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    buckets: Vec<f32>,
 }
-
-/// How much evidence a migrated bucket is credited with, in hours.
-///
-/// Deliberately meagre -- about a sixth of what an hour-of-week bucket settles at. The old format
-/// cannot say whether a stored mean was hard-won or simply the 1.0 it was initialised to, and
-/// importing a prior as though it were data is exactly the mistake the new representation exists to
-/// make impossible. A sixth is enough to carry a real pattern across the upgrade and light enough
-/// that a few weeks of real observation overrules it.
-const MIGRATION_EVIDENCE: f64 = 1.0;
 
 impl From<StoredProfile> for PresenceProfile {
     fn from(stored: StoredProfile) -> Self {
-        let mut profile = Self {
-            rungs: [
+        Self {
+            resolutions: [
                 stored.global,
                 stored.hour_of_day,
                 stored.day_type_hour,
                 stored.hour_of_week,
             ],
-        };
-        let finest = RUNGS.len() - 1;
-        if !stored.buckets.is_empty() && profile.rungs[finest].total.is_empty() {
-            let counts = &mut profile.rungs[finest];
-            counts.present = stored
-                .buckets
-                .iter()
-                .map(|&p| (f64::from(p).clamp(0.0, 1.0) * MIGRATION_EVIDENCE) as f32)
-                .collect();
-            counts.total = vec![MIGRATION_EVIDENCE as f32; counts.present.len()];
         }
-        profile
     }
 }
 
 impl From<PresenceProfile> for StoredProfile {
     fn from(profile: PresenceProfile) -> Self {
-        let [global, hour_of_day, day_type_hour, hour_of_week] = profile.rungs;
+        let [global, hour_of_day, day_type_hour, hour_of_week] = profile.resolutions;
         Self {
             global,
             hour_of_day,
             day_type_hour,
             hour_of_week,
-            buckets: Vec::new(),
         }
     }
 }
@@ -949,7 +802,7 @@ fn for_each_hour_chunk(interval: Interval, mut f: impl FnMut(Interval)) {
         let secs_from_last_hour = i64::from(cursor.minute()) * 60 + i64::from(cursor.second());
 
         // `.max(1)` makes sure we don't loop forever in strange cases (like a leap second).
-        let step = ChronoDuration::seconds((3600 - secs_from_last_hour).max(1));
+        let step = TimeDelta::seconds((3600 - secs_from_last_hour).max(1));
         let chunk_end = (cursor + step).min(interval.end);
 
         let interval = Interval::new(cursor, chunk_end);
@@ -963,9 +816,6 @@ fn for_each_hour_chunk(interval: Interval, mut f: impl FnMut(Interval)) {
 }
 
 /// Expected present minutes across `intervals`, integrating the profile hour by hour.
-///
-/// This is the only place the adaptation lives: everything else about the rate model is fixed, and
-/// learning the user's week only ever changes this denominator.
 pub fn expected_present_minutes(intervals: &[Interval], profile: &PresenceProfile) -> f64 {
     let mut total = 0.0;
     for interval in intervals {
@@ -974,26 +824,17 @@ pub fn expected_present_minutes(intervals: &[Interval], profile: &PresenceProfil
     total
 }
 
-// ─── The rate ──────────────────────────────────────────────────────────────────
-
 /// Ceiling on the dispersion correction in [`usable_present_minutes`], as a squared coefficient
 /// of variation.
-///
-/// The correction is a second-order expansion, and second-order expansions stop being trustworthy
-/// exactly where this one bites hardest: as the last hour of a window closes, the realised present
-/// time genuinely might be zero, `E[1/M]` runs away, and the series has nothing sensible to say.
-/// Capping it holds the denominator's shrinkage to a fifth, which is a correction rather than a
-/// rewrite, and leaves the endgame to the mechanism built for it: the reserve, which empties the
-/// denominator early enough for the intensity to place what is left.
 const MAX_DISPERSION: f64 = 0.25;
 
-/// The denominator the intensity actually wants, which is not the one the user is shown.
+/// The denominator the hazard actually wants, which is not the one the user is shown.
 ///
 /// [`expected_present_minutes`] answers "how much present time is left", and that is the honest
 /// answer for a config app to display. It is the wrong number to divide a budget by, for two
 /// reasons that happen to point the same way.
 ///
-/// The first is Jensen's inequality. The intensity that would place the remaining firings correctly
+/// The first is Jensen's inequality. The hazard that would place the remaining firings correctly
 /// is `k / M`, where `M` is the present time that *actually happens*; what we can compute is
 /// `k / E[M]`. Since `1/x` is convex, `E[k/M] >= k/E[M]`, so the plug-in systematically aims too
 /// low. This is a bias, not noise: it does not shrink as the profile converges, because it is
@@ -1028,51 +869,18 @@ pub fn usable_present_minutes(intervals: &[Interval], profile: &PresenceProfile)
     mean / (1.0 + dispersion)
 }
 
-/// The floor on the denominator, and now the only thing bounding the intensity at all.
-///
-/// One minute is a tick, so the most a firing can be worth in the last one is `remaining` per
-/// minute -- a probability of `1 - exp(-remaining)`, near certainty for a quota with anything left.
-/// That is the intended endgame: the range is closing and the budget is owed.
-const MIN_EXPECTED_MINUTES: f64 = 1.0;
-
-/// Conditional intensity per present-minute for the next point in a fixed-quota process:
+/// Hazard per present-minute for the next point in a fixed-quota process:
 /// `remaining / expected remaining present time`.
-///
-/// This is the hazard of the earliest of `remaining` uniform points in the remaining opportunity.
-/// It rises as that opportunity shrinks, and is allowed to keep rising, because that is exactly how
-/// a fixed quota gets placed: truncate the divergence and the last firings are the ones that go
-/// undelivered.
-///
-/// There used to be a cap here of one firing per cooldown, meant to stop a schedule that had fallen
-/// behind from cramming its remainder into the last few minutes. It was a second, softer copy of a
-/// constraint the engine already enforces exactly -- `cooling_down` suppresses firing outright, so
-/// two sessions cannot fall within a cooldown of each other whatever this returns -- and being the
-/// soft copy, it was the one that lost delivery: about nine points on an ordinary day. Removing it
-/// leaves one mechanism doing the spacing and one doing the placing.
-///
-/// The budget counter, not any cap, is what prevents over-delivery.
-pub fn hazard_per_minute(remaining_count: u32, expected_present_minutes: f64) -> f64 {
+pub fn hazard_per_minute(remaining_count: u32, usable_present_minutes: f64) -> f64 {
     if remaining_count == 0 {
         return 0.0;
     }
-    f64::from(remaining_count) / expected_present_minutes.max(MIN_EXPECTED_MINUTES)
+    f64::from(remaining_count) / usable_present_minutes.max(1.0)
 }
 
 /// Present-minutes that `sessions` further firings will consume rather than leave available to
 /// draw in, given a session length and the cooldown that follows it.
-///
-/// The denominator of the hazard is supposed to be opportunity, and a window is not all
-/// opportunity: every firing takes its own length out of it and then bars the next one for a
-/// cooldown. Counting that time as though a session could still be drawn in it makes the intensity
-/// too low by exactly the fraction of the window the schedule has already spoken for, and the
-/// shortfall compounds as the window closes -- which is precisely when there is no slack left to
-/// absorb it.
-///
-/// The two halves are weighted differently on purpose. A session's own minutes are present minutes
-/// by construction: people do not wander off in the middle of something they are watching. The
-/// cooldown that follows is ordinary time, and only the part of it the user is at the desk for was
-/// ever opportunity, so it is scaled by `presence`.
-pub fn dead_present_minutes(
+pub fn reserved_present_minutes(
     sessions: f64,
     session_minutes: f64,
     cooldown_minutes: u32,
@@ -1081,30 +889,17 @@ pub fn dead_present_minutes(
     if sessions <= 0.0 {
         return 0.0;
     }
+
     sessions * (session_minutes + f64::from(cooldown_minutes) * presence.clamp(0.0, 1.0))
 }
 
-/// P(fire) over a tick covering `present_minutes`, freezing the conditional intensity for that
-/// tick. The exponential survival formula is exact for a fixed intensity. The scheduler recomputes
-/// the intensity from its shrinking opportunity on every tick, making the complete process a
-/// piecewise-constant approximation to the fixed-quota order statistics above.
-pub fn fire_probability(hazard: f64, present_minutes: f64) -> f64 {
-    if hazard <= 0.0 || present_minutes <= 0.0 {
-        return 0.0;
-    }
-    any_fire_probability(hazard * present_minutes)
-}
-
-/// P(at least one firing) given an accumulated compensator increment.
-///
-/// The same formula [`fire_probability`] applies to one rule, stated in the form that composes:
-/// independent processes running together have the compensator increments of all of them, because
-/// their survival probabilities multiply and `exp` turns that into a sum. That is what lets several
-/// rules be resolved with a single draw instead of one apiece.
-pub fn any_fire_probability(compensator: f64) -> f64 {
+/// P(at least one firing) given a compensator (which should be the sum of `hazard * present_minutes`
+/// for each rule).
+pub fn fire_probability(compensator: f64) -> f64 {
     if compensator <= 0.0 {
         return 0.0;
     }
+
     1.0 - (-compensator).exp()
 }
 
@@ -1481,9 +1276,9 @@ mod tests {
         present: impl Fn(DateTime<Local>) -> bool,
     ) {
         for hour in 0..(days * 24) {
-            let at = start + ChronoDuration::hours(hour);
+            let at = start + TimeDelta::hours(hour);
             profile.observe(
-                Interval::new(at, at + ChronoDuration::hours(1)),
+                Interval::new(at, at + TimeDelta::hours(1)),
                 present(at),
             );
         }
@@ -1558,18 +1353,18 @@ mod tests {
     }
 
     /// The cold-start fix, stated as a test: a bucket that has never been observed still gets a
-    /// useful estimate, because coarser rungs have seen the same hour on other days.
+    /// useful estimate, because coarser resolutions have seen the same hour on other days.
     #[test]
-    fn a_coarse_rung_stands_in_for_a_fine_one_that_has_seen_nothing() {
+    fn a_coarse_resolution_stands_in_for_a_fine_one_that_has_seen_nothing() {
         // Six days only, so no Sunday is ever observed.
         let mut profile = PresenceProfile::default();
         observe_days(&mut profile, monday(), 6, away_at_three);
 
         let sunday_night = dt(2026, 7, 19, 3, 30);
         assert_eq!(
-            profile.evidence(sunday_night),
+            profile.evidence(Resolution::HourOfWeek, sunday_night),
             0.0,
-            "the finest rung must have nothing to go on"
+            "the finest resolution must have nothing to go on"
         );
         assert!(
             profile.p(sunday_night) < 0.25,
@@ -1580,19 +1375,19 @@ mod tests {
         assert!(profile.p(dt(2026, 7, 19, 15, 30)) > 0.7);
     }
 
-    /// Why the rungs exist. A fortnight is nowhere near enough for an hour-of-week bucket -- it has
-    /// seen two hours -- and yet the estimate is already all but settled, because the rungs above it
+    /// Why the resolutions exist. A fortnight is nowhere near enough for an hour-of-week bucket -- it has
+    /// seen two hours -- and yet the estimate is already all but settled, because the resolutions above it
     /// have seen the same hour fourteen times.
     #[test]
-    fn a_settled_estimate_arrives_long_before_the_finest_rung_has_the_evidence_for_it() {
+    fn a_settled_estimate_arrives_long_before_the_finest_resolution_has_the_evidence_for_it() {
         let mut profile = PresenceProfile::default();
         observe_days(&mut profile, monday(), 14, away_at_three);
 
         let at = dt(2026, 7, 13, 3, 30);
         assert!(
-            profile.evidence(at) < 2.5,
+            profile.evidence(Resolution::HourOfWeek, at) < 2.5,
             "hour-of-week should still be nearly empty: {}",
-            profile.evidence(at)
+            profile.evidence(Resolution::HourOfWeek, at)
         );
         assert!(
             profile.p(at) < 0.1,
@@ -1602,19 +1397,19 @@ mod tests {
     }
 
     /// The nesting the leave-one-out subtraction exists for: without it, one hour of evidence would
-    /// be counted once per rung and a couple of days would look like certainty.
+    /// be counted once per resolution and a couple of days would look like certainty.
     #[test]
-    fn evidence_seen_once_is_counted_once_however_many_rungs_hold_it() {
-        // A single hour of absence and nothing else, so all four rungs hold exactly the same one
+    fn evidence_seen_once_is_counted_once_however_many_resolutions_hold_it() {
+        // A single hour of absence and nothing else, so all four resolutions hold exactly the same one
         // hour and every sibling difference is empty.
         let mut profile = PresenceProfile::default();
         let at = dt(2026, 7, 13, 3, 0);
-        profile.observe(Interval::new(at, at + ChronoDuration::hours(1)), false);
+        profile.observe(Interval::new(at, at + TimeDelta::hours(1)), false);
 
         // One hour of absence against a prior of 0.5 at strength one: 0.5 / (1 + 1). Feeding each
-        // rung's total to its child instead of its siblings' would apply that division four times
+        // resolution's total to its child instead of its siblings' would apply that division four times
         // over and land near 0.03 -- one hour of evidence wearing the confidence of four.
-        let p = profile.p(at + ChronoDuration::minutes(30));
+        let p = profile.p(at + TimeDelta::minutes(30));
         assert!(
             (p - 0.25).abs() < 0.01,
             "one hour of evidence should read as one hour of evidence, got {p}"
@@ -1642,15 +1437,20 @@ mod tests {
         for twelfth in 0..12 {
             split.observe(
                 Interval::new(
-                    start + ChronoDuration::minutes(twelfth * 5),
-                    start + ChronoDuration::minutes((twelfth + 1) * 5),
+                    start + TimeDelta::minutes(twelfth * 5),
+                    start + TimeDelta::minutes((twelfth + 1) * 5),
                 ),
                 false,
             );
         }
 
         assert!((whole.p(start) - split.p(start)).abs() < 1e-6);
-        assert!((whole.evidence(start) - split.evidence(start)).abs() < 1e-6);
+        assert!(
+            (whole.evidence(Resolution::HourOfWeek, start)
+                - split.evidence(Resolution::HourOfWeek, start))
+            .abs()
+                < 1e-6
+        );
     }
 
     #[test]
@@ -1660,7 +1460,7 @@ mod tests {
         let after_absence = profile.p(dt(2026, 7, 13, 3, 30));
         observe_days(
             &mut profile,
-            monday() + ChronoDuration::days(30),
+            monday() + TimeDelta::days(30),
             30,
             |_| true,
         );
@@ -1677,13 +1477,16 @@ mod tests {
             },
             false,
         );
-        assert!(profile.evidence(dt(2026, 7, 13, 23, 30)) > 0.0);
-        assert!(profile.evidence(dt(2026, 7, 14, 0, 30)) > 0.0);
+        assert!(profile.evidence(Resolution::HourOfWeek, dt(2026, 7, 13, 23, 30)) > 0.0);
+        assert!(profile.evidence(Resolution::HourOfWeek, dt(2026, 7, 14, 0, 30)) > 0.0);
         assert!(profile.p(dt(2026, 7, 13, 23, 30)) < PRIOR_MEAN);
         assert!(profile.p(dt(2026, 7, 14, 0, 30)) < PRIOR_MEAN);
-        // 01:00 onwards was never seen, so it keeps whatever the coarse rungs make of it -- which
+        // 01:00 onwards was never seen, so it keeps whatever the coarse resolutions make of it -- which
         // after a single observation is very little.
-        assert_eq!(profile.evidence(dt(2026, 7, 14, 1, 30)), 0.0);
+        assert_eq!(
+            profile.evidence(Resolution::HourOfWeek, dt(2026, 7, 14, 1, 30)),
+            0.0
+        );
         assert!(profile.p(dt(2026, 7, 14, 1, 30)) > profile.p(dt(2026, 7, 14, 0, 30)));
     }
 
@@ -1703,39 +1506,16 @@ mod tests {
     #[test]
     fn a_truncated_profile_degrades_to_the_prior_instead_of_panicking() {
         let profile: PresenceProfile =
-            serde_json::from_str(r#"{"hour_of_week":{"present":[0.0],"total":[]}}"#)
-                .expect("a short rung is not a parse error");
+            serde_json::from_str(r#"{"hour_of_week":{"buckets":[]}}"#)
+                .expect("a short resolution is not a parse error");
         assert_eq!(profile.p(dt(2026, 7, 13, 10, 0)), PRIOR_MEAN);
     }
 
-    /// The upgrade path. A v1 file has means and no counts, so it is read in at deliberately low
-    /// confidence: enough to carry the pattern across, light enough that real evidence overrules it.
     #[test]
-    fn a_legacy_profile_is_migrated_at_low_confidence() {
-        let mut buckets = vec![1.0f32; PRESENCE_BUCKETS];
-        buckets[PresenceProfile::bucket_of(dt(2026, 7, 13, 3, 0))] = 0.0;
-        let json = serde_json::to_string(&serde_json::json!({ "buckets": buckets })).unwrap();
-
-        let mut profile: PresenceProfile = serde_json::from_str(&json).unwrap();
-        let at = dt(2026, 7, 13, 3, 30);
-        assert!(
-            profile.p(at) < PRIOR_MEAN,
-            "the old pattern should survive the upgrade: {}",
-            profile.p(at)
-        );
-        assert_eq!(profile.evidence(at), MIGRATION_EVIDENCE);
-
-        // ... and a month of the opposite overrules it.
-        observe_days(&mut profile, monday(), 28, |_| true);
-        assert!(profile.p(at) > 0.85, "{}", profile.p(at));
-    }
-
-    #[test]
-    fn the_stored_profile_round_trips_and_drops_the_legacy_field() {
+    fn the_stored_profile_round_trips() {
         let mut profile = PresenceProfile::default();
         observe_days(&mut profile, monday(), 3, away_at_three);
         let json = serde_json::to_string(&profile).unwrap();
-        assert!(!json.contains("buckets"), "{json}");
         let restored: PresenceProfile = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, profile);
     }
@@ -1748,12 +1528,12 @@ mod tests {
         assert!((remaining - 0.5).abs() < 1e-9, "{remaining}");
 
         // A coarse bucket comes round more often, so it settles holding more -- which is the only
-        // reason a coarse rung can speak for a fine one.
-        let settled: Vec<f64> = RUNGS.iter().map(|r| r.settled_evidence()).collect();
+        // reason a coarse resolution can speak for a fine one.
+        let settled: Vec<f64> = RESOLUTIONS.iter().map(|r| r.settled_evidence()).collect();
         assert!(settled.windows(2).all(|w| w[0] > w[1]), "{settled:?}");
-        // The finest rung settling near six hours is what a 0.159-per-week decay means.
+        // The finest resolution settling near six hours is what a 0.159-per-week decay means.
         assert!(
-            (settled[RUNGS.len() - 1] - 6.29).abs() < 0.05,
+            (settled[RESOLUTIONS.len() - 1] - 6.29).abs() < 0.05,
             "{settled:?}"
         );
     }
@@ -1827,7 +1607,7 @@ mod tests {
     }
 
     /// It only ever shrinks. A denominator larger than the honest expectation would aim the
-    /// intensity the wrong way entirely.
+    /// hazard the wrong way entirely.
     #[test]
     fn the_usable_denominator_never_exceeds_the_expected_one() {
         let rule = rate_rule(all_days(), Range::AllDay, 3);
@@ -1845,13 +1625,13 @@ mod tests {
         // Two gaps between three firings: a 20-minute session the user is there for by
         // construction, then a 30-minute cooldown only half of which they are at the desk for.
         assert_eq!(
-            dead_present_minutes(2.0, 20.0, 30, 0.5),
+            reserved_present_minutes(2.0, 20.0, 30, 0.5),
             2.0 * (20.0 + 15.0)
         );
         // Present throughout, and the whole 50 minutes is opportunity the schedule has spent.
-        assert_eq!(dead_present_minutes(2.0, 20.0, 30, 1.0), 100.0);
+        assert_eq!(reserved_present_minutes(2.0, 20.0, 30, 1.0), 100.0);
         // The last firing needs no room after it, so a rule down to one reserves nothing.
-        assert_eq!(dead_present_minutes(0.0, 20.0, 30, 1.0), 0.0);
+        assert_eq!(reserved_present_minutes(0.0, 20.0, 30, 1.0), 0.0);
     }
 
     #[test]
@@ -1886,7 +1666,7 @@ mod tests {
     /// 0.6 a minute, and it needs to be: anything less leaves the quota undelivered. Spacing is the
     /// cooldown's job, and the cooldown enforces it by suppression rather than by argument.
     #[test]
-    fn the_intensity_is_allowed_to_run_up_as_a_range_closes() {
+    fn the_hazard_is_allowed_to_run_up_as_a_range_closes() {
         assert_eq!(hazard_per_minute(3, 5.0), 0.6);
         assert!(hazard_per_minute(3, 1.0) > hazard_per_minute(3, 5.0));
     }
@@ -1899,24 +1679,24 @@ mod tests {
         assert!(hazard.is_finite());
         assert_eq!(hazard, 1.0);
         assert_eq!(hazard_per_minute(3, -5.0), 3.0);
-        assert!(fire_probability(hazard_per_minute(3, 0.0), 1.0) < 1.0);
+        assert!(fire_probability(hazard_per_minute(3, 0.0) * 1.0) < 1.0);
     }
 
     #[test]
     fn fixed_hazard_probability_matches_exponential_survival() {
-        // This establishes only the local, fixed-intensity conversion used within one tick. The
-        // scheduler-level quota comes from recomputing the intensity and spending budget.
+        // This establishes only the local, fixed-hazard conversion used within one tick. The
+        // scheduler-level quota comes from recomputing the hazard and spending budget.
         let hazard = hazard_per_minute(3, 480.0);
-        let p = fire_probability(hazard, 480.0);
+        let p = fire_probability(hazard * 480.0);
         assert!((p - (1.0 - (-3.0f64).exp())).abs() < 1e-12);
     }
 
     #[test]
     fn fixed_hazard_survival_is_invariant_when_split() {
         let hazard = hazard_per_minute(1, 240.0);
-        let whole = fire_probability(hazard, 60.0);
-        let first = fire_probability(hazard, 30.0);
-        let second = fire_probability(hazard, 30.0);
+        let whole = fire_probability(hazard * 60.0);
+        let first = fire_probability(hazard * 30.0);
+        let second = fire_probability(hazard * 30.0);
         // P(fire in 60) == 1 - P(miss 30)P(miss 30) while the hazard is held fixed. The running
         // scheduler recomputes it after each piece, so this intentionally makes no claim that its
         // complete distribution is exactly cadence-independent.
@@ -1930,14 +1710,14 @@ mod tests {
         let after = 479.0;
         let exact = 1.0 - f64::powi(after / before, remaining_count as i32);
         let approximated =
-            fire_probability(hazard_per_minute(remaining_count, after), before - after);
+            fire_probability(hazard_per_minute(remaining_count, after) * (before - after));
 
         assert!((exact - approximated).abs() < 1e-5);
     }
 
     #[test]
     fn no_presence_no_hazard() {
-        assert_eq!(fire_probability(0.5, 0.0), 0.0);
-        assert_eq!(fire_probability(0.0, 60.0), 0.0);
+        assert_eq!(fire_probability(0.5 * 0.0), 0.0);
+        assert_eq!(fire_probability(0.0 * 60.0), 0.0);
     }
 }

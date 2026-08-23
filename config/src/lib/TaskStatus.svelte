@@ -3,42 +3,48 @@
 	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 </script>
 
-{#if taskFeedback.active}
-	{@const task = taskFeedback.active}
-	<div
-		class="status {task.tone}"
-		role={task.tone === 'error' ? 'alert' : 'status'}
-		aria-live="polite"
-	>
-		{#if task.tone === 'progress'}
-			<span class="spinner" aria-hidden="true"></span>
-		{:else if task.tone === 'success'}
-			<Icon src={CheckCircle} mini size="16px" />
-		{:else}
-			<Icon src={ExclamationTriangle} mini size="16px" />
-		{/if}
-		<span class="message">{task.message}</span>
-		{#if taskFeedback.queuedCount}
-			<span
-				class="queued"
-				title={`${taskFeedback.queuedCount} more message${taskFeedback.queuedCount === 1 ? '' : 's'}`}
-				>+{taskFeedback.queuedCount}</span
-			>
-		{/if}
-		{#if task.tone === 'error' || task.tone === 'warning'}
-			<button onclick={() => taskFeedback.dismiss(task.id)} aria-label="Dismiss status">
-				<Icon src={XMark} mini size="14px" />
-			</button>
-		{/if}
-	</div>
-{/if}
+<!-- Keep this fixed host mounted. Adding and removing a child of the app's root flex layout makes
+     WebKitGTK briefly recompose nested scrollbars, even though the status itself is fixed. -->
+<div class="status-host">
+	{#if taskFeedback.active}
+		{@const task = taskFeedback.active}
+		<div
+			class="status {task.tone}"
+			role={task.tone === 'error' ? 'alert' : 'status'}
+			aria-live="polite"
+		>
+			{#if task.tone === 'progress'}
+				<span class="spinner" aria-hidden="true"></span>
+			{:else if task.tone === 'success'}
+				<Icon src={CheckCircle} mini size="16px" />
+			{:else}
+				<Icon src={ExclamationTriangle} mini size="16px" />
+			{/if}
+			<span class="message">{task.message}</span>
+			{#if taskFeedback.queuedCount}
+				<span
+					class="queued"
+					title={`${taskFeedback.queuedCount} more message${taskFeedback.queuedCount === 1 ? '' : 's'}`}
+					>+{taskFeedback.queuedCount}</span
+				>
+			{/if}
+			{#if task.tone === 'error' || task.tone === 'warning'}
+				<button onclick={() => taskFeedback.dismiss(task.id)} aria-label="Dismiss status">
+					<Icon src={XMark} mini size="14px" />
+				</button>
+			{/if}
+		</div>
+	{/if}
+</div>
 
 <style>
-	.status {
+	.status-host {
 		position: fixed;
 		right: 18px;
 		bottom: 18px;
 		z-index: 50;
+	}
+	.status {
 		display: flex;
 		max-width: min(440px, calc(100vw - 36px));
 		min-height: 34px;

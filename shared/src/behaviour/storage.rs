@@ -1,13 +1,13 @@
 //! Reading and writing a [`Behaviour`] against the pack database.
 //!
-//! The document is split across two places. Its structural half — the media slots and the whole
-//! timeline — lives in the `behaviour_*` tables (see `migrations/behaviour_schema.sql`),
-//! so that a slot is a foreign key the database enforces and so that editing one stage produces a
-//! changeset the size of that stage. What is left — the content pools and their settings — is
-//! still JSON in `pack_data`, and moves next.
+//! The whole document lives in the `behaviour_*` tables (see `migrations/behaviour_schema.sql`) —
+//! the media slots, the timeline, and the content pools alike — so that a slot is a foreign key
+//! the database enforces, a tag is a join rather than a name copied into seven lists, and editing
+//! one stage produces a changeset the size of that stage. Nothing is left in the `pack_data` blob
+//! the document used to live in; see [`LEGACY_BLOB_KEY`].
 //!
-//! [`read`] assembles the two into the one `Behaviour` every other layer already understands, and
-//! [`write`] takes it apart again. Nothing above this module knows about the split: the engine
+//! [`read`] assembles the tables into the one `Behaviour` every other layer already understands,
+//! and [`write`] takes it apart again. Nothing above this module knows about the split: the engine
 //! still gets a `Behaviour`, the editor still patches a `Behaviour`, and the converter still
 //! produces one.
 //!

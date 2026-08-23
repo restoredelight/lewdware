@@ -78,18 +78,18 @@ pub(super) fn populate_captions(index: &EdgewareIndex, content: &mut Content) {
 /// `shared::tags::escape`.
 pub(super) fn escape_managed_mood_names(index: &mut EdgewareIndex, levels: &mut [CorruptionLevel]) {
     for mood in &mut index.moods {
-        if let Cow::Owned(escaped) = tags::escape(&mood.name) {
+        if let Cow::Owned(escaped) = tags::escape_managed_prefix(&mood.name) {
             mood.name = escaped;
         }
     }
     for mood in index.media_moods.values_mut() {
-        if let Cow::Owned(escaped) = tags::escape(mood) {
+        if let Cow::Owned(escaped) = tags::escape_managed_prefix(mood) {
             *mood = escaped;
         }
     }
     for level in levels {
         for mood in level.added_moods.iter_mut().chain(&mut level.removed_moods) {
-            if let Cow::Owned(escaped) = tags::escape(mood) {
+            if let Cow::Owned(escaped) = tags::escape_managed_prefix(mood) {
                 *mood = escaped;
             }
         }

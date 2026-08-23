@@ -17,7 +17,7 @@ mod modes_wallpaper;
 mod modes_web;
 mod runtime;
 
-use shared::user_config::Capabilities;
+use shared::user_config::Permissions;
 
 use super::*;
 
@@ -46,8 +46,8 @@ pub(super) fn ensure_temp_dir() {
 /// `Capabilities::default`), and a test about what a mode does with a link would otherwise
 /// quietly turn into a test of a denied permission. Tests that care about denial say so
 /// through `Harness::with_capabilities`.
-pub(super) fn all_capabilities() -> Capabilities {
-    Capabilities {
+pub(super) fn all_capabilities() -> Permissions {
+    Permissions {
         set_wallpaper: true,
         open_links: true,
         send_notifications: true,

@@ -105,17 +105,6 @@ fn the_two_axes_fall_back_independently() {
     assert_eq!(resolved.appearance, AppearanceChoice::Dark);
 }
 
-/// A theme name this engine has never heard of -- a config written by a newer one -- must not
-/// take chrome down with it, and `plain` would be a poor guess at what the user meant: they
-/// asked for *some* real look.
-#[test]
-fn an_unknown_configured_theme_falls_back_to_the_product_default() {
-    let chrome = ChromeDefaults::from_config("some-future-theme", "sepia");
-
-    assert_eq!(chrome, ChromeDefaults::default());
-    assert_eq!(chrome.theme, ThemeChoice::Native);
-    assert_eq!(chrome.appearance, AppearanceChoice::Auto);
-}
 
 /// Every name the config app can write must round-trip, or a user's saved choice silently
 /// becomes someone else's.

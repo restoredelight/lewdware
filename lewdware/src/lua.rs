@@ -165,7 +165,6 @@ fn resolve_mode_config(
     metadata: &Metadata,
     mode: &shared::user_config::Mode,
     mode_options: &HashMap<shared::user_config::Mode, HashMap<String, StoredValue>>,
-    experience_options: &HashMap<Uuid, HashMap<String, StoredValue>>,
     pack_id: Uuid,
     media_manager: &MediaManager,
 ) -> (
@@ -173,18 +172,19 @@ fn resolve_mode_config(
     serde_json::Value,
     serde_json::Value,
 ) {
-    let stored = if matches!(mode, shared::user_config::Mode::Experience) {
-        experience_options
-            .get(&pack_id)
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        mode_options.get(mode).cloned().unwrap_or_default()
+    let stored = match mode {
+        shared::user_config::Mode::Experience { pack } => {
+            let key = shared::user_config::Mode::Experience {
+                pack: Some(pack.unwrap_or(pack_id)),
+            };
+            mode_options.get(&key).cloned().unwrap_or_default()
+        }
+        _ => mode_options.get(mode).cloned().unwrap_or_default(),
     };
 
     if !matches!(
         mode,
-        shared::user_config::Mode::Sandbox | shared::user_config::Mode::Experience
+        shared::user_config::Mode::Sandbox | shared::user_config::Mode::Experience { .. }
     ) {
         let mode_config = resolve_options(&metadata.entries, &stored);
 
@@ -335,7 +335,7 @@ pub fn start_lua_thread<T: EventPoster>(
 
                 Box::new(Cursor::new(mode_data))
             }
-            shared::user_config::Mode::Experience => {
+            shared::user_config::Mode::Experience { .. } => {
                 let mode_data =
                     include_bytes!("../../default-modes/experience/build/Sequence.lwmode");
 
@@ -395,7 +395,6 @@ pub fn start_lua_thread<T: EventPoster>(
             &metadata,
             &config.mode,
             &config.mode_options,
-            &config.experience_options,
             pack_info.id,
             &media_manager,
         );
@@ -441,7 +440,7 @@ pub fn start_lua_thread<T: EventPoster>(
                 config: mode_config,
                 content,
                 experience,
-                chrome: ChromeDefaults::from_config(&config.theme, &config.appearance),
+                chrome: ChromeDefaults::from(config.as_ref()),
                 gpu_available,
                 dev_mode,
             },

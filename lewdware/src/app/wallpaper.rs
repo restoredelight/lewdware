@@ -9,7 +9,7 @@ use super::LewdwareApp;
 
 impl LewdwareApp {
     pub(super) fn set_wallpaper(&mut self, file: ExtractedFile) -> Result<bool> {
-        if !self.config.capabilities.set_wallpaper {
+        if !self.config.permissions.set_wallpaper {
             return Ok(false);
         }
 
@@ -43,7 +43,7 @@ impl LewdwareApp {
     }
 
     pub(super) fn open_link(&self, url: String) -> Result<bool> {
-        if !self.config.capabilities.open_links {
+        if !self.config.permissions.open_links {
             return Ok(false);
         }
 
@@ -71,7 +71,7 @@ impl LewdwareApp {
     }
 
     pub(super) fn show_notification(&self, notification: Notification) -> Result<bool> {
-        if !self.config.capabilities.send_notifications {
+        if !self.config.permissions.send_notifications {
             return Ok(false);
         }
 

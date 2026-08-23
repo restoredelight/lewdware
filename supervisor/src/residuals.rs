@@ -11,7 +11,7 @@
 //! `(1 - exp(-T)) * increment_i / T`. Accumulating those probabilities as `Q` gives the martingale
 //! `N - Q`. The tick's total Bernoulli variance is distributed across its participating rules so
 //! the compact per-rule records add back to the exact global variance. This is deliberately not a continuous-time
-//! compensator residual: once the intensity cap was removed, a closing tick can have a large
+//! compensator residual: once the hazard cap was removed, a closing tick can have a large
 //! increment, and treating that increment as an expected *count* would claim several events from a
 //! tick that can only emit one.
 //!
@@ -399,8 +399,8 @@ mod tests {
     }
 
     #[test]
-    fn a_large_intensity_tick_expects_at_most_one_discrete_firing() {
-        let probability = shared::schedule::any_fire_probability(3.0);
+    fn a_large_hazard_tick_expects_at_most_one_discrete_firing() {
+        let probability = shared::schedule::fire_probability(3.0);
         let mut accumulator =
             Accumulator::starting_at(Local.with_ymd_and_hms(2026, 8, 21, 9, 0, 0).unwrap());
         accumulator.credit(probability, probability * (1.0 - probability), 1.0);

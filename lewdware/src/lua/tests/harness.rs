@@ -6,7 +6,7 @@ use std::{
 };
 
 use shared::behaviour::Behaviour;
-use shared::user_config::{Capabilities, Volume};
+use shared::user_config::{Permissions, Volume};
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -330,7 +330,7 @@ pub(super) fn run_fake_handler(
     request_rx: std::sync::mpsc::Receiver<LuaRequest>,
     recorded: Arc<Mutex<Vec<Recorded>>>,
     event_tx: UnboundedSender<Event>,
-    capabilities: Capabilities,
+    capabilities: Permissions,
     master_volume: Volume,
 ) {
     let mut closed_windows = HashSet::new();
@@ -603,7 +603,7 @@ impl Harness {
         content: Content,
         experience: Experience,
         mode_config: HashMap<String, OptionValue>,
-        capabilities: Capabilities,
+        capabilities: Permissions,
         volume: Volume,
     ) -> Self {
         ensure_temp_dir();
@@ -682,7 +682,7 @@ impl Harness {
         pack_file: NamedTempFile,
         content: Content,
         mode_config: HashMap<String, OptionValue>,
-        capabilities: Capabilities,
+        capabilities: Permissions,
         volume: Volume,
     ) -> Self {
         Self::with_pack_and_experience(
@@ -699,7 +699,7 @@ impl Harness {
     pub(super) fn with_config(
         sources: &[(&str, &str)],
         with_image: bool,
-        capabilities: Capabilities,
+        capabilities: Permissions,
         volume: Volume,
     ) -> Self {
         Self::with_pack(
@@ -722,7 +722,7 @@ impl Harness {
     pub(super) fn with_capabilities(
         sources: &[(&str, &str)],
         with_image: bool,
-        capabilities: Capabilities,
+        capabilities: Permissions,
     ) -> Self {
         Self::with_config(sources, with_image, capabilities, Volume::default())
     }

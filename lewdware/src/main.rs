@@ -117,8 +117,8 @@ fn main() -> Result<()> {
         SessionOverrides::from_env().inspect_err(|err| report_fatal_startup_error(err))?;
 
     // Applied after `load_config` so an override beats the stored setting, and before anything
-    // reads either. A pack override changes which `experience_options` apply, since those are
-    // keyed by the pack's own UUID -- which is the intended behaviour, not a side effect.
+    // reads either. A pack override changes which `Mode::Experience` options apply, since those are
+    // scoped by the pack's own UUID -- which is the intended behaviour, not a side effect.
     if let Some(path) = overrides.pack_path {
         config.pack_path = Some(path);
     }

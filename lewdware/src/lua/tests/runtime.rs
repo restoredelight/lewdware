@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use shared::user_config::{Capabilities, Volume};
+use shared::user_config::{Permissions, Volume};
 
 use super::{harness::*, *};
 
@@ -1071,7 +1071,7 @@ async fn hostile_mode_sees_every_denied_capability_as_false() {
                     "#,
                 )],
                 true,
-                Capabilities {
+                Permissions {
                     set_wallpaper: false,
                     open_links: false,
                     send_notifications: false,

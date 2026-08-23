@@ -77,6 +77,7 @@ pub async fn pick_pack(
             _ => ModeIdDto::Sandbox,
         }));
 
+    let pack_id = loaded.id;
     let pack_path_str = path.to_string_lossy().into_owned();
     let pack_metadata = PackMetadataDto::from(&loaded.metadata);
     *state.pack.lock().unwrap() = Some(loaded);
@@ -84,7 +85,13 @@ pub async fn pick_pack(
     let mut config = state.config.lock().unwrap();
     config.pack_path = Some(path);
     if let Some(ref m) = first_mode {
-        config.mode = m.clone().into();
+        let mut mode: Mode = m.clone().into();
+        if let Mode::Experience { ref mut pack } = mode {
+            *pack = Some(pack_id);
+        }
+        config.mode = mode;
+    } else if let Mode::Experience { ref mut pack } = config.mode {
+        *pack = Some(pack_id);
     }
 
     let groups = build_mode_groups(&state);
@@ -116,6 +123,8 @@ pub fn remove_pack(state: State<'_>) -> Result<(), String> {
     config.pack_path = None;
     if matches!(config.mode, Mode::Pack { .. }) {
         config.mode = Mode::default();
+    } else if let Mode::Experience { ref mut pack } = config.mode {
+        *pack = None;
     }
     let uploaded = state.uploaded.lock().unwrap();
     save_to_disk(&config, &uploaded).map_err(|e| e.to_string())

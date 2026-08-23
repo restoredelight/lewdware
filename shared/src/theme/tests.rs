@@ -873,11 +873,15 @@ fn every_name_is_unique() {
 #[test]
 fn the_config_defaults_are_offerable_values() {
     let config = crate::user_config::AppConfig::default();
-    assert!(theme(&config.theme).is_some(), "{}", config.theme);
     assert!(
-        appearance(&config.appearance).is_some(),
+        theme(config.theme.name()).is_some(),
         "{}",
-        config.appearance
+        config.theme.name()
+    );
+    assert!(
+        appearance(config.appearance.name()).is_some(),
+        "{}",
+        config.appearance.name()
     );
 }
 

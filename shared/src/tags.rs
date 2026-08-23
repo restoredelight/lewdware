@@ -1,14 +1,5 @@
-//! The reserved tag namespace: tags the editor owns, applied and cleared on the author's behalf
+//! The reserved tag namespace: tags the pack editor owns, applied and cleared on the author's behalf
 //! rather than typed by them.
-//!
-//! A pack's tags are otherwise a flat, author-owned namespace. These few are mechanical -- they
-//! say what a file *is to the engine*, not what it's about -- so the pack editor writes them
-//! itself (from the media slots) and hides them everywhere a tag is
-//! offered or listed. Authors can neither create them nor see them; the prefix is what makes
-//! that enforceable without a second table.
-//!
-//! The prefix matches the engine's existing `__lewdware_content` private global (see
-//! `create_api` in `lewdware/src/lua/api/`) -- same "this belongs to the engine" signal.
 
 use std::borrow::Cow;
 
@@ -35,13 +26,7 @@ pub fn is_managed(tag: &str) -> bool {
 }
 
 /// Moves an author-supplied tag out of the reserved namespace, if it's in it.
-///
-/// Nothing stops an imported pack from having named a mood `__lewdware-non-popup`; left alone it
-/// would silently acquire mechanical meaning (that one would pull the mood's whole media set out
-/// of the popup pool). One extra leading underscore is enough to leave the namespace, and keeps
-/// the tag recognizable to whoever wrote it. Colliding with a real tag of the escaped name is
-/// the same vanishingly small accepted risk as the converter's other synthetic names.
-pub fn escape(tag: &str) -> Cow<'_, str> {
+pub fn escape_managed_prefix(tag: &str) -> Cow<'_, str> {
     if is_managed(tag) {
         Cow::Owned(format!("_{tag}"))
     } else {
@@ -66,8 +51,8 @@ mod tests {
 
     #[test]
     fn escaping_leaves_the_namespace_and_leaves_ordinary_tags_alone() {
-        assert!(!is_managed(&escape(NON_POPUP_TAG)));
-        assert_eq!(escape("__lewdware-non-popup"), "___lewdware-non-popup");
-        assert_eq!(escape("wallpaper"), "wallpaper");
+        assert!(!is_managed(&escape_managed_prefix(NON_POPUP_TAG)));
+        assert_eq!(escape_managed_prefix("__lewdware-non-popup"), "___lewdware-non-popup");
+        assert_eq!(escape_managed_prefix("wallpaper"), "wallpaper");
     }
 }

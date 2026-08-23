@@ -9,7 +9,7 @@ use std::{env, path::Path};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::{Snapshot, daemons, kde, run, stdout_of};
+use super::{Snapshot, daemons, kde, run_cmd, stdout_of};
 
 const GNOME_SCHEMA: &str = "org.gnome.desktop.background";
 
@@ -232,8 +232,8 @@ pub fn set(path: &Path) -> Result<()> {
             } else {
                 "pcmanfm"
             };
-            run(pcmanfm, &["--set-wallpaper", path])?;
-            run(pcmanfm, &["--wallpaper-mode", LXDE_FILL])?;
+            run_cmd(pcmanfm, &["--set-wallpaper", path])?;
+            run_cmd(pcmanfm, &["--wallpaper-mode", LXDE_FILL])?;
             Ok(())
         }
         Desktop::Other => daemons::set(path),
@@ -258,7 +258,7 @@ pub fn restore(snapshot: &Snapshot) -> Result<()> {
                     Some(value) => dconf_write(key, value)?,
                     // Unset on the way in, so put it back to unset rather than writing an empty
                     // value that would shadow the desktop's default.
-                    None => run("dconf", &["reset", key])?,
+                    None => run_cmd("dconf", &["reset", key])?,
                 }
             }
             Ok(())
@@ -288,7 +288,7 @@ fn gsettings_get(schema: &str, key: &str) -> Result<String> {
 }
 
 fn gsettings_set(schema: &str, key: &str, value: &str) -> Result<()> {
-    run("gsettings", &["set", schema, key, value])
+    run_cmd("gsettings", &["set", schema, key, value])
 }
 
 fn dconf_read(key: &str) -> Result<Option<String>> {
@@ -298,7 +298,7 @@ fn dconf_read(key: &str) -> Result<Option<String>> {
 }
 
 fn dconf_write(key: &str, value: &str) -> Result<()> {
-    run("dconf", &["write", key, value])
+    run_cmd("dconf", &["write", key, value])
 }
 
 fn xfce_properties() -> Result<Vec<String>> {
@@ -320,7 +320,7 @@ fn xfconf_get(property: &str) -> Result<String> {
 }
 
 fn xfconf_set(property: &str, value: &str) -> Result<()> {
-    run(
+    run_cmd(
         "xfconf-query",
         &[
             "--channel",

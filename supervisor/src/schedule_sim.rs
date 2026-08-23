@@ -93,7 +93,7 @@ struct Scenario {
     /// P(the user is at the machine), truth.
     presence: f64,
     /// What the profile is seeded to believe, with enough evidence behind it to be confident.
-    /// `None` is a genuine cold start: the prior, nothing learned, and the rungs filling up as the
+    /// `None` is a genuine cold start: the prior, nothing learned, and the resolutions filling up as the
     /// day runs -- which is what a new install actually looks like.
     profile: Option<f64>,
 }
@@ -125,7 +125,7 @@ struct Outcome {
     /// Mean position of a firing within its window, as a fraction of it.
     ///
     /// The delivery figures alone cannot tell an improvement from an over-correction: anything that
-    /// raises the intensity delivers more, and raising it too far simply spends the budget early.
+    /// raises the hazard delivers more, and raising it too far simply spends the budget early.
     /// A fixed quota scattered uniformly averages 0.5, so this is the number that says whether the
     /// sessions are still unpredictable or merely front-loaded.
     position: f64,
@@ -310,7 +310,7 @@ fn delivery_grid() {
 // by how much, and a change that quietly makes it worse cannot pass.
 //
 // Measured at 4000 trials, release build (`cargo test --release ... delivery_grid`). The trailing
-// column is the same run with the intensity cap still in place, which is what these shapes used to
+// column is the same run with the hazard cap still in place, which is what these shapes used to
 // deliver:
 //
 //                                              P(all)  E[count]  pos | with the cap
@@ -330,7 +330,7 @@ fn delivery_grid() {
 //
 // The position column is the one worth reading twice. Removing the cap was supposed to risk
 // bunching sessions at the end of a range; instead every certain-profile row moved *toward* 0.500.
-// The cap had been truncating the late-window intensity, which suppressed the firings that should
+// The cap had been truncating the late-window hazard, which suppressed the firings that should
 // have landed late and skewed the survivors early. It was causing the front-loading it was there to
 // prevent.
 //
@@ -358,8 +358,8 @@ fn the_default_shape_delivers_its_whole_budget_most_days() {
 /// A single firing over a long window is the case with the most room to succeed, and the one the
 /// `Rng` trait's doc comment quotes a miss rate for.
 ///
-/// It is also the one case with a closed form, and the form changed when the intensity cap went.
-/// The intensity is `1 / (T - t)` throughout now, so the compensator accumulated across a window of
+/// It is also the one case with a closed form, and the form changed when the hazard cap went.
+/// The hazard is `1 / (T - t)` throughout now, so the compensator accumulated across a window of
 /// `W` present-minutes is the harmonic sum `H(W-1) + 1` -- the `+1` being the closing tick, where
 /// the denominator's one-minute floor is all that stops it diverging. Survival is its exponential:
 ///
@@ -464,9 +464,9 @@ fn the_reserve_carries_a_budget_that_crowds_its_window() {
     );
 }
 
-/// The guard on the dispersion correction, and on anything else that raises the intensity.
+/// The guard on the dispersion correction, and on anything else that raises the hazard.
 ///
-/// Delivery figures cannot tell a correction from an over-correction: *any* increase in intensity
+/// Delivery figures cannot tell a correction from an over-correction: *any* increase in hazard
 /// delivers more, and too large an increase simply spends the budget early and calls it a success.
 /// A fixed quota scattered uniformly averages halfway through its window, so this is the number
 /// that says whether the sessions are still unpredictable or merely front-loaded -- and it is the
@@ -474,7 +474,7 @@ fn the_reserve_carries_a_budget_that_crowds_its_window() {
 ///
 /// With a profile that is right, the measured value is 0.502 -- uniform to within noise, which is
 /// what a fixed quota scattered at random is supposed to look like. It only became that once the
-/// intensity cap was removed: the cap truncated the late-window intensity, suppressing the firings
+/// hazard cap was removed: the cap truncated the late-window hazard, suppressing the firings
 /// that should have landed late and pulling the average down to 0.488.
 #[test]
 fn firings_stay_spread_across_their_window_rather_than_bunching_early() {
@@ -500,7 +500,7 @@ fn firings_stay_spread_across_their_window_rather_than_bunching_early() {
 /// A brand-new install knows nothing, and used to spend months being wrong about it: one estimate
 /// per hour-of-week bucket, each fed an hour a week, so a bucket needed about fourteen weeks to
 /// settle and until then every answer was the prior -- which was 1.0, the expensive direction. With
-/// the rungs, the global estimate settles within hours of first run and the finer ones inherit it
+/// the resolutions, the global estimate settles within hours of first run and the finer ones inherit it
 /// until they have earned their own weight, so a cold start performs like a profile that is already
 /// right.
 ///
@@ -619,7 +619,7 @@ fn the_discrete_calibration_accounts_for_the_firings_it_produced() {
 /// A user who is rarely at the desk misses often enough to exercise censored intervals. They must
 /// remain in the calibration total, and the shortfall they represent must agree with delivery.
 ///
-/// Absence is what drives this now. It used to be the intensity cap, which left budget unspent by
+/// Absence is what drives this now. It used to be the hazard cap, which left budget unspent by
 /// design; with the cap gone, a range that closes still owing a session is a range the user was
 /// hardly present for -- which is the honest reason to under-deliver and the one the profile
 /// exists to anticipate.

@@ -224,7 +224,7 @@ pub fn builtin_mode_label(name: &str, recommended: bool) -> String {
 pub fn effective_entries_for_mode(mode: &Mode, state: &AppState) -> Option<EffectiveEntries> {
     let mode_meta = match mode {
         Mode::Sandbox => Some(state.sandbox_mode.clone()),
-        Mode::Experience => Some(state.experience_mode.clone()),
+        Mode::Experience { .. } => Some(state.experience_mode.clone()),
         Mode::Pack { id } => {
             let pack = state.pack.lock().unwrap();
             pack.as_ref()
@@ -242,7 +242,7 @@ pub fn effective_entries_for_mode(mode: &Mode, state: &AppState) -> Option<Effec
 
     let needs_permissions = mode_meta.needs_permissions.clone();
 
-    if matches!(mode, Mode::Sandbox | Mode::Experience) {
+    if matches!(mode, Mode::Sandbox | Mode::Experience { .. }) {
         let (behaviour, referenced_media) = state
             .pack
             .lock()
@@ -276,7 +276,7 @@ pub struct EffectiveEntries {
 }
 
 /// Resolves the values a mode's stored options should read from: `Mode::Experience` is scoped
-/// per pack (`AppConfig::experience_options`), everything else globally
+/// per pack (`Mode::Experience { pack: Some(id) }`), everything else globally
 /// (`AppConfig::mode_options`) -- see `behaviour-design/default-mode.md`, Ownership. No pack
 /// loaded means no scope to read Experience options from, so it falls back to empty (schema
 /// defaults), the same as any other mode with nothing stored yet.
@@ -285,14 +285,14 @@ pub fn stored_options_for(
     config: &AppConfig,
     state: &AppState,
 ) -> HashMap<String, StoredValue> {
-    if matches!(mode, Mode::Experience) {
-        let pack_id = state.pack.lock().unwrap().as_ref().map(|p| p.id);
-        pack_id
-            .and_then(|id| config.experience_options.get(&id).cloned())
-            .unwrap_or_default()
-    } else {
-        config.mode_options.get(mode).cloned().unwrap_or_default()
-    }
+    let key = match mode {
+        Mode::Experience { pack } => {
+            let pack_id = pack.or_else(|| state.pack.lock().unwrap().as_ref().map(|p| p.id));
+            Mode::Experience { pack: pack_id }
+        }
+        other => other.clone(),
+    };
+    config.mode_options.get(&key).cloned().unwrap_or_default()
 }
 
 pub fn get_mode_options_for(config: &AppConfig, state: &AppState) -> ModeOptionsDto {
@@ -371,10 +371,15 @@ pub fn save_to_disk(config: &AppConfig, uploaded: &[UploadedModeEntry]) -> anyho
 /// taking them from the DTO reverted every mode option the user had set that session as soon as
 /// anything else was saved — changing the theme, the volume, or switching mode.
 pub fn apply_config_dto(current: &AppConfig, dto: ConfigDto) -> AppConfig {
-    AppConfig {
-        mode_options: current.mode_options.clone(),
-        experience_options: current.experience_options.clone(),
-        uploaded_modes: current.uploaded_modes.clone(),
-        ..dto.into()
+    let mut config: AppConfig = dto.into();
+    config.mode_options = current.mode_options.clone();
+    config.uploaded_modes = current.uploaded_modes.clone();
+    if let Mode::Experience { ref mut pack } = config.mode {
+        if pack.is_none() {
+            if let Mode::Experience { pack: current_pack } = current.mode {
+                *pack = current_pack;
+            }
+        }
     }
+    config
 }

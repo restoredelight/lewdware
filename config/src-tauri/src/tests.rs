@@ -7,6 +7,7 @@ use shared::{
     db::migrate,
     encode::FileType,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, StoredValue},
+    theme::ThemeChoice,
     user_config::{AppConfig, AudioDeviceChoice, Mode},
 };
 use tempfile::NamedTempFile;
@@ -42,9 +43,11 @@ fn saving_frontend_settings_keeps_the_options_the_backend_owns() {
     let stored = || HashMap::from([("popup_frequency".to_string(), StoredValue::Float(4.0))]);
 
     let current = AppConfig {
-        theme: "plain".to_string(),
-        mode_options: HashMap::from([(Mode::Sandbox, stored())]),
-        experience_options: HashMap::from([(pack, stored())]),
+        theme: ThemeChoice::Plain,
+        mode_options: HashMap::from([
+            (Mode::Sandbox, stored()),
+            (Mode::Experience { pack: Some(pack) }, stored()),
+        ]),
         uploaded_modes: vec![PathBuf::from("/modes/custom.lwmode")],
         ..Default::default()
     };
@@ -52,15 +55,18 @@ fn saving_frontend_settings_keeps_the_options_the_backend_owns() {
     // What the frontend sends when the user changes one unrelated setting: its own fields,
     // and nothing at all about the options.
     let dto = ConfigDto {
-        theme: "breeze".to_string(),
+        theme: ThemeChoice::Breeze,
         ..AppConfig::default().into()
     };
 
     let saved = apply_config_dto(&current, dto);
 
-    assert_eq!(saved.theme, "breeze", "the frontend's own field is taken");
+    assert_eq!(
+        saved.theme,
+        ThemeChoice::Breeze,
+        "the frontend's own field is taken"
+    );
     assert_eq!(saved.mode_options, current.mode_options);
-    assert_eq!(saved.experience_options, current.experience_options);
     assert_eq!(saved.uploaded_modes, current.uploaded_modes);
 }
 
@@ -82,7 +88,6 @@ fn the_dto_carries_no_option_values() {
     let json = serde_json::to_value(&dto).unwrap();
     let object = json.as_object().expect("the DTO is a JSON object");
     assert!(!object.contains_key("mode_options"), "{object:?}");
-    assert!(!object.contains_key("experience_options"), "{object:?}");
 }
 
 /// The mirror of the bug above, for a field the *frontend* owns: `save_config` rebuilds a
@@ -101,7 +106,7 @@ fn saving_keeps_the_chosen_audio_device() {
 
     // The frontend's snapshot, as it would come back with some other setting changed.
     let dto = ConfigDto {
-        theme: "breeze".to_string(),
+        theme: ThemeChoice::Breeze,
         ..current.clone().into()
     };
 
@@ -558,4 +563,30 @@ fn default_mode_with_no_pack_loaded_has_no_content_checklist() {
     let entries = get_mode_options_for(&config, &state).entries;
 
     assert!(find_entry(&entries, "content_groups").is_none());
+}
+
+#[test]
+fn experience_mode_reads_scoped_options_by_pack_id() {
+    let pack = loaded_pack(behaviour_with_one_content_group(), vec![]);
+    let pack_id = pack.id;
+    let state = test_state(Some(pack));
+
+    let mut config = AppConfig {
+        mode: Mode::Experience { pack: None },
+        ..Default::default()
+    };
+    config
+        .mode_options
+        .entry(Mode::Experience {
+            pack: Some(pack_id),
+        })
+        .or_default()
+        .insert("content_group.kinky".to_string(), StoredValue::Bool(false));
+
+    let entries = get_mode_options_for(&config, &state).entries;
+
+    let Some(OptionEntryDto::Option(opt)) = find_entry(&entries, "content_group.kinky") else {
+        panic!("no content_group.kinky option in {entries:?}");
+    };
+    assert_eq!(opt.value, OptionValue::Boolean(false));
 }

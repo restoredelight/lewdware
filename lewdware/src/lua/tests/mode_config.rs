@@ -77,7 +77,6 @@ fn resolve_mode_config_synthesizes_content_group_toggle_for_sandbox_mode() {
         &metadata,
         &shared::user_config::Mode::Sandbox,
         &HashMap::new(),
-        &HashMap::new(),
         pack_id,
         &media_manager,
     );
@@ -96,7 +95,6 @@ fn resolve_mode_config_synthesizes_content_group_toggle_for_sandbox_mode() {
         &metadata,
         &shared::user_config::Mode::Sandbox,
         &mode_options,
-        &HashMap::new(),
         pack_id,
         &media_manager,
     );
@@ -129,7 +127,6 @@ fn resolve_mode_config_hides_content_groups_from_custom_modes() {
             &metadata,
             &mode,
             &HashMap::new(),
-            &HashMap::new(),
             pack_id,
             &media_manager,
         );
@@ -155,7 +152,6 @@ fn resolve_mode_config_sandbox_mode_with_no_behaviour_data() {
         &metadata,
         &shared::user_config::Mode::Sandbox,
         &HashMap::new(),
-        &HashMap::new(),
         pack_id,
         &media_manager,
     );
@@ -164,7 +160,7 @@ fn resolve_mode_config_sandbox_mode_with_no_behaviour_data() {
     assert_eq!(content, lua_view(&Content::default(), |_| None));
 }
 
-/// `Mode::Experience`'s stored options are scoped per pack (`AppConfig::experience_options`),
+/// `Mode::Experience`'s stored options are scoped per pack (`Mode::Experience { pack: Some(id) }`),
 /// unlike every other mode's global `mode_options` -- see `behaviour-design/default-mode.md`,
 /// Ownership. A stored value under a *different* pack's UUID must never leak into this one's
 /// resolved config.
@@ -214,15 +210,26 @@ fn resolve_mode_config_experience_mode_reads_scoped_experience_options() {
     let mut other_pack_options = HashMap::new();
     other_pack_options.insert("pace".to_string(), StoredValue::Float(9.0));
 
-    let mut experience_options = HashMap::new();
-    experience_options.insert(pack_id, this_pack_options);
-    experience_options.insert(Uuid::new_v4(), other_pack_options);
+    let mut mode_options = HashMap::new();
+    mode_options.insert(
+        shared::user_config::Mode::Experience {
+            pack: Some(pack_id),
+        },
+        this_pack_options,
+    );
+    mode_options.insert(
+        shared::user_config::Mode::Experience {
+            pack: Some(Uuid::new_v4()),
+        },
+        other_pack_options,
+    );
 
     let (config, _content, _experience) = resolve_mode_config(
         &metadata,
-        &shared::user_config::Mode::Experience,
-        &HashMap::new(),
-        &experience_options,
+        &shared::user_config::Mode::Experience {
+            pack: Some(pack_id),
+        },
+        &mode_options,
         pack_id,
         &media_manager,
     );
@@ -247,8 +254,9 @@ fn resolve_mode_config_experience_mode_synthesizes_content_group_toggle() {
 
     let (config, content, _experience) = resolve_mode_config(
         &metadata,
-        &shared::user_config::Mode::Experience,
-        &HashMap::new(),
+        &shared::user_config::Mode::Experience {
+            pack: Some(pack_id),
+        },
         &HashMap::new(),
         pack_id,
         &media_manager,

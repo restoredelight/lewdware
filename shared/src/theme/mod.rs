@@ -196,21 +196,14 @@ pub enum Appearance {
     Dark,
 }
 
-/// What a mode *asks* for on the appearance axis, which may be "whatever the system says".
-///
-/// Defaults to `Light`, not `Auto`: the API default is the predictable one. A dialog mixes
-/// theme-driven widget colours with author-specified ones (`background_color`, per-element
-/// `TextStyle`), so silently flipping the palette can make an author's own text unreadable on a
-/// machine they cannot see. The bundled modes default their option to `auto` instead.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AppearanceChoice {
     #[serde(rename = "light")]
     Light,
     #[serde(rename = "dark")]
     Dark,
-    /// Follow the desktop's own light/dark setting, falling back to light where that cannot be
-    /// determined. Resolved by [`crate::window::appearance::detect`].
     #[serde(rename = "auto")]
+    #[default]
     Auto,
 }
 
@@ -227,8 +220,7 @@ impl AppearanceChoice {
         }
     }
 
-    /// The inverse of [`name`](Self::name), for reading `AppConfig::appearance` — a free-form
-    /// string, so an unrecognised one is a `None` the caller falls back from, not an error.
+    /// The inverse of [`name`](Self::name).
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|c| c.name() == name)
     }
@@ -259,16 +251,11 @@ impl Default for ChromeDefaults {
     }
 }
 
-impl ChromeDefaults {
-    /// Reads the two free-form strings out of the user's config. An unrecognised name — a config
-    /// written against a newer engine, or hand-edited — falls back to the product default rather
-    /// than failing: the user asked for *some* real look, so `native` is a far better guess at
-    /// what they meant than the deliberately characterless `plain`.
-    pub fn from_config(theme: &str, appearance: &str) -> Self {
-        let fallback = Self::default();
+impl From<&crate::user_config::AppConfig> for ChromeDefaults {
+    fn from(config: &crate::user_config::AppConfig) -> Self {
         Self {
-            theme: ThemeChoice::from_name(theme).unwrap_or(fallback.theme),
-            appearance: AppearanceChoice::from_name(appearance).unwrap_or(fallback.appearance),
+            theme: config.theme,
+            appearance: config.appearance,
         }
     }
 }
@@ -278,7 +265,7 @@ impl ChromeDefaults {
 /// Kept separate from [`Theme`] so that every `Theme` stays one concrete drawable appearance: the
 /// platform branching lives here and nowhere else, and is resolved once — early, in
 /// `PopupSpawnOpts::resolve` — so nothing downstream ever asks what OS it is on.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeChoice {
     #[serde(rename = "plain")]
     Plain,
@@ -296,11 +283,10 @@ pub enum ThemeChoice {
     Platinum,
     #[serde(rename = "cde")]
     Cde,
-    /// Whatever this platform's current windows look like. On Linux this distinguishes KDE Plasma
-    /// from other desktops, using Breeze for KDE and Adwaita as the general fallback.
+    /// Whatever this platform's current windows look like.
     #[serde(rename = "native")]
+    #[default]
     Native,
-    /// Whatever this platform's windows *used* to look like. Linux resolves to CDE/Motif.
     #[serde(rename = "native-retro")]
     NativeRetro,
 }
@@ -341,9 +327,7 @@ impl ThemeChoice {
         }
     }
 
-    /// The inverse of [`name`](Self::name), for reading `AppConfig::theme`. `None` for a name
-    /// this engine does not know — a config written against a newer engine — which the caller
-    /// treats as "no preference" rather than as a failure.
+    /// The inverse of [`name`](Self::name).
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|c| c.name() == name)
     }
