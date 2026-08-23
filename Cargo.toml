@@ -13,6 +13,9 @@ resolver = "3"
 [workspace.package]
 version = "0.0.2"
 
+[patch.crates-io]
+pulseaudio = { git = "https://github.com/restoredelight/pulseaudio-rs.git", rev = "fafa8a05bfc36e38f4eda2be0db67c75dd8805ff" }
+
 [profile.profiling]
 inherits = "release"
 debug = true
