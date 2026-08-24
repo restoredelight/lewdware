@@ -11,6 +11,21 @@ export default defineConfig(async () => ({
 	// Tailwind as CSS for shared components outside this app root.
 	plugins: [sveltekit(), tailwindcss()],
 
+	// Tests run against a DOM, and against the *client* build of Svelte.
+	//
+	// Both are needed for anything that uses runes. Without `conditions: ['browser']` the Svelte
+	// plugin compiles for the server, where `$effect` is a no-op — so an effect-driven module looks
+	// inert and its tests pass by never running. And runes only compile in files the plugin owns,
+	// which means `*.svelte.ts`; a test for such a module is therefore `*.test.svelte.ts`, which
+	// vitest's default `include` does not match.
+	test: {
+		environment: 'happy-dom',
+		include: ['src/**/*.{test,spec}.{js,ts}', 'src/**/*.{test,spec}.svelte.{js,ts}']
+	},
+	resolve: {
+		conditions: process.env.VITEST ? ['browser'] : undefined
+	},
+
 	// Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
 	//
 	// 1. prevent Vite from obscuring rust errors

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { store } from './store.svelte.js';
 import { EXPLICIT_ONLY_TAG, NON_POPUP_TAG, POPUP_AUDIO_TAG } from './tags.js';
-import type { Behaviour, MediaFile } from './types.js';
+import type { MediaFile } from './types.js';
 
 const file = (id: number, file_name: string, tags: string[] = []): MediaFile =>
 	({
@@ -211,29 +211,8 @@ describe('the media tabs’ file lists', () => {
 		expect(store.activeView).toBe('content');
 		expect(store.contentTarget).toEqual({ tab: 'wallpaper', slot: 'splash' });
 
-		store.behaviour = {
-			version: 3,
-			content: {
-				popups: {},
-				audio: {},
-				content_groups: [],
-				captions: [],
-				prompts: [],
-				notifications: [],
-				web_links: []
-			},
-			experience: {
-				timeline: {
-					stages: [{ id: 'stage-1', label: 'Stage 1', content: {}, events: {} }],
-					transitions: []
-				}
-			}
-		} as Behaviour;
-		expect(store.revealExperienceStage('stage-1')).toBe(true);
+		store.revealExperienceStage('stage-1');
 		expect(store.activeView).toBe('experience');
-		expect(store.experienceTargetStageId).toBe('stage-1');
-
-		expect(store.revealExperienceStage('missing')).toBe(false);
 		expect(store.experienceTargetStageId).toBe('stage-1');
 	});
 });
@@ -306,5 +285,65 @@ describe('the Tags and Artists tabs’ way into the media', () => {
 
 		expect(store.mediaTab.searchQuery).toBe('');
 		expect([...store.mediaTab.artistFilter]).toEqual(['ren']);
+	});
+});
+
+describe('import progress across the pack it belongs to', () => {
+	// An Edgeware import spawns its media pipeline before the command that started it returns, so
+	// `upload:start` races the `openPack` that follows it. When the event wins, opening the pack
+	// used to wipe the batch it had just announced and the progress window never appeared.
+	it('keeps a batch announced before the pack finished opening', () => {
+		store.closePack();
+		store.onUploadStart(12);
+		store.openPack('imported-pack', 'Imported', [], [], [], false, false);
+
+		expect(store.uploadBatches).toBe(1);
+		expect(store.uploadTotal).toBe(12);
+		expect(store.showUploadProgress).toBe(true);
+	});
+
+	it('clears the readout when the pack closes, where nothing is in flight', () => {
+		store.openPack('pack-id', 'Test', [], [], []);
+		store.onUploadStart(3);
+		store.closePack();
+
+		expect(store.uploadBatches).toBe(0);
+		expect(store.uploadTotal).toBe(0);
+		expect(store.showUploadProgress).toBe(false);
+	});
+});
+
+describe('what a revert leaves selected', () => {
+	// Undo used to remount every tab, which reset any selection pointing at something the revert
+	// removed — and threw away the author's scroll position with it. The remount is gone, so the
+	// pointers a revert can invalidate are reconciled explicitly instead.
+	it('drops selections the reverted pack no longer has', () => {
+		store.openPack('pack-id', 'Test', [], [], []);
+		store.files = [file(1, 'a.png'), file(2, 'b.png')];
+		store.selectSingle(2);
+		store.openedId = 2;
+		store.previewId = 2;
+
+		store.files = [file(1, 'a.png')];
+		store.reconcileSelection();
+
+		expect([...store.mediaTab.selectedIds]).toEqual([]);
+		expect(store.mediaTab.primaryId).toBeNull();
+		expect(store.openedId).toBeNull();
+		expect(store.previewId).toBeNull();
+	});
+
+	it('keeps the ones that survived', () => {
+		store.openPack('pack-id', 'Test', [], [], []);
+		store.files = [file(1, 'a.png'), file(2, 'b.png')];
+		store.selectSingle(1);
+		store.openedId = 1;
+
+		store.files = [file(1, 'a.png')];
+		store.reconcileSelection();
+
+		expect([...store.mediaTab.selectedIds]).toEqual([1]);
+		expect(store.mediaTab.primaryId).toBe(1);
+		expect(store.openedId).toBe(1);
 	});
 });

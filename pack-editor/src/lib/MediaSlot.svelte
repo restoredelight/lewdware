@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { scrollIntoContainer } from '$ui/scroll';
 	// One media file, addressed by a behaviour slot. The author sees the image they picked, not
 	// the tag that keeps it out of popups -- the editor owns that (see shared/src/tags.rs).
 	//
@@ -6,7 +7,8 @@
 	// file with its tags, and `upload:added` appends to it, so a slot filled during an Edgeware
 	// import fills in live as its file arrives.
 	import { api } from './api.js';
-	import { adoptBehaviour } from './behaviourSave.svelte.js';
+	import { history } from './history.svelte.js';
+	import { invalidate, keys } from './query.svelte.js';
 	import ExplicitMediaPicker from './ExplicitMediaPicker.svelte';
 	import { store } from './store.svelte.js';
 	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
@@ -42,16 +44,30 @@
 	$effect(() => {
 		if (!reveal || !section) return;
 		queueMicrotask(() => {
-			section?.scrollIntoView({ block: 'center' });
-			section?.querySelector<HTMLElement>('button')?.focus();
+			if (!section) return;
+			// Scrolls the panel, not the document -- see `scrollIntoContainer`.
+			scrollIntoContainer(section, { block: 'center' });
+			section.querySelector<HTMLElement>('button')?.focus();
 			onrevealed?.();
 		});
 	});
 
-	// The backend fills the slot itself, so both handlers hand its result to `adoptBehaviour`.
-	// Nothing has to be flushed first: an edit the author is still typing on another tab is
-	// re-applied over the document that comes back, and would not have overwritten this slot in
-	// any case -- it is sent as a patch naming only the field it touched.
+	// The backend fills the slot itself and reports only what the caller could not have known --
+	// whether a displaced file left the pack. Nothing has to be flushed first: a field the author
+	// is still typing on another tab writes its own row when it lands, and could not have
+	// overwritten this slot in any case.
+	/**
+	 * Records the undo entry and tells the surfaces showing slots to look again.
+	 *
+	 * The slot commands used to hand back the whole behaviour document for the front end to adopt.
+	 * They return only what the caller could not have known — whether a displaced file left the
+	 * pack — and everything that renders a slot refetches.
+	 */
+	function slotChanged(label: string, storageBytes?: number) {
+		invalidate(keys.behaviour);
+		history.record({ label, storageBytes });
+	}
+
 	async function fill() {
 		busy = true;
 		try {
@@ -60,10 +76,7 @@
 			// A replacement drops the file it displaced when that file was only ever this slot's --
 			// the same rule, and the same bookkeeping, as clearing the slot.
 			if (result.deleted_id != null) store.removeFilesById([result.deleted_id], true);
-			adoptBehaviour(result.behaviour, {
-				label: `Set ${title.toLowerCase()}`,
-				storageBytes: result.file.size
-			});
+			slotChanged(`Set ${title.toLowerCase()}`, result.file.size);
 			if (!result.added) {
 				taskFeedback.confirm('slot', `Already in this pack as “${result.file.file_name}”`);
 			}
@@ -80,7 +93,7 @@
 			const result = await api.clearMediaSlot(slot);
 			if (!result) return;
 			if (result.deleted_id != null) store.removeFilesById([result.deleted_id], true);
-			adoptBehaviour(result.behaviour, { label: `Clear ${title.toLowerCase()}` });
+			slotChanged(`Clear ${title.toLowerCase()}`);
 		} catch (error) {
 			taskFeedback.error('slot', String(error));
 		} finally {
@@ -94,7 +107,7 @@
 			const result = await api.setMediaSlot(slot, mediaId);
 			if (!result) return;
 			if (result.deleted_id != null) store.removeFilesById([result.deleted_id], true);
-			adoptBehaviour(result.behaviour, { label: `Set ${title.toLowerCase()}` });
+			slotChanged(`Set ${title.toLowerCase()}`);
 		} catch (error) {
 			taskFeedback.error('slot', String(error));
 		} finally {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { leaveStagePlan, stageMembership } from './stageMembership.js';
-import type { Behaviour, Stage } from './types.js';
+import type { Stage } from './types.js';
 
 function stage(id: string, tags: string[] | null, ownedTag?: string): Stage {
 	return {
@@ -11,30 +11,32 @@ function stage(id: string, tags: string[] | null, ownedTag?: string): Stage {
 	} as unknown as Stage;
 }
 
-function pack(...stages: Stage[]): Behaviour {
-	return {
-		content: {
-			popups: {},
-			audio: {},
-			content_groups: [],
-			captions: [],
-			prompts: [],
-			notifications: [],
-			web_links: []
-		},
-		experience: { timeline: { stages, transitions: [] }, label: null }
-	} as unknown as Behaviour;
+function pack(...stages: Stage[]): Stage[] {
+	return stages;
+}
+
+/**
+ * Usage as `get_tag_rows` would report it for a pack whose only tag holders are these stages.
+ *
+ * Counting from the stage list keeps the tests describing one thing: a tag used by exactly one
+ * stage and nothing else is that stage's own machinery, which is what `joinTag` turns on.
+ */
+function usageOf(stages: Stage[]) {
+	return (tag: string) => ({
+		content: 0,
+		experience: stages.filter((item) => (item.content.tags ?? []).includes(tag)).length
+	});
 }
 
 describe('stage membership', () => {
 	it('is empty for a pack with no timeline', () => {
-		expect(stageMembership(null, ['kinky'])).toEqual([]);
-		expect(stageMembership(pack(), ['kinky'])).toEqual([]);
+		expect(stageMembership([], ['kinky'], usageOf([]))).toEqual([]);
+		expect(stageMembership([], ['kinky'], usageOf([]))).toEqual([]);
 	});
 
 	it('reads membership off the tags', () => {
 		const behaviour = pack(stage('early', ['soft']), stage('late', ['kinky']));
-		const rows = stageMembership(behaviour, ['kinky']);
+		const rows = stageMembership(behaviour, ['kinky'], usageOf(behaviour));
 		expect(rows.map((row) => row.member)).toEqual([false, true]);
 	});
 
@@ -42,7 +44,7 @@ describe('stage membership', () => {
 	/// the toggle creates the first tag it can write.
 	it('locks the stages no tag can affect', () => {
 		const behaviour = pack(stage('all', null), stage('none', []));
-		const [unrestricted, empty] = stageMembership(behaviour, []);
+		const [unrestricted, empty] = stageMembership(behaviour, [], usageOf(behaviour));
 
 		expect(unrestricted.member).toBe(true);
 		expect(unrestricted.locked).toMatch(/every file/);
@@ -54,12 +56,12 @@ describe('stage membership', () => {
 	it('uses a dedicated owned tag for joining and names the tags leaving would remove', () => {
 		const behaviour = pack(stage('peak', ['intense', 'loud', 'stage-peak'], 'stage-peak'));
 
-		const outside = stageMembership(behaviour, [])[0];
+		const outside = stageMembership(behaviour, [], usageOf(behaviour))[0];
 		expect(outside.joinTag).toBe('stage-peak');
 		expect(outside.joinCreatesTag).toBe(false);
 		expect(outside.leaveTags).toEqual([]);
 
-		const inside = stageMembership(behaviour, ['loud'])[0];
+		const inside = stageMembership(behaviour, ['loud'], usageOf(behaviour))[0];
 		expect(inside.member).toBe(true);
 		// Only the tags the file actually carries -- removing one it never had is a no-op that
 		// would still show up in the undo entry.
@@ -68,7 +70,7 @@ describe('stage membership', () => {
 
 	it('creates an owned tag instead of joining through an arbitrary author tag', () => {
 		const behaviour = pack(stage('peak', ['intense']));
-		const row = stageMembership(behaviour, [])[0];
+		const row = stageMembership(behaviour, [], usageOf(behaviour))[0];
 
 		expect(row.joinTag).toBeNull();
 		expect(row.joinCreatesTag).toBe(true);
@@ -79,17 +81,16 @@ describe('stage membership', () => {
 			stage('peak', ['stage-peak'], 'stage-peak'),
 			stage('other', ['stage-peak'])
 		);
-		expect(stageMembership(shared, [])[0].joinCreatesTag).toBe(true);
+		expect(stageMembership(shared, [], usageOf(shared))[0].joinCreatesTag).toBe(true);
 
+		// The other half of the same rule: one stage holds it, but a content group does too, so it
+		// is not this stage's own machinery either.
 		const content = pack(stage('peak', ['stage-peak'], 'stage-peak'));
-		content.content.content_groups.push({
-			id: 'group',
-			label: 'Group',
-			description: null,
-			tags: ['stage-peak'],
-			enabled_by_default: true
+		const alsoInContent = (tag: string) => ({
+			content: tag === 'stage-peak' ? 1 : 0,
+			experience: 1
 		});
-		expect(stageMembership(content, [])[0].joinCreatesTag).toBe(true);
+		expect(stageMembership(content, [], alsoInContent)[0].joinCreatesTag).toBe(true);
 	});
 
 	it('creates a distinct owned tag to preserve a stage that shares the one being removed', () => {
@@ -145,8 +146,8 @@ describe('stage membership', () => {
 			stage('same', ['shared']),
 			stage('same-2', ['shared'])
 		);
-		behaviour.experience!.timeline.stages[1].label = 'Same';
-		behaviour.experience!.timeline.stages[2].label = 'Same';
+		behaviour[1].label = 'Same';
+		behaviour[2].label = 'Same';
 		const plan = leaveStagePlan(behaviour, ['shared'], 'peak', ['shared']);
 
 		expect(plan.creations.map(({ tag }) => tag)).toEqual(['stage-same', 'stage-same-2']);
@@ -155,27 +156,28 @@ describe('stage membership', () => {
 	it('turning a shared stage off and back on changes only that stage', () => {
 		const behaviour = pack(stage('peak', ['shared']), stage('climax', ['shared']));
 		const plan = leaveStagePlan(behaviour, ['shared'], 'peak', ['shared']);
-		const climax = behaviour.experience!.timeline.stages[1];
+		const climax = behaviour[1];
 		climax.content.tags!.push(plan.creations[0].tag);
 		climax.content.owned_tag = plan.creations[0].tag;
 		const afterLeaving = [
 			...plan.preserveTags,
 			...['shared'].filter((tag) => !plan.removeTags.includes(tag))
 		];
-		expect(stageMembership(behaviour, afterLeaving).map((row) => row.member)).toEqual([
-			false,
-			true
-		]);
+		expect(
+			stageMembership(behaviour, afterLeaving, usageOf(behaviour)).map((row) => row.member)
+		).toEqual([false, true]);
 
 		// Peak still has only the shared author tag, so rejoining must not add that tag and thereby
 		// alter Climax. The UI creates `stage-peak`, appends it to Peak and applies it to the file.
-		const peakRow = stageMembership(behaviour, afterLeaving)[0];
+		const peakRow = stageMembership(behaviour, afterLeaving, usageOf(behaviour))[0];
 		expect(peakRow.joinTag).toBeNull();
 		expect(peakRow.joinCreatesTag).toBe(true);
-		behaviour.experience!.timeline.stages[0].content.tags!.push('stage-peak');
-		behaviour.experience!.timeline.stages[0].content.owned_tag = 'stage-peak';
+		behaviour[0].content.tags!.push('stage-peak');
+		behaviour[0].content.owned_tag = 'stage-peak';
 		expect(
-			stageMembership(behaviour, [...afterLeaving, 'stage-peak']).map((row) => row.member)
+			stageMembership(behaviour, [...afterLeaving, 'stage-peak'], usageOf(behaviour)).map(
+				(row) => row.member
+			)
 		).toEqual([true, true]);
 	});
 });

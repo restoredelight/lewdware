@@ -20,6 +20,19 @@ export interface MediaFile {
 	source_url: string | null;
 	size: number;
 }
+/**
+ * One tag, with everything the Tags tab shows — mirrors `pack::TagRow`.
+ *
+ * `content_uses` and `experience_uses` answer different halves of "what breaks if I delete this?":
+ * captions and groups on one side, which media a timeline stage selects on the other.
+ */
+export interface TagRow {
+	name: string;
+	media_count: number;
+	content_uses: number;
+	experience_uses: number;
+}
+
 export interface TagSummary {
 	name: string;
 	media_count: number;
@@ -230,7 +243,6 @@ export interface FilledSlot {
 }
 
 export interface SlotFilled {
-	behaviour: Behaviour;
 	file: MediaFile;
 	/** False when the pack already had these bytes, so the grid already knows the file. */
 	added: boolean;
@@ -239,7 +251,6 @@ export interface SlotFilled {
 }
 
 export interface SlotCleared {
-	behaviour: Behaviour;
 	/** Set when the file was only ever scenery and left with its slot. */
 	deleted_id: number | null;
 }
@@ -334,24 +345,13 @@ export interface Behaviour {
 }
 
 /**
- * One edit to the behaviour document: the value at `path` becomes `value`.
- *
- * `path` is dot-separated, with a numeric segment indexing an array --
- * `content.captions.0.text`, `experience.timeline.stages.2.label`. Structural
- * changes (adding a caption, removing a stage, reordering) address the whole array and carry its
- * new contents; see `shared/src/behaviour/patch.rs`, which applies these.
- */
-export interface BehaviourPatch {
-	path: string;
-	value: unknown;
-}
-/**
- * A tag edit belonging to the same author action as a behaviour patch — mirrors `pack::TagAction`.
+ * A tag edit belonging to the same author action as a behaviour mutation — mirrors
+ * `pack::TagAction`.
  *
  * The tag half of `retiring`: renaming a stage renames the tag it owns and deleting one retires it,
  * so the two have to be one transaction or undo would take back half the action. The backend
  * decides the conditional cases (a rename onto a taken name is skipped, a claimed tag is not
- * retired) and reports what it actually did on {@link BehaviourEdit}.
+ * retired) and reports what it actually did on {@link BehaviourOutcome}.
  */
 export type TagAction =
 	/** Put `tag` on `media`, creating it if needed. `null` media means every file in the pack. */
@@ -362,18 +362,93 @@ export type TagAction =
 	| { kind: 'retire_if_unclaimed'; tag: string }
 	| { kind: 'delete'; tag: string };
 
-/** What one behaviour edit produced -- mirrors `pack::BehaviourEdit`. */
-export interface BehaviourEdit {
-	behaviour: Behaviour;
+/**
+ * What one behaviour mutation produced, beyond the rows it wrote — mirrors `pack::BehaviourOutcome`.
+ *
+ * No document: surfaces fetch what they render. What is left is the part the front end could not
+ * have worked out for itself, because the backend *decided* it.
+ */
+export interface BehaviourOutcome {
 	/**
 	 * Media the edit retired that turned out to be scenery nothing else referenced, so it left the
-	 * pack with the edit. Dropped from the media grid by `behaviourSave`.
+	 * pack with the edit. Dropped from the media grid.
 	 */
 	deleted_ids: number[];
 	/** Tags the edit's {@link TagAction}s took out of the pack. */
 	removed_tags: string[];
 	/** `[from, to]` for each rename that actually happened. */
 	renamed_tags: [string, string][];
+}
+
+/** One text-pool entry with the row id the editor addresses it by — mirrors `editor::TextItemRow`. */
+export interface TextItemRow extends TextItem {
+	id: number;
+}
+
+/** One web link with its row id — mirrors `editor::WebLinkRow`. */
+export interface WebLinkRow extends WebLink {
+	id: number;
+}
+
+/** Which of the three text pools an entry belongs to. */
+export type PoolKind = 'caption' | 'prompt' | 'notification';
+
+/** The pack-wide media slots — mirrors `editor::MediaSlots`. */
+export interface MediaSlots {
+	wallpaper: number | null;
+	splash: number | null;
+}
+
+/** What the Content badges and the Experience header need — mirrors `commands::BehaviourSummary`. */
+export interface BehaviourSummary {
+	captions: number;
+	prompts: number;
+	notifications: number;
+	web_links: number;
+	content_groups: number;
+	/** Whether the pack has a timeline section at all. */
+	has_timeline: boolean;
+	/** Whether it plays. A timeline the author switched off is present but disabled. */
+	timeline_enabled: boolean;
+	timeline_label: string | null;
+}
+
+/**
+ * The timeline as the editor shows it — mirrors `commands::TimelineDto`.
+ *
+ * Present even while switched off, which the behaviour document deliberately cannot express: a
+ * suspended timeline reads as no timeline to the engine, and its stages are exactly what the editor
+ * still has to show.
+ */
+export interface TimelineDto {
+	stages: Stage[];
+	transitions: Transition[];
+	enabled: boolean;
+	label: string | null;
+}
+
+/**
+ * A partial edit to one or more files' popup attributes.
+ *
+ * An omitted field is left alone; `null` clears it. The two are different messages on purpose —
+ * collapsing them would make "set the scale" silently wipe the caption. Absent means *no opinion*,
+ * never a zero, because defaults move under the user across engine releases.
+ */
+export interface PopupChanges {
+	weight?: number | null;
+	scale?: number | null;
+	region?: SpawnRegion | null;
+	monitor?: MonitorPreference | null;
+	caption?: string | null;
+	video_loop?: boolean | null;
+	video_audio?: boolean | null;
+	/** A set, so an empty list is the cleared state — there is no separate null. */
+	audio?: number[];
+}
+
+/** A partial edit to one or more files' audio attributes. See {@link PopupChanges}. */
+export interface AudioChanges {
+	volume?: number | null;
 }
 
 export interface HistoryStatus {

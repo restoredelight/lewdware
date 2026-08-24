@@ -2,22 +2,36 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
 	ArtistSummary,
-	Behaviour,
-	BehaviourEdit,
-	BehaviourPatch,
+	AudioChanges,
+	AudioMedia,
+	BehaviourOutcome,
+	BehaviourSummary,
+	ContentGroup,
 	EmbeddedMode,
 	HistoryStatus,
 	ImportResult,
 	MediaFile,
 	MediaServerInfo,
 	MediaSlot,
+	MediaSlots,
 	MetadataDto,
 	PackInfo,
+	PoolKind,
+	PopupChanges,
+	PopupMedia,
 	RecentPack,
 	SlotCleared,
 	SlotFilled,
+	Stage,
 	TagAction,
-	TagSummary
+	TagRow,
+	TagSummary,
+	TextItem,
+	TextItemRow,
+	TimelineDto,
+	Transition,
+	WebLink,
+	WebLinkRow
 } from './types.js';
 
 async function invokeAfterSelection<T>(
@@ -72,7 +86,7 @@ export const api = {
 	getFiles: () => invoke<MediaFile[]>('get_files'),
 	// Deleting a file clears any slot pointing at it, so this returns the behaviour. Renaming does
 	// not: slots hold media ids, which a rename leaves alone.
-	removeFiles: (ids: number[]) => invoke<Behaviour | null>('remove_files', { ids }),
+	removeFiles: (ids: number[]) => invoke<void>('remove_files', { ids }),
 	setFileTitle: (id: number, name: string) => invoke<void>('set_file_title', { id, name }),
 	setFileSourceUrl: (id: number, url: string | null) =>
 		invoke<void>('set_file_source_url', { id, url }),
@@ -90,9 +104,12 @@ export const api = {
 	removeTagFromFiles: (ids: number[], tag: string) =>
 		invoke<void>('remove_tag_from_files', { ids, tag }),
 	getTagSummaries: () => invoke<TagSummary[]>('get_tag_summaries'),
-	renameTag: (from: string, to: string) => invoke<Behaviour>('rename_tag', { from, to }),
-	mergeTag: (from: string, to: string) => invoke<Behaviour>('merge_tag', { from, to }),
-	deleteTag: (tag: string) => invoke<Behaviour>('delete_tag', { tag }),
+	getTagRows: () => invoke<TagRow[]>('get_tag_rows'),
+	/** Every media slot pointing at `id`, named the way the author would recognize it. */
+	getMediaUsage: (id: number) => invoke<string[]>('get_media_usage', { id }),
+	renameTag: (from: string, to: string) => invoke<void>('rename_tag', { from, to }),
+	mergeTag: (from: string, to: string) => invoke<void>('merge_tag', { from, to }),
+	deleteTag: (tag: string) => invoke<void>('delete_tag', { tag }),
 
 	getAllArtists: () => invoke<string[]>('get_all_artists'),
 	addArtistToFiles: (ids: number[], artist: string) =>
@@ -108,18 +125,85 @@ export const api = {
 	setPackMetadata: (dto: MetadataDto) => invoke<void>('set_pack_metadata', { dto }),
 	savePackMetadata: () => invoke<void>('save_pack_metadata'),
 
-	getBehaviour: () => invoke<Behaviour>('get_behaviour'),
-	// Patches rather than a document: the backend is the only writer of behaviour, so an edit
-	// describes what changed instead of replacing what the backend has (see behaviourSave.ts).
-	// `retiring` names media the action deliberately lets go of and `tagActions` the tag edits that
-	// belong to it, so that dropping a stage and dropping the wallpaper and the tag that existed
-	// only for it are one transaction and one undo entry.
-	editBehaviour: (
-		patches: BehaviourPatch[],
-		label: string,
+	// ── Behaviour ────────────────────────────────────────────────────────────
+	//
+	// Typed queries and typed mutations, replacing one `edit_behaviour` that took dot-separated
+	// path strings. A query serves one view; a mutation is one author action, addressed by the id
+	// of the thing it changes, and is one transaction and one undo entry. `label` is the author's
+	// word for what they did — it becomes the undo entry, so it is UI copy and lives here. It
+	// addresses nothing. See `design/editor-data-flow.md`.
+
+	getBehaviourSummary: () => invoke<BehaviourSummary>('get_behaviour_summary'),
+
+	getTextPool: (kind: PoolKind) => invoke<TextItemRow[]>('get_text_pool', { kind }),
+	addTextItem: (kind: PoolKind, item: TextItem, label: string) =>
+		invoke<BehaviourOutcome>('add_text_item', { kind, item, label }),
+	updateTextItem: (id: number, item: TextItem, label: string) =>
+		invoke<BehaviourOutcome>('update_text_item', { id, item, label }),
+	removeTextItem: (id: number, label: string) =>
+		invoke<BehaviourOutcome>('remove_text_item', { id, label }),
+	reorderTextItems: (kind: PoolKind, ids: number[], label: string) =>
+		invoke<BehaviourOutcome>('reorder_text_items', { kind, ids, label }),
+
+	getWebLinks: () => invoke<WebLinkRow[]>('get_web_links'),
+	addWebLink: (link: WebLink, label: string) =>
+		invoke<BehaviourOutcome>('add_web_link', { link, label }),
+	updateWebLink: (id: number, link: WebLink, label: string) =>
+		invoke<BehaviourOutcome>('update_web_link', { id, link, label }),
+	removeWebLink: (id: number, label: string) =>
+		invoke<BehaviourOutcome>('remove_web_link', { id, label }),
+
+	getContentGroups: () => invoke<ContentGroup[]>('get_content_groups'),
+	addContentGroup: (group: ContentGroup, label: string) =>
+		invoke<BehaviourOutcome>('add_content_group', { group, label }),
+	updateContentGroup: (id: string, group: ContentGroup, label: string) =>
+		invoke<BehaviourOutcome>('update_content_group', { id, group, label }),
+	removeContentGroup: (id: string, label: string) =>
+		invoke<BehaviourOutcome>('remove_content_group', { id, label }),
+
+	getMediaSlots: () => invoke<MediaSlots>('get_media_slots'),
+
+	getPopupAttributes: (ids: number[]) =>
+		invoke<[number, PopupMedia][]>('get_popup_attributes', { ids }),
+	getAudioAttributes: (ids: number[]) =>
+		invoke<[number, AudioMedia][]>('get_audio_attributes', { ids }),
+	setPopupAttributes: (ids: number[], changes: PopupChanges, label: string) =>
+		invoke<BehaviourOutcome>('set_popup_attributes', { ids, changes, label }),
+	setAudioAttributes: (ids: number[], changes: AudioChanges, label: string) =>
+		invoke<BehaviourOutcome>('set_audio_attributes', { ids, changes, label }),
+
+	getTimeline: () => invoke<TimelineDto | null>('get_timeline'),
+	setTimelineEnabled: (enabled: boolean, label: string) =>
+		invoke<BehaviourOutcome>('set_timeline_enabled', { enabled, label }),
+	setTimelineLabel: (value: string | null, label: string) =>
+		invoke<BehaviourOutcome>('set_timeline_label', { value, label }),
+	addStage: (after: string | null, source: string | null, name: string, label: string) =>
+		invoke<BehaviourOutcome>('add_stage', { after, source, name, label }),
+	duplicateStage: (id: string, label: string) =>
+		invoke<BehaviourOutcome>('duplicate_stage', { id, label }),
+	moveStage: (id: string, to: number, label: string) =>
+		invoke<BehaviourOutcome>('move_stage', { id, to, label }),
+	/**
+	 * `retiring` names media the removal deliberately lets go of and `tagActions` the tag that
+	 * existed only for this stage, so the stage, its wallpaper and its tag are one undo entry.
+	 */
+	removeStage: (id: string, retiring: number[], tagActions: TagAction[], label: string) =>
+		invoke<BehaviourOutcome>('remove_stage', { id, retiring, tagActions, label }),
+	/**
+	 * Replaces the settings of one or more stages.
+	 *
+	 * A list because one author action can touch several: taking a file out of one stage gives any
+	 * stage that shared its tag a fresh tag of its own, so the file stays where it was. That is one
+	 * thing the author did, so it is one undo entry.
+	 */
+	updateStages: (
+		updates: { id: string; stage: Stage }[],
 		retiring: number[],
-		tagActions: TagAction[]
-	) => invoke<BehaviourEdit>('edit_behaviour', { patches, label, retiring, tagActions }),
+		tagActions: TagAction[],
+		label: string
+	) => invoke<BehaviourOutcome>('update_stages', { updates, retiring, tagActions, label }),
+	updateTransition: (id: string, transition: Transition, label: string) =>
+		invoke<BehaviourOutcome>('update_transition', { id, transition, label }),
 
 	fillMediaSlotDialog: (slot: MediaSlot) =>
 		invoke<SlotFilled | null>('fill_media_slot_dialog', { slot }),

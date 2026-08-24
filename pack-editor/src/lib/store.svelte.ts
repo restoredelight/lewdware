@@ -1,7 +1,5 @@
-import { behaviourTags } from './tagReferences.js';
 import { EXPLICIT_ONLY_TAG, NON_POPUP_TAG, POPUP_AUDIO_TAG, withoutManagedTags } from './tags.js';
 import type {
-	Behaviour,
 	ConversionWarning,
 	Experience,
 	MediaFile,
@@ -114,7 +112,7 @@ class AppStore {
 	// Pack
 	packOpen = $state(false);
 	/** The open pack's own UUID, from its header. Identity for work that outlives a round trip and
-	 * must not land on whatever pack replaced it -- see `ensureBehaviour`. */
+	 * must not land on whatever pack replaced it -- see `query.svelte.ts`. */
 	packId = $state('');
 	packName = $state('');
 	packSaved = $state(true);
@@ -125,7 +123,6 @@ class AppStore {
 	recoveryError = $state<string | null>(null);
 	recoveryErrorKind = $state<'metadata' | 'behaviour' | null>(null);
 	pendingMediaRemoval = $state<number[]>([]);
-	historyRevision = $state(0);
 
 	recoveryStatus = $derived<'saved' | 'pending' | 'backed-up' | 'error'>(
 		this.packSaved
@@ -293,14 +290,14 @@ class AppStore {
 		this.contentTarget = target;
 	}
 
-	revealExperienceStage(stageId: string): boolean {
-		const exists =
-			this.behaviour?.experience?.timeline.stages.some((stage) => stage.id === stageId) ?? false;
-		if (!exists) return false;
+	revealExperienceStage(stageId: string) {
+		// No existence check: the only way here is a link the inspector offered because the backend
+		// said this stage uses the file, so the stage exists by construction. The check that used
+		// to be here was guarding against a stale copy of the document, which nothing holds now --
+		// and the Experience tab, which fetches the timeline, ignores a target that is not in it.
 		this.setActiveView('experience');
 		this.experienceActiveId = stageId;
 		this.experienceTargetStageId = stageId;
-		return true;
 	}
 
 	/** Clears everything narrowing the open media tab, leaving its sort and selection alone. */
@@ -338,19 +335,15 @@ class AppStore {
 
 	// Edgeware import (the converter's warnings for the currently-open pack, if it was imported).
 	// behaviour.json/metadata are written synchronously by the import command itself, before it
-	// even returns -- so an imported pack's `behaviour` is never stale/empty, unlike media (which
-	// streams in afterwards via the same `upload:*` events a normal add-files uses). The one
-	// exception is the wallpaper/splash slots, which name files that don't exist yet at that point:
-	// each is filled as the file it names finishes importing and arrives via `import:slots-filled`
-	// (see `applyFilledMediaSlots`).
+	// even returns. The one exception is the wallpaper/splash slots, which name files that don't
+	// exist yet at that point: each is filled as the file it names finishes importing, and the
+	// `import:slots-filled` event tells the surfaces showing them to look again.
 	importWarnings = $state<ConversionWarning[]>([]);
 
-	// Content/Experience tab state: the pack's behaviour.json document, shared by both tabs (see
-	// behaviourSave.ts) -- null until lazily fetched by whichever tab mounts first.
-	behaviour = $state<Behaviour | null>(null);
-	// Retained only for the lifetime of the open pack, so disabling Experience can persist `null`
-	// without making a quick disable/re-enable cycle destroy the timeline the user was editing.
-	suspendedExperience = $state<Experience | null>(null);
+	// Content/Experience tab state. The document itself is not here: surfaces fetch what they
+	// render through `query.svelte.ts`, and the backend is the only place it exists. A suspended
+	// timeline is no longer held here either -- it is a persisted flag on the pack, so switching
+	// the timeline off and closing the editor no longer loses it (`design/editor-data-flow.md`).
 	contentTab = $state<ContentTab>('groups');
 	contentTarget = $state<ContentReveal | null>(null);
 	experienceActiveId = $state<string | null>(null);
@@ -524,8 +517,7 @@ class AppStore {
 		this.allTags = withoutManagedTags([
 			...new Set([
 				...this.allTags.flatMap((tag) => (tag === from ? (to ? [to] : []) : [tag])),
-				...this.files.flatMap((file) => file.tags),
-				...(this.behaviour ? behaviourTags(this.behaviour) : [])
+				...this.files.flatMap((file) => file.tags)
 			])
 		]);
 		if (!tracked) this.markLocallyBackedUp();
@@ -587,8 +579,6 @@ class AppStore {
 		this.allTags = [];
 		this.allArtists = [];
 		this.metadata = null;
-		this.behaviour = null;
-		this.suspendedExperience = null;
 		this.importWarnings = [];
 		this.mediaTabs = newMediaTabs();
 		this.lastMediaView = 'popups';
@@ -602,6 +592,18 @@ class AppStore {
 		this.experienceActiveId = null;
 		this.experienceTargetStageId = null;
 		this.dragActive = false;
+	}
+
+	/**
+	 * Zeroes the import/upload progress readout.
+	 *
+	 * Deliberately *not* part of `#resetPackState`, which `openPack` calls. An Edgeware import
+	 * spawns its media pipeline before the command that started it returns, so its `upload:start`
+	 * races the `openPack` that follows — and when the event won that race, opening the pack wiped
+	 * the batch it had just announced and the progress window never appeared. Closing a pack is the
+	 * only moment there is genuinely nothing in flight to report.
+	 */
+	#resetUploadState() {
 		this.uploadTotal = 0;
 		this.uploadDone = 0;
 		this.uploadBatches = 0;
@@ -610,6 +612,21 @@ class AppStore {
 		this._showDoneBriefly = false;
 		if (this._doneTimer !== null) clearTimeout(this._doneTimer);
 		this._doneTimer = null;
+	}
+
+	/**
+	 * Drops any selection, viewer or preview pointing at a file the pack no longer has.
+	 *
+	 * For a revert — undo, redo or discard — which can take files away underneath whatever the
+	 * author had picked. The editor used to handle this by remounting every tab, which reset the
+	 * pointers by rebuilding them, and threw away the author's scroll position in the process.
+	 */
+	reconcileSelection() {
+		const has = (id: number | null) => id !== null && this.files.some((file) => file.id === id);
+		this.mediaTab.selectedIds = new Set([...this.mediaTab.selectedIds].filter((id) => has(id)));
+		if (!has(this.mediaTab.primaryId)) this.mediaTab.primaryId = null;
+		if (!has(this.openedId)) this.openedId = null;
+		if (!has(this.previewId)) this.previewId = null;
 	}
 
 	openPack(
@@ -639,6 +656,7 @@ class AppStore {
 
 	closePack() {
 		this.#resetPackState();
+		this.#resetUploadState();
 		this.packOpen = false;
 		this.packId = '';
 		this.packName = '';

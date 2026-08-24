@@ -2,19 +2,21 @@
 //! can be given.
 
 use serde::Serialize;
-use shared::behaviour::Behaviour;
 use shared::encode::HardwareEncoder;
 use tauri::{AppHandle, State};
 
 use crate::pack::MediaFile;
 use crate::{encode, pack, AppState};
 
-/// What filling a slot produced: the updated behaviour, plus the file the slot now points at so
-/// the media grid can show it without waiting for a refresh. `added` distinguishes a fresh
-/// import from a file the pack already had (see `AddOutcome`), which the grid already knows about.
+/// What filling a slot produced: the file the slot now points at, so the media grid can show it
+/// without waiting for a refresh. `added` distinguishes a fresh import from a file the pack
+/// already had (see `AddOutcome`), which the grid already knows about.
+///
+/// No behaviour document: the slot's new value is the caller's own argument, and any surface that
+/// renders slots refetches. Handing back the whole document for the front end to adopt is the
+/// arrangement `design/editor-data-flow.md` replaced.
 #[derive(Serialize)]
 pub struct SlotFilled {
-    pub behaviour: Behaviour,
     pub file: MediaFile,
     pub added: bool,
     /// The file this replaced, when it was only ever this slot's scenery and left with the slot --
@@ -78,7 +80,7 @@ pub async fn fill_media_slot_dialog(
         | shared::behaviour::MediaSlot::StagePromptSound { .. } => "Set stage sound",
         _ => "Set wallpaper",
     };
-    let (outcome, behaviour, deleted_id) = encode::process_file_into_slot(
+    let (outcome, deleted_id) = encode::process_file_into_slot(
         &state.pack,
         &path,
         &app,
@@ -91,18 +93,16 @@ pub async fn fill_media_slot_dialog(
     .map_err(|e| e.to_string())?;
 
     Ok(Some(SlotFilled {
-        behaviour,
         added: matches!(outcome, pack::AddOutcome::Added(_)),
         file: outcome.file().clone(),
         deleted_id,
     }))
 }
 
-/// What emptying a slot produced: the updated behaviour, and the file it deleted (if the file was
+/// What emptying a slot produced: the file it deleted (if the file was
 /// only ever scenery -- see `MediaPack::clear_media_slot`) so the grid can drop it.
 #[derive(Serialize)]
 pub struct SlotCleared {
-    pub behaviour: Behaviour,
     pub deleted_id: Option<u64>,
 }
 
@@ -113,11 +113,8 @@ pub async fn clear_media_slot(
 ) -> Result<Option<SlotCleared>, String> {
     state
         .with_pack_or(None, async |pack| {
-            let (behaviour, deleted_id) = pack.clear_media_slot(slot).await?;
-            Ok(Some(SlotCleared {
-                behaviour,
-                deleted_id,
-            }))
+            let deleted_id = pack.clear_media_slot(slot).await?;
+            Ok(Some(SlotCleared { deleted_id }))
         })
         .await
 }
@@ -133,11 +130,8 @@ pub async fn set_media_slot(
 ) -> Result<Option<SlotCleared>, String> {
     state
         .with_pack_or(None, async |pack| {
-            let (behaviour, deleted_id) = pack.fill_media_slot(slot, media_id, false).await?;
-            Ok(Some(SlotCleared {
-                behaviour,
-                deleted_id,
-            }))
+            let deleted_id = pack.fill_media_slot(slot, media_id, false).await?;
+            Ok(Some(SlotCleared { deleted_id }))
         })
         .await
 }

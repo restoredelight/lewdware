@@ -1,9 +1,8 @@
 //! Tags and artists, on one file or across a whole selection.
 
-use shared::behaviour::Behaviour;
 use tauri::State;
 
-use crate::pack::{ArtistSummary, TagSummary};
+use crate::pack::{ArtistSummary, TagRow, TagSummary};
 use crate::AppState;
 
 #[tauri::command]
@@ -61,11 +60,26 @@ pub async fn get_tag_summaries(state: State<'_, AppState>) -> Result<Vec<TagSumm
 }
 
 #[tauri::command]
+pub async fn get_tag_rows(state: State<'_, AppState>) -> Result<Vec<TagRow>, String> {
+    state
+        .with_pack(async |pack| pack.get_tag_rows().await)
+        .await
+}
+
+/// Every media slot pointing at `id`, named the way the author would recognize it.
+#[tauri::command]
+pub async fn get_media_usage(state: State<'_, AppState>, id: u64) -> Result<Vec<String>, String> {
+    state
+        .with_pack_or(vec![], async |pack| pack.get_media_usage(id).await)
+        .await
+}
+
+#[tauri::command]
 pub async fn rename_tag(
     state: State<'_, AppState>,
     from: String,
     to: String,
-) -> Result<Behaviour, String> {
+) -> Result<(), String> {
     state
         .with_pack(async |pack| pack.rename_tag(from, to).await)
         .await
@@ -76,14 +90,14 @@ pub async fn merge_tag(
     state: State<'_, AppState>,
     from: String,
     to: String,
-) -> Result<Behaviour, String> {
+) -> Result<(), String> {
     state
         .with_pack(async |pack| pack.merge_tag(from, to).await)
         .await
 }
 
 #[tauri::command]
-pub async fn delete_tag(state: State<'_, AppState>, tag: String) -> Result<Behaviour, String> {
+pub async fn delete_tag(state: State<'_, AppState>, tag: String) -> Result<(), String> {
     state
         .with_pack(async |pack| pack.delete_tag(tag).await)
         .await

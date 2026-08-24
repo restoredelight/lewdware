@@ -1,30 +1,35 @@
 <script lang="ts">
 	import { store } from './store.svelte.js';
-	import { commitBehaviourEdit } from './behaviourSave.svelte.js';
 	import TagInput from '$ui/TagInput.svelte';
 
 	type Props = {
 		tags: string[];
 		id: string;
-		// The parent owns the array: mutating a plain prop trips Svelte's ownership warning.
-		onchange: (tags: string[]) => void;
-		// Where this list lives in the behaviour document, e.g. `content.captions.2.tags`. The
-		// parent knows it; this component only knows it has some tags.
-		path: string;
+		/**
+		 * Sends the new tag list, with the undo label for what the author did.
+		 *
+		 * This used to be a dot-separated `path` into the behaviour document, which made one shared
+		 * leaf component the write path for every "entity has tags" surface in the editor — a
+		 * caption, a web link, a content group, a stage. Each of those is now its own typed command,
+		 * so the parent (which knows what it owns) does the writing and this only knows it has some
+		 * tags.
+		 */
+		onchange: (tags: string[], label: string) => void;
 	};
 
-	let { tags, id, onchange, path }: Props = $props();
+	let { tags, id, onchange }: Props = $props();
 
 	function addTag(t: string) {
 		if (!t || tags.includes(t)) return;
-		onchange([...tags, t]);
-		commitBehaviourEdit(path, 'Add tag');
+		onchange([...tags, t], 'Add tag');
 	}
 
 	function removeTag(tag: string) {
 		if (!tags.includes(tag)) return;
-		onchange(tags.filter((item) => item !== tag));
-		commitBehaviourEdit(path, 'Remove tag');
+		onchange(
+			tags.filter((item) => item !== tag),
+			'Remove tag'
+		);
 	}
 </script>
 

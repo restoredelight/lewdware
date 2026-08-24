@@ -11,6 +11,7 @@
 	// to and focused. It is the whole point of the Add button that the thing you just made is where
 	// you are, and getting it right needs the list element, which is this component's.
 	import { tick, type Snippet } from 'svelte';
+	import { scrollIntoContainer } from '$ui/scroll';
 	import Button from '$ui/Button.svelte';
 	import Card from '$ui/Card.svelte';
 	import { Icon, Plus } from 'svelte-hero-icons';
@@ -72,8 +73,12 @@
 	export async function reveal() {
 		await tick();
 		const card = listElement?.lastElementChild;
-		card?.scrollIntoView({ block: 'center' });
-		card?.querySelector<HTMLElement>(focusSelector)?.focus();
+		if (!card) return;
+		// Not `card.scrollIntoView()`: that scrolls every scrollable ancestor including the
+		// document, which in this window drags the navigation off the top and leaves no scrollbar
+		// to come back with. See `scrollIntoContainer`.
+		scrollIntoContainer(card, { block: 'center' });
+		card.querySelector<HTMLElement>(focusSelector)?.focus();
 	}
 
 	async function add() {

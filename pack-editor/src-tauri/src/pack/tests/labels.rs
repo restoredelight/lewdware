@@ -147,17 +147,17 @@ async fn merging_a_tag_into_one_an_entry_already_has_leaves_a_single_mention() {
         .await
         .unwrap();
 
-    let after = pack
-        .merge_tag("source".to_string(), "target".to_string())
+    pack.merge_tag("source".to_string(), "target".to_string())
         .await
         .unwrap();
+    let after = read_pack_behaviour(&pack).await;
 
     assert_eq!(after.content.captions[0].tags, vec!["target".to_string()]);
 }
 
 /// Renaming a tag is now `UPDATE tags SET name` and nothing else: the document holds tag ids,
-/// so every mention follows without being rewritten. The returned document is read back rather
-/// than computed, which is what the test is really pinning down.
+/// so every mention follows without being rewritten. Reading it back afterwards is what the test
+/// is really pinning down -- nothing recomputed the document, and every mention still moved.
 #[tokio::test]
 async fn renaming_a_tag_carries_every_mention_in_the_document() {
     let tmp = tempdir().unwrap();
@@ -214,10 +214,10 @@ async fn renaming_a_tag_carries_every_mention_in_the_document() {
         .await
         .unwrap();
 
-    let after = pack
-        .rename_tag("old".to_string(), "new".to_string())
+    pack.rename_tag("old".to_string(), "new".to_string())
         .await
         .unwrap();
+    let after = read_pack_behaviour(&pack).await;
 
     let expected = vec!["new".to_string()];
     assert_eq!(after.content.content_groups[0].tags, expected);
@@ -248,17 +248,16 @@ async fn tag_management_updates_associations_and_behaviour_together() {
     pack.replace_behaviour(behaviour.clone(), "Seed behaviour".to_string())
         .await
         .unwrap();
-    let behaviour = pack
-        .rename_tag("old".to_string(), "new".to_string())
+    pack.rename_tag("old".to_string(), "new".to_string())
         .await
         .unwrap();
+    let behaviour = read_pack_behaviour(&pack).await;
 
     assert_eq!(pack.get_tags(media).await.unwrap(), vec!["new"]);
     assert_eq!(behaviour.content.captions[0].tags, vec!["new"]);
-    let stored = pack.get_behaviour().await.unwrap();
-    assert_eq!(stored.content.captions[0].tags, vec!["new"]);
 
-    let behaviour = pack.delete_tag("new".to_string()).await.unwrap();
+    pack.delete_tag("new".to_string()).await.unwrap();
+    let behaviour = read_pack_behaviour(&pack).await;
     assert!(behaviour.content.captions[0].tags.is_empty());
     assert!(pack.get_tags(media).await.unwrap().is_empty());
     assert!(pack.get_tag_summaries().await.unwrap().is_empty());
@@ -351,4 +350,90 @@ async fn undoing_a_deleted_tag_recovers_associations_and_behaviour() {
     assert_eq!(pack.get_tags(media).await.unwrap(), vec!["restore-me"]);
     let stored = pack.get_behaviour().await.unwrap();
     assert_eq!(stored.content.captions[0].tags, vec!["restore-me"]);
+}
+
+/// The Tags tab reads this, and it is the only thing it reads: the table used to be a three-way
+/// merge in the browser over the media list, a summary, and the behaviour document. A tag named
+/// only by a caption is a real row in the pack with no media on it, and it has to be listed.
+#[tokio::test]
+async fn tag_rows_count_media_and_both_halves_of_the_document() {
+    let tmp = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let pack = new_test_pack(&tmp.path().join("rows.lwpack"), data_dir.path(), "Rows").await;
+    let media = insert_staged_audio(&pack, b"tagged").await;
+    pack.create_and_add_tag(media, "shared".to_string())
+        .await
+        .unwrap();
+
+    let behaviour = Behaviour {
+        content: shared::behaviour::Content {
+            captions: vec![TextItem {
+                text: "Obey.".to_string(),
+                tags: vec!["shared".to_string(), "caption-only".to_string()],
+                timeout_seconds: None,
+                summary: None,
+            }],
+            ..Default::default()
+        },
+        experience: Some(shared::behaviour::Experience {
+            timeline: Timeline {
+                stages: vec![Stage {
+                    id: "s".to_string(),
+                    label: "Stage".to_string(),
+                    end: None,
+                    content: shared::behaviour::ContentSelection {
+                        tags: Some(vec!["shared".to_string()]),
+                        ..Default::default()
+                    },
+                    events: Default::default(),
+                    movement: None,
+                    mitosis: None,
+                    on_enter: Default::default(),
+                    prompt: Default::default(),
+                }],
+                transitions: vec![],
+            },
+            label: None,
+        }),
+    };
+    pack.replace_behaviour(behaviour, "Seed behaviour".to_string())
+        .await
+        .unwrap();
+
+    let rows = pack.get_tag_rows().await.unwrap();
+    let shared = rows.iter().find(|row| row.name == "shared").unwrap();
+    assert_eq!(shared.media_count, 1);
+    assert_eq!(shared.content_uses, 1, "the caption");
+    assert_eq!(shared.experience_uses, 1, "the stage's selection");
+
+    // Named by a caption and nothing else -- the row the old three-way merge existed to include.
+    let caption_only = rows.iter().find(|row| row.name == "caption-only").unwrap();
+    assert_eq!(caption_only.media_count, 0);
+    assert_eq!(caption_only.content_uses, 1);
+}
+
+/// What the Tags tab shows after a rename. The document holds tag *ids*, so the row moves without
+/// anything rewriting it -- and the tab has to see the new name when it looks again.
+#[tokio::test]
+async fn tag_rows_show_the_new_name_after_a_rename() {
+    let tmp = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let pack = new_test_pack(&tmp.path().join("rowrename.lwpack"), data_dir.path(), "Rows").await;
+    let media = insert_staged_audio(&pack, b"tagged").await;
+    pack.create_and_add_tag(media, "old".to_string())
+        .await
+        .unwrap();
+
+    pack.rename_tag("old".to_string(), "new".to_string())
+        .await
+        .unwrap();
+
+    let rows = pack.get_tag_rows().await.unwrap();
+    assert!(
+        rows.iter().all(|row| row.name != "old"),
+        "the old name is gone: {:?}",
+        rows.iter().map(|row| &row.name).collect::<Vec<_>>()
+    );
+    let renamed = rows.iter().find(|row| row.name == "new").unwrap();
+    assert_eq!(renamed.media_count, 1);
 }

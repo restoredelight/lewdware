@@ -1,6 +1,5 @@
 //! The media files in a pack: listing them, removing them, and their per-file attributes.
 
-use shared::behaviour::Behaviour;
 use tauri::State;
 
 use crate::pack::MediaFile;
@@ -17,9 +16,9 @@ pub async fn get_files(state: State<'_, AppState>) -> Result<Vec<MediaFile>, Str
 pub async fn remove_files(
     state: State<'_, AppState>,
     ids: Vec<u64>,
-) -> Result<Option<Behaviour>, String> {
+) -> Result<(), String> {
     state
-        .with_pack_or(None, async |pack| pack.remove_files(ids).await.map(Some))
+        .with_pack_or((), async |pack| pack.remove_files(ids).await)
         .await
 }
 

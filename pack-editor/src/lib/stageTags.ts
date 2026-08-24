@@ -23,8 +23,7 @@
  * dialog says out loud when something does.
  */
 
-import { behaviourTags, tagUsage } from './tagReferences.js';
-import type { Behaviour } from './types.js';
+import type { Stage } from './types.js';
 
 /** As long a slug as a tag should ever be. Long enough to stay recognisable, short enough that a
  * label somebody pasted a sentence into does not become the widest chip in the Tags tab. */
@@ -75,15 +74,15 @@ export function stageTagName(label: string, taken: Iterable<string> = []): strin
 }
 
 /**
- * Every tag name the pack already has: the ones on media (the caller's suggestion list) plus the
- * ones the behaviour document names on its own.
+ * Every tag name the pack already has.
  *
- * Both halves, because a tag typed into a caption or naming a content group is a real row in the
- * pack with no media attached — and a stage tag that collided with it would start writing that
+ * `get_tag_rows` answers this directly: a tag typed into a caption or naming a content group is a
+ * real row in the pack with no media attached, and it is listed alongside the ones on media. Both
+ * halves matter, because a stage tag that collided with such a name would start writing that
  * caption's classification onto files.
  */
-export function takenTagNames(behaviour: Behaviour | null, tags: Iterable<string>): Set<string> {
-	return new Set([...tags, ...(behaviour ? behaviourTags(behaviour) : [])]);
+export function takenTagNames(names: Iterable<string>): Set<string> {
+	return new Set(names);
 }
 
 /** What still holds a tag, from the point of view of a stage that is about to be deleted. */
@@ -107,17 +106,22 @@ export interface TagClaims {
  * `TagAction::RetireIfUnclaimed`); this one is for what the dialog says.
  */
 export function tagClaims(
-	behaviour: Behaviour | null,
+	allStages: Stage[],
 	tag: string,
 	stageId: string,
-	files: { tags: string[] }[]
+	files: { tags: string[] }[],
+	contentUses: number
 ): TagClaims {
-	const stages = (behaviour?.experience?.timeline.stages ?? [])
+	const stages = allStages
 		.filter((other) => other.id !== stageId && (other.content.tags ?? []).includes(tag))
 		.map((other) => other.label);
 	const media = files.filter((file) => file.tags.includes(tag)).length;
-	// `tagUsage` splits its count into the content half and the timeline half; the timeline half is
-	// the stages, which are counted above against the one being removed.
-	const content = behaviour ? tagUsage(behaviour, tag).content : 0;
-	return { media, stages, content, claimed: media > 0 || stages.length > 0 || content > 0 };
+	// `contentUses` is the content half of the tag's usage — captions, groups and links. The
+	// timeline half is the stages, counted above against the one being removed.
+	return {
+		media,
+		stages,
+		content: contentUses,
+		claimed: media > 0 || stages.length > 0 || contentUses > 0
+	};
 }

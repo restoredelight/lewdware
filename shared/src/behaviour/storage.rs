@@ -106,11 +106,28 @@ fn reject_legacy_blob(conn: &Connection) -> Result<()> {
 // clearing the last attribute removes the row rather than leaving a row of NULLs behind.
 
 fn read_popup_media(conn: &Connection) -> Result<BTreeMap<u64, PopupMedia>> {
-    let mut statement = conn.prepare(
+    read_popup_media_where(conn, "", &[])
+}
+
+/// One file's popup attributes, or `None` if the author has said nothing about it.
+///
+/// The editor asks about one file (or a selection) far more often than about the whole pack, and
+/// answering that by reading every entry — plus a pairings query each — is the O(document) cost
+/// this module exists to stop paying.
+pub(super) fn read_one_popup_media(conn: &Connection, id: u64) -> Result<Option<PopupMedia>> {
+    Ok(read_popup_media_where(conn, "WHERE media_id = ?", &[&id])?.remove(&id))
+}
+
+fn read_popup_media_where(
+    conn: &Connection,
+    filter: &str,
+    binds: &[&dyn rusqlite::ToSql],
+) -> Result<BTreeMap<u64, PopupMedia>> {
+    let mut statement = conn.prepare(&format!(
         "SELECT media_id, weight, scale, region_x, region_y, region_width, region_height,
                 monitor, caption, video_loop, video_audio
-         FROM behaviour_popup_media ORDER BY media_id",
-    )?;
+         FROM behaviour_popup_media {filter} ORDER BY media_id"
+    ))?;
     type Row = (
         u64,
         Option<f64>,
@@ -122,7 +139,7 @@ fn read_popup_media(conn: &Connection) -> Result<BTreeMap<u64, PopupMedia>> {
         Option<bool>,
     );
     let rows: Vec<Row> = statement
-        .query_map([], |row| {
+        .query_map(binds, |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -204,39 +221,52 @@ fn write_popup_media(tx: &Transaction<'_>, popups: &BTreeMap<u64, PopupMedia>) -
         if entry.is_empty() {
             continue;
         }
-        let region = entry.region.map(SpawnRegion::sanitized);
-        let monitor = entry.monitor.as_ref().map(to_text).transpose()?;
-        tx.execute(
-            "INSERT INTO behaviour_popup_media
-                 (media_id, weight, scale, region_x, region_y, region_width, region_height,
-                  monitor, caption, video_loop, video_audio)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(media_id) DO UPDATE SET weight = excluded.weight,
-                                                 scale = excluded.scale,
-                                                 region_x = excluded.region_x,
-                                                 region_y = excluded.region_y,
-                                                 region_width = excluded.region_width,
-                                                 region_height = excluded.region_height,
-                                                 monitor = excluded.monitor,
-                                                 caption = excluded.caption,
-                                                 video_loop = excluded.video_loop,
-                                                 video_audio = excluded.video_audio",
-            params![
-                media_id,
-                entry.weight,
-                entry.scale,
-                region.map(|region| region.x),
-                region.map(|region| region.y),
-                region.map(|region| region.width),
-                region.map(|region| region.height),
-                monitor,
-                entry.caption,
-                entry.video_loop,
-                entry.video_audio,
-            ],
-        )?;
-        write_popup_audio_pairs(tx, *media_id, &entry.audio)?;
+        write_one_popup_media(tx, *media_id, entry)?;
     }
+    Ok(())
+}
+
+/// Writes one file's popup attributes and its explicit sound pairings.
+///
+/// The body of [`write_popup_media`]' loop, separated so the editor can set one file's attributes
+/// without re-upserting every other entry in the pack.
+pub(super) fn write_one_popup_media(
+    tx: &Transaction<'_>,
+    media_id: u64,
+    entry: &PopupMedia,
+) -> Result<()> {
+    let region = entry.region.map(SpawnRegion::sanitized);
+    let monitor = entry.monitor.as_ref().map(to_text).transpose()?;
+    tx.execute(
+        "INSERT INTO behaviour_popup_media
+             (media_id, weight, scale, region_x, region_y, region_width, region_height,
+              monitor, caption, video_loop, video_audio)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(media_id) DO UPDATE SET weight = excluded.weight,
+                                             scale = excluded.scale,
+                                             region_x = excluded.region_x,
+                                             region_y = excluded.region_y,
+                                             region_width = excluded.region_width,
+                                             region_height = excluded.region_height,
+                                             monitor = excluded.monitor,
+                                             caption = excluded.caption,
+                                             video_loop = excluded.video_loop,
+                                             video_audio = excluded.video_audio",
+        params![
+            media_id,
+            entry.weight,
+            entry.scale,
+            region.map(|region| region.x),
+            region.map(|region| region.y),
+            region.map(|region| region.width),
+            region.map(|region| region.height),
+            monitor,
+            entry.caption,
+            entry.video_loop,
+            entry.video_audio,
+        ],
+    )?;
+    write_popup_audio_pairs(tx, media_id, &entry.audio)?;
     Ok(())
 }
 
@@ -295,7 +325,7 @@ fn write_audio_media(tx: &Transaction<'_>, audio: &BTreeMap<u64, AudioMedia>) ->
 
 // ── The content pools ────────────────────────────────────────────────────────
 
-fn read_text_pool(conn: &Connection, kind: &str) -> Result<Vec<TextItem>> {
+pub(super) fn read_text_pool(conn: &Connection, kind: &str) -> Result<Vec<TextItem>> {
     let mut statement = conn.prepare(
         "SELECT id, text, timeout_seconds, summary FROM behaviour_text_item WHERE kind = ? \
          ORDER BY position",
@@ -346,7 +376,7 @@ fn write_text_pool(tx: &Transaction<'_>, kind: &str, items: &[TextItem]) -> Resu
     Ok(())
 }
 
-fn read_web_links(conn: &Connection) -> Result<Vec<WebLink>> {
+pub(super) fn read_web_links(conn: &Connection) -> Result<Vec<WebLink>> {
     let mut statement = conn.prepare("SELECT id, url FROM behaviour_web_link ORDER BY position")?;
     let rows: Vec<(i64, String)> = statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -396,7 +426,7 @@ fn write_web_links(tx: &Transaction<'_>, links: &[WebLink]) -> Result<()> {
     Ok(())
 }
 
-fn read_content_groups(conn: &Connection) -> Result<Vec<ContentGroup>> {
+pub(super) fn read_content_groups(conn: &Connection) -> Result<Vec<ContentGroup>> {
     let mut statement = conn.prepare(
         "SELECT id, label, description, enabled_by_default
          FROM behaviour_content_group ORDER BY position",
@@ -460,7 +490,7 @@ fn write_content_groups(tx: &Transaction<'_>, groups: &[ContentGroup]) -> Result
 // `UPDATE tags SET name`, merging one a re-point, and deleting one a cascade, instead of a pass
 // over the whole document rewriting strings (the late `Behaviour::rewrite_tag`).
 
-fn read_tags(
+pub(super) fn read_tags(
     conn: &Connection,
     table: &str,
     key: &str,
@@ -477,7 +507,7 @@ fn read_tags(
     Ok(tags)
 }
 
-fn write_tags(
+pub(super) fn write_tags(
     tx: &Transaction<'_>,
     table: &str,
     key: &str,
@@ -512,7 +542,7 @@ fn write_tags(
 /// A tag the document names *is* a tag the pack has -- that is what the foreign key asserts. So a
 /// tag typed into a caption or a content group becomes a real row, and shows up in the Tags tab
 /// with no media attached, rather than existing only as a string inside the document.
-fn tag_id(tx: &Transaction<'_>, name: &str) -> Result<i64> {
+pub(super) fn tag_id(tx: &Transaction<'_>, name: &str) -> Result<i64> {
     tx.execute(
         "INSERT OR IGNORE INTO tags (name) VALUES (?)",
         params![name],
@@ -526,19 +556,98 @@ fn tag_id(tx: &Transaction<'_>, name: &str) -> Result<i64> {
 
 // ── The experience section ───────────────────────────────────────────────────
 
-fn read_experience(conn: &Connection) -> Result<Option<Experience>> {
-    let label: Option<Option<String>> = conn
+/// The timeline as the *editor* sees it: present even while switched off.
+///
+/// [`read`] deliberately cannot express this -- a suspended timeline reads as no timeline, which is
+/// what keeps suspension invisible to the engine. The editor needs the other view, because the
+/// stages it must still render are exactly the ones `Experience: None` is hiding.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimelineView {
+    /// The stages and transitions, whether or not the timeline is switched on.
+    pub timeline: Timeline,
+    /// The mode-name override, if the author set one.
+    pub label: Option<String>,
+    /// Whether the pack plays this timeline. `false` is a timeline the author switched off.
+    pub enabled: bool,
+}
+
+/// The pack's timeline, or `None` if it has never had one.
+pub fn read_timeline(conn: &Connection) -> Result<Option<TimelineView>> {
+    let row: Option<(Option<String>, bool)> = conn
         .query_row(
-            "SELECT label FROM behaviour_experience WHERE singleton = 1",
+            "SELECT label, enabled FROM behaviour_experience WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((label, enabled)) = row else {
+        return Ok(None);
+    };
+    Ok(Some(TimelineView {
+        timeline: Timeline {
+            stages: read_stages(conn)?,
+            transitions: read_transitions(conn)?,
+        },
+        label,
+        enabled,
+    }))
+}
+
+/// Switches the pack's timeline on or off, keeping its stages either way.
+///
+/// Creates the section if the pack has never had one, so switching on from nothing is the same
+/// call as switching back on. Returns whether anything changed, which is what keeps a toggle
+/// landing on its current value from costing an undo entry.
+pub fn set_experience_enabled(tx: &Transaction<'_>, enabled: bool) -> Result<bool> {
+    let current: Option<bool> = tx
+        .query_row(
+            "SELECT enabled FROM behaviour_experience WHERE singleton = 1",
             [],
             |row| row.get(0),
         )
         .optional()?;
+    if current == Some(enabled) {
+        return Ok(false);
+    }
+    tx.execute(
+        "INSERT INTO behaviour_experience (singleton, label, enabled) VALUES (1, NULL, ?)
+         ON CONFLICT(singleton) DO UPDATE SET enabled = excluded.enabled",
+        params![enabled],
+    )?;
+    Ok(true)
+}
+
+/// Sets the timeline's mode-name override, or clears it with `None`.
+///
+/// Does nothing if the pack has no timeline section: a name for a timeline that does not exist is
+/// a stale editor writing into something that has since gone, not a reason to create one.
+pub fn set_experience_label(tx: &Transaction<'_>, label: Option<&str>) -> Result<()> {
+    tx.execute(
+        "UPDATE behaviour_experience SET label = ? WHERE singleton = 1",
+        params![label],
+    )?;
+    Ok(())
+}
+
+fn read_experience(conn: &Connection) -> Result<Option<Experience>> {
+    let row: Option<(Option<String>, bool)> = conn
+        .query_row(
+            "SELECT label, enabled FROM behaviour_experience WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
     // No row at all is a pack with no timeline; a row with a NULL label is a timeline that simply
     // doesn't override the mode's name.
-    let Some(label) = label else {
+    let Some((label, enabled)) = row else {
         return Ok(None);
     };
+    // A suspended timeline reads exactly as no timeline, which is what keeps this change invisible
+    // to the engine, the converter and `lw`. Its stage rows are still there -- see
+    // `read_timeline`, which is how the editor gets at them.
+    if !enabled {
+        return Ok(None);
+    }
     Ok(Some(Experience {
         timeline: Timeline {
             stages: read_stages(conn)?,
@@ -548,13 +657,32 @@ fn read_experience(conn: &Connection) -> Result<Option<Experience>> {
     }))
 }
 
-fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
-    let mut statement = conn.prepare(
-        "SELECT id, label, restricts_content, wallpaper, audio, audio_random FROM behaviour_stage ORDER BY position",
-    )?;
+pub(super) fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
+    read_stages_where(conn, "", &[])
+}
+
+/// One stage, or `None` if the timeline no longer holds it.
+///
+/// The editor reads a single stage far more often than it reads the whole timeline — every
+/// keystroke in a stage's label compares against it — so this narrows the query rather than
+/// filtering [`read_stages`]' result, which would read every stage and its seven child tables to
+/// answer a question about one.
+pub(super) fn read_one_stage(conn: &Connection, id: &str) -> Result<Option<Stage>> {
+    Ok(read_stages_where(conn, "WHERE id = ?", &[&id])?.pop())
+}
+
+fn read_stages_where(
+    conn: &Connection,
+    filter: &str,
+    params: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<Stage>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT id, label, restricts_content, wallpaper, audio, audio_random FROM behaviour_stage \
+         {filter} ORDER BY position"
+    ))?;
 
     statement
-        .query_and_then([], |row| -> anyhow::Result<_> {
+        .query_and_then(params, |row| -> anyhow::Result<_> {
             let id: String = row.get("id")?;
 
             Ok(Stage {
@@ -766,7 +894,7 @@ fn read_stage_events(conn: &Connection, stage: &str) -> Result<Events> {
     Ok(events)
 }
 
-fn read_transitions(conn: &Connection) -> Result<Vec<Transition>> {
+pub(super) fn read_transitions(conn: &Connection) -> Result<Vec<Transition>> {
     let mut statement = conn.prepare(
         "SELECT id, from_stage, to_stage, duration_seconds, easing
          FROM behaviour_transition ORDER BY position",
@@ -809,16 +937,21 @@ fn read_transitions(conn: &Connection) -> Result<Vec<Transition>> {
 
 fn write_experience(tx: &Transaction<'_>, experience: Option<&Experience>) -> Result<()> {
     let Some(experience) = experience else {
-        // Suspending the timeline empties the section; the stage rows go with it, and the media
-        // they pointed at is deliberately *not* retired (see `MediaPack::edit_behaviour`).
+        // The pack has no timeline at all -- what a converted pack without one produces. This is
+        // not suspension: switching a timeline off keeps its rows and clears `enabled` instead
+        // (`set_experience_enabled`), because absence cannot hold anything to switch back on.
+        // The media the stages pointed at is deliberately *not* retired either way.
         tx.execute("DELETE FROM behaviour_experience", [])?;
         tx.execute("DELETE FROM behaviour_stage", [])?;
         tx.execute("DELETE FROM behaviour_transition", [])?;
         return Ok(());
     };
+    // `enabled` is set rather than left alone: writing a document that *has* a timeline is the
+    // whole-document path's way of saying the pack has one, and a stale suspension flag would
+    // hide it.
     tx.execute(
-        "INSERT INTO behaviour_experience (singleton, label) VALUES (1, ?)
-         ON CONFLICT(singleton) DO UPDATE SET label = excluded.label",
+        "INSERT INTO behaviour_experience (singleton, label, enabled) VALUES (1, ?, 1)
+         ON CONFLICT(singleton) DO UPDATE SET label = excluded.label, enabled = 1",
         params![experience.label],
     )?;
     // Stages first: a transition's endpoints are foreign keys, so a transition into a stage this
@@ -837,44 +970,53 @@ fn write_stages(tx: &Transaction<'_>, stages: &[Stage]) -> Result<()> {
         stages.iter().map(|s| s.id.as_str()),
     )?;
     for (position, stage) in stages.iter().enumerate() {
-        tx.execute(
-            "INSERT INTO behaviour_stage (id, position, label, restricts_content, wallpaper, audio, audio_random)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET position = excluded.position,
-                                           label = excluded.label,
-                                           restricts_content = excluded.restricts_content,
-                                           wallpaper = excluded.wallpaper,
-                                           audio = excluded.audio,
-                                           audio_random = excluded.audio_random",
-            params![
-                stage.id,
-                position as i64,
-                stage.label,
-                stage.content.tags.is_some(),
-                stage.content.wallpaper,
-                stage.content.audio,
-                stage.content.audio_random,
-            ],
-        )?;
-        write_tags(
-            tx,
-            "behaviour_stage_tag",
-            "stage_id",
-            &stage.id,
-            stage.content.tags.as_deref().unwrap_or(&[]),
-        )?;
-        write_owned_stage_tag(tx, &stage.id, stage.content.owned_tag.as_deref())?;
-        write_stage_end(tx, &stage.id, stage.end.as_ref())?;
-        write_stage_movement(tx, &stage.id, stage.movement.as_ref())?;
-        write_stage_mitosis(tx, &stage.id, stage.mitosis.as_ref())?;
-        write_stage_entry(
-            tx,
-            &stage.id,
-            (!stage.on_enter.is_default()).then_some(&stage.on_enter),
-        )?;
-        write_stage_prompt(tx, &stage.id, &stage.prompt)?;
-        write_stage_events(tx, &stage.id, &stage.events)?;
+        write_one_stage(tx, position as i64, stage)?;
     }
+    Ok(())
+}
+
+/// Writes one stage and every table hanging off it, at `position` in the timeline.
+///
+/// The body of [`write_stages`]' loop, separated so the editor can write a single stage without
+/// rewriting the timeline around it — which is the whole point of editing one stage at a time.
+pub(super) fn write_one_stage(tx: &Transaction<'_>, position: i64, stage: &Stage) -> Result<()> {
+    tx.execute(
+        "INSERT INTO behaviour_stage (id, position, label, restricts_content, wallpaper, audio, audio_random)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET position = excluded.position,
+                                       label = excluded.label,
+                                       restricts_content = excluded.restricts_content,
+                                       wallpaper = excluded.wallpaper,
+                                       audio = excluded.audio,
+                                       audio_random = excluded.audio_random",
+        params![
+            stage.id,
+            position,
+            stage.label,
+            stage.content.tags.is_some(),
+            stage.content.wallpaper,
+            stage.content.audio,
+            stage.content.audio_random,
+        ],
+    )?;
+    write_tags(
+        tx,
+        "behaviour_stage_tag",
+        "stage_id",
+        &stage.id,
+        stage.content.tags.as_deref().unwrap_or(&[]),
+    )?;
+    write_owned_stage_tag(tx, &stage.id, stage.content.owned_tag.as_deref())?;
+    write_stage_end(tx, &stage.id, stage.end.as_ref())?;
+    write_stage_movement(tx, &stage.id, stage.movement.as_ref())?;
+    write_stage_mitosis(tx, &stage.id, stage.mitosis.as_ref())?;
+    write_stage_entry(
+        tx,
+        &stage.id,
+        (!stage.on_enter.is_default()).then_some(&stage.on_enter),
+    )?;
+    write_stage_prompt(tx, &stage.id, &stage.prompt)?;
+    write_stage_events(tx, &stage.id, &stage.events)?;
     Ok(())
 }
 
@@ -1054,7 +1196,7 @@ fn write_stage_events(tx: &Transaction<'_>, stage: &str, events: &Events) -> Res
     Ok(())
 }
 
-fn write_transitions(tx: &Transaction<'_>, transitions: &[Transition]) -> Result<()> {
+pub(super) fn write_transitions(tx: &Transaction<'_>, transitions: &[Transition]) -> Result<()> {
     retain(
         tx,
         "behaviour_transition",
@@ -1117,7 +1259,7 @@ fn retain_ids(tx: &Transaction<'_>, table: &str, key: &str, keep: &[u64]) -> Res
 ///
 /// The delete half of the diff. Passing the surviving keys as JSON rather than building an `IN
 /// (?, ?, …)` keeps one prepared statement whatever the timeline's length.
-fn retain<'a>(
+pub(super) fn retain<'a>(
     tx: &Transaction<'_>,
     table: &str,
     key: &str,
@@ -1135,14 +1277,14 @@ fn retain<'a>(
 ///
 /// Routed through serde rather than a hand-written match so the two representations cannot drift:
 /// renaming a variant's `rename_all` spelling changes both at once.
-fn to_text<T: Serialize>(value: &T) -> Result<String> {
+pub(super) fn to_text<T: Serialize>(value: &T) -> Result<String> {
     match serde_json::to_value(value)? {
         serde_json::Value::String(text) => Ok(text),
         other => bail!("expected a string-valued enum, got {other}"),
     }
 }
 
-fn from_text<T: DeserializeOwned>(text: &str) -> Result<T> {
+pub(super) fn from_text<T: DeserializeOwned>(text: &str) -> Result<T> {
     Ok(serde_json::from_value(serde_json::Value::String(
         text.to_string(),
     ))?)

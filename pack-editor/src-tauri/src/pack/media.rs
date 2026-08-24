@@ -2,19 +2,19 @@
 //! attributes (title, source URL, popup role, behaviour media slots).
 
 use super::behaviour::{
-    conn_write_behaviour_if_changed, fill_media_slot_tx, set_slot, slot_label, slot_value,
-    write_behaviour,
+    conn_write_behaviour_if_changed, fill_media_slot_tx, slot_label,
 };
-use super::labels::{apply_tag, read_behaviour};
+use super::labels::apply_tag;
 use super::*;
 
 use std::{io, path::Path};
 
 use crate::history;
+use shared::behaviour::editor as behaviour_editor;
 use anyhow::{anyhow, bail, Result};
 use rusqlite::{named_params, params, OptionalExtension, TransactionBehavior};
 use shared::{
-    behaviour::{Behaviour, MediaSlot},
+    behaviour::MediaSlot,
     encode::{EncodedFile, FileInfo, FileInfoParts},
     pack::Metadata,
     tags,
@@ -230,17 +230,16 @@ impl MediaPack {
         })))
     }
 
-    pub async fn remove_files(&self, ids: Vec<u64>) -> Result<Behaviour> {
+    pub async fn remove_files(&self, ids: Vec<u64>) -> Result<()> {
         let _handle = self.saving.read().await;
         let label = if ids.len() == 1 {
             "Remove media item".to_string()
         } else {
             format!("Remove {} media items", ids.len())
         };
-        let behaviour = self
-            .db_execute(move |mut conn| {
+        self.db_execute(move |mut conn| {
                 if ids.is_empty() {
-                    return read_behaviour(&conn);
+                    return Ok(());
                 }
                 history::record_media_visibility(&mut conn, &label, &ids, true)?;
                 // Deleting a file has to take any slot pointing at it with it, or the slot is
@@ -255,10 +254,10 @@ impl MediaPack {
                     }
                     changed
                 })
+                .map(|_| ())
             })
             .await?;
-        self.mark_unsaved().await?;
-        Ok(behaviour)
+        self.mark_unsaved().await
     }
 
     pub async fn history_status(&self) -> Result<history::Status> {
@@ -590,17 +589,16 @@ impl MediaPack {
         slot: MediaSlot,
         media_id: u64,
         new_to_pack: bool,
-    ) -> Result<(Behaviour, Option<u64>)> {
+    ) -> Result<Option<u64>> {
         let _handle = self.saving.read().await;
         let result = self
             .db_execute(move |mut conn| {
                 history::record_with_media_refs(&mut conn, slot_label(&slot), 0, |tx| {
-                    let (behaviour, deleted) =
-                        fill_media_slot_tx(tx, &slot, media_id, new_to_pack)?;
+                    let deleted = fill_media_slot_tx(tx, &slot, media_id, new_to_pack)?;
                     // The displaced file's bytes have to outlive the entry that dropped it, or undo
                     // would restore a slot pointing at media the collector has taken away.
                     let refs = [Some(media_id), deleted].into_iter().flatten().collect();
-                    Ok(((behaviour, deleted), refs))
+                    Ok((deleted, refs))
                 })
             })
             .await?;
@@ -617,20 +615,19 @@ impl MediaPack {
         media_id: u64,
         history_id: i64,
         new_to_pack: bool,
-    ) -> Result<(Behaviour, Option<u64>)> {
+    ) -> Result<Option<u64>> {
         let _handle = self.saving.read().await;
         let result = self
             .db_execute(move |mut conn| {
                 history::record_into_pending(&mut conn, history_id, |tx| {
-                    let (behaviour, deleted) =
-                        fill_media_slot_tx(tx, &slot, media_id, new_to_pack)?;
+                    let deleted = fill_media_slot_tx(tx, &slot, media_id, new_to_pack)?;
                     // The soft delete itself rides in the entry's changeset, but the collector only
                     // spares media some entry names -- and this one is displaced, not imported, so
                     // `add_imported_media` never sees it.
                     if let Some(id) = deleted {
                         history::add_media_ref(tx, history_id, id)?;
                     }
-                    Ok((behaviour, deleted))
+                    Ok(deleted)
                 })
             })
             .await?;
@@ -647,21 +644,21 @@ impl MediaPack {
     /// by a timeline stage is Edgeware's ordinary case, and clearing the stage must not take the
     /// pack's main wallpaper with it.
     ///
-    /// Returns the updated behaviour and the id of the file it deleted, if any.
-    pub async fn clear_media_slot(&self, slot: MediaSlot) -> Result<(Behaviour, Option<u64>)> {
+    /// Returns the id of the file it deleted, if any.
+    pub async fn clear_media_slot(&self, slot: MediaSlot) -> Result<Option<u64>> {
         let _handle = self.saving.read().await;
         let result = self
             .db_execute(move |mut conn| {
                 history::record_with_media_refs(&mut conn, slot_label(&slot), 0, |tx| {
-                    let mut behaviour = read_behaviour(tx)?;
-                    let Some(media) = slot_value(&behaviour, &slot) else {
-                        return Ok(((behaviour, None), vec![]));
+                    let Some(media) = behaviour_editor::slot_value(tx, &slot)? else {
+                        return Ok((None, vec![]));
                     };
-                    set_slot(&mut behaviour, &slot, None);
-                    let deleted = delete_unreferenced_scenery(tx, &behaviour, media)?;
-                    write_behaviour(tx, &behaviour)?;
+                    behaviour_editor::set_media_slot(tx, &slot, None)?;
+                    // After the slot is emptied, so "still referenced" means what it means once
+                    // the slot has let go of it.
+                    let deleted = delete_unreferenced_scenery(tx, media)?;
                     let refs = deleted.map(|id| vec![id]).unwrap_or_default();
-                    Ok(((behaviour, deleted), refs))
+                    Ok((deleted, refs))
                 })
             })
             .await?;
@@ -753,10 +750,12 @@ impl MediaPack {
 /// Call with the *updated* behaviour, so "still referenced" means after the change, not before.
 pub(super) fn delete_unreferenced_scenery(
     tx: &rusqlite::Transaction<'_>,
-    behaviour: &Behaviour,
     media: u64,
 ) -> Result<Option<u64>> {
-    if behaviour.referenced_media_ids().contains(&media) {
+    // Asked of the tables, not of a read document: a document read while the timeline is switched
+    // off has no stages in it, so every stage wallpaper would look unreferenced to this and be
+    // deleted. See `shared::behaviour::editor::is_media_referenced`.
+    if shared::behaviour::editor::is_media_referenced(tx, media)? {
         return Ok(None);
     }
     let scenery: Option<u64> = tx

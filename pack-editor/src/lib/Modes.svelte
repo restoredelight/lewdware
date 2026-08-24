@@ -6,7 +6,7 @@
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Select from '$ui/Select.svelte';
 	import { api } from './api.js';
-	import { ensureBehaviour } from './behaviourSave.svelte.js';
+	import { keys, query } from './query.svelte.js';
 	import { history } from './history.svelte.js';
 	import {
 		flushMetadataSave,
@@ -36,11 +36,12 @@
 	});
 	// The timeline mode ("Sequence") shows under this pack's label when one is set, matching what
 	// the player will see in the config app.
-	const timelineName = $derived(store.behaviour?.experience?.label ?? 'Sequence');
+	const summary = query(keys.summary, api.getBehaviourSummary);
+	const timelineName = $derived(summary.current?.timeline_label ?? 'Sequence');
 	const recommendationOptions = $derived([
 		{
 			value: 'auto',
-			label: `Automatic (${store.behaviour?.experience ? timelineName : 'Sandbox'})`
+			label: `Automatic (${summary.current?.timeline_enabled ? timelineName : 'Sandbox'})`
 		},
 		{ value: 'sandbox', label: 'Sandbox' },
 		{ value: 'experience', label: timelineName },
@@ -58,7 +59,6 @@
 			modes = loadedModes;
 			store.metadata = metadata;
 			initializeMetadataHistory(metadata);
-			await ensureBehaviour();
 		} catch (cause) {
 			loadError = String(cause);
 		} finally {

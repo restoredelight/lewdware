@@ -18,6 +18,7 @@
 	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import { formatDuration, formatFileSize } from './format.js';
 	import { clampScroll } from '$ui/scroll';
+	import { keys, query } from './query.svelte.js';
 
 	function infoRows(info: FileInfo, size: number): { label: string; value: string }[] {
 		const rows =
@@ -43,6 +44,10 @@
 
 	const selCount = $derived(store.mediaTab.selectedIds.size);
 	const primary = $derived(store.primaryFile);
+	// The inspector is mounted alongside the grid, so it fetches what it shows rather than reading
+	// a document the media tabs would otherwise have to keep resident.
+	const slots = query(keys.mediaSlots, api.getMediaSlots);
+	const timeline = query(keys.timeline, api.getTimeline);
 	const selected = $derived(store.selectedFiles);
 	// Only in the tab that owns the role. All media is an inventory surface -- it lists every file
 	// the pack has, for a custom mode's sake as much as anyone's, and a control that only the
@@ -86,17 +91,19 @@
 			});
 		else if (!primary.tags.includes(NON_POPUP_TAG))
 			uses.push({ label: 'Popup', target: { kind: 'media', view: 'popups' } });
-		if (store.behaviour?.content.wallpaper === primary.id)
+		if (slots.current?.wallpaper === primary.id)
 			uses.push({
 				label: 'Wallpaper',
 				target: { kind: 'content', tab: 'wallpaper', slot: 'wallpaper' }
 			});
-		if (store.behaviour?.content.splash === primary.id)
+		if (slots.current?.splash === primary.id)
 			uses.push({
 				label: 'Splash',
 				target: { kind: 'content', tab: 'wallpaper', slot: 'splash' }
 			});
-		for (const stage of store.behaviour?.experience?.timeline.stages ?? [])
+		// Stage wallpapers come from the timeline rather than from `get_media_usage`, because the
+		// inspector needs the stage's id to link to it, not just a sentence naming it.
+		for (const stage of timeline.current?.stages ?? [])
 			if (stage.content.wallpaper === primary.id)
 				uses.push({
 					label: `Wallpaper for “${stage.label}”`,

@@ -3,7 +3,7 @@
 	import { listen } from '@tauri-apps/api/event';
 	import { store } from '$lib/store.svelte.js';
 	import { api } from '$lib/api.js';
-	import { applyFilledMediaSlots } from '$lib/behaviourSave.svelte.js';
+	import { invalidate, keys } from '$lib/query.svelte.js';
 	import { cancelPendingWrites, flushPendingWrites, packSave } from '$lib/packActions.svelte.js';
 	import type { FilledSlot, MediaFile, UploadError, SaveDone, SaveProgress } from '$lib/types.js';
 	import Start from '$lib/Start.svelte';
@@ -124,7 +124,10 @@
 			// it really filled a slot -- the one part of an imported behaviour written after the
 			// front end already has the document.
 			listen<FilledSlot[]>('import:slots-filled', (e) => {
-				applyFilledMediaSlots(e.payload);
+				// The slots an Edgeware import fills as its media lands, well after the command that
+				// started it returned. Nothing holds a document to patch, so this is just "the
+				// answer moved": whatever is showing a slot asks again.
+				invalidate(keys.behaviour);
 			}),
 			listen<SaveProgress>('save:progress', (e) => {
 				store.saveActive = true;

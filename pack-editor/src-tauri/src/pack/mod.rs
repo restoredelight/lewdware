@@ -26,7 +26,6 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::vtab::array;
 use serde::{Deserialize, Serialize};
 use shared::{
-    behaviour::Behaviour,
     encode::FileInfo,
     pack::{Header, Metadata, HEADER_SIZE},
     tags,
@@ -69,20 +68,60 @@ const TAG_JOIN_TABLES: &[(&str, &str)] = &[
     ("behaviour_content_group_tag", "group_id"),
 ];
 
-/// What one behaviour edit produced -- see [`MediaPack::edit_behaviour`].
-#[derive(Serialize, Clone, Debug)]
-pub struct BehaviourEdit {
-    pub behaviour: Behaviour,
+/// What one behaviour edit produced, beyond the rows it wrote.
+///
+/// No document: the front end fetches what it renders, so handing it a copy of the whole document
+/// to reconcile against is exactly the arrangement this replaced. What is left is the part the
+/// front end could not have worked out for itself — the side effects the backend *decided*.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct BehaviourOutcome {
     /// Media the edit retired that turned out to be scenery nothing else referenced, so it left
     /// the pack with the edit. The front end drops these from its media grid.
     pub deleted_ids: Vec<u64>,
-    /// Tags the edit's [`TagAction`]s took out of the pack, so the grid can drop them from the
-    /// files that carried them without refetching. Reported rather than assumed: a retirement is
-    /// conditional on nothing claiming the tag, and that is decided here.
+    /// Tags the edit's [`TagAction`]s took out of the pack. Reported rather than assumed: a
+    /// retirement is conditional on nothing claiming the tag, and that is decided here.
     pub removed_tags: Vec<String>,
     /// `[from, to]` for each rename that actually happened, for the same reason: a rename onto a
     /// name the pack already has is skipped rather than turned into a merge.
     pub renamed_tags: Vec<(String, String)>,
+}
+
+/// One author action, as [`MediaPack::behaviour_edit`] takes it.
+///
+/// A struct rather than four positional arguments because three of the four are almost always
+/// empty, and `edit_thing(x, label, vec![], vec![])` at thirty call sites says nothing about which
+/// `vec![]` is which.
+pub struct BehaviourAction<F> {
+    /// The author's word for what they did — it becomes the undo entry.
+    pub label: String,
+    /// Media this action deliberately lets go of. See [`MediaPack::behaviour_edit`].
+    pub retiring: Vec<u64>,
+    /// Tag edits belonging to the same action, run in the same transaction.
+    pub tag_actions: Vec<TagAction>,
+    /// The edit itself, reporting whether it changed anything.
+    pub edit: F,
+}
+
+impl<F> BehaviourAction<F> {
+    /// An action that only writes behaviour rows — no tags, nothing retired. The common case.
+    pub fn new(label: impl Into<String>, edit: F) -> Self {
+        Self {
+            label: label.into(),
+            retiring: Vec::new(),
+            tag_actions: Vec::new(),
+            edit,
+        }
+    }
+
+    pub fn retiring(mut self, retiring: Vec<u64>) -> Self {
+        self.retiring = retiring;
+        self
+    }
+
+    pub fn with_tag_actions(mut self, tag_actions: Vec<TagAction>) -> Self {
+        self.tag_actions = tag_actions;
+        self
+    }
 }
 
 /// A tag edit that belongs to the same author action as a behaviour patch.
@@ -138,6 +177,19 @@ pub enum TagAction {
 pub struct TagSummary {
     pub name: String,
     pub media_count: u64,
+}
+
+/// One tag, with everything the Tags tab shows about it.
+///
+/// `content_uses` and `experience_uses` are separate because they answer different halves of "what
+/// breaks if I delete this?" — captions and groups on one side, which stages select which media on
+/// the other.
+#[derive(Serialize, Clone, Debug)]
+pub struct TagRow {
+    pub name: String,
+    pub media_count: u64,
+    pub content_uses: u64,
+    pub experience_uses: u64,
 }
 
 #[derive(Serialize, Clone, Debug)]

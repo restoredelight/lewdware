@@ -2,7 +2,7 @@
 	import { api } from './api.js';
 	import { store } from './store.svelte.js';
 	import { history } from './history.svelte.js';
-	import { reapplyFilledMediaSlots, resetFilledMediaSlots } from './behaviourSave.svelte.js';
+	import { invalidate, keys } from './query.svelte.js';
 	import Dialog from '$ui/Dialog.svelte';
 	import type { PackInfo, RecentPack } from './types.js';
 	import Button from '$ui/Button.svelte';
@@ -152,7 +152,6 @@
 	async function importEdgeware() {
 		busy = 'import';
 		error = null;
-		resetFilledMediaSlots();
 		try {
 			const result = await api.importEdgewarePackDialog(() => (working = 'import'));
 			if (!result) return;
@@ -160,13 +159,12 @@
 			history.reset(false);
 			store.importWarnings = result.warnings;
 			// behaviour.json/metadata are already written by the time this command returns (see
-			// import_edgeware_pack_dialog/run_import) -- fetch it right away, no waiting on media.
-			// The wallpaper/splash slots are the exception and are still empty here; each lands as
-			// its own file finishes importing, via `import:slots-filled` (see
-			// `applyFilledMediaSlots`). The first of those can beat this fetch, whose result would
-			// then be a document that predates it -- hence the catch-up right after.
-			store.behaviour = await api.getBehaviour();
-			reapplyFilledMediaSlots();
+			// import_edgeware_pack_dialog/run_import), so the surfaces have something to show
+			// immediately. The wallpaper/splash slots are the exception and are still empty here;
+			// each lands as its own file finishes importing, and `import:slots-filled` tells the
+			// surfaces showing them to look again. Nothing here can go stale, because nothing here
+			// holds a document.
+			invalidate(keys.behaviour);
 			store.packSaved = !result.info.has_unsaved_changes;
 		} catch (err) {
 			error = `Import failed. ${String(err)}`;

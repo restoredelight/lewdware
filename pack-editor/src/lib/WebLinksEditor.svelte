@@ -1,55 +1,92 @@
 <script lang="ts">
-	import { store } from './store.svelte.js';
 	import ContentList from './ContentList.svelte';
 	import TagPicker from './TagPicker.svelte';
-	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
+	import { api } from './api.js';
+	import { fields, mutate } from './mutate.svelte.js';
+	import { keys, query } from './query.svelte.js';
+	import type { WebLink, WebLinkRow } from './types.js';
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Field from '$ui/Field.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import { Icon, XMark } from 'svelte-hero-icons';
 
-	const links = $derived(store.behaviour!.content.web_links);
-	// Adding or removing a link moves every later index, so those edits replace the array whole
-	// rather than addressing one entry.
-	const LINKS = 'content.web_links';
+	const stored = query(keys.webLinks, api.getWebLinks);
+	const links = $derived(stored.current ?? []);
+	const invalidates = [keys.webLinks, keys.summary];
 
 	let newArgByLink = $state<Record<number, string>>({});
-	let removing = $state<(typeof links)[number] | null>(null);
+	let removing = $state<WebLinkRow | null>(null);
 
-	function addLink() {
-		links.push({ url: '', args: [], tags: [] });
-		commitBehaviourEdit(LINKS, 'Add web link');
+	/**
+	 * Applies `change` to this link and sends it.
+	 *
+	 * Accumulated into one draft per link: the command sends the link whole, so a URL edit built
+	 * from the last fetched copy would revert a suffix added a moment earlier.
+	 */
+	function write(
+		link: WebLinkRow,
+		change: (draft: WebLink) => void,
+		label: string,
+		debounce = false
+	) {
+		fields.edit<WebLink>({
+			entity: `web-link:${link.id}`,
+			base: () => ({ url: link.url, args: [...link.args], tags: [...link.tags] }),
+			change,
+			label,
+			invalidates,
+			send: (draft) => api.updateWebLink(link.id, draft, label),
+			debounce
+		});
+	}
+
+	/** What a link looks like right now: the author's unsent edit if there is one, else stored. */
+	function shown(link: WebLinkRow): WebLink {
+		return fields.draftFor<WebLink>(`web-link:${link.id}`) ?? link;
+	}
+
+	async function addLink() {
+		await mutate(() => api.addWebLink({ url: '', args: [], tags: [] }, 'Add web link'), {
+			label: 'Add web link',
+			invalidates
+		});
 	}
 
 	function removeLink(index: number) {
 		const link = links[index];
+		if (!link) return;
 		if (link.url || link.args.length > 0 || link.tags.length > 0) {
 			removing = link;
 			return;
 		}
-		links.splice(index, 1);
-		commitBehaviourEdit(LINKS, 'Remove web link');
+		void mutate(() => api.removeWebLink(link.id, 'Remove web link'), {
+			label: 'Remove web link',
+			invalidates
+		});
 	}
 
 	function confirmRemove() {
 		if (!removing) return;
-		const index = links.indexOf(removing);
-		if (index >= 0) links.splice(index, 1);
+		const link = removing;
 		removing = null;
-		commitBehaviourEdit(LINKS, 'Remove web link');
+		void mutate(() => api.removeWebLink(link.id, 'Remove web link'), {
+			label: 'Remove web link',
+			invalidates
+		});
 	}
 
 	function addArg(index: number) {
+		const link = links[index];
 		const value = (newArgByLink[index] ?? '').trim();
-		if (!value) return;
-		links[index].args.push(value);
+		if (!link || !value) return;
 		newArgByLink[index] = '';
-		commitBehaviourEdit(`${LINKS}.${index}.args`, 'Add URL suffix');
+		write(link, (draft) => draft.args.push(value), 'Add URL suffix');
 	}
 
 	function removeArg(linkIndex: number, argIndex: number) {
-		links[linkIndex].args.splice(argIndex, 1);
-		commitBehaviourEdit(`${LINKS}.${linkIndex}.args`, 'Remove URL suffix');
+		const link = links[linkIndex];
+		if (!link) return;
+		write(link, (draft) => draft.args.splice(argIndex, 1), 'Remove URL suffix');
 	}
 </script>
 
@@ -81,12 +118,9 @@
 			label="URL"
 			type="url"
 			size="compact"
-			value={link.url}
+			value={shown(link).url}
 			placeholder="https://…"
-			oninput={(value) => {
-				link.url = value;
-				editBehaviourField(`${LINKS}.${index}.url`, 'Edit web link');
-			}}
+			oninput={(value) => write(link, (draft) => (draft.url = value), 'Edit web link', true)}
 		/>
 
 		<div>
@@ -94,7 +128,7 @@
 				Random URL suffixes <span class="font-normal">(optional)</span>
 			</p>
 			<div class="flex flex-wrap items-center gap-1.5">
-				{#each link.args as arg, argIndex}
+				{#each shown(link).args as arg, argIndex}
 					<span
 						class="bg-bg border-border text-text flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs"
 					>
@@ -123,10 +157,9 @@
 		</div>
 
 		<TagPicker
-			tags={link.tags}
+			tags={shown(link).tags}
 			id={`web-link-${index}`}
-			path={`${LINKS}.${index}.tags`}
-			onchange={(tags) => (link.tags = tags)}
+			onchange={(tags, label) => write(link, (draft) => (draft.tags = tags), label)}
 		/>
 	{/snippet}
 </ContentList>

@@ -1,6 +1,7 @@
 import { store } from './store.svelte.js';
 import { api } from './api.js';
-import { cancelBehaviourSave } from './behaviourSave.svelte.js';
+import { fields } from './mutate.svelte.js';
+import { invalidate, keys } from './query.svelte.js';
 import type { HistoryStatus } from './types.js';
 
 export interface HistoryRecord {
@@ -56,39 +57,36 @@ class BackendHistory {
 	}
 
 	private async reloadEditor() {
-		// Undo and redo flush first (so the edit being undone is a real entry to undo), which
-		// leaves nothing pending by the time this runs. This covers the rest: an edit typed
-		// *during* the round trip belongs to the state being replaced, and sending it afterwards
+		// Undo and redo flush first (so the edit being undone is a real entry to undo), which leaves
+		// nothing pending by the time this runs. This covers the rest: a field still being typed
+		// during the round trip belongs to the state being replaced, and sending it afterwards
 		// would write it back over the one the author reverted to.
-		cancelBehaviourSave();
-		const [files, tags, artists, metadata, behaviour] = await Promise.all([
+		fields.cancel();
+		// A changeset can touch any table, so everything the surfaces are showing is suspect. This
+		// is the one place a blanket invalidation is right, and it is cheap because only the open
+		// tab's queries have subscribers.
+		//
+		// This replaced remounting the whole tab (`{#key store.historyRevision}` in `Editor`),
+		// which existed back when a surface read a document that was swapped underneath it and had
+		// no way to notice. Rebuilding the DOM threw away the author's scroll position on every
+		// undo. Surfaces refetch now, and the two things the remount was really protecting are
+		// handled where they belong: the media ids below, and `TimelineEditor`'s own fallback when
+		// the stage it had selected is no longer in the timeline.
+		invalidate(keys.behaviour);
+		invalidate(keys.tags);
+		invalidate(keys.artists);
+		const [files, tags, artists, metadata] = await Promise.all([
 			api.getFiles(),
 			api.getAllTags(),
 			api.getAllArtists(),
-			api.getPackMetadata(),
-			api.getBehaviour()
+			api.getPackMetadata()
 		]);
 		store.files = files;
 		store.allTags = tags;
 		store.allArtists = artists;
 		store.metadata = metadata;
 		store.packName = metadata.name;
-		const suspendedExperience = store.suspendedExperience;
-		store.behaviour = behaviour;
-		store.suspendedExperience = behaviour.experience ? null : suspendedExperience;
-		store.mediaTab.selectedIds = new Set(
-			[...store.mediaTab.selectedIds].filter((id) => files.some((file) => file.id === id))
-		);
-		if (
-			store.mediaTab.primaryId !== null &&
-			!files.some((file) => file.id === store.mediaTab.primaryId)
-		)
-			store.mediaTab.primaryId = null;
-		if (store.openedId !== null && !files.some((file) => file.id === store.openedId))
-			store.openedId = null;
-		if (store.previewId !== null && !files.some((file) => file.id === store.previewId))
-			store.previewId = null;
-		store.historyRevision++;
+		store.reconcileSelection();
 	}
 
 	async undo() {

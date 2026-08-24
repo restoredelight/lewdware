@@ -2,29 +2,42 @@
 	import Checkbox from '$ui/Checkbox.svelte';
 	import NumberField from '$ui/NumberField.svelte';
 	import Select from '$ui/Select.svelte';
-	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
-	import { store } from './store.svelte.js';
+	import { api } from './api.js';
+	import { fields } from './mutate.svelte.js';
+	import { keys } from './query.svelte.js';
 	import type { Stage, Transition, TransitionValue } from './types.js';
 
-	type Props = { transitionId: string; from: Stage; to: Stage; onstage: (id: string) => void };
-	let { transitionId, from, to, onstage }: Props = $props();
-	// Looked up from the store rather than received as a prop: this editor mutates the
-	// transition, and mutating an unbound prop trips Svelte's ownership warning.
-	const transition = $derived(
-		store.behaviour!.experience!.timeline.transitions.find((item) => item.id === transitionId)!
-	);
-	// A patch addresses a transition by position, while everything else here addresses it by id --
-	// the ids are what survive the timeline being edited, but the document is a list.
-	const path = $derived(
-		`experience.timeline.transitions.${store.behaviour!.experience!.timeline.transitions.findIndex(
-			(item) => item.id === transitionId
-		)}`
-	);
+	// The transition comes down as a prop now that nothing here mutates it in place: an edit builds
+	// a draft and sends it, so the old reason for looking it up out of a shared document (mutating
+	// an unbound prop trips Svelte's ownership warning) is gone with the mutation.
+	type Props = { transition: Transition; from: Stage; to: Stage; onstage: (id: string) => void };
+	let { transition, from, to, onstage }: Props = $props();
+
+	// Addressed by id in the write: a transition's position is a fact about the timeline at the
+	// moment this rendered, and the id is what survives editing it.
+	const invalidates = [keys.timeline];
+
+	/** Applies `change` to this transition and sends it. Accumulated into one draft, as elsewhere. */
+	function write(change: (draft: Transition) => void, label: string, debounce = false) {
+		fields.edit<Transition>({
+			entity: `transition:${transition.id}`,
+			base: () => ({ ...transition, affected: [...transition.affected] }),
+			change,
+			label,
+			invalidates,
+			send: (draft) => api.updateTransition(transition.id, draft, label),
+			debounce
+		});
+	}
+
+	/** The transition as the author has it: their unsent edit if there is one, else stored. */
+	const shown = $derived(fields.draftFor<Transition>(`transition:${transition.id}`) ?? transition);
+
 	let rootEl = $state<HTMLElement>();
 	// WebKitGTK doesn't reliably clamp scrollTop when the panel's content shrinks,
 	// so reset the scroll when this editor switches to a different transition.
 	$effect(() => {
-		transitionId;
+		transition.id;
 		rootEl?.scrollTo(0, 0);
 	});
 	const groups: {
@@ -66,20 +79,21 @@
 		values: [{ key: 'crossfade' as TransitionValue, label: 'Background audio' }]
 	};
 	function isAffected(group: (typeof groups)[number], key: TransitionValue) {
-		return transition.affected.includes(group.legacy) || transition.affected.includes(key);
+		return shown.affected.includes(group.legacy) || shown.affected.includes(key);
 	}
 	function affected(group: (typeof groups)[number], key: TransitionValue, checked: boolean) {
-		// Expanding a legacy broad selection on first edit keeps every sibling selected.
-		if (transition.affected.includes(group.legacy)) {
-			transition.affected = transition.affected.filter((item) => item !== group.legacy);
-			for (const value of group.values)
-				if (!transition.affected.includes(value.key)) transition.affected.push(value.key);
-		}
-		if (checked && !transition.affected.includes(key)) transition.affected.push(key);
-		if (!checked) transition.affected = transition.affected.filter((item) => item !== key);
 		// Named for the section it lives in ("Gradual changes"), so the undo entry points at
 		// something the author can see rather than describing the field.
-		commitBehaviourEdit(`${path}.affected`, 'Edit gradual changes');
+		write((draft) => {
+			// Expanding a legacy broad selection on first edit keeps every sibling selected.
+			if (draft.affected.includes(group.legacy)) {
+				draft.affected = draft.affected.filter((item) => item !== group.legacy);
+				for (const value of group.values)
+					if (!draft.affected.includes(value.key)) draft.affected.push(value.key);
+			}
+			if (checked && !draft.affected.includes(key)) draft.affected.push(key);
+			if (!checked) draft.affected = draft.affected.filter((item) => item !== key);
+		}, 'Edit gradual changes');
 	}
 </script>
 
@@ -108,33 +122,33 @@
 					label="Duration (seconds)"
 					min={0}
 					step={1}
-					value={transition.duration_seconds}
+					value={shown.duration_seconds}
 					oninput={(seconds) => {
 						// An empty field is mid-edit, not a request for an instant transition: leave the
 						// stored duration where it is until a real number is typed.
 						if (seconds === null) return;
-						transition.duration_seconds = seconds;
-						editBehaviourField(`${path}.duration_seconds`, 'Edit transition duration');
+						write((draft) => (draft.duration_seconds = seconds), 'Edit transition duration', true);
 					}}
 				/>
 				<Select
 					label="Easing"
-					value={transition.easing}
-					disabled={transition.duration_seconds === 0}
+					value={shown.easing}
+					disabled={shown.duration_seconds === 0}
 					options={[
 						{ value: 'linear', label: 'Linear' },
 						{ value: 'ease_in', label: 'Ease in' },
 						{ value: 'ease_out', label: 'Ease out' },
 						{ value: 'ease_in_out', label: 'Ease in and out' }
 					]}
-					onchange={(value) => {
-						transition.easing = value as Transition['easing'];
-						commitBehaviourEdit(`${path}.easing`, 'Change transition easing');
-					}}
+					onchange={(value) =>
+						write(
+							(draft) => (draft.easing = value as Transition['easing']),
+							'Change transition easing'
+						)}
 				/>
 			</div>
 		</section>
-		<section class="card" class:disabled={transition.duration_seconds === 0}>
+		<section class="card" class:disabled={shown.duration_seconds === 0}>
 			<div class="section-title">
 				<div>
 					<h3>Gradual changes</h3>
@@ -152,7 +166,7 @@
 							<label class="value"
 								><Checkbox
 									checked={isAffected(group, value.key)}
-									disabled={transition.duration_seconds === 0}
+									disabled={shown.duration_seconds === 0}
 									ariaLabel={`Gradually change ${value.label}`}
 									onchange={(checked) => affected(group, value.key, checked)}
 								/><span>{value.label}</span></label
@@ -166,8 +180,8 @@
 				<div class="value-grid">
 					<label class="value"
 						><Checkbox
-							checked={transition.affected.includes('crossfade')}
-							disabled={transition.duration_seconds === 0}
+							checked={shown.affected.includes('crossfade')}
+							disabled={shown.duration_seconds === 0}
 							ariaLabel="Crossfade background audio"
 							onchange={(checked) => affected(crossfadeGroup, 'crossfade', checked)}
 						/><span>Crossfade background audio</span></label

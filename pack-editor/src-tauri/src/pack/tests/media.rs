@@ -602,6 +602,7 @@ async fn renaming_media_leaves_the_slots_pointing_at_it_alone() {
 
     // Deleting it is the one thing that does have to clear the slot, or it is left pointing
     // at media the pack no longer has.
-    let behaviour = pack.remove_files(vec![media]).await.unwrap();
+    pack.remove_files(vec![media]).await.unwrap();
+    let behaviour = read_pack_behaviour(&pack).await;
     assert_eq!(behaviour.content.wallpaper, None);
 }

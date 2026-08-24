@@ -223,18 +223,98 @@ impl MediaPack {
         .await
     }
 
+    /// Every tag the pack knows about, with how much of it uses each.
+    ///
+    /// One query rather than the three-way merge the Tags tab used to do in TypeScript — over the
+    /// whole behaviour document, the media list, and a summary — which needed the document resident
+    /// to answer a question SQL can answer directly.
+    ///
+    /// `content_uses` and `experience_uses` are counted separately because they are different
+    /// answers to "what breaks if I delete this?": one is captions and groups, the other is which
+    /// media a timeline stage selects.
+    pub async fn get_tag_rows(&self) -> Result<Vec<TagRow>> {
+        self.db_execute(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT tags.name,
+                        COUNT(DISTINCT media.id),
+                        (SELECT COUNT(*) FROM behaviour_content_group_tag t
+                             WHERE t.tag_id = tags.id)
+                          + (SELECT COUNT(*) FROM behaviour_text_item_tag t WHERE t.tag_id = tags.id)
+                          + (SELECT COUNT(*) FROM behaviour_web_link_tag t WHERE t.tag_id = tags.id),
+                        (SELECT COUNT(*) FROM behaviour_stage_tag t WHERE t.tag_id = tags.id)
+                 FROM tags
+                 LEFT JOIN media_tags ON media_tags.tag_id = tags.id
+                 LEFT JOIN media ON media.id = media_tags.media_id AND media.deleted = 0
+                 GROUP BY tags.id ORDER BY tags.name COLLATE NOCASE",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok(TagRow {
+                    name: row.get(0)?,
+                    media_count: row.get(1)?,
+                    content_uses: row.get(2)?,
+                    experience_uses: row.get(3)?,
+                })
+            })?;
+            // Same filter as `get_all_tags`: the Tags tab never lists a tag the author can't edit.
+            Ok(rows
+                .collect::<rusqlite::Result<Vec<TagRow>>>()?
+                .into_iter()
+                .filter(|row| !tags::is_managed(&row.name))
+                .collect())
+        })
+        .await
+    }
+
+    /// Every media slot pointing at `media`, described the way an author would recognize it.
+    ///
+    /// Deleting a file clears the slots referencing it, which is right and is a surprising thing to
+    /// discover afterwards — the pack quietly stops having a wallpaper. Naming them beforehand is
+    /// what makes that a decision rather than an accident.
+    ///
+    /// Includes stages of a switched-off timeline, deliberately: those slots still exist, and a
+    /// removal would still empty them.
+    pub async fn get_media_usage(&self, media: u64) -> Result<Vec<String>> {
+        self.db_execute(move |conn| {
+            let mut usage = Vec::new();
+            let (wallpaper, splash): (Option<u64>, Option<u64>) = conn
+                .query_row(
+                    "SELECT wallpaper, splash FROM behaviour_content WHERE singleton = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .unwrap_or((None, None));
+            if wallpaper == Some(media) {
+                usage.push("the pack wallpaper".to_string());
+            }
+            if splash == Some(media) {
+                usage.push("the splash".to_string());
+            }
+            let mut statement = conn.prepare(
+                "SELECT label FROM behaviour_stage WHERE wallpaper = ? ORDER BY position",
+            )?;
+            let stages: Vec<String> = statement
+                .query_map(params![media], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            for label in stages {
+                usage.push(format!("the wallpaper for \u{201c}{label}\u{201d}"));
+            }
+            Ok(usage)
+        })
+        .await
+    }
+
     /// Renames a tag. The behaviour document follows on its own: every tag list in it is a join
     /// to `tags`, so the rows that mention this tag hold its *id* and nothing about them changes.
     ///
     /// This used to walk the whole document rewriting strings (`Behaviour::rewrite_tag`) and write
-    /// it back. Returns the document anyway so the front end can refresh the copy it renders --
-    /// but it is now read back rather than computed here.
-    pub async fn rename_tag(&self, from: String, to: String) -> Result<Behaviour> {
+    /// it back, then hand the result to the front end to adopt. It writes one row, and the surfaces
+    /// showing tags refetch.
+    pub async fn rename_tag(&self, from: String, to: String) -> Result<()> {
         reject_managed_tag(&from)?;
         reject_managed_tag(&to)?;
         let _handle = self.saving.read().await;
-        let behaviour = self
-            .db_execute(move |mut conn| {
+        self.db_execute(move |mut conn| {
                 history::record_with_media_refs(&mut conn, "Rename tag", 0, |tx| {
                     let media_ids = tag_media_ids(tx, &from)?;
                     let target_exists: bool = tx.query_row(
@@ -246,12 +326,11 @@ impl MediaPack {
                         bail!("A tag named \"{to}\" already exists. Merge the tags instead.");
                     }
                     tx.execute("UPDATE tags SET name = ? WHERE name = ?", params![to, from])?;
-                    Ok((read_behaviour(tx)?, media_ids))
+                    Ok(((), media_ids))
                 })
             })
             .await?;
-        self.mark_unsaved().await?;
-        Ok(behaviour)
+        self.mark_unsaved().await
     }
 
     /// Folds one tag into another, everywhere it appears -- on media and throughout the behaviour
@@ -260,12 +339,11 @@ impl MediaPack {
     /// Each join table is re-pointed with `UPDATE OR IGNORE`, which skips the rows where the
     /// target tag is already present (that pair is the primary key), and the leftovers are then
     /// deleted. That is the deduplication `rewrite_tag` did by hand with a `HashSet`.
-    pub async fn merge_tag(&self, from: String, to: String) -> Result<Behaviour> {
+    pub async fn merge_tag(&self, from: String, to: String) -> Result<()> {
         reject_managed_tag(&from)?;
         reject_managed_tag(&to)?;
         let _handle = self.saving.read().await;
-        let behaviour = self
-            .db_execute(move |mut conn| {
+        self.db_execute(move |mut conn| {
                 history::record_with_media_refs(&mut conn, "Merge tags", 0, |tx| {
                     let media_ids = tag_media_ids(tx, &from)?;
                     tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![to])?;
@@ -275,7 +353,7 @@ impl MediaPack {
                         })
                         .optional()?;
                     let Some(source) = source else {
-                        return Ok((read_behaviour(tx)?, media_ids));
+                        return Ok(((), media_ids));
                     };
                     let target: u64 =
                         tx.query_row("SELECT id FROM tags WHERE name = ?", params![to], |row| {
@@ -295,12 +373,11 @@ impl MediaPack {
                         params![target, source],
                     )?;
                     tx.execute("DELETE FROM tags WHERE id = ?", params![source])?;
-                    Ok((read_behaviour(tx)?, media_ids))
+                    Ok(((), media_ids))
                 })
             })
             .await?;
-        self.mark_unsaved().await?;
-        Ok(behaviour)
+        self.mark_unsaved().await
     }
 
     /// Deletes a tag from the pack entirely.
@@ -308,19 +385,17 @@ impl MediaPack {
     /// One statement: every table that references a tag does so with `ON DELETE CASCADE`, so the
     /// media associations and every mention in the behaviour document go with the row. This used
     /// to be three statements and a document rewrite.
-    pub async fn delete_tag(&self, tag: String) -> Result<Behaviour> {
+    pub async fn delete_tag(&self, tag: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        let behaviour = self
-            .db_execute(move |mut conn| {
+        self.db_execute(move |mut conn| {
                 history::record_with_media_refs(&mut conn, "Delete tag", 0, |tx| {
                     let media_ids = tag_media_ids(tx, &tag)?;
                     tx.execute("DELETE FROM tags WHERE name = ?", params![tag])?;
-                    Ok((read_behaviour(tx)?, media_ids))
+                    Ok(((), media_ids))
                 })
             })
             .await?;
-        self.mark_unsaved().await?;
-        Ok(behaviour)
+        self.mark_unsaved().await
     }
 
     pub async fn get_tags(&self, id: u64) -> Result<Vec<String>> {

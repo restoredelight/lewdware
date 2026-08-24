@@ -11,9 +11,16 @@
  * still means leaving only that stage. Before its tags are removed, every other membership they
  * carried is preserved through a safe existing tag or a newly-created tag owned by that stage.
  */
-import type { Behaviour, Stage } from './types.js';
+import type { Stage } from './types.js';
 import { stageTagName } from './stageTags.js';
-import { tagUsage } from './tagReferences.js';
+
+/**
+ * How much of the pack holds a tag, split the way `get_tag_rows` reports it.
+ *
+ * `content` is captions, groups and links; `experience` is how many stages select by it. The split
+ * is what tells a stage's own machinery tag from one the author also uses for something else.
+ */
+export type TagUsage = (tag: string) => { content: number; experience: number };
 
 export interface StageMembership {
 	id: string;
@@ -70,16 +77,19 @@ function isMember(stage: Stage, tags: string[]): boolean {
 }
 
 /** The tag a membership toggle can add without changing any other behaviour-owned relationship. */
-function dedicatedOwnedTag(behaviour: Behaviour, stage: Stage): string | null {
+function dedicatedOwnedTag(usage: TagUsage, stage: Stage): string | null {
 	const owned = stage.content.owned_tag;
 	if (!owned || !(stage.content.tags ?? []).includes(owned)) return null;
-	const usage = tagUsage(behaviour, owned);
-	return usage.content === 0 && usage.experience === 1 ? owned : null;
+	const held = usage(owned);
+	return held.content === 0 && held.experience === 1 ? owned : null;
 }
 
 /** Every stage in the pack's timeline, with what a toggle on it would mean for `tags`. */
-export function stageMembership(behaviour: Behaviour | null, tags: string[]): StageMembership[] {
-	const stages = behaviour?.experience?.timeline.stages ?? [];
+export function stageMembership(
+	stages: Stage[],
+	tags: string[],
+	usage: TagUsage
+): StageMembership[] {
 	return stages.map((stage) => {
 		const restriction = stageTags(stage);
 		const member = isMember(stage, tags);
@@ -87,7 +97,7 @@ export function stageMembership(behaviour: Behaviour | null, tags: string[]): St
 
 		const locked = restriction === null ? 'This stage shows every file in the pack' : null;
 
-		const joinTag = restriction === null ? null : dedicatedOwnedTag(behaviour!, stage);
+		const joinTag = restriction === null ? null : dedicatedOwnedTag(usage, stage);
 		return {
 			id: stage.id,
 			label: stage.label,
@@ -108,12 +118,11 @@ export function stageMembership(behaviour: Behaviour | null, tags: string[]): St
  * stage membership. A new tag says only what this automatic rewrite needs it to say.
  */
 export function leaveStagePlan(
-	behaviour: Behaviour,
+	stages: Stage[],
 	tags: string[],
 	targetId: string,
 	takenTags: Iterable<string>
 ): LeaveStagePlan {
-	const stages = behaviour.experience?.timeline.stages ?? [];
 	const target = stages.find((stage) => stage.id === targetId);
 	const targetTags = target ? (stageTags(target) ?? []) : [];
 	const removeTags = targetTags.filter((tag) => tags.includes(tag));

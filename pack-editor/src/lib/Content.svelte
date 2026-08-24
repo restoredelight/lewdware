@@ -9,37 +9,45 @@
 	import MediaSlot from './MediaSlot.svelte';
 	import WebLinksEditor from './WebLinksEditor.svelte';
 	import Tabs from '$ui/Tabs.svelte';
+	import { api } from './api.js';
+	import { keys, query } from './query.svelte.js';
+
+	// One query for the badge counts and the slots, rather than the whole document. The counts are
+	// all this tab strip needs, and asking for them is cheaper than reading five pools to measure
+	// their length.
+	const summary = query(keys.summary, api.getBehaviourSummary);
+	const slots = query(keys.mediaSlots, api.getMediaSlots);
 
 	const tabs = $derived<{ id: ContentTab; label: string; group: string; badge?: number }[]>([
 		{
 			id: 'groups',
 			label: 'Content Groups',
 			group: 'Organization',
-			badge: store.behaviour?.content.content_groups.length
+			badge: summary.current?.content_groups
 		},
 		{
 			id: 'captions',
 			label: 'Captions',
 			group: 'Messages',
-			badge: store.behaviour?.content.captions.length
+			badge: summary.current?.captions
 		},
 		{
 			id: 'prompts',
 			label: 'Prompts',
 			group: 'Messages',
-			badge: store.behaviour?.content.prompts.length
+			badge: summary.current?.prompts
 		},
 		{
 			id: 'notifications',
 			label: 'Notifications',
 			group: 'Messages',
-			badge: store.behaviour?.content.notifications.length
+			badge: summary.current?.notifications
 		},
 		{
 			id: 'web_links',
 			label: 'Web Links',
 			group: 'Other',
-			badge: store.behaviour?.content.web_links.length
+			badge: summary.current?.web_links
 		},
 		{ id: 'wallpaper', label: 'Wallpaper & Splash', group: 'Other' }
 	]);
@@ -96,7 +104,7 @@
 </script>
 
 <div class="flex min-h-0 w-full flex-1 flex-col">
-	<BehaviourGate title="Content">
+	<BehaviourGate title="Content" queries={[summary, slots]}>
 		<div class="flex min-h-0 flex-1 max-[900px]:flex-col">
 			<aside
 				class="border-border bg-surface w-48 shrink-0 border-r p-3 max-[900px]:w-full max-[900px]:border-r-0 max-[900px]:border-b max-[900px]:py-0"
@@ -126,18 +134,18 @@
 					{#if store.contentTab === 'groups'}
 						<ContentGroupsEditor />
 					{:else if store.contentTab === 'captions'}
-						<TextPoolEditor title="Captions" poolKey="captions" idPrefix="caption" />
+						<TextPoolEditor title="Captions" poolKey="caption" idPrefix="caption" />
 					{:else if store.contentTab === 'prompts'}
-						<TextPoolEditor title="Prompts" poolKey="prompts" idPrefix="prompt" />
+						<TextPoolEditor title="Prompts" poolKey="prompt" idPrefix="prompt" />
 					{:else if store.contentTab === 'notifications'}
-						<TextPoolEditor title="Notifications" poolKey="notifications" idPrefix="notification" />
+						<TextPoolEditor title="Notifications" poolKey="notification" idPrefix="notification" />
 					{:else if store.contentTab === 'web_links'}
 						<WebLinksEditor />
 					{:else if store.contentTab === 'wallpaper'}
 						<div class="flex flex-col gap-6">
 							<MediaSlot
 								slot={{ kind: 'wallpaper' }}
-								mediaId={store.behaviour!.content.wallpaper}
+								mediaId={slots.current?.wallpaper ?? undefined}
 								title="Wallpaper"
 								description="The image Lewdware sets as the desktop wallpaper."
 								emptyNote="Lewdware will not change the wallpaper."
@@ -147,7 +155,7 @@
 							/>
 							<MediaSlot
 								slot={{ kind: 'splash' }}
-								mediaId={store.behaviour!.content.splash}
+								mediaId={slots.current?.splash ?? undefined}
 								title="Splash"
 								description="Shown once when a session starts. May be a video — an animated GIF is one."
 								emptyNote="No startup image will be shown."

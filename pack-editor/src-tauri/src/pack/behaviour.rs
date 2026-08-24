@@ -8,10 +8,11 @@ use super::media::delete_unreferenced_scenery;
 use super::*;
 
 use crate::history;
+use shared::behaviour::editor as behaviour_editor;
 use anyhow::{bail, Result};
 use rusqlite::{params, OptionalExtension};
 use shared::{
-    behaviour::{storage as behaviour_storage, Behaviour, MediaSlot, Patch},
+    behaviour::{storage as behaviour_storage, Behaviour, MediaSlot},
     tags,
 };
 
@@ -55,21 +56,10 @@ impl MediaPack {
         .await
     }
 
-    /// Applies one author action to the behaviour document, described as [`Patch`]es rather than
-    /// sent as a replacement document.
+    /// The stored behaviour document, whole.
     ///
-    /// This is the only way the editor's front end writes behaviour, and the reason is that a
-    /// whole-document write cannot be applied without overwriting. The document is also edited
-    /// here in the backend -- media slots, tag renames, file removal -- so a front end that sent
-    /// the version it happened to be holding would silently undo whichever of those landed while
-    /// it was typing. Patching against the stored document means the two cannot collide, and the
-    /// call sites no longer have to flush a pending write before every such command. See
-    /// `design/behaviour-storage.md`.
-    ///
-    /// `label` names the entry in the undo list, so it is the author's action ("Edit caption")
-    /// rather than the storage ("Edit pack behaviour"). Returns the stored document either way:
-    /// the caller reconciles its optimistic copy against it.
-    /// The stored behaviour document.
+    /// For the writers that still deal in whole documents — the Edgeware importer, and saving.
+    /// The editor's surfaces read through the typed queries instead.
     pub async fn get_behaviour(&self) -> Result<Behaviour> {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| read_behaviour(&conn)).await
@@ -78,8 +68,7 @@ impl MediaPack {
     /// Replaces the whole document in one history entry.
     ///
     /// For a writer that really does produce a document rather than edit one: the Edgeware
-    /// importer's converted output, and the slot fills it makes as its media lands. Author edits
-    /// go through [`MediaPack::edit_behaviour`] instead, which describes what changed.
+    /// importer's converted output. Author edits go through [`MediaPack::behaviour_edit`].
     pub async fn replace_behaviour(&self, behaviour: Behaviour, label: String) -> Result<()> {
         let _handle = self.saving.read().await;
         self.db_execute(move |mut connection| {
@@ -91,79 +80,143 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
-    /// What one behaviour edit produced: the stored document, and any scenery that left with it.
+    /// Points each of `slots` at `media_id`, but only those still empty.
     ///
-    /// `retiring` names media the edit *deliberately* lets go of — a timeline stage's wallpaper
-    /// when the stage itself is being removed. Each one is dropped from the pack if it was only
-    /// ever that slot's scenery and the patched document no longer refers to it, by exactly the
-    /// rule `clear_media_slot` uses.
+    /// The Edgeware importer's tail: the converted document named a file for each slot, and this is
+    /// the moment that file finally arrives. Fill, not set — an author who picked their own
+    /// wallpaper while the import was running keeps it.
     ///
-    /// Deliberate, rather than inferred from what the document stopped referencing, because the
-    /// two are not the same thing and the difference is destructive: disabling the Experience
-    /// section drops every stage on purpose *without* retiring their wallpapers, and a cleanup
-    /// driven by "which references went away?" would delete all of them on toggle-off. See
-    /// `design/behaviour-storage.md`, "Invariants to preserve".
-    pub async fn edit_behaviour(
+    /// Returns the slots it actually filled, which is what the front end is told about.
+    pub async fn fill_empty_slots(
         &self,
-        patches: Vec<Patch>,
+        slots: Vec<MediaSlot>,
+        media_id: u64,
         label: String,
-        retiring: Vec<u64>,
-        tag_actions: Vec<TagAction>,
-    ) -> Result<BehaviourEdit> {
+    ) -> Result<Vec<MediaSlot>> {
         let _handle = self.saving.read().await;
-        let (edit, changed) = self
+        let filled = self
             .db_execute(move |mut connection| {
-                history::record_with_media_refs(&mut connection, &label, 0, |tx| {
-                    let stored = read_behaviour(tx)?;
-                    let patched = stored.patched(&patches)?;
+                let slots = slots.clone();
+                history::record_with_media_refs(&mut connection, &label, 0, move |tx| {
+                    let mut filled = Vec::new();
+                    for slot in slots {
+                        if behaviour_editor::slot_value(tx, &slot)?.is_some() {
+                            continue;
+                        }
+                        // A slot on a stage that has since been removed simply goes unfilled --
+                        // this is a late arrival, not an author action, so it has nothing to say.
+                        if behaviour_editor::set_media_slot(tx, &slot, Some(media_id)).is_ok() {
+                            filled.push(slot);
+                        }
+                    }
+                    let refs = if filled.is_empty() {
+                        vec![]
+                    } else {
+                        vec![media_id]
+                    };
+                    Ok((filled, refs))
+                })
+            })
+            .await?;
+        if !filled.is_empty() {
+            self.mark_unsaved().await?;
+        }
+        Ok(filled)
+    }
 
-                    // Before the write, so the document is stored against the tag names the patch
-                    // uses rather than re-creating the ones a rename just left behind.
+    /// Runs one read against the behaviour tables.
+    ///
+    /// The query half of [`MediaPack::behaviour_edit`]: takes the saving lock, hops to the blocking
+    /// pool, and hands the closure a connection. Every typed query goes through it so none of them
+    /// has to remember the lock.
+    pub async fn behaviour_query<T, F>(&self, query: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: Fn(&rusqlite::Connection) -> Result<T> + Send + 'static,
+    {
+        let _handle = self.saving.read().await;
+        self.db_execute(move |conn| query(&conn)).await
+    }
+
+    /// Runs one author action against the behaviour tables.
+    ///
+    /// Every typed behaviour mutation goes through here, because they all need the same envelope
+    /// and getting it subtly different in twenty places is exactly how the old whole-document
+    /// writer accumulated its defects. The envelope is:
+    ///
+    /// - **One transaction, one undo entry.** `edit` runs inside `history::record_with_media_refs`,
+    ///   which records a changeset the size of what actually changed and skips the entry entirely
+    ///   when nothing did. `label` is the author's word for what they did ("Edit caption"), because
+    ///   that is what they will look for in the undo list.
+    /// - **`tag_actions` run in the same transaction**, so renaming a stage and renaming the tag it
+    ///   owns cannot come apart under undo.
+    /// - **`retiring` names media the action *deliberately* lets go of** — a stage's wallpaper when
+    ///   the stage itself is going. Each is dropped if it was only ever that slot's scenery.
+    ///   Deliberate rather than inferred, because the two are not the same thing and the difference
+    ///   is destructive: switching the timeline off drops every stage on purpose *without* retiring
+    ///   their wallpapers. See `design/behaviour-storage.md`, "Invariants to preserve".
+    ///
+    /// `edit` reports whether it changed anything. Returning `false` for an edit that landed on the
+    /// value already stored is what keeps an `oninput` that changed nothing from spending one of
+    /// the hundred entries undo keeps.
+    pub async fn behaviour_edit<F>(&self, action: BehaviourAction<F>) -> Result<BehaviourOutcome>
+    where
+        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<bool> + Send + 'static,
+    {
+        let _handle = self.saving.read().await;
+        let BehaviourAction {
+            label,
+            retiring,
+            tag_actions,
+            edit,
+        } = action;
+        let mut edit = Some(edit);
+        let (outcome, changed) = self
+            .db_execute(move |mut connection| {
+                let edit = edit.take().expect("the edit runs once");
+                let retiring = retiring.clone();
+                let tag_actions = tag_actions.clone();
+                history::record_with_media_refs(&mut connection, &label, 0, move |tx| {
+                    // Before the edit, so the write lands against the tag names the action uses
+                    // rather than re-creating the ones a rename just left behind.
                     let mut tags = TagActionOutcome::default();
                     run_tag_actions_before_write(tx, &tag_actions, &mut tags)?;
 
-                    // Against the *patched* document, so "still referenced" means after the edit
-                    // -- a wallpaper the retired stage shared with another stage stays.
+                    let document_changed = edit(tx)?;
+
+                    // Asked *after* the edit, so "still referenced" means what it means once the
+                    // action has happened -- a wallpaper the retired stage shared with another
+                    // stage stays.
                     let mut deleted_ids = Vec::new();
                     for media in &retiring {
-                        if let Some(id) = delete_unreferenced_scenery(tx, &patched, *media)? {
+                        if let Some(id) = delete_unreferenced_scenery(tx, *media)? {
                             deleted_ids.push(id);
                         }
-                    }
-
-                    // A patch that lands on the value already there is an `oninput` that changed
-                    // nothing, not an edit. Writing it would cost an undo entry out of the
-                    // hundred history keeps, evicting a real one off the bottom of the list.
-                    let document_changed = patched != stored;
-                    if document_changed {
-                        write_behaviour(tx, &patched)?;
                     }
                     run_tag_actions_after_write(tx, &tag_actions, &mut tags)?;
 
                     // The retired file's bytes have to outlive the entry that dropped it, or undo
-                    // would restore a slot pointing at media the collector has taken away. The tag
-                    // actions' media is here for the same reason association-wide tag edits collect
-                    // it (see `history::record_with_media_refs`).
+                    // would restore a slot pointing at media the collector has taken away.
                     let mut refs = deleted_ids.clone();
                     refs.extend(tags.media_refs);
-                    let edit = BehaviourEdit {
-                        behaviour: patched,
+                    let outcome = BehaviourOutcome {
                         deleted_ids,
                         removed_tags: tags.removed,
                         renamed_tags: tags.renamed,
                     };
-                    let changed = document_changed || !edit.deleted_ids.is_empty() || tags.changed;
+                    let changed =
+                        document_changed || !outcome.deleted_ids.is_empty() || tags.changed;
                     if !changed {
-                        return Ok(((edit, false), vec![]));
+                        return Ok(((outcome, false), vec![]));
                     }
-                    Ok(((edit, true), refs))
+                    Ok(((outcome, true), refs))
                 })
             })
             .await?;
         if changed {
             self.mark_unsaved().await?;
         }
-        Ok(edit)
+        Ok(outcome)
     }
 }
 
@@ -172,13 +225,13 @@ impl MediaPack {
 /// of `fill_media_slot`, separated so it can run either in its own history entry or folded into an
 /// open import.
 ///
-/// Returns the updated behaviour and the id of the displaced file, if it deleted one.
+/// Returns the id of the displaced file, if it deleted one.
 pub(super) fn fill_media_slot_tx(
     tx: &rusqlite::Transaction<'_>,
     slot: &MediaSlot,
     media_id: u64,
     new_to_pack: bool,
-) -> Result<(Behaviour, Option<u64>)> {
+) -> Result<Option<u64>> {
     // The row still has to exist: a slot may only point at media the pack really has, and the
     // picker's answer can be stale by the time it gets here.
     let exists = tx
@@ -196,23 +249,17 @@ pub(super) fn fill_media_slot_tx(
         apply_tag(tx, media_id, tags::EXPLICIT_ONLY_TAG)?;
     }
 
-    let mut behaviour = read_behaviour(tx)?;
-    let displaced = slot_value(&behaviour, slot);
+    let displaced = behaviour_editor::slot_value(tx, slot)?;
     // Set, not fill: replacing what a slot points at is the whole of "Replace".
-    if !set_slot(&mut behaviour, slot, Some(media_id)) {
-        bail!("That stage is no longer in the timeline");
-    }
+    behaviour_editor::set_media_slot(tx, slot, Some(media_id))?;
     // Replacing a slot's file is the other way it stops being used, and it has to clean up after
     // itself exactly as clearing does -- otherwise every Replace leaves the old wallpaper in the
     // pack as a file marked out of popups and referenced by nothing.
     let deleted = match displaced {
-        Some(previous) if previous != media_id => {
-            delete_unreferenced_scenery(tx, &behaviour, previous)?
-        }
+        Some(previous) if previous != media_id => delete_unreferenced_scenery(tx, previous)?,
         _ => None,
     };
-    write_behaviour(tx, &behaviour)?;
-    Ok((behaviour, deleted))
+    Ok(deleted)
 }
 
 /// The history label a slot operation records under. Named for what the author did, not for the
@@ -225,142 +272,6 @@ pub(super) fn slot_label(slot: &MediaSlot) -> &'static str {
         MediaSlot::StageEntrySplash { .. } => "Set stage splash",
         MediaSlot::StageEntrySound { .. } | MediaSlot::StagePromptSound { .. } => "Set stage sound",
     }
-}
-
-/// Reads what a slot currently points at.
-pub(super) fn slot_value(behaviour: &Behaviour, slot: &MediaSlot) -> Option<u64> {
-    match slot {
-        MediaSlot::Wallpaper => behaviour.content.wallpaper,
-        MediaSlot::Splash => behaviour.content.splash,
-        MediaSlot::StageWallpaper { stage } => {
-            behaviour
-                .experience
-                .as_ref()?
-                .timeline
-                .stages
-                .iter()
-                .find(|candidate| &candidate.id == stage)?
-                .content
-                .wallpaper
-        }
-        MediaSlot::StageAudio { stage } => {
-            behaviour
-                .experience
-                .as_ref()?
-                .timeline
-                .stages
-                .iter()
-                .find(|candidate| &candidate.id == stage)?
-                .content
-                .audio
-        }
-        MediaSlot::StageEntrySplash { stage } => {
-            behaviour
-                .experience
-                .as_ref()?
-                .timeline
-                .stages
-                .iter()
-                .find(|candidate| &candidate.id == stage)?
-                .on_enter
-                .splash
-        }
-        MediaSlot::StageEntrySound { stage } => {
-            behaviour
-                .experience
-                .as_ref()?
-                .timeline
-                .stages
-                .iter()
-                .find(|candidate| &candidate.id == stage)?
-                .on_enter
-                .sound
-        }
-        MediaSlot::StagePromptSound { stage } => {
-            behaviour
-                .experience
-                .as_ref()?
-                .timeline
-                .stages
-                .iter()
-                .find(|candidate| &candidate.id == stage)?
-                .prompt
-                .sound
-        }
-    }
-}
-
-/// Writes a slot outright, unlike `Behaviour::fill_media_reference` (which won't overwrite): the
-/// author pointing a slot somewhere new is exactly the case that has to win. Returns false if the
-/// slot doesn't exist -- only possible for a stage deleted from under the editor.
-pub(super) fn set_slot(behaviour: &mut Behaviour, slot: &MediaSlot, media: Option<u64>) -> bool {
-    let target = match slot {
-        MediaSlot::Wallpaper => &mut behaviour.content.wallpaper,
-        MediaSlot::Splash => &mut behaviour.content.splash,
-        MediaSlot::StageWallpaper { stage } => {
-            let Some(target) = behaviour.experience.as_mut().and_then(|experience| {
-                experience
-                    .timeline
-                    .stages
-                    .iter_mut()
-                    .find(|candidate| &candidate.id == stage)
-            }) else {
-                return false;
-            };
-            &mut target.content.wallpaper
-        }
-        MediaSlot::StageAudio { stage } => {
-            let Some(target) = behaviour.experience.as_mut().and_then(|experience| {
-                experience
-                    .timeline
-                    .stages
-                    .iter_mut()
-                    .find(|candidate| &candidate.id == stage)
-            }) else {
-                return false;
-            };
-            target.content.audio_random = false;
-            &mut target.content.audio
-        }
-        MediaSlot::StageEntrySplash { stage } => {
-            let Some(target) = behaviour.experience.as_mut().and_then(|experience| {
-                experience
-                    .timeline
-                    .stages
-                    .iter_mut()
-                    .find(|candidate| &candidate.id == stage)
-            }) else {
-                return false;
-            };
-            &mut target.on_enter.splash
-        }
-        MediaSlot::StageEntrySound { stage } => {
-            let Some(target) = behaviour.experience.as_mut().and_then(|experience| {
-                experience
-                    .timeline
-                    .stages
-                    .iter_mut()
-                    .find(|candidate| &candidate.id == stage)
-            }) else {
-                return false;
-            };
-            &mut target.on_enter.sound
-        }
-        MediaSlot::StagePromptSound { stage } => {
-            let Some(target) = behaviour.experience.as_mut().and_then(|experience| {
-                experience
-                    .timeline
-                    .stages
-                    .iter_mut()
-                    .find(|candidate| &candidate.id == stage)
-            }) else {
-                return false;
-            };
-            &mut target.prompt.sound
-        }
-    };
-    *target = media;
-    true
 }
 
 pub(super) fn write_behaviour(tx: &rusqlite::Transaction<'_>, behaviour: &Behaviour) -> Result<()> {

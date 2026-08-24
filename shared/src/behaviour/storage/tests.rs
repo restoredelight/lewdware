@@ -665,3 +665,93 @@ fn a_pack_from_before_the_content_tables_is_refused() {
     let error = read(&conn).unwrap_err();
     assert!(error.to_string().contains("re-import"), "{error}");
 }
+
+/// Suspension is the whole reason `behaviour_experience.enabled` exists: the engine must see a
+/// switched-off timeline as no timeline at all, while the editor must still be able to show the
+/// stages so switching it back on returns what was there.
+#[test]
+fn a_switched_off_timeline_reads_as_none_but_keeps_its_stages() {
+    let mut conn = pack();
+    let behaviour = Behaviour {
+        experience: Some(Experience {
+            timeline: Timeline {
+                stages: vec![stage("a"), stage("b")],
+                transitions: vec![],
+            },
+            label: Some("Corruption".to_string()),
+        }),
+        ..Behaviour::new()
+    };
+    store(&mut conn, &behaviour);
+
+    let tx = conn.transaction().unwrap();
+    assert!(set_experience_enabled(&tx, false).unwrap());
+    tx.commit().unwrap();
+
+    // What the engine, the converter and `lw` see.
+    assert_eq!(read(&conn).unwrap().experience, None);
+
+    // What the editor sees.
+    let view = read_timeline(&conn).unwrap().unwrap();
+    assert!(!view.enabled);
+    assert_eq!(view.label.as_deref(), Some("Corruption"));
+    assert_eq!(view.timeline.stages.len(), 2);
+
+    let tx = conn.transaction().unwrap();
+    assert!(set_experience_enabled(&tx, true).unwrap());
+    tx.commit().unwrap();
+    assert_eq!(read(&conn).unwrap().experience, behaviour.experience);
+}
+
+/// A pack that has never had a timeline has no section to switch on or off, and reads as `None`
+/// from both views -- as distinct from one whose timeline is merely switched off.
+#[test]
+fn a_pack_with_no_timeline_has_no_timeline_view_at_all() {
+    let conn = pack();
+    assert_eq!(read(&conn).unwrap().experience, None);
+    assert_eq!(read_timeline(&conn).unwrap(), None);
+}
+
+/// Switching a timeline on for a pack that never had one creates the section, so the author's
+/// first stage has somewhere to live.
+#[test]
+fn switching_on_a_pack_with_no_timeline_creates_the_section() {
+    let mut conn = pack();
+    let tx = conn.transaction().unwrap();
+    assert!(set_experience_enabled(&tx, true).unwrap());
+    tx.commit().unwrap();
+
+    let view = read_timeline(&conn).unwrap().unwrap();
+    assert!(view.enabled);
+    assert!(view.timeline.stages.is_empty());
+}
+
+/// A toggle landing on the value already stored is not an edit, and must not cost one of the
+/// hundred entries undo keeps.
+#[test]
+fn switching_to_the_current_value_reports_no_change() {
+    let mut conn = pack();
+    let tx = conn.transaction().unwrap();
+    assert!(set_experience_enabled(&tx, true).unwrap());
+    assert!(!set_experience_enabled(&tx, true).unwrap());
+    tx.commit().unwrap();
+}
+
+/// Writing a whole document that has a timeline clears any suspension: the document is saying the
+/// pack has one, and a stale flag would keep it hidden.
+#[test]
+fn a_whole_document_write_unsuspends_the_timeline() {
+    let mut conn = pack();
+    let behaviour = Behaviour {
+        experience: Some(Experience::default()),
+        ..Behaviour::new()
+    };
+    store(&mut conn, &behaviour);
+    let tx = conn.transaction().unwrap();
+    set_experience_enabled(&tx, false).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(read(&conn).unwrap().experience, None);
+
+    store(&mut conn, &behaviour);
+    assert_eq!(read(&conn).unwrap().experience, Some(Experience::default()));
+}

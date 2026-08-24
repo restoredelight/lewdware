@@ -18,7 +18,7 @@ use walkdir::WalkDir;
 
 use tauri::Emitter;
 
-use shared::behaviour::{Behaviour, MediaSlot};
+use shared::behaviour::MediaSlot;
 
 use crate::pack::{AddOutcome, MediaFile};
 
@@ -329,7 +329,7 @@ pub async fn process_file_into_slot(
     upload_lock: &Arc<RwLock<()>>,
     slot: MediaSlot,
     label: String,
-) -> anyhow::Result<(AddOutcome, Behaviour, Option<u64>)> {
+) -> anyhow::Result<(AddOutcome, Option<u64>)> {
     let _batch_guard = upload_lock.read().await;
     let (dir, pack_id) = {
         let lock = pack_state.lock().await;
@@ -396,11 +396,11 @@ pub async fn process_file_into_slot(
     }
 
     let outcome = outcome?;
-    let (behaviour, displaced) = filled?.context("The pack was closed while importing")?;
+    let displaced = filled?.context("The pack was closed while importing")?;
     if let AddOutcome::Added(file) = &outcome {
         let _ = app.emit("upload:added", file);
     }
-    Ok((outcome, behaviour, displaced))
+    Ok((outcome, displaced))
 }
 
 // The per-file arguments are one path; the rest is the loop-invariant context every file in a

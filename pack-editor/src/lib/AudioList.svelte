@@ -18,7 +18,7 @@
 	import { api } from './api.js';
 	import { playback } from './audioPlayback.svelte.js';
 	import { audioRole, setAudioRole, type AudioRole } from './audioRoles.js';
-	import { audioAttributes, editAudioAttributes } from './mediaAttributes.js';
+	import { attributesFor, audioAttributesQuery, editAudioAttributes } from './mediaAttributes.js';
 	import { MediaSelection } from './mediaSelection.svelte.js';
 	import { indexAt, offsetOf, totalHeight } from './virtualRows.js';
 	import { ChevronDown } from 'svelte-hero-icons';
@@ -53,6 +53,9 @@
 	// variable-height window would need. It also matches how the panel is used -- you open one
 	// file's details, adjust it, and move on.
 	let expandedId = $state<number | null>(null);
+	// Only the expanded row shows attributes, so only it is fetched — a pack with three hundred
+	// sounds asks about one.
+	const audioAttributes = audioAttributesQuery(() => (expandedId === null ? [] : [expandedId]));
 	// The volume mid-drag, before it is committed.
 	//
 	// `Slider` draws its filled track from the `value` it is *given*, and the reading beside it is
@@ -295,7 +298,7 @@
 					</span>
 				</div>
 				{#if expandedId === file.id}
-					{@const attributes = audioAttributes(file.id)}
+					{@const attributes = attributesFor(audioAttributes.current, file.id)}
 					{@const volume = liveVolume ?? attributes.volume ?? 1}
 					<!-- Positioned by the same arithmetic as the rows rather than sitting in flow or
 					     floating over them: the panel is part of the virtual window, so it scrolls
@@ -326,9 +329,9 @@
 									liveVolume = null;
 									// Full volume is "no opinion", not "set to 1": storing it would pin
 									// this file against a default that may move under it.
-									editAudioAttributes(
-										file.id,
-										{ volume: value === 1 ? undefined : value },
+									void editAudioAttributes(
+										[file.id],
+										{ volume: value === 1 ? null : value },
 										`Set volume for “${file.file_name}”`
 									);
 								}}

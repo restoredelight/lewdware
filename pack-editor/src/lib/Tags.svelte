@@ -1,69 +1,46 @@
 <script lang="ts">
 	// The tag namespace. Everything about *being a searchable table of names* lives in
-	// `VocabularyPage`, which the Artists tab shares; what is here is the two things tags do that
-	// artists do not — they are also referenced by the behaviour document, and every edit to one
-	// comes back from the backend as a new document.
-	import { onMount } from 'svelte';
+	// `VocabularyPage`, which the Artists tab shares; what is here is the one thing tags do that
+	// artists do not — they are also referenced by the behaviour document.
+	//
+	// This used to merge three sources in the browser: the media list, a backend summary, and the
+	// tags named only by the behaviour document (typed into a caption, naming a content group). All
+	// three had to be there or the table would be missing rows the Content tab can see. It is one
+	// query now, because that is a question SQL can answer directly.
 	import { api } from './api.js';
-	import { adoptBehaviour, ensureBehaviour } from './behaviourSave.svelte.js';
+	import { history } from './history.svelte.js';
+	import { invalidate, keys, query } from './query.svelte.js';
 	import { NO_MEDIA_SCOPE_COUNTS, store } from './store.svelte.js';
-	import { behaviourTags, tagUsage } from './tagReferences.js';
-	import type { Behaviour, TagSummary } from './types.js';
 	import VocabularyPage from './VocabularyPage.svelte';
 
-	let summaries = $state<TagSummary[]>([]);
-	let loaded = $state(false);
-	let loadError = $state<string | null>(null);
+	const tagRows = query(keys.tags, api.getTagRows);
 
-	// A tag can be in the pack three ways at once: on media, in the backend's own summary, or named
-	// only by the behaviour document (typed into a caption, naming a content group). All three, or
-	// the table would be missing rows the Content tab can see.
 	const rows = $derived.by(() => {
-		const behaviour = store.behaviour;
-		if (!behaviour) return [];
+		// The per-scope media counts (Popups / Audio / All media) still come from the file list the
+		// grid already holds — the backend counts every live file, which is the "all media" column.
 		const counts = store.mediaCountsByTag;
-		const names = new Set([
-			...store.allTags,
-			...summaries.map((item) => item.name),
-			...behaviourTags(behaviour)
-		]);
-		return [...names]
-			.map((name) => ({
-				name,
-				media: counts.get(name) ?? NO_MEDIA_SCOPE_COUNTS,
-				...tagUsage(behaviour, name)
+		return (tagRows.current ?? [])
+			.map((row) => ({
+				name: row.name,
+				media: counts.get(row.name) ?? {
+					...NO_MEDIA_SCOPE_COUNTS,
+					'all-media': row.media_count
+				},
+				content: row.content_uses,
+				experience: row.experience_uses,
+				total: row.content_uses + row.experience_uses
 			}))
 			.sort((a, b) => a.name.localeCompare(b.name));
 	});
 
-	// The behaviour can also go away *after* a successful load — an undo or a discard replaces it —
-	// and a table of tags with no document to count them against has nothing to show.
-	const failure = $derived(
-		loadError ?? (store.behaviour ? null : 'The pack behaviour could not be loaded.')
-	);
-
-	async function load() {
-		loaded = false;
-		loadError = null;
-		try {
-			if (!(await ensureBehaviour())) throw new Error('The pack behaviour could not be loaded.');
-			summaries = await api.getTagSummaries();
-		} catch (cause) {
-			loadError = String(cause);
-		} finally {
-			loaded = true;
-		}
-	}
-
-	onMount(() => {
-		void load();
-	});
-
-	/** All three edits rewrite the document server-side, so all three adopt what comes back. */
-	async function edit(request: Promise<Behaviour>, label: string, from: string, to: string | null) {
-		adoptBehaviour(await request, { label });
+	async function edit(request: Promise<void>, label: string, from: string, to: string | null) {
+		await request;
 		store.retagEverywhere(from, to, true);
-		summaries = await api.getTagSummaries();
+		// A tag rename reaches captions, groups, links and stage selections alike — every one of
+		// them is a join to this row, so every surface showing tags is now out of date.
+		invalidate(keys.behaviour);
+		invalidate(keys.tags);
+		history.record({ label });
 	}
 </script>
 
@@ -77,9 +54,9 @@
 		{ label: 'Experience', value: (row) => row.experience, width: '90px', narrowWidth: '68px' }
 	]}
 	{rows}
-	{loaded}
-	loadError={failure}
-	onload={load}
+	loaded={tagRows.current !== undefined}
+	loadError={tagRows.error}
+	onload={() => tagRows.reload()}
 	emptyDescription="Tags are created when you tag media or use them in Content and Experience settings."
 	renameNote="Every media and behaviour reference will be updated."
 	mergeNote="References will be combined and duplicates removed."

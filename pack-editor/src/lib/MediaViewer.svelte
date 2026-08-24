@@ -19,8 +19,13 @@
 	import MediaOverlay from './MediaOverlay.svelte';
 	import PopupOptions from './PopupOptions.svelte';
 	import PopupPlacement from './PopupPlacement.svelte';
-	import { editManyPopupAttributes, popupAttributes, sharedValue } from './mediaAttributes.js';
-	import type { PopupMedia } from './types.js';
+	import {
+		attributesFor,
+		editPopupAttributes,
+		popupAttributesQuery,
+		sharedValue
+	} from './mediaAttributes.js';
+	import type { PopupChanges, PopupMedia } from './types.js';
 
 	const file = $derived(store.openedFile);
 	const files = $derived(store.openedFiles);
@@ -108,11 +113,15 @@
 	/** The files an edit applies to: the whole scope when opened over a selection, else this one. */
 	const targets = $derived(store.openedSelection ? files : file ? [file] : []);
 	const targetIds = $derived(targets.map((item) => item.id));
-	const shared = <K extends keyof PopupMedia>(field: K) => sharedValue(targetIds, field);
-	const attributes = $derived(file ? popupAttributes(file.id) : {});
+	// Fetched for the whole scope at once, so stepping through a selection is one request rather
+	// than one per file.
+	const stored = popupAttributesQuery(() => targetIds);
+	const shared = <K extends keyof PopupMedia>(field: K) =>
+		sharedValue(stored.current, targetIds, field);
+	const attributes = $derived(file ? attributesFor(stored.current, file.id) : {});
 
-	function edit(changes: PopupMedia, label: string) {
-		editManyPopupAttributes(targetIds, changes, label);
+	function edit(changes: PopupChanges, label: string) {
+		void editPopupAttributes(targetIds, changes, label);
 	}
 
 	// Placement is a mode, not the resting state. Most visits to a popup file are about looking at
@@ -126,18 +135,19 @@
 		placing = false;
 	});
 
-	const caption = $derived(file ? (popupAttributes(file.id).caption ?? '') : '');
+	const caption = $derived(file ? (attributesFor(stored.current, file.id).caption ?? '') : '');
 	let captionValue = $state('');
 	$effect(() => {
 		captionValue = caption;
 	});
 	function saveCaption() {
 		if (!file) return;
-		const next = captionValue.trim() || undefined;
-		if (next === popupAttributes(file.id).caption) return;
+		// An emptied caption clears the field rather than storing "".
+		const next = captionValue.trim() || null;
+		if ((next ?? undefined) === attributesFor(stored.current, file.id).caption) return;
 		// The caption alone is never bulk-applied, whatever the scope: it is a sentence about this
 		// picture, and writing one file's words onto twenty others is not an edit anybody means.
-		editManyPopupAttributes([file.id], { caption: next }, `Set caption for “${file.file_name}”`);
+		void editPopupAttributes([file.id], { caption: next }, `Set caption for “${file.file_name}”`);
 	}
 </script>
 

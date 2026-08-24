@@ -2,8 +2,10 @@
 	// The timeline as a list: the stage strip, and the four edits that renumber it.
 	//
 	// Adding, moving or removing a stage renumbers the rest and rewrites the transitions between
-	// them (`normalizeTimeline`), so those edits address the timeline whole -- which is why they are
-	// here rather than in `StageEditor`, where every edit addresses one stage's own fields.
+	// them, so those edits are their own commands -- which is why they are here rather than in
+	// `StageEditor`, where every edit addresses one stage's own fields. The renumbering itself is
+	// the backend's: it used to live in `timelineModel.ts` because that is where the edit was
+	// constructed, and it went with the construction.
 	import { Icon, Plus } from 'svelte-hero-icons';
 	import Button from '$ui/Button.svelte';
 	import { clampScroll } from '$ui/scroll';
@@ -11,22 +13,18 @@
 	import StageEditor from './StageEditor.svelte';
 	import StageTabs from './StageTabs.svelte';
 	import TransitionEditor from './TransitionEditor.svelte';
-	import { commitBehaviourEdit } from './behaviourSave.svelte.js';
+	import { api } from './api.js';
+	import { mutate } from './mutate.svelte.js';
+	import { keys, query } from './query.svelte.js';
 	import { tagClaims } from './stageTags.js';
 	import { store } from './store.svelte.js';
 	import type { Stage, TagAction } from './types.js';
-	import {
-		duplicateStage as duplicateTimelineStage,
-		moveStage as moveTimelineStage,
-		normalizeTimeline,
-		removeStage as removeTimelineStage
-	} from './timelineModel.js';
 
-	const TIMELINE = 'experience.timeline';
-
-	const timeline = $derived(store.behaviour!.experience!.timeline);
-	const stages = $derived(timeline.stages);
-	const transitions = $derived(timeline.transitions);
+	const timeline = query(keys.timeline, api.getTimeline);
+	const tagRows = query(keys.tags, api.getTagRows);
+	const stages = $derived(timeline.current?.stages ?? []);
+	const transitions = $derived(timeline.current?.transitions ?? []);
+	const invalidates = [keys.timeline, keys.summary, keys.tags];
 
 	let activeId = $state(store.experienceActiveId ?? '');
 	let removing = $state<Stage | null>(null);
@@ -58,41 +56,40 @@
 	);
 
 	function addStage() {
-		// With a transition selected, insert between its two stages; otherwise after the active stage.
-		const source = stage ?? transitionFrom ?? stages[stages.length - 1];
-		let insertIndex = stages.length;
-		if (stage) insertIndex = activeIndex + 1;
-		else if (transition) {
-			const toIndex = stages.findIndex((item) => item.id === transition.to_stage);
-			if (toIndex >= 0) insertIndex = toIndex;
-		}
-		const added: Stage = source
-			? (structuredClone($state.snapshot(source)) as Stage)
-			: { id: '', label: '', content: {}, events: {} };
-		added.id = `stage-${crypto.randomUUID()}`;
-		added.label = `Stage ${stages.length + 1}`;
-		// Same rule as duplicating: the new stage inherits the source's selection but owns none of
-		// it, so renaming it cannot rewrite a tag the source is reading. See `timelineModel.ts`.
-		delete added.content.owned_tag;
-		stages.splice(insertIndex, 0, added);
-		activeId = added.id;
-		normalizeTimeline(timeline);
-		commitBehaviourEdit(TIMELINE, 'Add stage');
+		// With a transition selected, insert after its first stage; otherwise after the active one.
+		// The new stage copies the settings of whichever it lands next to, which is the author's
+		// expectation when adding one beside a stage they have configured. It never inherits tag
+		// *ownership* — two stages claiming one tag would mean renaming either rewrote a name the
+		// other reads — and the backend enforces that.
+		const after = stage ?? transitionFrom ?? stages[stages.length - 1];
+		void mutate(
+			() =>
+				api.addStage(
+					after?.id ?? null,
+					after?.id ?? null,
+					`Stage ${stages.length + 1}`,
+					'Add stage'
+				),
+			{ label: 'Add stage', invalidates }
+		);
 	}
 
 	function duplicate(index: number) {
 		const source = stages[index];
 		if (!source) return;
-		const copy = duplicateTimelineStage(timeline, index, $state.snapshot(source) as Stage);
-		activeId = copy.id;
-		commitBehaviourEdit(TIMELINE, 'Duplicate stage');
+		void mutate(() => api.duplicateStage(source.id, 'Duplicate stage'), {
+			label: 'Duplicate stage',
+			invalidates
+		});
 	}
 
 	function move(from: number, to: number) {
 		const selected = stages[from];
-		moveTimelineStage(timeline, from, to - from);
-		activeId = selected.id;
-		commitBehaviourEdit(TIMELINE, 'Move stage');
+		if (!selected) return;
+		void mutate(() => api.moveStage(selected.id, to, 'Move stage'), {
+			label: 'Move stage',
+			invalidates
+		});
 	}
 
 	// ── Removal ──────────────────────────────────────────────────────────────
@@ -102,11 +99,12 @@
 	// brings back the whole stage rather than a stage without its wallpaper.
 
 	/** What still holds the tag of the stage being removed, for the confirmation to say out loud. */
-	const removingClaims = $derived(
-		removing?.content.owned_tag
-			? tagClaims(store.behaviour, removing.content.owned_tag, removing.id, store.files)
-			: null
-	);
+	const removingClaims = $derived.by(() => {
+		const tag = removing?.content.owned_tag;
+		if (!tag || !removing) return null;
+		const contentUses = tagRows.current?.find((row) => row.name === tag)?.content_uses ?? 0;
+		return tagClaims(stages, tag, removing.id, store.files, contentUses);
+	});
 
 	function removalNote() {
 		const tag = removing?.content.owned_tag;
@@ -149,10 +147,13 @@
 						: { kind: 'retire_if_unclaimed', tag: owned }
 				]
 			: [];
-		removeTimelineStage(timeline, target);
-		activeId = stages[Math.min(index, stages.length - 1)].id;
+		const next = stages[Math.min(index + 1, stages.length - 1)] ?? stages[0];
+		activeId = next.id === target.id ? (stages[0]?.id ?? '') : next.id;
 		removing = null;
-		commitBehaviourEdit(TIMELINE, 'Remove stage', retiring, tagActions);
+		void mutate(() => api.removeStage(target.id, retiring, tagActions, 'Remove stage'), {
+			label: 'Remove stage',
+			invalidates
+		});
 	}
 </script>
 
@@ -179,7 +180,7 @@
 		<StageEditor stageId={stage.id} onselect={(id) => (activeId = id)} />
 	{:else if transition && transitionFrom && transitionTo}
 		<TransitionEditor
-			transitionId={transition.id}
+			{transition}
 			from={transitionFrom}
 			to={transitionTo}
 			onstage={(id) => (activeId = id)}

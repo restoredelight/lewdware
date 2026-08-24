@@ -336,19 +336,20 @@ async fn fill_slots_for(
     let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) else {
         return Ok(Vec::new());
     };
-    let mut behaviour = pack.get_behaviour().await?;
-    let mut filled = Vec::new();
-    for slot in slots {
-        if behaviour.fill_media_reference(&slot, media_id) {
-            filled.push(FilledSlot { slot, media_id });
-        }
-    }
-    if filled.is_empty() {
-        return Ok(filled);
-    }
-    pack.replace_behaviour(behaviour, "Set media slot".to_string())
+    // Fill, not set: a slot the author has already pointed somewhere keeps their choice. The
+    // converted document named a file, and this is the moment that file arrives -- but the author
+    // may have picked their own in the meantime, and the import must not overrule them.
+    //
+    // One targeted write per slot rather than a read-modify-write of the whole document: a
+    // document read while the timeline is switched off has no stages in it, so writing it back
+    // would delete them.
+    let filled = pack
+        .fill_empty_slots(slots, media_id, "Set media slot".to_string())
         .await?;
-    Ok(filled)
+    Ok(filled
+        .into_iter()
+        .map(|slot| FilledSlot { slot, media_id })
+        .collect())
 }
 
 // As in `encode::process_one_file`: one media item, plus the batch-wide context resolved once

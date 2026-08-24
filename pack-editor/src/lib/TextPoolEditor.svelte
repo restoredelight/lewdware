@@ -1,9 +1,10 @@
 <script lang="ts">
-	import type { TextItem } from './types.js';
+	import type { PoolKind, TextItem, TextItemRow } from './types.js';
 	import ContentList from './ContentList.svelte';
 	import TagPicker from './TagPicker.svelte';
-	import { commitBehaviourEdit, editBehaviourField } from './behaviourSave.svelte.js';
-	import { store } from './store.svelte.js';
+	import { api } from './api.js';
+	import { fields, mutate } from './mutate.svelte.js';
+	import { keys, query } from './query.svelte.js';
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 	import Field from '$ui/Field.svelte';
@@ -12,45 +13,95 @@
 
 	type Props = {
 		title: string;
-		// A key into behaviour content rather than the array itself: this editor mutates the
-		// pool, and mutating an unbound prop trips Svelte's ownership warning.
-		poolKey: 'captions' | 'prompts' | 'notifications';
+		poolKey: PoolKind;
 		idPrefix: string;
 	};
 
 	let { title, poolKey, idPrefix }: Props = $props();
-	const pool = $derived(store.behaviour!.content[poolKey]);
+
+	// Each entry carries the row id the backend addresses it by, so an edit names the entry the
+	// author is looking at rather than the position it happened to be in when the view rendered.
+	const stored = query(
+		() => keys.textPool(poolKey),
+		() => api.getTextPool(poolKey)
+	);
+	const pool = $derived(stored.current ?? []);
 	// Notifications are the one pool whose entry is two fields: the desktop notification's title
 	// and its body. Everywhere else `text` is the whole entry, and an unlabelled box is clearer
 	// than a labelled one.
-	const titled = $derived(poolKey === 'notifications');
-	// The pool's address in the behaviour document. Adding and removing entries move every later
-	// index, so those edits replace the array whole rather than addressing one entry.
-	const poolPath = $derived(`content.${poolKey}`);
+	const titled = $derived(poolKey === 'notification');
 	// "Caption", "Prompt" -- what the undo list should call one of these.
 	const noun = $derived(title.replace(/s$/, ''));
-	let removing = $state<TextItem | null>(null);
+	let removing = $state<TextItemRow | null>(null);
 
-	function addItem() {
-		pool.push({ text: '', tags: [] });
-		commitBehaviourEdit(poolPath, `Add ${noun.toLowerCase()}`);
+	const invalidates = $derived([keys.textPool(poolKey), keys.summary]);
+
+	/**
+	 * Applies `change` to this entry and sends it.
+	 *
+	 * Every change to one entry accumulates into a single draft — the text, the title and the tag
+	 * chips alike — because the command sends the entry whole. Building each one from the last
+	 * *fetched* copy would mean editing a title and then its message sent the message with the
+	 * title as it was before, reverting it.
+	 */
+	function write(
+		item: TextItemRow,
+		change: (draft: TextItem) => void,
+		label: string,
+		debounce = false
+	) {
+		fields.edit<TextItem>({
+			entity: `${poolKey}:${item.id}`,
+			base: () => ({
+				text: item.text,
+				tags: [...item.tags],
+				timeout_seconds: item.timeout_seconds,
+				summary: item.summary
+			}),
+			change,
+			label,
+			invalidates,
+			send: (draft) => api.updateTextItem(item.id, draft, label),
+			debounce
+		});
+	}
+
+	/** What an entry looks like right now: the author's unsent edit if there is one, else stored. */
+	function shown(item: TextItemRow): TextItem {
+		return fields.draftFor<TextItem>(`${poolKey}:${item.id}`) ?? item;
+	}
+
+	// Awaited, not fired and forgotten: `ContentList` reveals and focuses the new entry once this
+	// resolves, and an entry that does not exist yet cannot be revealed — it would scroll to the
+	// previous last card instead.
+	async function addItem() {
+		await mutate(
+			() => api.addTextItem(poolKey, { text: '', tags: [] }, `Add ${noun.toLowerCase()}`),
+			{ label: `Add ${noun.toLowerCase()}`, invalidates }
+		);
 	}
 
 	function removeItem(index: number) {
-		if (pool[index].text.trim() || pool[index].summary?.trim() || pool[index].tags.length > 0) {
-			removing = pool[index];
+		const item = pool[index];
+		if (!item) return;
+		if (item.text.trim() || item.summary?.trim() || item.tags.length > 0) {
+			removing = item;
 			return;
 		}
-		pool.splice(index, 1);
-		commitBehaviourEdit(poolPath, `Remove ${noun.toLowerCase()}`);
+		void mutate(() => api.removeTextItem(item.id, `Remove ${noun.toLowerCase()}`), {
+			label: `Remove ${noun.toLowerCase()}`,
+			invalidates
+		});
 	}
 
 	function confirmRemove() {
 		if (!removing) return;
-		const index = pool.indexOf(removing);
-		if (index >= 0) pool.splice(index, 1);
+		const item = removing;
 		removing = null;
-		commitBehaviourEdit(poolPath, `Remove ${noun.toLowerCase()}`);
+		void mutate(() => api.removeTextItem(item.id, `Remove ${noun.toLowerCase()}`), {
+			label: `Remove ${noun.toLowerCase()}`,
+			invalidates
+		});
 	}
 </script>
 
@@ -77,13 +128,16 @@
 				label="Title"
 				size="compact"
 				placeholder="Optional"
-				value={item.summary ?? ''}
+				value={shown(item).summary ?? ''}
 				oninput={(value) => {
 					// Stored only when it says something: a blank title is the absence of one, and
 					// the notification is shown body-only.
-					if (value.trim()) item.summary = value;
-					else delete item.summary;
-					editBehaviourField(`${poolPath}.${index}.summary`, 'Edit notification title');
+					write(
+						item,
+						(draft) => (draft.summary = value.trim() ? value : undefined),
+						'Edit notification title',
+						true
+					);
 				}}
 			/>
 		{/if}
@@ -94,36 +148,43 @@
 			>
 			<textarea
 				id={`${idPrefix}-text-${index}`}
-				bind:value={item.text}
-				oninput={() =>
-					editBehaviourField(`${poolPath}.${index}.text`, `Edit ${noun.toLowerCase()}`)}
+				value={shown(item).text}
+				oninput={(event) =>
+					write(
+						item,
+						(draft) => (draft.text = event.currentTarget.value),
+						`Edit ${noun.toLowerCase()}`,
+						true
+					)}
 				rows={2}
 				placeholder={titled ? undefined : 'Text'}
 				class="border-border bg-bg text-text w-full resize-none rounded border px-2 py-1 text-xs"
 			></textarea>
 		</div>
 		<TagPicker
-			tags={item.tags}
+			tags={shown(item).tags}
 			id={`${idPrefix}-${index}`}
-			path={`${poolPath}.${index}.tags`}
-			onchange={(tags) => (item.tags = tags)}
+			onchange={(tags, label) => write(item, (draft) => (draft.tags = tags), label)}
 		/>
-		{#if poolKey === 'prompts'}
+		{#if poolKey === 'prompt'}
 			<NumberField
 				label="Time limit"
-				description={item.timeout_seconds == null
-					? `Automatic: ${automaticPromptTimeout(item.text)} seconds based on this prompt's length.`
+				description={shown(item).timeout_seconds == null
+					? `Automatic: ${automaticPromptTimeout(shown(item).text)} seconds based on this prompt's length.`
 					: 'Clear this value to use the automatic limit based on prompt length.'}
 				placeholder="Automatic"
 				suffix="s"
 				min={1}
 				step={1}
-				value={item.timeout_seconds ?? null}
+				value={shown(item).timeout_seconds ?? null}
 				oninput={(seconds) => {
 					// Clearing the field is how an author asks for the automatic limit back.
-					if (seconds === null) delete item.timeout_seconds;
-					else item.timeout_seconds = seconds;
-					editBehaviourField(`${poolPath}.${index}.timeout_seconds`, 'Edit prompt time limit');
+					write(
+						item,
+						(draft) => (draft.timeout_seconds = seconds ?? undefined),
+						'Edit prompt time limit',
+						true
+					);
 				}}
 			/>
 		{/if}

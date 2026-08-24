@@ -22,10 +22,21 @@ CREATE TABLE IF NOT EXISTS behaviour_content (
 INSERT OR IGNORE INTO behaviour_content (singleton) VALUES (1);
 
 -- Whether the pack has an `experience` section at all, and its optional mode-name override. A row
--- means it has one; no row means it does not, which is also how a suspended timeline reads.
+-- means it has one; no row means it does not.
+--
+-- `enabled` is the difference between "this pack has no timeline" and "this pack has a timeline the
+-- author has switched off". Both read as `Experience: None` to the engine, the converter and `lw`
+-- -- `read_experience` returns `None` for either -- but only the second keeps its stage rows, so
+-- switching the timeline back on restores what was there.
+--
+-- A column rather than the absence of a row, because absence cannot hold anything. The editor used
+-- to keep the suspended timeline in front-end memory (`store.suspendedExperience`), which lost it
+-- for good the moment the pack was closed and orphaned every stage wallpaper with it. See
+-- `design/behaviour-storage.md`, "Invariants to preserve".
 CREATE TABLE IF NOT EXISTS behaviour_experience (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    label TEXT
+    label TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))
 ) STRICT;
 
 -- `position` orders the timeline and is not UNIQUE on purpose: reordering rewrites positions one
@@ -198,8 +209,11 @@ CREATE TABLE IF NOT EXISTS behaviour_content_group (
     enabled_by_default INTEGER NOT NULL CHECK (enabled_by_default IN (0, 1))
 ) STRICT;
 
+-- `ON UPDATE CASCADE` because the group's id is author-facing text, not a surrogate: renaming a
+-- group is a rename of the key its rows point at, and without the cascade it silently orphans them.
 CREATE TABLE IF NOT EXISTS behaviour_content_group_tag (
-    group_id TEXT NOT NULL REFERENCES behaviour_content_group (id) ON DELETE CASCADE,
+    group_id TEXT NOT NULL
+        REFERENCES behaviour_content_group (id) ON DELETE CASCADE ON UPDATE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
     PRIMARY KEY (group_id, tag_id)

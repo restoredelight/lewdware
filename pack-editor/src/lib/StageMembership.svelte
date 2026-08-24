@@ -1,9 +1,11 @@
 <script lang="ts">
-	import { commitBehaviourEdit } from './behaviourSave.svelte.js';
+	import { api } from './api.js';
+	import { mutate } from './mutate.svelte.js';
+	import { keys, query } from './query.svelte.js';
 	import { leaveStagePlan, stageMembership } from './stageMembership.js';
 	import { stageTagName, takenTagNames } from './stageTags.js';
 	import { store } from './store.svelte.js';
-	import type { MediaFile, TagAction } from './types.js';
+	import type { MediaFile, Stage, TagAction } from './types.js';
 
 	type Props = {
 		file: MediaFile;
@@ -12,25 +14,46 @@
 	};
 
 	let { file, label = 'Appears in', compact = false }: Props = $props();
-	const stages = $derived(stageMembership(store.behaviour, file.tags));
 
-	function commit(label: string, actions: TagAction[]) {
-		// A tag-only toggle still patches the timeline with its current value. That gives the
-		// behaviour writer a path on which to hang the tag actions, and the backend recognises the
-		// actions themselves as the change. If a preservation tag was created, the same patch also
-		// stores its stage association and ownership marker.
-		commitBehaviourEdit('experience.timeline.stages', label, [], actions);
+	const timeline = query(keys.timeline, api.getTimeline);
+	const tagRows = query(keys.tags, api.getTagRows);
+	const allStages = $derived(timeline.current?.stages ?? []);
+	// How much of the pack holds each tag, which is what tells a stage's own machinery tag from one
+	// the author also uses elsewhere. Counted by the backend rather than by walking a document.
+	const usage = $derived((tag: string) => {
+		const row = tagRows.current?.find((candidate) => candidate.name === tag);
+		return { content: row?.content_uses ?? 0, experience: row?.experience_uses ?? 0 };
+	});
+	const stages = $derived(stageMembership(allStages, file.tags, usage));
+	const taken = $derived(() =>
+		takenTagNames(tagRows.current?.map((row) => row.name) ?? store.allTags)
+	);
+
+	const invalidates = [keys.timeline, keys.tags, keys.summary];
+
+	/**
+	 * Sends one membership change: the stage rows it rewrites, and the tag actions that carry it.
+	 *
+	 * Both halves go together because they are one thing the author did. A tag-only toggle sends no
+	 * stage updates at all — it used to send the whole stage list back unchanged, purely to have
+	 * something for the tag actions to ride on.
+	 */
+	function commit(label: string, updates: { id: string; stage: Stage }[], actions: TagAction[]) {
+		void mutate(() => api.updateStages(updates, [], actions, label), { label, invalidates });
 	}
 
 	function joinByCreatingStageTag(stageId: string, stageLabel: string) {
-		const behaviour = store.behaviour;
-		const timeline = behaviour?.experience?.timeline.stages ?? [];
-		const target = timeline.find((stage) => stage.id === stageId);
-		if (!behaviour || !target) return;
-		const tag = stageTagName(stageLabel, takenTagNames(behaviour, store.allTags));
-		target.content.tags = [...(target.content.tags ?? []), tag];
-		target.content.owned_tag = tag;
-		commit(`Add “${file.file_name}” to ${stageLabel}`, [{ kind: 'apply', tag, media: [file.id] }]);
+		const target = allStages.find((stage) => stage.id === stageId);
+		if (!target) return;
+		const tag = stageTagName(stageLabel, taken());
+		const draft = structuredClone($state.snapshot(target)) as Stage;
+		draft.content.tags = [...(draft.content.tags ?? []), tag];
+		draft.content.owned_tag = tag;
+		commit(
+			`Add “${file.file_name}” to ${stageLabel}`,
+			[{ id: target.id, stage: draft }],
+			[{ kind: 'apply', tag, media: [file.id] }]
+		);
 		store.addTagToFiles([file.id], tag, true);
 	}
 
@@ -38,9 +61,11 @@
 		if (row.locked) return;
 		if (!row.member) {
 			if (row.joinTag) {
-				commit(`Add “${file.file_name}” to ${row.label}`, [
-					{ kind: 'apply', tag: row.joinTag, media: [file.id] }
-				]);
+				commit(
+					`Add “${file.file_name}” to ${row.label}`,
+					[],
+					[{ kind: 'apply', tag: row.joinTag, media: [file.id] }]
+				);
 				store.addTagToFiles([file.id], row.joinTag, true);
 			} else if (row.joinCreatesTag) {
 				joinByCreatingStageTag(row.id, row.label);
@@ -48,27 +73,24 @@
 			return;
 		}
 
-		const behaviour = store.behaviour;
-		if (!behaviour) return;
-		const plan = leaveStagePlan(
-			behaviour,
-			file.tags,
-			row.id,
-			takenTagNames(behaviour, store.allTags)
-		);
-		const timeline = behaviour.experience?.timeline.stages ?? [];
+		const plan = leaveStagePlan(allStages, file.tags, row.id, taken());
+		// Every stage that would have lost this file gets a tag of its own, so leaving one stage
+		// leaves only that stage. These go in the same transaction as the tag changes below.
+		const updates: { id: string; stage: Stage }[] = [];
 		for (const creation of plan.creations) {
-			const stage = timeline.find((candidate) => candidate.id === creation.stageId);
+			const stage = allStages.find((candidate) => candidate.id === creation.stageId);
 			if (!stage) continue;
-			stage.content.tags = [...(stage.content.tags ?? []), creation.tag];
-			stage.content.owned_tag = creation.tag;
+			const draft = structuredClone($state.snapshot(stage)) as Stage;
+			draft.content.tags = [...(draft.content.tags ?? []), creation.tag];
+			draft.content.owned_tag = creation.tag;
+			updates.push({ id: stage.id, stage: draft });
 		}
 
 		const actions: TagAction[] = [
 			...plan.preserveTags.map((tag) => ({ kind: 'apply' as const, tag, media: [file.id] })),
 			...plan.removeTags.map((tag) => ({ kind: 'remove' as const, tag, media: [file.id] }))
 		];
-		commit(`Remove “${file.file_name}” from ${row.label}`, actions);
+		commit(`Remove “${file.file_name}” from ${row.label}`, updates, actions);
 		for (const tag of plan.preserveTags) store.addTagToFiles([file.id], tag, true);
 		for (const tag of plan.removeTags) store.removeTagFromFiles([file.id], tag, true);
 	}

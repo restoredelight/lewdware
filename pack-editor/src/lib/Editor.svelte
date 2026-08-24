@@ -35,15 +35,14 @@
 	import MediaPreview from './MediaPreview.svelte';
 	import AudioList from './AudioList.svelte';
 	import ImportWarnings from './ImportWarnings.svelte';
-	import { mediaSlotUsage } from './tagReferences.js';
 	import { formatList } from './format.js';
 	import MediaToolbar from './MediaToolbar.svelte';
 	import Tags from './Tags.svelte';
 	import Artists from './Artists.svelte';
-	import { adoptBehaviour, ensureBehaviour } from './behaviourSave.svelte.js';
 	import { initializeMetadataHistory, scheduleMetadataSave } from './metadataSave.svelte.js';
 	import { cancelPendingWrites, flushPendingWrites, packSave } from './packActions.svelte.js';
 	import { history } from './history.svelte.js';
+	import { invalidate, keys, query } from './query.svelte.js';
 	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import type { MediaFile } from './types.js';
 	import EmptyState from '$ui/EmptyState.svelte';
@@ -152,11 +151,25 @@
 		};
 	});
 
+	// Which media slots the files being removed are filling, so the confirmation can name them.
+	//
+	// Deleting a file clears the slots referencing it, which is right and is a surprising thing to
+	// discover afterwards — the pack quietly stops having a wallpaper. Asked of the backend, which
+	// can see slots on a switched-off timeline that a read document would hide.
+	const removalUsageQuery = query(
+		() => `media-usage:${store.pendingMediaRemoval.join(',')}`,
+		async () => {
+			const perFile = await Promise.all(
+				store.pendingMediaRemoval.map((id) => api.getMediaUsage(id))
+			);
+			return [...new Set(perFile.flat())];
+		}
+	);
+
 	onMount(async () => {
-		// The media tabs are where the editor opens, and they read the behaviour document without
-		// owning it: the inspector's "Used as" line, and naming the slots a removal would clear. So
-		// it is loaded with the pack rather than by whichever tab happens to want it first.
-		void ensureBehaviour();
+		// Nothing is preloaded here any more. The document used to be fetched with the pack because
+		// the media tabs read it without owning it — the inspector's "Used as" line, and naming the
+		// slots a removal would clear. Each of those asks for what it shows now, when it shows it.
 		try {
 			const metadata = await api.getPackMetadata();
 			store.metadata = metadata;
@@ -207,7 +220,9 @@
 		const verb = undoing ? 'Undoing' : 'Redoing';
 		try {
 			taskFeedback.progress('history', label ? `${verb} “${label}”…` : `${verb} change…`);
-			await flushPendingWrites();
+			// A pending write that fails must not block getting back to a good state: it never
+			// reached the pack, so there is nothing of it to undo, and `mutate` has already said so.
+			await flushPendingWrites().catch(() => {});
 			await (undoing ? history.undo() : history.redo());
 			taskFeedback.success('history', undoing ? 'Change undone' : 'Change redone');
 		} catch (error) {
@@ -248,17 +263,19 @@
 			store.packName = meta.name;
 			packTitle = meta.name;
 			store.markPackSaved();
-			const [files, tags, artists, behaviour] = await Promise.all([
+			const [files, tags, artists] = await Promise.all([
 				api.getFiles(),
 				api.getAllTags(),
-				api.getAllArtists(),
-				api.getBehaviour()
+				api.getAllArtists()
 			]);
 			store.files = files;
 			store.allTags = tags;
 			store.allArtists = artists;
-			store.behaviour = behaviour;
-			store.suspendedExperience = null;
+			// Discarding restores the pack from its saved archive, so nothing the surfaces are
+			// showing survives it.
+			invalidate(keys.behaviour);
+			invalidate(keys.tags);
+			invalidate(keys.artists);
 			initializeMetadataHistory(meta);
 			history.reset(true);
 			taskFeedback.success('pack-action', 'Changes discarded');
@@ -354,9 +371,9 @@
 			`Removing ${ids.length} media item${ids.length === 1 ? '' : 's'}…`
 		);
 		try {
-			// Deleting a file clears any slot that named it -- see `MediaPack::remove_files`. Null
-			// when no slot named one, which is the only case with nothing to adopt.
-			const behaviour = await api.removeFiles(ids);
+			// Deleting a file clears any slot that named it -- see `MediaPack::remove_files`, and
+			// the dialog above names those slots first so it is a decision rather than a surprise.
+			await api.removeFiles(ids);
 			store.cancelMediaRemoval();
 			store.removeFilesById(ids, true);
 			const record = {
@@ -366,8 +383,8 @@
 						: `Remove ${removed.length} media items`,
 				storageBytes: removed.reduce((total, file) => total + file.size, 0)
 			};
-			if (behaviour) adoptBehaviour(behaviour, record);
-			else history.record(record);
+			invalidate(keys.behaviour);
+			history.record(record);
 			const remaining = store.filteredFiles;
 			if (remaining.length > 0) {
 				const next = remaining[Math.min(Math.max(activeIndex, 0), remaining.length - 1)];
@@ -436,75 +453,73 @@
 
 		<!-- Main content -->
 		<div class="flex min-w-0 flex-1 flex-col">
-			{#key store.historyRevision}
-				{#if store.activeView === 'popups' || store.activeView === 'all-media'}
-					{#if store.activeView === 'all-media'}
-						<div class="border-border bg-surface border-b px-3 py-2">
-							<p class="text-muted text-xs">
-								Everything in the pack, including wallpapers and splashes. Custom modes can draw
-								from all of it.
-							</p>
-						</div>
-					{/if}
-					<MediaToolbar view={store.activeView} />
-					<div class="flex min-h-0 flex-1 max-[520px]:flex-col">
-						<div class="min-h-0 min-w-0 flex-1">
-							{#if store.filteredFiles.length === 0 && store.mediaScopeFiles.length === 0}
-								<div class="flex h-full items-center justify-center p-8">
-									<div class="w-full max-w-lg">
-										<EmptyState
-											title="Add media to this pack"
-											description="Import images, videos, or audio files. You can also drag files or folders anywhere onto this window."
-											actionLabel="Import files…"
-											onclick={() => api.addFilesDialog()}
-											secondaryActionLabel="Import folder…"
-											onsecondary={() => api.addFolderDialog()}
-										/>
-									</div>
-								</div>
-							{:else if store.filteredFiles.length === 0}
-								<div class="flex h-full items-center justify-center p-8">
-									<div class="w-full max-w-lg">
-										<EmptyState
-											title="No matching media"
-											description="No media matches the current search, type, or tag filters."
-											actionLabel="Clear filters"
-											onclick={() => store.clearMediaFilters()}
-										/>
-									</div>
-								</div>
-							{:else}
-								<MediaGrid />
-							{/if}
-						</div>
-						<Sidebar />
-					</div>
-				{:else if store.activeView === 'audio'}
-					<MediaToolbar view="audio" />
-					<div class="flex min-h-0 flex-1 max-[520px]:flex-col">
-						<div class="min-h-0 min-w-0 flex-1"><AudioList /></div>
-						<Sidebar />
-					</div>
-				{:else if store.activeView === 'content'}
-					<div class="flex min-h-0 flex-1 flex-col">
-						<Content />
-					</div>
-				{:else if store.activeView === 'tags'}
-					<Tags />
-				{:else if store.activeView === 'artists'}
-					<Artists />
-				{:else if store.activeView === 'experience'}
-					<div class="flex min-h-0 flex-1 flex-col">
-						<Experience />
-					</div>
-				{:else if store.activeView === 'modes'}
-					<Modes />
-				{:else}
-					<div class="flex-1 overflow-y-auto" use:clampScroll>
-						<Options />
+			{#if store.activeView === 'popups' || store.activeView === 'all-media'}
+				{#if store.activeView === 'all-media'}
+					<div class="border-border bg-surface border-b px-3 py-2">
+						<p class="text-muted text-xs">
+							Everything in the pack, including wallpapers and splashes. Custom modes can draw from
+							all of it.
+						</p>
 					</div>
 				{/if}
-			{/key}
+				<MediaToolbar view={store.activeView} />
+				<div class="flex min-h-0 flex-1 max-[520px]:flex-col">
+					<div class="min-h-0 min-w-0 flex-1">
+						{#if store.filteredFiles.length === 0 && store.mediaScopeFiles.length === 0}
+							<div class="flex h-full items-center justify-center p-8">
+								<div class="w-full max-w-lg">
+									<EmptyState
+										title="Add media to this pack"
+										description="Import images, videos, or audio files. You can also drag files or folders anywhere onto this window."
+										actionLabel="Import files…"
+										onclick={() => api.addFilesDialog()}
+										secondaryActionLabel="Import folder…"
+										onsecondary={() => api.addFolderDialog()}
+									/>
+								</div>
+							</div>
+						{:else if store.filteredFiles.length === 0}
+							<div class="flex h-full items-center justify-center p-8">
+								<div class="w-full max-w-lg">
+									<EmptyState
+										title="No matching media"
+										description="No media matches the current search, type, or tag filters."
+										actionLabel="Clear filters"
+										onclick={() => store.clearMediaFilters()}
+									/>
+								</div>
+							</div>
+						{:else}
+							<MediaGrid />
+						{/if}
+					</div>
+					<Sidebar />
+				</div>
+			{:else if store.activeView === 'audio'}
+				<MediaToolbar view="audio" />
+				<div class="flex min-h-0 flex-1 max-[520px]:flex-col">
+					<div class="min-h-0 min-w-0 flex-1"><AudioList /></div>
+					<Sidebar />
+				</div>
+			{:else if store.activeView === 'content'}
+				<div class="flex min-h-0 flex-1 flex-col">
+					<Content />
+				</div>
+			{:else if store.activeView === 'tags'}
+				<Tags />
+			{:else if store.activeView === 'artists'}
+				<Artists />
+			{:else if store.activeView === 'experience'}
+				<div class="flex min-h-0 flex-1 flex-col">
+					<Experience />
+				</div>
+			{:else if store.activeView === 'modes'}
+				<Modes />
+			{:else}
+				<div class="flex-1 overflow-y-auto" use:clampScroll>
+					<Options />
+				</div>
+			{/if}
 		</div>
 	</div>
 
@@ -533,15 +548,7 @@
 		removalCount === 1
 			? store.files.find((file) => file.id === store.pendingMediaRemoval[0])
 			: null}
-	{@const removalUsage = store.behaviour
-		? [
-				...new Set(
-					store.files
-						.filter((file) => store.pendingMediaRemoval.includes(file.id))
-						.flatMap((file) => mediaSlotUsage(store.behaviour!, file.id))
-				)
-			]
-		: []}
+	{@const removalUsage = removalUsageQuery.current ?? []}
 	<Dialog
 		title={removalCount === 1
 			? 'Remove media from pack?'

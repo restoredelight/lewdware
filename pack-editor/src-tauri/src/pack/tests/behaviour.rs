@@ -7,7 +7,9 @@ use shared::behaviour::{
 use tempfile::tempdir;
 
 use super::*;
-use shared::behaviour::{MediaSlot, Patch};
+use rusqlite::Transaction;
+use shared::behaviour::editor::{self as behaviour_editor, PoolKind};
+use shared::behaviour::MediaSlot;
 use shared::encode::EncodedFile;
 
 /// Importing a file into a slot is one action to the author, so it has to be one undo step --
@@ -15,6 +17,16 @@ use shared::encode::EncodedFile;
 /// (undo soft-deletes the media so its bytes survive for redo), so the slot write rides on
 /// the same entry instead; this checks both halves really do move together, in both
 /// directions.
+/// A caption with nothing else said about it, which is all these tests need one to be.
+fn caption(text: &str) -> TextItem {
+    TextItem {
+        text: text.to_string(),
+        tags: vec![],
+        timeout_seconds: None,
+        summary: None,
+    }
+}
+
 #[tokio::test]
 async fn importing_into_a_slot_undoes_and_redoes_as_one_step() {
     let tmp = tempdir().unwrap();
@@ -118,14 +130,15 @@ async fn clearing_a_slot_deletes_scenery_but_keeps_real_content() {
 
     // Filled from the slot, so it carries the marker: only ever scenery.
     let scenery = insert_staged_audio(&pack, b"scenery").await;
-    let (behaviour, _) = pack
-        .fill_media_slot(MediaSlot::Wallpaper, scenery, true)
+    pack.fill_media_slot(MediaSlot::Wallpaper, scenery, true)
         .await
         .unwrap();
+    let behaviour = pack.get_behaviour().await.unwrap();
     let slot_media = behaviour.content.wallpaper.unwrap();
     assert!(pack.get_tags(scenery).await.unwrap() == vec![tags::EXPLICIT_ONLY_TAG]);
 
-    let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
+    let deleted = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
+    let behaviour = pack.get_behaviour().await.unwrap();
     assert_eq!(behaviour.content.wallpaper, None);
     assert_eq!(deleted, Some(scenery));
     assert!(!pack
@@ -143,7 +156,8 @@ async fn clearing_a_slot_deletes_scenery_but_keeps_real_content() {
         .unwrap();
     assert!(pack.get_tags(content).await.unwrap().is_empty());
 
-    let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Splash).await.unwrap();
+    let deleted = pack.clear_media_slot(MediaSlot::Splash).await.unwrap();
+    let behaviour = pack.get_behaviour().await.unwrap();
     assert_eq!(behaviour.content.splash, None);
     assert_eq!(deleted, None);
     assert!(pack
@@ -176,10 +190,11 @@ async fn replacing_a_slot_deletes_the_scenery_it_displaced() {
         .unwrap();
 
     let second = insert_staged_audio(&pack, b"second wallpaper").await;
-    let (behaviour, deleted) = pack
+    let deleted = pack
         .fill_media_slot(MediaSlot::Wallpaper, second, true)
         .await
         .unwrap();
+    let behaviour = pack.get_behaviour().await.unwrap();
 
     assert_eq!(
         deleted,
@@ -216,7 +231,7 @@ async fn replacing_a_slot_keeps_a_file_something_else_still_wants() {
         .unwrap();
 
     let replacement = insert_staged_audio(&pack, b"new wallpaper").await;
-    let (_, deleted) = pack
+    let deleted = pack
         .fill_media_slot(MediaSlot::Wallpaper, replacement, true)
         .await
         .unwrap();
@@ -234,7 +249,7 @@ async fn replacing_a_slot_keeps_a_file_something_else_still_wants() {
         .await
         .unwrap();
     let last = insert_staged_audio(&pack, b"final splash").await;
-    let (_, deleted) = pack
+    let deleted = pack
         .fill_media_slot(MediaSlot::Splash, last, true)
         .await
         .unwrap();
@@ -272,7 +287,8 @@ async fn filling_a_slot_from_media_already_in_the_pack_leaves_it_ordinary_conten
         "a file the pack already had is not scenery"
     );
 
-    let (behaviour, deleted) = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
+    let deleted = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
+    let behaviour = pack.get_behaviour().await.unwrap();
     assert_eq!(behaviour.content.wallpaper, None);
     assert_eq!(deleted, None, "emptying the slot must not delete the file");
     assert!(pack
@@ -371,14 +387,14 @@ async fn clearing_a_slot_keeps_a_file_another_slot_still_references() {
     .await
     .unwrap();
 
-    let (behaviour, deleted) = pack
+    let deleted = pack
         .clear_media_slot(MediaSlot::StageWallpaper {
             stage: "stage-1".to_string(),
         })
         .await
         .unwrap();
     assert_eq!(deleted, None, "the base wallpaper still points at it");
-    assert!(behaviour.content.wallpaper.is_some());
+    assert!(read_pack_behaviour(&pack).await.content.wallpaper.is_some());
     assert!(pack
         .get_files()
         .await
@@ -387,11 +403,11 @@ async fn clearing_a_slot_keeps_a_file_another_slot_still_references() {
         .any(|f| f.id == shared));
 
     // With the last reference gone it is scenery again, and goes.
-    let (_, deleted) = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
+    let deleted = pack.clear_media_slot(MediaSlot::Wallpaper).await.unwrap();
     assert_eq!(deleted, Some(shared));
 }
 
-/// The reason behaviour is edited by patch and not by replacement document.
+/// The reason behaviour is edited by typed command and not by replacement document.
 ///
 /// The front end holds a copy and edits it as the author types. If it saved by sending that
 /// copy, a slot the backend filled in between -- an import finishing, a wallpaper chosen on
@@ -413,22 +429,17 @@ async fn an_edit_cannot_undo_a_backend_change_it_never_saw() {
         .unwrap();
 
     // The author was typing a caption throughout, and the debounce fires now.
-    let patched = pack
-        .edit_behaviour(
-            vec![Patch::new(
-                "content.captions",
-                serde_json::json!([{ "text": "typed", "tags": [] }]),
-            )],
-            "Edit caption".to_string(),
-            vec![],
-            vec![],
-        )
-        .await
-        .unwrap();
+    pack.behaviour_edit(BehaviourAction::new("Edit caption", |tx: &Transaction<'_>| {
+        behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("typed"))?;
+        Ok(true)
+    }))
+    .await
+    .unwrap();
 
-    assert_eq!(patched.behaviour.content.captions[0].text, "typed");
+    let stored = read_pack_behaviour(&pack).await;
+    assert_eq!(stored.content.captions[0].text, "typed");
     assert!(
-        patched.behaviour.content.wallpaper.is_some(),
+        stored.content.wallpaper.is_some(),
         "the slot filled while the author was typing has to survive the caption edit"
     );
 }
@@ -441,32 +452,45 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
     let data_dir = tempdir().unwrap();
     let pack = new_test_pack(&tmp.path().join("noop.lwpack"), data_dir.path(), "Noop").await;
 
-    let caption = || {
-        Patch::new(
-            "content.captions",
-            serde_json::json!([{ "text": "typed", "tags": [] }]),
-        )
-    };
+    let id = std::sync::Arc::new(std::sync::Mutex::new(0i64));
+    let created = id.clone();
+    pack.behaviour_edit(BehaviourAction::new("Add caption", move |tx: &Transaction<'_>| {
+        *created.lock().unwrap() =
+            behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("typed"))?;
+        Ok(true)
+    }))
+    .await
+    .unwrap();
+    let id = *id.lock().unwrap();
 
-    pack.edit_behaviour(vec![caption()], "Edit caption".to_string(), vec![], vec![])
-        .await
-        .unwrap();
+    pack.behaviour_edit(BehaviourAction::new("Edit caption", move |tx: &Transaction<'_>| {
+        behaviour_editor::update_text_item(tx, id, &caption("edited"))
+    }))
+    .await
+    .unwrap();
     let after_real_edit = pack.history_status().await.unwrap();
     assert_eq!(after_real_edit.undo_label.as_deref(), Some("Edit caption"));
 
-    pack.edit_behaviour(vec![caption()], "Edit caption".to_string(), vec![], vec![])
-        .await
-        .unwrap();
+    // The same value again: an `oninput` that changed nothing.
+    pack.behaviour_edit(BehaviourAction::new("Edit caption", move |tx: &Transaction<'_>| {
+        behaviour_editor::update_text_item(tx, id, &caption("edited"))
+    }))
+    .await
+    .unwrap();
     let after_noop = pack.history_status().await.unwrap();
     assert_eq!(
         after_noop.undo_label, after_real_edit.undo_label,
         "the second write set the same value, so there is nothing to undo past the first"
     );
 
-    // One entry, not two: undoing once returns to the original document.
+    // One entry, not two: undoing once takes back the edit, not half of it.
     pack.undo().await.unwrap();
     let behaviour = read_pack_behaviour(&pack).await;
-    assert!(behaviour.content.captions.is_empty());
+    assert_eq!(behaviour.content.captions[0].text, "typed");
+
+    // And the add is still its own entry underneath.
+    pack.undo().await.unwrap();
+    assert!(read_pack_behaviour(&pack).await.content.captions.is_empty());
 }
 
 /// Leaving one stage can require a replacement tag for another stage that shared its only
@@ -521,17 +545,17 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
     .await
     .unwrap();
 
-    pack.edit_behaviour(
-        vec![Patch::new(
-            "experience.timeline.stages.1.content",
-            serde_json::json!({
-                "tags": ["shared", "stage-keep"],
-                "owned_tag": "stage-keep"
-            }),
-        )],
-        "Remove from leave".to_string(),
-        vec![],
-        vec![
+    pack.behaviour_edit(
+        BehaviourAction::new("Remove from leave", |tx: &Transaction<'_>| {
+            let mut stage = behaviour_editor::stages(tx)?
+                .into_iter()
+                .find(|stage| stage.id == "keep")
+                .unwrap();
+            stage.content.tags = Some(vec!["shared".to_string(), "stage-keep".to_string()]);
+            stage.content.owned_tag = Some("stage-keep".to_string());
+            behaviour_editor::update_stage(tx, "keep", &stage)
+        })
+        .with_tag_actions(vec![
             TagAction::Apply {
                 tag: "stage-keep".to_string(),
                 media: Some(vec![media]),
@@ -540,7 +564,7 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
                 tag: "shared".to_string(),
                 media: vec![media],
             },
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -574,41 +598,38 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
     assert_eq!(stages[1].content.owned_tag, None);
 }
 
-/// A patch the document can't take leaves it exactly as it was -- the editor keeps showing
+/// An edit the tables can't take leaves them exactly as they were -- the editor keeps showing
 /// what is really stored rather than a half-applied edit.
 #[tokio::test]
-async fn a_rejected_patch_leaves_the_document_untouched() {
+async fn a_rejected_edit_leaves_the_document_untouched() {
     let tmp = tempdir().unwrap();
     let data_dir = tempdir().unwrap();
     let pack = new_test_pack(&tmp.path().join("bad.lwpack"), data_dir.path(), "Bad").await;
 
-    pack.edit_behaviour(
-        vec![Patch::new(
-            "content.captions",
-            serde_json::json!([{ "text": "kept", "tags": [] }]),
-        )],
-        "Add caption".to_string(),
-        vec![],
-        vec![],
-    )
+    let id = std::sync::Arc::new(std::sync::Mutex::new(0i64));
+    let created = id.clone();
+    pack.behaviour_edit(BehaviourAction::new("Add caption", move |tx: &Transaction<'_>| {
+        *created.lock().unwrap() =
+            behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("kept"))?;
+        Ok(true)
+    }))
     .await
     .unwrap();
+    let good = *id.lock().unwrap();
 
     let error = pack
-        .edit_behaviour(
-            // Both patches are one author action, so the good one must not land on its own.
-            vec![
-                Patch::new("content.captions.0.text", "changed".into()),
-                Patch::new("content.captions.9.text", "no such entry".into()),
-            ],
-            "Edit caption".to_string(),
-            vec![],
-            vec![],
-        )
+        .behaviour_edit(BehaviourAction::new(
+            "Edit caption",
+            move |tx: &Transaction<'_>| {
+                // Both edits are one author action, so the good one must not land on its own.
+                behaviour_editor::update_text_item(tx, good, &caption("changed"))?;
+                behaviour_editor::update_text_item(tx, good + 999, &caption("no such entry"))
+            },
+        ))
         .await
         .unwrap_err();
     assert!(
-        error.to_string().contains("index 9"),
+        error.to_string().contains("no longer in the pack"),
         "unexpected error: {error}"
     );
 
@@ -664,28 +685,28 @@ async fn removing_a_stage_retires_its_wallpaper_in_one_undo_entry() {
     .await
     .unwrap();
 
-    // What the editor sends: the shortened timeline, plus the wallpaper it deliberately let go.
+    // What the editor sends: remove the stage, plus the wallpaper it deliberately lets go.
     let edit = pack
-        .edit_behaviour(
-            vec![Patch::new(
-                "experience.timeline",
-                serde_json::json!({
-                    "stages": [{
-                        "id": "stage-1", "label": "stage-1",
-                        "content": {}, "events": {}
-                    }],
-                    "transitions": []
-                }),
-            )],
-            "Remove stage".to_string(),
-            vec![scenery],
-            vec![],
+        .behaviour_edit(
+            BehaviourAction::new("Remove stage", |tx: &Transaction<'_>| {
+                behaviour_editor::remove_stage(tx, "stage-2")
+            })
+            .retiring(vec![scenery]),
         )
         .await
         .unwrap();
 
     assert_eq!(edit.deleted_ids, vec![scenery]);
-    assert_eq!(edit.behaviour.experience.unwrap().timeline.stages.len(), 1);
+    assert_eq!(
+        read_pack_behaviour(&pack)
+            .await
+            .experience
+            .unwrap()
+            .timeline
+            .stages
+            .len(),
+        1
+    );
     assert!(!pack
         .get_files()
         .await
@@ -734,12 +755,18 @@ async fn retiring_media_another_slot_still_uses_keeps_it() {
         .unwrap();
 
     let edit = pack
-        .edit_behaviour(vec![], "Remove stage".to_string(), vec![shared], vec![])
+        .behaviour_edit(
+            BehaviourAction::new("Remove stage", |_tx: &Transaction<'_>| Ok(false))
+                .retiring(vec![shared]),
+        )
         .await
         .unwrap();
 
     assert!(edit.deleted_ids.is_empty());
-    assert_eq!(edit.behaviour.content.wallpaper, Some(shared));
+    assert_eq!(
+        read_pack_behaviour(&pack).await.content.wallpaper,
+        Some(shared)
+    );
     assert!(pack
         .get_files()
         .await
@@ -791,18 +818,16 @@ async fn suspending_the_timeline_retires_nothing() {
     .await
     .unwrap();
 
-    // Toggling the timeline off: the stages go, but nothing is retired.
+    // Toggling the timeline off: it stops playing, but nothing is retired.
     let edit = pack
-        .edit_behaviour(
-            vec![Patch::new("experience", serde_json::Value::Null)],
-            "Disable timeline".to_string(),
-            vec![],
-            vec![],
-        )
+        .behaviour_edit(BehaviourAction::new(
+            "Disable timeline",
+            |tx: &Transaction<'_>| behaviour_editor::set_experience_enabled(tx, false),
+        ))
         .await
         .unwrap();
 
-    assert!(edit.behaviour.experience.is_none());
+    assert!(read_pack_behaviour(&pack).await.experience.is_none());
     assert!(edit.deleted_ids.is_empty());
     assert!(
         pack.get_files()
@@ -865,15 +890,17 @@ async fn editing_one_stage_records_a_changeset_the_size_of_that_stage() {
         .await
         .unwrap();
 
-    pack.edit_behaviour(
-        vec![Patch::new(
-            "experience.timeline.stages.7.label",
-            "Renamed".into(),
-        )],
-        "Rename stage".to_string(),
-        vec![],
-        vec![],
-    )
+    pack.behaviour_edit(BehaviourAction::new(
+        "Rename stage",
+        |tx: &Transaction<'_>| {
+            let mut stage = behaviour_editor::stages(tx)?
+                .into_iter()
+                .find(|stage| stage.id == "stage-7")
+                .unwrap();
+            stage.label = "Renamed".to_string();
+            behaviour_editor::update_stage(tx, "stage-7", &stage)
+        },
+    ))
     .await
     .unwrap();
 
@@ -949,10 +976,11 @@ async fn stage_wallpaper_slots_are_addressed_by_stage_id() {
     pack.fill_media_slot(slot("stage-2"), first, true)
         .await
         .unwrap();
-    let (behaviour, _) = pack
+    let _ = pack
         .fill_media_slot(slot("stage-1"), second, true)
         .await
         .unwrap();
+    let behaviour = pack.get_behaviour().await.unwrap();
 
     let stages = &behaviour.experience.as_ref().unwrap().timeline.stages;
     assert!(stages[0].content.wallpaper.is_some());
@@ -997,12 +1025,13 @@ async fn editing_one_caption_records_a_changeset_the_size_of_that_caption() {
         .await
         .unwrap();
 
-    pack.edit_behaviour(
-        vec![Patch::new("content.captions.99.text", "Edited.".into())],
-        "Edit caption".to_string(),
-        vec![],
-        vec![],
-    )
+    pack.behaviour_edit(BehaviourAction::new(
+        "Edit caption",
+        |tx: &Transaction<'_>| {
+            let target = behaviour_editor::text_pool(tx, PoolKind::Caption)?[99].id;
+            behaviour_editor::update_text_item(tx, target, &caption("Edited."))
+        },
+    ))
     .await
     .unwrap();
 
