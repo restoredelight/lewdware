@@ -103,6 +103,10 @@
 
 	function handleChange(event: Event) {
 		const nextPosition = (event.currentTarget as HTMLInputElement).valueAsNumber;
+		// The gesture is over, so the local hold goes and `value` governs again. A parent whose
+		// write travels over IPC has to hold the value across the round trip itself -- the way
+		// `AudioList` holds `liveVolume` -- because this component has no way to know whether a
+		// value it kept showing would ever come back, and a stuck thumb is worse than a correction.
 		dragPosition = null;
 		onchange(valueFor(nextPosition));
 	}

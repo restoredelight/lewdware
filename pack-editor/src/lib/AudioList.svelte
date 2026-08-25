@@ -56,13 +56,20 @@
 	// Only the expanded row shows attributes, so only it is fetched — a pack with three hundred
 	// sounds asks about one.
 	const audioAttributes = audioAttributesQuery(() => (expandedId === null ? [] : [expandedId]));
-	// The volume mid-drag, before it is committed.
+	// The volume the author is choosing, until the pack has it.
 	//
 	// `Slider` draws its filled track from the `value` it is *given*, and the reading beside it is
 	// drawn from the same place — so with only an `onchange` both sat at the old value until the
 	// pointer came up, while the thumb moved with it. Committing on every `input` instead would
-	// write an undo entry per pixel. So: track it here, commit on release. Only ever one row's,
-	// because only one row is open.
+	// write an undo entry per pixel. So: track it here, commit on release.
+	//
+	// Held until the write **and** the refetch behind it have landed, not merely until the commit
+	// is issued. Releasing it on release put the thumb back at the stored value for the length of
+	// the round trip and then moved it forward again when the answer arrived — the slider visibly
+	// snapping back to where it was and then to where the author put it. Same rule, and the same
+	// reason, as `DebouncedField`'s draft.
+	//
+	// Only ever one row's, because only one row is open.
 	let liveVolume = $state<number | null>(null);
 	$effect(() => {
 		expandedId;
@@ -326,15 +333,18 @@
 								ariaLabel={`Volume for ${file.file_name}`}
 								oninput={(value) => (liveVolume = value)}
 								onchange={(value) => {
-									liveVolume = null;
-									// Full volume is "no opinion", not "set to 1": storing it would pin
-									// this file against a default that may move under it.
-									void editAudioVolume(
-										[file.id],
-										// Full volume is "no opinion", not "set to 1".
-										value === 1 ? null : value,
-										`Set volume for “${file.file_name}”`
-									);
+									void (async () => {
+										// Full volume is "no opinion", not "set to 1": storing it would
+										// pin this file against a default that may move under it.
+										await editAudioVolume(
+											[file.id],
+											value === 1 ? null : value,
+											`Set volume for “${file.file_name}”`
+										);
+										// Now that the query has the answer. Skipped if the author has
+										// moved the thumb again since, because a later release owns it.
+										if (liveVolume === value) liveVolume = null;
+									})();
 								}}
 							/>
 							<span class="reading">{volume === 1 ? 'Full' : `${Math.round(volume * 100)}%`}</span>

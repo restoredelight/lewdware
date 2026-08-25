@@ -10,6 +10,7 @@
 	// `TransitionEditor` does it: this component mutates it, and mutating an unbound prop trips
 	// Svelte's ownership warning.
 	import { clampScroll } from '$ui/scroll';
+	import { onChange } from './onChange.svelte.js';
 	import NumberField from '$ui/NumberField.svelte';
 	import Select from '$ui/Select.svelte';
 	import Toggle from '$ui/Toggle.svelte';
@@ -57,12 +58,17 @@
 	let mainEl = $state<HTMLElement>();
 	let audioPickerStage = $state<string | null>(null);
 
-	// WebKitGTK doesn't reliably clamp scrollTop when the panel's content shrinks,
-	// leaving a shorter stage blank and unscrollable.
-	$effect(() => {
-		stageId;
-		mainEl?.scrollTo(0, 0);
-	});
+	// A different stage starts at the top. WebKitGTK doesn't reliably clamp scrollTop when the
+	// panel's content shrinks, leaving a shorter stage blank and unscrollable.
+	//
+	// Through `onChange` rather than a bare effect on `stageId`: every edit on this tab invalidates
+	// the timeline query, which hands back a new stage object saying exactly what the old one said
+	// — enough to re-run an effect that merely reads the id off it. Toggling anything, or typing in
+	// any field, would otherwise throw the panel back to the top.
+	onChange(
+		() => stageId,
+		() => mainEl?.scrollTo(0, 0)
+	);
 
 	const eventDefs = [
 		{ key: 'popup', label: 'Popups', interval: 30 },
