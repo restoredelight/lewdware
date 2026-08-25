@@ -54,7 +54,9 @@ async fn experience_timeline_with_no_levels_stays_inert_forever() {
                 "nil"
             );
             assert_eq!(
-                harness.eval_string("table.concat(require('timeline').tags() or {}, '|')"),
+                harness.eval_string(
+                    "table.concat((require('timeline').tags() or {}).any or {}, '|')"
+                ),
                 ""
             );
             assert_eq!(
@@ -106,7 +108,9 @@ async fn experience_timeline_advances_on_active_time_and_applies_level_values() 
                 4.0
             );
             assert_eq!(
-                harness.eval_string("table.concat(require('timeline').tags() or {}, '|')"),
+                harness.eval_string(
+                    "table.concat((require('timeline').tags() or {}).any or {}, '|')"
+                ),
                 "kinky"
             );
         })
@@ -328,7 +332,7 @@ async fn experience_timeline_order_independence_jumping_directly_matches_sequent
 
             let probe = "(function() \
                 local t = require('timeline') \
-                return t.anchors().popup * 1000 + #(t.tags() or {}) \
+                return t.anchors().popup * 1000 + #((t.tags() or {}).any or {}) \
             end)()";
 
             // Sequential: reach level 1 (2 popups), observe it, then continue to level 2.

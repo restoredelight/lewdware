@@ -63,13 +63,23 @@ CREATE INDEX IF NOT EXISTS behaviour_stage_position ON behaviour_stage (position
 --
 -- The flag lives here rather than on `behaviour_stage` so that "the stage owns this tag" cannot be
 -- recorded for a tag the stage does not actually select by: the row *is* the association. An
--- unrestricted stage has no rows and so owns nothing, which is right -- there is no selection for
--- a tag to be part of.
+-- unrestricted stage has no *included* rows and so owns no inclusion tag, which is right -- there
+-- is no selection for a tag to be part of.
+--
+-- `excluded` is which side of the selection the row is on. A stage shows a file when its inclusion
+-- list is absent or matched, *and* no excluded tag is matched -- so exclusion is the only way to
+-- take one file out of a stage without editing the author's own vocabulary, which is what the
+-- editor's "Appears in" toggle needs. It is a column rather than a second table because everything
+-- about the two sides is the same: both are tag associations, both are ordered, and both can be
+-- owned by the stage. One `PRIMARY KEY` also states the invariant that keeps them coherent: a tag
+-- cannot be on both sides of one stage's selection, because that stage would show nothing that
+-- carries it while claiming to select by it.
 CREATE TABLE IF NOT EXISTS behaviour_stage_tag (
     stage_id TEXT NOT NULL REFERENCES behaviour_stage (id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
     owned INTEGER NOT NULL DEFAULT 0 CHECK (owned IN (0, 1)),
+    excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0, 1)),
     PRIMARY KEY (stage_id, tag_id)
 ) STRICT;
 

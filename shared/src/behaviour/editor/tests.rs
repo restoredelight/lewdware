@@ -1220,15 +1220,18 @@ fn renaming_a_stage_only_renames_a_tag_the_editor_owns() {
     let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
     // Selected but not owned: the author's own word for this content, which is not ours to rename.
     tx_on(&mut conn, |tx| {
-        assert_eq!(stage_owned_tag(tx, "peak").unwrap(), None);
+        assert_eq!(stage_owned_tags(tx, "peak").unwrap(), []);
     });
     tx_on(&mut conn, |tx| {
         set_stage_content_tags(tx, "peak", Some(&["stage-peak".to_string()]), Some("stage-peak"))
             .unwrap();
     });
     assert_eq!(
-        stage_owned_tag(&conn, "peak").unwrap().as_deref(),
-        Some("stage-peak")
+        stage_owned_tags(&conn, "peak").unwrap(),
+        [OwnedStageTag {
+            tag: "stage-peak".to_string(),
+            excluded: false
+        }]
     );
 }
 
@@ -1251,11 +1254,22 @@ fn a_tag_another_stage_selects_by_is_not_ours_to_rename() {
     assert!(!stage_tag_shared(&conn, "stage-peak", "peak").unwrap());
 }
 
+/// A stage that restricts nothing used to be untoggleable: it shows every file, so there was no
+/// tag whose absence would exclude one. Exclusion is that tag, so the control now works everywhere.
 #[test]
-fn a_stage_that_restricts_nothing_has_no_membership_to_toggle() {
+fn a_file_can_leave_a_stage_that_restricts_nothing() {
     let conn = membership_pack(&[("all", "All", None)]);
-    // It shows every file, so there is no tag whose absence would exclude one.
-    assert!(plan_stage_membership(&conn, 1, "all", false).is_err());
+    let plan = plan_stage_membership(&conn, 1, "all", false).unwrap();
+    assert_eq!(
+        plan.creation,
+        Some(StageTagCreation {
+            stage: "all".to_string(),
+            tag: "not-stage-all".to_string(),
+            excluded: true,
+        })
+    );
+    assert_eq!(plan.apply, ["not-stage-all"]);
+    assert!(plan.remove.is_empty(), "nothing of the author's comes off");
 }
 
 #[test]
@@ -1267,7 +1281,7 @@ fn joining_reuses_the_stages_own_tag_and_nothing_else() {
     });
     let plan = plan_stage_membership(&conn, 1, "peak", true).unwrap();
     assert_eq!(plan.apply, ["stage-peak"]);
-    assert!(plan.creations.is_empty(), "{plan:?}");
+    assert_eq!(plan.creation, None, "{plan:?}");
 }
 
 #[test]
@@ -1275,120 +1289,25 @@ fn joining_by_an_author_tag_would_say_more_than_appears_here_so_it_makes_its_own
     // `intense` is the author's, and may also drive a content group or a text pool.
     let conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
     let plan = plan_stage_membership(&conn, 1, "peak", true).unwrap();
-    assert_eq!(plan.creations, [("peak".to_string(), "stage-peak".to_string())]);
+    assert_eq!(
+        plan.creation,
+        Some(StageTagCreation {
+            stage: "peak".to_string(),
+            tag: "stage-peak".to_string(),
+            excluded: false,
+        })
+    );
     assert_eq!(plan.apply, ["stage-peak"]);
     assert!(plan.remove.is_empty());
 }
 
+/// The heart of it. A stage selecting by the author's own word can only lose a file by that file
+/// losing the word -- which would also drop it from every content group and text pool naming it.
+/// So the file is excluded instead, and its own tags are left exactly as the author wrote them.
 #[test]
-fn leaving_one_stage_leaves_only_that_stage() {
-    let conn = membership_pack(&[
-        ("peak", "Peak", Some(&["intense"])),
-        ("climax", "Climax", Some(&["intense"])),
-    ]);
-    tag_file(&conn, 1, &["intense"]);
-    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
-
-    // Climax was a member only through the tag being removed, so it is given one of its own first.
-    assert_eq!(plan.remove, ["intense"]);
-    assert_eq!(plan.creations, [("climax".to_string(), "stage-climax".to_string())]);
-    assert_eq!(plan.apply, ["stage-climax"]);
-}
-
-#[test]
-fn a_stage_the_file_stays_in_by_another_tag_needs_no_rescue() {
-    let conn = membership_pack(&[
-        ("peak", "Peak", Some(&["intense"])),
-        ("climax", "Climax", Some(&["intense", "loud"])),
-    ]);
-    tag_file(&conn, 1, &["intense", "loud"]);
-    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
-    assert!(plan.creations.is_empty(), "{plan:?}");
-    assert!(plan.apply.is_empty(), "{plan:?}");
-}
-
-#[test]
-fn a_rescue_never_borrows_a_tag_that_would_join_a_third_stage() {
-    let conn = membership_pack(&[
-        ("peak", "Peak", Some(&["intense"])),
-        ("climax", "Climax", Some(&["intense", "loud"])),
-        ("after", "After", Some(&["loud"])),
-    ]);
-    tag_file(&conn, 1, &["intense"]);
-    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
-    // `loud` would have kept it in Climax -- and put it in After, which it was never in.
-    assert_eq!(plan.creations, [("climax".to_string(), "stage-climax".to_string())]);
-    assert_eq!(plan.apply, ["stage-climax"]);
-}
-
-#[test]
-fn an_unrestricted_stage_needs_no_rescue_because_it_shows_everything() {
-    let conn = membership_pack(&[("peak", "Peak", Some(&["intense"])), ("all", "All", None)]);
-    tag_file(&conn, 1, &["intense"]);
-    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
-    assert!(plan.creations.is_empty(), "{plan:?}");
-}
-
-#[test]
-fn two_stages_with_the_same_label_are_rescued_into_different_tags() {
-    let conn = membership_pack(&[
-        ("peak", "Peak", Some(&["shared"])),
-        ("one", "Same", Some(&["shared"])),
-        ("two", "Same", Some(&["shared"])),
-    ]);
-    tag_file(&conn, 1, &["shared"]);
-    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
-    let tags: Vec<&str> = plan.apply.iter().map(String::as_str).collect();
-    assert_eq!(tags.len(), 2, "{plan:?}");
-    assert_ne!(tags[0], tags[1], "one tag between two stages puts them back in step");
-}
-
-/// The round trip the toggle promises: off, then on, and only the stage clicked has moved.
-#[test]
-fn leaving_a_shared_stage_and_rejoining_it_changes_only_that_stage() {
-    let mut conn = membership_pack(&[
-        ("peak", "Peak", Some(&["shared"])),
-        ("climax", "Climax", Some(&["shared"])),
-    ]);
-    tag_file(&conn, 1, &["shared"]);
-
-    let mut plan = MembershipPlan::default();
-    tx_on(&mut conn, |tx| {
-        plan = plan_stage_membership(tx, 1, "peak", false).unwrap();
-        apply_membership_creations(tx, &plan).unwrap();
-    });
-    for tag in &plan.apply {
-        tag_file(&conn, 1, &[tag.as_str()]);
-    }
-    for tag in &plan.remove {
-        conn.execute(
-            "DELETE FROM media_tags WHERE media_id = 1
-             AND tag_id = (SELECT id FROM tags WHERE name = ?1)",
-            params![tag],
-        )
-        .unwrap();
-    }
-
-    let stages = read_stages(&conn).unwrap();
-    let tags = media_tags(&conn, 1).unwrap();
-    assert!(!selects(&stages[0], &tags), "left Peak");
-    assert!(selects(&stages[1], &tags), "but stayed in Climax");
-
-    // Rejoining must not put `shared` back: that would drag Climax along with it.
-    let back = plan_stage_membership(&conn, 1, "peak", true).unwrap();
-    assert_eq!(back.apply, ["stage-peak"]);
-    assert!(!back.apply.contains(&"shared".to_string()));
-}
-
-/// Leaving is where the abstraction leaks: there is no exclusion list, so a stage that selects by
-/// one of the author's tags can only be left by taking that tag off the file — and that tag may be
-/// driving a content group or matching a text pool. Joining is careful about this already; leaving
-/// cannot be, so it reports the price instead of paying it quietly.
-#[test]
-fn leaving_by_an_author_tag_reports_what_else_the_tag_does() {
+fn leaving_never_takes_off_a_tag_the_author_chose() {
     let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
     tag_file(&conn, 1, &["intense"]);
-    tag_file(&conn, 2, &["intense"]);
     tx_on(&mut conn, |tx| {
         add_content_group(
             tx,
@@ -1404,20 +1323,18 @@ fn leaving_by_an_author_tag_reports_what_else_the_tag_does() {
     });
 
     let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
-    assert_eq!(plan.remove, ["intense"]);
-    assert_eq!(
-        plan.collateral,
-        [Collateral {
-            tag: "intense".to_string(),
-            content_uses: 1,
-            stage_uses: 0,
-        }],
-        "the content group is what the author has to be told about"
+    assert!(
+        plan.remove.is_empty(),
+        "the content group would have gone with it: {plan:?}"
     );
+    assert_eq!(plan.apply, ["not-stage-peak"]);
 }
 
+/// The exception, and why it is one: a membership that exists *only* through the stage's own tag
+/// is undone exactly by taking that tag off, and doing it any other way would leave `stage-peak`
+/// and `not-stage-peak` sitting next to each other on the same file.
 #[test]
-fn leaving_by_the_stages_own_tag_costs_nothing_but_the_membership() {
+fn leaving_by_the_stages_own_tag_takes_that_tag_off_instead_of_excluding() {
     let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
     tx_on(&mut conn, |tx| {
         set_stage_content_tags(tx, "peak", Some(&["stage-peak".to_string()]), Some("stage-peak"))
@@ -1426,19 +1343,198 @@ fn leaving_by_the_stages_own_tag_costs_nothing_but_the_membership() {
     tag_file(&conn, 1, &["stage-peak"]);
     let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
     assert_eq!(plan.remove, ["stage-peak"]);
-    assert!(plan.collateral.is_empty(), "{plan:?}");
+    assert!(plan.apply.is_empty(), "{plan:?}");
+    assert_eq!(plan.creation, None);
 }
 
-/// A tag two stages share is not collateral in the content sense, but it is still not ours to take
-/// off silently — the other stage is rescued, and the author should know why a new tag appeared.
+/// ...but only when it is the *only* reason. A file also carrying an author tag the stage selects
+/// by would stay in after the owned tag came off, so taking it off would destroy work for nothing.
 #[test]
-fn a_tag_another_stage_selects_by_is_reported_too() {
-    let conn = membership_pack(&[
-        ("peak", "Peak", Some(&["shared"])),
-        ("climax", "Climax", Some(&["shared"])),
-    ]);
-    tag_file(&conn, 1, &["shared"]);
+fn a_file_held_by_two_tags_is_excluded_rather_than_half_untagged() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    tx_on(&mut conn, |tx| {
+        set_stage_content_tags(
+            tx,
+            "peak",
+            Some(&["intense".to_string(), "stage-peak".to_string()]),
+            Some("stage-peak"),
+        )
+        .unwrap();
+    });
+    tag_file(&conn, 1, &["intense", "stage-peak"]);
     let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
-    assert_eq!(plan.collateral.len(), 1, "{plan:?}");
-    assert_eq!(plan.collateral[0].tag, "shared");
+    assert!(plan.remove.is_empty(), "{plan:?}");
+    assert_eq!(plan.apply, ["not-stage-peak"]);
+}
+
+/// Leaving one stage leaves only that stage -- now for free, because nothing shared is removed.
+#[test]
+fn leaving_one_stage_leaves_only_that_stage() {
+    let mut conn = membership_pack(&[
+        ("peak", "Peak", Some(&["intense"])),
+        ("climax", "Climax", Some(&["intense"])),
+    ]);
+    tag_file(&conn, 1, &["intense"]);
+
+    let mut plan = MembershipPlan::default();
+    tx_on(&mut conn, |tx| {
+        plan = plan_stage_membership(tx, 1, "peak", false).unwrap();
+        apply_membership_creation(tx, &plan).unwrap();
+    });
+    settle(&mut conn, 1, &plan);
+
+    let stages = read_stages(&conn).unwrap();
+    let tags = media_tags(&conn, 1).unwrap();
+    assert!(!selects(&stages[0], &tags), "left Peak");
+    assert!(selects(&stages[1], &tags), "but stayed in Climax");
+    assert!(tags.contains(&"intense".to_string()), "and kept its own tag");
+}
+
+/// Off and on again, with only the stage clicked having moved -- and no tag left over.
+#[test]
+fn rejoining_a_stage_undoes_the_exclusion_rather_than_layering_over_it() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    tag_file(&conn, 1, &["intense"]);
+
+    let mut plan = MembershipPlan::default();
+    tx_on(&mut conn, |tx| {
+        plan = plan_stage_membership(tx, 1, "peak", false).unwrap();
+        apply_membership_creation(tx, &plan).unwrap();
+    });
+    settle(&mut conn, 1, &plan);
+    assert!(!selects(&read_stages(&conn).unwrap()[0], &media_tags(&conn, 1).unwrap()));
+
+    tx_on(&mut conn, |tx| {
+        plan = plan_stage_membership(tx, 1, "peak", true).unwrap();
+        apply_membership_creation(tx, &plan).unwrap();
+    });
+    // Taking the exclusion off is the whole of it: the file was always tagged `intense`.
+    assert_eq!(plan.remove, ["not-stage-peak"]);
+    assert!(plan.apply.is_empty(), "{plan:?}");
+    settle(&mut conn, 1, &plan);
+    assert!(selects(&read_stages(&conn).unwrap()[0], &media_tags(&conn, 1).unwrap()));
+}
+
+/// An exclusion tag left on the file would silently override the tag the join just added.
+#[test]
+fn joining_lifts_the_exclusion_even_when_a_tag_also_has_to_be_added() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    tx_on(&mut conn, |tx| {
+        set_stage_exclude_tags(
+            tx,
+            "peak",
+            &["not-stage-peak".to_string()],
+            Some("not-stage-peak"),
+        )
+        .unwrap();
+    });
+    tag_file(&conn, 1, &["not-stage-peak"]);
+
+    let plan = plan_stage_membership(&conn, 1, "peak", true).unwrap();
+    assert_eq!(plan.remove, ["not-stage-peak"]);
+    assert_eq!(plan.apply, ["stage-peak"], "and it still needs a way in");
+}
+
+/// A toggle that asks for the state the file is already in does nothing at all.
+#[test]
+fn a_membership_toggle_that_changes_nothing_plans_nothing() {
+    let conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    tag_file(&conn, 1, &["intense"]);
+    assert_eq!(
+        plan_stage_membership(&conn, 1, "peak", true).unwrap(),
+        MembershipPlan::default()
+    );
+    let conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    assert_eq!(
+        plan_stage_membership(&conn, 1, "peak", false).unwrap(),
+        MembershipPlan::default()
+    );
+}
+
+#[test]
+fn a_tag_cannot_be_on_both_sides_of_one_stages_selection() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    tx_on(&mut conn, |tx| {
+        set_stage_exclude_tags(tx, "peak", &["intense".to_string()], None).unwrap();
+    });
+    let stage = &read_stages(&conn).unwrap()[0];
+    // Otherwise the stage would claim to select by a tag that also guarantees exclusion, and show
+    // nothing carrying it.
+    assert_eq!(stage.content.tags.as_deref(), Some(&[][..]));
+    assert_eq!(stage.content.exclude, ["intense"]);
+}
+
+#[test]
+fn an_excluded_file_is_out_however_it_got_in() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    tx_on(&mut conn, |tx| {
+        set_stage_exclude_tags(tx, "peak", &["not-stage-peak".to_string()], None).unwrap();
+    });
+    let stage = &read_stages(&conn).unwrap()[0];
+    assert!(selects(stage, &["intense".to_string()]));
+    assert!(!selects(
+        stage,
+        &["intense".to_string(), "not-stage-peak".to_string()]
+    ));
+}
+
+/// Applies a plan's tag changes to the file, the way the tag-action phase does.
+fn settle(conn: &mut Connection, media: u64, plan: &MembershipPlan) {
+    for tag in &plan.apply {
+        tag_file(conn, media, &[tag.as_str()]);
+    }
+    for tag in &plan.remove {
+        conn.execute(
+            "DELETE FROM media_tags WHERE media_id = ?1
+             AND tag_id = (SELECT id FROM tags WHERE name = ?2)",
+            params![media, tag],
+        )
+        .unwrap();
+    }
+}
+
+/// A stage owns up to two tags — one to put files in, one to keep them out — and everything that
+/// follows a stage around has to move both. Handling one is how the other gets orphaned: a tag on
+/// media that no stage names any more, which nothing in the editor can reach to clean up.
+#[test]
+fn a_stage_owns_both_sides_of_its_own_selection() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["stage-peak"]))]);
+    tx_on(&mut conn, |tx| {
+        set_stage_content_tags(tx, "peak", Some(&["stage-peak".to_string()]), Some("stage-peak"))
+            .unwrap();
+        set_stage_exclude_tags(
+            tx,
+            "peak",
+            &["not-stage-peak".to_string()],
+            Some("not-stage-peak"),
+        )
+        .unwrap();
+    });
+    assert_eq!(
+        stage_owned_tags(&conn, "peak").unwrap(),
+        [
+            OwnedStageTag {
+                tag: "stage-peak".to_string(),
+                excluded: false
+            },
+            OwnedStageTag {
+                tag: "not-stage-peak".to_string(),
+                excluded: true
+            },
+        ]
+    );
+}
+
+/// Renaming the stage has to give the exclusion tag the matching new name, not the inclusion one's.
+#[test]
+fn the_exclusion_tag_is_renamed_with_its_own_prefix() {
+    let conn = pack();
+    assert_eq!(stage_tag_name(&conn, "Climax", None).unwrap(), "stage-climax");
+    assert_eq!(
+        stage_exclude_tag_name(&conn, "Climax", None).unwrap(),
+        "not-stage-climax"
+    );
+    // The same rules as the inclusion side, including the "already says stage" one.
+    assert_eq!(stage_exclude_tag_name(&conn, "Stage 3", None).unwrap(), "not-stage-3");
+    assert_eq!(stage_exclude_tag_name(&conn, "", None).unwrap(), "not-stage");
 }

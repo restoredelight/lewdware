@@ -22,7 +22,6 @@ import type {
 	MonitorPreference,
 	Movement,
 	PackInfo,
-	Collateral,
 	PoolKind,
 	PopupChanges,
 	PopupMedia,
@@ -253,33 +252,17 @@ export const api = {
 		 * stage shared with another one needs, are worked out inside the transaction that writes
 		 * them. The tag changes it came to arrive back in {@link BehaviourOutcome.media_tags}.
 		 */
-		setMembership: (
-			media: number,
-			stage: string,
-			member: boolean,
-			acceptCollateral: boolean,
-			label: string
-		) =>
-			invoke<BehaviourOutcome>('set_stage_membership', {
-				media,
-				stage,
-				member,
-				acceptCollateral,
-				label
-			}),
-		/**
-		 * What taking this file out of the stage would cost beyond the membership.
-		 *
-		 * Empty is the safe case. A non-empty answer names the author's tags that would come off and
-		 * what else they do, which is what the confirmation says — the backend refuses the removal
-		 * until the author has seen it.
-		 */
-		membershipCost: (media: number, stage: string) =>
-			invoke<Collateral[]>('get_stage_membership_cost', { media, stage }),
+		setMembership: (media: number, stage: string, member: boolean, label: string) =>
+			invoke<BehaviourOutcome>('set_stage_membership', { media, stage, member, label }),
 		addTag: (id: string, tag: string, label: string) =>
 			invoke<void>('add_stage_tag', { id, tag, label }),
 		removeTag: (id: string, tag: string, label: string) =>
 			invoke<void>('remove_stage_tag', { id, tag, label }),
+		/** A tag that keeps media out, whatever the stage's own selection says. */
+		addExcludeTag: (id: string, tag: string, label: string) =>
+			invoke<void>('add_stage_exclude_tag', { id, tag, label }),
+		removeExcludeTag: (id: string, tag: string, label: string) =>
+			invoke<void>('remove_stage_exclude_tag', { id, tag, label }),
 		setAudioRandom: (id: string, random: boolean, label: string) =>
 			invoke<BehaviourOutcome>('set_stage_audio_random', { id, random, label }),
 		setEvent: (id: string, kind: EventKind, schedule: EventSchedule | null, label: string) =>

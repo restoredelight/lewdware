@@ -42,7 +42,14 @@ export function tagClaims(
 	contentUses: number
 ): TagClaims {
 	const stages = allStages
-		.filter((other) => other.id !== stageId && (other.content.tags ?? []).includes(tag))
+		.filter(
+			(other) =>
+				other.id !== stageId &&
+				((other.content.tags ?? []).includes(tag) ||
+					// A stage excluding by it holds it just as firmly: taking the tag away would
+					// silently let every file it was keeping out back in.
+					(other.content.exclude ?? []).includes(tag))
+		)
 		.map((other) => other.label);
 	const media = files.filter((file) => file.tags.includes(tag)).length;
 	// `contentUses` is the content half of the tag's usage — captions, groups and links. The

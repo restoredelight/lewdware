@@ -261,11 +261,26 @@ export interface SlotCleared {
 export interface ContentSelection {
 	tags?: string[];
 	/**
+	 * Tags that keep a file out, whatever {@link tags} says.
+	 *
+	 * The stage shows a file when `tags` is absent or matched **and** nothing here is matched. It is
+	 * how a stage says "everything except the extreme stuff", and it is the only way to take one
+	 * file out of one stage without editing the author's own vocabulary — a stage selecting by
+	 * `intense` could otherwise only lose a file by that file losing `intense`, which would drop it
+	 * from every content group and text pool naming the tag too.
+	 *
+	 * Absent and empty mean the same thing. There is no "unrestricted" state, because excluding
+	 * nothing is what every stage does until the author says otherwise.
+	 */
+	exclude?: string[];
+	/**
 	 * The one of {@link tags} the editor created for this stage and maintains the name of. Always
 	 * one of them — ownership lives on the association — and absent for every stage whose tags the
 	 * author chose themselves. See `stageTagName.ts`.
 	 */
 	owned_tag?: string;
+	/** The same, for {@link exclude}: the tag every file taken out through "Appears in" carries. */
+	owned_exclude_tag?: string;
 	/** Id of the media file this stage sets as the wallpaper; absent keeps the previous one. */
 	wallpaper?: number;
 	/** Background track selected on entry; absent keeps the current track playing. */
@@ -485,20 +500,4 @@ export interface HistoryStatus {
 	undo_label: string | null;
 	redo_label: string | null;
 	at_saved_state: boolean;
-}
-
-/**
- * A tag that leaving a stage would take off a file, and what else it was doing there.
- *
- * A stage that selects by a tag of its own can be left by taking that tag off, and that says
- * nothing more than the author asked. A stage that selects by one of the author's tags cannot: the
- * same tag may drive a content group, match a text pool or name a link, and there is no exclusion
- * list to fall back on. Mirrors `shared::behaviour::editor::Collateral`.
- */
-export interface Collateral {
-	tag: string;
-	/** Content groups, text-pool entries and web links naming it. */
-	content_uses: number;
-	/** Other stages selecting by it — they are given tags of their own rather than losing the file. */
-	stage_uses: number;
 }

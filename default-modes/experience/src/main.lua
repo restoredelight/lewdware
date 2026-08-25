@@ -125,13 +125,13 @@ if config.background_audio_enabled then
 	local crossfaded_random_stage = nil
 
 	local function stage_background_audio()
+		-- A stage that deliberately selects no content (`ContentSelection::tags` of `Some([])`, as
+		-- against `None` for "no restriction"). `lib/media.lua` already answers an empty inclusion
+		-- set with nil, so this looks redundant -- it is not. Without it the fallback below would
+		-- read that nil as "nothing matched the stage's tags" and play the whole background pool,
+		-- turning "no content" into music.
+		if timeline.selects_nothing() then return nil end
 		local tags = timeline.tags()
-		-- `nil` means this stage does not restrict content; an empty list means it deliberately
-		-- selects none (`ContentSelection::tags`). `lib/media.lua` already answers an empty
-		-- inclusion set with nil, so this looks redundant -- it is not. Without it the fallback
-		-- below would read that nil as "nothing matched the stage's tags" and play the whole
-		-- background pool, turning "no content" into music.
-		if tags and #tags == 0 then return nil end
 		-- Narrow to the stage's tags, but fall back to the whole background pool rather than going
 		-- silent. A pack whose music carries no stage tags is the ordinary case (every converted
 		-- Edgeware pack: moods tag the images, not the soundtrack), and rule 5 makes an empty pool

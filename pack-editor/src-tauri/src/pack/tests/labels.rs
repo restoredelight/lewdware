@@ -198,6 +198,7 @@ async fn renaming_a_tag_carries_every_mention_in_the_document() {
                         wallpaper: None,
                         audio: None,
                         audio_random: false,
+                        ..ContentSelection::default()
                     },
                     events: Events::default(),
                     movement: None,

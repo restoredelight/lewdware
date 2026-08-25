@@ -688,11 +688,13 @@ fn read_stages_where(
             Ok(Stage {
                 content: ContentSelection {
                     tags: if row.get("restricts_content")? {
-                        Some(read_tags(conn, "behaviour_stage_tag", "stage_id", &id)?)
+                        Some(read_stage_tags(conn, &id, false)?)
                     } else {
                         None
                     },
-                    owned_tag: read_owned_stage_tag(conn, &id)?,
+                    exclude: read_stage_tags(conn, &id, true)?,
+                    owned_tag: read_owned_stage_tag(conn, &id, false)?,
+                    owned_exclude_tag: read_owned_stage_tag(conn, &id, true)?,
                     wallpaper: row.get("wallpaper")?,
                     audio: row.get("audio")?,
                     audio_random: row.get("audio_random")?,
@@ -733,17 +735,70 @@ pub(super) fn read_stage_prompt(conn: &Connection, stage: &str) -> Result<StageP
 /// flag, so it is no longer owned. `LIMIT 1` because a stage owns at most one — the editor creates
 /// exactly one per stage — and a document that somehow named two would be an ambiguity, not a
 /// feature.
-fn read_owned_stage_tag(conn: &Connection, stage: &str) -> Result<Option<String>> {
+fn read_owned_stage_tag(conn: &Connection, stage: &str, excluded: bool) -> Result<Option<String>> {
     Ok(conn
         .query_row(
             "SELECT tags.name FROM behaviour_stage_tag
              JOIN tags ON tags.id = behaviour_stage_tag.tag_id
-             WHERE behaviour_stage_tag.stage_id = ? AND behaviour_stage_tag.owned = 1
+             WHERE behaviour_stage_tag.stage_id = ?1 AND behaviour_stage_tag.owned = 1
+               AND behaviour_stage_tag.excluded = ?2
              ORDER BY behaviour_stage_tag.position LIMIT 1",
-            params![stage],
+            params![stage, excluded],
             |row| row.get(0),
         )
         .optional()?)
+}
+
+/// One side of a stage's selection: the tags it includes by, or the tags it excludes by.
+pub(super) fn read_stage_tags(conn: &Connection, stage: &str, excluded: bool) -> Result<Vec<String>> {
+    let mut statement = conn.prepare(
+        "SELECT tags.name FROM behaviour_stage_tag
+         JOIN tags ON tags.id = behaviour_stage_tag.tag_id
+         WHERE behaviour_stage_tag.stage_id = ?1 AND behaviour_stage_tag.excluded = ?2
+         ORDER BY behaviour_stage_tag.position",
+    )?;
+    let tags = statement
+        .query_map(params![stage, excluded], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(tags)
+}
+
+/// Both sides at once, because they share a table and a primary key.
+///
+/// Written together rather than through [`write_tags`] twice: the rows to delete are the ones on
+/// *neither* side, and a per-side pass would delete the other side's rows on its way through. The
+/// shared key is also what enforces that a tag is not on both sides — an `INSERT` moving a tag
+/// across takes the same row with it rather than making a second one.
+pub(super) fn write_stage_tags(
+    tx: &Transaction<'_>,
+    stage: &str,
+    include: &[String],
+    exclude: &[String],
+) -> Result<()> {
+    let ids = |tags: &[String]| {
+        tags.iter()
+            .map(|tag| tag_id(tx, tag))
+            .collect::<Result<Vec<_>>>()
+    };
+    let (included, excluded) = (ids(include)?, ids(exclude)?);
+    let keeping: Vec<i64> = included.iter().chain(excluded.iter()).copied().collect();
+    tx.execute(
+        "DELETE FROM behaviour_stage_tag WHERE stage_id = ?1
+         AND tag_id NOT IN (SELECT value FROM json_each(?2))",
+        params![stage, serde_json::to_string(&keeping)?],
+    )?;
+    for (side, ids) in [(false, &included), (true, &excluded)] {
+        for (position, id) in ids.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO behaviour_stage_tag (stage_id, tag_id, position, excluded)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(stage_id, tag_id) DO UPDATE SET position = excluded.position,
+                                                             excluded = excluded.excluded",
+                params![stage, id, position as i64, side],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Marks `owned` on the stage's row for that tag, and clears it on the rest.
@@ -753,17 +808,24 @@ fn read_owned_stage_tag(conn: &Connection, stage: &str) -> Result<Option<String>
 /// rather than resurrecting the association. That is the invariant the schema comment states, kept
 /// here rather than validated — an owned tag outside the selection is not a document a writer can
 /// produce, and refusing it would turn a stale editor's harmless patch into a failed save.
-pub(super) fn write_owned_stage_tag(tx: &Transaction<'_>, stage: &str, owned: Option<&str>) -> Result<()> {
+pub(super) fn write_owned_stage_tag(
+    tx: &Transaction<'_>,
+    stage: &str,
+    excluded: bool,
+    owned: Option<&str>,
+) -> Result<()> {
     tx.execute(
-        "UPDATE behaviour_stage_tag SET owned = 0 WHERE stage_id = ?1 AND owned = 1
+        "UPDATE behaviour_stage_tag SET owned = 0
+         WHERE stage_id = ?1 AND owned = 1 AND excluded = ?3
          AND tag_id IS NOT (SELECT id FROM tags WHERE name = ?2)",
-        params![stage, owned],
+        params![stage, owned, excluded],
     )?;
     if let Some(tag) = owned {
         tx.execute(
-            "UPDATE behaviour_stage_tag SET owned = 1 WHERE stage_id = ?1 AND owned = 0
+            "UPDATE behaviour_stage_tag SET owned = 1
+             WHERE stage_id = ?1 AND owned = 0 AND excluded = ?3
              AND tag_id = (SELECT id FROM tags WHERE name = ?2)",
-            params![stage, tag],
+            params![stage, tag, excluded],
         )?;
     }
     Ok(())
@@ -999,14 +1061,14 @@ pub(super) fn write_one_stage(tx: &Transaction<'_>, position: i64, stage: &Stage
             stage.content.audio_random,
         ],
     )?;
-    write_tags(
+    write_stage_tags(
         tx,
-        "behaviour_stage_tag",
-        "stage_id",
         &stage.id,
         stage.content.tags.as_deref().unwrap_or(&[]),
+        &stage.content.exclude,
     )?;
-    write_owned_stage_tag(tx, &stage.id, stage.content.owned_tag.as_deref())?;
+    write_owned_stage_tag(tx, &stage.id, false, stage.content.owned_tag.as_deref())?;
+    write_owned_stage_tag(tx, &stage.id, true, stage.content.owned_exclude_tag.as_deref())?;
     write_stage_end(tx, &stage.id, stage.end.as_ref())?;
     write_stage_movement(tx, &stage.id, stage.movement.as_ref())?;
     write_stage_mitosis(tx, &stage.id, stage.mitosis.as_ref())?;

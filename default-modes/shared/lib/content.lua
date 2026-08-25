@@ -45,6 +45,25 @@ local function matches(item_tags, other_tags)
 	return false
 end
 
+--- Whether a pool entry survives the timeline's current content filter.
+---
+--- `any` is the same "an entry with no tags of its own is always eligible" rule as `media_tags`.
+--- `none` is absolute: an entry carrying an excluded tag is out however else it qualified, which is
+--- what makes exclusion usable as "not this, whatever else you have said".
+---@param item_tags string[]
+---@param filter table|nil
+---@return boolean
+local function eligible_for(item_tags, filter)
+	if filter == nil then return true end
+	for _, excluded_tag in ipairs(filter.none or {}) do
+		for _, item_tag in ipairs(item_tags) do
+			if excluded_tag == item_tag then return false end
+		end
+	end
+	if filter.any == nil then return true end
+	return matches(item_tags, filter.any)
+end
+
 --- Pick a uniformly-random eligible entry from `pool` (an array of tables with a
 --- `tags: string[]` field -- a `TextItem` or `WebLink`). Returns nil if the pool is empty or
 --- every entry is filtered out -- interaction rule 5 (empty pools are skip-and-continue, never
@@ -54,21 +73,22 @@ end
 --- entry is eligible if its own tags are empty ("applies regardless of media/context") or
 --- intersect `media_tags`.
 ---
---- `active_tags`, if given, is the Experience timeline's current active tag set (see
---- `experience/src/timeline.lua`'s `M.tags()`) -- an *additional* AND'd eligibility condition, same
---- "empty tags always eligible" rule as `media_tags`. Sandbox has no timeline, so its callers never
---- pass this (nil, same as an absent/baseline level in Experience) -- every non-excluded,
---- non-media-filtered entry stays eligible regardless of its own tags, as before.
+--- `active_tags`, if given, is the Experience timeline's current content filter (see
+--- `experience/src/timeline.lua`'s `M.tags()`) -- an *additional* AND'd eligibility condition. A
+--- filter table rather than a plain list, because a stage both includes and excludes. Sandbox has
+--- no timeline, so its callers never pass this (nil, same as an absent/baseline level in
+--- Experience) -- every non-excluded, non-media-filtered entry stays eligible regardless of its own
+--- tags, as before.
 ---@param pool table[]
 ---@param media_tags? string[]
----@param active_tags? string[]
+---@param active_tags? table
 ---@return table|nil
 function M.pick(pool, media_tags, active_tags)
 	local eligible = {}
 	for _, item in ipairs(pool) do
 		if not excluded(item.tags)
 				and (media_tags == nil or matches(item.tags, media_tags))
-				and (active_tags == nil or matches(item.tags, active_tags))
+				and eligible_for(item.tags, active_tags)
 		then
 			table.insert(eligible, item)
 		end
@@ -83,19 +103,19 @@ function M.pick_caption(media_tags)
 	return M.pick(content().captions or {}, media_tags)
 end
 
----@param active_tags? string[]
+---@param active_tags? table
 ---@return table|nil
 function M.pick_prompt(active_tags)
 	return M.pick(content().prompts or {}, nil, active_tags)
 end
 
----@param active_tags? string[]
+---@param active_tags? table
 ---@return table|nil
 function M.pick_notification(active_tags)
 	return M.pick(content().notifications or {}, nil, active_tags)
 end
 
----@param active_tags? string[]
+---@param active_tags? table
 ---@return table|nil
 function M.pick_web_link(active_tags)
 	return M.pick(content().web_links or {}, nil, active_tags)

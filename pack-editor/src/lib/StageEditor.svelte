@@ -231,6 +231,29 @@
 						“{stage.content.owned_tag}” is this stage's own tag — the editor renames it with the
 						stage, and the Popups tab uses it to put files in and out of this stage.
 					</p>{/if}{/if}
+			<div class="toggle-row">
+				<div>
+					<strong>Excluded tags</strong><small
+						>Kept out of this stage even when the tags above let them in.</small
+					>
+				</div>
+			</div>
+			<TagPicker
+				tags={stage.content.exclude ?? []}
+				id={`stage-exclude-${stage.id}`}
+				onchange={(tag, added, label) =>
+					write(
+						() =>
+							added
+								? api.stage.addExcludeTag(stage.id, tag, label)
+								: api.stage.removeExcludeTag(stage.id, tag, label),
+						label
+					)}
+			/>
+			{#if stage.content.owned_exclude_tag}<p class="owned-note">
+					“{stage.content.owned_exclude_tag}” is this stage's own exclusion tag — every file you
+					take out of this stage from the Popups tab carries it.
+				</p>{/if}
 			<MediaSlot
 				slot={{ kind: 'stage_wallpaper', stage: stage.id }}
 				mediaId={stage.content.wallpaper}

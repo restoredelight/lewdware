@@ -105,15 +105,17 @@ pub async fn remove_stage(
                     Ok(Prepared {
                         value: (),
                         retiring: editor::stage_scenery(tx, &reading)?,
-                        tag_actions: editor::stage_owned_tag(tx, &reading)?
-                            .map(|tag| {
+                        // Both of them: a stage owns an inclusion tag and an exclusion tag, and
+                        // leaving either behind litters the pack with a tag nothing can reach.
+                        tag_actions: editor::stage_owned_tags(tx, &reading)?
+                            .into_iter()
+                            .map(|owned| {
                                 if also_remove_tag {
-                                    TagAction::Delete { tag }
+                                    TagAction::Delete { tag: owned.tag }
                                 } else {
-                                    TagAction::RetireIfUnclaimed { tag }
+                                    TagAction::RetireIfUnclaimed { tag: owned.tag }
                                 }
                             })
-                            .into_iter()
                             .collect(),
                     })
                 },
@@ -150,21 +152,28 @@ pub async fn set_stage_label(
             pack.behaviour_edit(BehaviourAction::planned(
                 label,
                 move |tx: &Transaction<'_>| {
-                    let rename = || -> Result<Option<TagAction>, anyhow::Error> {
-                        let Some(owned) = editor::stage_owned_tag(tx, &stage)? else {
-                            return Ok(None);
+                    // Both sides: a stage owns `stage-peak` to put files in and `not-stage-peak` to
+                    // keep them out, and renaming only one leaves the pair disagreeing about which
+                    // stage they belong to.
+                    let mut renames = Vec::new();
+                    for owned in editor::stage_owned_tags(tx, &stage)? {
+                        if editor::stage_tag_shared(tx, &owned.tag, &stage)? {
+                            continue;
+                        }
+                        let to = if owned.excluded {
+                            editor::stage_exclude_tag_name(tx, &renaming, Some(&owned.tag))?
+                        } else {
+                            editor::stage_tag_name(tx, &renaming, Some(&owned.tag))?
                         };
-                        if editor::stage_tag_shared(tx, &owned, &stage)? {
-                            return Ok(None);
+                        if to != owned.tag {
+                            renames.push(TagAction::Rename {
+                                from: owned.tag,
+                                to,
+                            });
                         }
-                        let to = editor::stage_tag_name(tx, &renaming, Some(&owned))?;
-                        if to == owned {
-                            return Ok(None);
-                        }
-                        Ok(Some(TagAction::Rename { from: owned, to }))
-                    };
+                    }
                     Ok(Prepared {
-                        tag_actions: rename()?.into_iter().collect(),
+                        tag_actions: renames,
                         ..Prepared::default()
                     })
                 },
@@ -261,31 +270,39 @@ pub async fn restrict_stage_content(
         .await
 }
 
+setter!(
+    /// Adds a tag to the list that keeps media *out* of this stage.
+    ///
+    /// Exclusion wins over inclusion, so this is how a stage says "everything except…" — and the
+    /// only way to take one file out of a stage without editing the author's own vocabulary.
+    add_stage_exclude_tag(id: String, tag: String) |tx| {
+        editor::add_stage_exclude_tag(tx, &id, &tag)
+    }
+);
+
+setter!(
+    /// Stops the stage excluding by a tag. Every file it was keeping out comes back.
+    remove_stage_exclude_tag(id: String, tag: String) |tx| {
+        editor::remove_stage_exclude_tag(tx, &id, &tag)
+    }
+);
+
 /// Puts one file into a stage, or takes it out — the "Appears in" strip.
 ///
 /// The whole toggle is one command because it is one thing the author clicked, and because every
 /// part of what it comes to is a fact about the pack rather than about the screen that asked.
-/// Joining may need the stage to be given a tag of its own first; *leaving* is the interesting
-/// half, because stages can share a tag — so before the target's tags come off, every other stage
-/// this file was in because of one of them gets a fresh tag of its own and the file gets that too.
-/// Leaving one stage has to leave only that stage.
+/// Either direction may need the stage to be given a tag of its own first — an inclusion tag to
+/// join by, an exclusion tag to be kept out by — and minting it, selecting by it and putting it on
+/// the file are one transaction, so they cannot come apart under undo.
 ///
-/// One transaction, so the rescue tags, the stage rows that select by them and the removal cannot
-/// come apart under undo — and one plan, worked out from the pack rather than from a tag list the
-/// front end last fetched.
-///
-/// `accept_collateral` is the author's answer to what leaving *costs*. A stage that selects by one
-/// of the author's tags rather than its own can only be left by taking that tag off the file, and
-/// the tag may also drive a content group or match a text pool. That is not a fact the backend can
-/// decide, so it refuses rather than guessing: see [`editor::MembershipPlan::collateral`] and
-/// `get_stage_membership_cost`, which is what the confirmation reads.
+/// Nothing about it is destructive. Both directions are additive on a tag the editor owns, so the
+/// author's own vocabulary is never edited to move one file — see [`editor::plan_stage_membership`].
 #[tauri::command]
 pub async fn set_stage_membership(
     state: State<'_, AppState>,
     media: u64,
     stage: String,
     member: bool,
-    accept_collateral: bool,
     label: String,
 ) -> Result<BehaviourOutcome, String> {
     state
@@ -294,15 +311,6 @@ pub async fn set_stage_membership(
                 label,
                 move |tx: &Transaction<'_>| {
                     let plan = editor::plan_stage_membership(tx, media, &stage, member)?;
-                    if !accept_collateral && !plan.collateral.is_empty() {
-                        let tags: Vec<&str> =
-                            plan.collateral.iter().map(|cost| cost.tag.as_str()).collect();
-                        anyhow::bail!(
-                            "leaving this stage would take off {}, which does more than select \
-                             media for it",
-                            tags.join(", ")
-                        );
-                    }
                     Ok(Prepared {
                         tag_actions: membership_tag_actions(media, &plan),
                         value: plan,
@@ -310,7 +318,7 @@ pub async fn set_stage_membership(
                     })
                 },
                 |tx: &Transaction<'_>, plan: editor::MembershipPlan| {
-                    editor::apply_membership_creations(tx, &plan)
+                    editor::apply_membership_creation(tx, &plan)
                 },
             ))
             .await

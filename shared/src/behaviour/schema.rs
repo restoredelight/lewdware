@@ -643,6 +643,20 @@ pub struct ContentSelection {
     /// `None` uses all content; `Some([])` deliberately selects none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// Tags that keep a file *out*, whatever [`Self::tags`] says.
+    ///
+    /// The stage shows a file when `tags` is absent or matched **and** nothing here is matched.
+    /// Two things need this. As an authoring tool it is the natural way to say "everything except
+    /// the extreme stuff", which an inclusion list can only express by enumerating everything else.
+    /// And it is the only way to take one file out of one stage without editing the author's own
+    /// vocabulary: a stage selecting by `intense` can only lose a file by that file losing
+    /// `intense`, which would also drop it from every content group and text pool naming the tag.
+    /// Excluding is additive and says exactly one thing.
+    ///
+    /// Empty is the default and means what it says. There is no `None` state, because "excludes
+    /// nothing" and "no exclusion list" are the same stage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
     /// The one of [`Self::tags`] the editor created for this stage, and therefore maintains the
     /// name of: renaming the stage renames it, and deleting the stage retires it when nothing else
     /// claims it. A tag the author added by hand is never owned, and never touched.
@@ -652,6 +666,14 @@ pub struct ContentSelection {
     /// themselves, and for every unrestricted stage, which has no selection to own a tag in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owned_tag: Option<String>,
+    /// The same, for [`Self::exclude`]: the tag the editor created to keep individual files out of
+    /// this stage. Every file the author has taken out through "Appears in" carries it.
+    ///
+    /// Separate from [`Self::owned_tag`] because a stage can own one of each and they are named
+    /// differently — `stage-peak` and `not-stage-peak` — but they are the same idea and the same
+    /// `owned` column; only the side of the association differs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_exclude_tag: Option<String>,
     /// Id of the media file this stage sets as the wallpaper. `None` retains whatever the
     /// previous stage (or `Content::wallpaper`) left in effect -- an absolute write, not a
     /// delta, which is why one id is enough.
@@ -880,11 +902,8 @@ mod tests {
                     label: "Stage 1".to_string(),
                     end: None,
                     content: ContentSelection {
-                        tags: None,
-                        owned_tag: None,
                         wallpaper: Some(stage_wallpaper),
-                        audio: None,
-                        audio_random: false,
+                        ..ContentSelection::default()
                     },
                     events: Events::default(),
                     movement: None,

@@ -133,28 +133,3 @@ pub async fn get_content_groups(state: State<'_, AppState>) -> Result<Vec<Conten
         .with_pack(async |pack| pack.behaviour_query(editor::content_groups).await)
         .await
 }
-
-/// What taking `media` out of `stage` would cost beyond the membership itself.
-///
-/// Empty is the safe case: the stage selects by a tag of its own, so removing it says only what the
-/// author asked. A non-empty answer names the author's tags that would come off the file and what
-/// else they are doing, which is what the confirmation says before `set_stage_membership` is sent
-/// with `accept_collateral`.
-///
-/// Asked of the pack as it stands, so it can be shown *before* the author decides; the command
-/// re-asks it inside the transaction, which is the answer that governs.
-#[tauri::command]
-pub async fn get_stage_membership_cost(
-    state: State<'_, AppState>,
-    media: u64,
-    stage: String,
-) -> Result<Vec<editor::Collateral>, String> {
-    state
-        .with_pack(async |pack| {
-            pack.behaviour_query(move |conn: &rusqlite::Connection| {
-                Ok(editor::plan_stage_membership(conn, media, &stage, false)?.collateral)
-            })
-            .await
-        })
-        .await
-}

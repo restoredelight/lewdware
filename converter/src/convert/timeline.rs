@@ -98,9 +98,16 @@ pub(super) fn levels_to_experience(levels: Vec<Level>) -> (Experience, Vec<(Medi
                 end,
                 content: ContentSelection {
                     tags: level.tags.clone(),
+                    // Edgeware has no notion of keeping a file out of a level, so a converted pack
+                    // starts with nothing excluded. The editor's "Appears in" toggle is what fills
+                    // this in, and it is the reason converted packs can use it at all: every tag
+                    // here is an author's mood, and taking one off a file to drop it from one stage
+                    // would drop it from everything else that mood drives.
+                    exclude: Vec::new(),
                     // Every tag here is an Edgeware mood the author wrote, so the stage owns none
                     // of them: renaming a converted stage must not rewrite `succubus`.
                     owned_tag: None,
+                    owned_exclude_tag: None,
                     // Filled in by the importer once the file has an id -- see the return value.
                     wallpaper: None,
                     audio: None,

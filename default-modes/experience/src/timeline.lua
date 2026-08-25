@@ -21,6 +21,19 @@ local current = stages[1] or { content={}, events={} }
 local duration_reached = false
 local audio_crossfade = nil
 
+--- One stage's `ContentSelection` as a media filter, or nil where it restricts nothing.
+---
+--- `any` is the inclusion list and `none` the exclusion list, so a file shows in the stage when it
+--- is included *and* not excluded. A stage that neither includes nor excludes has no filter at all,
+--- which is what nil means here -- distinct from an empty inclusion list, which means nothing.
+---@param content table
+---@return table|nil
+local function content_filter(content)
+	local include, exclude = content.tags, content.exclude
+	if include == nil and (exclude == nil or #exclude == 0) then return nil end
+	return { any = include, none = exclude }
+end
+
 local function milliseconds(seconds)
 	return math.max(0, math.floor((seconds or 0) * 1000))
 end
@@ -134,10 +147,11 @@ local function run_transition()
 	local random_audio = next_content.audio_random == true
 	if random_audio then
 		local media = require("lib.media")
-		local tags = next_content.tags
+		local include = next_content.tags
+		local filter = content_filter(next_content)
 		local picked = nil
-		if not tags or #tags > 0 then
-			picked = (tags and media.random_background_audio({ tags=tags }))
+		if not include or #include > 0 then
+			picked = (filter and media.random_background_audio({ tags=filter }))
 				or media.random_background_audio()
 		end
 		target_audio = picked and picked.name or nil
@@ -207,7 +221,26 @@ end
 function M.events() return current.events or {} end
 function M.movement() return current.movement end
 function M.mitosis() return current.mitosis end
-function M.tags() return (current.content or {}).tags end
+--- The current stage's content filter, in the shape `lewdware.media.*` takes one.
+---
+--- Always the object form or nil, never the plain-array shorthand, because a stage has two sides:
+--- tags that let media in (`any`) and tags that keep it out (`none`). Letting the shape depend on
+--- whether the document happens to exclude anything is how `{ any = nil }` bugs get in -- see
+--- `lib/media.lua`'s `normalize_tags`.
+---@return table|nil
+function M.tags() return content_filter(current.content or {}) end
+
+--- Whether the stage deliberately selects *no* content, as distinct from not restricting at all.
+---
+--- `ContentSelection::tags` is nil for "no restriction" and an empty list for "nothing", and the
+--- difference is the loudest one there is: read the wrong way round, a stage that wants silence
+--- spawns from the whole pack. Exclusion cannot express it -- no tag is guaranteed present on
+--- everything -- so it stays a question about the inclusion list.
+---@return boolean
+function M.selects_nothing()
+	local include = (current.content or {}).tags
+	return include ~= nil and #include == 0
+end
 function M.wallpaper() return (current.content or {}).wallpaper end
 function M.audio() return (current.content or {}).audio end
 function M.audio_random() return (current.content or {}).audio_random == true end

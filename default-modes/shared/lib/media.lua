@@ -233,11 +233,14 @@ end
 --- Picks a role-assigned popup sound for a declarative effect not attached to a popup.
 --- Goes through `M.list` so disabled content groups remain an absolute subtraction, and accepts
 --- the active stage's tags for the same reason every other timeline consumer does.
----@param tags string[]|nil
+---@param tags table|nil A content filter, as `experience/src/timeline.lua`'s `M.tags()` returns.
 function M.random_popup_sting(tags)
+	-- `tags` is a filter, not a plain list: a stage's exclusions have to reach the sting pool too,
+	-- or a file the author took out of this stage keeps making a noise in it.
+	local narrowed = normalize_tags(tags)
 	local pool = M.list({
 		type = "audio",
-		tags = { all = { POPUP_AUDIO_TAG }, any = tags },
+		tags = { all = { POPUP_AUDIO_TAG }, any = narrowed.any, none = narrowed.none },
 	})
 	if #pool == 0 then return nil end
 	return pool[math.random(#pool)]

@@ -493,10 +493,10 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
     assert!(read_pack_behaviour(&pack).await.content.captions.is_empty());
 }
 
-/// Leaving one stage can require a replacement tag for another stage that shared its only
-/// tag. The document patch and both media-tag changes are one author action and must undo as
-/// one; otherwise undo can restore a membership without restoring the stage selection that
-/// makes it mean anything (or the reverse).
+/// Leaving one stage that shares its only tag with another stage. The stage gains an exclusion tag
+/// and the file gains it too, and that pair is one author action: the row that makes the tag mean
+/// something and the tag itself must undo together, or undo restores a file carrying a tag no stage
+/// excludes by (or a stage excluding by a tag the file no longer has).
 #[tokio::test]
 async fn a_stage_membership_rewrite_is_one_undoable_edit() {
     let tmp = tempdir().unwrap();
@@ -522,6 +522,7 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
             wallpaper: None,
             audio: None,
             audio_random: false,
+            ..ContentSelection::default()
         },
         events: Events::default(),
         movement: None,
@@ -554,30 +555,38 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
         .await
         .unwrap();
 
-    // The delta the media grid follows. Reported by the edit, since the rescue tag is something the
-    // caller asked for only indirectly.
+    // The delta the media grid follows. Reported by the edit, since the exclusion tag is something
+    // the caller asked for only indirectly.
     assert_eq!(
         edit.media_tags,
-        vec![
-            (media, "stage-keep".to_string(), true),
-            (media, "shared".to_string(), false)
-        ]
+        vec![(media, "not-stage-leave".to_string(), true)]
     );
 
+    // `shared` is the author's own word, and it stays on the file: taking it off to drop the file
+    // from one stage would drop it from everything else that word drives.
     let tags = pack.get_tags(media).await.unwrap();
-    assert!(tags.contains(&"stage-keep".to_string()));
-    assert!(!tags.contains(&"shared".to_string()));
+    assert!(tags.contains(&"shared".to_string()));
+    assert!(tags.contains(&"not-stage-leave".to_string()));
+
     let stages = read_pack_behaviour(&pack)
         .await
         .experience
         .unwrap()
         .timeline
         .stages;
+    assert_eq!(stages[0].content.exclude, ["not-stage-leave"]);
+    assert_eq!(
+        stages[0].content.owned_exclude_tag.as_deref(),
+        Some("not-stage-leave")
+    );
+    // The other stage is untouched -- there was nothing to rescue it from.
     assert_eq!(
         stages[1].content.tags.as_deref(),
-        Some(&["shared".to_string(), "stage-keep".to_string()][..])
+        Some(&["shared".to_string()][..])
     );
+    assert!(stages[1].content.exclude.is_empty());
 
+    // One undo takes back the tag *and* the row that gives it meaning.
     pack.undo().await.unwrap();
     assert_eq!(pack.get_tags(media).await.unwrap(), vec!["shared"]);
     let stages = read_pack_behaviour(&pack)
@@ -586,11 +595,8 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
         .unwrap()
         .timeline
         .stages;
-    assert_eq!(
-        stages[1].content.tags.as_deref(),
-        Some(&["shared".to_string()][..])
-    );
-    assert_eq!(stages[1].content.owned_tag, None);
+    assert!(stages[0].content.exclude.is_empty());
+    assert_eq!(stages[0].content.owned_exclude_tag, None);
 }
 
 /// The action the `set_stage_membership` command builds, so the tests exercise the real thing.
@@ -612,7 +618,7 @@ fn membership_action(
             })
         },
         |tx: &Transaction<'_>, plan: behaviour_editor::MembershipPlan| {
-            behaviour_editor::apply_membership_creations(tx, &plan)
+            behaviour_editor::apply_membership_creation(tx, &plan)
         },
     )
 }
@@ -1295,6 +1301,7 @@ async fn content_and_experience_behaviour_survives_save_and_reopen() {
                         wallpaper: None,
                         audio: None,
                         audio_random: false,
+                        ..ContentSelection::default()
                     },
                     events: Events {
                         popup: Some(EventSchedule {
@@ -1357,4 +1364,130 @@ async fn get_pack_data_returns_none_when_absent_and_the_written_blob_otherwise()
         pack.get_pack_data("custom").await.unwrap(),
         Some(b"the-blob".to_vec())
     );
+}
+
+/// A stage owns up to two tags -- `stage-peak` to put files in and `not-stage-peak` to keep them
+/// out -- and renaming the stage has to move both, in the one transaction that renames the stage.
+/// Moving one leaves the pair naming different stages, and the orphan sits on media with nothing in
+/// the editor able to reach it.
+#[tokio::test]
+async fn renaming_a_stage_renames_both_of_the_tags_it_owns() {
+    let tmp = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let pack = new_test_pack(&tmp.path().join("rename.lwpack"), data_dir.path(), "Rename").await;
+    let media = insert_staged_audio(&pack, b"member").await;
+    pack.replace_behaviour(
+        Behaviour {
+            experience: Some(Experience {
+                timeline: Timeline {
+                    stages: vec![Stage {
+                        id: "peak".to_string(),
+                        label: "Peak".to_string(),
+                        end: None,
+                        content: ContentSelection::default(),
+                        events: Events::default(),
+                        movement: None,
+                        mitosis: None,
+                        on_enter: Default::default(),
+                        prompt: Default::default(),
+                    }],
+                    transitions: vec![],
+                },
+                label: None,
+            }),
+            ..Behaviour::default()
+        },
+        "Seed behaviour".to_string(),
+    )
+    .await
+    .unwrap();
+
+    // Restricting mints the inclusion tag and seeds it onto the file.
+    pack.behaviour_edit(restrict_action("peak")).await.unwrap();
+    // An author tag as well, so the file is held by two things: removing the owned tag alone would
+    // not take it out, which is what sends the departure down the exclusion path.
+    pack.add_tags(media, vec!["intense".to_string()])
+        .await
+        .unwrap();
+    pack.behaviour_edit(BehaviourAction::new(
+        "Add stage tag",
+        |tx: &Transaction<'_>| behaviour_editor::add_stage_tag(tx, "peak", "intense"),
+    ))
+    .await
+    .unwrap();
+    // Leaving now mints the exclusion tag.
+    pack.behaviour_edit(membership_action("Remove", media, "peak", false))
+        .await
+        .unwrap();
+
+    let renamed = pack
+        .behaviour_edit(rename_action("peak", "Climax"))
+        .await
+        .unwrap();
+
+    let mut moved = renamed.renamed_tags.clone();
+    moved.sort();
+    assert_eq!(
+        moved,
+        vec![
+            ("not-stage-peak".to_string(), "not-stage-climax".to_string()),
+            ("stage-peak".to_string(), "stage-climax".to_string()),
+        ]
+    );
+
+    let stages = read_pack_behaviour(&pack)
+        .await
+        .experience
+        .unwrap()
+        .timeline
+        .stages;
+    assert_eq!(
+        stages[0].content.owned_tag.as_deref(),
+        Some("stage-climax")
+    );
+    assert_eq!(
+        stages[0].content.owned_exclude_tag.as_deref(),
+        Some("not-stage-climax")
+    );
+    // And the file follows, because the lists hold tag ids and a rename moves the row.
+    let tags = pack.get_tags(media).await.unwrap();
+    assert!(tags.contains(&"not-stage-climax".to_string()), "{tags:?}");
+    assert!(!tags.iter().any(|tag| tag.ends_with("-peak")), "{tags:?}");
+}
+
+/// The action `set_stage_label` builds.
+fn rename_action(stage: &str, to: &str) -> BehaviourAction<()> {
+    let (reading, renaming, writing, value) = (
+        stage.to_string(),
+        to.to_string(),
+        stage.to_string(),
+        to.to_string(),
+    );
+    BehaviourAction::planned(
+        "Rename stage",
+        move |tx: &Transaction<'_>| {
+            let mut renames = Vec::new();
+            for owned in behaviour_editor::stage_owned_tags(tx, &reading)? {
+                if behaviour_editor::stage_tag_shared(tx, &owned.tag, &reading)? {
+                    continue;
+                }
+                let to = if owned.excluded {
+                    behaviour_editor::stage_exclude_tag_name(tx, &renaming, Some(&owned.tag))?
+                } else {
+                    behaviour_editor::stage_tag_name(tx, &renaming, Some(&owned.tag))?
+                };
+                if to != owned.tag {
+                    renames.push(TagAction::Rename {
+                        from: owned.tag,
+                        to,
+                    });
+                }
+            }
+            Ok(Prepared {
+                tag_actions: renames,
+                ..Prepared::default()
+            })
+        },
+        move |tx: &Transaction<'_>, ()| behaviour_editor::set_stage_label(tx, &writing, &value),
+    )
 }

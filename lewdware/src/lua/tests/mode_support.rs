@@ -214,6 +214,8 @@ pub(super) struct Level {
     pub(super) anchors: FrequencyAnchors,
     pub(super) design: DesignValues,
     pub(super) tags: Option<Vec<String>>,
+    /// Tags that keep media out of the stage, whatever `tags` lets in.
+    pub(super) exclude: Vec<String>,
     pub(super) wallpaper: Option<u64>,
 }
 
@@ -289,10 +291,9 @@ pub(super) fn levels_to_experience(levels: Vec<Level>) -> Experience {
                 end,
                 content: ContentSelection {
                     tags: level.tags.clone(),
-                    owned_tag: None,
+                    exclude: level.exclude.clone(),
                     wallpaper: level.wallpaper,
-                    audio: None,
-                    audio_random: false,
+                    ..ContentSelection::default()
                 },
                 events: Events {
                     popup: schedule(level.anchors.popup),
@@ -342,6 +343,7 @@ pub(super) fn experience_with_baseline(
         anchors,
         design,
         tags: None,
+        exclude: Vec::new(),
         wallpaper: None,
     }])
 }
