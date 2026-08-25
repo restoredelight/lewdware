@@ -43,6 +43,9 @@
 	let viewH = $state(0);
 	let viewW = $state(0);
 	let roleBusy = $state(false);
+	// Focus lives on the list, but the *indicator* belongs on the active row -- see the ring in the
+	// stylesheet, and `MediaGrid`, which points at its active cell the same way.
+	let listFocused = $state(false);
 
 	// Clicking, the range anchor, the shared keyboard commands and what they announce -- see
 	// `mediaSelection.svelte.ts`, which the media grid shares.
@@ -199,6 +202,9 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
+		// Escape dismisses the selection, and the open panel goes with it: a click on a row opens the
+		// panel *and* selects the row, so the two are the same gesture and undoing it undoes both.
+		if (event.key === 'Escape') expandedId = null;
 		if (selection.keydown(event)) return;
 		if (NAVIGATION_KEYS.includes(event.key) && files.length > 0) {
 			event.preventDefault();
@@ -232,11 +238,14 @@
 		bind:clientWidth={viewW}
 		onscroll={(event) => (scrollTop = event.currentTarget.scrollTop)}
 		onkeydown={handleKeydown}
+		onfocus={() => (listFocused = true)}
+		onblur={() => (listFocused = false)}
 		onpointerdown={(event) => (pressOrigin = event.target as HTMLElement)}
 		onclick={(event) => {
 			// A drag off the end of a row's seekbar, or of the panel's volume slider, lands here as a
 			// click on empty space. It is not one.
 			if (fromControl(event)) return;
+			expandedId = null;
 			selection.clear();
 		}}
 		use:clampScroll
@@ -258,6 +267,7 @@
 					class="audio-row"
 					class:selected
 					class:active={store.mediaTab.gridActiveId === file.id}
+					class:focused={listFocused}
 					style={`transform: translateY(${rowOffset(index)}px)`}
 					onclick={(event) => select(file, event)}
 					onkeydown={() => {}}
@@ -409,8 +419,11 @@
 		overflow-y: auto;
 		background: var(--ui-bg);
 	}
+	/* The list is one composite widget holding one tab stop, so a ring around the whole scroll box
+	   says nothing about where you are in it -- and on Escape, which clears the active row, it was
+	   the *only* thing that changed. The ring goes on the active row instead, below. */
 	.audio-list:focus-visible {
-		outline-offset: -2px;
+		outline: none;
 	}
 	.rows {
 		position: relative;
@@ -442,6 +455,12 @@
 	.audio-row.selected {
 		background: var(--ui-surface-raised);
 		box-shadow: inset 2px 0 0 var(--ui-accent-hover);
+	}
+	/* Drawn inside the row: an outset ring on a box that spans the full width of a clipping scroll
+	   container comes out cut off on both sides. Replaces the selected row's left edge rather than
+	   sitting beside it -- it already covers that edge. */
+	.audio-row.active.focused {
+		box-shadow: inset 0 0 0 2px var(--ui-focus);
 	}
 	.audio-row.active .audio-icon {
 		color: var(--ui-text);
