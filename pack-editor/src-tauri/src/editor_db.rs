@@ -8,10 +8,6 @@ use uuid::Uuid;
 const ARCHIVE_GENERATION_KEY: &str = "__pack_editor_archive_generation";
 const ARCHIVE_STATE_KEY: &str = "__pack_editor_archive_state";
 
-/// One migration, because nothing is released yet: a database is either current or absent, so
-/// there is no upgrade path worth carrying. The ledger stays a list so that the first real
-/// migration is an append rather than a rewrite of `initialize`.
-///
 /// Two files concatenated: the editor's own base schema, and the behaviour tables. The latter is
 /// reached across into `shared` on purpose -- they are identical in the runtime pack and the
 /// editor's working copy, and two hand-kept copies of that schema drifting apart would be a silent
@@ -21,7 +17,13 @@ const MIGRATION_1: &str = concat!(
     include_str!("../../../shared/src/migrations/behaviour_schema.sql"),
 );
 
-const MIGRATIONS: &[&str] = &[MIGRATION_1];
+/// `PopupMedia::video_volume`. Reached across into `shared` for the same reason `MIGRATION_1` is,
+/// and appended rather than folded into it because packs written against the eleven-column
+/// `behaviour_popup_media` already exist: see the file's own header. The ledger in `shared::db`
+/// carries the identical step, so a pack and a working copy of it stay the same shape.
+const MIGRATION_2: &str = include_str!("../../../shared/src/migrations/behaviour_video_volume.sql");
+
+const MIGRATIONS: &[&str] = &[MIGRATION_1, MIGRATION_2];
 
 /// The behaviour document's structural half (see `shared::behaviour::storage`), in an order that
 /// satisfies its foreign keys: parents before children, stages before the transitions between them.
@@ -105,6 +107,24 @@ fn clear_behaviour_tables(tx: &rusqlite::Transaction<'_>) -> Result<()> {
     for table in BEHAVIOUR_TABLES.iter().rev() {
         tx.execute(&format!("DELETE FROM {table}"), [])?;
     }
+    Ok(())
+}
+
+/// Brings an extracted runtime index up to the current schema, before anything reads it.
+///
+/// `copy_behaviour_tables` copies positionally (`SELECT t.*`), so the pack's tables and the
+/// editor's have to agree column for column: a pack written before a behaviour column existed
+/// would otherwise arrive one value short of the table it is going into, and the import would
+/// fail on a file that is not corrupt at all. The engine already does this to any pack it opens
+/// (`MediaPack::open`); this is the editor's half of the same rule.
+///
+/// Always our own extracted copy -- `import_runtime` is handed the index written out of the
+/// `.lwpack`, `replace_from_runtime` a staging file -- so writing to it touches nothing the user
+/// owns.
+fn migrate_runtime(runtime_path: &Path) -> Result<()> {
+    let mut connection = Connection::open(runtime_path)?;
+    configure_connection(&connection)?;
+    shared::db::migrate(&mut connection)?;
     Ok(())
 }
 
@@ -209,6 +229,7 @@ pub fn import_runtime(
     metadata: &Metadata,
 ) -> Result<String> {
     initialize(pooled)?;
+    migrate_runtime(runtime_path)?;
     let mut connection = dedicated_editor_connection(pooled)?;
     let generation = runtime_marker(runtime_path, ARCHIVE_GENERATION_KEY)?
         .unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -268,6 +289,7 @@ pub fn replace_from_runtime(
     runtime_path: &Path,
     metadata: &Metadata,
 ) -> Result<String> {
+    migrate_runtime(runtime_path)?;
     let mut connection = dedicated_editor_connection(pooled)?;
     let generation = runtime_marker(runtime_path, ARCHIVE_GENERATION_KEY)?
         .unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -604,5 +626,57 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("newer"));
+    }
+
+    /// Packs written before `video_volume` existed are on disk already, and the behaviour copy is
+    /// positional (`SELECT t.*`) -- so an unmigrated pack would arrive one value short of the
+    /// table it is going into and the import would fail on a file that is not corrupt at all.
+    /// `migrate_runtime` is what stops that; this is the test that says so.
+    #[test]
+    fn importing_a_pack_from_before_a_behaviour_column_brings_it_up_to_date() {
+        let directory = tempfile::tempdir().unwrap();
+
+        // A pack at schema 1, built by winding the current one back: the column gone and the
+        // ledger saying 1, which is the shape every pack written before this column is in. Wound
+        // back rather than hand-written, so the fixture cannot drift from the real schema.
+        let runtime_path = directory.path().join("pack.lwpack");
+        {
+            let mut runtime = Connection::open(&runtime_path).unwrap();
+            configure_connection(&runtime).unwrap();
+            shared::db::migrate(&mut runtime).unwrap();
+            runtime
+                .execute_batch(
+                    "ALTER TABLE behaviour_popup_media DROP COLUMN video_volume;
+                     UPDATE migrations SET migration_index = 1;
+                     INSERT INTO media (id, file_name, file_type, \"offset\", length, hash)
+                     VALUES (1, 'clip.mp4', 'video', 0, 0, x'00');
+                     INSERT INTO behaviour_popup_media (media_id, scale) VALUES (1, 2.0);",
+                )
+                .unwrap();
+        }
+
+        let mut editor = Connection::open(directory.path().join("editor.db")).unwrap();
+        configure_connection(&editor).unwrap();
+        import_runtime(
+            &mut editor,
+            &runtime_path,
+            &Metadata {
+                name: "Test pack".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // The row came across, and the column the pack never had reads as "no opinion" rather
+        // than as a level the author never chose.
+        let (scale, video_volume): (Option<f64>, Option<f64>) = editor
+            .query_row(
+                "SELECT scale, video_volume FROM behaviour_popup_media WHERE media_id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(scale, Some(2.0));
+        assert_eq!(video_volume, None);
     }
 }

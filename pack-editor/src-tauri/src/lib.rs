@@ -276,6 +276,7 @@ pub fn run() {
             behaviour::attributes::set_popup_caption,
             behaviour::attributes::set_popup_video_loop,
             behaviour::attributes::set_popup_video_audio,
+            behaviour::attributes::set_popup_video_volume,
             behaviour::attributes::set_audio_volume,
             slots::fill_media_slot_dialog,
             slots::set_media_slot,

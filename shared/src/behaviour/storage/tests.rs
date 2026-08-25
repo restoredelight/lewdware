@@ -110,6 +110,7 @@ fn a_full_document_survives_the_round_trip() {
                         caption: Some("Look.".to_string()),
                         video_loop: None,
                         video_audio: None,
+                        video_volume: None,
                         audio: vec![3],
                     },
                 ),
@@ -118,6 +119,7 @@ fn a_full_document_survives_the_round_trip() {
                     PopupMedia {
                         video_loop: Some(false),
                         video_audio: Some(true),
+                        video_volume: Some(0.6),
                         ..PopupMedia::default()
                     },
                 ),

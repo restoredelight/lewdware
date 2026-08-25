@@ -171,6 +171,9 @@ export interface PopupMedia {
 	video_loop?: boolean;
 	/** `false` silences the clip. Cannot unsilence one the user muted. */
 	video_audio?: boolean;
+	/** This clip's soundtrack level, multiplied by the user's popup volume rather than
+	 *  replacing it — so it can quieten a clip that comes in hot, never make one louder. */
+	video_volume?: number;
 	/** Media ids of sounds paired with this popup, replacing tag matching when non-empty. */
 	audio?: number[];
 }
@@ -485,6 +488,7 @@ export interface PopupChanges {
 	caption?: string | null;
 	video_loop?: boolean | null;
 	video_audio?: boolean | null;
+	video_volume?: number | null;
 	/** A set, so an empty list is the cleared state — there is no separate null. */
 	audio?: number[];
 }

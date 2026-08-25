@@ -61,6 +61,13 @@ setter!(
 );
 
 setter!(
+    /// These clips' soundtrack level, for levelling a pack assembled from mixed sources.
+    set_popup_video_volume(ids: Vec<u64>, volume: Option<f64>) |tx| {
+        editor::set_popup_video_volume(tx, &ids, volume)
+    }
+);
+
+setter!(
     /// These tracks' own level, for levelling a pack assembled from mixed sources.
     set_audio_volume(ids: Vec<u64>, volume: Option<f64>) |tx| {
         editor::set_audio_volume(tx, &ids, volume)

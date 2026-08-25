@@ -246,7 +246,11 @@ function M.make_spawner(opts)
 			-- an author saying "this one is silent" is content, an author saying "this one plays
 			-- anyway" would be overriding a class-1 switch.
 			popup_opts.audio = opts.popup_audio_enabled and attributes.video_audio ~= false
-			popup_opts.volume = opts.popup_audio_volume
+			-- The clip's own level composes with the user's rather than replacing it, exactly as a
+			-- popup sound's does below: the author is levelling this clip against the rest of the
+			-- pack, the user is setting how loud the pack is. So it can quieten a clip that comes
+			-- in hot, and cannot make one louder than the user allowed.
+			popup_opts.volume = (opts.popup_audio_volume or 1) * (attributes.video_volume or 1)
 			-- Absent leaves the engine default (loop forever); `false` closes the window when the
 			-- clip ends, which is what a short one-shot wants and no mode-wide option can express.
 			popup_opts.loop = attributes.video_loop

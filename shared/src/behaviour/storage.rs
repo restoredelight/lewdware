@@ -125,7 +125,7 @@ fn read_popup_media_where(
 ) -> Result<BTreeMap<u64, PopupMedia>> {
     let mut statement = conn.prepare(&format!(
         "SELECT media_id, weight, scale, region_x, region_y, region_width, region_height,
-                monitor, caption, video_loop, video_audio
+                monitor, caption, video_loop, video_audio, video_volume
          FROM behaviour_popup_media {filter} ORDER BY media_id"
     ))?;
     type Row = (
@@ -137,6 +137,7 @@ fn read_popup_media_where(
         Option<String>,
         Option<bool>,
         Option<bool>,
+        Option<f64>,
     );
     let rows: Vec<Row> = statement
         .query_map(binds, |row| {
@@ -149,12 +150,23 @@ fn read_popup_media_where(
                 row.get(8)?,
                 row.get(9)?,
                 row.get(10)?,
+                row.get(11)?,
             ))
         })?
         .collect::<rusqlite::Result<_>>()?;
     rows.into_iter()
         .map(
-            |(media_id, weight, scale, region, monitor, caption, video_loop, video_audio)| {
+            |(
+                media_id,
+                weight,
+                scale,
+                region,
+                monitor,
+                caption,
+                video_loop,
+                video_audio,
+                video_volume,
+            )| {
                 Ok((
                     media_id,
                     PopupMedia {
@@ -165,6 +177,7 @@ fn read_popup_media_where(
                         caption,
                         video_loop,
                         video_audio,
+                        video_volume,
                         audio: read_popup_audio_pairs(conn, media_id)?,
                     },
                 ))
@@ -240,8 +253,8 @@ pub(super) fn write_one_popup_media(
     tx.execute(
         "INSERT INTO behaviour_popup_media
              (media_id, weight, scale, region_x, region_y, region_width, region_height,
-              monitor, caption, video_loop, video_audio)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              monitor, caption, video_loop, video_audio, video_volume)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(media_id) DO UPDATE SET weight = excluded.weight,
                                              scale = excluded.scale,
                                              region_x = excluded.region_x,
@@ -251,7 +264,8 @@ pub(super) fn write_one_popup_media(
                                              monitor = excluded.monitor,
                                              caption = excluded.caption,
                                              video_loop = excluded.video_loop,
-                                             video_audio = excluded.video_audio",
+                                             video_audio = excluded.video_audio,
+                                             video_volume = excluded.video_volume",
         params![
             media_id,
             entry.weight,
@@ -264,6 +278,7 @@ pub(super) fn write_one_popup_media(
             entry.caption,
             entry.video_loop,
             entry.video_audio,
+            entry.video_volume,
         ],
     )?;
     write_popup_audio_pairs(tx, media_id, &entry.audio)?;

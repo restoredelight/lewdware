@@ -319,7 +319,9 @@ export const api = {
 		setVideoLoop: (ids: number[], value: boolean | null, label: string) =>
 			invoke<void>('set_popup_video_loop', { ids, value, label }),
 		setVideoAudio: (ids: number[], value: boolean | null, label: string) =>
-			invoke<void>('set_popup_video_audio', { ids, value, label })
+			invoke<void>('set_popup_video_audio', { ids, value, label }),
+		setVideoVolume: (ids: number[], volume: number | null, label: string) =>
+			invoke<void>('set_popup_video_volume', { ids, volume, label })
 	},
 
 	audio: {

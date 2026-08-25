@@ -12,6 +12,7 @@
 	import Checkbox from '$ui/Checkbox.svelte';
 	import NumberField from '$ui/NumberField.svelte';
 	import Select from '$ui/Select.svelte';
+	import Slider from '$ui/Slider.svelte';
 	import { isCapped, popupSize } from './popupSize.js';
 	import { describeRegion } from './spawnRegion.js';
 	import StageMembership from './StageMembership.svelte';
@@ -33,12 +34,20 @@
 			monitor: (value: MonitorPreference | null, label: string) => void;
 			videoLoop: (value: boolean | null, label: string) => void;
 			videoAudio: (value: boolean | null, label: string) => void;
+			/** Awaited, so the thumb is not released before the refetch behind the write lands. */
+			videoVolume: (value: number | null, label: string) => Promise<unknown>;
 		};
 		/** Enters the size-and-position frame, which owns the two spatial attributes. */
 		onplace: () => void;
+		/**
+		 * The level being dragged, for the preview to play at — see `liveVideoVolume`. Reported
+		 * rather than applied here, because the thing that has to become quieter is the `<video>`
+		 * in the viewer behind this panel.
+		 */
+		onvideovolume: (value: number | null) => void;
 	};
 
-	let { file, files, shared, edit, onplace }: Props = $props();
+	let { file, files, shared, edit, onplace, onvideovolume }: Props = $props();
 
 	const count = $derived(files.length);
 	const scale = $derived(shared('scale'));
@@ -47,7 +56,37 @@
 	const monitor = $derived(shared('monitor'));
 	const videoLoop = $derived(shared('video_loop'));
 	const videoAudio = $derived(shared('video_audio'));
+	const videoVolume = $derived(shared('video_volume'));
 	const anyVideo = $derived(files.some((item) => item.file_info.type === 'video'));
+
+	/**
+	 * The level the author is dragging, until the pack has it. Same rule, and the same reason, as
+	 * the audio tab's `liveVolume`: `Slider` draws its fill and its reading from the value it is
+	 * given, so committing only on release leaves both behind the thumb, and committing on every
+	 * input writes an undo entry per pixel.
+	 *
+	 * Held until the write **and** the refetch behind it have landed, not merely until the commit
+	 * is issued: releasing it on release put the thumb back at the stored value for the length of
+	 * the round trip and then moved it forward again when the answer arrived.
+	 *
+	 * Reset when the scope changes, so a level dragged on one file is never shown as another's.
+	 */
+	let liveVideoVolume = $state<number | null>(null);
+	$effect(() => {
+		files;
+		liveVideoVolume = null;
+	});
+	// Mixed sits the thumb at full and says so, rather than picking one file's level to show as
+	// though the selection agreed. Moving it from there sets every file in the scope, which is
+	// what every other control in this panel does with a mixed value.
+	const volumeShown = $derived(
+		liveVideoVolume ?? (videoVolume.mixed ? 1 : (videoVolume.value ?? 1))
+	);
+	const volumeReading = $derived.by(() => {
+		if (liveVideoVolume === null && videoVolume.mixed) return 'Mixed';
+		return volumeShown === 1 ? 'Full' : `${Math.round(volumeShown * 100)}%`;
+	});
+	$effect(() => onvideovolume(liveVideoVolume));
 
 	function plural(label: string) {
 		return count === 1 ? `${label} for “${file.file_name}”` : `${label} for ${count} items`;
@@ -159,6 +198,35 @@
 				/>
 				<span>Play sound<small>Still silent if popup sounds are muted</small></span>
 			</label>
+			<!-- Only when the clip is not silenced outright: a level on a muted clip is a control
+			     that cannot do anything, and the checkbox above already says why. -->
+			{#if videoAudio.value !== false || videoAudio.mixed}
+				<div class="volume">
+					<span class="volume-label" id="video-volume-label">Volume</span>
+					<Slider
+						value={volumeShown}
+						min={0}
+						max={1}
+						step={0.05}
+						ariaLabel={count === 1 ? `Volume for ${file.file_name}` : `Volume for ${count} items`}
+						oninput={(value) => (liveVideoVolume = value)}
+						onchange={(value) => {
+							void (async () => {
+								// Full volume is "no opinion", not "set to 1": storing it would pin the
+								// clip against a default that may move.
+								await edit.videoVolume(value === 1 ? null : value, plural('Set video volume'));
+								// Skipped if the author has moved the thumb again since, because a
+								// later release owns it.
+								if (liveVideoVolume === value) liveVideoVolume = null;
+							})();
+						}}
+					/>
+					<span class="reading" aria-labelledby="video-volume-label">{volumeReading}</span>
+				</div>
+				<p class="note">
+					Levels this clip against the rest of the pack. The user's own volume still applies.
+				</p>
+			{/if}
 		</section>
 	{/if}
 
@@ -235,5 +303,31 @@
 	.check small {
 		color: var(--ui-muted);
 		font-size: 10px;
+	}
+	/* The same row as the audio tab's volume field, narrower: label, track, reading. */
+	.volume {
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		color: var(--ui-muted);
+		font-size: 11px;
+	}
+	.volume :global(input[type='range']) {
+		flex: 1;
+		min-width: 0;
+	}
+	/* Fixed, and tabular: the reading changes on every step of the drag, and a width that
+	   followed the text would move the track under the thumb. */
+	.volume .reading {
+		min-width: 38px;
+		flex: none;
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+	}
+	.note {
+		margin: 0;
+		color: var(--ui-muted);
+		font-size: 10px;
+		line-height: 1.45;
 	}
 </style>

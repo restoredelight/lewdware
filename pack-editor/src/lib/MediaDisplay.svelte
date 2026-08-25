@@ -20,9 +20,31 @@
 		 * whose wrapper hugs its content passes a real length instead. See `MediaViewer`.
 		 */
 		maxWidth?: string;
+		/**
+		 * The level the pack gives this clip (`PopupMedia::video_volume`), on top of whatever the
+		 * viewer has set on the native controls.
+		 *
+		 * Applied here rather than only stored, because levelling a clip against the rest of a pack
+		 * is done by ear: a level the preview ignored would be a control its author could not use.
+		 * Ignored by every branch but the one with a soundtrack and controls to hear it through.
+		 */
+		volume?: number;
 	};
 
-	let { file, maxHeight = 'calc(100vh - 128px)', maxWidth = '100%' }: Props = $props();
+	let { file, maxHeight = 'calc(100vh - 128px)', maxWidth = '100%', volume = 1 }: Props = $props();
+
+	/**
+	 * Keeps `volume` on the element as it changes.
+	 *
+	 * An attribute would set it once at creation: `volume` is an IDL property with no content
+	 * attribute behind it, so Svelte writes the initial value and a later change would not reach
+	 * the player -- which is the whole point of applying it while the rail's slider moves.
+	 */
+	function level(element: HTMLMediaElement) {
+		$effect(() => {
+			element.volume = Math.max(0, Math.min(1, volume));
+		});
+	}
 
 	// Works around a WebKitGTK stall: a moment after playback starts, the player drops to
 	// `readyState = HAVE_CURRENT_DATA` and `networkState = NETWORK_LOADING` and stops advancing
@@ -128,6 +150,7 @@
 	<!-- svelte-ignore a11y_media_has_caption -->
 	<video
 		use:recoverFromStalls
+		use:level
 		src={store.mediaUrl(`/file/${file.id}`, file.hash)}
 		draggable="false"
 		controls

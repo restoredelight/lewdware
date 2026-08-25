@@ -140,6 +140,12 @@ pub struct PopupMedia {
     /// silence a clip the user allowed, never unsilence one they didn't.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video_audio: Option<bool>,
+    /// This clip's soundtrack's own level, for levelling a pack assembled from mixed sources —
+    /// the same job [`AudioMedia::volume`] does for sound files, which clips need at least as
+    /// badly. Composes with the user's popup volume rather than replacing it, so it can quieten a
+    /// clip that comes in hot but cannot make one louder than the user allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_volume: Option<f64>,
     /// Sounds paired explicitly with this popup, by media id — the cases tag matching cannot
     /// express. A set: the mode picks one at random, so the order carries no meaning and is
     /// normalised on read.
@@ -161,6 +167,7 @@ impl PopupMedia {
             && self.caption.is_none()
             && self.video_loop.is_none()
             && self.video_audio.is_none()
+            && self.video_volume.is_none()
             && self.audio.is_empty()
     }
 }

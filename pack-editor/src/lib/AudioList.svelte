@@ -57,8 +57,16 @@
 	// file's details, adjust it, and move on.
 	let expandedId = $state<number | null>(null);
 	// Only the expanded row shows attributes, so only it is fetched — a pack with three hundred
-	// sounds asks about one.
-	const audioAttributes = audioAttributesQuery(() => (expandedId === null ? [] : [expandedId]));
+	// sounds asks about one. Plus whichever row is playing, when that is a different one: the
+	// preview plays a file at its own level (see below), and every row has a transport, so a row
+	// can be playing without being open. Sorted, because the query is cached under its ids and the
+	// same pair asked in the other order is the same question.
+	const attributeIds = $derived(
+		[...new Set([expandedId, playback.activeId])]
+			.filter((id): id is number => id !== null)
+			.sort((a, b) => a - b)
+	);
+	const audioAttributes = audioAttributesQuery(() => attributeIds);
 	// The volume the author is choosing, until the pack has it.
 	//
 	// `Slider` draws its filled track from the `value` it is *given*, and the reading beside it is
@@ -96,6 +104,21 @@
 	const visible = $derived(
 		files.slice(firstRow, lastRow + 1).map((file, offset) => ({ file, index: firstRow + offset }))
 	);
+
+	// The pack's own level for the playing file, onto the element. Levelling a pack is done by ear,
+	// so a level the preview ignored would be a control the author could not use; the slider below
+	// writes `liveVolume` on every input, which is what makes it audible under the pointer rather
+	// than only on release.
+	//
+	// `liveVolume` belongs to the expanded row, so it speaks for the playing one only when they are
+	// the same row. Before the fetch lands, `attributesFor` answers with an empty entry and this
+	// says "full" -- which is what `#load` has already set, so nothing jumps.
+	$effect(() => {
+		const id = playback.activeId;
+		if (id === null) return;
+		const stored = attributesFor(audioAttributes.current, id).volume ?? 1;
+		playback.setLevel(id === expandedId ? (liveVolume ?? stored) : stored);
+	});
 
 	onDestroy(() => playback.stop());
 

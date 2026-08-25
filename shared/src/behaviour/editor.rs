@@ -677,6 +677,15 @@ pub fn set_popup_video_audio(
     edit_popup_entries(tx, ids, |entry| entry.video_audio = value)
 }
 
+/// This clip's soundtrack's own level. The audio-file counterpart is [`set_audio_volume`].
+pub fn set_popup_video_volume(
+    tx: &Transaction<'_>,
+    ids: &[u64],
+    volume: Option<f64>,
+) -> Result<bool> {
+    edit_popup_entries(tx, ids, |entry| entry.video_volume = volume)
+}
+
 /// This track's own level, for levelling a pack assembled from mixed sources.
 pub fn set_audio_volume(tx: &Transaction<'_>, ids: &[u64], volume: Option<f64>) -> Result<bool> {
     let mut changed = false;

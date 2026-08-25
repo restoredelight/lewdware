@@ -10,7 +10,9 @@ import { audioDuration } from './audioTime.js';
  * rather than something that has to be arranged: loading a new source ends the previous playback.
  *
  * Mute is a property of the element, so it is the list's rather than any one row's -- which is the
- * behaviour that makes sense for a control there is only one of.
+ * behaviour that makes sense for a control there is only one of. The pack's own per-file level is
+ * the opposite -- it belongs to the media, not to the transport -- so the list pushes it in with
+ * `setLevel` as the active row changes; see `level`.
  */
 class AudioPlayback {
 	/** The media the element is loaded with, playing or paused. */
@@ -21,6 +23,16 @@ class AudioPlayback {
 	 * duration the pack recorded rather than showing an empty player. */
 	measured = $state(0);
 	muted = $state(false);
+	/**
+	 * The active media's own level from the pack, as the element is currently playing it.
+	 *
+	 * Held here rather than read from the attributes each time the element is touched, because the
+	 * list is the only thing that knows it: only one file's attributes are fetched at a time, so
+	 * the level for a row arrives after the row is already loaded. Reset to full on a change of
+	 * media for exactly that reason -- a new row is played at the level a file with no opinion is
+	 * played at until its own arrives, rather than inheriting the level of the row before it.
+	 */
+	level = $state(1);
 	/** The one media that failed, so a broken file marks itself rather than the whole list. */
 	failedId = $state<number | null>(null);
 
@@ -91,6 +103,8 @@ class AudioPlayback {
 		const element = this.#audio();
 		if (this.activeId !== id) {
 			element.src = src;
+			element.volume = 1;
+			this.level = 1;
 			this.activeId = id;
 			this.position = 0;
 			this.measured = 0;
@@ -125,6 +139,18 @@ class AudioPlayback {
 		this.position = element.currentTime;
 	}
 
+	/**
+	 * Plays the active media at `value`, the level its pack author gave it.
+	 *
+	 * What the volume slider in the row's detail panel is *for*: levelling a pack is done by ear,
+	 * and an author cannot hear a level the preview does not apply. Fed the level being dragged
+	 * rather than the stored one, so the slider is audible while it moves.
+	 */
+	setLevel(value: number) {
+		this.level = value;
+		if (this.#element) this.#element.volume = value;
+	}
+
 	setMuted(value: boolean) {
 		this.#audio().muted = value;
 		this.muted = value;
@@ -139,6 +165,8 @@ class AudioPlayback {
 		this.position = 0;
 		this.measured = 0;
 		this.failedId = null;
+		this.level = 1;
+		if (this.#element) this.#element.volume = 1;
 	}
 }
 

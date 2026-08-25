@@ -138,8 +138,26 @@
 		videoLoop: (value: boolean | null, label: string) =>
 			void popupEdits.videoLoop(targetIds, value, label),
 		videoAudio: (value: boolean | null, label: string) =>
-			void popupEdits.videoAudio(targetIds, value, label)
+			void popupEdits.videoAudio(targetIds, value, label),
+		// Returned rather than discarded: the rail holds its slider until this settles.
+		videoVolume: (value: number | null, label: string) =>
+			popupEdits.videoVolume(targetIds, value, label)
 	});
+
+	/**
+	 * The level the clip on screen is played at, stored or being dragged in the rail.
+	 *
+	 * The point of the control is levelling a clip against the rest of the pack, which is done by
+	 * ear -- so the preview has to be the thing that gets quieter, and it has to do it under the
+	 * pointer rather than on release. Full whenever the rail is closed or the file is not a video:
+	 * `MediaDisplay` ignores it there anyway, and nothing should carry over to the next file.
+	 */
+	let draggedVolume = $state<number | null>(null);
+	$effect(() => {
+		file;
+		draggedVolume = null;
+	});
+	const previewVolume = $derived(draggedVolume ?? attributes.video_volume ?? 1);
 
 	// Placement is a mode, not the resting state. Most visits to a popup file are about looking at
 	// it -- and a video has to actually play -- so the media stays at full size and the screen
@@ -245,17 +263,34 @@
 						/>
 					</div>
 					<div class="popup-body">
-						<MediaDisplay {file} maxHeight={framedHeight} maxWidth={measuredWidth} />
+						<MediaDisplay
+							{file}
+							maxHeight={framedHeight}
+							maxWidth={measuredWidth}
+							volume={previewVolume}
+						/>
 					</div>
 				</div>
 			{:else if file}
-				<MediaDisplay {file} maxHeight={measuredHeight} maxWidth={measuredWidth} />
+				<MediaDisplay
+					{file}
+					maxHeight={measuredHeight}
+					maxWidth={measuredWidth}
+					volume={previewVolume}
+				/>
 			{/if}
 		</div>
 	</div>
 
 	{#if file && editing}
-		<PopupOptions {file} files={targets} {shared} {edit} onplace={() => (placing = !placing)} />
+		<PopupOptions
+			{file}
+			files={targets}
+			{shared}
+			{edit}
+			onplace={() => (placing = !placing)}
+			onvideovolume={(value) => (draggedVolume = value)}
+		/>
 	{/if}
 </MediaOverlay>
 

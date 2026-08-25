@@ -62,7 +62,9 @@ export const popupEdits = {
 	videoLoop: (ids: number[], value: boolean | null, label: string) =>
 		commit(() => api.popup.setVideoLoop(ids, value, label), label),
 	videoAudio: (ids: number[], value: boolean | null, label: string) =>
-		commit(() => api.popup.setVideoAudio(ids, value, label), label)
+		commit(() => api.popup.setVideoAudio(ids, value, label), label),
+	videoVolume: (ids: number[], value: number | null, label: string) =>
+		commit(() => api.popup.setVideoVolume(ids, value, label), label)
 };
 
 /** These tracks' own level. See {@link popupEdits}. */
