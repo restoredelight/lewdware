@@ -77,8 +77,11 @@ pub(in crate::behaviour) fn write_transitions(
             .collect::<Result<Vec<_>>>()?;
         tx.execute(
             "DELETE FROM behaviour_transition_category WHERE transition_id = ?1
-             AND category NOT IN (SELECT value FROM json_each(?2))",
-            params![transition.id, serde_json::to_string(&categories)?],
+             AND category NOT IN (SELECT value FROM rarray(?2))",
+            params![
+                transition.id,
+                text_array(categories.iter().map(String::as_str))
+            ],
         )?;
         for (position, category) in categories.iter().enumerate() {
             tx.execute(

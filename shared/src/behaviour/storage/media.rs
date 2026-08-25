@@ -199,8 +199,8 @@ fn write_popup_audio_pairs(tx: &Transaction<'_>, popup: u64, audio: &[u64]) -> R
     tx.execute(
         "DELETE FROM behaviour_popup_audio_pair
          WHERE popup_media_id = ?1
-           AND audio_media_id NOT IN (SELECT value FROM json_each(?2))",
-        params![popup, serde_json::to_string(audio)?],
+           AND audio_media_id NOT IN (SELECT value FROM rarray(?2))",
+        params![popup, id_array(audio)?],
     )?;
     for audio_media_id in audio {
         tx.execute(

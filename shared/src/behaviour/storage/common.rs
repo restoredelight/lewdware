@@ -1,5 +1,23 @@
 use super::*;
 
+pub(in crate::behaviour) fn integer_array(values: impl Iterator<Item = i64>) -> Array {
+    Rc::new(values.map(Value::Integer).collect())
+}
+
+pub(in crate::behaviour) fn text_array<'a>(values: impl Iterator<Item = &'a str>) -> Array {
+    Rc::new(values.map(|value| Value::Text(value.to_string())).collect())
+}
+
+pub(in crate::behaviour) fn id_array(values: &[u64]) -> Result<Array> {
+    Ok(integer_array(
+        values
+            .iter()
+            .map(|&value| i64::try_from(value))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter(),
+    ))
+}
+
 /// [`retain`] for a numeric key column. Separate because the ids never exist as strings anywhere
 /// else, and stringifying them just to satisfy one signature would invite the comparison to be
 /// made against SQLite's text affinity by accident.
@@ -10,15 +28,15 @@ pub(in crate::behaviour) fn retain_ids(
     keep: &[u64],
 ) -> Result<()> {
     tx.execute(
-        &format!("DELETE FROM {table} WHERE {key} NOT IN (SELECT value FROM json_each(?))"),
-        params![serde_json::to_string(keep)?],
+        &format!("DELETE FROM {table} WHERE {key} NOT IN (SELECT value FROM rarray(?))"),
+        params![id_array(keep)?],
     )?;
     Ok(())
 }
 
 /// Deletes every row of `table` whose `key` column is not in `keep`.
 ///
-/// The delete half of the diff. Passing the surviving keys as JSON rather than building an `IN
+/// The delete half of the diff. Passing the surviving keys as an array rather than building an `IN
 /// (?, ?, …)` keeps one prepared statement whatever the timeline's length.
 pub(in crate::behaviour) fn retain<'a>(
     tx: &Transaction<'_>,
@@ -28,8 +46,8 @@ pub(in crate::behaviour) fn retain<'a>(
 ) -> Result<()> {
     let keep: Vec<&str> = keep.collect();
     tx.execute(
-        &format!("DELETE FROM {table} WHERE {key} NOT IN (SELECT value FROM json_each(?))"),
-        params![serde_json::to_string(&keep)?],
+        &format!("DELETE FROM {table} WHERE {key} NOT IN (SELECT value FROM rarray(?))"),
+        params![text_array(keep.into_iter())],
     )?;
     Ok(())
 }

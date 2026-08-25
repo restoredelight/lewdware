@@ -17,10 +17,12 @@
 //! moving out of the blob was meant to remove. So each table is reconciled: rows that are gone are
 //! deleted, rows that are new are inserted, and rows that already match are left alone.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
 use anyhow::{Result, bail};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{
+    Connection, OptionalExtension, Transaction, params, types::Value, vtab::array::Array,
+};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::behaviour::SpawnRegion;
@@ -106,8 +108,8 @@ mod stage;
 mod tags;
 mod transition;
 
-use common::retain_ids;
 pub(super) use common::{from_text, retain, to_text};
+use common::{id_array, integer_array, retain_ids, text_array};
 pub(super) use content::{read_content_groups, read_text_pool, read_web_links};
 use content::{write_content_groups, write_text_pool, write_web_links};
 pub use experience::{TimelineView, read_timeline, set_experience_enabled, set_experience_label};

@@ -37,9 +37,9 @@ pub(in crate::behaviour) fn write_tags(
     tx.execute(
         &format!(
             "DELETE FROM {table} WHERE {key} = ?1
-             AND tag_id NOT IN (SELECT value FROM json_each(?2))"
+             AND tag_id NOT IN (SELECT value FROM rarray(?2))"
         ),
-        params![owner, serde_json::to_string(&ids)?],
+        params![owner, integer_array(ids.iter().copied())],
     )?;
     for (position, id) in ids.iter().enumerate() {
         tx.execute(

@@ -1,7 +1,11 @@
 use anyhow::{Result, bail};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, params, vtab::array};
 
 pub fn migrate(db: &mut rusqlite::Connection) -> Result<()> {
+    // Connection-local modules belong beside the schema initialization every writable pack
+    // connection already performs. `rarray` is used by behaviour-table reconciliation.
+    array::load_module(db)?;
+
     // Disable foreign key checking while doing migrations
     let foreign_keys: bool = db.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
     db.pragma_update(None, "foreign_keys", false)?;

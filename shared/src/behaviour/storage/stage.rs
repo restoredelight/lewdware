@@ -137,8 +137,8 @@ pub(in crate::behaviour) fn write_stage_tags(
     let keeping: Vec<i64> = included.iter().chain(excluded.iter()).copied().collect();
     tx.execute(
         "DELETE FROM behaviour_stage_tag WHERE stage_id = ?1
-         AND tag_id NOT IN (SELECT value FROM json_each(?2))",
-        params![stage, serde_json::to_string(&keeping)?],
+         AND tag_id NOT IN (SELECT value FROM rarray(?2))",
+        params![stage, integer_array(keeping.into_iter())],
     )?;
     for (side, ids) in [(false, &included), (true, &excluded)] {
         for (position, id) in ids.iter().enumerate() {
