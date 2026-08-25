@@ -4,7 +4,6 @@ use crate::behaviour::{
     Behaviour, Content, Easing, EventKind, EventSchedule, Events, Experience, Interval, Movement,
     Timeline, TransitionCategory,
 };
-use rusqlite::OptionalExtension as _;
 
 /// A migrated pack database. The editor module never needs media rows of its own — the entities
 /// here are text, links and groups — but the schema's foreign keys want a real database.
@@ -1141,4 +1140,305 @@ fn a_removed_entrys_id_is_never_given_to_the_next_one() {
         added = add_text_item(tx, PoolKind::Caption, &item("new")).unwrap();
     });
     assert_ne!(added, gone, "a stale Remove would have taken the new entry");
+}
+
+// ── Naming a stage's tag, and membership ─────────────────────────────────────
+
+/// A timeline whose stages carry the given labels and selections, plus a file to move around.
+fn membership_pack(stages: &[(&str, &str, Option<&[&str]>)]) -> Connection {
+    let ids: Vec<&str> = stages.iter().map(|(id, _, _)| *id).collect();
+    let mut conn = timeline_pack(&ids);
+    tx_on(&mut conn, |tx| {
+        for (id, label, tags) in stages {
+            set_stage_label(tx, id, label).unwrap();
+            if let Some(tags) = tags {
+                let tags: Vec<String> = tags.iter().map(|tag| tag.to_string()).collect();
+                set_stage_content_tags(tx, id, Some(&tags), None).unwrap();
+            }
+        }
+    });
+    conn
+}
+
+fn tag_file(conn: &Connection, media: u64, tags: &[&str]) {
+    for tag in tags {
+        conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", params![tag])
+            .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO media_tags (media_id, tag_id)
+             SELECT ?1, id FROM tags WHERE name = ?2",
+            params![media, tag],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn a_stages_tag_is_named_after_it() {
+    let conn = pack();
+    let name = |label: &str| stage_tag_name(&conn, label, None).unwrap();
+    assert_eq!(name("Peak"), "stage-peak");
+    assert_eq!(name("The very end!"), "stage-the-very-end");
+    // A label with nothing tag-shaped in it still has to produce a usable tag.
+    assert_eq!(name(""), "stage");
+    assert_eq!(name("!?!"), "stage");
+    // A label that already says "stage" keeps the prefix it has -- `stage-stage-3` reads like a bug.
+    assert_eq!(name("Stage 3"), "stage-3");
+    assert_eq!(name("Stage"), "stage");
+    // But only the word on its own counts: these are *about* stages, they are not one.
+    assert_eq!(name("Stages of grief"), "stage-stages-of-grief");
+    assert_eq!(name("Staged"), "stage-staged");
+    // Not by `[a-z0-9]`: a label in another script must produce a readable tag, not an empty one.
+    assert_eq!(name("Восход"), "stage-восход");
+}
+
+#[test]
+fn a_new_tag_never_lands_on_a_name_the_pack_already_uses() {
+    let conn = pack();
+    tag_file(&conn, 1, &["stage-peak", "stage-peak-2"]);
+    // Adopting `stage-peak` would silently classify every file already carrying it.
+    assert_eq!(stage_tag_name(&conn, "Peak", None).unwrap(), "stage-peak-3");
+    // Except the one the caller already holds: a rename must not dedupe against itself.
+    assert_eq!(
+        stage_tag_name(&conn, "Peak", Some("stage-peak")).unwrap(),
+        "stage-peak"
+    );
+}
+
+#[test]
+fn a_long_label_is_cut_between_words() {
+    let conn = pack();
+    let name = stage_tag_name(&conn, "the part where everything happens all at once forever", None)
+        .unwrap();
+    assert!(name.len() <= "stage-".len() + MAX_SLUG, "{name}");
+    assert!(!name.ends_with('-'), "{name}");
+    assert_eq!(name, "stage-the-part-where-everything-happens-all");
+}
+
+#[test]
+fn renaming_a_stage_only_renames_a_tag_the_editor_owns() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    // Selected but not owned: the author's own word for this content, which is not ours to rename.
+    tx_on(&mut conn, |tx| {
+        assert_eq!(stage_owned_tag(tx, "peak").unwrap(), None);
+    });
+    tx_on(&mut conn, |tx| {
+        set_stage_content_tags(tx, "peak", Some(&["stage-peak".to_string()]), Some("stage-peak"))
+            .unwrap();
+    });
+    assert_eq!(
+        stage_owned_tag(&conn, "peak").unwrap().as_deref(),
+        Some("stage-peak")
+    );
+}
+
+#[test]
+fn a_tag_another_stage_selects_by_is_not_ours_to_rename() {
+    let mut conn = membership_pack(&[
+        ("peak", "Peak", Some(&["stage-peak"])),
+        ("climax", "Climax", Some(&["stage-peak"])),
+    ]);
+    tx_on(&mut conn, |tx| {
+        set_stage_content_tags(tx, "peak", Some(&["stage-peak".to_string()]), Some("stage-peak"))
+            .unwrap();
+    });
+    // Another stage reading this name is another author decision; ours is bookkeeping.
+    assert!(stage_tag_shared(&conn, "stage-peak", "peak").unwrap());
+    // Once nothing else selects by it, it is the editor's to keep in step with the stage's label.
+    tx_on(&mut conn, |tx| {
+        remove_stage_tag(tx, "climax", "stage-peak").unwrap();
+    });
+    assert!(!stage_tag_shared(&conn, "stage-peak", "peak").unwrap());
+}
+
+#[test]
+fn a_stage_that_restricts_nothing_has_no_membership_to_toggle() {
+    let conn = membership_pack(&[("all", "All", None)]);
+    // It shows every file, so there is no tag whose absence would exclude one.
+    assert!(plan_stage_membership(&conn, 1, "all", false).is_err());
+}
+
+#[test]
+fn joining_reuses_the_stages_own_tag_and_nothing_else() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    tx_on(&mut conn, |tx| {
+        set_stage_content_tags(tx, "peak", Some(&["stage-peak".to_string()]), Some("stage-peak"))
+            .unwrap();
+    });
+    let plan = plan_stage_membership(&conn, 1, "peak", true).unwrap();
+    assert_eq!(plan.apply, ["stage-peak"]);
+    assert!(plan.creations.is_empty(), "{plan:?}");
+}
+
+#[test]
+fn joining_by_an_author_tag_would_say_more_than_appears_here_so_it_makes_its_own() {
+    // `intense` is the author's, and may also drive a content group or a text pool.
+    let conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    let plan = plan_stage_membership(&conn, 1, "peak", true).unwrap();
+    assert_eq!(plan.creations, [("peak".to_string(), "stage-peak".to_string())]);
+    assert_eq!(plan.apply, ["stage-peak"]);
+    assert!(plan.remove.is_empty());
+}
+
+#[test]
+fn leaving_one_stage_leaves_only_that_stage() {
+    let conn = membership_pack(&[
+        ("peak", "Peak", Some(&["intense"])),
+        ("climax", "Climax", Some(&["intense"])),
+    ]);
+    tag_file(&conn, 1, &["intense"]);
+    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
+
+    // Climax was a member only through the tag being removed, so it is given one of its own first.
+    assert_eq!(plan.remove, ["intense"]);
+    assert_eq!(plan.creations, [("climax".to_string(), "stage-climax".to_string())]);
+    assert_eq!(plan.apply, ["stage-climax"]);
+}
+
+#[test]
+fn a_stage_the_file_stays_in_by_another_tag_needs_no_rescue() {
+    let conn = membership_pack(&[
+        ("peak", "Peak", Some(&["intense"])),
+        ("climax", "Climax", Some(&["intense", "loud"])),
+    ]);
+    tag_file(&conn, 1, &["intense", "loud"]);
+    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
+    assert!(plan.creations.is_empty(), "{plan:?}");
+    assert!(plan.apply.is_empty(), "{plan:?}");
+}
+
+#[test]
+fn a_rescue_never_borrows_a_tag_that_would_join_a_third_stage() {
+    let conn = membership_pack(&[
+        ("peak", "Peak", Some(&["intense"])),
+        ("climax", "Climax", Some(&["intense", "loud"])),
+        ("after", "After", Some(&["loud"])),
+    ]);
+    tag_file(&conn, 1, &["intense"]);
+    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
+    // `loud` would have kept it in Climax -- and put it in After, which it was never in.
+    assert_eq!(plan.creations, [("climax".to_string(), "stage-climax".to_string())]);
+    assert_eq!(plan.apply, ["stage-climax"]);
+}
+
+#[test]
+fn an_unrestricted_stage_needs_no_rescue_because_it_shows_everything() {
+    let conn = membership_pack(&[("peak", "Peak", Some(&["intense"])), ("all", "All", None)]);
+    tag_file(&conn, 1, &["intense"]);
+    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
+    assert!(plan.creations.is_empty(), "{plan:?}");
+}
+
+#[test]
+fn two_stages_with_the_same_label_are_rescued_into_different_tags() {
+    let conn = membership_pack(&[
+        ("peak", "Peak", Some(&["shared"])),
+        ("one", "Same", Some(&["shared"])),
+        ("two", "Same", Some(&["shared"])),
+    ]);
+    tag_file(&conn, 1, &["shared"]);
+    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
+    let tags: Vec<&str> = plan.apply.iter().map(String::as_str).collect();
+    assert_eq!(tags.len(), 2, "{plan:?}");
+    assert_ne!(tags[0], tags[1], "one tag between two stages puts them back in step");
+}
+
+/// The round trip the toggle promises: off, then on, and only the stage clicked has moved.
+#[test]
+fn leaving_a_shared_stage_and_rejoining_it_changes_only_that_stage() {
+    let mut conn = membership_pack(&[
+        ("peak", "Peak", Some(&["shared"])),
+        ("climax", "Climax", Some(&["shared"])),
+    ]);
+    tag_file(&conn, 1, &["shared"]);
+
+    let mut plan = MembershipPlan::default();
+    tx_on(&mut conn, |tx| {
+        plan = plan_stage_membership(tx, 1, "peak", false).unwrap();
+        apply_membership_creations(tx, &plan).unwrap();
+    });
+    for tag in &plan.apply {
+        tag_file(&conn, 1, &[tag.as_str()]);
+    }
+    for tag in &plan.remove {
+        conn.execute(
+            "DELETE FROM media_tags WHERE media_id = 1
+             AND tag_id = (SELECT id FROM tags WHERE name = ?1)",
+            params![tag],
+        )
+        .unwrap();
+    }
+
+    let stages = read_stages(&conn).unwrap();
+    let tags = media_tags(&conn, 1).unwrap();
+    assert!(!selects(&stages[0], &tags), "left Peak");
+    assert!(selects(&stages[1], &tags), "but stayed in Climax");
+
+    // Rejoining must not put `shared` back: that would drag Climax along with it.
+    let back = plan_stage_membership(&conn, 1, "peak", true).unwrap();
+    assert_eq!(back.apply, ["stage-peak"]);
+    assert!(!back.apply.contains(&"shared".to_string()));
+}
+
+/// Leaving is where the abstraction leaks: there is no exclusion list, so a stage that selects by
+/// one of the author's tags can only be left by taking that tag off the file — and that tag may be
+/// driving a content group or matching a text pool. Joining is careful about this already; leaving
+/// cannot be, so it reports the price instead of paying it quietly.
+#[test]
+fn leaving_by_an_author_tag_reports_what_else_the_tag_does() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    tag_file(&conn, 1, &["intense"]);
+    tag_file(&conn, 2, &["intense"]);
+    tx_on(&mut conn, |tx| {
+        add_content_group(
+            tx,
+            &ContentGroup {
+                id: "intense".to_string(),
+                label: "Intense".to_string(),
+                description: None,
+                tags: vec!["intense".to_string()],
+                enabled_by_default: true,
+            },
+        )
+        .unwrap();
+    });
+
+    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
+    assert_eq!(plan.remove, ["intense"]);
+    assert_eq!(
+        plan.collateral,
+        [Collateral {
+            tag: "intense".to_string(),
+            content_uses: 1,
+            stage_uses: 0,
+        }],
+        "the content group is what the author has to be told about"
+    );
+}
+
+#[test]
+fn leaving_by_the_stages_own_tag_costs_nothing_but_the_membership() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    tx_on(&mut conn, |tx| {
+        set_stage_content_tags(tx, "peak", Some(&["stage-peak".to_string()]), Some("stage-peak"))
+            .unwrap();
+    });
+    tag_file(&conn, 1, &["stage-peak"]);
+    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
+    assert_eq!(plan.remove, ["stage-peak"]);
+    assert!(plan.collateral.is_empty(), "{plan:?}");
+}
+
+/// A tag two stages share is not collateral in the content sense, but it is still not ours to take
+/// off silently — the other stage is rescued, and the author should know why a new tag appeared.
+#[test]
+fn a_tag_another_stage_selects_by_is_reported_too() {
+    let conn = membership_pack(&[
+        ("peak", "Peak", Some(&["shared"])),
+        ("climax", "Climax", Some(&["shared"])),
+    ]);
+    tag_file(&conn, 1, &["shared"]);
+    let plan = plan_stage_membership(&conn, 1, "peak", false).unwrap();
+    assert_eq!(plan.collateral.len(), 1, "{plan:?}");
+    assert_eq!(plan.collateral[0].tag, "shared");
 }

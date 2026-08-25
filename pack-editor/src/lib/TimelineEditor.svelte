@@ -18,7 +18,7 @@
 	import { keys, query } from './query.svelte.js';
 	import { tagClaims } from './stageTags.js';
 	import { store } from './store.svelte.js';
-	import type { Stage, TagAction } from './types.js';
+	import type { Stage } from './types.js';
 
 	const timeline = query(keys.timeline, api.timeline.get);
 	const tagRows = query(keys.tags, api.getTagRows);
@@ -125,32 +125,17 @@
 		const index = stages.indexOf(target);
 		// A stage's wallpaper is a media slot, so retiring the stage retires the slot: a file that
 		// was only ever this stage's scenery leaves with it, exactly as the slot's own Remove does
-		// (see `MediaPack::clear_media_slot`). Handed to the backend as `retiring` rather than
-		// cleared through a command of its own, so that dropping the stage and dropping its
-		// wallpaper are one transaction -- and so one undo brings back both, instead of leaving a
-		// stage without the wallpaper it had.
-		const retiring = [
-			target.content.wallpaper,
-			target.content.audio,
-			target.on_enter?.splash,
-			target.on_enter?.sound,
-			target.prompt?.sound
-		].filter((value): value is number => value != null);
-		// And the same for the tag the stage owns, for the same reason and in the same transaction.
-		// Unconditional removal only where the author asked for it having been told what it is on;
-		// otherwise the backend drops it if — and only if — nothing turns out to claim it.
-		const owned = target.content.owned_tag;
-		const tagActions: TagAction[] = owned
-			? [
-					alsoRemoveTag
-						? { kind: 'delete', tag: owned }
-						: { kind: 'retire_if_unclaimed', tag: owned }
-				]
-			: [];
+		// (see `MediaPack::clear_media_slot`). That, and the fate of the tag the stage owns, are
+		// worked out inside the removing transaction rather than sent from here -- so one undo
+		// brings back the stage with the wallpaper it actually had, and so the tag survives if
+		// something turns out to claim it.
+		//
+		// `alsoRemoveTag` is all that travels, because it is the only part that is not a fact about
+		// the pack: the author was told what the tag is on and asked for it anyway.
 		const next = stages[Math.min(index + 1, stages.length - 1)] ?? stages[0];
 		activeId = next.id === target.id ? (stages[0]?.id ?? '') : next.id;
 		removing = null;
-		void mutate(() => api.stage.remove(target.id, retiring, tagActions, 'Remove stage'), {
+		void mutate(() => api.stage.remove(target.id, alsoRemoveTag, 'Remove stage'), {
 			label: 'Remove stage',
 			invalidates
 		});

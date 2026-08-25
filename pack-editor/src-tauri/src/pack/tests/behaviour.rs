@@ -545,28 +545,24 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
     .await
     .unwrap();
 
-    pack.behaviour_edit(
-        BehaviourAction::new("Remove from leave", |tx: &Transaction<'_>| {
-            behaviour_editor::set_stage_content_tags(
-                tx,
-                "keep",
-                Some(&["shared".to_string(), "stage-keep".to_string()]),
-                Some("stage-keep"),
-            )
-        })
-        .with_tag_actions(vec![
-            TagAction::Apply {
-                tag: "stage-keep".to_string(),
-                media: Some(vec![media]),
-            },
-            TagAction::Remove {
-                tag: "shared".to_string(),
-                media: vec![media],
-            },
-        ]),
-    )
-    .await
-    .unwrap();
+    // Through the real planner, not a hand-written pair of tag actions: what this exercises is the
+    // phase ordering. The plan is derived from the pre-edit pack, the tag work runs before the
+    // document write, and the rows the plan names are written after -- and a mistake in any of the
+    // three shows up here rather than in a planner test, which never runs the phases at all.
+    let edit = pack
+        .behaviour_edit(membership_action("Remove from leave", media, "leave", false))
+        .await
+        .unwrap();
+
+    // The delta the media grid follows. Reported by the edit, since the rescue tag is something the
+    // caller asked for only indirectly.
+    assert_eq!(
+        edit.media_tags,
+        vec![
+            (media, "stage-keep".to_string(), true),
+            (media, "shared".to_string(), false)
+        ]
+    );
 
     let tags = pack.get_tags(media).await.unwrap();
     assert!(tags.contains(&"stage-keep".to_string()));
@@ -595,6 +591,143 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
         Some(&["shared".to_string()][..])
     );
     assert_eq!(stages[1].content.owned_tag, None);
+}
+
+/// The action the `set_stage_membership` command builds, so the tests exercise the real thing.
+fn membership_action(
+    label: &str,
+    media: u64,
+    stage: &str,
+    member: bool,
+) -> BehaviourAction<behaviour_editor::MembershipPlan> {
+    let (stage, label) = (stage.to_string(), label.to_string());
+    BehaviourAction::planned(
+        label,
+        move |tx: &Transaction<'_>| {
+            let plan = behaviour_editor::plan_stage_membership(tx, media, &stage, member)?;
+            Ok(Prepared {
+                tag_actions: crate::commands::behaviour::stage::membership_tag_actions(media, &plan),
+                value: plan,
+                retiring: Vec::new(),
+            })
+        },
+        |tx: &Transaction<'_>, plan: behaviour_editor::MembershipPlan| {
+            behaviour_editor::apply_membership_creations(tx, &plan)
+        },
+    )
+}
+
+/// The action `restrict_stage_content` builds. Its whole subtlety is the first line of the
+/// derivation, so a test that rebuilt it by hand would test nothing.
+fn restrict_action(stage: &str) -> BehaviourAction<Option<String>> {
+    let (naming, writing) = (stage.to_string(), stage.to_string());
+    BehaviourAction::planned(
+        "Restrict stage content",
+        move |tx: &Transaction<'_>| {
+            let label = behaviour_editor::read_one_stage_label(tx, &naming)?.unwrap();
+            if behaviour_editor::stage_restricts_content(tx, &naming)? {
+                return Ok(Prepared::default());
+            }
+            let tag = behaviour_editor::stage_tag_name(tx, &label, None)?;
+            Ok(Prepared {
+                tag_actions: vec![TagAction::Apply {
+                    tag: tag.clone(),
+                    media: None,
+                }],
+                value: Some(tag),
+                retiring: Vec::new(),
+            })
+        },
+        move |tx: &Transaction<'_>, tag: Option<String>| match tag {
+            Some(tag) => behaviour_editor::set_stage_content_tags(
+                tx,
+                &writing,
+                Some(std::slice::from_ref(&tag)),
+                Some(&tag),
+            ),
+            None => Ok(false),
+        },
+    )
+}
+
+/// The checkbox computes its next value from what it last rendered, so a double click sends this
+/// twice before the query refreshes. Without the guard the second call mints a second tag, puts it
+/// on every file, replaces the selection with it -- orphaning the first tag on the whole pack --
+/// and spends a second undo entry.
+#[tokio::test]
+async fn restricting_a_stage_twice_is_the_same_as_restricting_it_once() {
+    let tmp = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let pack = new_test_pack(
+        &tmp.path().join("restrict.lwpack"),
+        data_dir.path(),
+        "Restrict",
+    )
+    .await;
+    let media = insert_staged_audio(&pack, b"seeded").await;
+    let stage = Stage {
+        id: "peak".to_string(),
+        label: "Peak".to_string(),
+        end: None,
+        content: ContentSelection::default(),
+        events: Events::default(),
+        movement: None,
+        mitosis: None,
+        on_enter: Default::default(),
+        prompt: Default::default(),
+    };
+    pack.replace_behaviour(
+        Behaviour {
+            experience: Some(Experience {
+                timeline: Timeline {
+                    stages: vec![stage],
+                    transitions: vec![],
+                },
+                label: None,
+            }),
+            ..Behaviour::default()
+        },
+        "Seed behaviour".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let first = pack.behaviour_edit(restrict_action("peak")).await.unwrap();
+    assert_eq!(first.media_tags, vec![(media, "stage-peak".to_string(), true)]);
+    let second = pack.behaviour_edit(restrict_action("peak")).await.unwrap();
+
+    assert!(
+        second.media_tags.is_empty(),
+        "a repeat put a second tag on the pack: {second:?}"
+    );
+    assert_eq!(
+        pack.get_tags(media).await.unwrap(),
+        vec!["stage-peak"],
+        "the first tag would be orphaned by a second"
+    );
+    let stages = read_pack_behaviour(&pack)
+        .await
+        .experience
+        .unwrap()
+        .timeline
+        .stages;
+    assert_eq!(
+        stages[0].content.tags.as_deref(),
+        Some(&["stage-peak".to_string()][..])
+    );
+    // One undo, not two: an edit that changed nothing must not spend an entry, or the author has to
+    // press undo twice to get back past a checkbox they ticked once.
+    pack.undo().await.unwrap();
+    let stages = read_pack_behaviour(&pack)
+        .await
+        .experience
+        .unwrap()
+        .timeline
+        .stages;
+    assert_eq!(
+        stages[0].content.tags, None,
+        "one undo should have taken the restriction back off"
+    );
 }
 
 /// An edit the tables can't take leaves them exactly as they were -- the editor keeps showing
@@ -684,14 +817,20 @@ async fn removing_a_stage_retires_its_wallpaper_in_one_undo_entry() {
     .await
     .unwrap();
 
-    // What the editor sends: remove the stage, plus the wallpaper it deliberately lets go.
+    // What the editor sends: the stage id, and nothing else. Which files leave with it is derived
+    // here -- and derived *before* the edit, which is the whole point: `remove_stage` deletes the
+    // rows the answer is read from, so a list computed after it would always be empty.
     let edit = pack
-        .behaviour_edit(
-            BehaviourAction::new("Remove stage", |tx: &Transaction<'_>| {
-                behaviour_editor::remove_stage(tx, "stage-2")
-            })
-            .retiring(vec![scenery]),
-        )
+        .behaviour_edit(BehaviourAction::planned(
+            "Remove stage",
+            |tx: &Transaction<'_>| {
+                Ok(Prepared {
+                    retiring: behaviour_editor::stage_scenery(tx, "stage-2")?,
+                    ..Prepared::default()
+                })
+            },
+            |tx: &Transaction<'_>, ()| behaviour_editor::remove_stage(tx, "stage-2"),
+        ))
         .await
         .unwrap();
 
@@ -755,8 +894,16 @@ async fn retiring_media_another_slot_still_uses_keeps_it() {
 
     let edit = pack
         .behaviour_edit(
-            BehaviourAction::new("Remove stage", |_tx: &Transaction<'_>| Ok(false))
-                .retiring(vec![shared]),
+            BehaviourAction::planned(
+                "Remove stage",
+                move |_tx: &Transaction<'_>| {
+                    Ok(Prepared {
+                        retiring: vec![shared],
+                        ..Prepared::default()
+                    })
+                },
+                |_tx: &Transaction<'_>, ()| Ok(false),
+            ),
         )
         .await
         .unwrap();

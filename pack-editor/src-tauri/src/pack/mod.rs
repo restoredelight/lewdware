@@ -84,43 +84,109 @@ pub struct BehaviourOutcome {
     /// `[from, to]` for each rename that actually happened, for the same reason: a rename onto a
     /// name the pack already has is skipped rather than turned into a merge.
     pub renamed_tags: Vec<(String, String)>,
+    /// Tags the edit put on or took off individual files, as `[media id, tag, added]`.
+    ///
+    /// The front end keeps the media grid as a client-side list, so it needs the delta to stay in
+    /// step. Reported rather than applied optimistically because which tags a membership toggle
+    /// comes to is worked out here — an author tag that has to be rescued into a fresh one is not
+    /// something the caller could have known — and because an edit that fails must leave the grid
+    /// showing what is really stored.
+    pub media_tags: Vec<(u64, String, bool)>,
+}
+
+/// What preparing an action worked out, before any of it is written.
+///
+/// One value from one read of the pre-edit pack, so the three halves cannot disagree: the tags the
+/// action edits, the media it lets go of, and whatever the row write needs to know are all facts
+/// about the same moment. A stage's scenery and the name of the tag it owns are the same question
+/// asked twice, and asking them separately is how the two come to describe different packs.
+pub struct Prepared<P> {
+    /// Whatever the row write needs from the preparation, and `()` where it needs nothing.
+    ///
+    /// This is what a plan travels in. Restricting a stage names its new tag once — the tag phase
+    /// creates it and the row phase selects by it — and naming it twice would not give the same
+    /// answer, because the first pass has already taken the name.
+    pub value: P,
+    /// Tag edits belonging to the same action, run in the same transaction.
+    ///
+    /// So that renaming a stage and renaming the tag it owns cannot come apart under undo. See
+    /// [`TagAction`] for why they are ordered by phase rather than by position.
+    pub tag_actions: Vec<TagAction>,
+    /// Media this action *deliberately* lets go of — a stage's wallpaper when the stage itself is
+    /// going. Each is dropped if it was only ever that slot's scenery.
+    ///
+    /// Deliberate rather than inferred, because the two are not the same thing and the difference
+    /// is destructive: switching the timeline off drops every stage on purpose *without* retiring
+    /// their wallpapers. See `design/behaviour-storage.md`, "Invariants to preserve".
+    pub retiring: Vec<u64>,
+}
+
+impl<P: Default> Default for Prepared<P> {
+    fn default() -> Self {
+        Self {
+            value: P::default(),
+            tag_actions: Vec::new(),
+            retiring: Vec::new(),
+        }
+    }
 }
 
 /// One author action, as [`MediaPack::behaviour_edit`] takes it.
 ///
-/// A struct rather than four positional arguments because three of the four are almost always
-/// empty, and `edit_thing(x, label, vec![], vec![])` at thirty call sites says nothing about which
-/// `vec![]` is which.
-pub struct BehaviourAction<F> {
+/// Two closures rather than one, because an action happens in two phases and they cannot be
+/// interleaved: tag work runs before the document write and retirement after it (see
+/// [`MediaPack::behaviour_edit`]). Splitting them this way is what lets a decision be made *once*
+/// and used by both — `prepare` returns it in [`Prepared::value`] and `apply` receives it — with
+/// ordinary ownership rather than a cell the two closures share and a runtime check that the first
+/// one ran.
+pub struct BehaviourAction<P> {
     /// The author's word for what they did — it becomes the undo entry.
     pub label: String,
-    /// Media this action deliberately lets go of. See [`MediaPack::behaviour_edit`].
-    pub retiring: Vec<u64>,
-    /// Tag edits belonging to the same action, run in the same transaction.
-    pub tag_actions: Vec<TagAction>,
-    /// The edit itself, reporting whether it changed anything.
-    pub edit: F,
+    /// Works out what the action comes to, from the pack as it stands before anything is written.
+    ///
+    /// Inside the transaction, because that is the only place the answer holds still. The front end
+    /// computing it means sending a decision made against whatever it last fetched: a stage whose
+    /// wallpaper changed on another surface retires the file it *used* to have, and the one it
+    /// actually has stays behind with nothing pointing at it.
+    prepare: Prepare<P>,
+    /// Writes the rows, reporting whether it changed anything.
+    apply: Apply<P>,
 }
 
-impl<F> BehaviourAction<F> {
-    /// An action that only writes behaviour rows — no tags, nothing retired. The common case.
-    pub fn new(label: impl Into<String>, edit: F) -> Self {
+type Prepare<P> = Box<dyn FnOnce(&rusqlite::Transaction<'_>) -> Result<Prepared<P>> + Send>;
+type Apply<P> = Box<dyn FnOnce(&rusqlite::Transaction<'_>, P) -> Result<bool> + Send>;
+
+impl BehaviourAction<()> {
+    /// An action that only writes behaviour rows — no tags, nothing retired. The common case, and
+    /// what every per-field setter is.
+    pub fn new<F>(label: impl Into<String>, edit: F) -> Self
+    where
+        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<bool> + Send + 'static,
+    {
         Self {
             label: label.into(),
-            retiring: Vec::new(),
-            tag_actions: Vec::new(),
-            edit,
+            prepare: Box::new(|_| Ok(Prepared::default())),
+            apply: Box::new(move |tx, ()| edit(tx)),
         }
     }
+}
 
-    pub fn retiring(mut self, retiring: Vec<u64>) -> Self {
-        self.retiring = retiring;
-        self
-    }
-
-    pub fn with_tag_actions(mut self, tag_actions: Vec<TagAction>) -> Self {
-        self.tag_actions = tag_actions;
-        self
+impl<P: Send + 'static> BehaviourAction<P> {
+    /// An action that works out what it is doing first, and then does it.
+    ///
+    /// For the edits whose tag work and row work answer to one decision, and for any that let go of
+    /// media: `prepare` reads the pack as it stands, and what it returns is what the rest of the
+    /// action runs on.
+    pub fn planned<R, A>(label: impl Into<String>, prepare: R, apply: A) -> Self
+    where
+        R: FnOnce(&rusqlite::Transaction<'_>) -> Result<Prepared<P>> + Send + 'static,
+        A: FnOnce(&rusqlite::Transaction<'_>, P) -> Result<bool> + Send + 'static,
+    {
+        Self {
+            label: label.into(),
+            prepare: Box::new(prepare),
+            apply: Box::new(apply),
+        }
     }
 }
 

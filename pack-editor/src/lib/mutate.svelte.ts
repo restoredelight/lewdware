@@ -42,13 +42,27 @@ export async function mutate(
 		// Most commands report nothing back: they set one field, and the surfaces showing it
 		// refetch. Only the few that retire media or edit tags have something the front end could
 		// not have worked out for itself.
-		const outcome = (await run()) ?? { deleted_ids: [], removed_tags: [], renamed_tags: [] };
+		const outcome = (await run()) ?? {
+			deleted_ids: [],
+			removed_tags: [],
+			renamed_tags: [],
+			media_tags: []
+		};
 		// Scenery that left with the edit — the wallpaper a removed stage was the only user of. It
 		// went in the same transaction, so the grid drops it here rather than through a command of
 		// its own. Reported rather than assumed: whether it left is the backend's decision.
 		if (outcome.deleted_ids.length > 0) store.removeFilesById(outcome.deleted_ids, true);
 		for (const tag of outcome.removed_tags) store.retagEverywhere(tag, null, true);
 		for (const [from, to] of outcome.renamed_tags) store.retagEverywhere(from, to, true);
+		// Per-file tag changes, applied here rather than at the call site and only now that the
+		// write has landed. An "Appears in" toggle can come to tags nobody asked for — a stage
+		// sharing the one being removed is rescued into a fresh tag of its own — so the caller
+		// could not have applied the right delta, and applying a guessed one before the round trip
+		// leaves the grid showing an edit that may have failed.
+		for (const [id, tag, added] of outcome.media_tags) {
+			if (added) store.addTagToFiles([id], tag, true);
+			else store.removeTagFromFiles([id], tag, true);
+		}
 		// Awaited so that a caller doing something with the result — `ContentList` scrolling to the
 		// entry it just added — acts on a view that has actually been updated.
 		await Promise.all(options.invalidates.map((prefix) => invalidate(prefix)));

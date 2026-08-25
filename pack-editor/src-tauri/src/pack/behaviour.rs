@@ -148,41 +148,49 @@ impl MediaPack {
     ///   which records a changeset the size of what actually changed and skips the entry entirely
     ///   when nothing did. `label` is the author's word for what they did ("Edit caption"), because
     ///   that is what they will look for in the undo list.
-    /// - **`tag_actions` run in the same transaction**, so renaming a stage and renaming the tag it
-    ///   owns cannot come apart under undo.
-    /// - **`retiring` names media the action *deliberately* lets go of** — a stage's wallpaper when
-    ///   the stage itself is going. Each is dropped if it was only ever that slot's scenery.
-    ///   Deliberate rather than inferred, because the two are not the same thing and the difference
-    ///   is destructive: switching the timeline off drops every stage on purpose *without* retiring
-    ///   their wallpapers. See `design/behaviour-storage.md`, "Invariants to preserve".
+    /// - **The action is prepared first**, inside the same transaction, and what it works out is
+    ///   what the rest of it runs on. [`Prepared::tag_actions`] run before the document write and
+    ///   [`Prepared::retiring`] after it, so a rename and the tag it renames cannot come apart under
+    ///   undo, and "is this still referenced?" is asked of the document the edit produced.
+    /// - **The two phases share one decision, by value.** `prepare` returns it and `apply` receives
+    ///   it. Restricting a stage names its new tag once; naming it again in the second phase would
+    ///   give a different answer, because the first has already taken the name.
     ///
-    /// `edit` reports whether it changed anything. Returning `false` for an edit that landed on the
+    /// `apply` reports whether it changed anything. Returning `false` for an edit that landed on the
     /// value already stored is what keeps an `oninput` that changed nothing from spending one of
     /// the hundred entries undo keeps.
-    pub async fn behaviour_edit<F>(&self, action: BehaviourAction<F>) -> Result<BehaviourOutcome>
-    where
-        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<bool> + Send + 'static,
-    {
+    pub async fn behaviour_edit<P: Send + 'static>(
+        &self,
+        action: BehaviourAction<P>,
+    ) -> Result<BehaviourOutcome> {
         let _handle = self.saving.read().await;
         let BehaviourAction {
             label,
-            retiring,
-            tag_actions,
-            edit,
+            prepare,
+            apply,
         } = action;
-        let mut edit = Some(edit);
+        let mut parts = Some((prepare, apply));
         let (outcome, changed) = self
             .db_execute(move |mut connection| {
-                let edit = edit.take().expect("the edit runs once");
-                let retiring = retiring.clone();
-                let tag_actions = tag_actions.clone();
+                let (prepare, apply) = parts.take().expect("the edit runs once");
                 history::record_with_media_refs(&mut connection, &label, 0, move |tx| {
+                    // Asked of the pack as it stands *now*, before anything is written: what this
+                    // stage's scenery is, and what its tag is called, are questions only the
+                    // pre-edit document can answer. One read, so the answers agree with each other.
+                    let Prepared {
+                        value,
+                        tag_actions,
+                        retiring,
+                    } = prepare(tx)?;
+
                     // Before the edit, so the write lands against the tag names the action uses
                     // rather than re-creating the ones a rename just left behind.
                     let mut tags = TagActionOutcome::default();
                     run_tag_actions_before_write(tx, &tag_actions, &mut tags)?;
 
-                    let document_changed = edit(tx)?;
+                    // Handed what `prepare` worked out, so a decision the tag phase already acted
+                    // on is the same one the rows are written from.
+                    let document_changed = apply(tx, value)?;
 
                     // Asked *after* the edit, so "still referenced" means what it means once the
                     // action has happened -- a wallpaper the retired stage shared with another
@@ -203,6 +211,7 @@ impl MediaPack {
                         deleted_ids,
                         removed_tags: tags.removed,
                         renamed_tags: tags.renamed,
+                        media_tags: tags.media_tags,
                     };
                     let changed =
                         document_changed || !outcome.deleted_ids.is_empty() || tags.changed;

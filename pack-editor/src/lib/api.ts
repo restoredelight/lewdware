@@ -22,6 +22,7 @@ import type {
 	MonitorPreference,
 	Movement,
 	PackInfo,
+	Collateral,
 	PoolKind,
 	PopupChanges,
 	PopupMedia,
@@ -30,7 +31,6 @@ import type {
 	SlotFilled,
 	SpawnRegion,
 	Stage,
-	TagAction,
 	TagRow,
 	TagSummary,
 	TextItem,
@@ -224,38 +224,64 @@ export const api = {
 		 * `retiring` names media the removal deliberately lets go of and `tagActions` the tag that
 		 * existed only for this stage, so all three go in one transaction and one undo entry.
 		 */
-		remove: (id: string, retiring: number[], tagActions: TagAction[], label: string) =>
-			invoke<BehaviourOutcome>('remove_stage', { id, retiring, tagActions, label }),
-		/** Renames the stage and the tag it owns together — one action, one undo entry. */
-		setLabel: (id: string, value: string, tagActions: TagAction[], label: string) =>
-			invoke<BehaviourOutcome>('set_stage_label', { id, value, tagActions, label }),
-		/** The selection and its owned tag move together: a stage cannot own a tag it does not select. */
-		setContentTags: (
-			id: string,
-			tags: string[] | null,
-			ownedTag: string | null,
-			tagActions: TagAction[],
+		/**
+		 * `alsoRemoveTag` is the author's answer to the confirmation, and the only part of the
+		 * removal the front end decides: the stage's scenery and whether its tag is still
+		 * machinery are facts the backend reads off the pack.
+		 */
+		remove: (id: string, alsoRemoveTag: boolean, label: string) =>
+			invoke<BehaviourOutcome>('remove_stage', { id, alsoRemoveTag, label }),
+		/** Renames the stage and the tag it owns together — one action, one undo entry, where one is due — decided backend-side. */
+		setLabel: (id: string, value: string, label: string) =>
+			invoke<BehaviourOutcome>('set_stage_label', { id, value, label }),
+		/**
+		 * Starts the stage restricting its content, with a tag of its own to restrict by.
+		 *
+		 * The name is chosen backend-side, from the stage's label and against the tags the pack has
+		 * at the moment of the write; the new tag is seeded onto everything the stage was already
+		 * showing, so switching the restriction on does not empty it.
+		 */
+		restrictContent: (id: string, label: string) =>
+			invoke<BehaviourOutcome>('restrict_stage_content', { id, label }),
+		/** Stops it restricting, and drops the tag it owned along with the selection. */
+		unrestrictContent: (id: string, label: string) =>
+			invoke<BehaviourOutcome>('unrestrict_stage_content', { id, label }),
+		/**
+		 * Puts one file into a stage, or takes it out — the "Appears in" strip.
+		 *
+		 * Nothing but the click travels: which tag joining uses, and the fresh tags that leaving a
+		 * stage shared with another one needs, are worked out inside the transaction that writes
+		 * them. The tag changes it came to arrive back in {@link BehaviourOutcome.media_tags}.
+		 */
+		setMembership: (
+			media: number,
+			stage: string,
+			member: boolean,
+			acceptCollateral: boolean,
 			label: string
 		) =>
-			invoke<BehaviourOutcome>('set_stage_content_tags', {
-				id,
-				tags,
-				ownedTag,
-				tagActions,
+			invoke<BehaviourOutcome>('set_stage_membership', {
+				media,
+				stage,
+				member,
+				acceptCollateral,
 				label
 			}),
-		/** Several stages at once — leaving one stage can give another a tag of its own. */
-		setContentTagsMany: (
-			updates: { id: string; tags: string[] | null; ownedTag: string | null }[],
-			tagActions: TagAction[],
-			label: string
-		) => invoke<BehaviourOutcome>('set_stage_content_tags_many', { updates, tagActions, label }),
+		/**
+		 * What taking this file out of the stage would cost beyond the membership.
+		 *
+		 * Empty is the safe case. A non-empty answer names the author's tags that would come off and
+		 * what else they do, which is what the confirmation says — the backend refuses the removal
+		 * until the author has seen it.
+		 */
+		membershipCost: (media: number, stage: string) =>
+			invoke<Collateral[]>('get_stage_membership_cost', { media, stage }),
 		addTag: (id: string, tag: string, label: string) =>
 			invoke<void>('add_stage_tag', { id, tag, label }),
 		removeTag: (id: string, tag: string, label: string) =>
 			invoke<void>('remove_stage_tag', { id, tag, label }),
-		setAudioRandom: (id: string, random: boolean, retiring: number[], label: string) =>
-			invoke<BehaviourOutcome>('set_stage_audio_random', { id, random, retiring, label }),
+		setAudioRandom: (id: string, random: boolean, label: string) =>
+			invoke<BehaviourOutcome>('set_stage_audio_random', { id, random, label }),
 		setEvent: (id: string, kind: EventKind, schedule: EventSchedule | null, label: string) =>
 			invoke<void>('set_stage_event', { id, kind, schedule, label }),
 		setEntryNotification: (id: string, text: string | null, label: string) =>

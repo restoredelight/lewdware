@@ -20,7 +20,6 @@
 	import { mutate } from './mutate.svelte.js';
 	import DebouncedField from './DebouncedField.svelte';
 	import { keys, query } from './query.svelte.js';
-	import { stageTagName, takenTagNames } from './stageTags.js';
 	import { store } from './store.svelte.js';
 	import type { EventKind, EventSchedule, Stage, TagAction } from './types.js';
 
@@ -34,7 +33,6 @@
 
 	const timelineQuery = query(keys.timeline, api.timeline.get);
 	const slots = query(keys.mediaSlots, api.getMediaSlots);
-	const tagRows = query(keys.tags, api.getTagRows);
 	const stages = $derived(timelineQuery.current?.stages ?? []);
 	const index = $derived(stages.findIndex((item) => item.id === stageId));
 	const stage = $derived(stages[index]);
@@ -96,76 +94,29 @@
 	// A stage that restricts its content needs a tag for the "Appears in" strip to write, and
 	// leaving authors to invent one per stage gives the pack arbitrary names that mean nothing to
 	// anyone reading it. So the editor creates one, keeps its name in step with the stage's, and
-	// takes it away again when the stage goes and nothing else is holding it. Naming and the
-	// claim check live in `stageTags.ts`; the removal moment is in `TimelineEditor`, which owns the
-	// confirmation. These are the other two.
-
-	/** Every tag name the pack already has, so a new one cannot land on an existing classification. */
-	function taken(except?: string) {
-		const names = takenTagNames(tagRows.current?.map((row) => row.name) ?? store.allTags);
-		if (except) names.delete(except);
-		return names;
-	}
+	// takes it away again when the stage goes and nothing else is holding it.
+	//
+	// None of that is decided here. Naming, the rename that follows a stage's, and the claim check
+	// are questions about the pack, and they are answered in `shared::behaviour::editor` inside the
+	// transaction that writes them. What is left on this side is the two controls that ask.
 
 	/**
 	 * Turns a stage's tag selection on or off.
 	 *
-	 * Switching it on is the cliff: the stage goes from *everything* to *nothing* in one checkbox,
-	 * because an empty inclusion list selects no media. So the stage's new tag is seeded onto the
-	 * media that appears there right now — which, for a stage that restricted nothing, is the whole
-	 * pack. Behaviour is preserved exactly, and only then do the per-file toggles have a tag to
-	 * remove. See `behaviour-design/default-mode-v2.md`, "Turning a stage's tags on is the cliff".
+	 * Both halves are a single command, because both are decisions about the pack rather than about
+	 * this screen: what the new tag is called has to dedupe against the tags that exist at the
+	 * moment of the write, and switching a restriction on has to seed that tag onto the media the
+	 * stage is showing right now or the stage goes from *everything* to *nothing* in one checkbox.
+	 * Computing either here would mean deciding from whatever this view last fetched.
 	 */
 	function setRestriction(on: boolean) {
 		if (!stage) return;
 		const id = stage.id;
-		if (!on) {
-			write(
-				() => api.stage.setContentTags(id, null, null, [], 'Change stage content'),
-				'Change stage content'
-			);
-			return;
-		}
-		const tag = stageTagName(stage.label, taken());
-		// `media: null` is "every file in the pack", resolved server-side — the seeding rule, which
-		// keeps the stage showing what it showed a moment before its tags were switched on.
+		const label = on ? 'Restrict stage content' : 'Change stage content';
 		write(
-			() =>
-				api.stage.setContentTags(
-					id,
-					[tag],
-					tag,
-					[{ kind: 'apply', tag, media: null }],
-					'Restrict stage content'
-				),
-			'Restrict stage content'
+			() => (on ? api.stage.restrictContent(id, label) : api.stage.unrestrictContent(id, label)),
+			label
 		);
-	}
-
-	/**
-	 * The tag rename that goes with renaming this stage to `label`, or nothing if none is due.
-	 *
-	 * Returned rather than sent, so it can travel *with* the rename. `set_stage_label` takes the tag
-	 * actions for exactly this reason: the stage's name and the name of the tag the editor made for
-	 * it are one thing the author did, and two commands would be two undo entries — one of which
-	 * could fail on its own and leave the two disagreeing.
-	 *
-	 * Only a tag no other stage selects by. A rename is lossless everywhere else it appears (the
-	 * lists are joins, so media, pools and groups follow the id), but another stage reading this
-	 * name is another author decision, and this one is bookkeeping.
-	 *
-	 * Nothing rewrites `content.tags`: the selection holds tag *ids*, so renaming the row is the
-	 * whole of it.
-	 */
-	function ownedTagRename(label: string): TagAction[] {
-		const owned = stage?.content.owned_tag;
-		if (!stage || !owned) return [];
-		const id = stage.id;
-		if (stages.some((other) => other.id !== id && (other.content.tags ?? []).includes(owned)))
-			return [];
-		const renamed = stageTagName(label, taken(owned));
-		if (renamed === owned) return [];
-		return [{ kind: 'rename', from: owned, to: renamed }];
 	}
 
 	function setEvent(key: EventKind, value?: EventSchedule) {
@@ -179,12 +130,11 @@
 	function setAudioMode(mode: string) {
 		if (!stage) return;
 		const id = stage.id;
-		// The track this stage was naming is deliberately let go of: leaving it behind would litter
-		// the pack with a sound marked out of popups and referenced by nothing.
-		const retiring = stage.content.audio != null ? [stage.content.audio] : [];
+		// The track this stage was naming is deliberately let go of -- by the backend, which reads
+		// the slot it is actually clearing rather than the one this view last saw.
 		audioPickerStage = mode === 'specific' ? id : null;
 		write(
-			() => api.stage.setAudioRandom(id, mode === 'random', retiring, 'Change stage audio'),
+			() => api.stage.setAudioRandom(id, mode === 'random', 'Change stage audio'),
 			'Change stage audio'
 		);
 	}
@@ -233,7 +183,7 @@
 					oncommit={(value: string, label: string) =>
 						// The tag the stage owns is renamed in the same command, so one undo takes back
 						// the whole rename rather than half of it.
-						api.stage.setLabel(stage!.id, value, ownedTagRename(value), label)}
+						api.stage.setLabel(stage!.id, value, label)}
 				>
 					{#snippet field(draft, set, commit)}
 						<input

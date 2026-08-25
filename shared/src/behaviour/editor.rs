@@ -21,6 +21,8 @@
 //! Every function taking a `&Transaction` returns whether it changed anything, so a caller can skip
 //! recording an undo entry for an edit that landed on the value already there.
 
+use std::collections::HashSet;
+
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -1601,13 +1603,13 @@ pub fn set_transition_category(
     enabled: bool,
 ) -> Result<bool> {
     let mut affected = transition_categories(tx, id)?;
-    if let Some(group) = legacy_group_of(category) {
-        if let Some(at) = affected.iter().position(|item| *item == group.0) {
-            affected.remove(at);
-            for member in group.1 {
-                if !affected.contains(member) {
-                    affected.push(*member);
-                }
+    if let Some(group) = legacy_group_of(category)
+        && let Some(at) = affected.iter().position(|item| *item == group.0)
+    {
+        affected.remove(at);
+        for member in group.1 {
+            if !affected.contains(member) {
+                affected.push(*member);
             }
         }
     }
@@ -1646,3 +1648,377 @@ fn legacy_group_of(
 
 #[cfg(test)]
 mod tests;
+
+// ── Naming a stage's own tag ─────────────────────────────────────────────────
+//
+// The editor gives a stage that restricts its content a tag of its own, because the "Appears in"
+// strip can only write membership if the stage *has* a tag, and asking authors to invent one per
+// stage invites arbitrary names that then mean nothing to anyone reading the pack.
+//
+// Named from the **label**, not the index: an index-derived name churns on every reorder, while a
+// label is already how the author refers to the stage — and it is what makes the tag legible in the
+// Tags tab, which is the point of not hiding these behind the reserved `__lewdware-` prefix.
+//
+// This lives here, next to the tables, rather than in the editor front end, because every caller
+// needs the same two things the front end could only approximate: the names the pack currently has,
+// and the answer holding still until the write lands.
+
+/// As long a slug as a tag should ever be. Long enough to stay recognisable, short enough that a
+/// label somebody pasted a sentence into does not become the widest chip in the Tags tab.
+const MAX_SLUG: usize = 40;
+
+/// The label as a tag-shaped word: lower case, runs of anything that is not a letter or a digit
+/// collapsed to one dash.
+///
+/// Letters and digits by Unicode property rather than by `[a-z0-9]`, so a label that is not written
+/// in Latin script produces a readable tag instead of an empty one.
+pub fn slugify_stage_label(label: &str) -> String {
+    let mut slug = String::new();
+    for ch in label.chars().flat_map(char::to_lowercase) {
+        if ch.is_alphanumeric() {
+            slug.push(ch);
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-');
+    // By character, not by byte: `MAX_SLUG` is a length an author would recognise, and slicing a
+    // string of non-Latin letters by bytes would both cut it far shorter than asked and panic on
+    // the boundary.
+    if slug.chars().count() <= MAX_SLUG {
+        return slug.to_string();
+    }
+    let cut: String = slug.chars().take(MAX_SLUG).collect();
+    // Cut at a dash where there is one to cut at, so the truncation lands between words.
+    let cut = match cut.rfind('-') {
+        Some(boundary) if boundary > 0 => &cut[..boundary],
+        _ => &cut[..],
+    };
+    cut.trim_end_matches('-').to_string()
+}
+
+/// The name to give the tag `label`'s stage owns, avoiding every name the pack already has.
+///
+/// Deduped against *every* tag, not just other stages': an owned tag is an ordinary tag, so
+/// colliding with `stage-intro` would mean adopting whatever that is already on. Predictable beats
+/// clever — a second stage called "Intro" gets `stage-intro-2` rather than silently inheriting
+/// forty-seven files' worth of classification.
+///
+/// A label with nothing tag-shaped in it (empty, or only punctuation) falls back to `stage`, which
+/// then dedupes like any other. A label that already says "stage" keeps the prefix it has: "Stage
+/// 3" is `stage-3`, not `stage-stage-3` — the prefix marks the tag as a stage's and the label has
+/// done that job already. Only the word on its own counts, so "Stages of grief" is still
+/// `stage-stages-of-grief`; the label is about stages, it is not one.
+///
+/// `keeping` is the name the caller already holds and may keep — a rename must not dedupe against
+/// the very tag it is renaming.
+pub fn stage_tag_name(conn: &Connection, label: &str, keeping: Option<&str>) -> Result<String> {
+    let slug = slugify_stage_label(label);
+    let base = if slug.is_empty() {
+        "stage".to_string()
+    } else if slug == "stage" || slug.starts_with("stage-") {
+        slug
+    } else {
+        format!("stage-{slug}")
+    };
+    // Every tag in the pack, not only the ones on stages: a caption's tag and a content group's
+    // are real rows here too, and landing on one would start writing that classification onto files.
+    let mut statement = conn.prepare("SELECT name FROM tags")?;
+    let taken: HashSet<String> = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .filter(|name| !matches!((name, keeping), (Ok(name), Some(keep)) if name == keep))
+        .collect::<rusqlite::Result<_>>()?;
+    if !taken.contains(&base) {
+        return Ok(base);
+    }
+    for suffix in 2.. {
+        let candidate = format!("{base}-{suffix}");
+        if !taken.contains(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    unreachable!("the suffix search always terminates: the pack has finitely many tags")
+}
+
+/// The tag this stage owns — the one the editor names after it — if it has one.
+pub fn stage_owned_tag(conn: &Connection, id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT t.name FROM behaviour_stage_tag AS st
+             JOIN tags AS t ON t.id = st.tag_id
+             WHERE st.stage_id = ?1 AND st.owned = 1",
+            params![id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
+/// Whether any stage other than `except` selects by `tag`.
+///
+/// The question a rename asks before it renames: a tag another stage reads by name is another
+/// author's decision, and this one is bookkeeping.
+pub fn stage_tag_shared(conn: &Connection, tag: &str, except: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (
+             SELECT 1 FROM behaviour_stage_tag AS st
+             JOIN tags AS t ON t.id = st.tag_id
+             WHERE t.name = ?1 AND st.stage_id <> ?2
+         )",
+        params![tag, except],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
+/// Every file this stage names in a slot of its own: its scenery.
+///
+/// What a removal deliberately lets go of — a file that was only ever this stage's wallpaper leaves
+/// with it, exactly as the slot's own Remove does. Derived here rather than sent by the caller so
+/// that the list is the one the pack actually holds at the moment of the write.
+pub fn stage_scenery(conn: &Connection, id: &str) -> Result<Vec<u64>> {
+    let Some(stage) = read_one_stage(conn, id)? else {
+        return Ok(Vec::new());
+    };
+    Ok([
+        stage.content.wallpaper,
+        stage.content.audio,
+        stage.on_enter.splash,
+        stage.on_enter.sound,
+        stage.prompt.sound,
+    ]
+    .into_iter()
+    .flatten()
+    .collect())
+}
+
+/// One stage's label, without reading the rest of it.
+pub fn read_one_stage_label(conn: &Connection, id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT label FROM behaviour_stage WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
+/// The background track this stage names, if it names one rather than picking at random.
+pub fn stage_audio(conn: &Connection, id: &str) -> Result<Option<u64>> {
+    Ok(read_one_stage(conn, id)?.and_then(|stage| stage.content.audio))
+}
+
+// ── Which stages a file appears in ───────────────────────────────────────────
+//
+// The storage model is deliberately tag-based: a stage names tags, and any file carrying one is
+// eligible. That scales — new media joins by being tagged, and reordering or deleting a stage
+// touches no file. But it makes the question an author asks while *looking* at a file ("where does
+// this one show up?") one they would have to run in their head, so the editor answers it and lets
+// the answer be edited.
+//
+// The subtlety: **stages can share a tag.** Leaving one stage still means leaving only that stage,
+// so before the target's tags come off, every other membership they were carrying is preserved
+// through a tag of that stage's own.
+
+/// The tag work one membership toggle comes to.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct MembershipPlan {
+    /// Stages to give a fresh owned tag, as `(stage id, tag name)`.
+    ///
+    /// Fresh rather than borrowed even where the stage has other tags to spare: an author tag can
+    /// also carry content-group, text-pool, link or popup-audio meaning, so adding one to preserve
+    /// a stage membership could quietly change four other things. A new tag says exactly the one
+    /// thing this automatic rewrite needs it to say.
+    pub creations: Vec<(String, String)>,
+    /// Tags to put on the file.
+    pub apply: Vec<String>,
+    /// Tags to take off it.
+    pub remove: Vec<String>,
+    /// Of those, the ones that say something beyond "appears in this stage".
+    ///
+    /// Leaving a stage means taking off the tags that put the file there — there is no exclusion
+    /// list to add to, only an inclusion list to fall out of. Where the stage selects by a tag of
+    /// its own that is the whole story. Where it selects by one of the author's, that tag can also
+    /// drive a content group, match a text pool or name a link, and removing it silently changes
+    /// those too. Joining is careful about this already (see [`dedicated_owned_tag`]); this is what
+    /// lets leaving be, by giving the caller something to say out loud before it happens.
+    pub collateral: Vec<Collateral>,
+}
+
+/// A tag leaving a stage takes off the file, and what else it was doing there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Collateral {
+    pub tag: String,
+    /// Content groups, text-pool entries and web links naming it. Zero means it is only the
+    /// timeline's, and removing it costs nothing but the stage membership being given up.
+    pub content_uses: u64,
+    /// Other stages selecting by it, which are given tags of their own rather than losing the file.
+    pub stage_uses: u64,
+}
+
+// How many *files* carry the tag is the other half of what a confirmation wants to say, and it is
+// deliberately not here: soft deletion is the editor's, not the pack format's, so the honest count
+// lives on the side that knows about it. The editor counts it off its own media list, as the
+// stage-removal dialog already does (`tagClaims`).
+
+/// Whether `tags` puts a file in this stage.
+fn selects(stage: &Stage, tags: &[String]) -> bool {
+    match stage.content.tags.as_deref() {
+        // No inclusion list at all is a stage that restricts nothing: every file appears in it.
+        None => true,
+        Some(restriction) => restriction.iter().any(|tag| tags.contains(tag)),
+    }
+}
+
+/// The tag a membership toggle can add to `stage` without changing any other relationship.
+///
+/// Only the stage's own tag, and only while this stage is its sole reference anywhere: the moment a
+/// caption or a content group also names it, adding it to a file says more than "appears here".
+fn dedicated_owned_tag(conn: &Connection, stage: &Stage) -> Result<Option<String>> {
+    let Some(owned) = stage.content.owned_tag.as_deref() else {
+        return Ok(None);
+    };
+    if !stage.content.tags.as_deref().is_some_and(|tags| tags.iter().any(|tag| tag == owned)) {
+        return Ok(None);
+    }
+    let (content, experience): (u64, u64) = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM behaviour_content_group_tag t WHERE t.tag_id = tags.id)
+                  + (SELECT COUNT(*) FROM behaviour_text_item_tag t WHERE t.tag_id = tags.id)
+                  + (SELECT COUNT(*) FROM behaviour_web_link_tag t WHERE t.tag_id = tags.id),
+                (SELECT COUNT(*) FROM behaviour_stage_tag t WHERE t.tag_id = tags.id)
+         FROM tags WHERE tags.name = ?1",
+        params![owned],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok((content == 0 && experience == 1).then(|| owned.to_string()))
+}
+
+/// What a tag is doing in the pack besides selecting media for one stage.
+fn tag_cost(conn: &Connection, tag: &str, except: &str) -> Result<Collateral> {
+    let (content_uses, stage_uses) = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM behaviour_content_group_tag t WHERE t.tag_id = tags.id)
+                  + (SELECT COUNT(*) FROM behaviour_text_item_tag t WHERE t.tag_id = tags.id)
+                  + (SELECT COUNT(*) FROM behaviour_web_link_tag t WHERE t.tag_id = tags.id),
+                (SELECT COUNT(*) FROM behaviour_stage_tag t
+                     WHERE t.tag_id = tags.id AND t.stage_id <> ?2)
+         FROM tags WHERE tags.name = ?1",
+        params![tag, except],
+        |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+    )?;
+    Ok(Collateral {
+        tag: tag.to_string(),
+        content_uses,
+        stage_uses,
+    })
+}
+
+/// The tags a file carries, as the pack holds them right now.
+pub fn media_tags(conn: &Connection, media: u64) -> Result<Vec<String>> {
+    let mut statement = conn.prepare(
+        "SELECT t.name FROM media_tags AS mt JOIN tags AS t ON t.id = mt.tag_id
+         WHERE mt.media_id = ?1 ORDER BY t.name",
+    )?;
+    let tags = statement
+        .query_map(params![media], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(tags)
+}
+
+/// Works out how to put `media` into `stage`, or take it out, and changes nothing.
+///
+/// Separate from applying it because the two halves run in different phases of one transaction —
+/// the stage rows are behaviour, the tag changes are media — and both have to be planned against
+/// the document as it stands *before* either lands.
+///
+/// A stage that restricts nothing is refused: it shows every file in the pack, so there is no tag
+/// whose absence would exclude one. Restricting the stage is the fix, and it is a different button.
+pub fn plan_stage_membership(
+    conn: &Connection,
+    media: u64,
+    stage_id: &str,
+    member: bool,
+) -> Result<MembershipPlan> {
+    let stages = read_stages(conn)?;
+    let Some(target) = stages.iter().find(|stage| stage.id == stage_id) else {
+        bail!("no stage {stage_id}");
+    };
+    if target.content.tags.is_none() {
+        bail!("{stage_id} shows every file in the pack");
+    }
+    let tags = media_tags(conn, media)?;
+    let mut plan = MembershipPlan::default();
+
+    if member {
+        if selects(target, &tags) {
+            return Ok(plan);
+        }
+        match dedicated_owned_tag(conn, target)? {
+            Some(owned) => plan.apply.push(owned),
+            None => {
+                let tag = stage_tag_name(conn, &target.label, None)?;
+                plan.creations.push((target.id.clone(), tag.clone()));
+                plan.apply.push(tag);
+            }
+        }
+        return Ok(plan);
+    }
+
+    // Leaving. Only the target's tags come off, and only the ones this file actually carries.
+    let restriction = target.content.tags.clone().unwrap_or_default();
+    plan.remove = restriction.into_iter().filter(|tag| tags.contains(tag)).collect();
+    for tag in &plan.remove {
+        // A tag no other stage selects by and nothing else names is this stage's machinery, and
+        // taking it off says only what the author asked. Anything else is worth saying out loud.
+        let cost = tag_cost(conn, tag, stage_id)?;
+        if cost.content_uses > 0 || cost.stage_uses > 0 {
+            plan.collateral.push(cost);
+        }
+    }
+    let remaining: Vec<String> =
+        tags.iter().filter(|tag| !plan.remove.contains(tag)).cloned().collect();
+
+    // Every *other* stage this file was in because of one of those tags gets a tag of its own, so
+    // leaving one stage leaves only that stage.
+    let mut used = Vec::new();
+    for other in &stages {
+        if other.id == stage_id
+            || other.content.tags.is_none()
+            || !selects(other, &tags)
+            || selects(other, &remaining)
+        {
+            continue;
+        }
+        // Deduped against the names this same plan has already handed out, as well as the pack's:
+        // two stages called "Peak" both being rescued must not be given one tag between them.
+        let mut tag = stage_tag_name(conn, &other.label, None)?;
+        let mut suffix = 2;
+        while used.contains(&tag) {
+            tag = stage_tag_name(conn, &format!("{} {suffix}", other.label), None)?;
+            suffix += 1;
+        }
+        used.push(tag.clone());
+        plan.creations.push((other.id.clone(), tag.clone()));
+        plan.apply.push(tag);
+    }
+    Ok(plan)
+}
+
+/// Gives each stage in `plan.creations` its new tag, appended to its selection and owned by it.
+pub fn apply_membership_creations(tx: &Transaction<'_>, plan: &MembershipPlan) -> Result<bool> {
+    let mut changed = false;
+    for (stage_id, tag) in &plan.creations {
+        let Some(stage) = read_one_stage(tx, stage_id)? else {
+            continue;
+        };
+        let mut tags = stage.content.tags.unwrap_or_default();
+        tags.push(tag.clone());
+        changed |= set_stage_content_tags(tx, stage_id, Some(&tags), Some(tag))?;
+    }
+    Ok(changed)
+}
+
+/// Whether the stage restricts what it shows, rather than showing the whole pack.
+///
+/// The three states of `ContentSelection::tags` collapse to two here: an inclusion list, however
+/// empty, is a restriction; its absence is not. See `behaviour_stage.restricts_content`.
+pub fn stage_restricts_content(conn: &Connection, id: &str) -> Result<bool> {
+    Ok(read_one_stage(conn, id)?.is_some_and(|stage| stage.content.tags.is_some()))
+}

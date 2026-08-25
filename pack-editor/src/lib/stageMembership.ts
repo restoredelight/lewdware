@@ -7,20 +7,13 @@
  * "where does this one show up?" — a query they have to run in their head. This answers it, and
  * lets the answer be edited, without a second selection model to keep in sync.
  *
- * The subtlety worth extracting from the component: **stages can share a tag.** Leaving one stage
- * still means leaving only that stage. Before its tags are removed, every other membership they
- * carried is preserved through a safe existing tag or a newly-created tag owned by that stage.
+ * Only the *reading* half is here. What a toggle comes to — which tag a stage can safely be joined
+ * by, and the rescue tags that leaving one shared with another stage needs — is worked out in
+ * `shared::behaviour::editor`, inside the transaction that writes it. Those are questions about the
+ * pack, and answering them from a fetched copy means answering them about a pack that may have
+ * moved on. See `set_stage_membership`.
  */
 import type { Stage } from './types.js';
-import { stageTagName } from './stageTags.js';
-
-/**
- * How much of the pack holds a tag, split the way `get_tag_rows` reports it.
- *
- * `content` is captions, groups and links; `experience` is how many stages select by it. The split
- * is what tells a stage's own machinery tag from one the author also uses for something else.
- */
-export type TagUsage = (tag: string) => { content: number; experience: number };
 
 export interface StageMembership {
 	id: string;
@@ -34,120 +27,26 @@ export interface StageMembership {
 	 * exclude one: `ContentSelection.tags` is an inclusion list with no `none` set, and the toggle
 	 * is shown disabled with the reason rather than silently doing nothing. The fix is to restrict
 	 * the stage, which seeds its own tag onto what it currently shows — see the Timeline tab.
+	 *
+	 * The backend refuses this case too; this is what the author sees instead of an error.
 	 */
 	locked: string | null;
-	/** The stage's dedicated owned tag, when it is safe for this toggle to add. */
-	joinTag: string | null;
-	/**
-	 * Whether joining has to create a fresh owned tag first.
-	 *
-	 * Arbitrary author tags are not safe substitutes: adding one can also put the file in a content
-	 * group, match a text pool, or join another stage. An existing owned tag is reusable only while
-	 * this stage is its sole behaviour reference.
-	 */
-	joinCreatesTag: boolean;
-	/** The tags leaving would remove — those of the stage's tags this file actually carries. */
-	leaveTags: string[];
-}
-
-export interface StageTagCreation {
-	stageId: string;
-	tag: string;
-}
-
-export interface LeaveStagePlan {
-	/** Tags to put on the file before removing the target stage's tags. */
-	preserveTags: string[];
-	/** New owned tags that must also be appended to their stages' selection. */
-	creations: StageTagCreation[];
-	/** The target stage's tags currently carried by the file. */
-	removeTags: string[];
-}
-
-function stageTags(stage: Stage): string[] | null {
-	return stage.content?.tags ?? null;
 }
 
 /** Whether `tags` puts a file in `stage`. */
 function isMember(stage: Stage, tags: string[]): boolean {
-	const restriction = stageTags(stage);
+	const restriction = stage.content?.tags ?? null;
 	if (restriction === null) return true;
-	if (restriction.length === 0) return false;
 	return restriction.some((tag) => tags.includes(tag));
 }
 
-/** The tag a membership toggle can add without changing any other behaviour-owned relationship. */
-function dedicatedOwnedTag(usage: TagUsage, stage: Stage): string | null {
-	const owned = stage.content.owned_tag;
-	if (!owned || !(stage.content.tags ?? []).includes(owned)) return null;
-	const held = usage(owned);
-	return held.content === 0 && held.experience === 1 ? owned : null;
-}
-
-/** Every stage in the pack's timeline, with what a toggle on it would mean for `tags`. */
-export function stageMembership(
-	stages: Stage[],
-	tags: string[],
-	usage: TagUsage
-): StageMembership[] {
-	return stages.map((stage) => {
-		const restriction = stageTags(stage);
-		const member = isMember(stage, tags);
-		const leaveTags = (restriction ?? []).filter((tag) => tags.includes(tag));
-
-		const locked = restriction === null ? 'This stage shows every file in the pack' : null;
-
-		const joinTag = restriction === null ? null : dedicatedOwnedTag(usage, stage);
-		return {
-			id: stage.id,
-			label: stage.label,
-			member,
-			locked,
-			joinTag,
-			joinCreatesTag: restriction !== null && joinTag === null,
-			leaveTags
-		};
-	});
-}
-
-/**
- * Plans the tag rewrite for leaving exactly `targetId`, without changing any other membership.
- *
- * Each endangered stage gets a fresh owned tag. Borrowing an existing author tag could also put
- * the file in a content group, make it match a text pool or popup sound, or manufacture another
- * stage membership. A new tag says only what this automatic rewrite needs it to say.
- */
-export function leaveStagePlan(
-	stages: Stage[],
-	tags: string[],
-	targetId: string,
-	takenTags: Iterable<string>
-): LeaveStagePlan {
-	const target = stages.find((stage) => stage.id === targetId);
-	const targetTags = target ? (stageTags(target) ?? []) : [];
-	const removeTags = targetTags.filter((tag) => tags.includes(tag));
-	const remaining = tags.filter((tag) => !removeTags.includes(tag));
-	const used = new Set(takenTags);
-	const preserveTags: string[] = [];
-	const creations: StageTagCreation[] = [];
-
-	for (const other of stages) {
-		if (
-			other.id === targetId ||
-			!isMember(other, tags) ||
-			isMember(other, remaining) ||
-			stageTags(other) === null
-		) {
-			continue;
-		}
-		// Never borrow another tag from this stage. Even one that is not shared with the target can
-		// carry content-group, text-pool, link or popup-audio meaning. A fresh tag says exactly the
-		// one thing this automatic rewrite needs it to say.
-		const tag = stageTagName(other.label, used);
-		used.add(tag);
-		preserveTags.push(tag);
-		creations.push({ stageId: other.id, tag });
-	}
-
-	return { preserveTags, creations, removeTags };
+/** Every stage in the pack's timeline, and whether this file appears in it. */
+export function stageMembership(stages: Stage[], tags: string[]): StageMembership[] {
+	return stages.map((stage) => ({
+		id: stage.id,
+		label: stage.label,
+		member: isMember(stage, tags),
+		locked:
+			(stage.content?.tags ?? null) === null ? 'This stage shows every file in the pack' : null
+	}));
 }

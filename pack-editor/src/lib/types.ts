@@ -381,6 +381,15 @@ export interface BehaviourOutcome {
 	removed_tags: string[];
 	/** `[from, to]` for each rename that actually happened. */
 	renamed_tags: [string, string][];
+	/**
+	 * Tags the edit put on or took off individual files, as `[media id, tag, added]`.
+	 *
+	 * The media grid is a client-side list, so it needs the delta to stay in step. Reported rather
+	 * than guessed at the call site: which tags a membership toggle comes to is decided backend-side
+	 * — a shared tag that has to be rescued into a fresh one is not something the caller could have
+	 * known — and a failed edit must leave the grid showing what is really stored.
+	 */
+	media_tags: [number, string, boolean][];
 }
 
 /** One text-pool entry with the row id the editor addresses it by — mirrors `editor::TextItemRow`. */
@@ -476,4 +485,20 @@ export interface HistoryStatus {
 	undo_label: string | null;
 	redo_label: string | null;
 	at_saved_state: boolean;
+}
+
+/**
+ * A tag that leaving a stage would take off a file, and what else it was doing there.
+ *
+ * A stage that selects by a tag of its own can be left by taking that tag off, and that says
+ * nothing more than the author asked. A stage that selects by one of the author's tags cannot: the
+ * same tag may drive a content group, match a text pool or name a link, and there is no exclusion
+ * list to fall back on. Mirrors `shared::behaviour::editor::Collateral`.
+ */
+export interface Collateral {
+	tag: string;
+	/** Content groups, text-pool entries and web links naming it. */
+	content_uses: number;
+	/** Other stages selecting by it — they are given tags of their own rather than losing the file. */
+	stage_uses: number;
 }

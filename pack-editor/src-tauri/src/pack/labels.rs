@@ -38,6 +38,8 @@ pub(super) struct TagActionOutcome {
     /// unchanged, which is exactly the case a per-file "Appears in" toggle produces.
     pub(super) changed: bool,
     pub(super) media_refs: Vec<u64>,
+    /// Per-file tag changes, for [`BehaviourOutcome::media_tags`].
+    pub(super) media_tags: Vec<(u64, String, bool)>,
     pub(super) removed: Vec<String>,
     pub(super) renamed: Vec<(String, String)>,
 }
@@ -68,6 +70,9 @@ pub(super) fn run_tag_actions_before_write(
                             )? > 0;
                         }
                         outcome.media_refs.extend(ids.iter().copied());
+                        outcome
+                            .media_tags
+                            .extend(ids.iter().map(|id| (*id, tag.clone(), true)));
                     }
                     None => {
                         outcome.changed |= tx.execute(
@@ -75,7 +80,11 @@ pub(super) fn run_tag_actions_before_write(
                              SELECT id, ? FROM media WHERE deleted = 0",
                             params![tag_id],
                         )? > 0;
-                        outcome.media_refs.extend(live_media_ids(tx)?);
+                        let live = live_media_ids(tx)?;
+                        outcome
+                            .media_tags
+                            .extend(live.iter().map(|id| (*id, tag.clone(), true)));
+                        outcome.media_refs.extend(live);
                     }
                 }
             }
@@ -96,6 +105,9 @@ pub(super) fn run_tag_actions_before_write(
                     )? > 0;
                 }
                 outcome.media_refs.extend(media.iter().copied());
+                outcome
+                    .media_tags
+                    .extend(media.iter().map(|id| (*id, tag.clone(), false)));
             }
             TagAction::Rename { from, to } => {
                 reject_managed_tag(from)?;

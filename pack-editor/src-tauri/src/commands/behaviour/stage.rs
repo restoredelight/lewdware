@@ -8,8 +8,14 @@
 //! - `set_stage_movement` and `set_stage_mitosis` carry the whole sub-structure, because one click
 //!   creates both of its values. As separate commands that would be several undo entries for one
 //!   action, and would need a grouping mechanism to undo the granularity it just bought.
-//! - `remove_stage` and the rename carry `retiring` and `tag_actions`, so a stage, the wallpaper
-//!   that was only ever its scenery, and the tag that existed only for it go in one transaction.
+//! - `remove_stage` and the rename retire media and tags alongside the stage row, so a stage, the
+//!   wallpaper that was only ever its scenery, and the tag that existed only for it go in one
+//!   transaction.
+//!
+//! What none of them take is a *decision*. The stage's scenery, the name its tag should have, and
+//! whether that tag is the editor's to rename are all facts about the pack, and they are worked out
+//! here, inside the transaction, from the pack itself — not computed by the front end against
+//! whatever it last fetched and sent along. See [`BehaviourAction::retiring`].
 
 use rusqlite::Transaction;
 use shared::behaviour::editor;
@@ -17,7 +23,7 @@ use shared::behaviour::{EndStrategy, EventCountCondition, EventKind, EventSchedu
 use tauri::State;
 
 use super::setter;
-use crate::pack::{BehaviourAction, BehaviourOutcome, TagAction};
+use crate::pack::{BehaviourAction, BehaviourOutcome, Prepared, TagAction};
 use crate::AppState;
 
 /// Adds a stage after `after`, copying `source`'s settings if given.
@@ -76,24 +82,43 @@ pub async fn move_stage(
 
 /// Removes a stage, retiring the media and the tag that existed only for it.
 ///
-/// `retiring` and `tag_actions` are what makes this one undo entry rather than three: the stage,
-/// its wallpaper and its owned tag go together, so one undo brings back the stage *with* its
-/// wallpaper rather than a stage the author never created.
+/// One undo entry rather than three: the stage, the files that were only ever its scenery, and the
+/// tag that existed only for it go together, so one undo brings back the stage *with* its wallpaper
+/// rather than a stage the author never created.
+///
+/// `also_remove_tag` is the only thing the caller decides, because it is the only part that is not
+/// a fact — the author was shown what the tag is on and said to take it anyway. Left false, the tag
+/// goes if and only if nothing turns out to claim it.
 #[tauri::command]
 pub async fn remove_stage(
     state: State<'_, AppState>,
     id: String,
-    retiring: Vec<u64>,
-    tag_actions: Vec<TagAction>,
+    also_remove_tag: bool,
     label: String,
 ) -> Result<BehaviourOutcome, String> {
     state
         .with_pack(async |pack| {
-            pack.behaviour_edit(
-                BehaviourAction::new(label, move |tx: &Transaction<'_>| editor::remove_stage(tx, &id))
-                    .retiring(retiring)
-                    .with_tag_actions(tag_actions),
-            )
+            let reading = id.clone();
+            pack.behaviour_edit(BehaviourAction::planned(
+                label,
+                move |tx: &Transaction<'_>| {
+                    Ok(Prepared {
+                        value: (),
+                        retiring: editor::stage_scenery(tx, &reading)?,
+                        tag_actions: editor::stage_owned_tag(tx, &reading)?
+                            .map(|tag| {
+                                if also_remove_tag {
+                                    TagAction::Delete { tag }
+                                } else {
+                                    TagAction::RetireIfUnclaimed { tag }
+                                }
+                            })
+                            .into_iter()
+                            .collect(),
+                    })
+                },
+                move |tx: &Transaction<'_>, ()| editor::remove_stage(tx, &id),
+            ))
             .await
         })
         .await
@@ -105,119 +130,220 @@ pub async fn remove_stage(
 /// Renames the stage, and renames the tag it owns along with it.
 ///
 /// One command because they are one author action: the editor names a stage's tag after the stage,
-/// so letting the two land separately would leave a rename half-applied under undo. `tag_actions`
-/// is empty for a stage that owns nothing.
+/// so letting the two land separately would leave a rename half-applied under undo.
+///
+/// The rename is worked out here because all three of its conditions are facts about the pack. Only
+/// a tag the stage owns, and only one no other stage selects by — a rename is lossless everywhere
+/// else it appears, since the lists hold tag *ids* and follow the row, but another stage reading
+/// this name is another author decision and this one is bookkeeping. And the new name has to dedupe
+/// against the tags the pack has at the moment of the write, not the ones the front end last saw.
 #[tauri::command]
 pub async fn set_stage_label(
     state: State<'_, AppState>,
     id: String,
     value: String,
-    tag_actions: Vec<TagAction>,
     label: String,
 ) -> Result<BehaviourOutcome, String> {
     state
         .with_pack(async |pack| {
-            pack.behaviour_edit(
-                BehaviourAction::new(label, move |tx: &Transaction<'_>| {
-                    editor::set_stage_label(tx, &id, &value)
-                })
-                .with_tag_actions(tag_actions),
-            )
+            let (stage, renaming) = (id.clone(), value.clone());
+            pack.behaviour_edit(BehaviourAction::planned(
+                label,
+                move |tx: &Transaction<'_>| {
+                    let rename = || -> Result<Option<TagAction>, anyhow::Error> {
+                        let Some(owned) = editor::stage_owned_tag(tx, &stage)? else {
+                            return Ok(None);
+                        };
+                        if editor::stage_tag_shared(tx, &owned, &stage)? {
+                            return Ok(None);
+                        }
+                        let to = editor::stage_tag_name(tx, &renaming, Some(&owned))?;
+                        if to == owned {
+                            return Ok(None);
+                        }
+                        Ok(Some(TagAction::Rename { from: owned, to }))
+                    };
+                    Ok(Prepared {
+                        tag_actions: rename()?.into_iter().collect(),
+                        ..Prepared::default()
+                    })
+                },
+                move |tx: &Transaction<'_>, ()| editor::set_stage_label(tx, &id, &value),
+            ))
             .await
         })
         .await
 }
 
-/// Which media the stage selects, and which of those tags the editor maintains the name of.
+/// Stops the stage restricting its content: it shows the whole pack again.
 ///
-/// `tags` of `None` is a stage that restricts nothing — and therefore owns nothing, since there is
-/// no selection for a tag to be part of. `tag_actions` carries the seeding that switching a
-/// restriction on needs: the stage's new tag goes onto the media it was showing a moment before, so
-/// behaviour is preserved rather than the stage going from everything to nothing in one checkbox.
+/// Its tag goes with the restriction — there is no selection left for a tag to be part of, and the
+/// `owned` flag lives on the association row. The tag itself survives on the media carrying it,
+/// which is the point: switching the restriction back on is a fresh decision, not an undo.
 #[tauri::command]
-pub async fn set_stage_content_tags(
+pub async fn unrestrict_stage_content(
     state: State<'_, AppState>,
     id: String,
-    tags: Option<Vec<String>>,
-    owned_tag: Option<String>,
-    tag_actions: Vec<TagAction>,
     label: String,
 ) -> Result<BehaviourOutcome, String> {
     state
         .with_pack(async |pack| {
-            pack.behaviour_edit(
-                BehaviourAction::new(label, move |tx: &Transaction<'_>| {
-                    editor::set_stage_content_tags(tx, &id, tags.as_deref(), owned_tag.as_deref())
-                })
-                .with_tag_actions(tag_actions),
-            )
+            pack.behaviour_edit(BehaviourAction::new(label, move |tx: &Transaction<'_>| {
+                editor::set_stage_content_tags(tx, &id, None, None)
+            }))
             .await
         })
         .await
 }
 
-/// The same, across several stages at once.
+/// Starts the stage restricting its content, giving it a tag of its own to restrict by.
 ///
-/// The one genuinely multi-entity action: taking a file out of one stage gives any stage that
-/// shared its tag a fresh tag of its own, so the file stays where it was. That is one thing the
-/// author did, so it is one transaction and one undo entry.
+/// Switching this on is the cliff: the stage goes from *everything* to *nothing* in one checkbox,
+/// because an empty inclusion list selects no media. So the new tag is seeded onto the media the
+/// stage is showing right now — which, for a stage that restricted nothing, is the whole pack.
+/// Behaviour is preserved exactly, and only then do the per-file toggles have a tag to remove. See
+/// `behaviour-design/default-mode-v2.md`, "Turning a stage's tags on is the cliff".
+///
+/// The name comes from the stage's label, deduped against the tags the pack has *at this moment* —
+/// which is why it is chosen here. A name picked from a stale tag list would either collide with a
+/// real classification, quietly adopting whatever it is already on, or fail the uniqueness check
+/// and take the author's checkbox with it.
+///
+/// **A stage that is already restricted is left alone.** The checkbox computes its next value from
+/// what it last rendered, so a double click sends this twice; without the check the second call
+/// would mint `stage-peak-2`, put it on every file, replace the selection with it — orphaning the
+/// first tag on the whole pack — and spend a second undo entry. The same guard covers a genuinely
+/// stale request, which would otherwise overwrite tags the author has since chosen by hand.
 #[tauri::command]
-pub async fn set_stage_content_tags_many(
+pub async fn restrict_stage_content(
     state: State<'_, AppState>,
-    updates: Vec<StageTagUpdate>,
-    tag_actions: Vec<TagAction>,
+    id: String,
     label: String,
 ) -> Result<BehaviourOutcome, String> {
     state
         .with_pack(async |pack| {
-            pack.behaviour_edit(
-                BehaviourAction::new(label, move |tx: &Transaction<'_>| {
-                    let mut changed = false;
-                    for update in &updates {
-                        changed |= editor::set_stage_content_tags(
-                            tx,
-                            &update.id,
-                            update.tags.as_deref(),
-                            update.owned_tag.as_deref(),
-                        )?;
+            let (naming, writing) = (id.clone(), id);
+            pack.behaviour_edit(BehaviourAction::planned(
+                label,
+                move |tx: &Transaction<'_>| {
+                    let Some(label) = editor::read_one_stage_label(tx, &naming)? else {
+                        anyhow::bail!("no stage {naming}");
+                    };
+                    // Already restricting: nothing to name, and nothing to seed.
+                    if editor::stage_restricts_content(tx, &naming)? {
+                        return Ok(Prepared::default());
                     }
-                    Ok(changed)
-                })
-                .with_tag_actions(tag_actions),
-            )
+                    let tag = editor::stage_tag_name(tx, &label, None)?;
+                    Ok(Prepared {
+                        // `media: None` is "every file in the pack", resolved against the pack
+                        // rather than by shipping every id across the IPC boundary to describe one
+                        // checkbox.
+                        tag_actions: vec![TagAction::Apply {
+                            tag: tag.clone(),
+                            media: None,
+                        }],
+                        value: Some(tag),
+                        retiring: Vec::new(),
+                    })
+                },
+                move |tx: &Transaction<'_>, tag: Option<String>| match tag {
+                    Some(tag) => editor::set_stage_content_tags(
+                        tx,
+                        &writing,
+                        Some(std::slice::from_ref(&tag)),
+                        Some(&tag),
+                    ),
+                    None => Ok(false),
+                },
+            ))
             .await
         })
         .await
 }
 
-/// One stage's selection, as [`set_stage_content_tags_many`] takes it.
-#[derive(serde::Deserialize)]
-pub struct StageTagUpdate {
-    id: String,
-    tags: Option<Vec<String>>,
-    owned_tag: Option<String>,
+/// Puts one file into a stage, or takes it out — the "Appears in" strip.
+///
+/// The whole toggle is one command because it is one thing the author clicked, and because every
+/// part of what it comes to is a fact about the pack rather than about the screen that asked.
+/// Joining may need the stage to be given a tag of its own first; *leaving* is the interesting
+/// half, because stages can share a tag — so before the target's tags come off, every other stage
+/// this file was in because of one of them gets a fresh tag of its own and the file gets that too.
+/// Leaving one stage has to leave only that stage.
+///
+/// One transaction, so the rescue tags, the stage rows that select by them and the removal cannot
+/// come apart under undo — and one plan, worked out from the pack rather than from a tag list the
+/// front end last fetched.
+///
+/// `accept_collateral` is the author's answer to what leaving *costs*. A stage that selects by one
+/// of the author's tags rather than its own can only be left by taking that tag off the file, and
+/// the tag may also drive a content group or match a text pool. That is not a fact the backend can
+/// decide, so it refuses rather than guessing: see [`editor::MembershipPlan::collateral`] and
+/// `get_stage_membership_cost`, which is what the confirmation reads.
+#[tauri::command]
+pub async fn set_stage_membership(
+    state: State<'_, AppState>,
+    media: u64,
+    stage: String,
+    member: bool,
+    accept_collateral: bool,
+    label: String,
+) -> Result<BehaviourOutcome, String> {
+    state
+        .with_pack(async |pack| {
+            pack.behaviour_edit(BehaviourAction::planned(
+                label,
+                move |tx: &Transaction<'_>| {
+                    let plan = editor::plan_stage_membership(tx, media, &stage, member)?;
+                    if !accept_collateral && !plan.collateral.is_empty() {
+                        let tags: Vec<&str> =
+                            plan.collateral.iter().map(|cost| cost.tag.as_str()).collect();
+                        anyhow::bail!(
+                            "leaving this stage would take off {}, which does more than select \
+                             media for it",
+                            tags.join(", ")
+                        );
+                    }
+                    Ok(Prepared {
+                        tag_actions: membership_tag_actions(media, &plan),
+                        value: plan,
+                        retiring: Vec::new(),
+                    })
+                },
+                |tx: &Transaction<'_>, plan: editor::MembershipPlan| {
+                    editor::apply_membership_creations(tx, &plan)
+                },
+            ))
+            .await
+        })
+        .await
 }
 
 /// Whether the stage picks a fresh background track from its own tags when it begins.
 ///
-/// Switching this on clears any named track — the two are alternatives. `retiring` names the track
-/// being let go of, so a sound that was only ever this stage's scenery leaves with it.
+/// Switching this on clears any named track — the two are alternatives. The track being let go of
+/// is retired with it, so a sound that was only ever this stage's scenery leaves with it rather
+/// than staying behind marked out of popups and referenced by nothing.
 #[tauri::command]
 pub async fn set_stage_audio_random(
     state: State<'_, AppState>,
     id: String,
     random: bool,
-    retiring: Vec<u64>,
     label: String,
 ) -> Result<BehaviourOutcome, String> {
     state
         .with_pack(async |pack| {
-            pack.behaviour_edit(
-                BehaviourAction::new(label, move |tx: &Transaction<'_>| {
-                    editor::set_stage_audio_random(tx, &id, random)
-                })
-                .retiring(retiring),
-            )
+            let stage = id.clone();
+            pack.behaviour_edit(BehaviourAction::planned(
+                label,
+                // The track this stage names *now*, not the one the front end last saw it naming.
+                move |tx: &Transaction<'_>| {
+                    Ok(Prepared {
+                        retiring: editor::stage_audio(tx, &stage)?.into_iter().collect(),
+                        ..Prepared::default()
+                    })
+                },
+                move |tx: &Transaction<'_>, ()| editor::set_stage_audio_random(tx, &id, random),
+            ))
             .await
         })
         .await
@@ -316,3 +442,24 @@ setter!(
     /// Removes one tag, and the stage's ownership of it if it owned it.
     remove_stage_tag(id: String, tag: String) |tx| editor::remove_stage_tag(tx, &id, &tag)
 );
+
+/// The tag work one membership toggle comes to: the rescue tags on, the stage's tags off.
+///
+/// Named so the tests can build the same action the command does — what they exercise is the phase
+/// ordering, and a hand-written pair of tag actions would exercise nothing.
+pub(crate) fn membership_tag_actions(
+    media: u64,
+    plan: &editor::MembershipPlan,
+) -> Vec<TagAction> {
+    plan.apply
+        .iter()
+        .map(|tag| TagAction::Apply {
+            tag: tag.clone(),
+            media: Some(vec![media]),
+        })
+        .chain(plan.remove.iter().map(|tag| TagAction::Remove {
+            tag: tag.clone(),
+            media: vec![media],
+        }))
+        .collect()
+}
