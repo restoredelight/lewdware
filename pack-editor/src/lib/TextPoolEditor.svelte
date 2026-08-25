@@ -147,7 +147,12 @@
 		<TagPicker
 			tags={item.tags}
 			id={`${idPrefix}-${index}`}
-			onchange={(tags, label) => write(() => api.pool.setTags(item.id, tags, label), label)}
+			onchange={(tag, added, label) =>
+				write(
+					() =>
+						added ? api.pool.addTag(item.id, tag, label) : api.pool.removeTag(item.id, tag, label),
+					label
+				)}
 		/>
 		{#if poolKey === 'prompt'}
 			<DebouncedField

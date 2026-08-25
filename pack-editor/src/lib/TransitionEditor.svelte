@@ -71,19 +71,15 @@
 	function isAffected(group: (typeof groups)[number], key: TransitionValue) {
 		return transition.affected.includes(group.legacy) || transition.affected.includes(key);
 	}
-	function affected(group: (typeof groups)[number], key: TransitionValue, checked: boolean) {
-		let next = [...transition.affected];
-		// Expanding a legacy broad selection on first edit keeps every sibling selected.
-		if (next.includes(group.legacy)) {
-			next = next.filter((item) => item !== group.legacy);
-			for (const value of group.values) if (!next.includes(value.key)) next.push(value.key);
-		}
-		if (checked && !next.includes(key)) next.push(key);
-		if (!checked) next = next.filter((item) => item !== key);
+	function affected(_group: (typeof groups)[number], key: TransitionValue, checked: boolean) {
+		// One checkbox, one command. Building the whole list here and sending that would mean two
+		// quick clicks each dropped the other's work — and the legacy broad-category expansion the
+		// backend does is the same edit, so it belongs in the same place.
+		//
 		// Named for the section it lives in ("Gradual changes"), so the undo entry points at
 		// something the author can see rather than describing the field.
 		write(
-			() => api.transition.setAffected(transition.id, next, 'Edit gradual changes'),
+			() => api.transition.setCategory(transition.id, key, checked, 'Edit gradual changes'),
 			'Edit gradual changes'
 		);
 	}

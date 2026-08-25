@@ -158,6 +158,12 @@ export const api = {
 			invoke<void>('set_text_item_timeout', { id, seconds, label }),
 		setTags: (id: number, tags: string[], label: string) =>
 			invoke<void>('set_text_item_tags', { id, tags, label }),
+		// One chip at a time: two removals built from the same fetched list would each put the
+		// other's tag back.
+		addTag: (id: number, tag: string, label: string) =>
+			invoke<void>('add_text_item_tag', { id, tag, label }),
+		removeTag: (id: number, tag: string, label: string) =>
+			invoke<void>('remove_text_item_tag', { id, tag, label }),
 		add: (kind: PoolKind, item: TextItem, label: string) =>
 			invoke<BehaviourOutcome>('add_text_item', { kind, item, label }),
 		remove: (id: number, label: string) => invoke<void>('remove_text_item', { id, label })
@@ -171,6 +177,15 @@ export const api = {
 			invoke<void>('set_web_link_args', { id, args, label }),
 		setTags: (id: number, tags: string[], label: string) =>
 			invoke<void>('set_web_link_tags', { id, tags, label }),
+		addTag: (id: number, tag: string, label: string) =>
+			invoke<void>('add_web_link_tag', { id, tag, label }),
+		removeTag: (id: number, tag: string, label: string) =>
+			invoke<void>('remove_web_link_tag', { id, tag, label }),
+		addArg: (id: number, value: string, label: string) =>
+			invoke<void>('add_web_link_arg', { id, value, label }),
+		/** By position: the same suffix may appear twice, so a value does not identify one. */
+		removeArg: (id: number, position: number, label: string) =>
+			invoke<void>('remove_web_link_arg', { id, position, label }),
 		add: (link: WebLink, label: string) =>
 			invoke<BehaviourOutcome>('add_web_link', { link, label }),
 		remove: (id: number, label: string) => invoke<void>('remove_web_link', { id, label })
@@ -186,6 +201,10 @@ export const api = {
 			invoke<void>('set_content_group_enabled_by_default', { id, enabled, label }),
 		setTags: (id: string, tags: string[], label: string) =>
 			invoke<void>('set_content_group_tags', { id, tags, label }),
+		addTag: (id: string, tag: string, label: string) =>
+			invoke<void>('add_content_group_tag', { id, tag, label }),
+		removeTag: (id: string, tag: string, label: string) =>
+			invoke<void>('remove_content_group_tag', { id, tag, label }),
 		add: (group: ContentGroup, label: string) =>
 			invoke<BehaviourOutcome>('add_content_group', { group, label }),
 		remove: (id: string, label: string) => invoke<void>('remove_content_group', { id, label })
@@ -236,6 +255,10 @@ export const api = {
 			tagActions: TagAction[],
 			label: string
 		) => invoke<BehaviourOutcome>('set_stage_content_tags_many', { updates, tagActions, label }),
+		addTag: (id: string, tag: string, label: string) =>
+			invoke<void>('add_stage_tag', { id, tag, label }),
+		removeTag: (id: string, tag: string, label: string) =>
+			invoke<void>('remove_stage_tag', { id, tag, label }),
 		setAudioRandom: (id: string, random: boolean, retiring: number[], label: string) =>
 			invoke<BehaviourOutcome>('set_stage_audio_random', { id, random, retiring, label }),
 		setEvent: (id: string, kind: EventKind, schedule: EventSchedule | null, label: string) =>
@@ -273,7 +296,10 @@ export const api = {
 		setEasing: (id: string, easing: Transition['easing'], label: string) =>
 			invoke<void>('set_transition_easing', { id, easing, label }),
 		setAffected: (id: string, affected: TransitionValue[], label: string) =>
-			invoke<void>('set_transition_affected', { id, affected, label })
+			invoke<void>('set_transition_affected', { id, affected, label }),
+		/** One checkbox. The legacy broad-category expansion happens server-side. */
+		setCategory: (id: string, category: TransitionValue, enabled: boolean, label: string) =>
+			invoke<void>('set_transition_category', { id, category, enabled, label })
 	},
 
 	popup: {

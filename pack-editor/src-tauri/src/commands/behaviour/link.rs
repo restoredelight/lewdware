@@ -45,3 +45,23 @@ pub async fn add_web_link(
 setter!(
     remove_web_link(id: i64) |tx| editor::remove_web_link(tx, id)
 );
+
+setter!(
+    add_web_link_tag(id: i64, tag: String) |tx| editor::add_web_link_tag(tx, id, &tag)
+);
+
+setter!(
+    remove_web_link_tag(id: i64, tag: String) |tx| editor::remove_web_link_tag(tx, id, &tag)
+);
+
+setter!(
+    /// Appends one suffix.
+    add_web_link_arg(id: i64, value: String) |tx| editor::add_web_link_arg(tx, id, &value)
+);
+
+setter!(
+    /// Removes the suffix at `position` — by position, because the same suffix may appear twice.
+    remove_web_link_arg(id: i64, position: usize) |tx| {
+        editor::remove_web_link_arg(tx, id, position)
+    }
+);

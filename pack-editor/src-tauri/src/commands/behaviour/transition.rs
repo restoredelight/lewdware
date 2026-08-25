@@ -24,3 +24,10 @@ setter!(
         editor::set_transition_affected(tx, &id, &affected)
     }
 );
+
+setter!(
+    /// Turns one category on or off, expanding a legacy broad category first.
+    set_transition_category(id: String, category: TransitionCategory, enabled: bool) |tx| {
+        editor::set_transition_category(tx, &id, category, enabled)
+    }
+);

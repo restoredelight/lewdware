@@ -257,3 +257,28 @@ describe('invalidating a query that is already fetching', () => {
 		view.unmount();
 	});
 });
+
+describe('changing packs while a query is in flight', () => {
+	// The overlap the other two tests miss: a reply for the pack that was open when the request went
+	// out is correctly discarded — but the pack that *is* open has not been asked yet. Without a
+	// follow-up the view stays on "Loading…" until some unrelated invalidation happens by.
+	it('asks again for the pack that is now open', async () => {
+		let release!: (value: string) => void;
+		const fetcher = vi
+			.fn()
+			.mockImplementationOnce(() => new Promise<string>((resolve) => (release = resolve)))
+			.mockResolvedValueOnce('the new pack');
+		const view = mount(() => query('k', fetcher));
+		await Promise.resolve();
+		await Promise.resolve();
+
+		store.openPack('other-pack', 'Other', [], [], []);
+		release('the old pack');
+		await settle();
+		await settle();
+
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(view.value.current).toBe('the new pack');
+		view.unmount();
+	});
+});

@@ -18,7 +18,7 @@
 	 */
 	import type { Snippet } from 'svelte';
 	import { onDestroy, untrack } from 'svelte';
-	import { mutate, registerField } from './mutate.svelte.js';
+	import { mutate, registerField, trackDetached } from './mutate.svelte.js';
 
 	type Props = {
 		/** The stored value. Adopted whenever there is no unsent edit. */
@@ -104,9 +104,11 @@
 
 	const unregister = registerField({ flush, cancel });
 	onDestroy(() => {
-		// Leaving the surface is not abandoning the edit: send it, then stop being flushable.
-		void flush().catch(() => {});
+		// Leaving the surface is not abandoning the edit: it is sent on the way out. The send
+		// outlives this component, so it moves to the detached set rather than simply disappearing
+		// — a save started a moment later still has to wait for it, and still has to see it fail.
 		unregister();
+		void trackDetached(flush()).catch(() => {});
 	});
 </script>
 

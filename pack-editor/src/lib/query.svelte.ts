@@ -96,20 +96,24 @@ class Entry<T> {
 			try {
 				const value = await this.fetcher();
 				// A reply for a pack that is no longer open describes something the author has
-				// closed. Adopting it would show the previous pack's content under this one's name.
-				if (store.packId !== packId) return;
-				this.value = value;
-				this.packId = packId;
-				this.error = null;
+				// closed. Adopting it would show the previous pack's content under this one's name
+				// — and the pack that *is* open has not been asked yet, so ask now. Without this the
+				// view stays on "Loading…" until some unrelated invalidation happens by.
+				if (store.packId !== packId) this.refetchWanted = true;
+				else {
+					this.value = value;
+					this.packId = packId;
+					this.error = null;
+				}
 			} catch (error) {
-				if (store.packId !== packId) return;
-				this.error = String(error);
+				if (store.packId !== packId) this.refetchWanted = true;
+				else this.error = String(error);
 			} finally {
 				this.loading = false;
 				this.inFlight = null;
 			}
-			// Something asked for a fresh answer while this one was on its way, so this one is
-			// already out of date however it turned out.
+			// Either something asked for a fresh answer while this one was on its way, or the pack
+			// changed under it. Both mean this answer is already out of date however it turned out.
 			if (this.refetchWanted) {
 				this.refetchWanted = false;
 				await this.fetch();

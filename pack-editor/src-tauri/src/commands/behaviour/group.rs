@@ -56,3 +56,15 @@ pub async fn add_content_group(
 setter!(
     remove_content_group(id: String) |tx| editor::remove_content_group(tx, &id)
 );
+
+setter!(
+    add_content_group_tag(id: String, tag: String) |tx| {
+        editor::add_content_group_tag(tx, &id, &tag)
+    }
+);
+
+setter!(
+    remove_content_group_tag(id: String, tag: String) |tx| {
+        editor::remove_content_group_tag(tx, &id, &tag)
+    }
+);

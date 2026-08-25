@@ -306,3 +306,13 @@ setter!(
         editor::set_stage_end_strategy(tx, &id, strategy)
     }
 );
+
+setter!(
+    /// Adds one tag to a restricted stage's selection.
+    add_stage_tag(id: String, tag: String) |tx| editor::add_stage_tag(tx, &id, &tag)
+);
+
+setter!(
+    /// Removes one tag, and the stage's ownership of it if it owned it.
+    remove_stage_tag(id: String, tag: String) |tx| editor::remove_stage_tag(tx, &id, &tag)
+);

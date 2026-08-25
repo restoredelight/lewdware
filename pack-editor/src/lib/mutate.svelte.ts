@@ -77,6 +77,23 @@ export async function mutate(
  */
 const pending = new Set<{ flush: () => Promise<void>; cancel: () => void }>();
 
+/**
+ * Writes still in flight from fields that have since gone away.
+ *
+ * A field unmounts when the author leaves the surface, and its last edit is sent on the way out —
+ * but the send outlives the component. Dropping it from the barrier the moment `onDestroy` runs
+ * would let a save start while that write is still travelling, and let a *failed* one pass
+ * unnoticed, so the pack is written without the value the author entered.
+ */
+const detached = new Set<Promise<void>>();
+
+/** Keeps `flush` in the save barrier until it settles, however the field that owned it ended. */
+export function trackDetached(flush: Promise<void>): Promise<void> {
+	detached.add(flush);
+	const settled = flush.finally(() => detached.delete(settled));
+	return settled;
+}
+
 /** Adds a field to the pending set, returning the call that removes it again. */
 export function registerField(field: {
 	flush: () => Promise<void>;
@@ -94,13 +111,23 @@ export function registerField(field: {
  * successful save would then report the pack as having no unsaved changes.
  */
 export async function flushFields(): Promise<void> {
-	const results = await Promise.allSettled([...pending].map((field) => field.flush()));
+	const results = await Promise.allSettled([
+		...[...pending].map((field) => field.flush()),
+		...detached
+	]);
 	if (results.some((result) => result.status === 'rejected')) {
 		throw new Error('A change could not be saved.');
 	}
 }
 
-/** Throws away every pending edit — for an undo, redo or discard. */
+/**
+ * Throws away every pending edit — for an undo, redo or discard.
+ *
+ * Writes already on their way are dropped from the barrier rather than cancelled: a sent write has
+ * landed or is about to, and the revert that prompted this covers it either way. What matters is
+ * that a save afterwards no longer waits on a value belonging to the state being left.
+ */
 export function cancelFields(): void {
 	for (const field of pending) field.cancel();
+	detached.clear();
 }

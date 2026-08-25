@@ -6,30 +6,30 @@
 		tags: string[];
 		id: string;
 		/**
-		 * Sends the new tag list, with the undo label for what the author did.
+		 * Sends the one chip that changed, with the undo label for what the author did.
 		 *
-		 * This used to be a dot-separated `path` into the behaviour document, which made one shared
-		 * leaf component the write path for every "entity has tags" surface in the editor — a
-		 * caption, a web link, a content group, a stage. Each of those is now its own typed command,
-		 * so the parent (which knows what it owns) does the writing and this only knows it has some
-		 * tags.
+		 * The *chip* rather than the resulting list, which is what this used to send. A list is
+		 * built from what was last fetched, so removing two chips in quick succession sends
+		 * "everything except A" and then "everything except B" — and the second puts A back. Naming
+		 * the item makes the two edits commute.
+		 *
+		 * Before that it was a dot-separated `path` into the behaviour document, which made one
+		 * shared leaf component the write path for every "entity has tags" surface in the editor.
+		 * The parent owns the writing now; this only knows it has some tags.
 		 */
-		onchange: (tags: string[], label: string) => void;
+		onchange: (tag: string, added: boolean, label: string) => void;
 	};
 
 	let { tags, id, onchange }: Props = $props();
 
-	function addTag(t: string) {
-		if (!t || tags.includes(t)) return;
-		onchange([...tags, t], 'Add tag');
+	function addTag(tag: string) {
+		if (!tag || tags.includes(tag)) return;
+		onchange(tag, true, 'Add tag');
 	}
 
 	function removeTag(tag: string) {
 		if (!tags.includes(tag)) return;
-		onchange(
-			tags.filter((item) => item !== tag),
-			'Remove tag'
-		);
+		onchange(tag, false, 'Remove tag');
 	}
 </script>
 

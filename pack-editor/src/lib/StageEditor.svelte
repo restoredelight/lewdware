@@ -22,7 +22,7 @@
 	import { keys, query } from './query.svelte.js';
 	import { stageTagName, takenTagNames } from './stageTags.js';
 	import { store } from './store.svelte.js';
-	import type { EventKind, EventSchedule, Stage } from './types.js';
+	import type { EventKind, EventSchedule, Stage, TagAction } from './types.js';
 
 	type Props = {
 		stageId: string;
@@ -143,36 +143,29 @@
 	}
 
 	/**
-	 * Follows a stage rename through to the tag it owns, on blur rather than on every keystroke —
-	 * `stage-i`, `stage-in`, `stage-int` are renames of a real tag, not an intermediate state.
+	 * The tag rename that goes with renaming this stage to `label`, or nothing if none is due.
+	 *
+	 * Returned rather than sent, so it can travel *with* the rename. `set_stage_label` takes the tag
+	 * actions for exactly this reason: the stage's name and the name of the tag the editor made for
+	 * it are one thing the author did, and two commands would be two undo entries — one of which
+	 * could fail on its own and leave the two disagreeing.
 	 *
 	 * Only a tag no other stage selects by. A rename is lossless everywhere else it appears (the
 	 * lists are joins, so media, pools and groups follow the id), but another stage reading this
 	 * name is another author decision, and this one is bookkeeping.
 	 *
-	 * `label` is passed in rather than read back, because the name field commits before this runs
-	 * and what is stored may not have caught up.
+	 * Nothing rewrites `content.tags`: the selection holds tag *ids*, so renaming the row is the
+	 * whole of it.
 	 */
-	function renameOwnedTag(label: string) {
+	function ownedTagRename(label: string): TagAction[] {
 		const owned = stage?.content.owned_tag;
-		if (!stage || !owned) return;
+		if (!stage || !owned) return [];
 		const id = stage.id;
 		if (stages.some((other) => other.id !== id && (other.content.tags ?? []).includes(owned)))
-			return;
+			return [];
 		const renamed = stageTagName(label, taken(owned));
-		if (renamed === owned) return;
-		const tags = (stage.content.tags ?? []).map((tag) => (tag === owned ? renamed : tag));
-		write(
-			() =>
-				api.stage.setContentTags(
-					id,
-					tags,
-					renamed,
-					[{ kind: 'rename', from: owned, to: renamed }],
-					'Rename stage'
-				),
-			'Rename stage'
-		);
+		if (renamed === owned) return [];
+		return [{ kind: 'rename', from: owned, to: renamed }];
 	}
 
 	function setEvent(key: EventKind, value?: EventSchedule) {
@@ -237,13 +230,10 @@
 					value={stage?.label ?? ''}
 					label="Rename stage"
 					{invalidates}
-					oncommit={async (value: string, label: string) => {
-						if (!stage) return;
-						await api.stage.setLabel(stage.id, value, [], label);
-						// The tag the stage owns follows its name — after the name has landed, so the
-						// two are consecutive entries rather than one racing the other.
-						renameOwnedTag(value);
-					}}
+					oncommit={(value: string, label: string) =>
+						// The tag the stage owns is renamed in the same command, so one undo takes back
+						// the whole rename rather than half of it.
+						api.stage.setLabel(stage!.id, value, ownedTagRename(value), label)}
 				>
 					{#snippet field(draft, set, commit)}
 						<input
@@ -278,16 +268,12 @@
 			{#if stage.content.tags}<TagPicker
 					tags={stage.content.tags}
 					id={`stage-content-${stage.id}`}
-					onchange={(tags, label) =>
+					onchange={(tag, added, label) =>
 						write(
 							() =>
-								api.stage.setContentTags(
-									stage.id,
-									tags,
-									stage.content.owned_tag ?? null,
-									[],
-									label
-								),
+								added
+									? api.stage.addTag(stage.id, tag, label)
+									: api.stage.removeTag(stage.id, tag, label),
 							label
 						)}
 				/>

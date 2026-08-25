@@ -174,7 +174,14 @@
 		<TagPicker
 			tags={group.tags}
 			id={`content-group-${index}`}
-			onchange={(tags, label) => write(() => api.group.setTags(group.id, tags, label), label)}
+			onchange={(tag, added, label) =>
+				write(
+					() =>
+						added
+							? api.group.addTag(group.id, tag, label)
+							: api.group.removeTag(group.id, tag, label),
+					label
+				)}
 		/>
 		<label class="flex items-center gap-2">
 			<Checkbox

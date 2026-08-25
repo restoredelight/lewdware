@@ -52,17 +52,13 @@
 		const value = (newArgByLink[index] ?? '').trim();
 		if (!link || !value) return;
 		newArgByLink[index] = '';
-		write(
-			() => api.link.setArgs(link.id, [...link.args, value], 'Add URL suffix'),
-			'Add URL suffix'
-		);
+		write(() => api.link.addArg(link.id, value, 'Add URL suffix'), 'Add URL suffix');
 	}
 
 	function removeArg(linkIndex: number, argIndex: number) {
 		const link = links[linkIndex];
 		if (!link) return;
-		const args = link.args.filter((_, index) => index !== argIndex);
-		write(() => api.link.setArgs(link.id, args, 'Remove URL suffix'), 'Remove URL suffix');
+		write(() => api.link.removeArg(link.id, argIndex, 'Remove URL suffix'), 'Remove URL suffix');
 	}
 </script>
 
@@ -145,7 +141,12 @@
 		<TagPicker
 			tags={link.tags}
 			id={`web-link-${index}`}
-			onchange={(tags, label) => write(() => api.link.setTags(link.id, tags, label), label)}
+			onchange={(tag, added, label) =>
+				write(
+					() =>
+						added ? api.link.addTag(link.id, tag, label) : api.link.removeTag(link.id, tag, label),
+					label
+				)}
 		/>
 	{/snippet}
 </ContentList>

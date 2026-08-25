@@ -54,3 +54,11 @@ pub async fn add_text_item(
 setter!(
     remove_text_item(id: i64) |tx| editor::remove_text_item(tx, id)
 );
+
+setter!(
+    add_text_item_tag(id: i64, tag: String) |tx| editor::add_text_item_tag(tx, id, &tag)
+);
+
+setter!(
+    remove_text_item_tag(id: i64, tag: String) |tx| editor::remove_text_item_tag(tx, id, &tag)
+);

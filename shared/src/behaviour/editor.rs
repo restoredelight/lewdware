@@ -1463,5 +1463,214 @@ pub fn set_transition_affected(
     Ok(true)
 }
 
+// ── One item of a collection ─────────────────────────────────────────────────
+//
+// A tag chip and a URL suffix are *items*, and adding or removing one is the whole of what the
+// author did. Setting the resulting list instead has the same flaw whole-entity writes had, one
+// level down: the list is built from what was last fetched, so two removals in quick succession
+// both say "everything except the one I clicked" and the second puts the first one back.
+//
+// Addressing the item makes the two edits commute, which is the same reason the field setters
+// above exist.
+
+/// Adds `tag` to an owner's selection, at the end. Reports whether it was not already there.
+fn add_tag(
+    tx: &Transaction<'_>,
+    table: &str,
+    key: &str,
+    owner: &dyn rusqlite::ToSql,
+    tag: &str,
+) -> Result<bool> {
+    let id = super::storage::tag_id(tx, tag)?;
+    let present: bool = tx.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {key} = ?1 AND tag_id = ?2)"),
+        params![owner, id],
+        |row| row.get(0),
+    )?;
+    if present {
+        return Ok(false);
+    }
+    let position: i64 = tx.query_row(
+        &format!("SELECT COALESCE(MAX(position) + 1, 0) FROM {table} WHERE {key} = ?"),
+        params![owner],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        &format!("INSERT INTO {table} ({key}, tag_id, position) VALUES (?1, ?2, ?3)"),
+        params![owner, id, position],
+    )?;
+    Ok(true)
+}
+
+/// Removes `tag` from an owner's selection. Reports whether it was there.
+///
+/// The gap it leaves in `position` is not closed: positions only order the list, and the primary
+/// key is the owner and the tag, so nothing collides with a hole.
+fn remove_tag(
+    tx: &Transaction<'_>,
+    table: &str,
+    key: &str,
+    owner: &dyn rusqlite::ToSql,
+    tag: &str,
+) -> Result<bool> {
+    let removed = tx.execute(
+        &format!(
+            "DELETE FROM {table} WHERE {key} = ?1
+             AND tag_id = (SELECT id FROM tags WHERE name = ?2)"
+        ),
+        params![owner, tag],
+    )?;
+    Ok(removed > 0)
+}
+
+pub fn add_text_item_tag(tx: &Transaction<'_>, id: i64, tag: &str) -> Result<bool> {
+    exists(tx, "behaviour_text_item", "id", &id, NO_TEXT_ITEM)?;
+    add_tag(tx, "behaviour_text_item_tag", "item_id", &id, tag)
+}
+
+pub fn remove_text_item_tag(tx: &Transaction<'_>, id: i64, tag: &str) -> Result<bool> {
+    remove_tag(tx, "behaviour_text_item_tag", "item_id", &id, tag)
+}
+
+pub fn add_web_link_tag(tx: &Transaction<'_>, id: i64, tag: &str) -> Result<bool> {
+    exists(tx, "behaviour_web_link", "id", &id, NO_WEB_LINK)?;
+    add_tag(tx, "behaviour_web_link_tag", "link_id", &id, tag)
+}
+
+pub fn remove_web_link_tag(tx: &Transaction<'_>, id: i64, tag: &str) -> Result<bool> {
+    remove_tag(tx, "behaviour_web_link_tag", "link_id", &id, tag)
+}
+
+pub fn add_content_group_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<bool> {
+    exists(tx, "behaviour_content_group", "id", &id, NO_GROUP)?;
+    add_tag(tx, "behaviour_content_group_tag", "group_id", &id, tag)
+}
+
+pub fn remove_content_group_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<bool> {
+    remove_tag(tx, "behaviour_content_group_tag", "group_id", &id, tag)
+}
+
+/// Adds a tag to a stage's selection.
+///
+/// Only for a stage that already restricts its content: on one that shows everything there is no
+/// selection for a tag to join, and switching the restriction on is a different author action
+/// ([`set_stage_content_tags`]) that has to seed the tag onto what the stage was showing.
+pub fn add_stage_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<bool> {
+    let restricts: Option<bool> = tx
+        .query_row(
+            "SELECT restricts_content FROM behaviour_stage WHERE id = ?",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match restricts {
+        None => bail!("{NO_STAGE}"),
+        Some(false) => bail!("this stage shows every file in the pack"),
+        Some(true) => add_tag(tx, "behaviour_stage_tag", "stage_id", &id, tag),
+    }
+}
+
+/// Removes a tag from a stage's selection, and its ownership with it if the stage owned it.
+///
+/// The ownership needs no separate step: the `owned` flag lives on the association row, so a stage
+/// that stops selecting by a tag stops owning it by construction.
+pub fn remove_stage_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<bool> {
+    remove_tag(tx, "behaviour_stage_tag", "stage_id", &id, tag)
+}
+
+/// Appends one suffix to a web link's list.
+pub fn add_web_link_arg(tx: &Transaction<'_>, id: i64, value: &str) -> Result<bool> {
+    exists(tx, "behaviour_web_link", "id", &id, NO_WEB_LINK)?;
+    let position: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(position) + 1, 0) FROM behaviour_web_link_arg WHERE link_id = ?",
+        params![id],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "INSERT INTO behaviour_web_link_arg (link_id, position, value) VALUES (?1, ?2, ?3)",
+        params![id, position, value],
+    )?;
+    Ok(true)
+}
+
+/// Removes the suffix at `position`, closing the gap behind it.
+///
+/// By position rather than by value, because the same suffix twice is a legitimate way to weight
+/// it — the list is ordered and not a set, so a value does not identify one entry.
+pub fn remove_web_link_arg(tx: &Transaction<'_>, id: i64, position: usize) -> Result<bool> {
+    let removed = tx.execute(
+        "DELETE FROM behaviour_web_link_arg WHERE link_id = ?1 AND position = ?2",
+        params![id, position as i64],
+    )?;
+    if removed == 0 {
+        return Ok(false);
+    }
+    // Unlike the tag tables, `position` is part of this table's key, so the gap has to close or the
+    // next append collides with it.
+    tx.execute(
+        "UPDATE behaviour_web_link_arg SET position = position - 1
+         WHERE link_id = ?1 AND position > ?2",
+        params![id, position as i64],
+    )?;
+    Ok(true)
+}
+
+/// Turns one transition category on or off, expanding a legacy broad category first.
+///
+/// Early v3 editor builds stored one entry for a whole group ("events"), where the editor now names
+/// each value. Ticking any member of such a group has to replace the broad entry with its siblings,
+/// or switching one off would silently switch the rest off too. That expansion lives here rather
+/// than in the editor so the whole toggle is one command — two of them built from the last fetched
+/// list would each drop the other's work.
+pub fn set_transition_category(
+    tx: &Transaction<'_>,
+    id: &str,
+    category: TransitionCategory,
+    enabled: bool,
+) -> Result<bool> {
+    let mut affected = transition_categories(tx, id)?;
+    if let Some(group) = legacy_group_of(category) {
+        if let Some(at) = affected.iter().position(|item| *item == group.0) {
+            affected.remove(at);
+            for member in group.1 {
+                if !affected.contains(member) {
+                    affected.push(*member);
+                }
+            }
+        }
+    }
+    let present = affected.contains(&category);
+    if enabled && !present {
+        affected.push(category);
+    } else if !enabled && present {
+        affected.retain(|item| *item != category);
+    }
+    set_transition_affected(tx, id, &affected)
+}
+
+/// The broad category a value used to be covered by, and everything that covers now.
+fn legacy_group_of(
+    category: TransitionCategory,
+) -> Option<(TransitionCategory, &'static [TransitionCategory])> {
+    use TransitionCategory::*;
+    const INTERVALS: &[TransitionCategory] = &[
+        PopupInterval,
+        WebInterval,
+        NotificationInterval,
+        PromptInterval,
+        SoundInterval,
+    ];
+    const MOVEMENT: &[TransitionCategory] = &[MovementMinimumSpeed, MovementMaximumSpeed];
+    const MITOSIS: &[TransitionCategory] = &[MitosisChance, MitosisCount];
+    match category {
+        PopupInterval | WebInterval | NotificationInterval | PromptInterval | SoundInterval => {
+            Some((Events, INTERVALS))
+        }
+        MovementMinimumSpeed | MovementMaximumSpeed => Some((Movement, MOVEMENT)),
+        MitosisChance | MitosisCount => Some((Mitosis, MITOSIS)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests;

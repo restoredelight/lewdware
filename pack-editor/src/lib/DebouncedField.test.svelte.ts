@@ -243,3 +243,36 @@ describe('holding the draft across the round trip', () => {
 		view.destroy();
 	});
 });
+
+describe('a field that goes away mid-edit', () => {
+	// Leaving a tab sends what was typed, but the send outlives the component. Dropping it from the
+	// barrier at that moment lets a save start while the write is still travelling — and lets a
+	// failed one pass unnoticed, writing the pack without the value the author entered.
+	it('is still waited on by a save started after it unmounted', async () => {
+		let release!: () => void;
+		const commit = vi.fn(() => new Promise<void>((resolve) => (release = resolve)));
+		const view = field('stored', commit);
+
+		view.type('typed');
+		view.destroy();
+		await settle();
+
+		let saved = false;
+		const barrier = flushFields().then(() => (saved = true));
+		await settle();
+		expect(saved, 'the detached write is still in flight').toBe(false);
+
+		release();
+		await barrier;
+		expect(commit).toHaveBeenCalledExactlyOnceWith('typed', 'Edit thing');
+	});
+
+	it('still reports its failure to a save started after it unmounted', async () => {
+		const view = field('stored', vi.fn().mockRejectedValue(new Error('disk on fire')));
+
+		view.type('typed');
+		view.destroy();
+
+		await expect(flushFields()).rejects.toThrow();
+	});
+});
