@@ -6,13 +6,14 @@
 	import ContentList from './ContentList.svelte';
 	import TagPicker from './TagPicker.svelte';
 	import { api } from './api.js';
-	import { fields, mutate } from './mutate.svelte.js';
+	import { mutate } from './mutate.svelte.js';
+	import DebouncedField from './DebouncedField.svelte';
 	import { keys, query } from './query.svelte.js';
 	import type { ContentGroup } from './types.js';
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 
-	const stored = query(keys.contentGroups, api.getContentGroups);
+	const stored = query(keys.contentGroups, api.group.get);
 	const groups = $derived(stored.current ?? []);
 	const availableToggleTags = $derived(
 		store.allTags.filter((tag) => !groups.some((group) => group.tags.includes(tag)))
@@ -27,33 +28,9 @@
 		return value.length === 0 ? value : value[0].toUpperCase() + value.slice(1);
 	}
 
-	/**
-	 * Applies `change` to this group and sends it.
-	 *
-	 * Accumulated into one draft per group, for the same reason as the pools: the command sends the
-	 * group whole, so a description edit built from the last fetched copy would revert the name
-	 * typed a moment earlier.
-	 */
-	function write(
-		group: ContentGroup,
-		change: (draft: ContentGroup) => void,
-		label: string,
-		debounce = false
-	) {
-		fields.edit<ContentGroup>({
-			entity: `content-group:${group.id}`,
-			base: () => ({ ...group, tags: [...group.tags] }),
-			change,
-			label,
-			invalidates,
-			send: (draft) => api.updateContentGroup(group.id, draft, label),
-			debounce
-		});
-	}
-
-	/** What a group looks like right now: the author's unsent edit if there is one, else stored. */
-	function shown(group: ContentGroup): ContentGroup {
-		return fields.draftFor<ContentGroup>(`content-group:${group.id}`) ?? group;
+	/** Sends one field of one group. Nothing else about the group travels with it. */
+	function write(run: () => Promise<void>, label: string) {
+		void mutate(run, { label, invalidates });
 	}
 
 	// Awaited: `ContentList` reveals and focuses the new entry once this resolves. See
@@ -61,7 +38,7 @@
 	async function addGroup() {
 		await mutate(
 			() =>
-				api.addContentGroup(
+				api.group.add(
 					{
 						id: `group-${Date.now()}`,
 						label: 'New group',
@@ -81,7 +58,7 @@
 		quickCreateTag = '';
 		await mutate(
 			() =>
-				api.addContentGroup(
+				api.group.add(
 					{
 						id: tag,
 						label: capitalize(tag),
@@ -103,20 +80,14 @@
 			removing = group;
 			return;
 		}
-		void mutate(() => api.removeContentGroup(group.id, 'Remove content group'), {
-			label: 'Remove content group',
-			invalidates
-		});
+		write(() => api.group.remove(group.id, 'Remove content group'), 'Remove content group');
 	}
 
 	function confirmRemove() {
 		if (!removing) return;
 		const group = removing;
 		removing = null;
-		void mutate(() => api.removeContentGroup(group.id, 'Remove content group'), {
-			label: 'Remove content group',
-			invalidates
-		});
+		write(() => api.group.remove(group.id, 'Remove content group'), 'Remove content group');
 	}
 </script>
 
@@ -159,39 +130,61 @@
 	{/snippet}
 	{#snippet fields(group, index)}
 		<div class="flex flex-1 flex-col gap-3">
-			<Field
-				label="Group name"
-				size="compact"
-				value={shown(group).label}
-				placeholder="Label"
-				oninput={(value) => write(group, (draft) => (draft.label = value), 'Edit group name', true)}
-			/>
-			<Field
-				label="Description (optional)"
-				size="compact"
-				value={shown(group).description ?? ''}
-				placeholder="Explain what this group contains"
-				oninput={(value) =>
-					write(
-						group,
+			<DebouncedField
+				value={group.label}
+				label="Edit group name"
+				{invalidates}
+				oncommit={(value: string, label: string) => api.group.setLabel(group.id, value, label)}
+			>
+				{#snippet field(draft, set, commit)}
+					<Field
+						label="Group name"
+						size="compact"
+						value={draft}
+						placeholder="Label"
+						oninput={set}
+						onchange={() => commit()}
+					/>
+				{/snippet}
+			</DebouncedField>
+			<DebouncedField
+				value={group.description ?? ''}
+				label="Edit group description"
+				{invalidates}
+				oncommit={(value: string, label: string) =>
+					api.group.setDescription(
+						group.id,
 						// A blank description is the absence of one, not an empty string.
-						(draft) => (draft.description = value.trim() ? value : null),
-						'Edit group description',
-						true
+						value.trim() ? value : null,
+						label
 					)}
-			/>
+			>
+				{#snippet field(draft, set, commit)}
+					<Field
+						label="Description (optional)"
+						size="compact"
+						value={draft}
+						placeholder="Explain what this group contains"
+						oninput={set}
+						onchange={() => commit()}
+					/>
+				{/snippet}
+			</DebouncedField>
 		</div>
 		<TagPicker
-			tags={shown(group).tags}
+			tags={group.tags}
 			id={`content-group-${index}`}
-			onchange={(tags, label) => write(group, (draft) => (draft.tags = tags), label)}
+			onchange={(tags, label) => write(() => api.group.setTags(group.id, tags, label), label)}
 		/>
 		<label class="flex items-center gap-2">
 			<Checkbox
-				checked={shown(group).enabled_by_default}
+				checked={group.enabled_by_default}
 				ariaLabel="Enabled by default"
 				onchange={(checked) =>
-					write(group, (draft) => (draft.enabled_by_default = checked), 'Change group default')}
+					write(
+						() => api.group.setEnabledByDefault(group.id, checked, 'Change group default'),
+						'Change group default'
+					)}
 			/>
 			<span class="text-text text-xs">Enabled by default</span>
 		</label>

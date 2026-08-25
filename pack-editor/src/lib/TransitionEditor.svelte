@@ -3,7 +3,8 @@
 	import NumberField from '$ui/NumberField.svelte';
 	import Select from '$ui/Select.svelte';
 	import { api } from './api.js';
-	import { fields } from './mutate.svelte.js';
+	import { mutate } from './mutate.svelte.js';
+	import DebouncedField from './DebouncedField.svelte';
 	import { keys } from './query.svelte.js';
 	import type { Stage, Transition, TransitionValue } from './types.js';
 
@@ -17,21 +18,10 @@
 	// moment this rendered, and the id is what survives editing it.
 	const invalidates = [keys.timeline];
 
-	/** Applies `change` to this transition and sends it. Accumulated into one draft, as elsewhere. */
-	function write(change: (draft: Transition) => void, label: string, debounce = false) {
-		fields.edit<Transition>({
-			entity: `transition:${transition.id}`,
-			base: () => ({ ...transition, affected: [...transition.affected] }),
-			change,
-			label,
-			invalidates,
-			send: (draft) => api.updateTransition(transition.id, draft, label),
-			debounce
-		});
+	/** Sends one field of this transition. Nothing else about it travels with the change. */
+	function write(run: () => Promise<void>, label: string) {
+		void mutate(run, { label, invalidates });
 	}
-
-	/** The transition as the author has it: their unsent edit if there is one, else stored. */
-	const shown = $derived(fields.draftFor<Transition>(`transition:${transition.id}`) ?? transition);
 
 	let rootEl = $state<HTMLElement>();
 	// WebKitGTK doesn't reliably clamp scrollTop when the panel's content shrinks,
@@ -79,21 +69,23 @@
 		values: [{ key: 'crossfade' as TransitionValue, label: 'Background audio' }]
 	};
 	function isAffected(group: (typeof groups)[number], key: TransitionValue) {
-		return shown.affected.includes(group.legacy) || shown.affected.includes(key);
+		return transition.affected.includes(group.legacy) || transition.affected.includes(key);
 	}
 	function affected(group: (typeof groups)[number], key: TransitionValue, checked: boolean) {
+		let next = [...transition.affected];
+		// Expanding a legacy broad selection on first edit keeps every sibling selected.
+		if (next.includes(group.legacy)) {
+			next = next.filter((item) => item !== group.legacy);
+			for (const value of group.values) if (!next.includes(value.key)) next.push(value.key);
+		}
+		if (checked && !next.includes(key)) next.push(key);
+		if (!checked) next = next.filter((item) => item !== key);
 		// Named for the section it lives in ("Gradual changes"), so the undo entry points at
 		// something the author can see rather than describing the field.
-		write((draft) => {
-			// Expanding a legacy broad selection on first edit keeps every sibling selected.
-			if (draft.affected.includes(group.legacy)) {
-				draft.affected = draft.affected.filter((item) => item !== group.legacy);
-				for (const value of group.values)
-					if (!draft.affected.includes(value.key)) draft.affected.push(value.key);
-			}
-			if (checked && !draft.affected.includes(key)) draft.affected.push(key);
-			if (!checked) draft.affected = draft.affected.filter((item) => item !== key);
-		}, 'Edit gradual changes');
+		write(
+			() => api.transition.setAffected(transition.id, next, 'Edit gradual changes'),
+			'Edit gradual changes'
+		);
 	}
 </script>
 
@@ -118,22 +110,32 @@
 				</div>
 			</div>
 			<div class="fields">
-				<NumberField
-					label="Duration (seconds)"
-					min={0}
-					step={1}
-					value={shown.duration_seconds}
-					oninput={(seconds) => {
-						// An empty field is mid-edit, not a request for an instant transition: leave the
-						// stored duration where it is until a real number is typed.
-						if (seconds === null) return;
-						write((draft) => (draft.duration_seconds = seconds), 'Edit transition duration', true);
-					}}
-				/>
+				<DebouncedField
+					value={transition.duration_seconds}
+					label="Edit transition duration"
+					{invalidates}
+					oncommit={(seconds: number, label: string) =>
+						api.transition.setDuration(transition.id, seconds, label)}
+				>
+					{#snippet field(draft, set, commit)}
+						<NumberField
+							label="Duration (seconds)"
+							min={0}
+							step={1}
+							value={draft}
+							oninput={(seconds) => {
+								// An empty field is mid-edit, not a request for an instant transition:
+								// leave the value where it is until a real number is typed.
+								if (seconds !== null) set(seconds);
+							}}
+							onchange={() => commit()}
+						/>
+					{/snippet}
+				</DebouncedField>
 				<Select
 					label="Easing"
-					value={shown.easing}
-					disabled={shown.duration_seconds === 0}
+					value={transition.easing}
+					disabled={transition.duration_seconds === 0}
 					options={[
 						{ value: 'linear', label: 'Linear' },
 						{ value: 'ease_in', label: 'Ease in' },
@@ -142,13 +144,18 @@
 					]}
 					onchange={(value) =>
 						write(
-							(draft) => (draft.easing = value as Transition['easing']),
+							() =>
+								api.transition.setEasing(
+									transition.id,
+									value as Transition['easing'],
+									'Change transition easing'
+								),
 							'Change transition easing'
 						)}
 				/>
 			</div>
 		</section>
-		<section class="card" class:disabled={shown.duration_seconds === 0}>
+		<section class="card" class:disabled={transition.duration_seconds === 0}>
 			<div class="section-title">
 				<div>
 					<h3>Gradual changes</h3>
@@ -166,7 +173,7 @@
 							<label class="value"
 								><Checkbox
 									checked={isAffected(group, value.key)}
-									disabled={shown.duration_seconds === 0}
+									disabled={transition.duration_seconds === 0}
 									ariaLabel={`Gradually change ${value.label}`}
 									onchange={(checked) => affected(group, value.key, checked)}
 								/><span>{value.label}</span></label
@@ -180,8 +187,8 @@
 				<div class="value-grid">
 					<label class="value"
 						><Checkbox
-							checked={shown.affected.includes('crossfade')}
-							disabled={shown.duration_seconds === 0}
+							checked={transition.affected.includes('crossfade')}
+							disabled={transition.duration_seconds === 0}
 							ariaLabel="Crossfade background audio"
 							onchange={(checked) => affected(crossfadeGroup, 'crossfade', checked)}
 						/><span>Crossfade background audio</span></label

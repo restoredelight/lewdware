@@ -710,7 +710,7 @@ fn read_stages_where(
         .collect()
 }
 
-fn read_stage_entry(conn: &Connection, stage: &str) -> Result<Option<StageEntry>> {
+pub(super) fn read_stage_entry(conn: &Connection, stage: &str) -> Result<Option<StageEntry>> {
     Ok(conn.query_row(
         "SELECT splash_media, sound_media, popup_burst, notification_text FROM behaviour_stage_entry WHERE stage_id = ?",
         params![stage],
@@ -718,7 +718,7 @@ fn read_stage_entry(conn: &Connection, stage: &str) -> Result<Option<StageEntry>
     ).optional()?)
 }
 
-fn read_stage_prompt(conn: &Connection, stage: &str) -> Result<StagePrompt> {
+pub(super) fn read_stage_prompt(conn: &Connection, stage: &str) -> Result<StagePrompt> {
     Ok(conn.query_row(
         "SELECT timeouts_enabled, timeout_multiplier, popup_burst, sound_media FROM behaviour_stage_prompt WHERE stage_id = ?",
         params![stage],
@@ -753,7 +753,7 @@ fn read_owned_stage_tag(conn: &Connection, stage: &str) -> Result<Option<String>
 /// rather than resurrecting the association. That is the invariant the schema comment states, kept
 /// here rather than validated — an owned tag outside the selection is not a document a writer can
 /// produce, and refusing it would turn a stale editor's harmless patch into a failed save.
-fn write_owned_stage_tag(tx: &Transaction<'_>, stage: &str, owned: Option<&str>) -> Result<()> {
+pub(super) fn write_owned_stage_tag(tx: &Transaction<'_>, stage: &str, owned: Option<&str>) -> Result<()> {
     tx.execute(
         "UPDATE behaviour_stage_tag SET owned = 0 WHERE stage_id = ?1 AND owned = 1
          AND tag_id IS NOT (SELECT id FROM tags WHERE name = ?2)",
@@ -769,7 +769,7 @@ fn write_owned_stage_tag(tx: &Transaction<'_>, stage: &str, owned: Option<&str>)
     Ok(())
 }
 
-fn read_stage_end(conn: &Connection, stage: &str) -> Result<Option<StageEnd>> {
+pub(super) fn read_stage_end(conn: &Connection, stage: &str) -> Result<Option<StageEnd>> {
     conn.query_row(
         "SELECT duration_seconds, strategy, event_kind, event_count, event_scope
          FROM behaviour_stage_end WHERE stage_id = ?",
@@ -803,7 +803,7 @@ fn read_stage_end(conn: &Connection, stage: &str) -> Result<Option<StageEnd>> {
     .transpose()
 }
 
-fn read_stage_movement(conn: &Connection, stage: &str) -> Result<Option<Movement>> {
+pub(super) fn read_stage_movement(conn: &Connection, stage: &str) -> Result<Option<Movement>> {
     Ok(conn
         .query_row(
             "SELECT minimum_speed, maximum_speed FROM behaviour_stage_movement WHERE stage_id = ?",
@@ -818,7 +818,7 @@ fn read_stage_movement(conn: &Connection, stage: &str) -> Result<Option<Movement
         .optional()?)
 }
 
-fn read_stage_mitosis(conn: &Connection, stage: &str) -> Result<Option<Mitosis>> {
+pub(super) fn read_stage_mitosis(conn: &Connection, stage: &str) -> Result<Option<Mitosis>> {
     Ok(conn
         .query_row(
             "SELECT chance, count FROM behaviour_stage_mitosis WHERE stage_id = ?",
@@ -845,7 +845,7 @@ struct EventRow {
     max_concurrent: Option<u32>,
 }
 
-fn read_stage_events(conn: &Connection, stage: &str) -> Result<Events> {
+pub(super) fn read_stage_events(conn: &Connection, stage: &str) -> Result<Events> {
     let mut statement = conn.prepare(
         "SELECT kind, interval_kind, seconds, minimum_seconds, maximum_seconds,
                 initial_delay_seconds, max_concurrent
@@ -1020,7 +1020,7 @@ pub(super) fn write_one_stage(tx: &Transaction<'_>, position: i64, stage: &Stage
     Ok(())
 }
 
-fn write_stage_entry(tx: &Transaction<'_>, stage: &str, entry: Option<&StageEntry>) -> Result<()> {
+pub(super) fn write_stage_entry(tx: &Transaction<'_>, stage: &str, entry: Option<&StageEntry>) -> Result<()> {
     let Some(entry) = entry else {
         tx.execute(
             "DELETE FROM behaviour_stage_entry WHERE stage_id = ?",
@@ -1045,7 +1045,7 @@ fn write_stage_entry(tx: &Transaction<'_>, stage: &str, entry: Option<&StageEntr
     Ok(())
 }
 
-fn write_stage_prompt(tx: &Transaction<'_>, stage: &str, prompt: &StagePrompt) -> Result<()> {
+pub(super) fn write_stage_prompt(tx: &Transaction<'_>, stage: &str, prompt: &StagePrompt) -> Result<()> {
     if prompt == &StagePrompt::default() {
         tx.execute(
             "DELETE FROM behaviour_stage_prompt WHERE stage_id = ?",
@@ -1071,7 +1071,7 @@ fn write_stage_prompt(tx: &Transaction<'_>, stage: &str, prompt: &StagePrompt) -
     Ok(())
 }
 
-fn write_stage_end(tx: &Transaction<'_>, stage: &str, end: Option<&StageEnd>) -> Result<()> {
+pub(super) fn write_stage_end(tx: &Transaction<'_>, stage: &str, end: Option<&StageEnd>) -> Result<()> {
     let Some(end) = end else {
         tx.execute(
             "DELETE FROM behaviour_stage_end WHERE stage_id = ?",
@@ -1108,7 +1108,7 @@ fn write_stage_end(tx: &Transaction<'_>, stage: &str, end: Option<&StageEnd>) ->
     Ok(())
 }
 
-fn write_stage_movement(
+pub(super) fn write_stage_movement(
     tx: &Transaction<'_>,
     stage: &str,
     movement: Option<&Movement>,
@@ -1130,7 +1130,7 @@ fn write_stage_movement(
     Ok(())
 }
 
-fn write_stage_mitosis(tx: &Transaction<'_>, stage: &str, mitosis: Option<&Mitosis>) -> Result<()> {
+pub(super) fn write_stage_mitosis(tx: &Transaction<'_>, stage: &str, mitosis: Option<&Mitosis>) -> Result<()> {
     let Some(mitosis) = mitosis else {
         tx.execute(
             "DELETE FROM behaviour_stage_mitosis WHERE stage_id = ?",
@@ -1146,7 +1146,7 @@ fn write_stage_mitosis(tx: &Transaction<'_>, stage: &str, mitosis: Option<&Mitos
     Ok(())
 }
 
-fn write_stage_events(tx: &Transaction<'_>, stage: &str, events: &Events) -> Result<()> {
+pub(super) fn write_stage_events(tx: &Transaction<'_>, stage: &str, events: &Events) -> Result<()> {
     let scheduled = [
         ("popup", events.popup.as_ref()),
         ("web", events.web.as_ref()),

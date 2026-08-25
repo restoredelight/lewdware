@@ -33,7 +33,7 @@
 		snap,
 		type PointName
 	} from './spawnRegion.js';
-	import type { MediaFile, PopupMedia, SpawnRegion } from './types.js';
+	import type { MediaFile, MonitorPreference, PopupMedia, SpawnRegion } from './types.js';
 
 	type Props = {
 		/** The file drawn in the frame — one, even when the edit applies to a whole selection. */
@@ -42,7 +42,15 @@
 		attributes: PopupMedia;
 		/** How many files an edit here changes, for the labels. */
 		count: number;
-		edit: (changes: PopupMedia, label: string) => void;
+		/** The per-field setters, bound to the files this view is editing. */
+		edit: {
+			weight: (value: number | null, label: string) => void;
+			scale: (value: number | null, label: string) => void;
+			region: (value: SpawnRegion | null, label: string) => void;
+			monitor: (value: MonitorPreference | null, label: string) => void;
+			videoLoop: (value: boolean | null, label: string) => void;
+			videoAudio: (value: boolean | null, label: string) => void;
+		};
 		/** Leaves the frame and returns to the full-size view. */
 		ondone: () => void;
 	};
@@ -138,7 +146,7 @@
 	function commit(next: SpawnRegion, label = 'Set popup area') {
 		const clamped = clampRegion(next);
 		// The whole screen is "no opinion", not a rectangle to store — see `spawnRegion.ts`.
-		edit({ region: isFullRegion(clamped) ? undefined : clamped }, plural(label));
+		edit.region(isFullRegion(clamped) ? null : clamped, plural(label));
 	}
 
 	function plural(label: string) {
@@ -249,7 +257,7 @@
 		const left = rect.left + popupBox.left;
 		const target = Math.max(8, event.clientX - left) / ratio;
 		const scale = scaleForWidth(media, Math.round(target));
-		if (scale !== attributes.scale) edit({ scale }, plural('Set popup size'));
+		if (scale !== attributes.scale) edit.scale(scale ?? null, plural('Set popup size'));
 	}
 
 	function endResize(event: PointerEvent) {
@@ -397,7 +405,7 @@
 						value.trim() === '' || !Number.isFinite(parsed) || parsed <= 0 || parsed === 1
 							? undefined
 							: parsed;
-					edit({ scale }, plural('Set popup size'));
+					edit.scale(scale ?? null, plural('Set popup size'));
 					// Uncontrolled once typed in: clearing to `undefined` when the field already read
 					// `1` changes no state, so the field would go on showing a value the editor just
 					// rejected. Same fix as the region's edge fields.
@@ -471,7 +479,7 @@
 				<Button
 					size="compact"
 					variant="quiet"
-					onclick={() => edit({ scale: undefined }, plural('Set popup size'))}>Reset size</Button
+					onclick={() => edit.scale(null, plural('Set popup size'))}>Reset size</Button
 				>
 			{/if}
 			<!-- In the panel's own bar rather than floating over the overlay: centred on the dialog it

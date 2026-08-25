@@ -18,7 +18,7 @@
 	import { api } from './api.js';
 	import { playback } from './audioPlayback.svelte.js';
 	import { audioRole, setAudioRole, type AudioRole } from './audioRoles.js';
-	import { attributesFor, audioAttributesQuery, editAudioAttributes } from './mediaAttributes.js';
+	import { attributesFor, audioAttributesQuery, editAudioVolume } from './mediaAttributes.js';
 	import { MediaSelection } from './mediaSelection.svelte.js';
 	import { indexAt, offsetOf, totalHeight } from './virtualRows.js';
 	import { ChevronDown } from 'svelte-hero-icons';
@@ -329,9 +329,10 @@
 									liveVolume = null;
 									// Full volume is "no opinion", not "set to 1": storing it would pin
 									// this file against a default that may move under it.
-									void editAudioAttributes(
+									void editAudioVolume(
 										[file.id],
-										{ volume: value === 1 ? null : value },
+										// Full volume is "no opinion", not "set to 1".
+										value === 1 ? null : value,
 										`Set volume for “${file.file_name}”`
 									);
 								}}

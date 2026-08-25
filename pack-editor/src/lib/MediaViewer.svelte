@@ -21,11 +21,11 @@
 	import PopupPlacement from './PopupPlacement.svelte';
 	import {
 		attributesFor,
-		editPopupAttributes,
 		popupAttributesQuery,
+		popupEdits,
 		sharedValue
 	} from './mediaAttributes.js';
-	import type { PopupChanges, PopupMedia } from './types.js';
+	import type { MonitorPreference, PopupMedia, SpawnRegion } from './types.js';
 
 	const file = $derived(store.openedFile);
 	const files = $derived(store.openedFiles);
@@ -120,9 +120,26 @@
 		sharedValue(stored.current, targetIds, field);
 	const attributes = $derived(file ? attributesFor(stored.current, file.id) : {});
 
-	function edit(changes: PopupChanges, label: string) {
-		void editPopupAttributes(targetIds, changes, label);
-	}
+	/**
+	 * The per-field setters, bound to whatever this view is editing.
+	 *
+	 * One function per attribute rather than a partial object: every control here sets exactly one
+	 * thing, and a command that names its field cannot be misread as saying something about the
+	 * others.
+	 */
+	const edit = $derived({
+		weight: (value: number | null, label: string) =>
+			void popupEdits.weight(targetIds, value, label),
+		scale: (value: number | null, label: string) => void popupEdits.scale(targetIds, value, label),
+		region: (value: SpawnRegion | null, label: string) =>
+			void popupEdits.region(targetIds, value, label),
+		monitor: (value: MonitorPreference | null, label: string) =>
+			void popupEdits.monitor(targetIds, value, label),
+		videoLoop: (value: boolean | null, label: string) =>
+			void popupEdits.videoLoop(targetIds, value, label),
+		videoAudio: (value: boolean | null, label: string) =>
+			void popupEdits.videoAudio(targetIds, value, label)
+	});
 
 	// Placement is a mode, not the resting state. Most visits to a popup file are about looking at
 	// it -- and a video has to actually play -- so the media stays at full size and the screen
@@ -147,7 +164,7 @@
 		if ((next ?? undefined) === attributesFor(stored.current, file.id).caption) return;
 		// The caption alone is never bulk-applied, whatever the scope: it is a sentence about this
 		// picture, and writing one file's words onto twenty others is not an edit anybody means.
-		void editPopupAttributes([file.id], { caption: next }, `Set caption for “${file.file_name}”`);
+		void popupEdits.caption([file.id], next, `Set caption for “${file.file_name}”`);
 	}
 </script>
 

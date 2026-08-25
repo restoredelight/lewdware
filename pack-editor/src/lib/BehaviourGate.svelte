@@ -12,7 +12,7 @@
 	import type { Snippet } from 'svelte';
 	import { onDestroy } from 'svelte';
 	import EmptyState from '$ui/EmptyState.svelte';
-	import { fields } from './mutate.svelte.js';
+	import { flushFields } from './mutate.svelte.js';
 	import type { Query } from './query.svelte.js';
 
 	type Props = {
@@ -34,7 +34,7 @@
 
 	onDestroy(() => {
 		// A field still inside its debounce belongs to the author, not to the tab they are leaving.
-		void fields.flush();
+		void flushFields().catch(() => {});
 	});
 </script>
 

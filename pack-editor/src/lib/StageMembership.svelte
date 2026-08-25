@@ -5,7 +5,7 @@
 	import { leaveStagePlan, stageMembership } from './stageMembership.js';
 	import { stageTagName, takenTagNames } from './stageTags.js';
 	import { store } from './store.svelte.js';
-	import type { MediaFile, Stage, TagAction } from './types.js';
+	import type { MediaFile, TagAction } from './types.js';
 
 	type Props = {
 		file: MediaFile;
@@ -15,7 +15,7 @@
 
 	let { file, label = 'Appears in', compact = false }: Props = $props();
 
-	const timeline = query(keys.timeline, api.getTimeline);
+	const timeline = query(keys.timeline, api.timeline.get);
 	const tagRows = query(keys.tags, api.getTagRows);
 	const allStages = $derived(timeline.current?.stages ?? []);
 	// How much of the pack holds each tag, which is what tells a stage's own machinery tag from one
@@ -38,20 +38,30 @@
 	 * stage updates at all — it used to send the whole stage list back unchanged, purely to have
 	 * something for the tag actions to ride on.
 	 */
-	function commit(label: string, updates: { id: string; stage: Stage }[], actions: TagAction[]) {
-		void mutate(() => api.updateStages(updates, [], actions, label), { label, invalidates });
+	function commit(
+		label: string,
+		updates: { id: string; tags: string[] | null; ownedTag: string | null }[],
+		actions: TagAction[]
+	) {
+		void mutate(() => api.stage.setContentTagsMany(updates, actions, label), {
+			label,
+			invalidates
+		});
 	}
 
 	function joinByCreatingStageTag(stageId: string, stageLabel: string) {
 		const target = allStages.find((stage) => stage.id === stageId);
 		if (!target) return;
 		const tag = stageTagName(stageLabel, taken());
-		const draft = structuredClone($state.snapshot(target)) as Stage;
-		draft.content.tags = [...(draft.content.tags ?? []), tag];
-		draft.content.owned_tag = tag;
 		commit(
 			`Add “${file.file_name}” to ${stageLabel}`,
-			[{ id: target.id, stage: draft }],
+			[
+				{
+					id: target.id,
+					tags: [...(target.content.tags ?? []), tag],
+					ownedTag: tag
+				}
+			],
 			[{ kind: 'apply', tag, media: [file.id] }]
 		);
 		store.addTagToFiles([file.id], tag, true);
@@ -76,14 +86,15 @@
 		const plan = leaveStagePlan(allStages, file.tags, row.id, taken());
 		// Every stage that would have lost this file gets a tag of its own, so leaving one stage
 		// leaves only that stage. These go in the same transaction as the tag changes below.
-		const updates: { id: string; stage: Stage }[] = [];
+		const updates: { id: string; tags: string[] | null; ownedTag: string | null }[] = [];
 		for (const creation of plan.creations) {
 			const stage = allStages.find((candidate) => candidate.id === creation.stageId);
 			if (!stage) continue;
-			const draft = structuredClone($state.snapshot(stage)) as Stage;
-			draft.content.tags = [...(draft.content.tags ?? []), creation.tag];
-			draft.content.owned_tag = creation.tag;
-			updates.push({ id: stage.id, stage: draft });
+			updates.push({
+				id: stage.id,
+				tags: [...(stage.content.tags ?? []), creation.tag],
+				ownedTag: creation.tag
+			});
 		}
 
 		const actions: TagAction[] = [

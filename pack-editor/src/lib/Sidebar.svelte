@@ -47,7 +47,7 @@
 	// The inspector is mounted alongside the grid, so it fetches what it shows rather than reading
 	// a document the media tabs would otherwise have to keep resident.
 	const slots = query(keys.mediaSlots, api.getMediaSlots);
-	const timeline = query(keys.timeline, api.getTimeline);
+	const timeline = query(keys.timeline, api.timeline.get);
 	const selected = $derived(store.selectedFiles);
 	// Only in the tab that owns the role. All media is an inventory surface -- it lists every file
 	// the pack has, for a custom mode's sake as much as anyone's, and a control that only the

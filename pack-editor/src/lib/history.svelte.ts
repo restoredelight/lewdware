@@ -1,6 +1,6 @@
 import { store } from './store.svelte.js';
 import { api } from './api.js';
-import { fields } from './mutate.svelte.js';
+import { cancelFields } from './mutate.svelte.js';
 import { invalidate, keys } from './query.svelte.js';
 import type { HistoryStatus } from './types.js';
 
@@ -61,7 +61,7 @@ class BackendHistory {
 		// nothing pending by the time this runs. This covers the rest: a field still being typed
 		// during the round trip belongs to the state being replaced, and sending it afterwards
 		// would write it back over the one the author reverted to.
-		fields.cancel();
+		cancelFields();
 		// A changeset can touch any table, so everything the surfaces are showing is suspect. This
 		// is the one place a blanket invalidation is right, and it is cheap because only the open
 		// tab's queries have subscribers.

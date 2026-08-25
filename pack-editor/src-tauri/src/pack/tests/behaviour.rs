@@ -464,7 +464,7 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
     let id = *id.lock().unwrap();
 
     pack.behaviour_edit(BehaviourAction::new("Edit caption", move |tx: &Transaction<'_>| {
-        behaviour_editor::update_text_item(tx, id, &caption("edited"))
+        behaviour_editor::set_text_item_text(tx, id, "edited")
     }))
     .await
     .unwrap();
@@ -473,7 +473,7 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
 
     // The same value again: an `oninput` that changed nothing.
     pack.behaviour_edit(BehaviourAction::new("Edit caption", move |tx: &Transaction<'_>| {
-        behaviour_editor::update_text_item(tx, id, &caption("edited"))
+        behaviour_editor::set_text_item_text(tx, id, "edited")
     }))
     .await
     .unwrap();
@@ -547,13 +547,12 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
 
     pack.behaviour_edit(
         BehaviourAction::new("Remove from leave", |tx: &Transaction<'_>| {
-            let mut stage = behaviour_editor::stages(tx)?
-                .into_iter()
-                .find(|stage| stage.id == "keep")
-                .unwrap();
-            stage.content.tags = Some(vec!["shared".to_string(), "stage-keep".to_string()]);
-            stage.content.owned_tag = Some("stage-keep".to_string());
-            behaviour_editor::update_stage(tx, "keep", &stage)
+            behaviour_editor::set_stage_content_tags(
+                tx,
+                "keep",
+                Some(&["shared".to_string(), "stage-keep".to_string()]),
+                Some("stage-keep"),
+            )
         })
         .with_tag_actions(vec![
             TagAction::Apply {
@@ -622,8 +621,8 @@ async fn a_rejected_edit_leaves_the_document_untouched() {
             "Edit caption",
             move |tx: &Transaction<'_>| {
                 // Both edits are one author action, so the good one must not land on its own.
-                behaviour_editor::update_text_item(tx, good, &caption("changed"))?;
-                behaviour_editor::update_text_item(tx, good + 999, &caption("no such entry"))
+                behaviour_editor::set_text_item_text(tx, good, "changed")?;
+                behaviour_editor::set_text_item_text(tx, good + 999, "no such entry")
             },
         ))
         .await
@@ -893,12 +892,7 @@ async fn editing_one_stage_records_a_changeset_the_size_of_that_stage() {
     pack.behaviour_edit(BehaviourAction::new(
         "Rename stage",
         |tx: &Transaction<'_>| {
-            let mut stage = behaviour_editor::stages(tx)?
-                .into_iter()
-                .find(|stage| stage.id == "stage-7")
-                .unwrap();
-            stage.label = "Renamed".to_string();
-            behaviour_editor::update_stage(tx, "stage-7", &stage)
+            behaviour_editor::set_stage_label(tx, "stage-7", "Renamed")
         },
     ))
     .await
@@ -1029,7 +1023,7 @@ async fn editing_one_caption_records_a_changeset_the_size_of_that_caption() {
         "Edit caption",
         |tx: &Transaction<'_>| {
             let target = behaviour_editor::text_pool(tx, PoolKind::Caption)?[99].id;
-            behaviour_editor::update_text_item(tx, target, &caption("Edited."))
+            behaviour_editor::set_text_item_text(tx, target, "Edited.")
         },
     ))
     .await

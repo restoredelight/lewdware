@@ -680,6 +680,34 @@ pub struct Events {
     pub sound: Option<EventSchedule>,
 }
 
+impl Events {
+    /// The schedule for `kind`, or `None` if the stage does not schedule that kind at all.
+    pub fn get(&self, kind: EventKind) -> Option<&EventSchedule> {
+        match kind {
+            EventKind::Popup => self.popup.as_ref(),
+            EventKind::Web => self.web.as_ref(),
+            EventKind::Notification => self.notification.as_ref(),
+            EventKind::Prompt => self.prompt.as_ref(),
+            EventKind::Sound => self.sound.as_ref(),
+        }
+    }
+
+    /// Sets one kind's schedule, or stops the stage scheduling it with `None`.
+    ///
+    /// Addressed by `EventKind` rather than by field so that a caller working from the event kind it
+    /// was handed — a command naming one kind — cannot reach the wrong one.
+    pub fn set(&mut self, kind: EventKind, schedule: Option<EventSchedule>) {
+        let slot = match kind {
+            EventKind::Popup => &mut self.popup,
+            EventKind::Web => &mut self.web,
+            EventKind::Notification => &mut self.notification,
+            EventKind::Prompt => &mut self.prompt,
+            EventKind::Sound => &mut self.sound,
+        };
+        *slot = schedule;
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EventSchedule {
     pub interval: Interval,

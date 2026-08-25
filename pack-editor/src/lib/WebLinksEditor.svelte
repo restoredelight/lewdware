@@ -2,7 +2,8 @@
 	import ContentList from './ContentList.svelte';
 	import TagPicker from './TagPicker.svelte';
 	import { api } from './api.js';
-	import { fields, mutate } from './mutate.svelte.js';
+	import { mutate } from './mutate.svelte.js';
+	import DebouncedField from './DebouncedField.svelte';
 	import { keys, query } from './query.svelte.js';
 	import type { WebLink, WebLinkRow } from './types.js';
 	import EmptyState from '$ui/EmptyState.svelte';
@@ -10,43 +11,20 @@
 	import Dialog from '$ui/Dialog.svelte';
 	import { Icon, XMark } from 'svelte-hero-icons';
 
-	const stored = query(keys.webLinks, api.getWebLinks);
+	const stored = query(keys.webLinks, api.link.get);
 	const links = $derived(stored.current ?? []);
 	const invalidates = [keys.webLinks, keys.summary];
 
 	let newArgByLink = $state<Record<number, string>>({});
 	let removing = $state<WebLinkRow | null>(null);
 
-	/**
-	 * Applies `change` to this link and sends it.
-	 *
-	 * Accumulated into one draft per link: the command sends the link whole, so a URL edit built
-	 * from the last fetched copy would revert a suffix added a moment earlier.
-	 */
-	function write(
-		link: WebLinkRow,
-		change: (draft: WebLink) => void,
-		label: string,
-		debounce = false
-	) {
-		fields.edit<WebLink>({
-			entity: `web-link:${link.id}`,
-			base: () => ({ url: link.url, args: [...link.args], tags: [...link.tags] }),
-			change,
-			label,
-			invalidates,
-			send: (draft) => api.updateWebLink(link.id, draft, label),
-			debounce
-		});
-	}
-
-	/** What a link looks like right now: the author's unsent edit if there is one, else stored. */
-	function shown(link: WebLinkRow): WebLink {
-		return fields.draftFor<WebLink>(`web-link:${link.id}`) ?? link;
+	/** Sends one field of one link. Nothing else about the link travels with it. */
+	function write(run: () => Promise<void>, label: string) {
+		void mutate(run, { label, invalidates });
 	}
 
 	async function addLink() {
-		await mutate(() => api.addWebLink({ url: '', args: [], tags: [] }, 'Add web link'), {
+		await mutate(() => api.link.add({ url: '', args: [], tags: [] }, 'Add web link'), {
 			label: 'Add web link',
 			invalidates
 		});
@@ -59,20 +37,14 @@
 			removing = link;
 			return;
 		}
-		void mutate(() => api.removeWebLink(link.id, 'Remove web link'), {
-			label: 'Remove web link',
-			invalidates
-		});
+		write(() => api.link.remove(link.id, 'Remove web link'), 'Remove web link');
 	}
 
 	function confirmRemove() {
 		if (!removing) return;
 		const link = removing;
 		removing = null;
-		void mutate(() => api.removeWebLink(link.id, 'Remove web link'), {
-			label: 'Remove web link',
-			invalidates
-		});
+		write(() => api.link.remove(link.id, 'Remove web link'), 'Remove web link');
 	}
 
 	function addArg(index: number) {
@@ -80,13 +52,17 @@
 		const value = (newArgByLink[index] ?? '').trim();
 		if (!link || !value) return;
 		newArgByLink[index] = '';
-		write(link, (draft) => draft.args.push(value), 'Add URL suffix');
+		write(
+			() => api.link.setArgs(link.id, [...link.args, value], 'Add URL suffix'),
+			'Add URL suffix'
+		);
 	}
 
 	function removeArg(linkIndex: number, argIndex: number) {
 		const link = links[linkIndex];
 		if (!link) return;
-		write(link, (draft) => draft.args.splice(argIndex, 1), 'Remove URL suffix');
+		const args = link.args.filter((_, index) => index !== argIndex);
+		write(() => api.link.setArgs(link.id, args, 'Remove URL suffix'), 'Remove URL suffix');
 	}
 </script>
 
@@ -114,21 +90,31 @@
 		/>
 	{/snippet}
 	{#snippet fields(link, index)}
-		<Field
-			label="URL"
-			type="url"
-			size="compact"
-			value={shown(link).url}
-			placeholder="https://…"
-			oninput={(value) => write(link, (draft) => (draft.url = value), 'Edit web link', true)}
-		/>
+		<DebouncedField
+			value={link.url}
+			label="Edit web link"
+			{invalidates}
+			oncommit={(value: string, label: string) => api.link.setUrl(link.id, value, label)}
+		>
+			{#snippet field(draft, set, commit)}
+				<Field
+					label="URL"
+					type="url"
+					size="compact"
+					value={draft}
+					placeholder="https://…"
+					oninput={set}
+					onchange={() => commit()}
+				/>
+			{/snippet}
+		</DebouncedField>
 
 		<div>
 			<p class="text-muted mb-1.5 text-xs font-medium">
 				Random URL suffixes <span class="font-normal">(optional)</span>
 			</p>
 			<div class="flex flex-wrap items-center gap-1.5">
-				{#each shown(link).args as arg, argIndex}
+				{#each link.args as arg, argIndex}
 					<span
 						class="bg-bg border-border text-text flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs"
 					>
@@ -157,9 +143,9 @@
 		</div>
 
 		<TagPicker
-			tags={shown(link).tags}
+			tags={link.tags}
 			id={`web-link-${index}`}
-			onchange={(tags, label) => write(link, (draft) => (draft.tags = tags), label)}
+			onchange={(tags, label) => write(() => api.link.setTags(link.id, tags, label), label)}
 		/>
 	{/snippet}
 </ContentList>

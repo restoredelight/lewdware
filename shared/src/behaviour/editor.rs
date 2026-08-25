@@ -23,15 +23,17 @@
 
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use super::schema::{
-    AudioMedia, ContentGroup, ContentSelection, EndStrategy, MediaSlot, PopupMedia, Stage, StageEnd,
-    TextItem, Timeline, Transition, WebLink,
+    AudioMedia, ContentGroup, ContentSelection, Easing, EndStrategy, EventCountCondition, EventKind,
+    EventSchedule, MediaSlot, Mitosis, Movement, PopupMedia, Stage, StageEnd, TextItem, Timeline,
+    MonitorPreference, SpawnRegion, Transition, TransitionCategory, WebLink,
 };
 use super::storage::{
-    read_one_stage, read_stages, read_tags, read_transitions, write_one_stage, write_tags,
-    TimelineView,
+    read_one_stage, read_stages, read_tags, read_transitions, write_one_stage, write_owned_stage_tag,
+    write_stage_end, write_stage_entry, write_stage_events, write_stage_mitosis,
+    write_stage_movement, write_stage_prompt, write_tags, to_text, TimelineView,
 };
 
 // Switching the timeline on and off is a storage-level concern -- it is the `enabled` column, and
@@ -127,36 +129,6 @@ pub fn add_text_item(tx: &Transaction<'_>, kind: PoolKind, item: &TextItem) -> R
     Ok(id)
 }
 
-/// Replaces the entry `id` holds. Errors if it has since been removed, rather than re-creating it:
-/// an edit arriving for an entry that is gone is a stale editor, and reviving the entry would undo
-/// the removal.
-pub fn update_text_item(tx: &Transaction<'_>, id: i64, item: &TextItem) -> Result<bool> {
-    let current: Option<(String, Option<f64>, Option<String>)> = tx
-        .query_row(
-            "SELECT text, timeout_seconds, summary FROM behaviour_text_item WHERE id = ?",
-            params![id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-    let Some(current) = current else {
-        bail!("that entry is no longer in the pack");
-    };
-    let tags = read_tags(tx, "behaviour_text_item_tag", "item_id", &id)?;
-    if current.0 == item.text
-        && current.1 == item.timeout_seconds
-        && current.2 == item.summary
-        && tags == item.tags
-    {
-        return Ok(false);
-    }
-    tx.execute(
-        "UPDATE behaviour_text_item SET text = ?2, timeout_seconds = ?3, summary = ?4
-         WHERE id = ?1",
-        params![id, item.text, item.timeout_seconds, item.summary],
-    )?;
-    write_tags(tx, "behaviour_text_item_tag", "item_id", &id, &item.tags)?;
-    Ok(true)
-}
 
 /// Removes an entry and closes the gap its position left.
 pub fn remove_text_item(tx: &Transaction<'_>, id: i64) -> Result<bool> {
@@ -181,35 +153,6 @@ pub fn remove_text_item(tx: &Transaction<'_>, id: i64) -> Result<bool> {
     Ok(true)
 }
 
-/// Reorders a pool to exactly `ids`, which must name every entry it holds.
-pub fn reorder_text_items(tx: &Transaction<'_>, kind: PoolKind, ids: &[i64]) -> Result<bool> {
-    let mut current: Vec<i64> = tx
-        .prepare("SELECT id FROM behaviour_text_item WHERE kind = ? ORDER BY position")?
-        .query_map(params![kind.as_str()], |row| row.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    if current == ids {
-        return Ok(false);
-    }
-    current.sort_unstable();
-    let mut wanted = ids.to_vec();
-    wanted.sort_unstable();
-    if current != wanted {
-        bail!("that reordering does not match the entries the pack has");
-    }
-    // Two passes through a negative scratch range: `(kind, position)` is unique, so a direct
-    // swap would collide with a row that has not moved yet.
-    for (position, id) in ids.iter().enumerate() {
-        tx.execute(
-            "UPDATE behaviour_text_item SET position = ?2 WHERE id = ?1",
-            params![id, -(position as i64) - 1],
-        )?;
-    }
-    tx.execute(
-        "UPDATE behaviour_text_item SET position = -position - 1 WHERE kind = ? AND position < 0",
-        params![kind.as_str()],
-    )?;
-    Ok(true)
-}
 
 // ── Web links ────────────────────────────────────────────────────────────────
 
@@ -260,31 +203,6 @@ pub fn add_web_link(tx: &Transaction<'_>, link: &WebLink) -> Result<i64> {
     Ok(id)
 }
 
-/// Replaces the link `id` holds. See [`update_text_item`] for why a missing row is an error.
-pub fn update_web_link(tx: &Transaction<'_>, id: i64, link: &WebLink) -> Result<bool> {
-    let url: Option<String> = tx
-        .query_row(
-            "SELECT url FROM behaviour_web_link WHERE id = ?",
-            params![id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(url) = url else {
-        bail!("that web link is no longer in the pack");
-    };
-    let args = link_args(tx, id)?;
-    let tags = read_tags(tx, "behaviour_web_link_tag", "link_id", &id)?;
-    if url == link.url && args == link.args && tags == link.tags {
-        return Ok(false);
-    }
-    tx.execute(
-        "UPDATE behaviour_web_link SET url = ?2 WHERE id = ?1",
-        params![id, link.url],
-    )?;
-    write_link_args(tx, id, &link.args)?;
-    write_tags(tx, "behaviour_web_link_tag", "link_id", &id, &link.tags)?;
-    Ok(true)
-}
 
 fn write_link_args(tx: &Transaction<'_>, id: i64, args: &[String]) -> Result<()> {
     // A set of suffixes is ordered but not unique -- the same suffix twice is how a pack weights
@@ -367,58 +285,6 @@ pub fn add_content_group(tx: &Transaction<'_>, group: &ContentGroup) -> Result<(
     Ok(())
 }
 
-/// Replaces the group `id` holds, which may rename it — `group.id` is allowed to differ from `id`.
-pub fn update_content_group(tx: &Transaction<'_>, id: &str, group: &ContentGroup) -> Result<bool> {
-    let current: Option<(String, Option<String>, bool)> = tx
-        .query_row(
-            "SELECT label, description, enabled_by_default FROM behaviour_content_group
-             WHERE id = ?",
-            params![id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-    let Some(current) = current else {
-        bail!("that content group is no longer in the pack");
-    };
-    let tags = read_tags(tx, "behaviour_content_group_tag", "group_id", &id)?;
-    if id == group.id
-        && current.0 == group.label
-        && current.1 == group.description
-        && current.2 == group.enabled_by_default
-        && tags == group.tags
-    {
-        return Ok(false);
-    }
-    if id != group.id {
-        let taken: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM behaviour_content_group WHERE id = ?)",
-            params![group.id],
-            |row| row.get(0),
-        )?;
-        if taken {
-            bail!("a content group named “{}” already exists", group.id);
-        }
-    }
-    tx.execute(
-        "UPDATE behaviour_content_group
-         SET id = ?2, label = ?3, description = ?4, enabled_by_default = ?5 WHERE id = ?1",
-        params![
-            id,
-            group.id,
-            group.label,
-            group.description,
-            group.enabled_by_default
-        ],
-    )?;
-    write_tags(
-        tx,
-        "behaviour_content_group_tag",
-        "group_id",
-        &group.id,
-        &group.tags,
-    )?;
-    Ok(true)
-}
 
 /// Removes a content group and closes the gap its position left.
 pub fn remove_content_group(tx: &Transaction<'_>, id: &str) -> Result<bool> {
@@ -640,79 +506,7 @@ pub fn remove_stage(tx: &Transaction<'_>, id: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// Replaces the settings of one stage, leaving its position and the timeline around it alone.
-///
-/// The stage's `id` is not editable here — it is what addresses the row, and the transitions point
-/// at it. Everything else is written whole; see the module docs for why that is the granularity.
-pub fn update_stage(tx: &Transaction<'_>, id: &str, stage: &Stage) -> Result<bool> {
-    let position: Option<i64> = tx
-        .query_row(
-            "SELECT position FROM behaviour_stage WHERE id = ?",
-            params![id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(position) = position else {
-        bail!("that stage is no longer in the timeline");
-    };
-    let current = read_one_stage(tx, id)?;
-    let stage = Stage {
-        id: id.to_string(),
-        ..stage.clone()
-    };
-    if current.as_ref() == Some(&stage) {
-        return Ok(false);
-    }
-    write_one_stage(tx, position, &stage)?;
-    Ok(true)
-}
 
-/// Replaces one transition's settings. Its endpoints are not editable: which stages a transition
-/// joins is decided by their order, and rewriting them here would contradict the timeline.
-pub fn update_transition(tx: &Transaction<'_>, id: &str, transition: &Transition) -> Result<bool> {
-    let current: Option<(f64, String)> = tx
-        .query_row(
-            "SELECT duration_seconds, easing FROM behaviour_transition WHERE id = ?",
-            params![id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    let Some((duration_seconds, easing)) = current else {
-        bail!("that transition is no longer in the timeline");
-    };
-    let easing: super::schema::Easing = super::storage::from_text(&easing)?;
-    let affected = transition_categories(tx, id)?;
-    if duration_seconds == transition.duration_seconds
-        && easing == transition.easing
-        && affected == transition.affected
-    {
-        return Ok(false);
-    }
-    tx.execute(
-        "UPDATE behaviour_transition SET duration_seconds = ?2, easing = ?3 WHERE id = ?1",
-        params![
-            id,
-            transition.duration_seconds,
-            super::storage::to_text(&transition.easing)?
-        ],
-    )?;
-    tx.execute(
-        "DELETE FROM behaviour_transition_category WHERE transition_id = ?",
-        params![id],
-    )?;
-    for (position, category) in transition.affected.iter().enumerate() {
-        tx.execute(
-            "INSERT INTO behaviour_transition_category (transition_id, category, position)
-             VALUES (?1, ?2, ?3)",
-            params![
-                id,
-                super::storage::to_text(category)?,
-                position as i64
-            ],
-        )?;
-    }
-    Ok(true)
-}
 
 fn transition_categories(
     conn: &Connection,
@@ -742,79 +536,6 @@ fn transition_categories(
 // This is the one place a partial update is unavoidable, because the inspector edits a *selection*
 // — "set scale to 2 on these forty files", leaving each file's other attributes alone. Hence the
 // double option below: absent leaves a field as it is, `null` clears it.
-
-/// A field in a partial change: absent leaves it alone, `null` clears it.
-///
-/// Serde folds `null` into `None` for a plain `Option`, which would make "clear this" and "don't
-/// mention this" the same message — exactly the distinction this section exists to keep.
-fn double_option<'de, T, D>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
-where
-    T: Deserialize<'de>,
-    D: Deserializer<'de>,
-{
-    Deserialize::deserialize(deserializer).map(Some)
-}
-
-/// A partial edit to one or more files' popup attributes. See [`double_option`].
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PopupChanges {
-    #[serde(deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
-    pub weight: Option<Option<f64>>,
-    #[serde(deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
-    pub scale: Option<Option<f64>>,
-    #[serde(deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
-    pub region: Option<Option<super::schema::SpawnRegion>>,
-    #[serde(deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
-    pub monitor: Option<Option<super::schema::MonitorPreference>>,
-    #[serde(deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
-    pub caption: Option<Option<String>>,
-    #[serde(deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
-    pub video_loop: Option<Option<bool>>,
-    #[serde(deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
-    pub video_audio: Option<Option<bool>>,
-    /// A set, so an empty list *is* the cleared state — there is no separate null to send.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio: Option<Vec<u64>>,
-}
-
-impl PopupChanges {
-    fn apply(&self, entry: &mut PopupMedia) {
-        if let Some(value) = self.weight {
-            entry.weight = value;
-        }
-        if let Some(value) = self.scale {
-            entry.scale = value;
-        }
-        if let Some(value) = self.region {
-            entry.region = value;
-        }
-        if let Some(value) = self.monitor {
-            entry.monitor = value;
-        }
-        if let Some(value) = self.caption.clone() {
-            // An empty caption says nothing, and would otherwise keep an entry alive holding "".
-            entry.caption = value.filter(|text| !text.is_empty());
-        }
-        if let Some(value) = self.video_loop {
-            entry.video_loop = value;
-        }
-        if let Some(value) = self.video_audio {
-            entry.video_audio = value;
-        }
-        if let Some(value) = self.audio.clone() {
-            entry.audio = value;
-        }
-    }
-}
-
-/// A partial edit to one or more files' audio attributes.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct AudioChanges {
-    #[serde(deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
-    pub volume: Option<Option<f64>>,
-}
 
 /// The popup attributes of each of `ids` that has any, keyed by media id.
 ///
@@ -848,24 +569,27 @@ pub fn audio_attributes(conn: &Connection, ids: &[u64]) -> Result<Vec<(u64, Audi
     Ok(found)
 }
 
-/// Applies `changes` to every file in `ids`, dropping any entry left saying nothing.
-pub fn set_popup_attributes(
+/// Applies `change` to every file in `ids`, dropping any entry left saying nothing.
+///
+/// The prune is what keeps "the author has said nothing about this file" and "the author set every
+/// field to whatever today's default happens to be" from becoming the same stored state — defaults
+/// move under the user across engine releases, and an entry that says nothing must not pin a file
+/// against the ones that were current when it was written.
+fn edit_popup_entries(
     tx: &Transaction<'_>,
     ids: &[u64],
-    changes: &PopupChanges,
+    change: impl Fn(&mut PopupMedia),
 ) -> Result<bool> {
     let mut changed = false;
     for id in ids {
         let before = super::storage::read_one_popup_media(tx, *id)?;
         let mut after = before.clone().unwrap_or_default();
-        changes.apply(&mut after);
+        change(&mut after);
         if before.as_ref() == Some(&after) || (before.is_none() && after.is_empty()) {
             continue;
         }
         changed = true;
         if after.is_empty() {
-            // An entry with nothing left to say is not stored -- the same answer a whole-document
-            // write reaches, arrived at now so the UI never shows a state the next read denies.
             tx.execute(
                 "DELETE FROM behaviour_popup_media WHERE media_id = ?",
                 params![id],
@@ -877,12 +601,65 @@ pub fn set_popup_attributes(
     Ok(changed)
 }
 
-/// Applies `changes` to every file in `ids`. See [`set_popup_attributes`].
-pub fn set_audio_attributes(
+/// How often these files are drawn relative to their neighbours.
+pub fn set_popup_weight(tx: &Transaction<'_>, ids: &[u64], weight: Option<f64>) -> Result<bool> {
+    edit_popup_entries(tx, ids, |entry| entry.weight = weight)
+}
+
+/// Multiplies the size the mode would otherwise have chosen.
+pub fn set_popup_scale(tx: &Transaction<'_>, ids: &[u64], scale: Option<f64>) -> Result<bool> {
+    edit_popup_entries(tx, ids, |entry| entry.scale = scale)
+}
+
+/// The part of the monitor these files may spawn in. One field, not four: a region is a rectangle,
+/// and half of one is not a placement anybody asked for.
+pub fn set_popup_region(
     tx: &Transaction<'_>,
     ids: &[u64],
-    changes: &AudioChanges,
+    region: Option<SpawnRegion>,
 ) -> Result<bool> {
+    edit_popup_entries(tx, ids, |entry| entry.region = region)
+}
+
+pub fn set_popup_monitor(
+    tx: &Transaction<'_>,
+    ids: &[u64],
+    monitor: Option<MonitorPreference>,
+) -> Result<bool> {
+    edit_popup_entries(tx, ids, |entry| entry.monitor = monitor)
+}
+
+/// A caption belonging to these files, as opposed to the tag-matched pool. An empty one is the
+/// absence of a caption rather than a caption of "".
+pub fn set_popup_caption(
+    tx: &Transaction<'_>,
+    ids: &[u64],
+    caption: Option<&str>,
+) -> Result<bool> {
+    let caption = caption.filter(|text| !text.is_empty());
+    edit_popup_entries(tx, ids, |entry| {
+        entry.caption = caption.map(str::to_string)
+    })
+}
+
+pub fn set_popup_video_loop(
+    tx: &Transaction<'_>,
+    ids: &[u64],
+    value: Option<bool>,
+) -> Result<bool> {
+    edit_popup_entries(tx, ids, |entry| entry.video_loop = value)
+}
+
+pub fn set_popup_video_audio(
+    tx: &Transaction<'_>,
+    ids: &[u64],
+    value: Option<bool>,
+) -> Result<bool> {
+    edit_popup_entries(tx, ids, |entry| entry.video_audio = value)
+}
+
+/// This track's own level, for levelling a pack assembled from mixed sources.
+pub fn set_audio_volume(tx: &Transaction<'_>, ids: &[u64], volume: Option<f64>) -> Result<bool> {
     let mut changed = false;
     for id in ids {
         let before: Option<Option<f64>> = tx
@@ -892,30 +669,25 @@ pub fn set_audio_attributes(
                 |row| row.get(0),
             )
             .optional()?;
-        let mut after = AudioMedia {
-            volume: before.flatten(),
-        };
-        if let Some(value) = changes.volume {
-            after.volume = value;
-        }
-        if before.map(|volume| AudioMedia { volume }).as_ref() == Some(&after)
-            || (before.is_none() && after.is_empty())
-        {
+        if before.flatten() == volume {
             continue;
         }
         changed = true;
-        if after.is_empty() {
-            tx.execute(
-                "DELETE FROM behaviour_audio_media WHERE media_id = ?",
-                params![id],
-            )?;
-            continue;
+        match volume {
+            None => {
+                tx.execute(
+                    "DELETE FROM behaviour_audio_media WHERE media_id = ?",
+                    params![id],
+                )?;
+            }
+            Some(volume) => {
+                tx.execute(
+                    "INSERT INTO behaviour_audio_media (media_id, volume) VALUES (?1, ?2)
+                     ON CONFLICT(media_id) DO UPDATE SET volume = excluded.volume",
+                    params![id, volume],
+                )?;
+            }
         }
-        tx.execute(
-            "INSERT INTO behaviour_audio_media (media_id, volume) VALUES (?1, ?2)
-             ON CONFLICT(media_id) DO UPDATE SET volume = excluded.volume",
-            params![id, after.volume],
-        )?;
     }
     Ok(changed)
 }
@@ -1107,6 +879,588 @@ pub fn is_media_referenced(conn: &Connection, media: u64) -> Result<bool> {
         |row| row.get(0),
     )?;
     Ok(referenced)
+}
+
+// ── Setting one field ────────────────────────────────────────────────────────
+//
+// Everything below sets a single field, and that is the point rather than an optimisation. A
+// command that writes a whole entity cannot be applied twice concurrently without one write
+// carrying a stale copy of whatever the other changed — which is why the editor used to keep a
+// draft, merge changes into it, and count generations to know when it could let go. Two writes that
+// each touch one column commute, so none of that is needed for correctness.
+//
+// It also removes the "was this field set, or merely not mentioned?" problem. A partial update has
+// to tell an absent field from a null one, which is what `PopupChanges` needed `double_option` for;
+// a setter that names its field has nothing to not-mention, so a plain `Option<T>` says it all.
+//
+// **Every setter reports whether it changed anything.** An `oninput` that fires without changing a
+// value is not an edit, and recording one would spend an entry out of the hundred undo keeps.
+
+/// Writes one column of an existing row, reporting whether the value actually moved.
+///
+/// The row must exist: an edit arriving for something that has since been removed is a stale editor
+/// acting on a document that has moved on, and re-creating the row would undo the removal.
+///
+/// `value` is owned rather than borrowed because the same type has to come back out of the database
+/// to be compared against — and `&str` cannot, only `String` can.
+fn set_column<T>(
+    tx: &Transaction<'_>,
+    table: &str,
+    key_column: &str,
+    key: &dyn rusqlite::ToSql,
+    column: &str,
+    value: T,
+    missing: &str,
+) -> Result<bool>
+where
+    T: rusqlite::ToSql + rusqlite::types::FromSql + PartialEq,
+{
+    let current: Option<T> = tx
+        .query_row(
+            &format!("SELECT {column} FROM {table} WHERE {key_column} = ?"),
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(current) = current else {
+        bail!("{missing}");
+    };
+    if current == value {
+        return Ok(false);
+    }
+    tx.execute(
+        &format!("UPDATE {table} SET {column} = ?2 WHERE {key_column} = ?1"),
+        params![key, value],
+    )?;
+    Ok(true)
+}
+
+// ── Text pool entries ────────────────────────────────────────────────────────
+
+const NO_TEXT_ITEM: &str = "that entry is no longer in the pack";
+
+pub fn set_text_item_text(tx: &Transaction<'_>, id: i64, text: &str) -> Result<bool> {
+    set_column(
+        tx,
+        "behaviour_text_item",
+        "id",
+        &id,
+        "text",
+        text.to_string(),
+        NO_TEXT_ITEM,
+    )
+}
+
+/// The notification's title. `None` is a notification shown with no title, which is what every
+/// converted Edgeware pack gets — a blank one is the absence of a title, not a title of "".
+pub fn set_text_item_summary(tx: &Transaction<'_>, id: i64, summary: Option<&str>) -> Result<bool> {
+    set_column(
+        tx,
+        "behaviour_text_item",
+        "id",
+        &id,
+        "summary",
+        summary.map(str::to_string),
+        NO_TEXT_ITEM,
+    )
+}
+
+/// A prompt's answer deadline. `None` asks the mode to derive one from the prompt's length.
+pub fn set_text_item_timeout(tx: &Transaction<'_>, id: i64, seconds: Option<f64>) -> Result<bool> {
+    set_column(
+        tx,
+        "behaviour_text_item",
+        "id",
+        &id,
+        "timeout_seconds",
+        seconds,
+        NO_TEXT_ITEM,
+    )
+}
+
+pub fn set_text_item_tags(tx: &Transaction<'_>, id: i64, tags: &[String]) -> Result<bool> {
+    let current = read_tags(tx, "behaviour_text_item_tag", "item_id", &id)?;
+    if current == tags {
+        return Ok(false);
+    }
+    exists(tx, "behaviour_text_item", "id", &id, NO_TEXT_ITEM)?;
+    write_tags(tx, "behaviour_text_item_tag", "item_id", &id, tags)?;
+    Ok(true)
+}
+
+// ── Web links ────────────────────────────────────────────────────────────────
+
+const NO_WEB_LINK: &str = "that web link is no longer in the pack";
+
+pub fn set_web_link_url(tx: &Transaction<'_>, id: i64, url: &str) -> Result<bool> {
+    set_column(
+        tx,
+        "behaviour_web_link",
+        "id",
+        &id,
+        "url",
+        url.to_string(),
+        NO_WEB_LINK,
+    )
+}
+
+/// The suffixes appended at random when the link is opened.
+///
+/// One field rather than one per suffix: adding and removing one both rewrite the list, and the
+/// same suffix twice is a legitimate way to weight it, so this is an ordered list and not a set.
+pub fn set_web_link_args(tx: &Transaction<'_>, id: i64, args: &[String]) -> Result<bool> {
+    if link_args(tx, id)? == args {
+        return Ok(false);
+    }
+    exists(tx, "behaviour_web_link", "id", &id, NO_WEB_LINK)?;
+    write_link_args(tx, id, args)?;
+    Ok(true)
+}
+
+pub fn set_web_link_tags(tx: &Transaction<'_>, id: i64, tags: &[String]) -> Result<bool> {
+    let current = read_tags(tx, "behaviour_web_link_tag", "link_id", &id)?;
+    if current == tags {
+        return Ok(false);
+    }
+    exists(tx, "behaviour_web_link", "id", &id, NO_WEB_LINK)?;
+    write_tags(tx, "behaviour_web_link_tag", "link_id", &id, tags)?;
+    Ok(true)
+}
+
+// ── Content groups ───────────────────────────────────────────────────────────
+
+const NO_GROUP: &str = "that content group is no longer in the pack";
+
+pub fn set_content_group_label(tx: &Transaction<'_>, id: &str, label: &str) -> Result<bool> {
+    set_column(
+        tx,
+        "behaviour_content_group",
+        "id",
+        &id,
+        "label",
+        label.to_string(),
+        NO_GROUP,
+    )
+}
+
+pub fn set_content_group_description(
+    tx: &Transaction<'_>,
+    id: &str,
+    description: Option<&str>,
+) -> Result<bool> {
+    set_column(
+        tx,
+        "behaviour_content_group",
+        "id",
+        &id,
+        "description",
+        description.map(str::to_string),
+        NO_GROUP,
+    )
+}
+
+pub fn set_content_group_enabled_by_default(
+    tx: &Transaction<'_>,
+    id: &str,
+    enabled: bool,
+) -> Result<bool> {
+    set_column(
+        tx,
+        "behaviour_content_group",
+        "id",
+        &id,
+        "enabled_by_default",
+        enabled,
+        NO_GROUP,
+    )
+}
+
+pub fn set_content_group_tags(tx: &Transaction<'_>, id: &str, tags: &[String]) -> Result<bool> {
+    let current = read_tags(tx, "behaviour_content_group_tag", "group_id", &id)?;
+    if current == tags {
+        return Ok(false);
+    }
+    exists(tx, "behaviour_content_group", "id", &id, NO_GROUP)?;
+    write_tags(tx, "behaviour_content_group_tag", "group_id", &id, tags)?;
+    Ok(true)
+}
+
+/// Refuses if the row is gone. See [`set_column`] for why that is an error rather than a no-op.
+fn exists(
+    tx: &Transaction<'_>,
+    table: &str,
+    key_column: &str,
+    key: &dyn rusqlite::ToSql,
+    missing: &str,
+) -> Result<()> {
+    let found: bool = tx.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {key_column} = ?)"),
+        params![key],
+        |row| row.get(0),
+    )?;
+    if !found {
+        bail!("{missing}");
+    }
+    Ok(())
+}
+
+// ── Stages ───────────────────────────────────────────────────────────────────
+
+const NO_STAGE: &str = "that stage is no longer in the timeline";
+
+pub fn set_stage_label(tx: &Transaction<'_>, id: &str, label: &str) -> Result<bool> {
+    set_column(
+        tx,
+        "behaviour_stage",
+        "id",
+        &id,
+        "label",
+        label.to_string(),
+        NO_STAGE,
+    )
+}
+
+/// Which media the stage selects, and which of those tags the editor maintains the name of.
+///
+/// The two are one command because they are one invariant: ownership is recorded on the association
+/// row (`behaviour_stage_tag.owned`), so a stage cannot own a tag it does not select by. Setting
+/// them separately would allow a moment where `owned_tag` names something absent from the selection
+/// — and it is *checked* here rather than merely written in the right order, because until now that
+/// invariant lived only in the front end's habits.
+///
+/// `tags` of `None` is a stage that restricts nothing, which therefore owns nothing either: there
+/// is no selection for a tag to be part of.
+pub fn set_stage_content_tags(
+    tx: &Transaction<'_>,
+    id: &str,
+    tags: Option<&[String]>,
+    owned_tag: Option<&str>,
+) -> Result<bool> {
+    if let Some(owned) = owned_tag {
+        let selected = tags.is_some_and(|tags| tags.iter().any(|tag| tag == owned));
+        if !selected {
+            bail!("a stage can only own a tag it selects by");
+        }
+    }
+    let Some(current) = read_one_stage(tx, id)? else {
+        bail!("{NO_STAGE}");
+    };
+    if current.content.tags.as_deref() == tags && current.content.owned_tag.as_deref() == owned_tag {
+        return Ok(false);
+    }
+    tx.execute(
+        "UPDATE behaviour_stage SET restricts_content = ?2 WHERE id = ?1",
+        params![id, tags.is_some()],
+    )?;
+    write_tags(
+        tx,
+        "behaviour_stage_tag",
+        "stage_id",
+        &id,
+        tags.unwrap_or(&[]),
+    )?;
+    write_owned_stage_tag(tx, id, owned_tag)?;
+    Ok(true)
+}
+
+/// Whether the stage picks a fresh background track from its own tags when it begins.
+///
+/// Naming a track and picking one at random are alternatives, so switching the flag on clears the
+/// named track. The other direction is enforced by [`set_media_slot`], which clears this flag when
+/// a track is named — between them the two columns cannot both be claimed.
+pub fn set_stage_audio_random(tx: &Transaction<'_>, id: &str, random: bool) -> Result<bool> {
+    let Some(current) = read_one_stage(tx, id)? else {
+        bail!("{NO_STAGE}");
+    };
+    let clearing_track = random && current.content.audio.is_some();
+    if current.content.audio_random == random && !clearing_track {
+        return Ok(false);
+    }
+    tx.execute(
+        "UPDATE behaviour_stage SET audio_random = ?2, audio = CASE WHEN ?2 THEN NULL ELSE audio END
+         WHERE id = ?1",
+        params![id, random],
+    )?;
+    Ok(true)
+}
+
+/// One event kind's schedule, or `None` to stop the stage scheduling that kind at all.
+pub fn set_stage_event(
+    tx: &Transaction<'_>,
+    id: &str,
+    kind: EventKind,
+    schedule: Option<&EventSchedule>,
+) -> Result<bool> {
+    let Some(mut current) = read_one_stage(tx, id)? else {
+        bail!("{NO_STAGE}");
+    };
+    if current.events.get(kind) == schedule {
+        return Ok(false);
+    }
+    current.events.set(kind, schedule.cloned());
+    write_stage_events(tx, id, &current.events)?;
+    Ok(true)
+}
+
+// The stage's entry and prompt blocks are not optional in the schema -- `StageEntry` and
+// `StagePrompt` are plain structs with defaults, not `Option`s -- so a leaf setter can create the
+// row it needs rather than requiring a parent to be switched on first.
+
+pub fn set_stage_entry_notification(
+    tx: &Transaction<'_>,
+    id: &str,
+    text: Option<&str>,
+) -> Result<bool> {
+    edit_stage_entry(tx, id, |entry| {
+        entry.notification = text.filter(|text| !text.is_empty()).map(str::to_string)
+    })
+}
+
+pub fn set_stage_entry_popup_burst(
+    tx: &Transaction<'_>,
+    id: &str,
+    count: Option<u32>,
+) -> Result<bool> {
+    edit_stage_entry(tx, id, |entry| entry.popup_burst = count)
+}
+
+fn edit_stage_entry(
+    tx: &Transaction<'_>,
+    id: &str,
+    change: impl FnOnce(&mut super::schema::StageEntry),
+) -> Result<bool> {
+    let Some(stage) = read_one_stage(tx, id)? else {
+        bail!("{NO_STAGE}");
+    };
+    let mut entry = stage.on_enter.clone();
+    change(&mut entry);
+    if entry == stage.on_enter {
+        return Ok(false);
+    }
+    write_stage_entry(tx, id, (!entry.is_default()).then_some(&entry))?;
+    Ok(true)
+}
+
+pub fn set_stage_prompt_timeouts_enabled(
+    tx: &Transaction<'_>,
+    id: &str,
+    enabled: bool,
+) -> Result<bool> {
+    edit_stage_prompt(tx, id, |prompt| prompt.timeouts_enabled = enabled)
+}
+
+/// Scales every prompt's explicit or automatically derived deadline while this stage is playing.
+pub fn set_stage_prompt_timeout_multiplier(
+    tx: &Transaction<'_>,
+    id: &str,
+    multiplier: f64,
+) -> Result<bool> {
+    edit_stage_prompt(tx, id, |prompt| prompt.timeout_multiplier = multiplier)
+}
+
+pub fn set_stage_prompt_popup_burst(
+    tx: &Transaction<'_>,
+    id: &str,
+    count: Option<u32>,
+) -> Result<bool> {
+    edit_stage_prompt(tx, id, |prompt| prompt.popup_burst = count)
+}
+
+fn edit_stage_prompt(
+    tx: &Transaction<'_>,
+    id: &str,
+    change: impl FnOnce(&mut super::schema::StagePrompt),
+) -> Result<bool> {
+    let Some(stage) = read_one_stage(tx, id)? else {
+        bail!("{NO_STAGE}");
+    };
+    let mut prompt = stage.prompt.clone();
+    change(&mut prompt);
+    if prompt == stage.prompt {
+        return Ok(false);
+    }
+    write_stage_prompt(tx, id, &prompt)?;
+    Ok(true)
+}
+
+/// Switches window movement on or off. One command rather than three, because one click sets both
+/// speeds — as separate commands it would cost three undo entries for one action.
+pub fn set_stage_movement(
+    tx: &Transaction<'_>,
+    id: &str,
+    movement: Option<&Movement>,
+) -> Result<bool> {
+    let Some(stage) = read_one_stage(tx, id)? else {
+        bail!("{NO_STAGE}");
+    };
+    if stage.movement.as_ref() == movement {
+        return Ok(false);
+    }
+    write_stage_movement(tx, id, movement)?;
+    Ok(true)
+}
+
+pub fn set_stage_movement_speed(
+    tx: &Transaction<'_>,
+    id: &str,
+    minimum: Option<f64>,
+    maximum: Option<f64>,
+) -> Result<bool> {
+    let Some(stage) = read_one_stage(tx, id)? else {
+        bail!("{NO_STAGE}");
+    };
+    // Only meaningful while movement is switched on; a speed for a stage that does not move is a
+    // stale editor, not a request to start moving.
+    let Some(current) = stage.movement.as_ref() else {
+        bail!("this stage does not move");
+    };
+    let updated = Movement {
+        minimum_speed: minimum.or(current.minimum_speed),
+        maximum_speed: maximum.or(current.maximum_speed),
+    };
+    if &updated == current {
+        return Ok(false);
+    }
+    write_stage_movement(tx, id, Some(&updated))?;
+    Ok(true)
+}
+
+/// Switches mitosis on or off. One command for the same reason as [`set_stage_movement`].
+pub fn set_stage_mitosis(tx: &Transaction<'_>, id: &str, mitosis: Option<&Mitosis>) -> Result<bool> {
+    let Some(stage) = read_one_stage(tx, id)? else {
+        bail!("{NO_STAGE}");
+    };
+    if stage.mitosis.as_ref() == mitosis {
+        return Ok(false);
+    }
+    write_stage_mitosis(tx, id, mitosis)?;
+    Ok(true)
+}
+
+pub fn set_stage_mitosis_values(
+    tx: &Transaction<'_>,
+    id: &str,
+    chance: Option<f64>,
+    count: Option<u32>,
+) -> Result<bool> {
+    let Some(stage) = read_one_stage(tx, id)? else {
+        bail!("{NO_STAGE}");
+    };
+    let Some(current) = stage.mitosis.as_ref() else {
+        bail!("this stage does not use mitosis");
+    };
+    let updated = Mitosis {
+        chance: chance.or(current.chance),
+        count: count.or(current.count),
+    };
+    if &updated == current {
+        return Ok(false);
+    }
+    write_stage_mitosis(tx, id, Some(&updated))?;
+    Ok(true)
+}
+
+// A stage's end condition exists for every stage but the last, and whether it exists is decided by
+// `normalize` rather than by the author -- so a leaf setter refuses when there is none rather than
+// creating one, which would give the final stage an end it must not have.
+
+pub fn set_stage_end_duration(
+    tx: &Transaction<'_>,
+    id: &str,
+    seconds: Option<f64>,
+) -> Result<bool> {
+    edit_stage_end(tx, id, |end| end.duration_seconds = seconds)
+}
+
+pub fn set_stage_end_event_count(
+    tx: &Transaction<'_>,
+    id: &str,
+    condition: Option<&EventCountCondition>,
+) -> Result<bool> {
+    edit_stage_end(tx, id, |end| end.event_count = condition.cloned())
+}
+
+pub fn set_stage_end_strategy(
+    tx: &Transaction<'_>,
+    id: &str,
+    strategy: EndStrategy,
+) -> Result<bool> {
+    edit_stage_end(tx, id, |end| end.strategy = strategy)
+}
+
+fn edit_stage_end(
+    tx: &Transaction<'_>,
+    id: &str,
+    change: impl FnOnce(&mut StageEnd),
+) -> Result<bool> {
+    let Some(stage) = read_one_stage(tx, id)? else {
+        bail!("{NO_STAGE}");
+    };
+    let Some(current) = stage.end.as_ref() else {
+        bail!("the last stage has no end condition");
+    };
+    let mut updated = current.clone();
+    change(&mut updated);
+    if &updated == current {
+        return Ok(false);
+    }
+    write_stage_end(tx, id, Some(&updated))?;
+    Ok(true)
+}
+
+// ── Transitions ──────────────────────────────────────────────────────────────
+
+const NO_TRANSITION: &str = "that transition is no longer in the timeline";
+
+pub fn set_transition_duration(tx: &Transaction<'_>, id: &str, seconds: f64) -> Result<bool> {
+    set_column(
+        tx,
+        "behaviour_transition",
+        "id",
+        &id,
+        "duration_seconds",
+        seconds,
+        NO_TRANSITION,
+    )
+}
+
+pub fn set_transition_easing(tx: &Transaction<'_>, id: &str, easing: Easing) -> Result<bool> {
+    set_column(
+        tx,
+        "behaviour_transition",
+        "id",
+        &id,
+        "easing",
+        to_text(&easing)?,
+        NO_TRANSITION,
+    )
+}
+
+/// Which values interpolate gradually across the transition.
+///
+/// One field rather than one per category: a single checkbox can rewrite the whole list, because
+/// ticking one member of a legacy broad category expands that category into its siblings first.
+pub fn set_transition_affected(
+    tx: &Transaction<'_>,
+    id: &str,
+    affected: &[TransitionCategory],
+) -> Result<bool> {
+    if transition_categories(tx, id)? == affected {
+        return Ok(false);
+    }
+    exists(tx, "behaviour_transition", "id", &id, NO_TRANSITION)?;
+    tx.execute(
+        "DELETE FROM behaviour_transition_category WHERE transition_id = ?",
+        params![id],
+    )?;
+    for (position, category) in affected.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO behaviour_transition_category (transition_id, category, position)
+             VALUES (?1, ?2, ?3)",
+            params![id, to_text(category)?, position as i64],
+        )?;
+    }
+    Ok(true)
 }
 
 #[cfg(test)]

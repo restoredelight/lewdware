@@ -15,7 +15,7 @@
 	import { isCapped, popupSize } from './popupSize.js';
 	import { describeRegion } from './spawnRegion.js';
 	import StageMembership from './StageMembership.svelte';
-	import type { MediaFile, MonitorPreference, PopupMedia } from './types.js';
+	import type { MediaFile, MonitorPreference, PopupMedia, SpawnRegion } from './types.js';
 
 	type Shared<K extends keyof PopupMedia> = { value: PopupMedia[K]; mixed: boolean };
 
@@ -25,7 +25,15 @@
 		/** Every file an edit here changes. */
 		files: MediaFile[];
 		shared: <K extends keyof PopupMedia>(field: K) => Shared<K>;
-		edit: (changes: PopupMedia, label: string) => void;
+		/** The per-field setters, bound to the files this view is editing. */
+		edit: {
+			weight: (value: number | null, label: string) => void;
+			scale: (value: number | null, label: string) => void;
+			region: (value: SpawnRegion | null, label: string) => void;
+			monitor: (value: MonitorPreference | null, label: string) => void;
+			videoLoop: (value: boolean | null, label: string) => void;
+			videoAudio: (value: boolean | null, label: string) => void;
+		};
 		/** Enters the size-and-position frame, which owns the two spatial attributes. */
 		onplace: () => void;
 	};
@@ -43,10 +51,6 @@
 
 	function plural(label: string) {
 		return count === 1 ? `${label} for “${file.file_name}”` : `${label} for ${count} items`;
-	}
-
-	function set(changes: PopupMedia, label: string) {
-		edit(changes, plural(label));
 	}
 
 	// Only where the dimensions are known and the selection agrees: across mixed media a single
@@ -88,11 +92,11 @@
 			value={weight.value ?? null}
 			description="How often this is drawn against the rest of the pack."
 			onchange={(weight) =>
-				set(
+				edit.weight(
 					// Empty, or a number that could not be a frequency, both mean "no opinion" -- which
 					// is stored as nothing at all rather than as a multiplier of 1.
-					{ weight: weight !== null && weight > 0 ? weight : undefined },
-					'Set popup frequency'
+					weight !== null && weight > 0 ? weight : null,
+					plural('Set popup frequency')
 				)}
 		/>
 	</section>
@@ -124,11 +128,11 @@
 				}
 			]}
 			onchange={(value) =>
-				set(
+				edit.monitor(
 					// "Any" is what saying nothing already means, so it clears the field rather than
 					// storing a value that would pin the file against a default that may move.
-					{ monitor: value === 'any' || value === '' ? undefined : (value as MonitorPreference) },
-					'Set popup monitor'
+					value === 'any' || value === '' ? null : (value as MonitorPreference),
+					plural('Set popup monitor')
 				)}
 		/>
 	</section>
@@ -142,7 +146,7 @@
 					indeterminate={videoLoop.mixed}
 					ariaLabel="Loop video"
 					onchange={(checked) =>
-						set({ video_loop: checked ? undefined : false }, 'Set video looping')}
+						edit.videoLoop(checked ? null : false, plural('Set video looping'))}
 				/>
 				<span>Loop<small>Off closes the popup when the clip ends</small></span>
 			</label>
@@ -151,8 +155,7 @@
 					checked={videoAudio.value !== false}
 					indeterminate={videoAudio.mixed}
 					ariaLabel="Play video sound"
-					onchange={(checked) =>
-						set({ video_audio: checked ? undefined : false }, 'Set video sound')}
+					onchange={(checked) => edit.videoAudio(checked ? null : false, plural('Set video sound'))}
 				/>
 				<span>Play sound<small>Still silent if popup sounds are muted</small></span>
 			</label>

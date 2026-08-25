@@ -218,6 +218,9 @@ export interface Events {
 	prompt?: EventSchedule;
 	sound?: EventSchedule;
 }
+
+/** Which kind of event a schedule belongs to — mirrors `behaviour::EventKind`. */
+export type EventKind = keyof Events;
 export interface Movement {
 	minimum_speed?: number;
 	maximum_speed?: number;

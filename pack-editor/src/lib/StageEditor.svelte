@@ -17,11 +17,12 @@
 	import MediaSlot from './MediaSlot.svelte';
 	import TagPicker from './TagPicker.svelte';
 	import { api } from './api.js';
-	import { fields } from './mutate.svelte.js';
+	import { mutate } from './mutate.svelte.js';
+	import DebouncedField from './DebouncedField.svelte';
 	import { keys, query } from './query.svelte.js';
 	import { stageTagName, takenTagNames } from './stageTags.js';
 	import { store } from './store.svelte.js';
-	import type { EventSchedule, Stage, TagAction } from './types.js';
+	import type { EventKind, EventSchedule, Stage } from './types.js';
 
 	type Props = {
 		stageId: string;
@@ -31,7 +32,7 @@
 
 	let { stageId, onselect }: Props = $props();
 
-	const timelineQuery = query(keys.timeline, api.getTimeline);
+	const timelineQuery = query(keys.timeline, api.timeline.get);
 	const slots = query(keys.mediaSlots, api.getMediaSlots);
 	const tagRows = query(keys.tags, api.getTagRows);
 	const stages = $derived(timelineQuery.current?.stages ?? []);
@@ -50,43 +51,10 @@
 
 	const invalidates = [keys.timeline, keys.summary, keys.tags];
 
-	/**
-	 * Sends this stage, having applied `change` to the copy this view is showing.
-	 *
-	 * A stage is a few dozen small fields, so it goes whole rather than as one command per field —
-	 * still one row and its children, and still a changeset the size of one stage. `retiring` and
-	 * `tagActions` ride along for the edits that are also about media or tags, so a rename and the
-	 * tag rename it causes cannot come apart under undo.
-	 *
-	 * Changes accumulate into one draft per stage. A stage is sent whole, so building each command
-	 * from the last *fetched* copy would mean toggling mitosis mid-rename sent the old name back.
-	 */
-	function write(
-		change: (draft: Stage) => void,
-		label: string,
-		options: { debounce?: boolean; retiring?: number[]; tagActions?: TagAction[] } = {}
-	) {
-		if (!stage) return;
-		const id = stage.id;
-		fields.edit<Stage>({
-			entity: `stage:${id}`,
-			base: () => structuredClone($state.snapshot(stage)) as Stage,
-			change,
-			label,
-			invalidates,
-			send: (draft) =>
-				api.updateStages(
-					[{ id, stage: draft }],
-					options.retiring ?? [],
-					options.tagActions ?? [],
-					label
-				),
-			debounce: options.debounce
-		});
+	/** Sends one field of this stage. Nothing else about the stage travels with the change. */
+	function write(run: () => Promise<unknown>, label: string) {
+		void mutate(run as () => Promise<void>, { label, invalidates });
 	}
-
-	/** The stage as the author has it: their unsent edits if any, else what was fetched. */
-	const shown = $derived((stage && fields.draftFor<Stage>(`stage:${stage.id}`)) ?? stage);
 
 	let mainEl = $state<HTMLElement>();
 	let audioPickerStage = $state<string | null>(null);
@@ -150,23 +118,27 @@
 	 */
 	function setRestriction(on: boolean) {
 		if (!stage) return;
+		const id = stage.id;
 		if (!on) {
-			write((draft) => {
-				delete draft.content.tags;
-				delete draft.content.owned_tag;
-			}, 'Change stage content');
+			write(
+				() => api.stage.setContentTags(id, null, null, [], 'Change stage content'),
+				'Change stage content'
+			);
 			return;
 		}
 		const tag = stageTagName(stage.label, taken());
 		// `media: null` is "every file in the pack", resolved server-side — the seeding rule, which
 		// keeps the stage showing what it showed a moment before its tags were switched on.
 		write(
-			(draft) => {
-				draft.content.tags = [tag];
-				draft.content.owned_tag = tag;
-			},
-			'Restrict stage content',
-			{ tagActions: [{ kind: 'apply', tag, media: null }] }
+			() =>
+				api.stage.setContentTags(
+					id,
+					[tag],
+					tag,
+					[{ kind: 'apply', tag, media: null }],
+					'Restrict stage content'
+				),
+			'Restrict stage content'
 		);
 	}
 
@@ -177,76 +149,77 @@
 	 * Only a tag no other stage selects by. A rename is lossless everywhere else it appears (the
 	 * lists are joins, so media, pools and groups follow the id), but another stage reading this
 	 * name is another author decision, and this one is bookkeeping.
+	 *
+	 * `label` is passed in rather than read back, because the name field commits before this runs
+	 * and what is stored may not have caught up.
 	 */
-	function renameOwnedTag() {
+	function renameOwnedTag(label: string) {
 		const owned = stage?.content.owned_tag;
 		if (!stage || !owned) return;
-		if (stages.some((other) => other.id !== stage.id && (other.content.tags ?? []).includes(owned)))
+		const id = stage.id;
+		if (stages.some((other) => other.id !== id && (other.content.tags ?? []).includes(owned)))
 			return;
-		// The label the author has actually typed, not the one last fetched. Blur lands inside the
-		// name field's debounce window, so the stored label is still the old one — reading that made
-		// this decide the tag was already correctly named and leave it behind.
-		const label = shown?.label ?? stage.label;
 		const renamed = stageTagName(label, taken(owned));
 		if (renamed === owned) return;
-		// Written into the same draft as the name, so the rename and the tag rename it causes are
-		// one command and one undo entry.
+		const tags = (stage.content.tags ?? []).map((tag) => (tag === owned ? renamed : tag));
 		write(
-			(draft) => {
-				draft.content.tags = (draft.content.tags ?? []).map((tag) =>
-					tag === owned ? renamed : tag
-				);
-				draft.content.owned_tag = renamed;
-			},
-			'Rename stage',
-			{ tagActions: [{ kind: 'rename', from: owned, to: renamed }] }
+			() =>
+				api.stage.setContentTags(
+					id,
+					tags,
+					renamed,
+					[{ kind: 'rename', from: owned, to: renamed }],
+					'Rename stage'
+				),
+			'Rename stage'
 		);
 	}
 
-	function setEvent(key: keyof Stage['events'], value?: EventSchedule) {
-		write((draft) => {
-			if (value) draft.events[key] = value;
-			else delete draft.events[key];
-		}, 'Change stage events');
+	function setEvent(key: EventKind, value?: EventSchedule) {
+		if (!stage) return;
+		write(
+			() => api.stage.setEvent(stage.id, key, value ?? null, 'Change stage events'),
+			'Change stage events'
+		);
 	}
 
 	function setAudioMode(mode: string) {
 		if (!stage) return;
+		const id = stage.id;
 		// The track this stage was naming is deliberately let go of: leaving it behind would litter
 		// the pack with a sound marked out of popups and referenced by nothing.
 		const retiring = stage.content.audio != null ? [stage.content.audio] : [];
-		audioPickerStage = mode === 'specific' ? stage.id : null;
+		audioPickerStage = mode === 'specific' ? id : null;
 		write(
-			(draft) => {
-				delete draft.content.audio;
-				if (mode === 'random') draft.content.audio_random = true;
-				else delete draft.content.audio_random;
-			},
-			'Change stage audio',
-			{ retiring }
+			() => api.stage.setAudioRandom(id, mode === 'random', retiring, 'Change stage audio'),
+			'Change stage audio'
 		);
 	}
 
-	/** The prompt block a draft edit is about to write into, created on first use. */
-	function promptOf(draft: Stage) {
-		draft.prompt ??= { timeouts_enabled: true, timeout_multiplier: 1 };
-		return draft.prompt;
-	}
-
 	function setPromptPopups(enabled: boolean) {
-		write((draft) => {
-			const prompt = promptOf(draft);
-			if (enabled) prompt.popup_burst ??= 5;
-			else delete prompt.popup_burst;
-		}, 'Toggle prompt popups');
+		if (!stage) return;
+		write(
+			() =>
+				api.stage.setPromptPopupBurst(
+					stage.id,
+					enabled ? (stage.prompt?.popup_burst ?? 5) : null,
+					'Toggle prompt popups'
+				),
+			'Toggle prompt popups'
+		);
 	}
 
 	function setEntryPopups(enabled: boolean) {
-		write((draft) => {
-			draft.on_enter ??= {};
-			if (enabled) draft.on_enter.popup_burst ??= 5;
-			else delete draft.on_enter.popup_burst;
-		}, 'Toggle stage entry popups');
+		if (!stage) return;
+		write(
+			() =>
+				api.stage.setEntryPopupBurst(
+					stage.id,
+					enabled ? (stage.on_enter?.popup_burst ?? 5) : null,
+					'Toggle stage entry popups'
+				),
+			'Toggle stage entry popups'
+		);
 	}
 
 	function transitionSummary() {
@@ -260,16 +233,28 @@
 	<div class="panel">
 		<header>
 			<div>
-				<input
-					class="stage-name"
-					aria-label="Stage name"
-					value={shown?.label ?? ''}
-					oninput={(event) =>
-						write((draft) => (draft.label = event.currentTarget.value), 'Rename stage', {
-							debounce: true
-						})}
-					onblur={renameOwnedTag}
-				/>
+				<DebouncedField
+					value={stage?.label ?? ''}
+					label="Rename stage"
+					{invalidates}
+					oncommit={async (value: string, label: string) => {
+						if (!stage) return;
+						await api.stage.setLabel(stage.id, value, [], label);
+						// The tag the stage owns follows its name — after the name has landed, so the
+						// two are consecutive entries rather than one racing the other.
+						renameOwnedTag(value);
+					}}
+				>
+					{#snippet field(draft, set, commit)}
+						<input
+							class="stage-name"
+							aria-label="Stage name"
+							value={draft}
+							oninput={(event) => set(event.currentTarget.value)}
+							onblur={commit}
+						/>
+					{/snippet}
+				</DebouncedField>
 			</div>
 		</header>
 
@@ -288,20 +273,31 @@
 								: 'All content'}</small
 						>{/if}
 				</div>
-				<Toggle ariaLabel="Active tags" checked={!!shown.content.tags} onchange={setRestriction} />
+				<Toggle ariaLabel="Active tags" checked={!!stage.content.tags} onchange={setRestriction} />
 			</div>
-			{#if shown.content.tags}<TagPicker
-					tags={shown.content.tags}
+			{#if stage.content.tags}<TagPicker
+					tags={stage.content.tags}
 					id={`stage-content-${stage.id}`}
-					onchange={(tags, label) => write((draft) => (draft.content.tags = tags), label)}
+					onchange={(tags, label) =>
+						write(
+							() =>
+								api.stage.setContentTags(
+									stage.id,
+									tags,
+									stage.content.owned_tag ?? null,
+									[],
+									label
+								),
+							label
+						)}
 				/>
-				{#if shown.content.owned_tag}<p class="owned-note">
-						“{shown.content.owned_tag}” is this stage's own tag — the editor renames it with the
+				{#if stage.content.owned_tag}<p class="owned-note">
+						“{stage.content.owned_tag}” is this stage's own tag — the editor renames it with the
 						stage, and the Popups tab uses it to put files in and out of this stage.
 					</p>{/if}{/if}
 			<MediaSlot
 				slot={{ kind: 'stage_wallpaper', stage: stage.id }}
-				mediaId={shown.content.wallpaper}
+				mediaId={stage.content.wallpaper}
 				title="Wallpaper"
 				description="The wallpaper this stage sets. Every stage writes it outright, so leaving it empty is what keeps the one already in effect."
 				emptyNote={inheritedWallpaper
@@ -313,9 +309,9 @@
 			<div class="audio-choice">
 				<Select
 					label="Background audio"
-					value={shown.content.audio != null || audioPickerStage === stage.id
+					value={stage.content.audio != null || audioPickerStage === stage.id
 						? 'specific'
-						: shown.content.audio_random
+						: stage.content.audio_random
 							? 'random'
 							: 'keep'}
 					options={[
@@ -325,10 +321,10 @@
 					]}
 					onchange={setAudioMode}
 				/>
-				{#if shown.content.audio != null || audioPickerStage === stage.id}
+				{#if stage.content.audio != null || audioPickerStage === stage.id}
 					<MediaSlot
 						slot={{ kind: 'stage_audio', stage: stage.id }}
-						mediaId={shown.content.audio}
+						mediaId={stage.content.audio}
 						title="Specific track"
 						description="Choose the exact track this stage starts."
 						emptyNote="Choose a track."
@@ -348,35 +344,35 @@
 			<div class="entry-effects">
 				<MediaSlot
 					slot={{ kind: 'stage_entry_splash', stage: stage.id }}
-					mediaId={shown.on_enter?.splash}
+					mediaId={stage.on_enter?.splash}
 					title="Splash"
 					description="A specific image or video shown on entry."
 					emptyNote="No splash is shown on entry."
 				/>
 				<MediaSlot
 					slot={{ kind: 'stage_entry_sound', stage: stage.id }}
-					mediaId={shown.on_enter?.sound}
+					mediaId={stage.on_enter?.sound}
 					title="Sound"
 					description="A specific sound played on entry."
 					emptyNote="No sound is played on entry."
 				/>
 				<label
-					>Notification<textarea
-						rows="2"
-						value={shown.on_enter?.notification ?? ''}
-						placeholder="No notification"
-						oninput={(event) => {
-							const value = event.currentTarget.value;
-							write(
-								(draft) => {
-									draft.on_enter ??= {};
-									if (value) draft.on_enter.notification = value;
-									else delete draft.on_enter.notification;
-								},
-								'Edit stage notification',
-								{ debounce: true }
-							);
-						}}></textarea><small>Custom text sent as a desktop notification.</small></label
+					>Notification<DebouncedField
+						value={stage.on_enter?.notification ?? ''}
+						label="Edit stage notification"
+						{invalidates}
+						oncommit={(value: string, label: string) =>
+							api.stage.setEntryNotification(stage.id, value ? value : null, label)}
+					>
+						{#snippet field(draft, set, commit)}
+							<textarea
+								rows="2"
+								value={draft}
+								placeholder="No notification"
+								oninput={(event) => set(event.currentTarget.value)}
+								onblur={commit}></textarea>
+						{/snippet}
+					</DebouncedField><small>Custom text sent as a desktop notification.</small></label
 				>
 				<div class="optional-effect">
 					<div class="toggle-row">
@@ -385,30 +381,29 @@
 						</div>
 						<Toggle
 							ariaLabel="Spawn popups on stage entry"
-							checked={shown.on_enter?.popup_burst != null}
+							checked={stage.on_enter?.popup_burst != null}
 							onchange={setEntryPopups}
 						/>
 					</div>
-					{#if shown.on_enter?.popup_burst != null}<NumberField
-							label="Number of popups"
-							description="The user's popup limit still applies."
-							min={1}
-							step={1}
-							value={shown.on_enter.popup_burst}
-							oninput={(count) => {
-								// An empty field is not a burst of zero -- and not a burst of one either.
-								// Leave the stored count alone until a real number is typed.
-								if (count === null) return;
-								write(
-									(draft) => {
-										draft.on_enter ??= {};
-										draft.on_enter.popup_burst = Math.max(1, Math.floor(count));
-									},
-									'Edit stage entry popups',
-									{ debounce: true }
-								);
-							}}
-						/>{/if}
+					{#if stage.on_enter?.popup_burst != null}<DebouncedField
+							value={stage.on_enter.popup_burst}
+							label="Edit stage entry popups"
+							{invalidates}
+							oncommit={(value: number | null | undefined, label: string) =>
+								api.stage.setEntryPopupBurst(stage.id, value ?? null, label)}
+						>
+							{#snippet field(draft, set, commit)}
+								<NumberField
+									label="Number of popups"
+									description="The user's popup limit still applies."
+									min={1}
+									step={1}
+									value={draft}
+									oninput={(count) => count !== null && set(Math.max(1, Math.floor(count)))}
+									onchange={() => commit()}
+								/>
+							{/snippet}
+						</DebouncedField>{/if}
 				</div>
 			</div>
 		</section>
@@ -422,7 +417,7 @@
 			</div>
 			{#each eventDefs as def}<EventScheduleEditor
 					label={def.label}
-					value={shown.events[def.key]}
+					value={stage.events[def.key]}
 					previous={previous?.events[def.key]}
 					defaultInterval={def.interval}
 					onchange={(value) => setEvent(def.key, value)}
@@ -436,30 +431,36 @@
 								</div>
 								<Toggle
 									ariaLabel="Enforce prompt deadlines"
-									checked={shown.prompt?.timeouts_enabled !== false}
+									checked={stage.prompt?.timeouts_enabled !== false}
 									onchange={(on) =>
 										write(
-											(draft) => (promptOf(draft).timeouts_enabled = on),
+											() =>
+												api.stage.setPromptTimeoutsEnabled(stage.id, on, 'Change prompt deadlines'),
 											'Change prompt deadlines'
 										)}
 								/>
 							</div>
-							{#if shown.prompt?.timeouts_enabled !== false}<NumberField
-									label="Time allowance"
-									description="Multiplies every prompt's explicit or automatic time limit."
-									min={0.1}
-									step={0.1}
-									suffix="×"
-									value={shown.prompt?.timeout_multiplier ?? 1}
-									oninput={(multiplier) => {
-										if (multiplier === null) return;
-										write(
-											(draft) => (promptOf(draft).timeout_multiplier = Math.max(0.1, multiplier)),
-											'Edit prompt time allowance',
-											{ debounce: true }
-										);
-									}}
-								/>{/if}
+							{#if stage.prompt?.timeouts_enabled !== false}<DebouncedField
+									value={stage.prompt?.timeout_multiplier ?? 1}
+									label="Edit prompt time allowance"
+									{invalidates}
+									oncommit={(value: number, label: string) =>
+										api.stage.setPromptTimeoutMultiplier(stage.id, value, label)}
+								>
+									{#snippet field(draft, set, commit)}
+										<NumberField
+											label="Time allowance"
+											description="Multiplies every prompt's explicit or automatic time limit."
+											min={0.1}
+											step={0.1}
+											suffix="×"
+											value={draft}
+											oninput={(multiplier) =>
+												multiplier !== null && set(Math.max(0.1, multiplier))}
+											onchange={() => commit()}
+										/>
+									{/snippet}
+								</DebouncedField>{/if}
 							<div class="optional-effect">
 								<div class="toggle-row">
 									<div>
@@ -469,29 +470,33 @@
 									</div>
 									<Toggle
 										ariaLabel="Spawn popups for an incorrect prompt"
-										checked={shown.prompt?.popup_burst != null}
+										checked={stage.prompt?.popup_burst != null}
 										onchange={setPromptPopups}
 									/>
 								</div>
-								{#if shown.prompt?.popup_burst != null}<NumberField
-										label="Number of popups"
-										description="The user's popup limit still applies."
-										min={1}
-										step={1}
-										value={shown.prompt.popup_burst}
-										oninput={(count) => {
-											if (count === null) return;
-											write(
-												(draft) => (promptOf(draft).popup_burst = Math.max(1, Math.floor(count))),
-												'Edit prompt popups',
-												{ debounce: true }
-											);
-										}}
-									/>{/if}
+								{#if stage.prompt?.popup_burst != null}<DebouncedField
+										value={stage.prompt.popup_burst}
+										label="Edit prompt popups"
+										{invalidates}
+										oncommit={(value: number | null | undefined, label: string) =>
+											api.stage.setPromptPopupBurst(stage.id, value ?? null, label)}
+									>
+										{#snippet field(draft, set, commit)}
+											<NumberField
+												label="Number of popups"
+												description="The user's popup limit still applies."
+												min={1}
+												step={1}
+												value={draft}
+												oninput={(count) => count !== null && set(Math.max(1, Math.floor(count)))}
+												onchange={() => commit()}
+											/>
+										{/snippet}
+									</DebouncedField>{/if}
 							</div>
 							<MediaSlot
 								slot={{ kind: 'stage_prompt_sound', stage: stage.id }}
-								mediaId={shown.prompt?.sound}
+								mediaId={stage.prompt?.sound}
 								title="Sound"
 								description="A specific sound played for a wrong answer or timeout."
 								emptyNote="No sound consequence."
@@ -508,41 +513,54 @@
 				</div>
 				<Toggle
 					ariaLabel="Enable window movement"
-					checked={!!shown.movement}
+					checked={!!stage.movement}
 					onchange={(on) =>
-						write((draft) => {
-							if (on) draft.movement = { minimum_speed: 50, maximum_speed: 150 };
-							else delete draft.movement;
-						}, 'Toggle window movement')}
+						write(
+							() =>
+								api.stage.setMovement(
+									stage.id,
+									on ? { minimum_speed: 50, maximum_speed: 150 } : null,
+									'Toggle window movement'
+								),
+							'Toggle window movement'
+						)}
 				/>
 			</div>
-			{#if shown.movement}<div class="fields">
-					<NumberField
-						label="Minimum speed"
-						description={`Previous: ${previous?.movement?.minimum_speed ?? 'Off'}`}
-						value={shown.movement.minimum_speed}
-						oninput={(speed) => {
-							if (speed === null) return;
-							write(
-								(draft) => draft.movement && (draft.movement.minimum_speed = speed),
-								'Edit movement speed',
-								{ debounce: true }
-							);
-						}}
-					/>
-					<NumberField
-						label="Maximum speed"
-						description={`Previous: ${previous?.movement?.maximum_speed ?? 'Off'}`}
-						value={shown.movement.maximum_speed}
-						oninput={(speed) => {
-							if (speed === null) return;
-							write(
-								(draft) => draft.movement && (draft.movement.maximum_speed = speed),
-								'Edit movement speed',
-								{ debounce: true }
-							);
-						}}
-					/>
+			{#if stage.movement}<div class="fields">
+					<DebouncedField
+						value={stage.movement.minimum_speed}
+						label="Edit movement speed"
+						{invalidates}
+						oncommit={(value: number | null | undefined, label: string) =>
+							api.stage.setMovementSpeed(stage.id, value ?? null, null, label)}
+					>
+						{#snippet field(draft, set, commit)}
+							<NumberField
+								label="Minimum speed"
+								description={`Previous: ${previous?.movement?.minimum_speed ?? 'Off'}`}
+								value={draft}
+								oninput={(speed) => speed !== null && set(speed)}
+								onchange={() => commit()}
+							/>
+						{/snippet}
+					</DebouncedField>
+					<DebouncedField
+						value={stage.movement.maximum_speed}
+						label="Edit movement speed"
+						{invalidates}
+						oncommit={(value: number | null | undefined, label: string) =>
+							api.stage.setMovementSpeed(stage.id, null, value ?? null, label)}
+					>
+						{#snippet field(draft, set, commit)}
+							<NumberField
+								label="Maximum speed"
+								description={`Previous: ${previous?.movement?.maximum_speed ?? 'Off'}`}
+								value={draft}
+								oninput={(speed) => speed !== null && set(speed)}
+								onchange={() => commit()}
+							/>
+						{/snippet}
+					</DebouncedField>
 				</div>{/if}
 		</section>
 
@@ -554,42 +572,59 @@
 				</div>
 				<Toggle
 					ariaLabel="Enable mitosis"
-					checked={!!shown.mitosis}
+					checked={!!stage.mitosis}
 					onchange={(on) =>
-						write((draft) => {
-							if (on) draft.mitosis = { chance: 0.5, count: 2 };
-							else delete draft.mitosis;
-						}, 'Toggle mitosis')}
+						write(
+							() =>
+								api.stage.setMitosis(
+									stage.id,
+									on ? { chance: 0.5, count: 2 } : null,
+									'Toggle mitosis'
+								),
+							'Toggle mitosis'
+						)}
 				/>
 			</div>
-			{#if shown.mitosis}<div class="fields">
-					<NumberField
-						label="Chance (0-1)"
-						description={`Previous: ${previous?.mitosis?.chance ?? 'Off'}`}
-						min={0}
-						max={1}
-						step={0.05}
-						value={shown.mitosis.chance}
-						oninput={(chance) => {
-							if (chance === null) return;
-							write((draft) => draft.mitosis && (draft.mitosis.chance = chance), 'Edit mitosis', {
-								debounce: true
-							});
-						}}
-					/>
-					<NumberField
-						label="Copies"
-						description={`Previous: ${previous?.mitosis?.count ?? 'Off'}`}
-						min={1}
-						step={1}
-						value={shown.mitosis.count}
-						oninput={(count) => {
-							if (count === null) return;
-							write((draft) => draft.mitosis && (draft.mitosis.count = count), 'Edit mitosis', {
-								debounce: true
-							});
-						}}
-					/>
+			{#if stage.mitosis}<div class="fields">
+					<DebouncedField
+						value={stage.mitosis.chance}
+						label="Edit mitosis"
+						{invalidates}
+						oncommit={(value: number | null | undefined, label: string) =>
+							api.stage.setMitosisValues(stage.id, value ?? null, null, label)}
+					>
+						{#snippet field(draft, set, commit)}
+							<NumberField
+								label="Chance (0-1)"
+								description={`Previous: ${previous?.mitosis?.chance ?? 'Off'}`}
+								min={0}
+								max={1}
+								step={0.05}
+								value={draft}
+								oninput={(chance) => chance !== null && set(chance)}
+								onchange={() => commit()}
+							/>
+						{/snippet}
+					</DebouncedField>
+					<DebouncedField
+						value={stage.mitosis.count}
+						label="Edit mitosis"
+						{invalidates}
+						oncommit={(value: number | null | undefined, label: string) =>
+							api.stage.setMitosisValues(stage.id, null, value ?? null, label)}
+					>
+						{#snippet field(draft, set, commit)}
+							<NumberField
+								label="Copies"
+								description={`Previous: ${previous?.mitosis?.count ?? 'Off'}`}
+								min={1}
+								step={1}
+								value={draft}
+								oninput={(count) => count !== null && set(count)}
+								onchange={() => commit()}
+							/>
+						{/snippet}
+					</DebouncedField>
 				</div>{/if}
 		</section>
 
@@ -604,62 +639,86 @@
 					</p>
 				</div>
 			</div>
-			{#if shown.end}<div class="fields">
-					<NumberField
-						label="Keep these settings for (minutes)"
-						description={shown.end.duration_seconds === 0
-							? 'The transition begins as soon as this stage is reached.'
-							: undefined}
-						min={0}
-						value={(shown.end.duration_seconds ?? 300) / 60}
-						oninput={(minutes) => {
-							if (minutes === null) return;
-							write(
-								(draft) => draft.end && (draft.end.duration_seconds = minutes * 60),
-								'Edit stage duration',
-								{ debounce: true }
-							);
-						}}
-					/><Select
+			{#if stage.end}<div class="fields">
+					<DebouncedField
+						value={(stage.end?.duration_seconds ?? 300) / 60}
+						label="Edit stage duration"
+						{invalidates}
+						oncommit={(value: number | null, label: string) =>
+							api.stage.setEndDuration(stage.id, value === null ? null : value * 60, label)}
+					>
+						{#snippet field(draft, set, commit)}
+							<NumberField
+								label="Keep these settings for (minutes)"
+								description={stage.end?.duration_seconds === 0
+									? 'The transition begins as soon as this stage is reached.'
+									: undefined}
+								min={0}
+								value={draft}
+								oninput={(minutes) => minutes !== null && set(minutes)}
+								onchange={() => commit()}
+							/>
+						{/snippet}
+					</DebouncedField><Select
 						label="Additional condition"
-						value={shown.end.event_count ? shown.end.event_count.event : 'none'}
+						value={stage.end.event_count ? stage.end.event_count.event : 'none'}
 						options={[
 							{ value: 'none', label: 'No event condition' },
 							...eventDefs.map((def) => ({ value: def.key, label: `${def.label} spawned` }))
 						]}
 						onchange={(value) =>
-							write((draft) => {
-								if (!draft.end) return;
-								if (value === 'none') delete draft.end.event_count;
-								else
-									draft.end.event_count = {
-										event: value as (typeof eventDefs)[number]['key'],
-										count: 10,
-										scope: 'stage'
-									};
-							}, 'Change stage end condition')}
-					/>{#if shown.end.event_count}<NumberField
-							label="Event count"
-							min={1}
-							value={shown.end.event_count.count}
-							oninput={(count) => {
-								if (count === null) return;
-								write(
-									(draft) => draft.end?.event_count && (draft.end.event_count.count = count),
-									'Edit stage end condition',
-									{ debounce: true }
-								);
-							}}
-						/><Select
+							write(
+								() =>
+									api.stage.setEndEventCount(
+										stage.id,
+										value === 'none'
+											? null
+											: {
+													event: value as (typeof eventDefs)[number]['key'],
+													count: 10,
+													scope: 'stage'
+												},
+										'Change stage end condition'
+									),
+								'Change stage end condition'
+							)}
+					/>{#if stage.end.event_count}<DebouncedField
+							value={stage.end?.event_count?.count ?? null}
+							label="Edit stage end condition"
+							{invalidates}
+							oncommit={(value: number | null, label: string) =>
+								api.stage.setEndEventCount(
+									stage.id,
+									stage.end?.event_count && value !== null
+										? { ...stage.end.event_count, count: value }
+										: (stage.end?.event_count ?? null),
+									label
+								)}
+						>
+							{#snippet field(draft, set, commit)}
+								<NumberField
+									label="Event count"
+									min={1}
+									value={draft}
+									oninput={(count) => count !== null && set(count)}
+									onchange={() => commit()}
+								/>
+							{/snippet}
+						</DebouncedField><Select
 							label="Advance when"
-							value={shown.end.strategy}
+							value={stage.end.strategy}
 							options={[
 								{ value: 'any', label: 'Either condition is reached' },
 								{ value: 'all', label: 'Both conditions are reached' }
 							]}
 							onchange={(value) =>
 								write(
-									(draft) => draft.end && (draft.end.strategy = value as 'any' | 'all'),
+									() =>
+										api.stage.setEndStrategy(
+											stage.id,
+											value as 'any' | 'all',
+											'Change stage end condition'
+										),
 									'Change stage end condition'
 								)}
 						/>{/if}

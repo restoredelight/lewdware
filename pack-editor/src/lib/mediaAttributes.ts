@@ -15,13 +15,13 @@
 import { api } from './api.js';
 import { mutate } from './mutate.svelte.js';
 import { keys, query } from './query.svelte.js';
-import type { AudioChanges, AudioMedia, PopupChanges, PopupMedia, SpawnRegion } from './types.js';
+import type { AudioMedia, MonitorPreference, PopupMedia, SpawnRegion } from './types.js';
 
 /** The popup attributes of each of `ids` the author has said anything about, keyed by media id. */
 export function popupAttributesQuery(ids: () => number[]) {
 	return query(
 		() => keys.popupAttributes(ids()),
-		() => api.getPopupAttributes(ids())
+		() => api.popup.get(ids())
 	);
 }
 
@@ -29,7 +29,7 @@ export function popupAttributesQuery(ids: () => number[]) {
 export function audioAttributesQuery(ids: () => number[]) {
 	return query(
 		() => keys.audioAttributes(ids()),
-		() => api.getAudioAttributes(ids())
+		() => api.audio.get(ids())
 	);
 }
 
@@ -41,20 +41,37 @@ export function attributesFor<T extends PopupMedia | AudioMedia>(
 	return entries?.find(([candidate]) => candidate === id)?.[1] ?? ({} as T);
 }
 
-/** Applies `changes` to every id in `ids`, as one undo entry named `label`. */
-export function editPopupAttributes(ids: number[], changes: PopupChanges, label: string) {
-	return mutate(() => api.setPopupAttributes(ids, changes, label), {
-		label,
-		invalidates: ['behaviour:popup:']
-	});
+/**
+ * The per-field popup setters, each as one undo entry named `label`.
+ *
+ * One function per attribute rather than a partial object: a command that names its field has
+ * nothing to *not* mention, so "clear the caption" and "say nothing about the caption" stop being
+ * the same message and the double-option they needed goes away.
+ */
+export const popupEdits = {
+	weight: (ids: number[], value: number | null, label: string) =>
+		commit(() => api.popup.setWeight(ids, value, label), label),
+	scale: (ids: number[], value: number | null, label: string) =>
+		commit(() => api.popup.setScale(ids, value, label), label),
+	region: (ids: number[], value: SpawnRegion | null, label: string) =>
+		commit(() => api.popup.setRegion(ids, value, label), label),
+	monitor: (ids: number[], value: MonitorPreference | null, label: string) =>
+		commit(() => api.popup.setMonitor(ids, value, label), label),
+	caption: (ids: number[], value: string | null, label: string) =>
+		commit(() => api.popup.setCaption(ids, value, label), label),
+	videoLoop: (ids: number[], value: boolean | null, label: string) =>
+		commit(() => api.popup.setVideoLoop(ids, value, label), label),
+	videoAudio: (ids: number[], value: boolean | null, label: string) =>
+		commit(() => api.popup.setVideoAudio(ids, value, label), label)
+};
+
+/** These tracks' own level. See {@link popupEdits}. */
+export function editAudioVolume(ids: number[], volume: number | null, label: string) {
+	return commit(() => api.audio.setVolume(ids, volume, label), label);
 }
 
-/** Applies `changes` to every id in `ids`. See {@link editPopupAttributes}. */
-export function editAudioAttributes(ids: number[], changes: AudioChanges, label: string) {
-	return mutate(() => api.setAudioAttributes(ids, changes, label), {
-		label,
-		invalidates: ['behaviour:audio:']
-	});
+function commit(run: () => Promise<void>, label: string) {
+	return mutate(run, { label, invalidates: ['behaviour:popup:', 'behaviour:audio:'] });
 }
 
 /**

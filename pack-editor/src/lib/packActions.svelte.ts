@@ -12,7 +12,7 @@
  * what a written pack means next.
  */
 import { api } from './api.js';
-import { fields } from './mutate.svelte.js';
+import { cancelFields, flushFields } from './mutate.svelte.js';
 import { cancelMetadataSave, flushMetadataSave } from './metadataSave.svelte.js';
 import { store } from './store.svelte.js';
 import { taskFeedback } from '$ui/taskFeedback.svelte.js';
@@ -36,14 +36,14 @@ export interface SaveOutcome {
 
 /** Throws away edits neither writer has sent yet -- for a discard, where they are about to be moot. */
 export function cancelPendingWrites() {
-	fields.cancel();
+	cancelFields();
 	cancelMetadataSave();
 }
 
 /** Sends everything both writers are holding, in the order it was made. */
 export async function flushPendingWrites() {
 	await flushMetadataSave();
-	await fields.flush();
+	await flushFields();
 }
 
 class PackSave {

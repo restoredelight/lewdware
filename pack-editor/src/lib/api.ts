@@ -8,6 +8,9 @@ import type {
 	BehaviourSummary,
 	ContentGroup,
 	EmbeddedMode,
+	EventCountCondition,
+	EventKind,
+	EventSchedule,
 	HistoryStatus,
 	ImportResult,
 	MediaFile,
@@ -15,6 +18,9 @@ import type {
 	MediaSlot,
 	MediaSlots,
 	MetadataDto,
+	Mitosis,
+	MonitorPreference,
+	Movement,
 	PackInfo,
 	PoolKind,
 	PopupChanges,
@@ -22,6 +28,7 @@ import type {
 	RecentPack,
 	SlotCleared,
 	SlotFilled,
+	SpawnRegion,
 	Stage,
 	TagAction,
 	TagRow,
@@ -30,6 +37,7 @@ import type {
 	TextItemRow,
 	TimelineDto,
 	Transition,
+	TransitionValue,
 	WebLink,
 	WebLinkRow
 } from './types.js';
@@ -127,83 +135,170 @@ export const api = {
 
 	// ── Behaviour ────────────────────────────────────────────────────────────
 	//
-	// Typed queries and typed mutations, replacing one `edit_behaviour` that took dot-separated
-	// path strings. A query serves one view; a mutation is one author action, addressed by the id
-	// of the thing it changes, and is one transaction and one undo entry. `label` is the author's
-	// word for what they did — it becomes the undo entry, so it is UI copy and lives here. It
-	// addresses nothing. See `design/editor-data-flow.md`.
+	// Queries return what one surface renders. Mutations set one field, addressed by the id of the
+	// thing they change — two of them touching different fields of one entity commute, which is
+	// what removed the front end's need to accumulate an entity before sending it.
+	//
+	// Grouped here rather than on the wire: Tauri command names are flat and must be unique across
+	// the crate (`#[tauri::command]` emits `__cmd__<fn>` at the crate root), so the backend names
+	// are long and explicit and the grouping is this object's business.
+	//
+	// `label` is the author's word for what they did — it becomes the undo entry.
 
 	getBehaviourSummary: () => invoke<BehaviourSummary>('get_behaviour_summary'),
-
-	getTextPool: (kind: PoolKind) => invoke<TextItemRow[]>('get_text_pool', { kind }),
-	addTextItem: (kind: PoolKind, item: TextItem, label: string) =>
-		invoke<BehaviourOutcome>('add_text_item', { kind, item, label }),
-	updateTextItem: (id: number, item: TextItem, label: string) =>
-		invoke<BehaviourOutcome>('update_text_item', { id, item, label }),
-	removeTextItem: (id: number, label: string) =>
-		invoke<BehaviourOutcome>('remove_text_item', { id, label }),
-	reorderTextItems: (kind: PoolKind, ids: number[], label: string) =>
-		invoke<BehaviourOutcome>('reorder_text_items', { kind, ids, label }),
-
-	getWebLinks: () => invoke<WebLinkRow[]>('get_web_links'),
-	addWebLink: (link: WebLink, label: string) =>
-		invoke<BehaviourOutcome>('add_web_link', { link, label }),
-	updateWebLink: (id: number, link: WebLink, label: string) =>
-		invoke<BehaviourOutcome>('update_web_link', { id, link, label }),
-	removeWebLink: (id: number, label: string) =>
-		invoke<BehaviourOutcome>('remove_web_link', { id, label }),
-
-	getContentGroups: () => invoke<ContentGroup[]>('get_content_groups'),
-	addContentGroup: (group: ContentGroup, label: string) =>
-		invoke<BehaviourOutcome>('add_content_group', { group, label }),
-	updateContentGroup: (id: string, group: ContentGroup, label: string) =>
-		invoke<BehaviourOutcome>('update_content_group', { id, group, label }),
-	removeContentGroup: (id: string, label: string) =>
-		invoke<BehaviourOutcome>('remove_content_group', { id, label }),
-
 	getMediaSlots: () => invoke<MediaSlots>('get_media_slots'),
 
-	getPopupAttributes: (ids: number[]) =>
-		invoke<[number, PopupMedia][]>('get_popup_attributes', { ids }),
-	getAudioAttributes: (ids: number[]) =>
-		invoke<[number, AudioMedia][]>('get_audio_attributes', { ids }),
-	setPopupAttributes: (ids: number[], changes: PopupChanges, label: string) =>
-		invoke<BehaviourOutcome>('set_popup_attributes', { ids, changes, label }),
-	setAudioAttributes: (ids: number[], changes: AudioChanges, label: string) =>
-		invoke<BehaviourOutcome>('set_audio_attributes', { ids, changes, label }),
+	pool: {
+		get: (kind: PoolKind) => invoke<TextItemRow[]>('get_text_pool', { kind }),
+		setText: (id: number, text: string, label: string) =>
+			invoke<void>('set_text_item_text', { id, text, label }),
+		setSummary: (id: number, summary: string | null, label: string) =>
+			invoke<void>('set_text_item_summary', { id, summary, label }),
+		setTimeout: (id: number, seconds: number | null, label: string) =>
+			invoke<void>('set_text_item_timeout', { id, seconds, label }),
+		setTags: (id: number, tags: string[], label: string) =>
+			invoke<void>('set_text_item_tags', { id, tags, label }),
+		add: (kind: PoolKind, item: TextItem, label: string) =>
+			invoke<BehaviourOutcome>('add_text_item', { kind, item, label }),
+		remove: (id: number, label: string) => invoke<void>('remove_text_item', { id, label })
+	},
 
-	getTimeline: () => invoke<TimelineDto | null>('get_timeline'),
-	setTimelineEnabled: (enabled: boolean, label: string) =>
-		invoke<BehaviourOutcome>('set_timeline_enabled', { enabled, label }),
-	setTimelineLabel: (value: string | null, label: string) =>
-		invoke<BehaviourOutcome>('set_timeline_label', { value, label }),
-	addStage: (after: string | null, source: string | null, name: string, label: string) =>
-		invoke<BehaviourOutcome>('add_stage', { after, source, name, label }),
-	duplicateStage: (id: string, label: string) =>
-		invoke<BehaviourOutcome>('duplicate_stage', { id, label }),
-	moveStage: (id: string, to: number, label: string) =>
-		invoke<BehaviourOutcome>('move_stage', { id, to, label }),
-	/**
-	 * `retiring` names media the removal deliberately lets go of and `tagActions` the tag that
-	 * existed only for this stage, so the stage, its wallpaper and its tag are one undo entry.
-	 */
-	removeStage: (id: string, retiring: number[], tagActions: TagAction[], label: string) =>
-		invoke<BehaviourOutcome>('remove_stage', { id, retiring, tagActions, label }),
-	/**
-	 * Replaces the settings of one or more stages.
-	 *
-	 * A list because one author action can touch several: taking a file out of one stage gives any
-	 * stage that shared its tag a fresh tag of its own, so the file stays where it was. That is one
-	 * thing the author did, so it is one undo entry.
-	 */
-	updateStages: (
-		updates: { id: string; stage: Stage }[],
-		retiring: number[],
-		tagActions: TagAction[],
-		label: string
-	) => invoke<BehaviourOutcome>('update_stages', { updates, retiring, tagActions, label }),
-	updateTransition: (id: string, transition: Transition, label: string) =>
-		invoke<BehaviourOutcome>('update_transition', { id, transition, label }),
+	link: {
+		get: () => invoke<WebLinkRow[]>('get_web_links'),
+		setUrl: (id: number, url: string, label: string) =>
+			invoke<void>('set_web_link_url', { id, url, label }),
+		setArgs: (id: number, args: string[], label: string) =>
+			invoke<void>('set_web_link_args', { id, args, label }),
+		setTags: (id: number, tags: string[], label: string) =>
+			invoke<void>('set_web_link_tags', { id, tags, label }),
+		add: (link: WebLink, label: string) =>
+			invoke<BehaviourOutcome>('add_web_link', { link, label }),
+		remove: (id: number, label: string) => invoke<void>('remove_web_link', { id, label })
+	},
+
+	group: {
+		get: () => invoke<ContentGroup[]>('get_content_groups'),
+		setLabel: (id: string, value: string, label: string) =>
+			invoke<void>('set_content_group_label', { id, value, label }),
+		setDescription: (id: string, description: string | null, label: string) =>
+			invoke<void>('set_content_group_description', { id, description, label }),
+		setEnabledByDefault: (id: string, enabled: boolean, label: string) =>
+			invoke<void>('set_content_group_enabled_by_default', { id, enabled, label }),
+		setTags: (id: string, tags: string[], label: string) =>
+			invoke<void>('set_content_group_tags', { id, tags, label }),
+		add: (group: ContentGroup, label: string) =>
+			invoke<BehaviourOutcome>('add_content_group', { group, label }),
+		remove: (id: string, label: string) => invoke<void>('remove_content_group', { id, label })
+	},
+
+	timeline: {
+		get: () => invoke<TimelineDto | null>('get_timeline'),
+		setEnabled: (enabled: boolean, label: string) =>
+			invoke<void>('set_timeline_enabled', { enabled, label }),
+		setLabel: (value: string | null, label: string) =>
+			invoke<void>('set_timeline_label', { value, label })
+	},
+
+	stage: {
+		add: (after: string | null, source: string | null, name: string, label: string) =>
+			invoke<BehaviourOutcome>('add_stage', { after, source, name, label }),
+		duplicate: (id: string, label: string) =>
+			invoke<BehaviourOutcome>('duplicate_stage', { id, label }),
+		move: (id: string, to: number, label: string) =>
+			invoke<BehaviourOutcome>('move_stage', { id, to, label }),
+		/**
+		 * `retiring` names media the removal deliberately lets go of and `tagActions` the tag that
+		 * existed only for this stage, so all three go in one transaction and one undo entry.
+		 */
+		remove: (id: string, retiring: number[], tagActions: TagAction[], label: string) =>
+			invoke<BehaviourOutcome>('remove_stage', { id, retiring, tagActions, label }),
+		/** Renames the stage and the tag it owns together — one action, one undo entry. */
+		setLabel: (id: string, value: string, tagActions: TagAction[], label: string) =>
+			invoke<BehaviourOutcome>('set_stage_label', { id, value, tagActions, label }),
+		/** The selection and its owned tag move together: a stage cannot own a tag it does not select. */
+		setContentTags: (
+			id: string,
+			tags: string[] | null,
+			ownedTag: string | null,
+			tagActions: TagAction[],
+			label: string
+		) =>
+			invoke<BehaviourOutcome>('set_stage_content_tags', {
+				id,
+				tags,
+				ownedTag,
+				tagActions,
+				label
+			}),
+		/** Several stages at once — leaving one stage can give another a tag of its own. */
+		setContentTagsMany: (
+			updates: { id: string; tags: string[] | null; ownedTag: string | null }[],
+			tagActions: TagAction[],
+			label: string
+		) => invoke<BehaviourOutcome>('set_stage_content_tags_many', { updates, tagActions, label }),
+		setAudioRandom: (id: string, random: boolean, retiring: number[], label: string) =>
+			invoke<BehaviourOutcome>('set_stage_audio_random', { id, random, retiring, label }),
+		setEvent: (id: string, kind: EventKind, schedule: EventSchedule | null, label: string) =>
+			invoke<void>('set_stage_event', { id, kind, schedule, label }),
+		setEntryNotification: (id: string, text: string | null, label: string) =>
+			invoke<void>('set_stage_entry_notification', { id, text, label }),
+		setEntryPopupBurst: (id: string, count: number | null, label: string) =>
+			invoke<void>('set_stage_entry_popup_burst', { id, count, label }),
+		setPromptTimeoutsEnabled: (id: string, enabled: boolean, label: string) =>
+			invoke<void>('set_stage_prompt_timeouts_enabled', { id, enabled, label }),
+		setPromptTimeoutMultiplier: (id: string, multiplier: number, label: string) =>
+			invoke<void>('set_stage_prompt_timeout_multiplier', { id, multiplier, label }),
+		setPromptPopupBurst: (id: string, count: number | null, label: string) =>
+			invoke<void>('set_stage_prompt_popup_burst', { id, count, label }),
+		setMovement: (id: string, movement: Movement | null, label: string) =>
+			invoke<void>('set_stage_movement', { id, movement, label }),
+		/** One or both speeds; the unnamed one keeps its value. */
+		setMovementSpeed: (id: string, minimum: number | null, maximum: number | null, label: string) =>
+			invoke<void>('set_stage_movement_speed', { id, minimum, maximum, label }),
+		setMitosis: (id: string, mitosis: Mitosis | null, label: string) =>
+			invoke<void>('set_stage_mitosis', { id, mitosis, label }),
+		setMitosisValues: (id: string, chance: number | null, count: number | null, label: string) =>
+			invoke<void>('set_stage_mitosis_values', { id, chance, count, label }),
+		setEndDuration: (id: string, seconds: number | null, label: string) =>
+			invoke<void>('set_stage_end_duration', { id, seconds, label }),
+		setEndEventCount: (id: string, condition: EventCountCondition | null, label: string) =>
+			invoke<void>('set_stage_end_event_count', { id, condition, label }),
+		setEndStrategy: (id: string, strategy: 'any' | 'all', label: string) =>
+			invoke<void>('set_stage_end_strategy', { id, strategy, label })
+	},
+
+	transition: {
+		setDuration: (id: string, seconds: number, label: string) =>
+			invoke<void>('set_transition_duration', { id, seconds, label }),
+		setEasing: (id: string, easing: Transition['easing'], label: string) =>
+			invoke<void>('set_transition_easing', { id, easing, label }),
+		setAffected: (id: string, affected: TransitionValue[], label: string) =>
+			invoke<void>('set_transition_affected', { id, affected, label })
+	},
+
+	popup: {
+		get: (ids: number[]) => invoke<[number, PopupMedia][]>('get_popup_attributes', { ids }),
+		setWeight: (ids: number[], weight: number | null, label: string) =>
+			invoke<void>('set_popup_weight', { ids, weight, label }),
+		setScale: (ids: number[], scale: number | null, label: string) =>
+			invoke<void>('set_popup_scale', { ids, scale, label }),
+		setRegion: (ids: number[], region: SpawnRegion | null, label: string) =>
+			invoke<void>('set_popup_region', { ids, region, label }),
+		setMonitor: (ids: number[], monitor: MonitorPreference | null, label: string) =>
+			invoke<void>('set_popup_monitor', { ids, monitor, label }),
+		setCaption: (ids: number[], caption: string | null, label: string) =>
+			invoke<void>('set_popup_caption', { ids, caption, label }),
+		setVideoLoop: (ids: number[], value: boolean | null, label: string) =>
+			invoke<void>('set_popup_video_loop', { ids, value, label }),
+		setVideoAudio: (ids: number[], value: boolean | null, label: string) =>
+			invoke<void>('set_popup_video_audio', { ids, value, label })
+	},
+
+	audio: {
+		get: (ids: number[]) => invoke<[number, AudioMedia][]>('get_audio_attributes', { ids }),
+		setVolume: (ids: number[], volume: number | null, label: string) =>
+			invoke<void>('set_audio_volume', { ids, volume, label })
+	},
 
 	fillMediaSlotDialog: (slot: MediaSlot) =>
 		invoke<SlotFilled | null>('fill_media_slot_dialog', { slot }),

@@ -20,7 +20,7 @@
 	import { store } from './store.svelte.js';
 	import type { Stage, TagAction } from './types.js';
 
-	const timeline = query(keys.timeline, api.getTimeline);
+	const timeline = query(keys.timeline, api.timeline.get);
 	const tagRows = query(keys.tags, api.getTagRows);
 	const stages = $derived(timeline.current?.stages ?? []);
 	const transitions = $derived(timeline.current?.transitions ?? []);
@@ -64,7 +64,7 @@
 		const after = stage ?? transitionFrom ?? stages[stages.length - 1];
 		void mutate(
 			() =>
-				api.addStage(
+				api.stage.add(
 					after?.id ?? null,
 					after?.id ?? null,
 					`Stage ${stages.length + 1}`,
@@ -77,7 +77,7 @@
 	function duplicate(index: number) {
 		const source = stages[index];
 		if (!source) return;
-		void mutate(() => api.duplicateStage(source.id, 'Duplicate stage'), {
+		void mutate(() => api.stage.duplicate(source.id, 'Duplicate stage'), {
 			label: 'Duplicate stage',
 			invalidates
 		});
@@ -86,7 +86,7 @@
 	function move(from: number, to: number) {
 		const selected = stages[from];
 		if (!selected) return;
-		void mutate(() => api.moveStage(selected.id, to, 'Move stage'), {
+		void mutate(() => api.stage.move(selected.id, to, 'Move stage'), {
 			label: 'Move stage',
 			invalidates
 		});
@@ -150,7 +150,7 @@
 		const next = stages[Math.min(index + 1, stages.length - 1)] ?? stages[0];
 		activeId = next.id === target.id ? (stages[0]?.id ?? '') : next.id;
 		removing = null;
-		void mutate(() => api.removeStage(target.id, retiring, tagActions, 'Remove stage'), {
+		void mutate(() => api.stage.remove(target.id, retiring, tagActions, 'Remove stage'), {
 			label: 'Remove stage',
 			invalidates
 		});
