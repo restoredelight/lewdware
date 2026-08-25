@@ -55,10 +55,10 @@
 		write(() => api.link.addArg(link.id, value, 'Add URL suffix'), 'Add URL suffix');
 	}
 
-	function removeArg(linkIndex: number, argIndex: number) {
+	function removeArg(linkIndex: number, arg: number) {
 		const link = links[linkIndex];
 		if (!link) return;
-		write(() => api.link.removeArg(link.id, argIndex, 'Remove URL suffix'), 'Remove URL suffix');
+		write(() => api.link.removeArg(link.id, arg, 'Remove URL suffix'), 'Remove URL suffix');
 	}
 </script>
 
@@ -110,15 +110,15 @@
 				Random URL suffixes <span class="font-normal">(optional)</span>
 			</p>
 			<div class="flex flex-wrap items-center gap-1.5">
-				{#each link.args as arg, argIndex}
+				{#each link.args as arg (arg.id)}
 					<span
 						class="bg-bg border-border text-text flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs"
 					>
-						{arg}
+						{arg.value}
 						<button
-							onclick={() => removeArg(index, argIndex)}
+							onclick={() => removeArg(index, arg.id)}
 							class="text-muted hover:text-text leading-none"
-							aria-label={`Remove URL suffix ${arg}`}
+							aria-label={`Remove URL suffix ${arg.value}`}
 							><span class="block h-3.5 w-3.5"><Icon src={XMark} mini /></span></button
 						>
 					</span>

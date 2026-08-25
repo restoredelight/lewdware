@@ -388,9 +388,25 @@ export interface TextItemRow extends TextItem {
 	id: number;
 }
 
-/** One web link with its row id — mirrors `editor::WebLinkRow`. */
-export interface WebLinkRow extends WebLink {
+/**
+ * One web link with its row id — mirrors `editor::WebLinkRow`.
+ *
+ * Its suffixes carry their own ids rather than arriving as a bare list, because nothing else
+ * identifies one: the list is ordered and may repeat, so a value names no particular entry, and an
+ * index into the rendered array shifts the moment any other suffix goes.
+ */
+export interface WebLinkRow {
 	id: number;
+	url: string;
+	tags: string[];
+	args: WebLinkArg[];
+}
+
+/** One suffix appended at random when a link is opened — mirrors `editor::WebLinkArg`. */
+export interface WebLinkArg {
+	/** Names this suffix for as long as it exists, and is never given to another. */
+	id: number;
+	value: string;
 }
 
 /** Which of the three text pools an entry belongs to. */

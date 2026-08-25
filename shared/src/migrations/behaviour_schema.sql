@@ -156,8 +156,11 @@ CREATE TABLE IF NOT EXISTS behaviour_transition_category (
 -- only in which pool a mode draws from, so `kind` is the pool rather than three near-identical
 -- tables and three near-identical readers. `summary` is `TextItem::summary`, a title alongside the
 -- body; only the 'notification' kind uses it.
+-- `AUTOINCREMENT` rather than a plain rowid: SQLite reuses the highest rowid once its row is gone,
+-- so removing the last entry and adding another would hand the new one the id the editor is still
+-- showing on the old one's Remove button. An id has to outlive the row it named.
 CREATE TABLE IF NOT EXISTS behaviour_text_item (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK (
         kind IN ('caption', 'prompt', 'notification')
     ),
@@ -178,18 +181,22 @@ CREATE TABLE IF NOT EXISTS behaviour_text_item_tag (
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS behaviour_web_link (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     position INTEGER NOT NULL UNIQUE,
     url TEXT NOT NULL
 ) STRICT;
 
 -- Suffixes appended at random when the link is opened. Ordered but not a set: the same suffix
 -- twice is a legitimate way to weight it, so `position` is part of the key rather than the value.
+-- `id` names the suffix; `position` only orders it. They are separate because the editor removes a
+-- suffix the author pointed at, and a position is not an identity: it moves when the list is
+-- rewritten, and the highest one is handed straight back to the next suffix added.
 CREATE TABLE IF NOT EXISTS behaviour_web_link_arg (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     link_id INTEGER NOT NULL REFERENCES behaviour_web_link (id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
     value TEXT NOT NULL,
-    PRIMARY KEY (link_id, position)
+    UNIQUE (link_id, position)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS behaviour_web_link_tag (

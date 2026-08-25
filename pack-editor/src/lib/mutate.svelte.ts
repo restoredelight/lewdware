@@ -90,8 +90,10 @@ const detached = new Set<Promise<void>>();
 /** Keeps `flush` in the save barrier until it settles, however the field that owned it ended. */
 export function trackDetached(flush: Promise<void>): Promise<void> {
 	detached.add(flush);
-	const settled = flush.finally(() => detached.delete(settled));
-	return settled;
+	// Removing the promise that was *added*, not the one `finally` returns — they are different
+	// objects, and deleting the wrong one leaves every write in here forever. A failed one then
+	// fails every later save, because the barrier keeps finding it.
+	return flush.finally(() => detached.delete(flush));
 }
 
 /** Adds a field to the pending set, returning the call that removes it again. */

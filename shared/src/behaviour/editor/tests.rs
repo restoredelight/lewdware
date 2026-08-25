@@ -37,6 +37,10 @@ fn tx_on(conn: &mut Connection, body: impl FnOnce(&Transaction<'_>)) {
     tx.commit().unwrap();
 }
 
+fn arg_values(row: &WebLinkRow) -> Vec<String> {
+    row.args.iter().map(|arg| arg.value.clone()).collect()
+}
+
 fn texts(conn: &Connection, kind: PoolKind) -> Vec<String> {
     text_pool(conn, kind)
         .unwrap()
@@ -142,8 +146,10 @@ fn a_web_link_round_trips_with_its_args_and_tags() {
     });
     let rows = web_links(&conn).unwrap();
     assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].url, link.url);
+    assert_eq!(rows[0].tags, link.tags);
     // The same suffix twice is a legitimate way to weight it, so args are a list, not a set.
-    assert_eq!(rows[0].link, link);
+    assert_eq!(arg_values(&rows[0]), link.args);
 }
 
 #[test]
@@ -160,9 +166,11 @@ fn shortening_a_links_args_drops_the_tail() {
             },
         )
         .unwrap();
-        assert!(set_web_link_args(tx, id, &["a".to_string()]).unwrap());
+        let args = web_links(tx).unwrap()[0].args.clone();
+        assert!(remove_web_link_arg(tx, id, args[1].id).unwrap());
+        assert!(remove_web_link_arg(tx, id, args[2].id).unwrap());
     });
-    assert_eq!(web_links(&conn).unwrap()[0].link.args, ["a"]);
+    assert_eq!(arg_values(&web_links(&conn).unwrap()[0]), ["a"]);
 }
 
 #[test]
@@ -781,7 +789,7 @@ fn a_setter_refuses_a_row_that_is_gone() {
     });
     let tx = conn.transaction().unwrap();
     assert!(set_text_item_text(&tx, id, "back").is_err());
-    assert!(set_text_item_tags(&tx, id, &["imp".to_string()]).is_err());
+    assert!(add_text_item_tag(&tx, id, "imp").is_err());
 }
 
 /// Ownership is recorded on the association row, so a stage cannot own a tag it does not select by.
@@ -1012,11 +1020,41 @@ fn suffixes_are_added_and_removed_one_at_a_time() {
         add_web_link_arg(tx, id, "a").unwrap();
         add_web_link_arg(tx, id, "b").unwrap();
         add_web_link_arg(tx, id, "a").unwrap();
-        assert!(remove_web_link_arg(tx, id, 1).unwrap());
-        // The gap has to close, or the next append collides with the position it left.
+        let args = web_links(tx).unwrap()[0].args.clone();
+        assert!(remove_web_link_arg(tx, id, args[1].id).unwrap());
         add_web_link_arg(tx, id, "c").unwrap();
     });
-    assert_eq!(web_links(&conn).unwrap()[0].link.args, ["a", "a", "c"]);
+    assert_eq!(arg_values(&web_links(&conn).unwrap()[0]), ["a", "a", "c"]);
+}
+
+/// Two removals in quick succession are each aimed at what the author saw, and the second must not
+/// land on whatever has moved into that place. Addressed by position this fails either way: closing
+/// the gap slides C into B's slot, and leaving it means the next suffix added takes the number back.
+#[test]
+fn two_suffix_removals_hit_the_two_that_were_clicked() {
+    let mut conn = pack();
+    let mut id = 0;
+    let mut positions = vec![];
+    tx_on(&mut conn, |tx| {
+        id = add_web_link(
+            tx,
+            &WebLink {
+                url: "https://example.invalid".to_string(),
+                args: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+                tags: vec![],
+            },
+        )
+        .unwrap();
+        positions = web_links(tx).unwrap()[0].args.iter().map(|arg| arg.id).collect();
+    });
+
+    tx_on(&mut conn, |tx| {
+        // Both aimed at the list as the author saw it, neither having seen the other land.
+        assert!(remove_web_link_arg(tx, id, positions[0]).unwrap());
+        assert!(remove_web_link_arg(tx, id, positions[1]).unwrap());
+    });
+
+    assert_eq!(arg_values(&web_links(&conn).unwrap()[0]), ["c"]);
 }
 
 /// Early builds stored one entry for a whole group. Ticking any member has to replace the broad
@@ -1051,4 +1089,56 @@ fn two_category_toggles_do_not_undo_each_other() {
     let affected = transitions(&conn).unwrap()[0].affected.clone();
     assert!(affected.contains(&TransitionCategory::PopupInterval));
     assert!(affected.contains(&TransitionCategory::Crossfade));
+}
+
+/// Removing the *last* suffix and adding another is where a position-as-identity scheme fails
+/// silently: the new suffix takes the number the removed one had, so a stale Remove still on screen
+/// deletes the wrong thing. An id outlives the row it named.
+#[test]
+fn a_removed_suffixs_id_is_never_given_to_the_next_one() {
+    let mut conn = pack();
+    let mut id = 0;
+    let mut gone = 0;
+    tx_on(&mut conn, |tx| {
+        id = add_web_link(
+            tx,
+            &WebLink {
+                url: "https://example.invalid".to_string(),
+                args: vec!["a".to_string(), "b".to_string()],
+                tags: vec![],
+            },
+        )
+        .unwrap();
+        let args = web_links(tx).unwrap()[0].args.clone();
+        gone = args[1].id;
+        assert!(remove_web_link_arg(tx, id, gone).unwrap());
+        add_web_link_arg(tx, id, "c").unwrap();
+    });
+
+    let args = web_links(&conn).unwrap()[0].args.clone();
+    assert_eq!(args.iter().map(|arg| &arg.value).collect::<Vec<_>>(), ["a", "c"]);
+    assert!(
+        args.iter().all(|arg| arg.id != gone),
+        "the new suffix must not inherit the removed one's id: {args:?}"
+    );
+    // And a stale removal aimed at the one that went finds nothing rather than taking its place.
+    let tx = conn.transaction().unwrap();
+    assert!(!remove_web_link_arg(&tx, id, gone).unwrap());
+}
+
+/// The same rule for the pools, which are addressed by id from the editor for the same reason.
+#[test]
+fn a_removed_entrys_id_is_never_given_to_the_next_one() {
+    let mut conn = pack();
+    let mut gone = 0;
+    tx_on(&mut conn, |tx| {
+        add_text_item(tx, PoolKind::Caption, &item("first")).unwrap();
+        gone = add_text_item(tx, PoolKind::Caption, &item("last")).unwrap();
+        assert!(remove_text_item(tx, gone).unwrap());
+    });
+    let mut added = 0;
+    tx_on(&mut conn, |tx| {
+        added = add_text_item(tx, PoolKind::Caption, &item("new")).unwrap();
+    });
+    assert_ne!(added, gone, "a stale Remove would have taken the new entry");
 }

@@ -71,11 +71,24 @@ pub struct TextItemRow {
 }
 
 /// One web link, with the row id the editor addresses it by.
+///
+/// Its suffixes carry their own ids rather than arriving as a bare list, because nothing else
+/// identifies one: the list is ordered and may repeat, so a value names no particular entry, and an
+/// index into the rendered array shifts the moment any other suffix goes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebLinkRow {
     pub id: i64,
-    #[serde(flatten)]
-    pub link: WebLink,
+    pub url: String,
+    pub tags: Vec<String>,
+    pub args: Vec<WebLinkArg>,
+}
+
+/// One suffix appended at random when a link is opened.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WebLinkArg {
+    /// Names this suffix for as long as it exists, and is never given to another.
+    pub id: i64,
+    pub value: String,
 }
 
 // ── Text pools ───────────────────────────────────────────────────────────────
@@ -158,8 +171,7 @@ pub fn remove_text_item(tx: &Transaction<'_>, id: i64) -> Result<bool> {
 
 /// Every web link, in author order.
 pub fn web_links(conn: &Connection) -> Result<Vec<WebLinkRow>> {
-    let mut statement =
-        conn.prepare("SELECT id, url FROM behaviour_web_link ORDER BY position")?;
+    let mut statement = conn.prepare("SELECT id, url FROM behaviour_web_link ORDER BY position")?;
     let rows: Vec<(i64, String)> = statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
@@ -167,21 +179,25 @@ pub fn web_links(conn: &Connection) -> Result<Vec<WebLinkRow>> {
         .map(|(id, url)| {
             Ok(WebLinkRow {
                 id,
-                link: WebLink {
-                    url,
-                    args: link_args(conn, id)?,
-                    tags: read_tags(conn, "behaviour_web_link_tag", "link_id", &id)?,
-                },
+                url,
+                tags: read_tags(conn, "behaviour_web_link_tag", "link_id", &id)?,
+                args: numbered_link_args(conn, id)?,
             })
         })
         .collect()
 }
 
-fn link_args(conn: &Connection, id: i64) -> Result<Vec<String>> {
-    let mut statement = conn
-        .prepare("SELECT value FROM behaviour_web_link_arg WHERE link_id = ? ORDER BY position")?;
+fn numbered_link_args(conn: &Connection, id: i64) -> Result<Vec<WebLinkArg>> {
+    let mut statement = conn.prepare(
+        "SELECT id, value FROM behaviour_web_link_arg WHERE link_id = ? ORDER BY position",
+    )?;
     let args = statement
-        .query_map(params![id], |row| row.get(0))?
+        .query_map(params![id], |row| {
+            Ok(WebLinkArg {
+                id: row.get(0)?,
+                value: row.get(1)?,
+            })
+        })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(args)
 }
@@ -978,15 +994,6 @@ pub fn set_text_item_timeout(tx: &Transaction<'_>, id: i64, seconds: Option<f64>
     )
 }
 
-pub fn set_text_item_tags(tx: &Transaction<'_>, id: i64, tags: &[String]) -> Result<bool> {
-    let current = read_tags(tx, "behaviour_text_item_tag", "item_id", &id)?;
-    if current == tags {
-        return Ok(false);
-    }
-    exists(tx, "behaviour_text_item", "id", &id, NO_TEXT_ITEM)?;
-    write_tags(tx, "behaviour_text_item_tag", "item_id", &id, tags)?;
-    Ok(true)
-}
 
 // ── Web links ────────────────────────────────────────────────────────────────
 
@@ -1004,28 +1011,7 @@ pub fn set_web_link_url(tx: &Transaction<'_>, id: i64, url: &str) -> Result<bool
     )
 }
 
-/// The suffixes appended at random when the link is opened.
-///
-/// One field rather than one per suffix: adding and removing one both rewrite the list, and the
-/// same suffix twice is a legitimate way to weight it, so this is an ordered list and not a set.
-pub fn set_web_link_args(tx: &Transaction<'_>, id: i64, args: &[String]) -> Result<bool> {
-    if link_args(tx, id)? == args {
-        return Ok(false);
-    }
-    exists(tx, "behaviour_web_link", "id", &id, NO_WEB_LINK)?;
-    write_link_args(tx, id, args)?;
-    Ok(true)
-}
 
-pub fn set_web_link_tags(tx: &Transaction<'_>, id: i64, tags: &[String]) -> Result<bool> {
-    let current = read_tags(tx, "behaviour_web_link_tag", "link_id", &id)?;
-    if current == tags {
-        return Ok(false);
-    }
-    exists(tx, "behaviour_web_link", "id", &id, NO_WEB_LINK)?;
-    write_tags(tx, "behaviour_web_link_tag", "link_id", &id, tags)?;
-    Ok(true)
-}
 
 // ── Content groups ───────────────────────────────────────────────────────────
 
@@ -1075,15 +1061,6 @@ pub fn set_content_group_enabled_by_default(
     )
 }
 
-pub fn set_content_group_tags(tx: &Transaction<'_>, id: &str, tags: &[String]) -> Result<bool> {
-    let current = read_tags(tx, "behaviour_content_group_tag", "group_id", &id)?;
-    if current == tags {
-        return Ok(false);
-    }
-    exists(tx, "behaviour_content_group", "id", &id, NO_GROUP)?;
-    write_tags(tx, "behaviour_content_group_tag", "group_id", &id, tags)?;
-    Ok(true)
-}
 
 /// Refuses if the row is gone. See [`set_column`] for why that is an error rather than a no-op.
 fn exists(
@@ -1436,10 +1413,10 @@ pub fn set_transition_easing(tx: &Transaction<'_>, id: &str, easing: Easing) -> 
     )
 }
 
-/// Which values interpolate gradually across the transition.
+/// Replaces the whole set of values that interpolate gradually.
 ///
-/// One field rather than one per category: a single checkbox can rewrite the whole list, because
-/// ticking one member of a legacy broad category expands that category into its siblings first.
+/// Not reached from the editor, which toggles one category at a time — this is what
+/// [`set_transition_category`] writes the result with once it has expanded any legacy group.
 pub fn set_transition_affected(
     tx: &Transaction<'_>,
     id: &str,
@@ -1593,26 +1570,21 @@ pub fn add_web_link_arg(tx: &Transaction<'_>, id: i64, value: &str) -> Result<bo
     Ok(true)
 }
 
-/// Removes the suffix at `position`, closing the gap behind it.
+/// Removes one suffix, by its own id.
 ///
-/// By position rather than by value, because the same suffix twice is a legitimate way to weight
-/// it — the list is ordered and not a set, so a value does not identify one entry.
-pub fn remove_web_link_arg(tx: &Transaction<'_>, id: i64, position: usize) -> Result<bool> {
+/// Not by value, because the same suffix twice is a legitimate way to weight it — the list is
+/// ordered and not a set. Not by position either: a position says where a suffix sits, and where it
+/// sits changes. The id is the only thing about a suffix that does not move.
+///
+/// The gap the removal leaves in `position` is not closed. Nothing needs the numbers to be dense —
+/// they only order the list — and closing it would move every suffix after this one, which is what
+/// the id exists to stop mattering.
+pub fn remove_web_link_arg(tx: &Transaction<'_>, link: i64, arg: i64) -> Result<bool> {
     let removed = tx.execute(
-        "DELETE FROM behaviour_web_link_arg WHERE link_id = ?1 AND position = ?2",
-        params![id, position as i64],
+        "DELETE FROM behaviour_web_link_arg WHERE link_id = ?1 AND id = ?2",
+        params![link, arg],
     )?;
-    if removed == 0 {
-        return Ok(false);
-    }
-    // Unlike the tag tables, `position` is part of this table's key, so the gap has to close or the
-    // next append collides with it.
-    tx.execute(
-        "UPDATE behaviour_web_link_arg SET position = position - 1
-         WHERE link_id = ?1 AND position > ?2",
-        params![id, position as i64],
-    )?;
-    Ok(true)
+    Ok(removed > 0)
 }
 
 /// Turns one transition category on or off, expanding a legacy broad category first.

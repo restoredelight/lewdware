@@ -27,12 +27,6 @@ setter!(
     }
 );
 
-setter!(
-    set_content_group_tags(id: String, tags: Vec<String>) |tx| {
-        editor::set_content_group_tags(tx, &id, &tags)
-    }
-);
-
 #[tauri::command]
 pub async fn add_content_group(
     state: State<'_, AppState>,

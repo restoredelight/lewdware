@@ -51,6 +51,24 @@
 	 * trip — the field visibly resetting to what it said before.
 	 */
 	let generation = 0;
+	/**
+	 * Sends from this field, chained so one finishes before the next begins.
+	 *
+	 * Not just for ordering. A commit's payload can be computed from what the *query* currently
+	 * says — renaming a stage derives the new name for the tag it owns from the tag's present name
+	 * — and two overlapping sends would both read the state from before either landed. The second
+	 * would then ask to rename a tag the first has already renamed, and quietly do nothing, leaving
+	 * the stage's name and its tag disagreeing.
+	 */
+	let chain: Promise<void> = Promise.resolve();
+	/**
+	 * Bumped by {@link cancel}, so a send still waiting its turn in the chain knows not to go.
+	 *
+	 * Clearing the draft is not enough: a queued callback holds the value it was given, so a
+	 * discard while one send is in flight and another is queued would let the queued one land
+	 * *after* the pack had been restored, making it dirty again with an edit the author threw away.
+	 */
+	let epoch = 0;
 
 	// While nothing is pending, the stored value is the truth — that is what lets an undo, or an
 	// edit made on another surface, reach a field the author has left alone.
@@ -73,25 +91,38 @@
 			clearTimeout(timer);
 			timer = null;
 		}
-		if (!dirty) return;
+		// Nothing of our own to send, but a send already on its way is still this field's — a save
+		// waiting on us has to wait for it.
+		if (!dirty) return chain;
 		const sending = draft;
 		const mine = generation;
-		// Routed through `mutate` rather than calling the command directly, so this edit records its
-		// undo entry and — the part that matters here — the views showing it refetch. Without that
-		// the query keeps the value from before the edit, and the resync below hands it straight
-		// back to the field.
-		const landed = await mutate(async () => void (await oncommit(sending, label)), {
-			label,
-			invalidates
-		});
-		if (!landed) {
-			// Keep holding it: the author can still see what they typed, and `flushFields` has to be
-			// able to stop a save that would write the pack without it.
-			throw new Error(`Could not save ${label.toLowerCase()}.`);
-		}
-		// Let go only once the write *and* the refetch behind it have landed, and only if nothing
-		// has been typed since this one went out.
-		if (generation === mine) dirty = false;
+		const era = epoch;
+		const run = chain
+			.catch(() => {})
+			.then(async () => {
+				// Thrown away while this was waiting its turn: the state it belonged to is gone, and
+				// sending it now would put the author's discarded edit back into the pack.
+				if (era !== epoch) return;
+				// Routed through `mutate` rather than calling the command directly, so this edit records
+				// its undo entry and — the part that matters here — the views showing it refetch.
+				// Without that the query keeps the value from before the edit, and the resync above
+				// hands it straight back to the field.
+				const landed = await mutate(async () => void (await oncommit(sending, label)), {
+					label,
+					invalidates
+				});
+				if (!landed) {
+					// Keep holding it: the author can still see what they typed, and `flushFields` has to
+					// be able to stop a save that would write the pack without it.
+					throw new Error(`Could not save ${label.toLowerCase()}.`);
+				}
+				// Let go only once the write *and* the refetch behind it have landed, and only if
+				// nothing has been typed since this one went out.
+				if (generation === mine) dirty = false;
+			});
+		// A failure must not wedge the chain for every edit after it.
+		chain = run.catch(() => {});
+		await run;
 	}
 
 	/** Throws away the pending value — for an undo, whose result the field should adopt instead. */
@@ -100,6 +131,7 @@
 		timer = null;
 		dirty = false;
 		draft = value;
+		epoch += 1;
 	}
 
 	const unregister = registerField({ flush, cancel });

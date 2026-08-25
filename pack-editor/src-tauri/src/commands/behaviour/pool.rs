@@ -26,10 +26,6 @@ setter!(
     }
 );
 
-setter!(
-    set_text_item_tags(id: i64, tags: Vec<String>) |tx| editor::set_text_item_tags(tx, id, &tags)
-);
-
 #[tauri::command]
 pub async fn add_text_item(
     state: State<'_, AppState>,

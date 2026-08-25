@@ -276,3 +276,104 @@ describe('a field that goes away mid-edit', () => {
 		await expect(flushFields()).rejects.toThrow();
 	});
 });
+
+describe('the detached-write barrier', () => {
+	// A write left behind by an unmounting field has to leave the barrier once it settles. Keeping
+	// it makes every later save wait on something already finished — and keeping a *failed* one
+	// makes every later save fail, for the rest of the session.
+	it('stops waiting on a detached write once it has landed', async () => {
+		const view = field('stored', vi.fn().mockResolvedValue(undefined));
+		view.type('typed');
+		view.destroy();
+		await settle();
+
+		await expect(flushFields()).resolves.toBeUndefined();
+		// And again: a leaked entry would still be here.
+		await expect(flushFields()).resolves.toBeUndefined();
+	});
+
+	it('does not fail every later save because one detached write failed', async () => {
+		const failing = field('stored', vi.fn().mockRejectedValue(new Error('disk on fire')));
+		failing.type('typed');
+		failing.destroy();
+
+		// A save that races the write still sees it fail — that is the point of the barrier.
+		await expect(flushFields()).rejects.toThrow();
+
+		// But the failure belongs to that write, not to the rest of the session: once it has
+		// settled it leaves the barrier, and a later save is not blocked by it forever.
+		await settle();
+		await expect(flushFields()).resolves.toBeUndefined();
+	});
+});
+
+describe('overlapping commits from one field', () => {
+	// A commit's payload can be derived from what the query currently says — renaming a stage works
+	// out the new name for the tag it owns from that tag's present name. Two sends overlapping would
+	// both read the state from before either landed, and the second would ask to rename a tag the
+	// first had already renamed: a silent no-op, leaving the stage's name and its tag disagreeing.
+	it('does not start a second send while the first is still going', async () => {
+		const order: string[] = [];
+		let releaseFirst!: () => void;
+		const commit = vi.fn((value: string) => {
+			order.push(`start ${value}`);
+			if (value === 'first') {
+				return new Promise<void>((resolve) => {
+					releaseFirst = () => {
+						order.push('finish first');
+						resolve();
+					};
+				});
+			}
+			order.push(`finish ${value}`);
+			return Promise.resolve();
+		});
+		const view = field('', commit);
+
+		view.type('first');
+		view.blur();
+		await settle();
+
+		view.type('second');
+		view.blur();
+		await settle();
+		expect(order, 'the second must not have started').toEqual(['start first']);
+
+		releaseFirst();
+		await settle();
+		expect(order).toEqual(['start first', 'finish first', 'start second', 'finish second']);
+		view.destroy();
+	});
+});
+
+describe('cancelling while sends are queued', () => {
+	// Clearing the draft does not reach a send already waiting its turn: it holds the value it was
+	// handed. A discard while one send is in flight and another is queued would let the queued one
+	// land after the pack had been restored — making it dirty again with an edit the author threw
+	// away.
+	it('does not run a queued send after the edit was thrown away', async () => {
+		const sent: string[] = [];
+		let releaseFirst!: () => void;
+		const commit = vi.fn((value: string) => {
+			sent.push(value);
+			if (value === 'first') return new Promise<void>((resolve) => (releaseFirst = resolve));
+			return Promise.resolve();
+		});
+		const view = field('stored', commit);
+
+		view.type('first');
+		view.blur();
+		await settle();
+		view.type('second');
+		view.blur();
+		await settle();
+		expect(sent, 'the second is queued behind the first').toEqual(['first']);
+
+		cancelFields();
+		releaseFirst();
+		await settle();
+
+		expect(sent, 'the queued send belonged to the state being discarded').toEqual(['first']);
+		view.destroy();
+	});
+});

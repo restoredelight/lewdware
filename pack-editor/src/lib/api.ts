@@ -156,8 +156,6 @@ export const api = {
 			invoke<void>('set_text_item_summary', { id, summary, label }),
 		setTimeout: (id: number, seconds: number | null, label: string) =>
 			invoke<void>('set_text_item_timeout', { id, seconds, label }),
-		setTags: (id: number, tags: string[], label: string) =>
-			invoke<void>('set_text_item_tags', { id, tags, label }),
 		// One chip at a time: two removals built from the same fetched list would each put the
 		// other's tag back.
 		addTag: (id: number, tag: string, label: string) =>
@@ -173,19 +171,18 @@ export const api = {
 		get: () => invoke<WebLinkRow[]>('get_web_links'),
 		setUrl: (id: number, url: string, label: string) =>
 			invoke<void>('set_web_link_url', { id, url, label }),
-		setArgs: (id: number, args: string[], label: string) =>
-			invoke<void>('set_web_link_args', { id, args, label }),
-		setTags: (id: number, tags: string[], label: string) =>
-			invoke<void>('set_web_link_tags', { id, tags, label }),
 		addTag: (id: number, tag: string, label: string) =>
 			invoke<void>('add_web_link_tag', { id, tag, label }),
 		removeTag: (id: number, tag: string, label: string) =>
 			invoke<void>('remove_web_link_tag', { id, tag, label }),
 		addArg: (id: number, value: string, label: string) =>
 			invoke<void>('add_web_link_arg', { id, value, label }),
-		/** By position: the same suffix may appear twice, so a value does not identify one. */
-		removeArg: (id: number, position: number, label: string) =>
-			invoke<void>('remove_web_link_arg', { id, position, label }),
+		/**
+		 * By the suffix's own id, not its place in the list: the same suffix may appear twice, and a
+		 * place shifts the moment any other suffix goes.
+		 */
+		removeArg: (id: number, arg: number, label: string) =>
+			invoke<void>('remove_web_link_arg', { id, arg, label }),
 		add: (link: WebLink, label: string) =>
 			invoke<BehaviourOutcome>('add_web_link', { link, label }),
 		remove: (id: number, label: string) => invoke<void>('remove_web_link', { id, label })
@@ -199,8 +196,6 @@ export const api = {
 			invoke<void>('set_content_group_description', { id, description, label }),
 		setEnabledByDefault: (id: string, enabled: boolean, label: string) =>
 			invoke<void>('set_content_group_enabled_by_default', { id, enabled, label }),
-		setTags: (id: string, tags: string[], label: string) =>
-			invoke<void>('set_content_group_tags', { id, tags, label }),
 		addTag: (id: string, tag: string, label: string) =>
 			invoke<void>('add_content_group_tag', { id, tag, label }),
 		removeTag: (id: string, tag: string, label: string) =>
@@ -295,8 +290,6 @@ export const api = {
 			invoke<void>('set_transition_duration', { id, seconds, label }),
 		setEasing: (id: string, easing: Transition['easing'], label: string) =>
 			invoke<void>('set_transition_easing', { id, easing, label }),
-		setAffected: (id: string, affected: TransitionValue[], label: string) =>
-			invoke<void>('set_transition_affected', { id, affected, label }),
 		/** One checkbox. The legacy broad-category expansion happens server-side. */
 		setCategory: (id: string, category: TransitionValue, enabled: boolean, label: string) =>
 			invoke<void>('set_transition_category', { id, category, enabled, label })
