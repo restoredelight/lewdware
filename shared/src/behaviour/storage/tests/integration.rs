@@ -127,8 +127,7 @@ fn a_full_document_survives_the_round_trip() {
                 summary: Some("Attention".to_string()),
             }],
             web_links: vec![WebLink {
-                url: "https://duckduckgo.com/?q=".to_string(),
-                args: vec!["one".to_string(), "two".to_string()],
+                url: "https://duckduckgo.com/?q=one".to_string(),
                 tags: vec!["kinky".to_string()],
             }],
             wallpaper: Some(1),

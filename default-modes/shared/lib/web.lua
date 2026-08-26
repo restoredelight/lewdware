@@ -1,6 +1,5 @@
--- Web opening process: on its own frequency, picks a web link and opens it, optionally with a
--- random arg suffix appended -- carried over from Edgeware's Web{url, args}, see
--- shared/src/behaviour/schema.rs's WebLink doc comment. See behaviour-design/default-mode.md's
+-- Web opening process: on its own frequency, picks a web link and opens it. See
+-- behaviour-design/default-mode.md's
 -- feature table ("Web opening | both | Process | frequency, own scheduler").
 
 local content = require("lib.content")
@@ -11,20 +10,10 @@ local function secs(s)
 	return math.floor(s * 1000)
 end
 
----@param link table
----@return string
-local function build_url(link)
-	local url = link.url
-	if link.args and #link.args > 0 then
-		url = url .. link.args[math.random(#link.args)]
-	end
-	return url
-end
-
 function M.fire(active_tags)
 	local link = content.pick_web_link(active_tags and active_tags())
 	if not link then return false end
-	lewdware.open_link(build_url(link))
+	lewdware.open_link(link.url)
 	return true
 end
 

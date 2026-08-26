@@ -47,7 +47,6 @@ pub const BEHAVIOUR_TABLES: &[&str] = &[
     "behaviour_text_item",
     "behaviour_text_item_tag",
     "behaviour_web_link",
-    "behaviour_web_link_arg",
     "behaviour_web_link_tag",
     "behaviour_content_group",
     "behaviour_content_group_tag",

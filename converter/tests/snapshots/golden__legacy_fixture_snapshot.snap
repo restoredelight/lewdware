@@ -55,16 +55,14 @@ behaviour:
         tags: []
     web_links:
       - url: "https://example.com/"
-        args: []
         tags: []
       - url: "https://github.com/"
-        args: []
         tags:
           - vanilla
-      - url: "https://duckduckgo.com/?q="
-        args:
-          - edgeware
-          - packs
+      - url: "https://duckduckgo.com/?q=edgeware"
+        tags:
+          - low
+      - url: "https://duckduckgo.com/?q=packs"
         tags:
           - low
   experience:

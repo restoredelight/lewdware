@@ -56,16 +56,13 @@ behaviour:
       - text: Notification
         tags: []
     web_links:
-      - url: "https://duckduckgo.com/?q="
-        args:
-          - edgeware packs
-          - rule 34
+      - url: "https://duckduckgo.com/?q=edgeware packs"
+        tags: []
+      - url: "https://duckduckgo.com/?q=rule 34"
         tags: []
       - url: "https://github.com/"
-        args: []
         tags: []
       - url: "https://bsky.app/"
-        args: []
         tags:
           - vanilla
   experience:

@@ -174,14 +174,6 @@ export const api = {
 			invoke<void>('add_web_link_tag', { id, tag, label }),
 		removeTag: (id: number, tag: string, label: string) =>
 			invoke<void>('remove_web_link_tag', { id, tag, label }),
-		addArg: (id: number, value: string, label: string) =>
-			invoke<void>('add_web_link_arg', { id, value, label }),
-		/**
-		 * By the suffix's own id, not its place in the list: the same suffix may appear twice, and a
-		 * place shifts the moment any other suffix goes.
-		 */
-		removeArg: (id: number, arg: number, label: string) =>
-			invoke<void>('remove_web_link_arg', { id, arg, label }),
 		add: (link: WebLink, label: string) =>
 			invoke<BehaviourOutcome>('add_web_link', { link, label }),
 		remove: (id: number, label: string) => invoke<void>('remove_web_link', { id, label })

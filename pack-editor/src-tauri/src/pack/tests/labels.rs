@@ -181,7 +181,6 @@ async fn renaming_a_tag_carries_every_mention_in_the_document() {
             }],
             web_links: vec![WebLink {
                 url: "https://example.com".to_string(),
-                args: vec![],
                 tags: vec!["old".to_string()],
             }],
             ..Default::default()

@@ -196,19 +196,6 @@ CREATE TABLE IF NOT EXISTS behaviour_web_link (
     url TEXT NOT NULL
 ) STRICT;
 
--- Suffixes appended at random when the link is opened. Ordered but not a set: the same suffix
--- twice is a legitimate way to weight it, so `position` is part of the key rather than the value.
--- `id` names the suffix; `position` only orders it. They are separate because the editor removes a
--- suffix the author pointed at, and a position is not an identity: it moves when the list is
--- rewritten, and the highest one is handed straight back to the next suffix added.
-CREATE TABLE IF NOT EXISTS behaviour_web_link_arg (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    link_id INTEGER NOT NULL REFERENCES behaviour_web_link (id) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
-    value TEXT NOT NULL,
-    UNIQUE (link_id, position)
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS behaviour_web_link_tag (
     link_id INTEGER NOT NULL REFERENCES behaviour_web_link (id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,

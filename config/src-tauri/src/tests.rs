@@ -431,7 +431,6 @@ fn pack_has_facts_reach_the_dto_for_default_mode() {
         content: shared::behaviour::Content {
             web_links: vec![WebLink {
                 url: "https://example.com".to_string(),
-                args: Vec::new(),
                 tags: Vec::new(),
             }],
             ..Default::default()

@@ -25,8 +25,8 @@ pub use group::{
     set_content_group_enabled_by_default, set_content_group_label,
 };
 pub use link::{
-    WebLinkArg, WebLinkRow, add_web_link, add_web_link_arg, add_web_link_tag, remove_web_link,
-    remove_web_link_arg, remove_web_link_tag, set_web_link_url, web_links,
+    WebLinkRow, add_web_link, add_web_link_tag, remove_web_link, remove_web_link_tag,
+    set_web_link_url, web_links,
 };
 pub use media::{
     MediaSlots, audio_attributes, is_media_referenced, media_slots, popup_attributes,

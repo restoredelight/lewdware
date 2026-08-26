@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 
-use crate::model::{CorruptionLevel, EdgewareIndex, EdgewareMood};
+use crate::model::{CorruptionLevel, EdgewareIndex, EdgewareMood, WebEntry};
 use crate::slug::unique_slug;
 use shared::behaviour::{Content, ContentGroup, TextItem, WebLink};
 use shared::tags;
@@ -109,24 +109,84 @@ pub(super) fn populate_notifications(index: &EdgewareIndex, content: &mut Conten
 }
 
 pub(super) fn populate_web_links(index: &EdgewareIndex, content: &mut Content) {
-    let mut links: Vec<WebLink> = index
-        .default
-        .web
-        .iter()
-        .map(|entry| WebLink {
-            url: entry.url.clone(),
-            args: entry.args.clone(),
-            tags: vec![],
-        })
-        .collect();
+    let mut links = vec![];
+    append_web_links(&mut links, &index.default.web, &[]);
     for mood in &index.moods {
-        for entry in &mood.base.web {
-            links.push(WebLink {
-                url: entry.url.clone(),
-                args: entry.args.clone(),
-                tags: vec![mood.name.clone()],
-            });
-        }
+        append_web_links(&mut links, &mood.base.web, std::slice::from_ref(&mood.name));
     }
     content.web_links = links;
+}
+
+/// Edgeware models a link as a base URL plus a randomly selected suffix. Lewdware models every
+/// possible destination as its own item. Repeated suffixes collapse to one destination because
+/// Lewdware links have no weighting model. An absent suffix list means the base URL itself is the
+/// item.
+fn append_web_links(links: &mut Vec<WebLink>, entries: &[WebEntry], tags: &[String]) {
+    for entry in entries {
+        if entry.args.is_empty() {
+            links.push(WebLink {
+                url: entry.url.clone(),
+                tags: tags.to_vec(),
+            });
+        } else {
+            let mut seen = HashSet::new();
+            links.extend(entry.args.iter().filter_map(|suffix| {
+                let url = format!("{}{suffix}", entry.url);
+                seen.insert(url.clone()).then(|| WebLink {
+                    url,
+                    tags: tags.to_vec(),
+                })
+            }));
+        }
+    }
+}
+
+#[cfg(test)]
+mod web_link_tests {
+    use super::*;
+
+    #[test]
+    fn suffixes_expand_into_distinct_tagged_links_without_weighting() {
+        let entries = [WebEntry {
+            url: "https://example.invalid/?q=".to_string(),
+            args: vec!["one".to_string(), "two".to_string(), "one".to_string()],
+        }];
+        let tags = ["mood".to_string()];
+        let mut links = vec![];
+
+        append_web_links(&mut links, &entries, &tags);
+
+        assert_eq!(
+            links,
+            [
+                WebLink {
+                    url: "https://example.invalid/?q=one".to_string(),
+                    tags: tags.to_vec(),
+                },
+                WebLink {
+                    url: "https://example.invalid/?q=two".to_string(),
+                    tags: tags.to_vec(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_link_without_suffixes_stays_as_one_item() {
+        let entries = [WebEntry {
+            url: "https://example.invalid/".to_string(),
+            args: vec![],
+        }];
+        let mut links = vec![];
+
+        append_web_links(&mut links, &entries, &[]);
+
+        assert_eq!(
+            links,
+            [WebLink {
+                url: "https://example.invalid/".to_string(),
+                tags: vec![],
+            }]
+        );
+    }
 }

@@ -300,11 +300,6 @@ pub struct TextItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WebLink {
     pub url: String,
-    /// Suffixes randomly appended to `url` when opened (e.g. search-query terms) — carried
-    /// over from Edgeware's `Web{url, args}`, which is how a pack varies what a link opens
-    /// without always hitting the exact same page. Empty means open `url` unmodified.
-    #[serde(default)]
-    pub args: Vec<String>,
     #[serde(default)]
     pub tags: Vec<String>,
 }

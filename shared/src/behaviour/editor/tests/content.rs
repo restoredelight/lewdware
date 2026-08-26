@@ -1,7 +1,7 @@
-use super::{arg_values, item, pack, texts, tx_on};
+use super::{item, pack, texts, tx_on};
 use crate::behaviour::editor::{
     PoolKind, add_content_group, add_text_item, add_web_link, content_groups, remove_text_item,
-    remove_web_link_arg, set_text_item_text, text_pool, web_links,
+    set_text_item_text, text_pool, web_links,
 };
 use crate::behaviour::schema::{Behaviour, Content, ContentGroup, TextItem, WebLink};
 use crate::behaviour::storage;
@@ -91,11 +91,10 @@ fn an_entrys_tags_round_trip_and_become_real_tags() {
 }
 
 #[test]
-fn a_web_link_round_trips_with_its_args_and_tags() {
+fn a_web_link_round_trips_with_its_tags() {
     let mut conn = pack();
     let link = WebLink {
         url: "https://example.invalid".to_string(),
-        args: vec!["a".to_string(), "b".to_string(), "a".to_string()],
         tags: vec!["imp".to_string()],
     };
     tx_on(&mut conn, |tx| {
@@ -105,29 +104,6 @@ fn a_web_link_round_trips_with_its_args_and_tags() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].url, link.url);
     assert_eq!(rows[0].tags, link.tags);
-    // The same suffix twice is a legitimate way to weight it, so args are a list, not a set.
-    assert_eq!(arg_values(&rows[0]), link.args);
-}
-
-#[test]
-fn shortening_a_links_args_drops_the_tail() {
-    let mut conn = pack();
-    let mut id = 0;
-    tx_on(&mut conn, |tx| {
-        id = add_web_link(
-            tx,
-            &WebLink {
-                url: "https://example.invalid".to_string(),
-                args: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-                tags: vec![],
-            },
-        )
-        .unwrap();
-        let args = web_links(tx).unwrap()[0].args.clone();
-        assert!(remove_web_link_arg(tx, id, args[1].id).unwrap());
-        assert!(remove_web_link_arg(tx, id, args[2].id).unwrap());
-    });
-    assert_eq!(arg_values(&web_links(&conn).unwrap()[0]), ["a"]);
 }
 
 #[test]
@@ -176,7 +152,6 @@ fn what_the_editor_writes_the_engine_reads() {
             tx,
             &WebLink {
                 url: "https://example.invalid".to_string(),
-                args: vec![],
                 tags: vec![],
             },
         )
@@ -201,7 +176,6 @@ fn what_the_editor_writes_the_engine_reads() {
             captions: vec![item("hello")],
             web_links: vec![WebLink {
                 url: "https://example.invalid".to_string(),
-                args: vec![],
                 tags: vec![],
             }],
             content_groups: vec![ContentGroup {

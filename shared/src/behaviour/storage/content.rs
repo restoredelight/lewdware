@@ -68,15 +68,10 @@ pub fn read_web_links(conn: &Connection) -> Result<Vec<WebLink>> {
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
 
-    let mut args = conn
-        .prepare("SELECT value FROM behaviour_web_link_arg WHERE link_id = ? ORDER BY position")?;
     rows.into_iter()
         .map(|(id, url)| {
             Ok(WebLink {
                 url,
-                args: args
-                    .query_map(params![id], |row| row.get(0))?
-                    .collect::<rusqlite::Result<_>>()?,
                 tags: read_tags(conn, "behaviour_web_link_tag", "link_id", &id)?,
             })
         })
@@ -96,17 +91,6 @@ pub fn write_web_links(tx: &Transaction<'_>, links: &[WebLink]) -> Result<()> {
             params![position as i64, link.url],
             |row| row.get(0),
         )?;
-        tx.execute(
-            "DELETE FROM behaviour_web_link_arg WHERE link_id = ?1 AND position >= ?2",
-            params![id, link.args.len() as i64],
-        )?;
-        for (position, value) in link.args.iter().enumerate() {
-            tx.execute(
-                "INSERT INTO behaviour_web_link_arg (link_id, position, value) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(link_id, position) DO UPDATE SET value = excluded.value",
-                params![id, position as i64, value],
-            )?;
-        }
         write_tags(tx, "behaviour_web_link_tag", "link_id", &id, &link.tags)?;
     }
     Ok(())

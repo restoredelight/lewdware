@@ -1,8 +1,7 @@
 use rusqlite::{Connection, Transaction};
 
 use super::{
-    PoolKind, WebLinkRow, add_stage, popup_attributes, remove_stage, stages, text_pool,
-    transitions,
+    PoolKind, add_stage, popup_attributes, remove_stage, stages, text_pool, transitions,
 };
 use crate::behaviour::schema::{
     Behaviour, ContentSelection, Events, Experience, PopupMedia, Stage, TextItem, Timeline,
@@ -38,10 +37,6 @@ fn tx_on(conn: &mut Connection, body: impl FnOnce(&Transaction<'_>)) {
     let tx = conn.transaction().unwrap();
     body(&tx);
     tx.commit().unwrap();
-}
-
-fn arg_values(row: &WebLinkRow) -> Vec<String> {
-    row.args.iter().map(|arg| arg.value.clone()).collect()
 }
 
 fn texts(conn: &Connection, kind: PoolKind) -> Vec<String> {

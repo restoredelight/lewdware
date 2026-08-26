@@ -43,13 +43,3 @@ setter!(
 setter!(
     remove_web_link_tag(id: i64, tag: String) |tx| editor::remove_web_link_tag(tx, id, &tag)
 );
-
-setter!(
-    /// Appends one suffix.
-    add_web_link_arg(id: i64, value: String) |tx| editor::add_web_link_arg(tx, id, &value)
-);
-
-setter!(
-    /// Removes one suffix by its own id — the only thing about a suffix that does not move.
-    remove_web_link_arg(id: i64, arg: i64) |tx| editor::remove_web_link_arg(tx, id, arg)
-);

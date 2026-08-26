@@ -229,8 +229,6 @@ pub fn run() {
             behaviour::link::remove_web_link,
             behaviour::link::add_web_link_tag,
             behaviour::link::remove_web_link_tag,
-            behaviour::link::add_web_link_arg,
-            behaviour::link::remove_web_link_arg,
             behaviour::group::set_content_group_label,
             behaviour::group::set_content_group_description,
             behaviour::group::set_content_group_enabled_by_default,

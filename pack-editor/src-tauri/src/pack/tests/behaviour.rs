@@ -1278,8 +1278,7 @@ async fn content_and_experience_behaviour_survives_save_and_reopen() {
         summary: None,
     });
     behaviour.content.web_links.push(WebLink {
-        url: "https://duckduckgo.com/?q=".to_string(),
-        args: vec!["edgeware packs".to_string()],
+        url: "https://duckduckgo.com/?q=edgeware packs".to_string(),
         tags: vec![],
     });
     behaviour.content.wallpaper = Some(1);
