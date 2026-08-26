@@ -8,23 +8,6 @@
 //! The implementation is divided by editor domain. Public items are re-exported here to preserve
 //! the original `behaviour::editor::*` API.
 
-use std::collections::HashSet;
-
-use anyhow::{Result, bail};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use serde::{Deserialize, Serialize};
-
-use super::schema::{
-    AudioMedia, ContentGroup, ContentSelection, Easing, EndStrategy, EventCountCondition,
-    EventKind, EventSchedule, MediaSlot, Mitosis, MonitorPreference, Movement, PopupMedia,
-    SpawnRegion, Stage, StageEnd, TextItem, Timeline, Transition, TransitionCategory, WebLink,
-};
-use super::storage::{
-    TimelineView, read_one_stage, read_stages, read_tags, read_transitions, to_text,
-    write_one_stage, write_owned_stage_tag, write_stage_end, write_stage_entry, write_stage_events,
-    write_stage_mitosis, write_stage_movement, write_stage_prompt, write_stage_tags, write_tags,
-};
-
 mod common;
 mod group;
 mod link;
@@ -36,25 +19,50 @@ mod stage_tags;
 mod timeline;
 mod transition;
 
-use common::*;
-pub use group::*;
-pub use link::*;
-#[cfg(test)]
-use media::edit_popup_entries;
-pub use media::*;
-#[cfg(test)]
-use membership::selects;
-pub use membership::*;
-pub use pool::*;
-pub use stage::*;
-#[cfg(test)]
-use stage_tags::MAX_SLUG;
-pub use stage_tags::*;
-#[cfg(test)]
-use timeline::DEFAULT_STAGE_SECONDS;
-use timeline::transition_categories;
-pub use timeline::*;
-pub use transition::*;
+pub use group::{
+    add_content_group, add_content_group_tag, content_groups, remove_content_group,
+    remove_content_group_tag, set_content_group_description,
+    set_content_group_enabled_by_default, set_content_group_label,
+};
+pub use link::{
+    WebLinkArg, WebLinkRow, add_web_link, add_web_link_arg, add_web_link_tag, remove_web_link,
+    remove_web_link_arg, remove_web_link_tag, set_web_link_url, web_links,
+};
+pub use media::{
+    MediaSlots, audio_attributes, is_media_referenced, media_slots, popup_attributes,
+    set_audio_volume, set_media_slot, set_popup_caption, set_popup_monitor, set_popup_region,
+    set_popup_scale, set_popup_video_audio, set_popup_video_loop, set_popup_video_volume,
+    set_popup_weight, slot_value,
+};
+pub use membership::{
+    MembershipPlan, StageTagCreation, apply_membership_creation, media_tags,
+    plan_stage_membership, stage_restricts_content,
+};
+pub use pool::{
+    PoolKind, TextItemRow, add_text_item, add_text_item_tag, remove_text_item,
+    remove_text_item_tag, set_text_item_summary, set_text_item_text, set_text_item_timeout,
+    text_pool,
+};
+pub use stage::{
+    add_stage_exclude_tag, add_stage_tag, remove_stage_exclude_tag, remove_stage_tag,
+    set_stage_audio_random, set_stage_content_tags, set_stage_end_duration,
+    set_stage_end_event_count, set_stage_end_strategy, set_stage_entry_notification,
+    set_stage_entry_popup_burst, set_stage_event, set_stage_exclude_tags, set_stage_label,
+    set_stage_mitosis, set_stage_mitosis_values, set_stage_movement, set_stage_movement_speed,
+    set_stage_prompt_popup_burst, set_stage_prompt_timeout_multiplier,
+    set_stage_prompt_timeouts_enabled,
+};
+pub use stage_tags::{
+    OwnedStageTag, read_one_stage_label, slugify_stage_label, stage_audio,
+    stage_exclude_tag_name, stage_owned_tags, stage_scenery, stage_tag_name, stage_tag_shared,
+};
+pub use timeline::{
+    add_stage, duplicate_stage, move_stage, remove_stage, stages, timeline, transitions,
+};
+pub use transition::{
+    set_transition_affected, set_transition_category, set_transition_duration,
+    set_transition_easing,
+};
 
 // Switching the timeline on and off is represented by storage's `enabled` column, but remains an
 // editor action and therefore stays available through this facade.

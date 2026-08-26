@@ -1,4 +1,9 @@
-use super::*;
+use std::collections::HashSet;
+
+use anyhow::Result;
+use rusqlite::{Connection, OptionalExtension, params};
+
+use crate::behaviour::storage::read_one_stage;
 
 // ── Naming a stage's own tag ─────────────────────────────────────────────────
 //
@@ -16,7 +21,7 @@ use super::*;
 
 /// As long a slug as a tag should ever be. Long enough to stay recognisable, short enough that a
 /// label somebody pasted a sentence into does not become the widest chip in the Tags tab.
-pub(super) const MAX_SLUG: usize = 40;
+pub const MAX_SLUG: usize = 40;
 
 /// The label as a tag-shaped word: lower case, runs of anything that is not a letter or a digit
 /// collapsed to one dash.

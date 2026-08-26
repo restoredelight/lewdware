@@ -1,4 +1,7 @@
-use super::*;
+use anyhow::Result;
+use rusqlite::{Connection, Transaction, params};
+
+use super::common::integer_array;
 
 // ── Tags ─────────────────────────────────────────────────────────────────────
 //
@@ -6,7 +9,7 @@ use super::*;
 // `UPDATE tags SET name`, merging one a re-point, and deleting one a cascade, instead of a pass
 // over the whole document rewriting strings (the late `Behaviour::rewrite_tag`).
 
-pub(in crate::behaviour) fn read_tags(
+pub fn read_tags(
     conn: &Connection,
     table: &str,
     key: &str,
@@ -23,7 +26,7 @@ pub(in crate::behaviour) fn read_tags(
     Ok(tags)
 }
 
-pub(in crate::behaviour) fn write_tags(
+pub fn write_tags(
     tx: &Transaction<'_>,
     table: &str,
     key: &str,
@@ -58,7 +61,7 @@ pub(in crate::behaviour) fn write_tags(
 /// A tag the document names *is* a tag the pack has -- that is what the foreign key asserts. So a
 /// tag typed into a caption or a content group becomes a real row, and shows up in the Tags tab
 /// with no media attached, rather than existing only as a string inside the document.
-pub(in crate::behaviour) fn tag_id(tx: &Transaction<'_>, name: &str) -> Result<i64> {
+pub fn tag_id(tx: &Transaction<'_>, name: &str) -> Result<i64> {
     tx.execute(
         "INSERT OR IGNORE INTO tags (name) VALUES (?)",
         params![name],

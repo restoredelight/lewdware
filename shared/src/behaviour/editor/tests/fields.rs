@@ -1,4 +1,14 @@
-use super::*;
+use super::{item, pack, popups_of, timeline_pack, tx_on};
+use crate::behaviour::editor::{
+    PoolKind, add_text_item, add_text_item_tag, remove_text_item, set_media_slot,
+    set_popup_scale, set_popup_weight, set_stage_audio_random, set_stage_content_tags,
+    set_stage_end_duration, set_stage_entry_notification, set_stage_event, set_stage_movement,
+    set_stage_movement_speed, set_stage_prompt_timeout_multiplier, set_text_item_summary,
+    set_text_item_text, set_text_item_timeout, set_transition_duration, set_transition_easing,
+    text_pool, transitions,
+};
+use crate::behaviour::schema::{Easing, EventKind, EventSchedule, Interval, MediaSlot, Movement};
+use crate::behaviour::storage::read_one_stage;
 
 // ── Setting one field ────────────────────────────────────────────────────────
 

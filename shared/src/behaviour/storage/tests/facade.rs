@@ -1,4 +1,8 @@
-use super::*;
+use rusqlite::params;
+
+use super::{pack, store};
+use crate::behaviour::schema::{Behaviour, Experience, TextItem};
+use crate::behaviour::storage::{read, write};
 
 /// The point of the whole step: a slot is a foreign key now, so pointing one at media the pack
 /// does not have is refused by the database rather than discovered later.

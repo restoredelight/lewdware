@@ -1,4 +1,10 @@
-use super::*;
+use anyhow::{Result, bail};
+use rusqlite::{Connection, Transaction, params};
+
+use super::stage::{set_stage_content_tags, set_stage_exclude_tags};
+use super::stage_tags::{stage_exclude_tag_name, stage_tag_name};
+use crate::behaviour::schema::Stage;
+use crate::behaviour::storage::read_one_stage;
 
 // ── Which stages a file appears in ───────────────────────────────────────────
 //
@@ -37,7 +43,7 @@ pub struct StageTagCreation {
 /// Included *and* not excluded. The order matters for reading it, not for the answer: exclusion
 /// always wins, which is what makes it usable as "take this one file out" regardless of why the
 /// file was in.
-pub(super) fn selects(stage: &Stage, tags: &[String]) -> bool {
+pub fn selects(stage: &Stage, tags: &[String]) -> bool {
     let included = match stage.content.tags.as_deref() {
         // No inclusion list at all is a stage that restricts nothing: every file appears in it.
         None => true,

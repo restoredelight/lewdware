@@ -1,19 +1,5 @@
-use super::*;
-
-// ── Setting one field ────────────────────────────────────────────────────────
-//
-// Everything below sets a single field, and that is the point rather than an optimisation. A
-// command that writes a whole entity cannot be applied twice concurrently without one write
-// carrying a stale copy of whatever the other changed — which is why the editor used to keep a
-// draft, merge changes into it, and count generations to know when it could let go. Two writes that
-// each touch one column commute, so none of that is needed for correctness.
-//
-// It also removes the "was this field set, or merely not mentioned?" problem. A partial update has
-// to tell an absent field from a null one, which is what `PopupChanges` needed `double_option` for;
-// a setter that names its field has nothing to not-mention, so a plain `Option<T>` says it all.
-//
-// **Every setter reports whether it changed anything.** An `oninput` that fires without changing a
-// value is not an edit, and recording one would spend an entry out of the hundred undo keeps.
+use anyhow::{Result, bail};
+use rusqlite::{OptionalExtension, Transaction, params};
 
 /// Writes one column of an existing row, reporting whether the value actually moved.
 ///
@@ -22,7 +8,7 @@ use super::*;
 ///
 /// `value` is owned rather than borrowed because the same type has to come back out of the database
 /// to be compared against — and `&str` cannot, only `String` can.
-pub(super) fn set_column<T>(
+pub fn set_column<T>(
     tx: &Transaction<'_>,
     table: &str,
     key_column: &str,
@@ -55,7 +41,7 @@ where
 }
 
 /// Refuses if the row is gone. See [`set_column`] for why that is an error rather than a no-op.
-pub(super) fn exists(
+pub fn exists(
     tx: &Transaction<'_>,
     table: &str,
     key_column: &str,
@@ -73,18 +59,8 @@ pub(super) fn exists(
     Ok(())
 }
 
-// ── One item of a collection ─────────────────────────────────────────────────
-//
-// A tag chip and a URL suffix are *items*, and adding or removing one is the whole of what the
-// author did. Setting the resulting list instead has the same flaw whole-entity writes had, one
-// level down: the list is built from what was last fetched, so two removals in quick succession
-// both say "everything except the one I clicked" and the second puts the first one back.
-//
-// Addressing the item makes the two edits commute, which is the same reason the field setters
-// above exist.
-
 /// Adds `tag` to an owner's selection, at the end. Reports whether it was not already there.
-pub(super) fn add_tag(
+pub fn add_tag(
     tx: &Transaction<'_>,
     table: &str,
     key: &str,
@@ -116,7 +92,7 @@ pub(super) fn add_tag(
 ///
 /// The gap it leaves in `position` is not closed: positions only order the list, and the primary
 /// key is the owner and the tag, so nothing collides with a hole.
-pub(super) fn remove_tag(
+pub fn remove_tag(
     tx: &Transaction<'_>,
     table: &str,
     key: &str,

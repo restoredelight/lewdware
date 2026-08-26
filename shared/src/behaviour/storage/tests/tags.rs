@@ -1,4 +1,6 @@
-use super::*;
+use super::{pack, store};
+use crate::behaviour::schema::{Behaviour, TextItem};
+use crate::behaviour::storage::read;
 
 /// What the tag joins are for. A tag list in the document is a foreign key into `tags`, so a
 /// tag the author typed into a caption is a real tag the pack has -- which is what lets

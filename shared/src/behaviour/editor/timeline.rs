@@ -1,4 +1,13 @@
-use super::*;
+use anyhow::{Result, bail};
+use rusqlite::{Connection, Transaction, params};
+
+use crate::behaviour::schema::{
+    ContentSelection, EndStrategy, Stage, StageEnd, Timeline, Transition, TransitionCategory,
+};
+use crate::behaviour::storage::{
+    TimelineView, from_text, read_stages, read_timeline, read_transitions, retain, write_one_stage,
+    write_transitions,
+};
 
 // ── The timeline ─────────────────────────────────────────────────────────────
 //
@@ -16,7 +25,7 @@ use super::*;
 // build one, and building one is now the backend's job.
 
 /// The default an end condition takes when a stage stops being last and needs one.
-pub(super) const DEFAULT_STAGE_SECONDS: f64 = 300.0;
+pub const DEFAULT_STAGE_SECONDS: f64 = 300.0;
 
 /// Restores the two timeline invariants, in place.
 ///
@@ -63,7 +72,7 @@ fn uuid() -> String {
 
 /// The timeline as the editor sees it, switched off or not. See [`TimelineView`].
 pub fn timeline(conn: &Connection) -> Result<Option<TimelineView>> {
-    crate::behaviour::storage::read_timeline(conn)
+    read_timeline(conn)
 }
 
 /// Writes `timeline` back over the stored one, touching only the rows that differ.
@@ -72,7 +81,7 @@ pub fn timeline(conn: &Connection) -> Result<Option<TimelineView>> {
 /// list, normalize, and write. Only the rows that actually changed are touched, so reordering two
 /// stages records a changeset naming two stages rather than the whole timeline.
 fn write_timeline(tx: &Transaction<'_>, timeline: &Timeline) -> Result<()> {
-    crate::behaviour::storage::retain(
+    retain(
         tx,
         "behaviour_stage",
         "id",
@@ -81,13 +90,13 @@ fn write_timeline(tx: &Transaction<'_>, timeline: &Timeline) -> Result<()> {
     for (position, stage) in timeline.stages.iter().enumerate() {
         write_one_stage(tx, position as i64, stage)?;
     }
-    crate::behaviour::storage::write_transitions(tx, &timeline.transitions)?;
+    write_transitions(tx, &timeline.transitions)?;
     Ok(())
 }
 
 /// Reads the timeline for a structural edit, refusing if the pack has none.
 fn timeline_for_edit(tx: &Transaction<'_>) -> Result<Timeline> {
-    let Some(view) = crate::behaviour::storage::read_timeline(tx)? else {
+    let Some(view) = read_timeline(tx)? else {
         bail!("this pack has no timeline");
     };
     Ok(view.timeline)
@@ -197,10 +206,10 @@ pub fn remove_stage(tx: &Transaction<'_>, id: &str) -> Result<bool> {
     Ok(true)
 }
 
-pub(super) fn transition_categories(
+pub fn transition_categories(
     conn: &Connection,
     id: &str,
-) -> Result<Vec<crate::behaviour::schema::TransitionCategory>> {
+) -> Result<Vec<TransitionCategory>> {
     let mut statement = conn.prepare(
         "SELECT category FROM behaviour_transition_category WHERE transition_id = ?
          ORDER BY position",
@@ -209,6 +218,6 @@ pub(super) fn transition_categories(
         .query_map(params![id], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     rows.iter()
-        .map(|value| crate::behaviour::storage::from_text(value))
+        .map(|value| from_text(value))
         .collect()
 }

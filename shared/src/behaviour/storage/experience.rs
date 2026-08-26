@@ -1,4 +1,9 @@
-use super::*;
+use anyhow::Result;
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+
+use super::stage::{read_stages, write_stages};
+use super::transition::{read_transitions, write_transitions};
+use crate::behaviour::schema::{Experience, Timeline};
 
 // ── The experience section ───────────────────────────────────────────────────
 
@@ -75,7 +80,7 @@ pub fn set_experience_label(tx: &Transaction<'_>, label: Option<&str>) -> Result
     Ok(())
 }
 
-pub(in crate::behaviour) fn read_experience(conn: &Connection) -> Result<Option<Experience>> {
+pub fn read_experience(conn: &Connection) -> Result<Option<Experience>> {
     let row: Option<(Option<String>, bool)> = conn
         .query_row(
             "SELECT label, enabled FROM behaviour_experience WHERE singleton = 1",
@@ -103,7 +108,7 @@ pub(in crate::behaviour) fn read_experience(conn: &Connection) -> Result<Option<
     }))
 }
 
-pub(in crate::behaviour) fn write_experience(
+pub fn write_experience(
     tx: &Transaction<'_>,
     experience: Option<&Experience>,
 ) -> Result<()> {

@@ -1,6 +1,10 @@
-use super::*;
+use anyhow::Result;
+use rusqlite::{Connection, Transaction, params};
 
-pub(in crate::behaviour) fn read_transitions(conn: &Connection) -> Result<Vec<Transition>> {
+use super::common::{from_text, retain, text_array, to_text};
+use crate::behaviour::schema::Transition;
+
+pub fn read_transitions(conn: &Connection) -> Result<Vec<Transition>> {
     let mut statement = conn.prepare(
         "SELECT id, from_stage, to_stage, duration_seconds, easing
          FROM behaviour_transition ORDER BY position",
@@ -41,7 +45,7 @@ pub(in crate::behaviour) fn read_transitions(conn: &Connection) -> Result<Vec<Tr
         .collect()
 }
 
-pub(in crate::behaviour) fn write_transitions(
+pub fn write_transitions(
     tx: &Transaction<'_>,
     transitions: &[Transition],
 ) -> Result<()> {

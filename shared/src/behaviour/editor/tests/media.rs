@@ -1,4 +1,12 @@
-use super::*;
+use super::{pack, popups_of, stage_ids, timeline_pack, tx_on};
+use crate::behaviour::editor::media::edit_popup_entries;
+use crate::behaviour::editor::{
+    MediaSlots, audio_attributes, media_slots, popup_attributes, remove_stage, set_audio_volume,
+    set_experience_enabled, set_media_slot, set_popup_caption, set_popup_scale, set_popup_weight,
+    set_stage_audio_random, slot_value,
+};
+use crate::behaviour::schema::{AudioMedia, Behaviour, Content, MediaSlot};
+use crate::behaviour::storage::{self, read_one_stage};
 
 #[test]
 fn a_file_with_no_opinion_has_no_entry() {
@@ -152,8 +160,6 @@ fn the_pack_media_slots_round_trip() {
 }
 
 // ── Slots ────────────────────────────────────────────────────────────────────
-
-use crate::behaviour::MediaSlot;
 
 #[test]
 fn a_pack_slot_reads_back_what_was_written() {

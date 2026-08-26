@@ -220,8 +220,17 @@ pub fn effective_config(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::behaviour::schema::{ContentGroup, TextItem};
+    use std::collections::HashMap;
+
+    use indexmap::IndexMap;
+
+    use super::{
+        CONTENT_GROUPS_ENTRY_KEY, CONTENT_GROUP_KEY_PREFIX, MediaLookup, effective_config,
+        effective_options, no_media,
+    };
+    use crate::behaviour::schema::{Behaviour, ContentGroup, TextItem};
+    use crate::encode::FileType;
+    use crate::mode::{Metadata, ModeEntry, ModeOption, OptionType, OptionValue, StoredValue};
 
     fn empty_mode_schema() -> Metadata {
         Metadata {
@@ -657,8 +666,9 @@ mod tests {
 
 #[cfg(test)]
 mod shipped_mode_tests {
-    use super::*;
+    use super::{effective_options, no_media};
     use crate::behaviour::schema::{Behaviour, Experience, Movement, Stage, Timeline};
+    use crate::mode::OptionValue;
 
     /// End-to-end over the real shipped bundle: the `show_when` gating has to survive `lw mode
     /// build`'s JSONC parse and the CBOR round-trip, not just be written in `config.jsonc`. Reads

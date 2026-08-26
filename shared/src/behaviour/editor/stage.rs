@@ -1,4 +1,15 @@
-use super::*;
+use anyhow::{Result, bail};
+use rusqlite::{OptionalExtension, Transaction, params};
+
+use super::common::{add_tag, remove_tag, set_column};
+use crate::behaviour::schema::{
+    EndStrategy, EventCountCondition, EventKind, EventSchedule, Mitosis, Movement, StageEnd,
+    StageEntry, StagePrompt,
+};
+use crate::behaviour::storage::{
+    read_one_stage, write_owned_stage_tag, write_stage_end, write_stage_entry, write_stage_events,
+    write_stage_mitosis, write_stage_movement, write_stage_prompt, write_stage_tags,
+};
 
 // ── Stages ───────────────────────────────────────────────────────────────────
 
@@ -164,7 +175,7 @@ pub fn set_stage_entry_popup_burst(
 fn edit_stage_entry(
     tx: &Transaction<'_>,
     id: &str,
-    change: impl FnOnce(&mut crate::behaviour::schema::StageEntry),
+    change: impl FnOnce(&mut StageEntry),
 ) -> Result<bool> {
     let Some(stage) = read_one_stage(tx, id)? else {
         bail!("{NO_STAGE}");
@@ -206,7 +217,7 @@ pub fn set_stage_prompt_popup_burst(
 fn edit_stage_prompt(
     tx: &Transaction<'_>,
     id: &str,
-    change: impl FnOnce(&mut crate::behaviour::schema::StagePrompt),
+    change: impl FnOnce(&mut StagePrompt),
 ) -> Result<bool> {
     let Some(stage) = read_one_stage(tx, id)? else {
         bail!("{NO_STAGE}");

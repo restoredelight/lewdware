@@ -1,6 +1,14 @@
-use super::*;
+use anyhow::{Result, bail};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-pub(in crate::behaviour) fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
+use super::common::{from_text, integer_array, retain, to_text};
+use super::tags::tag_id;
+use crate::behaviour::schema::{
+    ContentSelection, EventCountCondition, EventSchedule, Events, Interval, Mitosis, Movement,
+    Stage, StageEnd, StageEntry, StagePrompt,
+};
+
+pub fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
     read_stages_where(conn, "", &[])
 }
 
@@ -10,7 +18,7 @@ pub(in crate::behaviour) fn read_stages(conn: &Connection) -> Result<Vec<Stage>>
 /// keystroke in a stage's label compares against it — so this narrows the query rather than
 /// filtering [`read_stages`]' result, which would read every stage and its seven child tables to
 /// answer a question about one.
-pub(in crate::behaviour) fn read_one_stage(conn: &Connection, id: &str) -> Result<Option<Stage>> {
+pub fn read_one_stage(conn: &Connection, id: &str) -> Result<Option<Stage>> {
     Ok(read_stages_where(conn, "WHERE id = ?", &[&id])?.pop())
 }
 
@@ -55,7 +63,7 @@ fn read_stages_where(
         .collect()
 }
 
-pub(in crate::behaviour) fn read_stage_entry(
+pub fn read_stage_entry(
     conn: &Connection,
     stage: &str,
 ) -> Result<Option<StageEntry>> {
@@ -66,7 +74,7 @@ pub(in crate::behaviour) fn read_stage_entry(
     ).optional()?)
 }
 
-pub(in crate::behaviour) fn read_stage_prompt(
+pub fn read_stage_prompt(
     conn: &Connection,
     stage: &str,
 ) -> Result<StagePrompt> {
@@ -99,7 +107,7 @@ fn read_owned_stage_tag(conn: &Connection, stage: &str, excluded: bool) -> Resul
 }
 
 /// One side of a stage's selection: the tags it includes by, or the tags it excludes by.
-pub(in crate::behaviour) fn read_stage_tags(
+pub fn read_stage_tags(
     conn: &Connection,
     stage: &str,
     excluded: bool,
@@ -122,7 +130,7 @@ pub(in crate::behaviour) fn read_stage_tags(
 /// *neither* side, and a per-side pass would delete the other side's rows on its way through. The
 /// shared key is also what enforces that a tag is not on both sides — an `INSERT` moving a tag
 /// across takes the same row with it rather than making a second one.
-pub(in crate::behaviour) fn write_stage_tags(
+pub fn write_stage_tags(
     tx: &Transaction<'_>,
     stage: &str,
     include: &[String],
@@ -161,7 +169,7 @@ pub(in crate::behaviour) fn write_stage_tags(
 /// rather than resurrecting the association. That is the invariant the schema comment states, kept
 /// here rather than validated — an owned tag outside the selection is not a document a writer can
 /// produce, and refusing it would turn a stale editor's harmless patch into a failed save.
-pub(in crate::behaviour) fn write_owned_stage_tag(
+pub fn write_owned_stage_tag(
     tx: &Transaction<'_>,
     stage: &str,
     excluded: bool,
@@ -184,7 +192,7 @@ pub(in crate::behaviour) fn write_owned_stage_tag(
     Ok(())
 }
 
-pub(in crate::behaviour) fn read_stage_end(
+pub fn read_stage_end(
     conn: &Connection,
     stage: &str,
 ) -> Result<Option<StageEnd>> {
@@ -221,7 +229,7 @@ pub(in crate::behaviour) fn read_stage_end(
     .transpose()
 }
 
-pub(in crate::behaviour) fn read_stage_movement(
+pub fn read_stage_movement(
     conn: &Connection,
     stage: &str,
 ) -> Result<Option<Movement>> {
@@ -239,7 +247,7 @@ pub(in crate::behaviour) fn read_stage_movement(
         .optional()?)
 }
 
-pub(in crate::behaviour) fn read_stage_mitosis(
+pub fn read_stage_mitosis(
     conn: &Connection,
     stage: &str,
 ) -> Result<Option<Mitosis>> {
@@ -269,7 +277,7 @@ struct EventRow {
     max_concurrent: Option<u32>,
 }
 
-pub(in crate::behaviour) fn read_stage_events(conn: &Connection, stage: &str) -> Result<Events> {
+pub fn read_stage_events(conn: &Connection, stage: &str) -> Result<Events> {
     let mut statement = conn.prepare(
         "SELECT kind, interval_kind, seconds, minimum_seconds, maximum_seconds,
                 initial_delay_seconds, max_concurrent
@@ -318,7 +326,7 @@ pub(in crate::behaviour) fn read_stage_events(conn: &Connection, stage: &str) ->
     Ok(events)
 }
 
-pub(in crate::behaviour) fn write_stages(tx: &Transaction<'_>, stages: &[Stage]) -> Result<()> {
+pub fn write_stages(tx: &Transaction<'_>, stages: &[Stage]) -> Result<()> {
     retain(
         tx,
         "behaviour_stage",
@@ -335,7 +343,7 @@ pub(in crate::behaviour) fn write_stages(tx: &Transaction<'_>, stages: &[Stage])
 ///
 /// The body of [`write_stages`]' loop, separated so the editor can write a single stage without
 /// rewriting the timeline around it — which is the whole point of editing one stage at a time.
-pub(in crate::behaviour) fn write_one_stage(
+pub fn write_one_stage(
     tx: &Transaction<'_>,
     position: i64,
     stage: &Stage,
@@ -385,7 +393,7 @@ pub(in crate::behaviour) fn write_one_stage(
     Ok(())
 }
 
-pub(in crate::behaviour) fn write_stage_entry(
+pub fn write_stage_entry(
     tx: &Transaction<'_>,
     stage: &str,
     entry: Option<&StageEntry>,
@@ -414,7 +422,7 @@ pub(in crate::behaviour) fn write_stage_entry(
     Ok(())
 }
 
-pub(in crate::behaviour) fn write_stage_prompt(
+pub fn write_stage_prompt(
     tx: &Transaction<'_>,
     stage: &str,
     prompt: &StagePrompt,
@@ -444,7 +452,7 @@ pub(in crate::behaviour) fn write_stage_prompt(
     Ok(())
 }
 
-pub(in crate::behaviour) fn write_stage_end(
+pub fn write_stage_end(
     tx: &Transaction<'_>,
     stage: &str,
     end: Option<&StageEnd>,
@@ -485,7 +493,7 @@ pub(in crate::behaviour) fn write_stage_end(
     Ok(())
 }
 
-pub(in crate::behaviour) fn write_stage_movement(
+pub fn write_stage_movement(
     tx: &Transaction<'_>,
     stage: &str,
     movement: Option<&Movement>,
@@ -507,7 +515,7 @@ pub(in crate::behaviour) fn write_stage_movement(
     Ok(())
 }
 
-pub(in crate::behaviour) fn write_stage_mitosis(
+pub fn write_stage_mitosis(
     tx: &Transaction<'_>,
     stage: &str,
     mitosis: Option<&Mitosis>,
@@ -527,7 +535,7 @@ pub(in crate::behaviour) fn write_stage_mitosis(
     Ok(())
 }
 
-pub(in crate::behaviour) fn write_stage_events(
+pub fn write_stage_events(
     tx: &Transaction<'_>,
     stage: &str,
     events: &Events,

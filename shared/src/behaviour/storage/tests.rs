@@ -1,8 +1,7 @@
-use super::*;
-use crate::behaviour::{
-    ContentGroup, CountScope, Easing, EndStrategy, EventKind, MonitorPreference, TextItem,
-    TransitionCategory, WebLink,
-};
+use rusqlite::Connection;
+
+use super::write;
+use crate::behaviour::schema::{Behaviour, ContentSelection, Events, Stage};
 
 /// A migrated pack database with a few media files, so the slot and per-item foreign keys
 /// have something real to point at.

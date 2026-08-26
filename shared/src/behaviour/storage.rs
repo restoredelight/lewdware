@@ -17,21 +17,10 @@
 //! moving out of the blob was meant to remove. So each table is reconciled: rows that are gone are
 //! deleted, rows that are new are inserted, and rows that already match are left alone.
 
-use std::{collections::BTreeMap, rc::Rc};
-
 use anyhow::{Result, bail};
-use rusqlite::{
-    Connection, OptionalExtension, Transaction, params, types::Value, vtab::array::Array,
-};
-use serde::{Serialize, de::DeserializeOwned};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::behaviour::SpawnRegion;
-
-use super::schema::{
-    AudioMedia, Behaviour, Content, ContentGroup, ContentSelection, EventCountCondition,
-    EventSchedule, Events, Experience, Interval, Mitosis, Movement, PopupMedia, Stage, StageEnd,
-    StageEntry, StagePrompt, TextItem, Timeline, Transition, WebLink,
-};
+use super::schema::{Behaviour, Content};
 
 /// The `pack_data` key the document used to live under.
 ///
@@ -108,24 +97,25 @@ mod stage;
 mod tags;
 mod transition;
 
-pub(super) use common::{from_text, retain, to_text};
-use common::{id_array, integer_array, retain_ids, text_array};
-pub(super) use content::{read_content_groups, read_text_pool, read_web_links};
+pub(crate) use common::{from_text, retain, to_text};
+pub(crate) use content::{read_content_groups, read_text_pool, read_web_links};
 use content::{write_content_groups, write_text_pool, write_web_links};
 pub use experience::{TimelineView, read_timeline, set_experience_enabled, set_experience_label};
 use experience::{read_experience, write_experience};
-use media::{read_audio_media, read_popup_media, write_audio_media, write_popup_media};
-pub(super) use media::{read_one_popup_media, write_one_popup_media};
-use stage::write_stages;
+pub(crate) use media::{
+    read_audio_media, read_one_popup_media, read_popup_media, write_audio_media,
+    write_one_popup_media, write_popup_media,
+};
 #[allow(unused_imports)]
-pub(super) use stage::{
+pub(crate) use stage::{
     read_one_stage, read_stage_end, read_stage_entry, read_stage_events, read_stage_mitosis,
     read_stage_movement, read_stage_prompt, read_stage_tags, read_stages, write_one_stage,
     write_owned_stage_tag, write_stage_end, write_stage_entry, write_stage_events,
     write_stage_mitosis, write_stage_movement, write_stage_prompt, write_stage_tags,
+    write_stages,
 };
-pub(super) use tags::{read_tags, tag_id, write_tags};
-pub(super) use transition::{read_transitions, write_transitions};
+pub(crate) use tags::{read_tags, tag_id, write_tags};
+pub(crate) use transition::{read_transitions, write_transitions};
 
 #[cfg(test)]
 mod tests;

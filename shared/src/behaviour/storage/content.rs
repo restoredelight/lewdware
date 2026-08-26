@@ -1,8 +1,13 @@
-use super::*;
+use anyhow::Result;
+use rusqlite::{Connection, Transaction, params};
+
+use super::common::retain;
+use super::tags::{read_tags, write_tags};
+use crate::behaviour::schema::{ContentGroup, TextItem, WebLink};
 
 // ── The content pools ────────────────────────────────────────────────────────
 
-pub(in crate::behaviour) fn read_text_pool(conn: &Connection, kind: &str) -> Result<Vec<TextItem>> {
+pub fn read_text_pool(conn: &Connection, kind: &str) -> Result<Vec<TextItem>> {
     let mut statement = conn.prepare(
         "SELECT id, text, timeout_seconds, summary FROM behaviour_text_item WHERE kind = ? \
          ORDER BY position",
@@ -24,7 +29,7 @@ pub(in crate::behaviour) fn read_text_pool(conn: &Connection, kind: &str) -> Res
         .collect()
 }
 
-pub(in crate::behaviour) fn write_text_pool(
+pub fn write_text_pool(
     tx: &Transaction<'_>,
     kind: &str,
     items: &[TextItem],
@@ -57,7 +62,7 @@ pub(in crate::behaviour) fn write_text_pool(
     Ok(())
 }
 
-pub(in crate::behaviour) fn read_web_links(conn: &Connection) -> Result<Vec<WebLink>> {
+pub fn read_web_links(conn: &Connection) -> Result<Vec<WebLink>> {
     let mut statement = conn.prepare("SELECT id, url FROM behaviour_web_link ORDER BY position")?;
     let rows: Vec<(i64, String)> = statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -78,7 +83,7 @@ pub(in crate::behaviour) fn read_web_links(conn: &Connection) -> Result<Vec<WebL
         .collect()
 }
 
-pub(in crate::behaviour) fn write_web_links(tx: &Transaction<'_>, links: &[WebLink]) -> Result<()> {
+pub fn write_web_links(tx: &Transaction<'_>, links: &[WebLink]) -> Result<()> {
     tx.execute(
         "DELETE FROM behaviour_web_link WHERE position >= ?",
         params![links.len() as i64],
@@ -107,7 +112,7 @@ pub(in crate::behaviour) fn write_web_links(tx: &Transaction<'_>, links: &[WebLi
     Ok(())
 }
 
-pub(in crate::behaviour) fn read_content_groups(conn: &Connection) -> Result<Vec<ContentGroup>> {
+pub fn read_content_groups(conn: &Connection) -> Result<Vec<ContentGroup>> {
     let mut statement = conn.prepare(
         "SELECT id, label, description, enabled_by_default
          FROM behaviour_content_group ORDER BY position",
@@ -130,7 +135,7 @@ pub(in crate::behaviour) fn read_content_groups(conn: &Connection) -> Result<Vec
         .collect()
 }
 
-pub(in crate::behaviour) fn write_content_groups(
+pub fn write_content_groups(
     tx: &Transaction<'_>,
     groups: &[ContentGroup],
 ) -> Result<()> {

@@ -887,7 +887,10 @@ pub enum ValidationSeverity {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        Behaviour, Content, ContentSelection, EndStrategy, Events, Experience, MediaSlot, Stage,
+        StageEnd, Timeline,
+    };
 
     #[test]
     fn wallpaper_and_splash_are_opt_in_with_no_mechanical_default() {

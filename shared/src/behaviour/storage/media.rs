@@ -1,4 +1,10 @@
-use super::*;
+use std::collections::BTreeMap;
+
+use anyhow::Result;
+use rusqlite::{Connection, Transaction, params};
+
+use super::common::{from_text, id_array, retain_ids, to_text};
+use crate::behaviour::schema::{AudioMedia, PopupMedia, SpawnRegion};
 
 // ── Per-item media attributes ────────────────────────────────────────────────
 //
@@ -7,7 +13,7 @@ use super::*;
 // by hand for the slots. An entry that says nothing is not stored (`PopupMedia::is_empty`), so
 // clearing the last attribute removes the row rather than leaving a row of NULLs behind.
 
-pub(in crate::behaviour) fn read_popup_media(
+pub fn read_popup_media(
     conn: &Connection,
 ) -> Result<BTreeMap<u64, PopupMedia>> {
     read_popup_media_where(conn, "", &[])
@@ -18,7 +24,7 @@ pub(in crate::behaviour) fn read_popup_media(
 /// The editor asks about one file (or a selection) far more often than about the whole pack, and
 /// answering that by reading every entry — plus a pairings query each — is the O(document) cost
 /// this module exists to stop paying.
-pub(in crate::behaviour) fn read_one_popup_media(
+pub fn read_one_popup_media(
     conn: &Connection,
     id: u64,
 ) -> Result<Option<PopupMedia>> {
@@ -128,7 +134,7 @@ fn read_popup_audio_pairs(conn: &Connection, popup: u64) -> Result<Vec<u64>> {
         .collect::<rusqlite::Result<_>>()?)
 }
 
-pub(in crate::behaviour) fn write_popup_media(
+pub fn write_popup_media(
     tx: &Transaction<'_>,
     popups: &BTreeMap<u64, PopupMedia>,
 ) -> Result<()> {
@@ -153,7 +159,7 @@ pub(in crate::behaviour) fn write_popup_media(
 ///
 /// The body of [`write_popup_media`]' loop, separated so the editor can set one file's attributes
 /// without re-upserting every other entry in the pack.
-pub(in crate::behaviour) fn write_one_popup_media(
+pub fn write_one_popup_media(
     tx: &Transaction<'_>,
     media_id: u64,
     entry: &PopupMedia,
@@ -212,7 +218,7 @@ fn write_popup_audio_pairs(tx: &Transaction<'_>, popup: u64, audio: &[u64]) -> R
     Ok(())
 }
 
-pub(in crate::behaviour) fn read_audio_media(
+pub fn read_audio_media(
     conn: &Connection,
 ) -> Result<BTreeMap<u64, AudioMedia>> {
     let mut statement =
@@ -229,7 +235,7 @@ pub(in crate::behaviour) fn read_audio_media(
         .collect::<rusqlite::Result<_>>()?)
 }
 
-pub(in crate::behaviour) fn write_audio_media(
+pub fn write_audio_media(
     tx: &Transaction<'_>,
     audio: &BTreeMap<u64, AudioMedia>,
 ) -> Result<()> {

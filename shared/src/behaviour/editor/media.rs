@@ -1,4 +1,11 @@
-use super::*;
+use anyhow::{Result, bail};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde::{Deserialize, Serialize};
+
+use crate::behaviour::schema::{
+    AudioMedia, MediaSlot, MonitorPreference, PopupMedia, SpawnRegion,
+};
+use crate::behaviour::storage::{read_one_popup_media, write_one_popup_media};
 
 // ── Per-file attributes ──────────────────────────────────────────────────────
 //
@@ -20,7 +27,7 @@ use super::*;
 pub fn popup_attributes(conn: &Connection, ids: &[u64]) -> Result<Vec<(u64, PopupMedia)>> {
     let mut found = Vec::new();
     for id in ids {
-        if let Some(entry) = crate::behaviour::storage::read_one_popup_media(conn, *id)? {
+        if let Some(entry) = read_one_popup_media(conn, *id)? {
             found.push((*id, entry));
         }
     }
@@ -51,14 +58,14 @@ pub fn audio_attributes(conn: &Connection, ids: &[u64]) -> Result<Vec<(u64, Audi
 /// field to whatever today's default happens to be" from becoming the same stored state — defaults
 /// move under the user across engine releases, and an entry that says nothing must not pin a file
 /// against the ones that were current when it was written.
-pub(super) fn edit_popup_entries(
+pub fn edit_popup_entries(
     tx: &Transaction<'_>,
     ids: &[u64],
     change: impl Fn(&mut PopupMedia),
 ) -> Result<bool> {
     let mut changed = false;
     for id in ids {
-        let before = crate::behaviour::storage::read_one_popup_media(tx, *id)?;
+        let before = read_one_popup_media(tx, *id)?;
         let mut after = before.clone().unwrap_or_default();
         change(&mut after);
         if before.as_ref() == Some(&after) || (before.is_none() && after.is_empty()) {
@@ -72,7 +79,7 @@ pub(super) fn edit_popup_entries(
             )?;
             continue;
         }
-        crate::behaviour::storage::write_one_popup_media(tx, *id, &after)?;
+        write_one_popup_media(tx, *id, &after)?;
     }
     Ok(changed)
 }

@@ -1,10 +1,15 @@
-use super::*;
+use anyhow::{Result, bail};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+
+use super::common::{add_tag, exists, remove_tag, set_column};
+use crate::behaviour::schema::ContentGroup;
+use crate::behaviour::storage::{read_content_groups, write_tags};
 
 // ── Content groups ───────────────────────────────────────────────────────────
 
 /// Every content group, in author order.
 pub fn content_groups(conn: &Connection) -> Result<Vec<ContentGroup>> {
-    crate::behaviour::storage::read_content_groups(conn)
+    read_content_groups(conn)
 }
 
 /// Adds a content group. Its `id` is the author-facing key the resolver turns into a mode option

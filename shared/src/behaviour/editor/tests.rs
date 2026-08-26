@@ -1,9 +1,13 @@
-use super::*;
-use crate::behaviour::storage;
-use crate::behaviour::{
-    Behaviour, Content, Easing, EventKind, EventSchedule, Events, Experience, Interval, Movement,
-    Timeline, TransitionCategory,
+use rusqlite::{Connection, Transaction};
+
+use super::{
+    PoolKind, WebLinkRow, add_stage, popup_attributes, remove_stage, stages, text_pool,
+    transitions,
 };
+use crate::behaviour::schema::{
+    Behaviour, ContentSelection, Events, Experience, PopupMedia, Stage, TextItem, Timeline,
+};
+use crate::behaviour::storage;
 
 /// A migrated pack database. The editor module never needs media rows of its own — the entities
 /// here are text, links and groups — but the schema's foreign keys want a real database.

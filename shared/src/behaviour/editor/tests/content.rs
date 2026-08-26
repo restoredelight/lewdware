@@ -1,4 +1,10 @@
-use super::*;
+use super::{arg_values, item, pack, texts, tx_on};
+use crate::behaviour::editor::{
+    PoolKind, add_content_group, add_text_item, add_web_link, content_groups, remove_text_item,
+    remove_web_link_arg, set_text_item_text, text_pool, web_links,
+};
+use crate::behaviour::schema::{Behaviour, Content, ContentGroup, TextItem, WebLink};
+use crate::behaviour::storage;
 
 #[test]
 fn a_pool_entry_round_trips_with_its_id() {

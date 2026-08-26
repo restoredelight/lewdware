@@ -1,4 +1,10 @@
-use super::*;
+use anyhow::Result;
+use rusqlite::{Transaction, params};
+
+use super::common::{exists, set_column};
+use super::timeline::transition_categories;
+use crate::behaviour::schema::{Easing, TransitionCategory};
+use crate::behaviour::storage::to_text;
 
 // ── Transitions ──────────────────────────────────────────────────────────────
 
@@ -92,22 +98,33 @@ pub fn set_transition_category(
 fn legacy_group_of(
     category: TransitionCategory,
 ) -> Option<(TransitionCategory, &'static [TransitionCategory])> {
-    use TransitionCategory::*;
     const INTERVALS: &[TransitionCategory] = &[
-        PopupInterval,
-        WebInterval,
-        NotificationInterval,
-        PromptInterval,
-        SoundInterval,
+        TransitionCategory::PopupInterval,
+        TransitionCategory::WebInterval,
+        TransitionCategory::NotificationInterval,
+        TransitionCategory::PromptInterval,
+        TransitionCategory::SoundInterval,
     ];
-    const MOVEMENT: &[TransitionCategory] = &[MovementMinimumSpeed, MovementMaximumSpeed];
-    const MITOSIS: &[TransitionCategory] = &[MitosisChance, MitosisCount];
+    const MOVEMENT: &[TransitionCategory] = &[
+        TransitionCategory::MovementMinimumSpeed,
+        TransitionCategory::MovementMaximumSpeed,
+    ];
+    const MITOSIS: &[TransitionCategory] = &[
+        TransitionCategory::MitosisChance,
+        TransitionCategory::MitosisCount,
+    ];
     match category {
-        PopupInterval | WebInterval | NotificationInterval | PromptInterval | SoundInterval => {
-            Some((Events, INTERVALS))
+        TransitionCategory::PopupInterval
+        | TransitionCategory::WebInterval
+        | TransitionCategory::NotificationInterval
+        | TransitionCategory::PromptInterval
+        | TransitionCategory::SoundInterval => Some((TransitionCategory::Events, INTERVALS)),
+        TransitionCategory::MovementMinimumSpeed | TransitionCategory::MovementMaximumSpeed => {
+            Some((TransitionCategory::Movement, MOVEMENT))
         }
-        MovementMinimumSpeed | MovementMaximumSpeed => Some((Movement, MOVEMENT)),
-        MitosisChance | MitosisCount => Some((Mitosis, MITOSIS)),
+        TransitionCategory::MitosisChance | TransitionCategory::MitosisCount => {
+            Some((TransitionCategory::Mitosis, MITOSIS))
+        }
         _ => None,
     }
 }
