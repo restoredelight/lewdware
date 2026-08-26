@@ -86,11 +86,7 @@ pub async fn rename_tag(
 }
 
 #[tauri::command]
-pub async fn merge_tag(
-    state: State<'_, AppState>,
-    from: String,
-    to: String,
-) -> Result<(), String> {
+pub async fn merge_tag(state: State<'_, AppState>, from: String, to: String) -> Result<(), String> {
     state
         .with_pack(async |pack| pack.merge_tag(from, to).await)
         .await

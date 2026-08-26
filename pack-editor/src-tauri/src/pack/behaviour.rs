@@ -8,9 +8,9 @@ use super::media::delete_unreferenced_scenery;
 use super::*;
 
 use crate::history;
-use shared::behaviour::editor as behaviour_editor;
 use anyhow::{bail, Result};
 use rusqlite::{params, OptionalExtension};
+use shared::behaviour::editor as behaviour_editor;
 use shared::{
     behaviour::{storage as behaviour_storage, Behaviour, MediaSlot},
     tags,

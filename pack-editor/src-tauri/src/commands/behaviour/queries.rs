@@ -87,8 +87,10 @@ pub async fn get_popup_attributes(
 ) -> Result<Vec<(u64, PopupMedia)>, String> {
     state
         .with_pack(async |pack| {
-            pack.behaviour_query(move |conn: &rusqlite::Connection| editor::popup_attributes(conn, &ids))
-                .await
+            pack.behaviour_query(move |conn: &rusqlite::Connection| {
+                editor::popup_attributes(conn, &ids)
+            })
+            .await
         })
         .await
 }
@@ -100,12 +102,13 @@ pub async fn get_audio_attributes(
 ) -> Result<Vec<(u64, AudioMedia)>, String> {
     state
         .with_pack(async |pack| {
-            pack.behaviour_query(move |conn: &rusqlite::Connection| editor::audio_attributes(conn, &ids))
-                .await
+            pack.behaviour_query(move |conn: &rusqlite::Connection| {
+                editor::audio_attributes(conn, &ids)
+            })
+            .await
         })
         .await
 }
-
 
 #[tauri::command]
 pub async fn get_text_pool(

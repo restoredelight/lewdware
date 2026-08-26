@@ -327,21 +327,21 @@ impl MediaPack {
         reject_managed_tag(&to)?;
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
-                history::record_with_media_refs(&mut conn, "Rename tag", 0, |tx| {
-                    let media_ids = tag_media_ids(tx, &from)?;
-                    let target_exists: bool = tx.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM tags WHERE name = ?)",
-                        params![to],
-                        |row| row.get(0),
-                    )?;
-                    if target_exists {
-                        bail!("A tag named \"{to}\" already exists. Merge the tags instead.");
-                    }
-                    tx.execute("UPDATE tags SET name = ? WHERE name = ?", params![to, from])?;
-                    Ok(((), media_ids))
-                })
+            history::record_with_media_refs(&mut conn, "Rename tag", 0, |tx| {
+                let media_ids = tag_media_ids(tx, &from)?;
+                let target_exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tags WHERE name = ?)",
+                    params![to],
+                    |row| row.get(0),
+                )?;
+                if target_exists {
+                    bail!("A tag named \"{to}\" already exists. Merge the tags instead.");
+                }
+                tx.execute("UPDATE tags SET name = ? WHERE name = ?", params![to, from])?;
+                Ok(((), media_ids))
             })
-            .await?;
+        })
+        .await?;
         self.mark_unsaved().await
     }
 
@@ -356,39 +356,39 @@ impl MediaPack {
         reject_managed_tag(&to)?;
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
-                history::record_with_media_refs(&mut conn, "Merge tags", 0, |tx| {
-                    let media_ids = tag_media_ids(tx, &from)?;
-                    tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![to])?;
-                    let source: Option<u64> = tx
-                        .query_row("SELECT id FROM tags WHERE name = ?", params![from], |row| {
-                            row.get(0)
-                        })
-                        .optional()?;
-                    let Some(source) = source else {
-                        return Ok(((), media_ids));
-                    };
-                    let target: u64 =
-                        tx.query_row("SELECT id FROM tags WHERE name = ?", params![to], |row| {
-                            row.get(0)
-                        })?;
-                    for (table, key) in TAG_JOIN_TABLES {
-                        tx.execute(
-                            &format!("UPDATE OR IGNORE {table} SET tag_id = ?1 WHERE tag_id = ?2"),
-                            params![target, source],
-                        )?;
-                        let _ = key;
-                    }
-                    // Whatever the re-point skipped as a duplicate, plus the tag itself. Dropping
-                    // the row would cascade the survivors away, so it goes last.
+            history::record_with_media_refs(&mut conn, "Merge tags", 0, |tx| {
+                let media_ids = tag_media_ids(tx, &from)?;
+                tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![to])?;
+                let source: Option<u64> = tx
+                    .query_row("SELECT id FROM tags WHERE name = ?", params![from], |row| {
+                        row.get(0)
+                    })
+                    .optional()?;
+                let Some(source) = source else {
+                    return Ok(((), media_ids));
+                };
+                let target: u64 =
+                    tx.query_row("SELECT id FROM tags WHERE name = ?", params![to], |row| {
+                        row.get(0)
+                    })?;
+                for (table, key) in TAG_JOIN_TABLES {
                     tx.execute(
-                        "UPDATE OR IGNORE media_tags SET tag_id = ?1 WHERE tag_id = ?2",
+                        &format!("UPDATE OR IGNORE {table} SET tag_id = ?1 WHERE tag_id = ?2"),
                         params![target, source],
                     )?;
-                    tx.execute("DELETE FROM tags WHERE id = ?", params![source])?;
-                    Ok(((), media_ids))
-                })
+                    let _ = key;
+                }
+                // Whatever the re-point skipped as a duplicate, plus the tag itself. Dropping
+                // the row would cascade the survivors away, so it goes last.
+                tx.execute(
+                    "UPDATE OR IGNORE media_tags SET tag_id = ?1 WHERE tag_id = ?2",
+                    params![target, source],
+                )?;
+                tx.execute("DELETE FROM tags WHERE id = ?", params![source])?;
+                Ok(((), media_ids))
             })
-            .await?;
+        })
+        .await?;
         self.mark_unsaved().await
     }
 
@@ -400,13 +400,13 @@ impl MediaPack {
     pub async fn delete_tag(&self, tag: String) -> Result<()> {
         let _handle = self.saving.read().await;
         self.db_execute(move |mut conn| {
-                history::record_with_media_refs(&mut conn, "Delete tag", 0, |tx| {
-                    let media_ids = tag_media_ids(tx, &tag)?;
-                    tx.execute("DELETE FROM tags WHERE name = ?", params![tag])?;
-                    Ok(((), media_ids))
-                })
+            history::record_with_media_refs(&mut conn, "Delete tag", 0, |tx| {
+                let media_ids = tag_media_ids(tx, &tag)?;
+                tx.execute("DELETE FROM tags WHERE name = ?", params![tag])?;
+                Ok(((), media_ids))
             })
-            .await?;
+        })
+        .await?;
         self.mark_unsaved().await
     }
 

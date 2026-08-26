@@ -52,7 +52,10 @@ mod tests {
     #[test]
     fn escaping_leaves_the_namespace_and_leaves_ordinary_tags_alone() {
         assert!(!is_managed(&escape_managed_prefix(NON_POPUP_TAG)));
-        assert_eq!(escape_managed_prefix("__lewdware-non-popup"), "___lewdware-non-popup");
+        assert_eq!(
+            escape_managed_prefix("__lewdware-non-popup"),
+            "___lewdware-non-popup"
+        );
         assert_eq!(escape_managed_prefix("wallpaper"), "wallpaper");
     }
 }

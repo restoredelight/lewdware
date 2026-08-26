@@ -19,7 +19,9 @@
 
 use rusqlite::Transaction;
 use shared::behaviour::editor;
-use shared::behaviour::{EndStrategy, EventCountCondition, EventKind, EventSchedule, Mitosis, Movement};
+use shared::behaviour::{
+    EndStrategy, EventCountCondition, EventKind, EventSchedule, Mitosis, Movement,
+};
 use tauri::State;
 
 use super::setter;
@@ -125,7 +127,6 @@ pub async fn remove_stage(
         })
         .await
 }
-
 
 // ── The stage's own fields ───────────────────────────────────────────────────
 
@@ -455,10 +456,7 @@ setter!(
 ///
 /// Named so the tests can build the same action the command does — what they exercise is the phase
 /// ordering, and a hand-written pair of tag actions would exercise nothing.
-pub(crate) fn membership_tag_actions(
-    media: u64,
-    plan: &editor::MembershipPlan,
-) -> Vec<TagAction> {
+pub(crate) fn membership_tag_actions(media: u64, plan: &editor::MembershipPlan) -> Vec<TagAction> {
     plan.apply
         .iter()
         .map(|tag| TagAction::Apply {

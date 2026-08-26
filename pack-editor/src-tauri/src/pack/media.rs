@@ -1,18 +1,16 @@
 //! Importing media into the pack, removing it, undo/redo over those edits, and the per-file
 //! attributes (title, source URL, popup role, behaviour media slots).
 
-use super::behaviour::{
-    conn_write_behaviour_if_changed, fill_media_slot_tx, slot_label,
-};
+use super::behaviour::{conn_write_behaviour_if_changed, fill_media_slot_tx, slot_label};
 use super::labels::apply_tag;
 use super::*;
 
 use std::{io, path::Path};
 
 use crate::history;
-use shared::behaviour::editor as behaviour_editor;
 use anyhow::{anyhow, bail, Result};
 use rusqlite::{named_params, params, OptionalExtension, TransactionBehavior};
+use shared::behaviour::editor as behaviour_editor;
 use shared::{
     behaviour::MediaSlot,
     encode::{EncodedFile, FileInfo, FileInfoParts},
@@ -238,25 +236,25 @@ impl MediaPack {
             format!("Remove {} media items", ids.len())
         };
         self.db_execute(move |mut conn| {
-                if ids.is_empty() {
-                    return Ok(());
+            if ids.is_empty() {
+                return Ok(());
+            }
+            history::record_media_visibility(&mut conn, &label, &ids, true)?;
+            // Deleting a file has to take any slot pointing at it with it, or the slot is
+            // left pointing at media the pack no longer has. Deletion is the only thing that
+            // can do this now that slots hold ids -- a rename leaves them alone.
+            conn_write_behaviour_if_changed(&mut conn, &label, |behaviour| {
+                // Every id, not the first match: `any` would stop early and leave the other
+                // slots pointing at files this same call deleted.
+                let mut changed = false;
+                for id in &ids {
+                    changed |= behaviour.clear_media_reference(*id);
                 }
-                history::record_media_visibility(&mut conn, &label, &ids, true)?;
-                // Deleting a file has to take any slot pointing at it with it, or the slot is
-                // left pointing at media the pack no longer has. Deletion is the only thing that
-                // can do this now that slots hold ids -- a rename leaves them alone.
-                conn_write_behaviour_if_changed(&mut conn, &label, |behaviour| {
-                    // Every id, not the first match: `any` would stop early and leave the other
-                    // slots pointing at files this same call deleted.
-                    let mut changed = false;
-                    for id in &ids {
-                        changed |= behaviour.clear_media_reference(*id);
-                    }
-                    changed
-                })
-                .map(|_| ())
+                changed
             })
-            .await?;
+            .map(|_| ())
+        })
+        .await?;
         self.mark_unsaved().await
     }
 

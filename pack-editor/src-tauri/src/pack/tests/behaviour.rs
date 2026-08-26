@@ -429,10 +429,13 @@ async fn an_edit_cannot_undo_a_backend_change_it_never_saw() {
         .unwrap();
 
     // The author was typing a caption throughout, and the debounce fires now.
-    pack.behaviour_edit(BehaviourAction::new("Edit caption", |tx: &Transaction<'_>| {
-        behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("typed"))?;
-        Ok(true)
-    }))
+    pack.behaviour_edit(BehaviourAction::new(
+        "Edit caption",
+        |tx: &Transaction<'_>| {
+            behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("typed"))?;
+            Ok(true)
+        },
+    ))
     .await
     .unwrap();
 
@@ -454,27 +457,32 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
 
     let id = std::sync::Arc::new(std::sync::Mutex::new(0i64));
     let created = id.clone();
-    pack.behaviour_edit(BehaviourAction::new("Add caption", move |tx: &Transaction<'_>| {
-        *created.lock().unwrap() =
-            behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("typed"))?;
-        Ok(true)
-    }))
+    pack.behaviour_edit(BehaviourAction::new(
+        "Add caption",
+        move |tx: &Transaction<'_>| {
+            *created.lock().unwrap() =
+                behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("typed"))?;
+            Ok(true)
+        },
+    ))
     .await
     .unwrap();
     let id = *id.lock().unwrap();
 
-    pack.behaviour_edit(BehaviourAction::new("Edit caption", move |tx: &Transaction<'_>| {
-        behaviour_editor::set_text_item_text(tx, id, "edited")
-    }))
+    pack.behaviour_edit(BehaviourAction::new(
+        "Edit caption",
+        move |tx: &Transaction<'_>| behaviour_editor::set_text_item_text(tx, id, "edited"),
+    ))
     .await
     .unwrap();
     let after_real_edit = pack.history_status().await.unwrap();
     assert_eq!(after_real_edit.undo_label.as_deref(), Some("Edit caption"));
 
     // The same value again: an `oninput` that changed nothing.
-    pack.behaviour_edit(BehaviourAction::new("Edit caption", move |tx: &Transaction<'_>| {
-        behaviour_editor::set_text_item_text(tx, id, "edited")
-    }))
+    pack.behaviour_edit(BehaviourAction::new(
+        "Edit caption",
+        move |tx: &Transaction<'_>| behaviour_editor::set_text_item_text(tx, id, "edited"),
+    ))
     .await
     .unwrap();
     let after_noop = pack.history_status().await.unwrap();
@@ -551,7 +559,12 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
     // document write, and the rows the plan names are written after -- and a mistake in any of the
     // three shows up here rather than in a planner test, which never runs the phases at all.
     let edit = pack
-        .behaviour_edit(membership_action("Remove from leave", media, "leave", false))
+        .behaviour_edit(membership_action(
+            "Remove from leave",
+            media,
+            "leave",
+            false,
+        ))
         .await
         .unwrap();
 
@@ -612,7 +625,9 @@ fn membership_action(
         move |tx: &Transaction<'_>| {
             let plan = behaviour_editor::plan_stage_membership(tx, media, &stage, member)?;
             Ok(Prepared {
-                tag_actions: crate::commands::behaviour::stage::membership_tag_actions(media, &plan),
+                tag_actions: crate::commands::behaviour::stage::membership_tag_actions(
+                    media, &plan,
+                ),
                 value: plan,
                 retiring: Vec::new(),
             })
@@ -699,7 +714,10 @@ async fn restricting_a_stage_twice_is_the_same_as_restricting_it_once() {
     .unwrap();
 
     let first = pack.behaviour_edit(restrict_action("peak")).await.unwrap();
-    assert_eq!(first.media_tags, vec![(media, "stage-peak".to_string(), true)]);
+    assert_eq!(
+        first.media_tags,
+        vec![(media, "stage-peak".to_string(), true)]
+    );
     let second = pack.behaviour_edit(restrict_action("peak")).await.unwrap();
 
     assert!(
@@ -746,11 +764,14 @@ async fn a_rejected_edit_leaves_the_document_untouched() {
 
     let id = std::sync::Arc::new(std::sync::Mutex::new(0i64));
     let created = id.clone();
-    pack.behaviour_edit(BehaviourAction::new("Add caption", move |tx: &Transaction<'_>| {
-        *created.lock().unwrap() =
-            behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("kept"))?;
-        Ok(true)
-    }))
+    pack.behaviour_edit(BehaviourAction::new(
+        "Add caption",
+        move |tx: &Transaction<'_>| {
+            *created.lock().unwrap() =
+                behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("kept"))?;
+            Ok(true)
+        },
+    ))
     .await
     .unwrap();
     let good = *id.lock().unwrap();
@@ -899,18 +920,16 @@ async fn retiring_media_another_slot_still_uses_keeps_it() {
         .unwrap();
 
     let edit = pack
-        .behaviour_edit(
-            BehaviourAction::planned(
-                "Remove stage",
-                move |_tx: &Transaction<'_>| {
-                    Ok(Prepared {
-                        retiring: vec![shared],
-                        ..Prepared::default()
-                    })
-                },
-                |_tx: &Transaction<'_>, ()| Ok(false),
-            ),
-        )
+        .behaviour_edit(BehaviourAction::planned(
+            "Remove stage",
+            move |_tx: &Transaction<'_>| {
+                Ok(Prepared {
+                    retiring: vec![shared],
+                    ..Prepared::default()
+                })
+            },
+            |_tx: &Transaction<'_>, ()| Ok(false),
+        ))
         .await
         .unwrap();
 
@@ -1044,9 +1063,7 @@ async fn editing_one_stage_records_a_changeset_the_size_of_that_stage() {
 
     pack.behaviour_edit(BehaviourAction::new(
         "Rename stage",
-        |tx: &Transaction<'_>| {
-            behaviour_editor::set_stage_label(tx, "stage-7", "Renamed")
-        },
+        |tx: &Transaction<'_>| behaviour_editor::set_stage_label(tx, "stage-7", "Renamed"),
     ))
     .await
     .unwrap();
@@ -1441,10 +1458,7 @@ async fn renaming_a_stage_renames_both_of_the_tags_it_owns() {
         .unwrap()
         .timeline
         .stages;
-    assert_eq!(
-        stages[0].content.owned_tag.as_deref(),
-        Some("stage-climax")
-    );
+    assert_eq!(stages[0].content.owned_tag.as_deref(), Some("stage-climax"));
     assert_eq!(
         stages[0].content.owned_exclude_tag.as_deref(),
         Some("not-stage-climax")

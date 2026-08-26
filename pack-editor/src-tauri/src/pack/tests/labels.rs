@@ -419,7 +419,12 @@ async fn tag_rows_count_media_and_both_halves_of_the_document() {
 async fn tag_rows_show_the_new_name_after_a_rename() {
     let tmp = tempdir().unwrap();
     let data_dir = tempdir().unwrap();
-    let pack = new_test_pack(&tmp.path().join("rowrename.lwpack"), data_dir.path(), "Rows").await;
+    let pack = new_test_pack(
+        &tmp.path().join("rowrename.lwpack"),
+        data_dir.path(),
+        "Rows",
+    )
+    .await;
     let media = insert_staged_audio(&pack, b"tagged").await;
     pack.create_and_add_tag(media, "old".to_string())
         .await

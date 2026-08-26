@@ -54,9 +54,8 @@ async fn experience_timeline_with_no_levels_stays_inert_forever() {
                 "nil"
             );
             assert_eq!(
-                harness.eval_string(
-                    "table.concat((require('timeline').tags() or {}).any or {}, '|')"
-                ),
+                harness
+                    .eval_string("table.concat((require('timeline').tags() or {}).any or {}, '|')"),
                 ""
             );
             assert_eq!(
@@ -108,9 +107,8 @@ async fn experience_timeline_advances_on_active_time_and_applies_level_values() 
                 4.0
             );
             assert_eq!(
-                harness.eval_string(
-                    "table.concat((require('timeline').tags() or {}).any or {}, '|')"
-                ),
+                harness
+                    .eval_string("table.concat((require('timeline').tags() or {}).any or {}, '|')"),
                 "kinky"
             );
         })

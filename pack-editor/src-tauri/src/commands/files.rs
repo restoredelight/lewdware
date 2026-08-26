@@ -13,10 +13,7 @@ pub async fn get_files(state: State<'_, AppState>) -> Result<Vec<MediaFile>, Str
 }
 
 #[tauri::command]
-pub async fn remove_files(
-    state: State<'_, AppState>,
-    ids: Vec<u64>,
-) -> Result<(), String> {
+pub async fn remove_files(state: State<'_, AppState>, ids: Vec<u64>) -> Result<(), String> {
     state
         .with_pack_or((), async |pack| pack.remove_files(ids).await)
         .await

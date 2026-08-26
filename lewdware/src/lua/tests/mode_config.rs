@@ -123,13 +123,8 @@ fn resolve_mode_config_hides_content_groups_from_custom_modes() {
             path: "some/mode.lwmode".into(),
         },
     ] {
-        let (config, content, _experience) = resolve_mode_config(
-            &metadata,
-            &mode,
-            &HashMap::new(),
-            pack_id,
-            &media_manager,
-        );
+        let (config, content, _experience) =
+            resolve_mode_config(&metadata, &mode, &HashMap::new(), pack_id, &media_manager);
 
         assert_eq!(config.get(&key), None);
         assert_eq!(content, lua_view(&Content::default(), |_| None));

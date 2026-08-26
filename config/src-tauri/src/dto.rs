@@ -7,7 +7,7 @@ use shared::{
     monitor::MonitorRegion,
     schedule::{QuietHours, Rule, ScheduleConfig, SessionLength, SessionOverrides, Trigger},
     theme::{AppearanceChoice, ThemeChoice},
-    user_config::{AppConfig, AudioDeviceChoice, Permissions, Key, Mode, Volume, WallpaperConfig},
+    user_config::{AppConfig, AudioDeviceChoice, Key, Mode, Permissions, Volume, WallpaperConfig},
 };
 use uuid::Uuid;
 

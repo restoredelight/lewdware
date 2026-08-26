@@ -105,7 +105,6 @@ fn the_two_axes_fall_back_independently() {
     assert_eq!(resolved.appearance, AppearanceChoice::Dark);
 }
 
-
 /// Every name the config app can write must round-trip, or a user's saved choice silently
 /// becomes someone else's.
 #[test]

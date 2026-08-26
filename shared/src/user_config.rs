@@ -27,6 +27,7 @@ pub struct AppConfig {
     pub disabled_monitors: Vec<String>,
     #[serde(default)]
     pub monitor_regions: HashMap<String, crate::monitor::MonitorRegion>,
+    #[serde(alias = "capabilities")]
     pub permissions: Permissions,
     #[serde(default)]
     pub wallpaper: WallpaperConfig,
@@ -298,8 +299,8 @@ mod tests {
     }
 
     /// Opening a browser is the one capability whose effect leaves the desktop session, so it
-    /// starts denied. Only new installs are affected: `capabilities` has no `#[serde(default)]`,
-    /// so an existing `config.json` always carries the user's own answer.
+    /// starts denied. Only new installs are affected: `permissions` has no `#[serde(default)]`,
+    /// and its `capabilities` alias preserves the answer in an existing `config.json`.
     #[test]
     fn open_link_is_the_only_capability_denied_by_default() {
         let config = AppConfig::default();

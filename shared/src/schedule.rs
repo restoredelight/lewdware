@@ -8,10 +8,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use chrono::{
-    DateTime, Datelike, TimeDelta, Local, LocalResult, NaiveDate, TimeZone,
-    Timelike,
-};
+use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDate, TimeDelta, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -322,8 +319,7 @@ pub fn current_period(rule: &Rule, now: DateTime<Local>) -> Option<Period> {
             last: anchor,
         },
         Frequency::PerWeek { .. } => {
-            let monday =
-                anchor - TimeDelta::days(anchor.weekday().num_days_from_monday() as i64);
+            let monday = anchor - TimeDelta::days(anchor.weekday().num_days_from_monday() as i64);
             Period {
                 first: monday,
                 last: monday + TimeDelta::days(6),
@@ -470,11 +466,7 @@ pub fn period_opportunity(
         .into_iter()
         .map(|o| o.interval)
         .collect();
-    let blockers = quiet_intervals(
-        quiet_hours,
-        period.first,
-        period.last + TimeDelta::days(1),
-    );
+    let blockers = quiet_intervals(quiet_hours, period.first, period.last + TimeDelta::days(1));
     subtract(&intervals, &blockers)
 }
 
@@ -648,7 +640,7 @@ impl Counts {
 }
 
 /// Aims to predict P(the user is at the machine) based on previous observations. We record data at
-/// four resolutions (see [Resolution]). 
+/// four resolutions (see [Resolution]).
 ///
 /// Reading an estimate walks the resolutions coarse to fine, each one shrinking toward what the resolution
 /// above concluded:
@@ -1277,10 +1269,7 @@ mod tests {
     ) {
         for hour in 0..(days * 24) {
             let at = start + TimeDelta::hours(hour);
-            profile.observe(
-                Interval::new(at, at + TimeDelta::hours(1)),
-                present(at),
-            );
+            profile.observe(Interval::new(at, at + TimeDelta::hours(1)), present(at));
         }
     }
 
@@ -1458,12 +1447,7 @@ mod tests {
         let mut profile = PresenceProfile::default();
         observe_days(&mut profile, monday(), 30, away_at_three);
         let after_absence = profile.p(dt(2026, 7, 13, 3, 30));
-        observe_days(
-            &mut profile,
-            monday() + TimeDelta::days(30),
-            30,
-            |_| true,
-        );
+        observe_days(&mut profile, monday() + TimeDelta::days(30), 30, |_| true);
         assert!(profile.p(dt(2026, 7, 13, 3, 30)) > after_absence);
     }
 
@@ -1505,9 +1489,8 @@ mod tests {
 
     #[test]
     fn a_truncated_profile_degrades_to_the_prior_instead_of_panicking() {
-        let profile: PresenceProfile =
-            serde_json::from_str(r#"{"hour_of_week":{"buckets":[]}}"#)
-                .expect("a short resolution is not a parse error");
+        let profile: PresenceProfile = serde_json::from_str(r#"{"hour_of_week":{"buckets":[]}}"#)
+            .expect("a short resolution is not a parse error");
         assert_eq!(profile.p(dt(2026, 7, 13, 10, 0)), PRIOR_MEAN);
     }
 
