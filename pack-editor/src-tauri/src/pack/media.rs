@@ -1,7 +1,7 @@
 //! Importing media into the pack, removing it, undo/redo over those edits, and the per-file
 //! attributes (title, source URL, popup role, behaviour media slots).
 
-use super::behaviour::{conn_write_behaviour_if_changed, fill_media_slot_tx, slot_label};
+use super::behaviour::{fill_media_slot_tx, slot_label};
 use super::labels::apply_tag;
 use super::*;
 
@@ -239,20 +239,12 @@ impl MediaPack {
             if ids.is_empty() {
                 return Ok(());
             }
-            history::record_media_visibility(&mut conn, &label, &ids, true)?;
-            // Deleting a file has to take any slot pointing at it with it, or the slot is
-            // left pointing at media the pack no longer has. Deletion is the only thing that
-            // can do this now that slots hold ids -- a rename leaves them alone.
-            conn_write_behaviour_if_changed(&mut conn, &label, |behaviour| {
-                // Every id, not the first match: `any` would stop early and leave the other
-                // slots pointing at files this same call deleted.
-                let mut changed = false;
-                for id in &ids {
-                    changed |= behaviour.clear_media_reference(*id);
-                }
-                changed
+            // The slot updates ride on the visibility history entry, so removing a wallpaper is
+            // one undo step and restores both the file and the reference together.
+            history::record_media_visibility(&mut conn, &label, &ids, true, |tx| {
+                behaviour_editor::clear_media_slots(tx, &ids)?;
+                Ok(())
             })
-            .map(|_| ())
         })
         .await?;
         self.mark_unsaved().await
@@ -291,17 +283,10 @@ impl MediaPack {
     }
 
     pub(super) async fn reload_metadata_from_db(&self) -> Result<()> {
-        let bytes = self
-            .db_execute(move |conn| {
-                conn.query_row(
-                    "SELECT metadata FROM pack_metadata WHERE singleton = 1",
-                    [],
-                    |row| row.get::<_, Vec<u8>>(0),
-                )
-                .map_err(Into::into)
-            })
+        let metadata = self
+            .db_execute(move |conn| Metadata::read(&conn).map_err(Into::into))
             .await?;
-        *self.metadata.write().unwrap() = Metadata::from_buf(&bytes)?;
+        *self.metadata.write().unwrap() = metadata;
         Ok(())
     }
 
@@ -589,7 +574,7 @@ impl MediaPack {
         new_to_pack: bool,
     ) -> Result<Option<u64>> {
         let _handle = self.saving.read().await;
-        let result = self
+        let (result, changed) = self
             .db_execute(move |mut conn| {
                 history::record_with_media_refs(&mut conn, slot_label(&slot), 0, |tx| {
                     let deleted = fill_media_slot_tx(tx, &slot, media_id, new_to_pack)?;
@@ -600,7 +585,9 @@ impl MediaPack {
                 })
             })
             .await?;
-        self.mark_unsaved().await?;
+        if changed {
+            self.mark_unsaved().await?;
+        }
         Ok(result)
     }
 
@@ -645,7 +632,7 @@ impl MediaPack {
     /// Returns the id of the file it deleted, if any.
     pub async fn clear_media_slot(&self, slot: MediaSlot) -> Result<Option<u64>> {
         let _handle = self.saving.read().await;
-        let result = self
+        let (result, changed) = self
             .db_execute(move |mut conn| {
                 history::record_with_media_refs(&mut conn, slot_label(&slot), 0, |tx| {
                     let Some(media) = behaviour_editor::slot_value(tx, &slot)? else {
@@ -660,7 +647,9 @@ impl MediaPack {
                 })
             })
             .await?;
-        self.mark_unsaved().await?;
+        if changed {
+            self.mark_unsaved().await?;
+        }
         Ok(result)
     }
 

@@ -3,19 +3,18 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use rusqlite::{Connection, Transaction, params};
 
-use super::common::{from_text, id_array, retain_ids, to_text};
-use crate::behaviour::schema::{AudioMedia, PopupMedia, SpawnRegion};
+use super::common::id_array;
+use crate::behaviour::schema::{AudioMedia, MonitorPreference, PopupMedia, SpawnRegion};
 
 // ── Per-item media attributes ────────────────────────────────────────────────
 //
 // Keyed by media id rather than by position, which is what lets an edit address one file's
-// attributes directly and lets `ON DELETE CASCADE` do the work `clear_media_reference` has to do
-// by hand for the slots. An entry that says nothing is not stored (`PopupMedia::is_empty`), so
+// attributes directly and lets `ON DELETE CASCADE` remove them with their media row. Slots are
+// cleared separately when the editor soft-deletes media. An entry that says nothing is not stored
+// (`PopupMedia::is_empty`), so
 // clearing the last attribute removes the row rather than leaving a row of NULLs behind.
 
-pub fn read_popup_media(
-    conn: &Connection,
-) -> Result<BTreeMap<u64, PopupMedia>> {
+pub fn read_popup_media(conn: &Connection) -> Result<BTreeMap<u64, PopupMedia>> {
     read_popup_media_where(conn, "", &[])
 }
 
@@ -24,10 +23,7 @@ pub fn read_popup_media(
 /// The editor asks about one file (or a selection) far more often than about the whole pack, and
 /// answering that by reading every entry — plus a pairings query each — is the O(document) cost
 /// this module exists to stop paying.
-pub fn read_one_popup_media(
-    conn: &Connection,
-    id: u64,
-) -> Result<Option<PopupMedia>> {
+pub fn read_one_popup_media(conn: &Connection, id: u64) -> Result<Option<PopupMedia>> {
     Ok(read_popup_media_where(conn, "WHERE media_id = ?", &[&id])?.remove(&id))
 }
 
@@ -46,7 +42,7 @@ fn read_popup_media_where(
         Option<f64>,
         Option<f64>,
         (Option<f64>, Option<f64>, Option<f64>, Option<f64>),
-        Option<String>,
+        Option<MonitorPreference>,
         Option<String>,
         Option<bool>,
         Option<bool>,
@@ -86,7 +82,7 @@ fn read_popup_media_where(
                         weight,
                         scale,
                         region: read_region(region),
-                        monitor: monitor.as_deref().map(from_text).transpose()?,
+                        monitor,
                         caption,
                         video_loop,
                         video_audio,
@@ -134,18 +130,7 @@ fn read_popup_audio_pairs(conn: &Connection, popup: u64) -> Result<Vec<u64>> {
         .collect::<rusqlite::Result<_>>()?)
 }
 
-pub fn write_popup_media(
-    tx: &Transaction<'_>,
-    popups: &BTreeMap<u64, PopupMedia>,
-) -> Result<()> {
-    let kept: Vec<u64> = popups
-        .iter()
-        .filter(|(_, entry)| !entry.is_empty())
-        .map(|(media_id, _)| *media_id)
-        .collect();
-    // Deleting the parent takes its pairings with it, so the pair table needs no retain of its own
-    // for entries that went away entirely.
-    retain_ids(tx, "behaviour_popup_media", "media_id", &kept)?;
+pub fn write_popup_media(tx: &Transaction<'_>, popups: &BTreeMap<u64, PopupMedia>) -> Result<()> {
     for (media_id, entry) in popups {
         if entry.is_empty() {
             continue;
@@ -165,7 +150,7 @@ pub fn write_one_popup_media(
     entry: &PopupMedia,
 ) -> Result<()> {
     let region = entry.region.map(SpawnRegion::sanitized);
-    let monitor = entry.monitor.as_ref().map(to_text).transpose()?;
+    let monitor = entry.monitor.as_ref();
     tx.execute(
         "INSERT INTO behaviour_popup_media
              (media_id, weight, scale, region_x, region_y, region_width, region_height,
@@ -218,9 +203,7 @@ fn write_popup_audio_pairs(tx: &Transaction<'_>, popup: u64, audio: &[u64]) -> R
     Ok(())
 }
 
-pub fn read_audio_media(
-    conn: &Connection,
-) -> Result<BTreeMap<u64, AudioMedia>> {
+pub fn read_audio_media(conn: &Connection) -> Result<BTreeMap<u64, AudioMedia>> {
     let mut statement =
         conn.prepare("SELECT media_id, volume FROM behaviour_audio_media ORDER BY media_id")?;
     Ok(statement
@@ -235,16 +218,7 @@ pub fn read_audio_media(
         .collect::<rusqlite::Result<_>>()?)
 }
 
-pub fn write_audio_media(
-    tx: &Transaction<'_>,
-    audio: &BTreeMap<u64, AudioMedia>,
-) -> Result<()> {
-    let kept: Vec<u64> = audio
-        .iter()
-        .filter(|(_, entry)| !entry.is_empty())
-        .map(|(media_id, _)| *media_id)
-        .collect();
-    retain_ids(tx, "behaviour_audio_media", "media_id", &kept)?;
+pub fn write_audio_media(tx: &Transaction<'_>, audio: &BTreeMap<u64, AudioMedia>) -> Result<()> {
     for (media_id, entry) in audio {
         if entry.is_empty() {
             continue;

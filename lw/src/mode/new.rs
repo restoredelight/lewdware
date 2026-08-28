@@ -5,30 +5,9 @@ use std::{
 };
 
 use anyhow::Result;
-use include_dir::{Dir, DirEntry, include_dir};
 use uuid::Uuid;
 
 use super::types::write_type_stubs;
-
-static DEFAULT_SRC: Dir = include_dir!("$CARGO_MANIFEST_DIR/../default-modes/sandbox/src");
-static DEFAULT_LIB: Dir = include_dir!("$CARGO_MANIFEST_DIR/../default-modes/shared/lib");
-const DEFAULT_CONFIG_JSONC: &str = include_str!("../../../default-modes/sandbox/config.jsonc");
-
-fn copy_dir(dir: &Dir, dest: &PathBuf) -> Result<()> {
-    for entry in dir.entries() {
-        match entry {
-            DirEntry::File(file) => {
-                let path = dest.join(file.path());
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(path, file.contents())?;
-            }
-            DirEntry::Dir(subdir) => copy_dir(subdir, dest)?,
-        }
-    }
-    Ok(())
-}
 
 fn prompt(label: &str, default: Option<&str>) -> Result<String> {
     match default {
@@ -52,7 +31,7 @@ fn json_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-pub fn create_new_mode(from_default: bool) -> Result<()> {
+pub fn create_new_mode() -> Result<()> {
     let name = prompt("Name", None)?;
     if name.is_empty() {
         anyhow::bail!("Name is required");
@@ -73,42 +52,13 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
     // `lewdware.storage` scopes this mode's data by.
     let id = Uuid::new_v4();
 
-    if from_default {
-        let escaped_name = json_escape(&name);
-        let escaped_author = json_escape(&author);
-        let escaped_description = json_escape(&description);
-        let escaped_version = json_escape(&version);
+    let escaped_name = json_escape(&name);
+    let escaped_author = json_escape(&author);
+    let escaped_description = json_escape(&description);
+    let escaped_version = json_escape(&version);
 
-        let config_content = DEFAULT_CONFIG_JSONC
-            .replace(
-                "\"$schema\": \"../../docs/src/data/config.schema.json\",\n  // \"$schema\": \"https://lewdware.github.com/config.schema.json\",",
-                "\"$schema\": \"https://lewdware.net/reference/config.schema.json\",",
-            )
-            .replacen("cd5a36d6-ca1c-4381-97b3-0d2f00d1d401", &id.to_string(), 1)
-            .replace("\"Sandbox\"", &format!("\"{}\"", escaped_name))
-            .replace(
-                "Configure popup timing, media, interactions, audio, and other behaviour yourself.",
-                &escaped_description,
-            )
-            .replace("\"restoredelight\"", &format!("\"{}\"", escaped_author))
-            .replace("\"0.1.0\"", &format!("\"{}\"", escaped_version))
-            .replace("[\"../shared\", \"src\"]", "[\"src\"]");
-
-        fs::write(base_path.join("config.jsonc"), config_content)?;
-        // The sandbox project's `main.lua` requires its shared `lib/*.lua` modules from a
-        // sibling `../shared` directory (see `default-modes/`'s own layout); a standalone copy
-        // has no sibling project, so both land together under this new mode's own `src/`,
-        // becoming a fully self-contained copy (matching this flag's pre-split behaviour).
-        copy_dir(&DEFAULT_SRC, &base_path.join("src"))?;
-        copy_dir(&DEFAULT_LIB, &base_path.join("src/lib"))?;
-    } else {
-        let escaped_name = json_escape(&name);
-        let escaped_author = json_escape(&author);
-        let escaped_description = json_escape(&description);
-        let escaped_version = json_escape(&version);
-
-        let config_content = format!(
-            r#"{{
+    let config_content = format!(
+        r#"{{
   "$schema": "https://lewdware.net/reference/config.schema.json",
   "id": "{id}",
   "name": "{escaped_name}",
@@ -119,10 +69,10 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
   "entrypoint": "src/main.lua",
   "options": {{}}
 }}"#
-        );
-        fs::write(base_path.join("config.jsonc"), config_content)?;
+    );
+    fs::write(base_path.join("config.jsonc"), config_content)?;
 
-        let lua_content = r#"lewdware.every(1000, function()
+    let lua_content = r#"lewdware.every(1000, function()
     local media = lewdware.media.random({ type = {"image", "video"} });
     if media then
         if media.type == "image" then
@@ -133,8 +83,7 @@ pub fn create_new_mode(from_default: bool) -> Result<()> {
     end
 end)
 "#;
-        fs::write(base_path.join("src/main.lua"), lua_content)?;
-    }
+    fs::write(base_path.join("src/main.lua"), lua_content)?;
 
     write_type_stubs(&base_path)?;
 

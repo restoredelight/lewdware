@@ -10,13 +10,11 @@ use std::{
 use indexmap::IndexMap;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, OptionalExtension};
 use shared::{
     behaviour::effective_options,
     db::migrate,
-    encode::FileType,
     mode::{self, ModeEntry, OptionValue, Permission, StoredValue},
-    pack::{read_pack_metadata, RecommendedMode},
+    pack::{Header, Metadata as PackMetadata, RecommendedMode, HEADER_SIZE},
     user_config::{self, AppConfig, Mode},
 };
 use tempfile::NamedTempFile;
@@ -29,7 +27,9 @@ use crate::state::{AppState, LoadedPack, PackModeEntry, UploadedModeEntry};
 
 pub fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
     let mut file = std::fs::File::open(&path)?;
-    let (header, metadata) = read_pack_metadata(&mut file)?;
+    let mut header_bytes = [0; HEADER_SIZE];
+    file.read_exact(&mut header_bytes)?;
+    let header = Header::from_buf(header_bytes)?;
 
     let mut db_file = NamedTempFile::new()?;
     file.seek(SeekFrom::Start(header.index_offset))?;
@@ -40,6 +40,7 @@ pub fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
     let pool = Pool::builder().build(manager)?;
     let mut conn = pool.get()?;
     migrate(&mut conn)?;
+    let metadata = PackMetadata::read(&conn)?;
 
     let mut stmt = conn.prepare("SELECT id, file FROM modes")?;
     let rows: Vec<(u64, Vec<u8>)> = stmt
@@ -54,25 +55,11 @@ pub fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
     }
 
     // Assembled from the `behaviour_*` tables and what is left of the blob -- see
-    // `shared::behaviour::storage`. A pack whose document cannot be read at all still opens; it
+    // `shared::behaviour::Behaviour`. A pack whose document cannot be read at all still opens; it
     // simply offers no behaviour-derived options, which is what an empty document means anyway.
-    let behaviour = shared::behaviour::storage::read(&conn)
+    let behaviour = shared::behaviour::Behaviour::read(&conn)
         .inspect_err(|error| tracing::warn!("Could not read the pack's behaviour: {error}"))
         .unwrap_or_default();
-
-    let mut referenced_media = HashMap::new();
-    let mut media_stmt = conn.prepare("SELECT file_type FROM media WHERE id = ?")?;
-    for id in behaviour.referenced_media_ids() {
-        let file_type: Option<String> = media_stmt
-            .query_row(params![id], |row| row.get(0))
-            .optional()?;
-        // An unrecognized `file_type` reads the same as a missing file: whatever it is, the
-        // wallpaper/splash features can't use it.
-        if let Some(file_type) = file_type.as_deref().and_then(parse_file_type) {
-            referenced_media.insert(id, file_type);
-        }
-    }
-    drop(media_stmt);
 
     Ok(LoadedPack {
         _db_file: db_file,
@@ -80,18 +67,8 @@ pub fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
         metadata: metadata.clone(),
         modes,
         behaviour,
-        referenced_media,
         recommended_mode: metadata.recommended_mode,
     })
-}
-
-pub fn parse_file_type(value: &str) -> Option<FileType> {
-    match value {
-        "image" => Some(FileType::Image),
-        "video" => Some(FileType::Video),
-        "audio" => Some(FileType::Audio),
-        _ => None,
-    }
 }
 
 pub fn load_mode_file(path: PathBuf) -> anyhow::Result<UploadedModeEntry> {
@@ -243,15 +220,14 @@ pub fn effective_entries_for_mode(mode: &Mode, state: &AppState) -> Option<Effec
     let needs_permissions = mode_meta.needs_permissions.clone();
 
     if matches!(mode, Mode::Sandbox | Mode::Experience { .. }) {
-        let (behaviour, referenced_media) = state
+        let behaviour = state
             .pack
             .lock()
             .unwrap()
             .as_ref()
-            .map(|p| (p.behaviour.clone(), p.referenced_media.clone()))
+            .map(|p| p.behaviour.clone())
             .unwrap_or_default();
-        let media = |id: u64| referenced_media.get(&id).copied();
-        let schema = effective_options(&mode_meta, &behaviour, &media);
+        let schema = effective_options(&mode_meta, &behaviour);
         Some(EffectiveEntries {
             entries: schema.entries,
             needs_permissions,

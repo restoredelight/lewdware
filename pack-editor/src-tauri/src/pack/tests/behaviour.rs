@@ -27,6 +27,80 @@ fn caption(text: &str) -> TextItem {
     }
 }
 
+/// Conversion creates a new draft rather than editing an existing one. Its initial document,
+/// metadata, media, and delayed scenery references therefore establish the baseline from which
+/// later author edits are undoable; none of the converted pieces should themselves appear in
+/// history.
+#[tokio::test]
+async fn conversion_initialization_does_not_occupy_undo_history() {
+    let tmp = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let pack = new_test_pack(
+        &tmp.path().join("converted.lwpack"),
+        data_dir.path(),
+        "Initial",
+    )
+    .await;
+
+    let mut converted = Behaviour::default();
+    converted
+        .content
+        .captions
+        .push(caption("converted caption"));
+    let metadata = Metadata {
+        name: "Converted pack".to_string(),
+        description: Some("Converted description".to_string()),
+        ..Metadata::default()
+    };
+    pack.initialize_from_conversion(converted.clone(), metadata.clone())
+        .await
+        .unwrap();
+
+    let bytes = b"converted scenery";
+    let staged = pack.dir.join("media").join("converted.opus");
+    tokio::fs::write(&staged, bytes).await.unwrap();
+    let media = pack
+        .add_file_to_import(
+            EncodedFile {
+                info: FileInfo::Audio { duration: 1.0 },
+                thumbnail: None,
+                path: staged,
+                artists: vec![],
+                source_url: None,
+            },
+            Path::new("converted.png"),
+            blake3::hash(bytes),
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    pack.fill_empty_slots_from_conversion(vec![MediaSlot::Wallpaper], media.file().id)
+        .await
+        .unwrap();
+
+    let status = pack.history_status().await.unwrap();
+    assert!(!status.can_undo);
+    assert!(!status.can_redo);
+    assert_eq!(pack.metadata(), metadata);
+    let initialized = read_pack_behaviour(&pack).await;
+    assert_eq!(initialized.content.captions, converted.content.captions);
+    assert_eq!(initialized.content.wallpaper, Some(media.file().id));
+
+    let mut edited = initialized.clone();
+    edited.content.captions.push(caption("author edit"));
+    pack.replace_behaviour(edited, "Edit captions".to_string())
+        .await
+        .unwrap();
+    assert!(pack.history_status().await.unwrap().can_undo);
+
+    pack.undo().await.unwrap();
+    let restored = read_pack_behaviour(&pack).await;
+    assert_eq!(restored.content.captions, converted.content.captions);
+    assert_eq!(restored.content.wallpaper, Some(media.file().id));
+    assert_eq!(pack.get_files().await.unwrap()[0].id, media.file().id);
+}
+
 #[tokio::test]
 async fn importing_into_a_slot_undoes_and_redoes_as_one_step() {
     let tmp = tempdir().unwrap();
@@ -433,7 +507,7 @@ async fn an_edit_cannot_undo_a_backend_change_it_never_saw() {
         "Edit caption",
         |tx: &Transaction<'_>| {
             behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("typed"))?;
-            Ok(true)
+            Ok(())
         },
     ))
     .await
@@ -462,7 +536,7 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
         move |tx: &Transaction<'_>| {
             *created.lock().unwrap() =
                 behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("typed"))?;
-            Ok(true)
+            Ok(())
         },
     ))
     .await
@@ -666,7 +740,7 @@ fn restrict_action(stage: &str) -> BehaviourAction<Option<String>> {
                 Some(std::slice::from_ref(&tag)),
                 Some(&tag),
             ),
-            None => Ok(false),
+            None => Ok(()),
         },
     )
 }
@@ -769,7 +843,7 @@ async fn a_rejected_edit_leaves_the_document_untouched() {
         move |tx: &Transaction<'_>| {
             *created.lock().unwrap() =
                 behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("kept"))?;
-            Ok(true)
+            Ok(())
         },
     ))
     .await
@@ -928,7 +1002,7 @@ async fn retiring_media_another_slot_still_uses_keeps_it() {
                     ..Prepared::default()
                 })
             },
-            |_tx: &Transaction<'_>, ()| Ok(false),
+            |_tx: &Transaction<'_>, ()| Ok(()),
         ))
         .await
         .unwrap();

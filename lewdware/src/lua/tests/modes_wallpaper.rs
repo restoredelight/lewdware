@@ -95,10 +95,9 @@ async fn wallpaper_not_applied_when_no_slot_is_set() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn wallpaper_skips_silently_when_the_reference_is_not_an_image() {
-    // `lewdware.wallpaper.set` takes an image. A slot pointing at a video takes rule 5's skip
-    // branch rather than erroring -- the same outcome `pack_has_wallpaper` reports up front,
-    // so the toggle is never offered for this pack in the first place.
+async fn wallpaper_reports_when_the_reference_is_not_an_image() {
+    // Slot presence controls whether the option is offered. If malformed pack data puts a video
+    // in that slot, fail where the engine tries to use it and can give a useful error.
     LocalSet::new()
         .run_until(async {
             let content = Content {
@@ -120,9 +119,12 @@ async fn wallpaper_skips_silently_when_the_reference_is_not_an_image() {
                 all_capabilities(),
                 Volume::default(),
             );
-            harness.run_entrypoint("main.lua").unwrap();
-
-            assert_eq!(harness.eval_number("SET_COUNT"), 0.0);
+            let err = harness.run_entrypoint("main.lua").unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("wallpaper media 'clip.webm' is not an image (got video)"),
+                "unexpected error: {err}"
+            );
         })
         .await;
 }

@@ -1,4 +1,6 @@
 use super::{edges, stage_ids, timeline_pack, tx_on};
+use crate::behaviour::Behaviour;
+use crate::behaviour::db::read_one_stage;
 use crate::behaviour::editor::timeline::DEFAULT_STAGE_SECONDS;
 use crate::behaviour::editor::{
     add_stage, duplicate_stage, move_stage, remove_stage, set_stage_content_tags, set_stage_event,
@@ -6,7 +8,6 @@ use crate::behaviour::editor::{
     stages, timeline, transitions,
 };
 use crate::behaviour::schema::{Easing, EventKind, EventSchedule, Interval, TransitionCategory};
-use crate::behaviour::storage::{self, read_one_stage};
 
 #[test]
 fn only_the_final_stage_is_unbounded() {
@@ -31,9 +32,9 @@ fn a_transition_between_still_adjacent_stages_keeps_its_settings() {
         .find(|t| t.from_stage == "a" && t.to_stage == "b")
         .unwrap();
     tx_on(&mut conn, |tx| {
-        assert!(set_transition_duration(tx, &ab.id, 12.5).unwrap());
-        assert!(set_transition_easing(tx, &ab.id, Easing::EaseInOut).unwrap());
-        assert!(set_transition_affected(tx, &ab.id, &[TransitionCategory::PopupInterval]).unwrap());
+        set_transition_duration(tx, &ab.id, 12.5).unwrap();
+        set_transition_easing(tx, &ab.id, Easing::EaseInOut).unwrap();
+        set_transition_affected(tx, &ab.id, &[TransitionCategory::PopupInterval]).unwrap();
         // Moving "c" to the end leaves a→b adjacent, so its transition must survive intact.
         move_stage(tx, "c", 2).unwrap();
     });
@@ -53,7 +54,7 @@ fn a_transition_between_still_adjacent_stages_keeps_its_settings() {
 fn moving_a_stage_rebuilds_only_the_edges_that_changed() {
     let mut conn = timeline_pack(&["a", "b", "c"]);
     tx_on(&mut conn, |tx| {
-        assert!(move_stage(tx, "c", 1).unwrap());
+        move_stage(tx, "c", 1).unwrap();
     });
     assert_eq!(stage_ids(&conn), ["a", "c", "b"]);
     assert_eq!(
@@ -66,11 +67,12 @@ fn moving_a_stage_rebuilds_only_the_edges_that_changed() {
 }
 
 #[test]
-fn moving_a_stage_to_where_it_already_is_reports_no_change() {
+fn moving_a_stage_to_where_it_already_is_leaves_the_order_alone() {
     let mut conn = timeline_pack(&["a", "b"]);
     tx_on(&mut conn, |tx| {
-        assert!(!move_stage(tx, "a", 0).unwrap());
+        move_stage(tx, "a", 0).unwrap();
     });
+    assert_eq!(stage_ids(&conn), ["a", "b"]);
 }
 
 #[test]
@@ -88,10 +90,7 @@ fn a_duplicate_carries_the_settings_but_not_the_tag_ownership() {
             }),
         )
         .unwrap();
-        assert!(
-            set_stage_content_tags(tx, "a", Some(&["stage-a".to_string()]), Some("stage-a"))
-                .unwrap()
-        );
+        set_stage_content_tags(tx, "a", Some(&["stage-a".to_string()]), Some("stage-a")).unwrap();
     });
 
     let mut copy_id = String::new();
@@ -127,7 +126,7 @@ fn adding_a_stage_lands_after_the_one_it_was_added_from() {
 fn removing_a_stage_closes_the_timeline_over_it() {
     let mut conn = timeline_pack(&["a", "b", "c"]);
     tx_on(&mut conn, |tx| {
-        assert!(remove_stage(tx, "b").unwrap());
+        remove_stage(tx, "b").unwrap();
     });
     assert_eq!(stage_ids(&conn), ["a", "c"]);
     assert_eq!(edges(&conn), [("a".to_string(), "c".to_string())]);
@@ -148,7 +147,7 @@ fn editing_one_stage_leaves_its_neighbours_alone() {
     let mut conn = timeline_pack(&["a", "b", "c"]);
     let before = stages(&conn).unwrap();
     tx_on(&mut conn, |tx| {
-        assert!(set_stage_label(tx, "b", "renamed").unwrap());
+        set_stage_label(tx, "b", "renamed").unwrap();
     });
     let after = stages(&conn).unwrap();
     assert_eq!(after[0], before[0]);
@@ -162,6 +161,6 @@ fn editing_one_stage_leaves_its_neighbours_alone() {
 fn the_editors_timeline_is_the_documents_timeline() {
     let conn = timeline_pack(&["a", "b"]);
     let view = timeline(&conn).unwrap().unwrap();
-    let document = storage::read(&conn).unwrap().experience.unwrap();
+    let document = Behaviour::read(&conn).unwrap().experience.unwrap();
     assert_eq!(view.timeline, document.timeline);
 }

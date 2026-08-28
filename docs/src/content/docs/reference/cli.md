@@ -10,15 +10,11 @@ Lewdware; type `lw` in a terminal to verify it's available.
 ## `lw mode new`
 
 ```bash frame="none"
-lw mode new [--from-default]
+lw mode new
 ```
 
 Interactively creates a new mode. You'll be prompted for a name, author and
 version, then a new directory (named after the mode) is created.
-
-#### Options
-
-- `--from-default` - scaffold the mode from Lewdware's built-in default mode.
 
 ## `lw mode build`
 

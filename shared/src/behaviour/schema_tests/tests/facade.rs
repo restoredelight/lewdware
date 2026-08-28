@@ -2,7 +2,6 @@ use rusqlite::params;
 
 use super::{pack, store};
 use crate::behaviour::schema::{Behaviour, Experience, TextItem};
-use crate::behaviour::storage::{read, write};
 
 /// The point of the whole step: a slot is a foreign key now, so pointing one at media the pack
 /// does not have is refused by the database rather than discovered later.
@@ -17,7 +16,7 @@ fn a_slot_cannot_point_at_media_the_pack_does_not_have() {
         ..Behaviour::new()
     };
     let tx = conn.transaction().unwrap();
-    let error = write(&tx, &behaviour).unwrap_err();
+    let error = behaviour.write(&tx).unwrap_err();
     assert!(
         error.to_string().to_lowercase().contains("foreign key"),
         "unexpected error: {error}"
@@ -47,7 +46,7 @@ fn the_document_no_longer_touches_pack_data() {
         .query_row("SELECT COUNT(*) FROM pack_data", [], |row| row.get(0))
         .unwrap();
     assert_eq!(rows, 0, "the behaviour blob is gone, not merely smaller");
-    assert_eq!(read(&conn).unwrap(), behaviour);
+    assert_eq!(Behaviour::read(&conn).unwrap(), behaviour);
 }
 
 /// A pack still carrying the old blob is one the tables cannot describe, so it is refused
@@ -61,6 +60,6 @@ fn a_pack_from_before_the_content_tables_is_refused() {
     )
     .unwrap();
 
-    let error = read(&conn).unwrap_err();
+    let error = Behaviour::read(&conn).unwrap_err();
     assert!(error.to_string().contains("re-import"), "{error}");
 }

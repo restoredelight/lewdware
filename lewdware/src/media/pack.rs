@@ -9,7 +9,7 @@ use image::{ImageFormat, ImageReader};
 use rusqlite::{Connection, MAIN_DB, Row, params, params_from_iter};
 use shared::{
     db::migrate,
-    pack::{Header, Metadata, read_pack_metadata},
+    pack::{HEADER_SIZE, Header, Metadata},
 };
 use tempfile::NamedTempFile;
 use tokio::{
@@ -37,9 +37,9 @@ fn repeat_vars(count: usize) -> String {
     s
 }
 
-/// A pack, consisting of a header, some metadata and an SQLite database at the end, which
-/// contains information about all the media in the file. The database stores the offset and length
-/// of each image/video/audio file, which can be used to read it from the pack file.
+/// A pack consisting of a header, raw media, and an SQLite database at the end. The database stores
+/// the pack metadata plus the offset and length of each image/video/audio file, which can be used
+/// to read it from the pack file.
 pub struct MediaPack {
     path: PathBuf,
     db: Connection,
@@ -62,7 +62,9 @@ impl MediaPack {
         let path = path.into();
         let mut file = fs::File::open(&path)?;
 
-        let (header, metadata) = read_pack_metadata(&mut file)?;
+        let mut header_bytes = [0; HEADER_SIZE];
+        file.read_exact(&mut header_bytes)?;
+        let header = Header::from_buf(header_bytes)?;
 
         // Load the SQLite database straight into memory (no temp file: `deserialize_read_exact`
         // hands the bytes we just read directly to SQLite's own in-memory representation via
@@ -75,6 +77,7 @@ impl MediaPack {
         connection.deserialize_read_exact(MAIN_DB, db_data.as_slice(), db_data.len(), false)?;
 
         migrate(&mut connection)?;
+        let metadata = Metadata::read(&connection)?;
 
         let mut tag_map: HashMap<String, u64> = HashMap::new();
 
@@ -374,10 +377,10 @@ impl MediaPack {
     /// pack doesn't carry an entry with this name -- packs predating a given key, or not written
     /// by a tool that populates it, are expected, not an error.
     /// The pack's behaviour document, assembled from the `behaviour_*` tables and what is left of
-    /// the `pack_data` blob -- see `shared::behaviour::storage`. The engine sees one `Behaviour`
+    /// the `pack_data` blob -- see `shared::behaviour::Behaviour`. The engine sees one `Behaviour`
     /// either way; where each part is stored is that module's business.
     pub fn get_behaviour(&self) -> anyhow::Result<shared::behaviour::Behaviour> {
-        shared::behaviour::storage::read(&self.db)
+        shared::behaviour::Behaviour::read(&self.db)
     }
 
     /// The pack's full tag vocabulary, sorted for a stable order -- not a query, so (unlike

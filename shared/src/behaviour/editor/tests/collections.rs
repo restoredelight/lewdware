@@ -1,11 +1,11 @@
 use super::{item, pack, timeline_pack, tx_on};
+use crate::behaviour::db::read_one_stage;
 use crate::behaviour::editor::{
     PoolKind, add_stage_tag, add_text_item, add_text_item_tag, remove_stage_tag, remove_text_item,
     remove_text_item_tag, set_stage_content_tags, set_transition_affected, set_transition_category,
     text_pool, transitions,
 };
 use crate::behaviour::schema::{TextItem, TransitionCategory};
-use crate::behaviour::storage::read_one_stage;
 
 // ── One item of a collection ─────────────────────────────────────────────────
 
@@ -25,8 +25,8 @@ fn two_tag_removals_do_not_restore_each_other() {
             },
         )
         .unwrap();
-        assert!(remove_text_item_tag(tx, id, "a").unwrap());
-        assert!(remove_text_item_tag(tx, id, "b").unwrap());
+        remove_text_item_tag(tx, id, "a").unwrap();
+        remove_text_item_tag(tx, id, "b").unwrap();
     });
     assert_eq!(
         text_pool(&conn, PoolKind::Caption).unwrap()[0].item.tags,
@@ -34,16 +34,44 @@ fn two_tag_removals_do_not_restore_each_other() {
     );
 }
 
+/// Both are ordinary writes that happen to write nothing, not errors and not duplicates.
 #[test]
-fn adding_a_tag_that_is_already_there_reports_no_change() {
+fn adding_a_tag_twice_leaves_one_and_removing_an_absent_one_is_harmless() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
         id = add_text_item(tx, PoolKind::Caption, &item("tagged")).unwrap();
-        assert!(add_text_item_tag(tx, id, "imp").unwrap());
-        assert!(!add_text_item_tag(tx, id, "imp").unwrap());
-        assert!(!remove_text_item_tag(tx, id, "absent").unwrap());
+        add_text_item_tag(tx, id, "imp").unwrap();
+        add_text_item_tag(tx, id, "imp").unwrap();
+        remove_text_item_tag(tx, id, "absent").unwrap();
     });
+    assert_eq!(
+        text_pool(&conn, PoolKind::Caption).unwrap()[0].item.tags,
+        ["imp"]
+    );
+}
+
+#[test]
+fn readding_a_removed_tag_puts_it_last() {
+    let mut conn = pack();
+    let mut id = 0;
+    tx_on(&mut conn, |tx| {
+        id = add_text_item(
+            tx,
+            PoolKind::Caption,
+            &TextItem {
+                tags: vec!["first".to_string(), "second".to_string()],
+                ..item("tagged")
+            },
+        )
+        .unwrap();
+        remove_text_item_tag(tx, id, "first").unwrap();
+        add_text_item_tag(tx, id, "first").unwrap();
+    });
+    assert_eq!(
+        text_pool(&conn, PoolKind::Caption).unwrap()[0].item.tags,
+        ["second", "first"]
+    );
 }
 
 /// A stage that shows everything has no selection for a tag to join; switching the restriction on
@@ -62,7 +90,7 @@ fn removing_a_stages_owned_tag_removes_its_ownership() {
     let mut conn = timeline_pack(&["a", "b"]);
     tx_on(&mut conn, |tx| {
         set_stage_content_tags(tx, "a", Some(&["stage-a".to_string()]), Some("stage-a")).unwrap();
-        assert!(remove_stage_tag(tx, "a", "stage-a").unwrap());
+        remove_stage_tag(tx, "a", "stage-a").unwrap();
     });
     let stage = read_one_stage(&conn, "a").unwrap().unwrap();
     assert_eq!(stage.content.tags.as_deref(), Some(&[][..]));
@@ -77,9 +105,7 @@ fn toggling_a_category_expands_the_legacy_group_it_belonged_to() {
     let id = transitions(&conn).unwrap()[0].id.clone();
     tx_on(&mut conn, |tx| {
         set_transition_affected(tx, &id, &[TransitionCategory::Events]).unwrap();
-        assert!(
-            set_transition_category(tx, &id, TransitionCategory::PopupInterval, false).unwrap()
-        );
+        set_transition_category(tx, &id, TransitionCategory::PopupInterval, false).unwrap();
     });
     let affected = transitions(&conn).unwrap()[0].affected.clone();
     assert!(
@@ -117,7 +143,7 @@ fn a_removed_entrys_id_is_never_given_to_the_next_one() {
     tx_on(&mut conn, |tx| {
         add_text_item(tx, PoolKind::Caption, &item("first")).unwrap();
         gone = add_text_item(tx, PoolKind::Caption, &item("last")).unwrap();
-        assert!(remove_text_item(tx, gone).unwrap());
+        remove_text_item(tx, gone).unwrap();
     });
     let mut added = 0;
     tx_on(&mut conn, |tx| {

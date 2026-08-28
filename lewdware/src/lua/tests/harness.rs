@@ -65,12 +65,10 @@ pub(super) fn pack_fixture(with_image: bool) -> NamedTempFile {
         name: "test-pack".to_string(),
         ..Default::default()
     };
-    let metadata_bytes = metadata.to_buf().unwrap();
+    metadata.insert(&db).unwrap();
 
     let mut header = shared::pack::Header::new();
-    header.metadata_offset = shared::pack::HEADER_SIZE as u64;
-    header.metadata_length = metadata_bytes.len() as u64;
-    header.index_offset = header.metadata_offset + header.metadata_length;
+    header.index_offset = shared::pack::HEADER_SIZE as u64;
 
     // Two-pass, like `media/pack.rs`'s `get_video_data_opens_embedded_clip`: the row's
     // offset needs the db's own serialized length to compute, so serialize once to size it,
@@ -90,7 +88,6 @@ pub(super) fn pack_fixture(with_image: bool) -> NamedTempFile {
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(&header.to_buf().unwrap()).unwrap();
-    file.write_all(&metadata_bytes).unwrap();
     file.write_all(&db_bytes).unwrap();
     if with_image {
         file.write_all(IMAGE_BYTES).unwrap();
@@ -131,12 +128,10 @@ pub(super) fn pack_fixture_with_tagged_video(tags: &[&str]) -> NamedTempFile {
         name: "test-pack".to_string(),
         ..Default::default()
     };
-    let metadata_bytes = metadata.to_buf().unwrap();
+    metadata.insert(&db).unwrap();
 
     let mut header = shared::pack::Header::new();
-    header.metadata_offset = shared::pack::HEADER_SIZE as u64;
-    header.metadata_length = metadata_bytes.len() as u64;
-    header.index_offset = header.metadata_offset + header.metadata_length;
+    header.index_offset = shared::pack::HEADER_SIZE as u64;
 
     let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
     header.index_length = db_bytes.len() as u64;
@@ -151,7 +146,6 @@ pub(super) fn pack_fixture_with_tagged_video(tags: &[&str]) -> NamedTempFile {
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(&header.to_buf().unwrap()).unwrap();
-    file.write_all(&metadata_bytes).unwrap();
     file.write_all(&db_bytes).unwrap();
     file.write_all(VIDEO_BYTES).unwrap();
     file.flush().unwrap();
@@ -203,7 +197,7 @@ pub(super) fn pack_fixture_with_data(
 
     if let Some(behaviour) = behaviour {
         let tx = db.transaction().unwrap();
-        shared::behaviour::storage::write(&tx, behaviour).unwrap();
+        behaviour.write(&tx).unwrap();
         tx.commit().unwrap();
     }
 
@@ -211,19 +205,16 @@ pub(super) fn pack_fixture_with_data(
         name: "test-pack".to_string(),
         ..Default::default()
     };
-    let metadata_bytes = metadata.to_buf().unwrap();
+    metadata.insert(&db).unwrap();
 
     let mut header = shared::pack::Header::new();
-    header.metadata_offset = shared::pack::HEADER_SIZE as u64;
-    header.metadata_length = metadata_bytes.len() as u64;
-    header.index_offset = header.metadata_offset + header.metadata_length;
+    header.index_offset = shared::pack::HEADER_SIZE as u64;
 
     let db_bytes = db.serialize(rusqlite::MAIN_DB).unwrap();
     header.index_length = db_bytes.len() as u64;
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(&header.to_buf().unwrap()).unwrap();
-    file.write_all(&metadata_bytes).unwrap();
     file.write_all(&db_bytes).unwrap();
     file.flush().unwrap();
     file

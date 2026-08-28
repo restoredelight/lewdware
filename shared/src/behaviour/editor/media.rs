@@ -2,10 +2,8 @@ use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use crate::behaviour::schema::{
-    AudioMedia, MediaSlot, MonitorPreference, PopupMedia, SpawnRegion,
-};
-use crate::behaviour::storage::{read_one_popup_media, write_one_popup_media};
+use crate::behaviour::db::{read_one_popup_media, write_one_popup_media};
+use crate::behaviour::schema::{AudioMedia, MediaSlot, MonitorPreference, PopupMedia, SpawnRegion};
 
 // ── Per-file attributes ──────────────────────────────────────────────────────
 //
@@ -62,16 +60,12 @@ pub fn edit_popup_entries(
     tx: &Transaction<'_>,
     ids: &[u64],
     change: impl Fn(&mut PopupMedia),
-) -> Result<bool> {
-    let mut changed = false;
+) -> Result<()> {
     for id in ids {
-        let before = read_one_popup_media(tx, *id)?;
-        let mut after = before.clone().unwrap_or_default();
+        let mut after = read_one_popup_media(tx, *id)?.unwrap_or_default();
         change(&mut after);
-        if before.as_ref() == Some(&after) || (before.is_none() && after.is_empty()) {
-            continue;
-        }
-        changed = true;
+        // An entry holding nothing but defaults is the absence of an entry, so it is stored as
+        // one. The DELETE matches no row when there was nothing there to begin with.
         if after.is_empty() {
             tx.execute(
                 "DELETE FROM behaviour_popup_media WHERE media_id = ?",
@@ -81,16 +75,16 @@ pub fn edit_popup_entries(
         }
         write_one_popup_media(tx, *id, &after)?;
     }
-    Ok(changed)
+    Ok(())
 }
 
 /// How often these files are drawn relative to their neighbours.
-pub fn set_popup_weight(tx: &Transaction<'_>, ids: &[u64], weight: Option<f64>) -> Result<bool> {
+pub fn set_popup_weight(tx: &Transaction<'_>, ids: &[u64], weight: Option<f64>) -> Result<()> {
     edit_popup_entries(tx, ids, |entry| entry.weight = weight)
 }
 
 /// Multiplies the size the mode would otherwise have chosen.
-pub fn set_popup_scale(tx: &Transaction<'_>, ids: &[u64], scale: Option<f64>) -> Result<bool> {
+pub fn set_popup_scale(tx: &Transaction<'_>, ids: &[u64], scale: Option<f64>) -> Result<()> {
     edit_popup_entries(tx, ids, |entry| entry.scale = scale)
 }
 
@@ -100,7 +94,7 @@ pub fn set_popup_region(
     tx: &Transaction<'_>,
     ids: &[u64],
     region: Option<SpawnRegion>,
-) -> Result<bool> {
+) -> Result<()> {
     edit_popup_entries(tx, ids, |entry| entry.region = region)
 }
 
@@ -108,13 +102,13 @@ pub fn set_popup_monitor(
     tx: &Transaction<'_>,
     ids: &[u64],
     monitor: Option<MonitorPreference>,
-) -> Result<bool> {
+) -> Result<()> {
     edit_popup_entries(tx, ids, |entry| entry.monitor = monitor)
 }
 
 /// A caption belonging to these files, as opposed to the tag-matched pool. An empty one is the
 /// absence of a caption rather than a caption of "".
-pub fn set_popup_caption(tx: &Transaction<'_>, ids: &[u64], caption: Option<&str>) -> Result<bool> {
+pub fn set_popup_caption(tx: &Transaction<'_>, ids: &[u64], caption: Option<&str>) -> Result<()> {
     let caption = caption.filter(|text| !text.is_empty());
     edit_popup_entries(tx, ids, |entry| entry.caption = caption.map(str::to_string))
 }
@@ -123,7 +117,7 @@ pub fn set_popup_video_loop(
     tx: &Transaction<'_>,
     ids: &[u64],
     value: Option<bool>,
-) -> Result<bool> {
+) -> Result<()> {
     edit_popup_entries(tx, ids, |entry| entry.video_loop = value)
 }
 
@@ -131,7 +125,7 @@ pub fn set_popup_video_audio(
     tx: &Transaction<'_>,
     ids: &[u64],
     value: Option<bool>,
-) -> Result<bool> {
+) -> Result<()> {
     edit_popup_entries(tx, ids, |entry| entry.video_audio = value)
 }
 
@@ -140,25 +134,13 @@ pub fn set_popup_video_volume(
     tx: &Transaction<'_>,
     ids: &[u64],
     volume: Option<f64>,
-) -> Result<bool> {
+) -> Result<()> {
     edit_popup_entries(tx, ids, |entry| entry.video_volume = volume)
 }
 
 /// This track's own level, for levelling a pack assembled from mixed sources.
-pub fn set_audio_volume(tx: &Transaction<'_>, ids: &[u64], volume: Option<f64>) -> Result<bool> {
-    let mut changed = false;
+pub fn set_audio_volume(tx: &Transaction<'_>, ids: &[u64], volume: Option<f64>) -> Result<()> {
     for id in ids {
-        let before: Option<Option<f64>> = tx
-            .query_row(
-                "SELECT volume FROM behaviour_audio_media WHERE media_id = ?",
-                params![id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if before.flatten() == volume {
-            continue;
-        }
-        changed = true;
         match volume {
             None => {
                 tx.execute(
@@ -175,7 +157,7 @@ pub fn set_audio_volume(tx: &Transaction<'_>, ids: &[u64], volume: Option<f64>) 
             }
         }
     }
-    Ok(changed)
+    Ok(())
 }
 
 // ── Media slots ──────────────────────────────────────────────────────────────
@@ -272,14 +254,11 @@ pub fn slot_value(conn: &Connection, slot: &MediaSlot) -> Result<Option<u64>> {
     Ok(value.flatten())
 }
 
-/// Points `slot` at `media`, or empties it with `None`. Reports whether anything changed.
+/// Points `slot` at `media`, or empties it with `None`.
 ///
 /// Errors if the slot's stage has been removed — a slot on a stage that is gone is a stale editor,
 /// and creating the row would resurrect part of what the removal took away.
-pub fn set_media_slot(tx: &Transaction<'_>, slot: &MediaSlot, media: Option<u64>) -> Result<bool> {
-    if slot_value(tx, slot)? == media {
-        return Ok(false);
-    }
+pub fn set_media_slot(tx: &Transaction<'_>, slot: &MediaSlot, media: Option<u64>) -> Result<()> {
     let SlotColumn {
         table,
         column,
@@ -291,7 +270,7 @@ pub fn set_media_slot(tx: &Transaction<'_>, slot: &MediaSlot, media: Option<u64>
             &format!("UPDATE {table} SET {column} = ? WHERE singleton = 1"),
             params![media],
         )?;
-        return Ok(true);
+        return Ok(());
     };
     let exists: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM behaviour_stage WHERE id = ?)",
@@ -336,7 +315,7 @@ pub fn set_media_slot(tx: &Transaction<'_>, slot: &MediaSlot, media: Option<u64>
             )?;
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Whether any media slot in the pack points at `media`.
@@ -361,4 +340,43 @@ pub fn is_media_referenced(conn: &Connection, media: u64) -> Result<bool> {
         |row| row.get(0),
     )?;
     Ok(referenced)
+}
+
+/// Empties every behaviour slot that points at one of `media_ids`.
+///
+/// Media visibility is changed separately from the behaviour tables, so SQLite's foreign keys do
+/// not clear these nullable references for us. Keeping this as targeted updates means removing a
+/// file records only the slots it actually displaced in editor history.
+pub fn clear_media_slots(tx: &Transaction<'_>, media_ids: &[u64]) -> Result<()> {
+    for media_id in media_ids {
+        tx.execute(
+            "UPDATE behaviour_content SET wallpaper = NULL WHERE wallpaper = ?",
+            params![media_id],
+        )?;
+        tx.execute(
+            "UPDATE behaviour_content SET splash = NULL WHERE splash = ?",
+            params![media_id],
+        )?;
+        tx.execute(
+            "UPDATE behaviour_stage SET wallpaper = NULL WHERE wallpaper = ?",
+            params![media_id],
+        )?;
+        tx.execute(
+            "UPDATE behaviour_stage SET audio = NULL WHERE audio = ?",
+            params![media_id],
+        )?;
+        tx.execute(
+            "UPDATE behaviour_stage_entry SET splash_media = NULL WHERE splash_media = ?",
+            params![media_id],
+        )?;
+        tx.execute(
+            "UPDATE behaviour_stage_entry SET sound_media = NULL WHERE sound_media = ?",
+            params![media_id],
+        )?;
+        tx.execute(
+            "UPDATE behaviour_stage_prompt SET sound_media = NULL WHERE sound_media = ?",
+            params![media_id],
+        )?;
+    }
+    Ok(())
 }

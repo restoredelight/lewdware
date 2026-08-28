@@ -1,11 +1,11 @@
 use rusqlite::Connection;
 
 use super::{pack, stage, store};
+use crate::behaviour::editor::{set_experience_enabled, timeline as read_timeline};
 use crate::behaviour::schema::{
     Behaviour, Easing, EventSchedule, Experience, Interval, Mitosis, Movement, Timeline,
     Transition, TransitionCategory,
 };
-use crate::behaviour::storage::{read, read_timeline, set_experience_enabled};
 
 /// The three-state tag field. "No restriction" and "restricted to nothing" are different
 /// answers and an empty table cannot tell them apart on its own.
@@ -29,7 +29,12 @@ fn an_empty_tag_selection_stays_distinct_from_no_selection() {
     };
     store(&mut conn, &behaviour);
 
-    let stages = read(&conn).unwrap().experience.unwrap().timeline.stages;
+    let stages = Behaviour::read(&conn)
+        .unwrap()
+        .experience
+        .unwrap()
+        .timeline
+        .stages;
     assert_eq!(stages[0].content.tags, None);
     assert_eq!(stages[1].content.tags, Some(vec![]));
 }
@@ -62,7 +67,12 @@ fn an_empty_sub_structure_stays_distinct_from_an_absent_one() {
     };
     store(&mut conn, &behaviour);
 
-    let stages = read(&conn).unwrap().experience.unwrap().timeline.stages;
+    let stages = Behaviour::read(&conn)
+        .unwrap()
+        .experience
+        .unwrap()
+        .timeline
+        .stages;
     assert_eq!(
         stages[0].movement,
         Some(Movement {
@@ -91,10 +101,13 @@ fn a_suspended_timeline_is_distinct_from_an_unlabelled_one() {
         ..Behaviour::new()
     };
     store(&mut conn, &with_timeline);
-    assert_eq!(read(&conn).unwrap().experience, Some(Experience::default()));
+    assert_eq!(
+        Behaviour::read(&conn).unwrap().experience,
+        Some(Experience::default())
+    );
 
     store(&mut conn, &Behaviour::new());
-    assert_eq!(read(&conn).unwrap().experience, None);
+    assert_eq!(Behaviour::read(&conn).unwrap().experience, None);
 }
 
 /// The reason writes diff instead of replacing: undo is a changeset, so a wholesale rewrite
@@ -134,7 +147,12 @@ fn editing_one_stage_leaves_the_other_rows_untouched() {
     store(&mut conn, &behaviour);
 
     assert_eq!(before, rowids(&conn), "no stage row was replaced");
-    let stages = read(&conn).unwrap().experience.unwrap().timeline.stages;
+    let stages = Behaviour::read(&conn)
+        .unwrap()
+        .experience
+        .unwrap()
+        .timeline
+        .stages;
     assert_eq!(stages[1].label, "Renamed");
 }
 
@@ -209,11 +227,11 @@ fn a_switched_off_timeline_reads_as_none_but_keeps_its_stages() {
     store(&mut conn, &behaviour);
 
     let tx = conn.transaction().unwrap();
-    assert!(set_experience_enabled(&tx, false).unwrap());
+    set_experience_enabled(&tx, false).unwrap();
     tx.commit().unwrap();
 
     // What the engine, the converter and `lw` see.
-    assert_eq!(read(&conn).unwrap().experience, None);
+    assert_eq!(Behaviour::read(&conn).unwrap().experience, None);
 
     // What the editor sees.
     let view = read_timeline(&conn).unwrap().unwrap();
@@ -222,9 +240,12 @@ fn a_switched_off_timeline_reads_as_none_but_keeps_its_stages() {
     assert_eq!(view.timeline.stages.len(), 2);
 
     let tx = conn.transaction().unwrap();
-    assert!(set_experience_enabled(&tx, true).unwrap());
+    set_experience_enabled(&tx, true).unwrap();
     tx.commit().unwrap();
-    assert_eq!(read(&conn).unwrap().experience, behaviour.experience);
+    assert_eq!(
+        Behaviour::read(&conn).unwrap().experience,
+        behaviour.experience
+    );
 }
 
 /// A pack that has never had a timeline has no section to switch on or off, and reads as `None`
@@ -232,7 +253,7 @@ fn a_switched_off_timeline_reads_as_none_but_keeps_its_stages() {
 #[test]
 fn a_pack_with_no_timeline_has_no_timeline_view_at_all() {
     let conn = pack();
-    assert_eq!(read(&conn).unwrap().experience, None);
+    assert_eq!(Behaviour::read(&conn).unwrap().experience, None);
     assert_eq!(read_timeline(&conn).unwrap(), None);
 }
 
@@ -242,7 +263,7 @@ fn a_pack_with_no_timeline_has_no_timeline_view_at_all() {
 fn switching_on_a_pack_with_no_timeline_creates_the_section() {
     let mut conn = pack();
     let tx = conn.transaction().unwrap();
-    assert!(set_experience_enabled(&tx, true).unwrap());
+    set_experience_enabled(&tx, true).unwrap();
     tx.commit().unwrap();
 
     let view = read_timeline(&conn).unwrap().unwrap();
@@ -250,15 +271,18 @@ fn switching_on_a_pack_with_no_timeline_creates_the_section() {
     assert!(view.timeline.stages.is_empty());
 }
 
-/// A toggle landing on the value already stored is not an edit, and must not cost one of the
-/// hundred entries undo keeps.
+/// A toggle landing on the value already stored is still not an edit, and must not cost one of
+/// the hundred entries undo keeps -- but that is now the changeset's guarantee rather than this
+/// setter's, and the editor tests it (`an_edit_that_changes_nothing_records_no_history_entry`). What is left to check
+/// here is that writing it twice is accepted and leaves the value where it was.
 #[test]
-fn switching_to_the_current_value_reports_no_change() {
+fn switching_to_the_current_value_keeps_it() {
     let mut conn = pack();
     let tx = conn.transaction().unwrap();
-    assert!(set_experience_enabled(&tx, true).unwrap());
-    assert!(!set_experience_enabled(&tx, true).unwrap());
+    set_experience_enabled(&tx, true).unwrap();
+    set_experience_enabled(&tx, true).unwrap();
     tx.commit().unwrap();
+    assert!(read_timeline(&conn).unwrap().unwrap().enabled);
 }
 
 /// Writing a whole document that has a timeline clears any suspension: the document is saying the
@@ -274,8 +298,11 @@ fn a_whole_document_write_unsuspends_the_timeline() {
     let tx = conn.transaction().unwrap();
     set_experience_enabled(&tx, false).unwrap();
     tx.commit().unwrap();
-    assert_eq!(read(&conn).unwrap().experience, None);
+    assert_eq!(Behaviour::read(&conn).unwrap().experience, None);
 
     store(&mut conn, &behaviour);
-    assert_eq!(read(&conn).unwrap().experience, Some(Experience::default()));
+    assert_eq!(
+        Behaviour::read(&conn).unwrap().experience,
+        Some(Experience::default())
+    );
 }

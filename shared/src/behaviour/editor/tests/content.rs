@@ -4,7 +4,6 @@ use crate::behaviour::editor::{
     set_text_item_text, text_pool, web_links,
 };
 use crate::behaviour::schema::{Behaviour, Content, ContentGroup, TextItem, WebLink};
-use crate::behaviour::storage;
 
 #[test]
 fn a_pool_entry_round_trips_with_its_id() {
@@ -33,7 +32,7 @@ fn editing_one_entry_leaves_its_neighbours_alone() {
     });
 
     tx_on(&mut conn, |tx| {
-        assert!(set_text_item_text(tx, ids[1], "edited").unwrap());
+        set_text_item_text(tx, ids[1], "edited").unwrap();
     });
 
     assert_eq!(texts(&conn, PoolKind::Caption), ["one", "edited", "three"]);
@@ -49,7 +48,7 @@ fn removing_an_entry_closes_the_gap() {
         for text in ["one", "two", "three"] {
             ids.push(add_text_item(tx, PoolKind::Caption, &item(text)).unwrap());
         }
-        assert!(remove_text_item(tx, ids[0]).unwrap());
+        remove_text_item(tx, ids[0]).unwrap();
         add_text_item(tx, PoolKind::Caption, &item("four")).unwrap();
     });
     assert_eq!(texts(&conn, PoolKind::Caption), ["two", "three", "four"]);
@@ -169,7 +168,7 @@ fn what_the_editor_writes_the_engine_reads() {
         .unwrap();
     });
 
-    let document = storage::read(&conn).unwrap();
+    let document = Behaviour::read(&conn).unwrap();
     assert_eq!(
         document.content,
         Content {

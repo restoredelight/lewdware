@@ -12,7 +12,7 @@ use anyhow::{bail, Result};
 use rusqlite::{params, OptionalExtension};
 use shared::behaviour::editor as behaviour_editor;
 use shared::{
-    behaviour::{storage as behaviour_storage, Behaviour, MediaSlot},
+    behaviour::{Behaviour, MediaSlot},
     tags,
 };
 
@@ -56,19 +56,42 @@ impl MediaPack {
         .await
     }
 
-    /// The stored behaviour document, whole.
-    ///
-    /// For the writers that still deal in whole documents — the Edgeware importer, and saving.
-    /// The editor's surfaces read through the typed queries instead.
+    /// The stored behaviour document, whole. The editor's surfaces read through typed queries
+    /// instead; whole-document reads remain useful at serialization boundaries and in tests.
     pub async fn get_behaviour(&self) -> Result<Behaviour> {
         let _handle = self.saving.read().await;
         self.db_execute(move |conn| read_behaviour(&conn)).await
     }
 
+    /// Seeds a newly-created draft with converted behaviour and metadata.
+    ///
+    /// Conversion establishes the draft's initial contents; it is not an author edit and must not
+    /// occupy undo history. The pack remains unsaved, so the first later author edit still gets an
+    /// ordinary history entry relative to this imported baseline.
+    pub async fn initialize_from_conversion(
+        &self,
+        behaviour: Behaviour,
+        metadata: Metadata,
+    ) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let metadata_for_db = metadata.clone();
+        self.db_execute(move |mut connection| {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            write_behaviour(&tx, &behaviour)?;
+            metadata_for_db.update(&tx)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        *self.metadata.write().unwrap() = metadata;
+        self.mark_unsaved().await
+    }
+
     /// Replaces the whole document in one history entry.
     ///
-    /// For a writer that really does produce a document rather than edit one: the Edgeware
-    /// importer's converted output. Author edits go through [`MediaPack::behaviour_edit`].
+    /// Author edits normally go through [`MediaPack::behaviour_edit`]. This remains available for
+    /// callers that genuinely need an undoable whole-document replacement and for test setup.
     pub async fn replace_behaviour(&self, behaviour: Behaviour, label: String) -> Result<()> {
         let _handle = self.saving.read().await;
         self.db_execute(move |mut connection| {
@@ -81,46 +104,37 @@ impl MediaPack {
     }
 
     /// Points each of `slots` at `media_id`, but only those still empty.
-    ///
-    /// The Edgeware importer's tail: the converted document named a file for each slot, and this is
-    /// the moment that file finally arrives. Fill, not set — an author who picked their own
-    /// wallpaper while the import was running keeps it.
-    ///
-    /// Returns the slots it actually filled, which is what the front end is told about.
-    pub async fn fill_empty_slots(
+    pub async fn fill_empty_slots_from_conversion(
         &self,
         slots: Vec<MediaSlot>,
         media_id: u64,
-        label: String,
     ) -> Result<Vec<MediaSlot>> {
         let _handle = self.saving.read().await;
         let filled = self
             .db_execute(move |mut connection| {
-                let slots = slots.clone();
-                history::record_with_media_refs(&mut connection, &label, 0, move |tx| {
-                    let mut filled = Vec::new();
-                    for slot in slots {
-                        if behaviour_editor::slot_value(tx, &slot)?.is_some() {
-                            continue;
-                        }
-                        // A slot on a stage that has since been removed simply goes unfilled --
-                        // this is a late arrival, not an author action, so it has nothing to say.
-                        if behaviour_editor::set_media_slot(tx, &slot, Some(media_id)).is_ok() {
-                            filled.push(slot);
-                        }
+                let tx = connection
+                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let mut filled = Vec::new();
+
+                for slot in &slots {
+                    if behaviour_editor::slot_value(&tx, slot)?.is_some() {
+                        continue;
                     }
-                    let refs = if filled.is_empty() {
-                        vec![]
-                    } else {
-                        vec![media_id]
-                    };
-                    Ok((filled, refs))
-                })
+
+                    if behaviour_editor::set_media_slot(&tx, slot, Some(media_id)).is_ok() {
+                        filled.push(slot.clone());
+                    }
+                }
+
+                tx.commit()?;
+                Ok(filled)
             })
             .await?;
+
         if !filled.is_empty() {
             self.mark_unsaved().await?;
         }
+
         Ok(filled)
     }
 
@@ -156,9 +170,11 @@ impl MediaPack {
     ///   it. Restricting a stage names its new tag once; naming it again in the second phase would
     ///   give a different answer, because the first has already taken the name.
     ///
-    /// `apply` reports whether it changed anything. Returning `false` for an edit that landed on the
-    /// value already stored is what keeps an `oninput` that changed nothing from spending one of
-    /// the hundred entries undo keeps.
+    /// `apply` writes; it does not first check whether writing is necessary. An `oninput` that
+    /// lands on the value already stored still runs its UPDATE, and still spends no undo entry and
+    /// leaves the pack saved -- because the changeset it produces is empty, which is what both of
+    /// those now key off. Asking the database what it already holds, so as to not write it again,
+    /// only bought a second answer to a question the changeset was already answering.
     pub async fn behaviour_edit<P: Send + 'static>(
         &self,
         action: BehaviourAction<P>,
@@ -190,7 +206,7 @@ impl MediaPack {
 
                     // Handed what `prepare` worked out, so a decision the tag phase already acted
                     // on is the same one the rows are written from.
-                    let document_changed = apply(tx, value)?;
+                    apply(tx, value)?;
 
                     // Asked *after* the edit, so "still referenced" means what it means once the
                     // action has happened -- a wallpaper the retired stage shared with another
@@ -213,12 +229,7 @@ impl MediaPack {
                         renamed_tags: tags.renamed,
                         media_tags: tags.media_tags,
                     };
-                    let changed =
-                        document_changed || !outcome.deleted_ids.is_empty() || tags.changed;
-                    if !changed {
-                        return Ok(((outcome, false), vec![]));
-                    }
-                    Ok(((outcome, true), refs))
+                    Ok((outcome, refs))
                 })
             })
             .await?;
@@ -284,22 +295,5 @@ pub(super) fn slot_label(slot: &MediaSlot) -> &'static str {
 }
 
 pub(super) fn write_behaviour(tx: &rusqlite::Transaction<'_>, behaviour: &Behaviour) -> Result<()> {
-    behaviour_storage::write(tx, behaviour)
-}
-
-/// Applies `edit` to the stored behaviour, recording its own history entry only when the edit
-/// reported a change. Returns the behaviour either way, since callers hand it back to the front
-/// end to replace its copy.
-pub(super) fn conn_write_behaviour_if_changed(
-    conn: &mut rusqlite::Connection,
-    label: &str,
-    edit: impl FnOnce(&mut Behaviour) -> bool,
-) -> Result<Behaviour> {
-    let mut behaviour = read_behaviour(conn)?;
-    if !edit(&mut behaviour) {
-        return Ok(behaviour);
-    }
-    let updated = behaviour.clone();
-    history::record(conn, label, 0, &[], |tx| write_behaviour(tx, &updated))?;
-    Ok(behaviour)
+    behaviour.write(tx)
 }

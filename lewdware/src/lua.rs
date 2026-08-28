@@ -15,7 +15,6 @@ use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
     behaviour::{Content, Experience, effective_config, effective_options},
-    encode::FileType,
     mode::{
         Metadata, OptionValue, StoredValue, VERSION_MAJOR, read_mode_metadata, resolve_options,
     },
@@ -201,9 +200,8 @@ fn resolve_mode_config(
         .inspect_err(|err| tracing::warn!("Failed to read the pack's behaviour document: {err}"))
         .unwrap_or_default();
 
-    // The behaviour document addresses media by id, so every lookup here is one query away from
-    // the row itself -- used both for `pack_has_wallpaper`/`pack_has_splash` (which ask what a
-    // slot actually resolves to; see `MediaLookup`) and for the file names the modes are given.
+    // The behaviour document addresses media by id, so resolve each slot to the file name the
+    // mode API expects.
     let media_of = |id: u64| {
         media_manager
             .get_media_by_id(id)
@@ -211,16 +209,9 @@ fn resolve_mode_config(
             .ok()
             .flatten()
     };
-    let media_lookup = |id: u64| {
-        media_of(id).map(|media| match media.media_data {
-            MediaData::Image { .. } => FileType::Image,
-            MediaData::Video { .. } => FileType::Video,
-            MediaData::Audio { .. } => FileType::Audio,
-        })
-    };
     let name_of = |id: u64| media_of(id).map(|media| media.name);
 
-    let schema = effective_options(metadata, &behaviour, &media_lookup);
+    let schema = effective_options(metadata, &behaviour);
     let resolved = effective_config(&schema, &stored);
 
     (

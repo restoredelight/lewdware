@@ -1,25 +1,22 @@
-//! Read and write the header and metadata of pack files
+//! Read and write pack headers and the metadata row in their embedded SQLite database.
 
 use std::{
     error, fmt,
-    io::{self, Cursor, Read, Seek, SeekFrom, Write},
+    io::{self, Cursor, Read, Write},
 };
 
-use ciborium::{from_reader, into_writer};
+use rusqlite::{Connection, params, types::Type};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncSeek};
 use uuid::Uuid;
 
 pub const MAGIC: &[u8; 6] = b"LWPACK";
-pub const VERSION: u8 = 0;
+pub const VERSION: u8 = 1;
 pub const HEADER_SIZE: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     pub index_offset: u64,
     pub index_length: u64,
-    pub metadata_offset: u64,
-    pub metadata_length: u64,
     pub id: Uuid,
 }
 
@@ -44,14 +41,85 @@ pub enum RecommendedMode {
 }
 
 impl Metadata {
-    pub fn to_buf(&self) -> Result<Vec<u8>, ciborium::ser::Error<io::Error>> {
-        let mut buf = Vec::new();
-        into_writer(self, &mut buf)?;
-        Ok(buf)
+    pub fn read(connection: &Connection) -> rusqlite::Result<Self> {
+        connection.query_row(
+            "SELECT name, creator, description, version,
+                    recommended_mode_kind, recommended_mode_id
+             FROM pack_metadata WHERE singleton = 1",
+            [],
+            |row| {
+                let kind: Option<String> = row.get(4)?;
+                let id: Option<u64> = row.get(5)?;
+                let recommended_mode = match (kind.as_deref(), id) {
+                    (None, None) => None,
+                    (Some("sandbox"), None) => Some(RecommendedMode::Sandbox),
+                    (Some("experience"), None) => Some(RecommendedMode::Experience),
+                    (Some("pack"), Some(id)) => Some(RecommendedMode::Pack { id }),
+                    _ => {
+                        return Err(rusqlite::Error::FromSqlConversionFailure(
+                            4,
+                            Type::Text,
+                            Box::new(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "invalid recommended mode in pack_metadata",
+                            )),
+                        ));
+                    }
+                };
+                Ok(Self {
+                    name: row.get(0)?,
+                    creator: row.get(1)?,
+                    description: row.get(2)?,
+                    version: row.get(3)?,
+                    recommended_mode,
+                })
+            },
+        )
     }
 
-    pub fn from_buf(buf: &[u8]) -> Result<Self, ciborium::de::Error<io::Error>> {
-        from_reader(buf)
+    pub fn insert(&self, connection: &Connection) -> rusqlite::Result<()> {
+        let (kind, id) = self.recommended_mode_parts();
+        connection.execute(
+            "INSERT INTO pack_metadata
+             (singleton, name, creator, description, version,
+              recommended_mode_kind, recommended_mode_id)
+             VALUES (1, ?, ?, ?, ?, ?, ?)",
+            params![
+                self.name,
+                self.creator,
+                self.description,
+                self.version,
+                kind,
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update(&self, connection: &Connection) -> rusqlite::Result<()> {
+        let (kind, id) = self.recommended_mode_parts();
+        connection.execute(
+            "UPDATE pack_metadata SET name = ?, creator = ?, description = ?, version = ?,
+             recommended_mode_kind = ?, recommended_mode_id = ? WHERE singleton = 1",
+            params![
+                self.name,
+                self.creator,
+                self.description,
+                self.version,
+                kind,
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn recommended_mode_parts(&self) -> (Option<&'static str>, Option<u64>) {
+        match self.recommended_mode {
+            None => (None, None),
+            Some(RecommendedMode::Sandbox) => (Some("sandbox"), None),
+            Some(RecommendedMode::Experience) => (Some("experience"), None),
+            Some(RecommendedMode::Pack { id }) => (Some("pack"), Some(id)),
+        }
     }
 }
 
@@ -91,8 +159,6 @@ impl Header {
         Self {
             index_offset: 0,
             index_length: 0,
-            metadata_offset: 0,
-            metadata_length: 0,
             id: Uuid::new_v4(),
         }
     }
@@ -112,10 +178,8 @@ impl Header {
         cursor.write_all(&[0u8])?; // 1 byte
         cursor.write_all(&self.index_offset.to_le_bytes())?; // 8 bytes
         cursor.write_all(&self.index_length.to_le_bytes())?; // 8 bytes
-        cursor.write_all(&self.metadata_offset.to_le_bytes())?; // 8 bytes
-        cursor.write_all(&self.metadata_length.to_le_bytes())?; // 8 bytes
         cursor.write_all(self.id.as_bytes())?; // 16 bytes
-        // 8 bytes leftover
+        // 24 bytes reserved
 
         Ok(buffer)
     }
@@ -132,7 +196,7 @@ impl Header {
         let mut buf = [0u8; 1];
         cursor.read_exact(&mut buf)?;
         let version = u8::from_le_bytes(buf);
-        if version > VERSION {
+        if version != VERSION {
             return Err(ReadError::UnsupportedVersion);
         }
 
@@ -147,14 +211,6 @@ impl Header {
         cursor.read_exact(&mut buf8)?;
         let index_length = u64::from_le_bytes(buf8);
 
-        let mut buf8 = [0u8; 8];
-        cursor.read_exact(&mut buf8)?;
-        let metadata_offset = u64::from_le_bytes(buf8);
-
-        let mut buf8 = [0u8; 8];
-        cursor.read_exact(&mut buf8)?;
-        let metadata_length = u64::from_le_bytes(buf8);
-
         let mut buf16 = [0u8; 16];
         cursor.read_exact(&mut buf16)?;
         let id = Uuid::from_bytes(buf16);
@@ -162,82 +218,37 @@ impl Header {
         Ok(Self {
             index_offset,
             index_length,
-            metadata_offset,
-            metadata_length,
             id,
         })
     }
 
     pub fn is_default(&self) -> bool {
-        self.index_offset == 0
-            && self.index_length == 0
-            && self.metadata_offset == 0
-            && self.metadata_length == 0
+        self.index_offset == 0 && self.index_length == 0
     }
-}
-
-/// Read the header and metadata of a pack file.
-pub fn read_pack_metadata<F: Read + Seek>(mut file: F) -> anyhow::Result<(Header, Metadata)> {
-    let mut buf = [0u8; HEADER_SIZE];
-    file.read_exact(&mut buf)?;
-
-    let header = Header::from_buf(buf)?;
-
-    tracing::info!("{:?}", header);
-
-    file.seek(SeekFrom::Start(header.metadata_offset))?;
-
-    let mut buf = vec![0u8; header.metadata_length as usize];
-    file.read_exact(&mut buf)?;
-
-    let metadata = Metadata::from_buf(&buf)?;
-
-    Ok((header, metadata))
-}
-
-pub async fn read_pack_metadata_async<F: AsyncRead + AsyncSeek + Unpin>(
-    mut file: F,
-) -> anyhow::Result<(Header, Metadata)> {
-    // Only import here since tokio implements these traits for `Cursor`
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
-
-    let mut buf = [0u8; HEADER_SIZE];
-    file.read_exact(&mut buf).await?;
-
-    let header = Header::from_buf(buf)?;
-
-    file.seek(SeekFrom::Start(header.metadata_offset)).await?;
-
-    let mut buf = vec![0u8; header.metadata_length as usize];
-    file.read_exact(&mut buf).await?;
-
-    let metadata = Metadata::from_buf(&buf)?;
-
-    Ok((header, metadata))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_header(
-        index_offset: u64,
-        index_length: u64,
-        metadata_offset: u64,
-        metadata_length: u64,
-    ) -> Header {
+    fn make_header(index_offset: u64, index_length: u64) -> Header {
         Header {
             index_offset,
             index_length,
-            metadata_offset,
-            metadata_length,
             id: Uuid::nil(),
         }
     }
 
+    fn roundtrip_metadata(original: &Metadata) -> Metadata {
+        let mut connection = Connection::open_in_memory().unwrap();
+        crate::db::migrate(&mut connection).unwrap();
+        original.insert(&connection).unwrap();
+        Metadata::read(&connection).unwrap()
+    }
+
     #[test]
     fn header_roundtrip() {
-        let original = make_header(64, 512, 576, 128);
+        let original = make_header(64, 512);
         let buf = original.to_buf().unwrap();
         let decoded = Header::from_buf(buf).unwrap();
         assert_eq!(original, decoded);
@@ -252,13 +263,13 @@ mod tests {
 
     #[test]
     fn header_is_default_when_all_offsets_zero() {
-        let h = make_header(0, 0, 0, 0);
+        let h = make_header(0, 0);
         assert!(h.is_default());
     }
 
     #[test]
     fn header_is_not_default_when_offsets_set() {
-        let h = make_header(64, 0, 0, 0);
+        let h = make_header(64, 0);
         assert!(!h.is_default());
     }
 
@@ -268,12 +279,12 @@ mod tests {
         let cloned = original.make_clone();
         assert_ne!(original.id, cloned.id);
         assert_eq!(original.index_offset, cloned.index_offset);
-        assert_eq!(original.metadata_offset, cloned.metadata_offset);
+        assert_eq!(original.index_length, cloned.index_length);
     }
 
     #[test]
     fn header_invalid_magic_rejected() {
-        let mut buf = make_header(0, 0, 0, 0).to_buf().unwrap();
+        let mut buf = make_header(0, 0).to_buf().unwrap();
         buf[0] = b'X';
         assert!(matches!(
             Header::from_buf(buf),
@@ -283,7 +294,7 @@ mod tests {
 
     #[test]
     fn header_unsupported_version_rejected() {
-        let mut buf = make_header(0, 0, 0, 0).to_buf().unwrap();
+        let mut buf = make_header(0, 0).to_buf().unwrap();
         buf[6] = VERSION + 1;
         assert!(matches!(
             Header::from_buf(buf),
@@ -300,8 +311,7 @@ mod tests {
             version: Some("1.0.0".to_string()),
             recommended_mode: Some(RecommendedMode::Experience),
         };
-        let buf = original.to_buf().unwrap();
-        let decoded = Metadata::from_buf(&buf).unwrap();
+        let decoded = roundtrip_metadata(&original);
         assert_eq!(original, decoded);
     }
 
@@ -312,8 +322,7 @@ mod tests {
             recommended_mode: Some(RecommendedMode::Pack { id: 7 }),
             ..Default::default()
         };
-        let buf = original.to_buf().unwrap();
-        let decoded = Metadata::from_buf(&buf).unwrap();
+        let decoded = roundtrip_metadata(&original);
         assert_eq!(original, decoded);
     }
 
@@ -323,8 +332,7 @@ mod tests {
             name: "minimal".to_string(),
             ..Default::default()
         };
-        let buf = original.to_buf().unwrap();
-        let decoded = Metadata::from_buf(&buf).unwrap();
+        let decoded = roundtrip_metadata(&original);
         assert_eq!(original, decoded);
         assert!(decoded.creator.is_none());
         assert!(decoded.version.is_none());

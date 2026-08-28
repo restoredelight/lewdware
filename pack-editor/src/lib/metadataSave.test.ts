@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MetadataDto } from './types.js';
 
 const mocks = vi.hoisted(() => ({
-	api: { setPackMetadata: vi.fn(), savePackMetadata: vi.fn() },
+	api: {
+		setPackName: vi.fn(),
+		setPackCreator: vi.fn(),
+		setPackDescription: vi.fn(),
+		setPackVersion: vi.fn(),
+		setPackRecommendedMode: vi.fn()
+	},
 	store: {
 		metadata: null as MetadataDto | null,
 		markBackupComplete: vi.fn(),
@@ -31,8 +37,7 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	vi.resetModules();
 	vi.clearAllMocks();
-	mocks.api.setPackMetadata.mockResolvedValue(undefined);
-	mocks.api.savePackMetadata.mockResolvedValue(undefined);
+	for (const command of Object.values(mocks.api)) command.mockResolvedValue(undefined);
 	mocks.store.metadata = metadata('Initial');
 });
 
@@ -44,11 +49,11 @@ describe('metadata save scheduler', () => {
 		await vi.advanceTimersByTimeAsync(400);
 		save.scheduleMetadataSave(metadata('Latest'));
 		await vi.advanceTimersByTimeAsync(599);
-		expect(mocks.api.setPackMetadata).not.toHaveBeenCalled();
+		expect(mocks.api.setPackName).not.toHaveBeenCalled();
 		await vi.advanceTimersByTimeAsync(1);
-		expect(mocks.api.setPackMetadata).toHaveBeenCalledOnce();
-		expect(mocks.api.setPackMetadata).toHaveBeenCalledWith(metadata('Latest'));
-		expect(mocks.api.savePackMetadata).toHaveBeenCalledOnce();
+		expect(mocks.api.setPackName).toHaveBeenCalledOnce();
+		expect(mocks.api.setPackName).toHaveBeenCalledWith('Latest', 'Edit pack name');
+		expect(mocks.api.setPackCreator).not.toHaveBeenCalled();
 		expect(mocks.history.record).toHaveBeenCalledOnce();
 	});
 
@@ -57,9 +62,9 @@ describe('metadata save scheduler', () => {
 		save.initializeMetadataHistory(metadata('Initial'));
 		save.scheduleMetadataSave(metadata('Flushed'));
 		await save.flushMetadataSave();
-		expect(mocks.api.setPackMetadata).toHaveBeenCalledWith(metadata('Flushed'));
+		expect(mocks.api.setPackName).toHaveBeenCalledWith('Flushed', 'Edit pack name');
 		await vi.advanceTimersByTimeAsync(600);
-		expect(mocks.api.setPackMetadata).toHaveBeenCalledOnce();
+		expect(mocks.api.setPackName).toHaveBeenCalledOnce();
 	});
 
 	it('records the persisted edit in backend history', async () => {
@@ -68,11 +73,11 @@ describe('metadata save scheduler', () => {
 		save.scheduleMetadataSave(metadata('Changed'));
 		await save.flushMetadataSave();
 		expect(mocks.history.record).toHaveBeenCalledWith({ label: 'Edit pack metadata' });
-		expect(mocks.api.setPackMetadata).toHaveBeenCalledOnce();
+		expect(mocks.api.setPackName).toHaveBeenCalledOnce();
 	});
 
 	it('retains failed metadata and succeeds when flushed again', async () => {
-		mocks.api.savePackMetadata
+		mocks.api.setPackName
 			.mockRejectedValueOnce(new Error('disk full'))
 			.mockResolvedValue(undefined);
 		const save = await scheduler();
@@ -85,7 +90,7 @@ describe('metadata save scheduler', () => {
 			expect.stringContaining('disk full')
 		);
 		await expect(save.flushMetadataSave()).resolves.toBeUndefined();
-		expect(mocks.api.setPackMetadata).toHaveBeenCalledTimes(2);
+		expect(mocks.api.setPackName).toHaveBeenCalledTimes(2);
 		expect(mocks.feedback.dismiss).toHaveBeenCalledWith('metadata-backup');
 	});
 
@@ -94,6 +99,6 @@ describe('metadata save scheduler', () => {
 		save.scheduleMetadataSave(metadata('Discarded'));
 		save.cancelMetadataSave();
 		await vi.advanceTimersByTimeAsync(600);
-		expect(mocks.api.setPackMetadata).not.toHaveBeenCalled();
+		expect(mocks.api.setPackName).not.toHaveBeenCalled();
 	});
 });

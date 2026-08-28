@@ -1,6 +1,5 @@
 use rusqlite::Connection;
 
-use super::write;
 use crate::behaviour::schema::{Behaviour, ContentSelection, Events, Stage};
 
 /// A migrated pack database with a few media files, so the slot and per-item foreign keys
@@ -21,7 +20,7 @@ fn pack() -> Connection {
 
 fn store(conn: &mut Connection, behaviour: &Behaviour) {
     let tx = conn.transaction().unwrap();
-    write(&tx, behaviour).unwrap();
+    behaviour.write(&tx).unwrap();
     tx.commit().unwrap();
 }
 
@@ -40,8 +39,13 @@ fn stage(id: &str) -> Stage {
 }
 
 /// Everything the structural half can express, in one document, through a full round trip.
+#[path = "tests/experience.rs"]
 mod experience;
+#[path = "tests/facade.rs"]
 mod facade;
+#[path = "tests/integration.rs"]
 mod integration;
+#[path = "tests/media.rs"]
 mod media;
+#[path = "tests/tags.rs"]
 mod tags;

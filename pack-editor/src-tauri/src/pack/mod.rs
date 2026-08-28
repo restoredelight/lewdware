@@ -23,7 +23,7 @@ use std::{
 use anyhow::{anyhow, bail, Result};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::vtab::array;
+use rusqlite::{params, vtab::array};
 use serde::{Deserialize, Serialize};
 use shared::{
     encode::FileInfo,
@@ -149,19 +149,20 @@ pub struct BehaviourAction<P> {
     /// wallpaper changed on another surface retires the file it *used* to have, and the one it
     /// actually has stays behind with nothing pointing at it.
     prepare: Prepare<P>,
-    /// Writes the rows, reporting whether it changed anything.
+    /// Writes the rows. Whether that came to anything is the changeset's answer to give, not
+    /// this closure's -- see [`MediaPack::behaviour_edit`].
     apply: Apply<P>,
 }
 
 type Prepare<P> = Box<dyn FnOnce(&rusqlite::Transaction<'_>) -> Result<Prepared<P>> + Send>;
-type Apply<P> = Box<dyn FnOnce(&rusqlite::Transaction<'_>, P) -> Result<bool> + Send>;
+type Apply<P> = Box<dyn FnOnce(&rusqlite::Transaction<'_>, P) -> Result<()> + Send>;
 
 impl BehaviourAction<()> {
     /// An action that only writes behaviour rows — no tags, nothing retired. The common case, and
     /// what every per-field setter is.
     pub fn new<F>(label: impl Into<String>, edit: F) -> Self
     where
-        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<bool> + Send + 'static,
+        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<()> + Send + 'static,
     {
         Self {
             label: label.into(),
@@ -180,7 +181,7 @@ impl<P: Send + 'static> BehaviourAction<P> {
     pub fn planned<R, A>(label: impl Into<String>, prepare: R, apply: A) -> Self
     where
         R: FnOnce(&rusqlite::Transaction<'_>) -> Result<Prepared<P>> + Send + 'static,
-        A: FnOnce(&rusqlite::Transaction<'_>, P) -> Result<bool> + Send + 'static,
+        A: FnOnce(&rusqlite::Transaction<'_>, P) -> Result<()> + Send + 'static,
     {
         Self {
             label: label.into(),
@@ -386,7 +387,6 @@ struct SaveSnapshot {
     generation_id: String,
     editor_state_id: String,
     pending_history: bool,
-    metadata: Metadata,
     runtime_path: PathBuf,
     db_path: PathBuf,
     db_pool: Pool<SqliteConnectionManager>,
@@ -401,6 +401,75 @@ struct PreparedGeneration {
 enum GenerationPersistence {
     Durable,
     ReplacedButNotSynced(anyhow::Error),
+}
+
+#[derive(Clone)]
+enum MetadataEdit {
+    Name(String),
+    Creator(Option<String>),
+    Description(Option<String>),
+    Version(Option<String>),
+    RecommendedMode(Option<shared::pack::RecommendedMode>),
+}
+
+impl MetadataEdit {
+    fn write(&self, connection: &rusqlite::Connection) -> Result<bool> {
+        let changed = match self {
+            Self::Name(value) => {
+                connection.execute(
+                    "UPDATE pack_metadata SET name = ? WHERE singleton = 1 AND name IS NOT ?",
+                    params![value, value],
+                )?
+            }
+            Self::Creator(value) => {
+                connection.execute(
+                    "UPDATE pack_metadata SET creator = ? WHERE singleton = 1 AND creator IS NOT ?",
+                    params![value, value],
+                )?
+            }
+            Self::Description(value) => {
+                connection.execute(
+                    "UPDATE pack_metadata SET description = ?
+                     WHERE singleton = 1 AND description IS NOT ?",
+                    params![value, value],
+                )?
+            }
+            Self::Version(value) => {
+                connection.execute(
+                    "UPDATE pack_metadata SET version = ? WHERE singleton = 1 AND version IS NOT ?",
+                    params![value, value],
+                )?
+            }
+            Self::RecommendedMode(value) => {
+                let (kind, id) = match value {
+                    None => (None, None),
+                    Some(shared::pack::RecommendedMode::Sandbox) => (Some("sandbox"), None),
+                    Some(shared::pack::RecommendedMode::Experience) => (Some("experience"), None),
+                    Some(shared::pack::RecommendedMode::Pack { id }) => {
+                        (Some("pack"), Some(*id))
+                    }
+                };
+                connection.execute(
+                    "UPDATE pack_metadata
+                     SET recommended_mode_kind = ?, recommended_mode_id = ?
+                     WHERE singleton = 1
+                       AND (recommended_mode_kind IS NOT ? OR recommended_mode_id IS NOT ?)",
+                    params![kind, id, kind, id],
+                )?
+            }
+        };
+        Ok(changed != 0)
+    }
+
+    fn update_cached(self, metadata: &mut Metadata) {
+        match self {
+            Self::Name(value) => metadata.name = value,
+            Self::Creator(value) => metadata.creator = value,
+            Self::Description(value) => metadata.description = value,
+            Self::Version(value) => metadata.version = value,
+            Self::RecommendedMode(value) => metadata.recommended_mode = value,
+        }
+    }
 }
 
 enum GarbageCollectorCommand {
@@ -642,7 +711,6 @@ impl MediaPack {
             bail!("draft no longer exists");
         }
         let lock = Lock::new(draft_lock_path(data_dir, id))?;
-        let metadata = Metadata::from_buf(&fs::read(dir.join("Metadata"))?)?;
         let db_path = dir.join("index.db");
         if !db_path.is_file() {
             bail!("draft database is missing");
@@ -650,10 +718,11 @@ impl MediaPack {
         let manager = sqlite_connection_manager(&db_path);
         let db_pool = Pool::builder().build(manager)?;
         let pool = db_pool.clone();
-        spawn_blocking(move || -> Result<_> {
+        let metadata = spawn_blocking(move || -> Result<_> {
             let conn = pool.get()?;
             conn.pragma_update(None, "journal_mode", "WAL")?;
-            editor_db::initialize(&conn)
+            editor_db::initialize(&conn)?;
+            Ok(Metadata::read(&conn)?)
         })
         .await??;
         let mut header = Header::new();
@@ -722,12 +791,6 @@ impl MediaPack {
             Some(lock) => Some(lock),
             None => Some(Lock::new(draft_lock_path(data_dir, header.id))?),
         };
-
-        let metadata_path = dir.join("Metadata");
-        File::create(&metadata_path)
-            .await?
-            .write_all(&metadata.to_buf()?)
-            .await?;
 
         let db_path = dir.join("index.db");
         let manager = sqlite_connection_manager(&db_path);
@@ -800,32 +863,6 @@ impl MediaPack {
         let has_unsaved = fs::exists(dir.join("UNSAVED"))? && fs::exists(&db_path)?;
         let has_working_db = has_unsaved || (reuse_working_db && fs::exists(&db_path)?);
 
-        let mut metadata = if has_working_db {
-            let metadata_path = dir.join("Metadata");
-            match fs::read(&metadata_path)
-                .map_err(|err| anyhow!(err))
-                .and_then(|buf| Metadata::from_buf(&buf).map_err(|err| err.into()))
-            {
-                Ok(metadata) => metadata,
-                Err(err) => {
-                    // Never replace damaged recovery metadata with an all-default value. The
-                    // last saved metadata embedded in the pack is a safer recovery baseline.
-                    tracing::error!("could not read working metadata, using saved metadata: {err}");
-                    file.seek(SeekFrom::Start(header.metadata_offset)).await?;
-                    let mut buf = vec![0u8; header.metadata_length as usize];
-                    file.read_exact(&mut buf).await?;
-                    let metadata = Metadata::from_buf(&buf)?;
-                    fs::write(&metadata_path, metadata.to_buf()?)?;
-                    metadata
-                }
-            }
-        } else {
-            file.seek(SeekFrom::Start(header.metadata_offset)).await?;
-            let mut buf = vec![0u8; header.metadata_length as usize];
-            file.read_exact(&mut buf).await?;
-            Metadata::from_buf(&buf)?
-        };
-
         let runtime_path = dir.join("saved-index.db");
         let has_archive = !header.is_default() && header.index_length > 0;
         let db_data = if has_archive {
@@ -877,15 +914,14 @@ impl MediaPack {
 
         let pool = db_pool.clone();
         let runtime = has_archive_db.then_some(runtime_path.clone());
-        let metadata_for_db = metadata.clone();
-        spawn_blocking(move || -> Result<_> {
+        let metadata = spawn_blocking(move || -> Result<_> {
             let mut conn = pool.get()?;
             conn.pragma_update(None, "journal_mode", "WAL")?;
             if !has_working_db {
                 let runtime = runtime
                     .as_ref()
                     .ok_or_else(|| anyhow!("pack has no index"))?;
-                editor_db::import_runtime(&mut conn, runtime, &metadata_for_db)?;
+                editor_db::import_runtime(&mut conn, runtime)?;
             } else {
                 editor_db::initialize(&conn)?;
                 if let Some(runtime) = &runtime {
@@ -908,22 +944,9 @@ impl MediaPack {
             if let Some(runtime) = runtime {
                 let _ = fs::remove_file(runtime);
             }
-            Ok(())
+            Ok(Metadata::read(&conn)?)
         })
         .await??;
-        if has_working_db {
-            let pool = db_pool.clone();
-            let stored = spawn_blocking(move || -> Result<Vec<u8>> {
-                Ok(pool.get()?.query_row(
-                    "SELECT metadata FROM pack_metadata WHERE singleton = 1",
-                    [],
-                    |row| row.get(0),
-                )?)
-            })
-            .await??;
-            metadata = Metadata::from_buf(&stored)?;
-            fs::write(dir.join("Metadata"), &stored)?;
-        }
 
         let pack = Self {
             path: Some(path),
@@ -1112,13 +1135,10 @@ impl MediaPack {
 
     pub async fn set_metadata(&self, metadata: &Metadata) -> Result<()> {
         let _handle = self.saving.read().await;
-        let data = metadata.to_buf()?;
+        let metadata_for_db = metadata.clone();
         self.db_execute(move |mut connection| {
             history::record(&mut connection, "Edit pack metadata", 0, &[], |tx| {
-                tx.execute(
-                    "UPDATE pack_metadata SET metadata = ? WHERE singleton = 1",
-                    [&data],
-                )?;
+                metadata_for_db.update(tx)?;
                 Ok(())
             })
         })
@@ -1127,19 +1147,45 @@ impl MediaPack {
         self.mark_unsaved().await
     }
 
-    pub async fn save_metadata(&self) -> Result<()> {
-        let final_path = self.dir.join("Metadata");
-        let data = self.metadata.read().unwrap().to_buf()?;
-        let dir = self.dir.clone();
-        spawn_blocking(move || -> Result<()> {
-            let mut temp = tempfile::NamedTempFile::new_in(dir)?;
-            std::io::Write::write_all(&mut temp, &data)?;
-            temp.as_file().sync_all()?;
-            temp.persist(final_path).map_err(|e| e.error)?;
-            Ok(())
+    async fn edit_metadata(&self, edit: MetadataEdit, label: String) -> Result<()> {
+        let _handle = self.saving.read().await;
+        let db_edit = edit.clone();
+        let changed = self.db_execute(move |mut connection| {
+            history::record(&mut connection, &label, 0, &[], |tx| db_edit.write(tx))
         })
-        .await??;
-        Ok(())
+        .await?;
+        edit.update_cached(&mut self.metadata.write().unwrap());
+        if changed { self.mark_unsaved().await } else { Ok(()) }
+    }
+
+    pub async fn set_metadata_name(&self, value: String, label: String) -> Result<()> {
+        self.edit_metadata(MetadataEdit::Name(value), label).await
+    }
+
+    pub async fn set_metadata_creator(&self, value: Option<String>, label: String) -> Result<()> {
+        self.edit_metadata(MetadataEdit::Creator(value), label).await
+    }
+
+    pub async fn set_metadata_description(
+        &self,
+        value: Option<String>,
+        label: String,
+    ) -> Result<()> {
+        self.edit_metadata(MetadataEdit::Description(value), label)
+            .await
+    }
+
+    pub async fn set_metadata_version(&self, value: Option<String>, label: String) -> Result<()> {
+        self.edit_metadata(MetadataEdit::Version(value), label).await
+    }
+
+    pub async fn set_metadata_recommended_mode(
+        &self,
+        value: Option<shared::pack::RecommendedMode>,
+        label: String,
+    ) -> Result<()> {
+        self.edit_metadata(MetadataEdit::RecommendedMode(value), label)
+            .await
     }
 }
 

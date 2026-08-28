@@ -1,14 +1,13 @@
 use super::{item, pack, popups_of, timeline_pack, tx_on};
+use crate::behaviour::db::read_one_stage;
 use crate::behaviour::editor::{
-    PoolKind, add_text_item, add_text_item_tag, remove_text_item, set_media_slot,
-    set_popup_scale, set_popup_weight, set_stage_audio_random, set_stage_content_tags,
-    set_stage_end_duration, set_stage_entry_notification, set_stage_event, set_stage_movement,
-    set_stage_movement_speed, set_stage_prompt_timeout_multiplier, set_text_item_summary,
-    set_text_item_text, set_text_item_timeout, set_transition_duration, set_transition_easing,
-    text_pool, transitions,
+    PoolKind, add_text_item, add_text_item_tag, remove_text_item, set_media_slot, set_popup_scale,
+    set_popup_weight, set_stage_audio_random, set_stage_content_tags, set_stage_end_duration,
+    set_stage_entry_notification, set_stage_event, set_stage_movement, set_stage_movement_speed,
+    set_stage_prompt_timeout_multiplier, set_text_item_summary, set_text_item_text,
+    set_text_item_timeout, set_transition_duration, set_transition_easing, text_pool, transitions,
 };
 use crate::behaviour::schema::{Easing, EventKind, EventSchedule, Interval, MediaSlot, Movement};
-use crate::behaviour::storage::read_one_stage;
 
 // ── Setting one field ────────────────────────────────────────────────────────
 
@@ -31,17 +30,21 @@ fn two_fields_of_one_entry_do_not_clobber_each_other() {
     assert_eq!(stored.text, "new body");
 }
 
+/// Writing the value already stored is an ordinary write, not a case a setter has to detect. It
+/// leaves the row as it found it, which is all the caller needed; whether that came to a change is
+/// the changeset's answer, and the editor's undo entry is what tests it.
 #[test]
-fn a_setter_reports_no_change_for_the_value_already_stored() {
+fn a_setter_accepts_the_value_already_stored() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
         id = add_text_item(tx, PoolKind::Caption, &item("same")).unwrap();
-        assert!(!set_text_item_text(tx, id, "same").unwrap());
-        assert!(set_text_item_text(tx, id, "different").unwrap());
-        assert!(!set_text_item_timeout(tx, id, None).unwrap());
-        assert!(set_text_item_timeout(tx, id, Some(4.0)).unwrap());
+        set_text_item_text(tx, id, "same").unwrap();
+        set_text_item_timeout(tx, id, None).unwrap();
     });
+    let stored = &text_pool(&conn, PoolKind::Caption).unwrap()[0].item;
+    assert_eq!(stored.text, "same");
+    assert_eq!(stored.timeout_seconds, None);
 }
 
 /// A stale editor writing into an entry that has since been removed must be told, not quietly given
@@ -76,10 +79,8 @@ fn a_stage_cannot_own_a_tag_it_does_not_select() {
 fn a_stages_selection_and_its_owned_tag_move_together() {
     let mut conn = timeline_pack(&["a", "b"]);
     tx_on(&mut conn, |tx| {
-        assert!(
-            set_stage_content_tags(tx, "a", Some(&["stage-a".to_string()]), Some("stage-a"))
-                .unwrap()
-        );
+        set_stage_content_tags(tx, "a", Some(&["stage-a".to_string()]), Some("stage-a"))
+                .unwrap();
     });
     let stage = read_one_stage(&conn, "a").unwrap().unwrap();
     assert_eq!(
@@ -90,7 +91,7 @@ fn a_stages_selection_and_its_owned_tag_move_together() {
 
     // Dropping the restriction drops the ownership with it.
     tx_on(&mut conn, |tx| {
-        assert!(set_stage_content_tags(tx, "a", None, None).unwrap());
+        set_stage_content_tags(tx, "a", None, None).unwrap();
     });
     let stage = read_one_stage(&conn, "a").unwrap().unwrap();
     assert_eq!(stage.content.tags, None);
@@ -111,7 +112,7 @@ fn switching_on_random_audio_clears_the_named_track() {
             Some(3),
         )
         .unwrap();
-        assert!(set_stage_audio_random(tx, "a", true).unwrap());
+        set_stage_audio_random(tx, "a", true).unwrap();
     });
     let stage = read_one_stage(&conn, "a").unwrap().unwrap();
     assert_eq!(stage.content.audio, None);
@@ -126,7 +127,7 @@ fn an_end_condition_leaf_refuses_the_final_stage() {
     let tx = conn.transaction().unwrap();
     assert!(set_stage_end_duration(&tx, "b", Some(60.0)).is_err());
     // The stage before it has one, so the same call lands.
-    assert!(set_stage_end_duration(&tx, "a", Some(60.0)).unwrap());
+    set_stage_end_duration(&tx, "a", Some(60.0)).unwrap();
 }
 
 /// Movement and mitosis are optional sub-structures: one click creates the whole thing, and a speed
@@ -139,8 +140,7 @@ fn a_speed_needs_movement_to_be_switched_on_first() {
         assert!(set_stage_movement_speed(&tx, "a", Some(50.0), None).is_err());
     }
     tx_on(&mut conn, |tx| {
-        assert!(
-            set_stage_movement(
+        set_stage_movement(
                 tx,
                 "a",
                 Some(&Movement {
@@ -148,9 +148,8 @@ fn a_speed_needs_movement_to_be_switched_on_first() {
                     maximum_speed: Some(150.0)
                 })
             )
-            .unwrap()
-        );
-        assert!(set_stage_movement_speed(tx, "a", Some(80.0), None).unwrap());
+            .unwrap();
+        set_stage_movement_speed(tx, "a", Some(80.0), None).unwrap();
     });
     let stage = read_one_stage(&conn, "a").unwrap().unwrap();
     let movement = stage.movement.unwrap();
@@ -166,8 +165,8 @@ fn a_speed_needs_movement_to_be_switched_on_first() {
 fn a_stages_prompt_and_entry_rows_are_created_on_demand() {
     let mut conn = timeline_pack(&["a", "b"]);
     tx_on(&mut conn, |tx| {
-        assert!(set_stage_prompt_timeout_multiplier(tx, "a", 2.0).unwrap());
-        assert!(set_stage_entry_notification(tx, "a", Some("Begin.")).unwrap());
+        set_stage_prompt_timeout_multiplier(tx, "a", 2.0).unwrap();
+        set_stage_entry_notification(tx, "a", Some("Begin.")).unwrap();
     });
     let stage = read_one_stage(&conn, "a").unwrap().unwrap();
     assert_eq!(stage.prompt.timeout_multiplier, 2.0);
@@ -185,7 +184,7 @@ fn setting_one_event_kind_leaves_the_others_alone() {
     tx_on(&mut conn, |tx| {
         set_stage_event(tx, "a", EventKind::Popup, Some(&schedule)).unwrap();
         set_stage_event(tx, "a", EventKind::Sound, Some(&schedule)).unwrap();
-        assert!(set_stage_event(tx, "a", EventKind::Popup, None).unwrap());
+        set_stage_event(tx, "a", EventKind::Popup, None).unwrap();
     });
     let stage = read_one_stage(&conn, "a").unwrap().unwrap();
     assert_eq!(stage.events.popup, None);
@@ -197,9 +196,9 @@ fn a_transition_field_moves_on_its_own() {
     let mut conn = timeline_pack(&["a", "b"]);
     let id = transitions(&conn).unwrap()[0].id.clone();
     tx_on(&mut conn, |tx| {
-        assert!(set_transition_duration(tx, &id, 12.5).unwrap());
-        assert!(set_transition_easing(tx, &id, Easing::EaseInOut).unwrap());
-        assert!(!set_transition_easing(tx, &id, Easing::EaseInOut).unwrap());
+        set_transition_duration(tx, &id, 12.5).unwrap();
+        set_transition_easing(tx, &id, Easing::EaseInOut).unwrap();
+        set_transition_easing(tx, &id, Easing::EaseInOut).unwrap();
     });
     let transition = &transitions(&conn).unwrap()[0];
     assert_eq!(transition.duration_seconds, 12.5);

@@ -16,8 +16,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Duration as ChronoDuration, Local};
 use shared::schedule::{
-    self, Interval, PresenceProfile, Resolution, Rule, ScheduleConfig, SessionLength,
-    SessionOverrides, Trigger,
+    self, Interval, PresenceProfile, Rule, ScheduleConfig, SessionLength, SessionOverrides, Trigger,
 };
 use uuid::Uuid;
 
@@ -1029,7 +1028,7 @@ impl ScheduleEngine {
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use shared::schedule::{Frequency, QuietHours, Range, TimeOfDay};
+    use shared::schedule::{Frequency, QuietHours, Range, Resolution, TimeOfDay};
 
     fn ymd(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
         chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()

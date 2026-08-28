@@ -108,7 +108,6 @@ impl MediaPack {
         })
         .await??;
         let revision = self.revision.load(Ordering::SeqCst);
-        let metadata = self.metadata.read().unwrap().clone();
         drop(_mutation_guard);
 
         let destination = db_path.clone();
@@ -146,7 +145,6 @@ impl MediaPack {
             generation_id,
             editor_state_id,
             pending_history,
-            metadata,
             runtime_path,
             db_path,
             db_pool,
@@ -274,18 +272,12 @@ impl MediaPack {
             let mut dbf = File::open(&snapshot.runtime_path).await?;
             tokio::io::copy(&mut dbf, &mut file).await?
         };
-        let metadata = snapshot.metadata.to_buf()?;
-        let metadata_length = metadata.len() as u64;
-        file.write_all(&metadata).await?;
-        file.set_len(offset + index_length + metadata_length)
-            .await?;
+        file.set_len(offset + index_length).await?;
 
         let header = Header {
             id: self.header.read().unwrap().id,
             index_offset: offset,
             index_length,
-            metadata_offset: offset + index_length,
-            metadata_length,
         };
         file.seek(SeekFrom::Start(0)).await?;
         file.write_all(&header.to_buf()?).await?;
@@ -1004,11 +996,7 @@ impl MediaPack {
                 tokio::io::copy(&mut dbf, &mut file).await?
             };
 
-            let buf = self.metadata.read().unwrap().to_buf()?;
-            let metadata_length = buf.len() as u64;
-            file.write_all(&buf).await?;
-            file.set_len(offset + metadata_length + index_length)
-                .await?;
+            file.set_len(offset + index_length).await?;
 
             let header = Header {
                 id: if first_save {
@@ -1018,8 +1006,6 @@ impl MediaPack {
                 },
                 index_offset: offset,
                 index_length,
-                metadata_offset: offset + index_length,
-                metadata_length,
             };
 
             file.seek(SeekFrom::Start(0)).await?;
@@ -1046,24 +1032,9 @@ impl MediaPack {
         let mut file = self.open_read().await?;
 
         // Extract all header fields before any .await so Ref<Header> doesn't cross await points
-        let (not_saved_yet, metadata_offset, metadata_length, index_offset, index_length) = {
+        let (not_saved_yet, index_offset, index_length) = {
             let h = self.header.read().unwrap();
-            (
-                h.is_default(),
-                h.metadata_offset,
-                h.metadata_length,
-                h.index_offset,
-                h.index_length,
-            )
-        };
-
-        let metadata = if not_saved_yet {
-            None
-        } else {
-            file.seek(SeekFrom::Start(metadata_offset)).await?;
-            let mut buf = vec![0u8; metadata_length as usize];
-            file.read_exact(&mut buf).await?;
-            Some(Metadata::from_buf(&buf)?)
+            (h.is_default(), h.index_offset, h.index_length)
         };
 
         if not_saved_yet {
@@ -1082,22 +1053,17 @@ impl MediaPack {
         let restore_path = staging.path().join("index.db");
         tokio::fs::write(&restore_path, db_data).await?;
         let pool = self.db_pool.clone();
-        let restored_metadata = metadata.clone().unwrap();
         spawn_blocking(move || -> Result<()> {
             let mut destination = pool.get()?;
-            editor_db::replace_from_runtime(&mut destination, &restore_path, &restored_metadata)?;
+            editor_db::replace_from_runtime(&mut destination, &restore_path)?;
             Ok(())
         })
         .await??;
 
         self.sweep_loose_files().await?;
 
-        let final_meta = if let Some(m) = metadata {
-            *self.metadata.write().unwrap() = m.clone();
-            m
-        } else {
-            self.metadata.read().unwrap().clone()
-        };
+        self.reload_metadata_from_db().await?;
+        let final_meta = self.metadata.read().unwrap().clone();
 
         self.mark_saved().await?;
         Ok(final_meta)

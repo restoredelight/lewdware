@@ -1,6 +1,5 @@
 use super::{pack, store};
 use crate::behaviour::schema::{Behaviour, TextItem};
-use crate::behaviour::storage::read;
 
 /// What the tag joins are for. A tag list in the document is a foreign key into `tags`, so a
 /// tag the author typed into a caption is a real tag the pack has -- which is what lets
@@ -32,11 +31,15 @@ fn a_tag_named_by_the_document_becomes_a_real_tag() {
     conn.execute("UPDATE tags SET name = 'renamed' WHERE id = ?", [id])
         .unwrap();
     assert_eq!(
-        read(&conn).unwrap().content.captions[0].tags,
+        Behaviour::read(&conn).unwrap().content.captions[0].tags,
         vec!["renamed".to_string()]
     );
 
     // And deleting it cascades, which is what "delete this tag" used to mean longhand.
     conn.execute("DELETE FROM tags WHERE id = ?", [id]).unwrap();
-    assert!(read(&conn).unwrap().content.captions[0].tags.is_empty());
+    assert!(
+        Behaviour::read(&conn).unwrap().content.captions[0]
+            .tags
+            .is_empty()
+    );
 }

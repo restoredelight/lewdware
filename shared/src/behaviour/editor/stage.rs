@@ -1,21 +1,23 @@
 use anyhow::{Result, bail};
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use super::common::{add_tag, remove_tag, set_column};
+use super::common::{add_tag, exists, remove_tag, set_column};
+use crate::behaviour::db::{
+    read_owned_stage_tag, read_stage_end, read_stage_entry,
+    read_stage_mitosis, read_stage_movement, read_stage_prompt, read_stage_tags,
+    write_one_stage_event, write_owned_stage_tag, write_stage_end, write_stage_entry,
+    write_stage_mitosis, write_stage_movement, write_stage_prompt, write_stage_tags,
+};
 use crate::behaviour::schema::{
     EndStrategy, EventCountCondition, EventKind, EventSchedule, Mitosis, Movement, StageEnd,
     StageEntry, StagePrompt,
-};
-use crate::behaviour::storage::{
-    read_one_stage, write_owned_stage_tag, write_stage_end, write_stage_entry, write_stage_events,
-    write_stage_mitosis, write_stage_movement, write_stage_prompt, write_stage_tags,
 };
 
 // ── Stages ───────────────────────────────────────────────────────────────────
 
 const NO_STAGE: &str = "that stage is no longer in the timeline";
 
-pub fn set_stage_label(tx: &Transaction<'_>, id: &str, label: &str) -> Result<bool> {
+pub fn set_stage_label(tx: &Transaction<'_>, id: &str, label: &str) -> Result<()> {
     set_column(
         tx,
         "behaviour_stage",
@@ -42,29 +44,26 @@ pub fn set_stage_content_tags(
     id: &str,
     tags: Option<&[String]>,
     owned_tag: Option<&str>,
-) -> Result<bool> {
+) -> Result<()> {
     if let Some(owned) = owned_tag {
         let selected = tags.is_some_and(|tags| tags.iter().any(|tag| tag == owned));
         if !selected {
             bail!("a stage can only own a tag it selects by");
         }
     }
-    let Some(current) = read_one_stage(tx, id)? else {
-        bail!("{NO_STAGE}");
-    };
-    if current.content.tags.as_deref() == tags && current.content.owned_tag.as_deref() == owned_tag
-    {
-        return Ok(false);
-    }
-    tx.execute(
+    let updated = tx.execute(
         "UPDATE behaviour_stage SET restricts_content = ?2 WHERE id = ?1",
         params![id, tags.is_some()],
     )?;
+    if updated == 0 {
+        bail!("{NO_STAGE}");
+    }
     // The exclusion side is carried through untouched: it is a separate decision, and a stage that
     // stops restricting still keeps the files the author took out of it by hand.
-    write_stage_tags(tx, id, tags.unwrap_or(&[]), &current.content.exclude)?;
+    let exclude = read_stage_tags(tx, id, true)?;
+    write_stage_tags(tx, id, tags.unwrap_or(&[]), &exclude)?;
     write_owned_stage_tag(tx, id, false, owned_tag)?;
-    Ok(true)
+    Ok(())
 }
 
 /// The tags that keep a file out of this stage, and which of them the editor maintains the name of.
@@ -81,34 +80,37 @@ pub fn set_stage_exclude_tags(
     id: &str,
     exclude: &[String],
     owned_tag: Option<&str>,
-) -> Result<bool> {
+) -> Result<()> {
     if let Some(owned) = owned_tag
         && !exclude.iter().any(|tag| tag == owned)
     {
         bail!("a stage can only own an exclusion tag it excludes by");
     }
-    let Some(current) = read_one_stage(tx, id)? else {
+    let current_restricts: Option<bool> = tx
+        .query_row(
+            "SELECT restricts_content FROM behaviour_stage WHERE id = ?",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(current_restricts) = current_restricts else {
         bail!("{NO_STAGE}");
     };
-    if current.content.exclude == exclude
-        && current.content.owned_exclude_tag.as_deref() == owned_tag
-    {
-        return Ok(false);
-    }
     // A tag cannot be on both sides at once -- the stage would show nothing carrying it while
     // claiming to select by it -- so excluding one takes it off the inclusion list.
-    let include: Vec<String> = current
-        .content
-        .tags
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|tag| !exclude.contains(tag))
-        .collect();
+    let include: Vec<String> = if current_restricts {
+        read_stage_tags(tx, id, false)?
+            .into_iter()
+            .filter(|tag| !exclude.contains(tag))
+            .collect()
+    } else {
+        Vec::new()
+    };
     write_stage_tags(tx, id, &include, exclude)?;
-    write_owned_stage_tag(tx, id, false, current.content.owned_tag.as_deref())?;
+    let owned_include = read_owned_stage_tag(tx, id, false)?;
+    write_owned_stage_tag(tx, id, false, owned_include.as_deref())?;
     write_owned_stage_tag(tx, id, true, owned_tag)?;
-    Ok(true)
+    Ok(())
 }
 
 /// Whether the stage picks a fresh background track from its own tags when it begins.
@@ -116,20 +118,16 @@ pub fn set_stage_exclude_tags(
 /// Naming a track and picking one at random are alternatives, so switching the flag on clears the
 /// named track. The other direction is enforced by [`set_media_slot`], which clears this flag when
 /// a track is named — between them the two columns cannot both be claimed.
-pub fn set_stage_audio_random(tx: &Transaction<'_>, id: &str, random: bool) -> Result<bool> {
-    let Some(current) = read_one_stage(tx, id)? else {
-        bail!("{NO_STAGE}");
-    };
-    let clearing_track = random && current.content.audio.is_some();
-    if current.content.audio_random == random && !clearing_track {
-        return Ok(false);
-    }
-    tx.execute(
+pub fn set_stage_audio_random(tx: &Transaction<'_>, id: &str, random: bool) -> Result<()> {
+    let updated = tx.execute(
         "UPDATE behaviour_stage SET audio_random = ?2, audio = CASE WHEN ?2 THEN NULL ELSE audio END
          WHERE id = ?1",
         params![id, random],
     )?;
-    Ok(true)
+    if updated == 0 {
+        bail!("{NO_STAGE}");
+    }
+    Ok(())
 }
 
 /// One event kind's schedule, or `None` to stop the stage scheduling that kind at all.
@@ -138,16 +136,12 @@ pub fn set_stage_event(
     id: &str,
     kind: EventKind,
     schedule: Option<&EventSchedule>,
-) -> Result<bool> {
-    let Some(mut current) = read_one_stage(tx, id)? else {
+) -> Result<()> {
+    if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
-    };
-    if current.events.get(kind) == schedule {
-        return Ok(false);
     }
-    current.events.set(kind, schedule.cloned());
-    write_stage_events(tx, id, &current.events)?;
-    Ok(true)
+    write_one_stage_event(tx, id, kind, schedule)?;
+    Ok(())
 }
 
 // The stage's entry and prompt blocks are not optional in the schema -- `StageEntry` and
@@ -158,7 +152,7 @@ pub fn set_stage_entry_notification(
     tx: &Transaction<'_>,
     id: &str,
     text: Option<&str>,
-) -> Result<bool> {
+) -> Result<()> {
     edit_stage_entry(tx, id, |entry| {
         entry.notification = text.filter(|text| !text.is_empty()).map(str::to_string)
     })
@@ -168,7 +162,7 @@ pub fn set_stage_entry_popup_burst(
     tx: &Transaction<'_>,
     id: &str,
     count: Option<u32>,
-) -> Result<bool> {
+) -> Result<()> {
     edit_stage_entry(tx, id, |entry| entry.popup_burst = count)
 }
 
@@ -176,24 +170,21 @@ fn edit_stage_entry(
     tx: &Transaction<'_>,
     id: &str,
     change: impl FnOnce(&mut StageEntry),
-) -> Result<bool> {
-    let Some(stage) = read_one_stage(tx, id)? else {
+) -> Result<()> {
+    if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
-    };
-    let mut entry = stage.on_enter.clone();
-    change(&mut entry);
-    if entry == stage.on_enter {
-        return Ok(false);
     }
+    let mut entry = read_stage_entry(tx, id)?.unwrap_or_default();
+    change(&mut entry);
     write_stage_entry(tx, id, (!entry.is_default()).then_some(&entry))?;
-    Ok(true)
+    Ok(())
 }
 
 pub fn set_stage_prompt_timeouts_enabled(
     tx: &Transaction<'_>,
     id: &str,
     enabled: bool,
-) -> Result<bool> {
+) -> Result<()> {
     edit_stage_prompt(tx, id, |prompt| prompt.timeouts_enabled = enabled)
 }
 
@@ -202,7 +193,7 @@ pub fn set_stage_prompt_timeout_multiplier(
     tx: &Transaction<'_>,
     id: &str,
     multiplier: f64,
-) -> Result<bool> {
+) -> Result<()> {
     edit_stage_prompt(tx, id, |prompt| prompt.timeout_multiplier = multiplier)
 }
 
@@ -210,7 +201,7 @@ pub fn set_stage_prompt_popup_burst(
     tx: &Transaction<'_>,
     id: &str,
     count: Option<u32>,
-) -> Result<bool> {
+) -> Result<()> {
     edit_stage_prompt(tx, id, |prompt| prompt.popup_burst = count)
 }
 
@@ -218,17 +209,14 @@ fn edit_stage_prompt(
     tx: &Transaction<'_>,
     id: &str,
     change: impl FnOnce(&mut StagePrompt),
-) -> Result<bool> {
-    let Some(stage) = read_one_stage(tx, id)? else {
+) -> Result<()> {
+    if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
-    };
-    let mut prompt = stage.prompt.clone();
-    change(&mut prompt);
-    if prompt == stage.prompt {
-        return Ok(false);
     }
+    let mut prompt = read_stage_prompt(tx, id)?;
+    change(&mut prompt);
     write_stage_prompt(tx, id, &prompt)?;
-    Ok(true)
+    Ok(())
 }
 
 /// Switches window movement on or off. One command rather than three, because one click sets both
@@ -237,15 +225,12 @@ pub fn set_stage_movement(
     tx: &Transaction<'_>,
     id: &str,
     movement: Option<&Movement>,
-) -> Result<bool> {
-    let Some(stage) = read_one_stage(tx, id)? else {
+) -> Result<()> {
+    if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
-    };
-    if stage.movement.as_ref() == movement {
-        return Ok(false);
     }
     write_stage_movement(tx, id, movement)?;
-    Ok(true)
+    Ok(())
 }
 
 pub fn set_stage_movement_speed(
@@ -253,24 +238,19 @@ pub fn set_stage_movement_speed(
     id: &str,
     minimum: Option<f64>,
     maximum: Option<f64>,
-) -> Result<bool> {
-    let Some(stage) = read_one_stage(tx, id)? else {
+) -> Result<()> {
+    if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
-    };
-    // Only meaningful while movement is switched on; a speed for a stage that does not move is a
-    // stale editor, not a request to start moving.
-    let Some(current) = stage.movement.as_ref() else {
+    }
+    let Some(current) = read_stage_movement(tx, id)? else {
         bail!("this stage does not move");
     };
     let updated = Movement {
         minimum_speed: minimum.or(current.minimum_speed),
         maximum_speed: maximum.or(current.maximum_speed),
     };
-    if &updated == current {
-        return Ok(false);
-    }
     write_stage_movement(tx, id, Some(&updated))?;
-    Ok(true)
+    Ok(())
 }
 
 /// Switches mitosis on or off. One command for the same reason as [`set_stage_movement`].
@@ -278,15 +258,12 @@ pub fn set_stage_mitosis(
     tx: &Transaction<'_>,
     id: &str,
     mitosis: Option<&Mitosis>,
-) -> Result<bool> {
-    let Some(stage) = read_one_stage(tx, id)? else {
+) -> Result<()> {
+    if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
-    };
-    if stage.mitosis.as_ref() == mitosis {
-        return Ok(false);
     }
     write_stage_mitosis(tx, id, mitosis)?;
-    Ok(true)
+    Ok(())
 }
 
 pub fn set_stage_mitosis_values(
@@ -294,22 +271,19 @@ pub fn set_stage_mitosis_values(
     id: &str,
     chance: Option<f64>,
     count: Option<u32>,
-) -> Result<bool> {
-    let Some(stage) = read_one_stage(tx, id)? else {
+) -> Result<()> {
+    if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
-    };
-    let Some(current) = stage.mitosis.as_ref() else {
+    }
+    let Some(current) = read_stage_mitosis(tx, id)? else {
         bail!("this stage does not use mitosis");
     };
     let updated = Mitosis {
         chance: chance.or(current.chance),
         count: count.or(current.count),
     };
-    if &updated == current {
-        return Ok(false);
-    }
     write_stage_mitosis(tx, id, Some(&updated))?;
-    Ok(true)
+    Ok(())
 }
 
 // A stage's end condition exists for every stage but the last, and whether it exists is decided by
@@ -320,7 +294,7 @@ pub fn set_stage_end_duration(
     tx: &Transaction<'_>,
     id: &str,
     seconds: Option<f64>,
-) -> Result<bool> {
+) -> Result<()> {
     edit_stage_end(tx, id, |end| end.duration_seconds = seconds)
 }
 
@@ -328,7 +302,7 @@ pub fn set_stage_end_event_count(
     tx: &Transaction<'_>,
     id: &str,
     condition: Option<&EventCountCondition>,
-) -> Result<bool> {
+) -> Result<()> {
     edit_stage_end(tx, id, |end| end.event_count = condition.cloned())
 }
 
@@ -336,7 +310,7 @@ pub fn set_stage_end_strategy(
     tx: &Transaction<'_>,
     id: &str,
     strategy: EndStrategy,
-) -> Result<bool> {
+) -> Result<()> {
     edit_stage_end(tx, id, |end| end.strategy = strategy)
 }
 
@@ -344,20 +318,16 @@ fn edit_stage_end(
     tx: &Transaction<'_>,
     id: &str,
     change: impl FnOnce(&mut StageEnd),
-) -> Result<bool> {
-    let Some(stage) = read_one_stage(tx, id)? else {
+) -> Result<()> {
+    if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
-    };
-    let Some(current) = stage.end.as_ref() else {
+    }
+    let Some(mut updated) = read_stage_end(tx, id)? else {
         bail!("the last stage has no end condition");
     };
-    let mut updated = current.clone();
     change(&mut updated);
-    if &updated == current {
-        return Ok(false);
-    }
     write_stage_end(tx, id, Some(&updated))?;
-    Ok(true)
+    Ok(())
 }
 
 /// Adds a tag to a stage's selection.
@@ -365,7 +335,7 @@ fn edit_stage_end(
 /// Only for a stage that already restricts its content: on one that shows everything there is no
 /// selection for a tag to join, and switching the restriction on is a different author action
 /// ([`set_stage_content_tags`]) that has to seed the tag onto what the stage was showing.
-pub fn add_stage_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<bool> {
+pub fn add_stage_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<()> {
     let restricts: Option<bool> = tx
         .query_row(
             "SELECT restricts_content FROM behaviour_stage WHERE id = ?",
@@ -385,35 +355,31 @@ pub fn add_stage_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<bool> 
 /// Exclusion wins over inclusion, so a tag the stage includes by is *moved* rather than added: a
 /// stage on both sides of one tag would claim to select by something that also guarantees the file
 /// is excluded, and would show nothing carrying it.
-pub fn add_stage_exclude_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<bool> {
-    let Some(stage) = read_one_stage(tx, id)? else {
+pub fn add_stage_exclude_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<()> {
+    if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
-    };
-    if stage.content.exclude.iter().any(|item| item == tag) {
-        return Ok(false);
     }
-    let mut exclude = stage.content.exclude;
-    exclude.push(tag.to_string());
-    set_stage_exclude_tags(tx, id, &exclude, stage.content.owned_exclude_tag.as_deref())
+    let mut exclude = read_stage_tags(tx, id, true)?;
+    // Guarding the push, not the write: the list is a set, and adding a tag twice would put it on
+    // the stage twice. Re-writing an unchanged list is fine and costs nothing.
+    if !exclude.iter().any(|item| item == tag) {
+        exclude.push(tag.to_string());
+    }
+    let owned = read_owned_stage_tag(tx, id, true)?;
+    set_stage_exclude_tags(tx, id, &exclude, owned.as_deref())
 }
 
 /// Stops the stage excluding by a tag. Every file it was keeping out comes back.
-pub fn remove_stage_exclude_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<bool> {
-    let Some(stage) = read_one_stage(tx, id)? else {
+pub fn remove_stage_exclude_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<()> {
+    if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
-    };
-    let exclude: Vec<String> = stage
-        .content
-        .exclude
+    }
+    let exclude: Vec<String> = read_stage_tags(tx, id, true)?
         .into_iter()
         .filter(|item| item != tag)
         .collect();
-    // Ownership lives on the association row, so a tag the stage no longer excludes by is no longer
-    // owned -- the same rule the inclusion side has always had.
-    let owned = stage
-        .content
-        .owned_exclude_tag
-        .filter(|owned| exclude.contains(owned));
+    let owned = read_owned_stage_tag(tx, id, true)?;
+    let owned = owned.filter(|owned| exclude.contains(owned));
     set_stage_exclude_tags(tx, id, &exclude, owned.as_deref())
 }
 
@@ -421,6 +387,6 @@ pub fn remove_stage_exclude_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Re
 ///
 /// The ownership needs no separate step: the `owned` flag lives on the association row, so a stage
 /// that stops selecting by a tag stops owning it by construction.
-pub fn remove_stage_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<bool> {
+pub fn remove_stage_tag(tx: &Transaction<'_>, id: &str, tag: &str) -> Result<()> {
     remove_tag(tx, "behaviour_stage_tag", "stage_id", &id, tag)
 }

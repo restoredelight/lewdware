@@ -18,7 +18,7 @@ pub fn read_tags(
     let mut statement = conn.prepare(&format!(
         "SELECT tags.name FROM {table}
          JOIN tags ON tags.id = {table}.tag_id
-         WHERE {table}.{key} = ? ORDER BY {table}.position"
+         WHERE {table}.{key} = ? ORDER BY {table}.id"
     ))?;
     let tags = statement
         .query_map([owner], |row| row.get(0))?
@@ -44,13 +44,13 @@ pub fn write_tags(
         ),
         params![owner, integer_array(ids.iter().copied())],
     )?;
-    for (position, id) in ids.iter().enumerate() {
+    for id in ids {
         tx.execute(
             &format!(
-                "INSERT INTO {table} ({key}, tag_id, position) VALUES (?1, ?2, ?3)
-                 ON CONFLICT({key}, tag_id) DO UPDATE SET position = excluded.position"
+                "INSERT INTO {table} ({key}, tag_id) VALUES (?1, ?2)
+                 ON CONFLICT({key}, tag_id) DO NOTHING"
             ),
-            params![owner, id, position as i64],
+            params![owner, id],
         )?;
     }
     Ok(())

@@ -7,7 +7,6 @@ use crate::behaviour::schema::{
     PopupMedia, SpawnRegion, StageEnd, StageEntry, TextItem, Timeline, Transition,
     TransitionCategory, WebLink,
 };
-use crate::behaviour::storage::read;
 
 #[test]
 fn a_full_document_survives_the_round_trip() {
@@ -155,5 +154,23 @@ fn a_full_document_survives_the_round_trip() {
     };
 
     store(&mut conn, &behaviour);
-    assert_eq!(read(&conn).unwrap(), behaviour);
+    let read = Behaviour::read(&conn).unwrap();
+
+    // `affected` is a set, and the rows carry no order of their own, so it comes back in category
+    // order however the document listed it -- deliberately not the order written above. Everything
+    // else is compared as written.
+    let affected = &read.experience.as_ref().unwrap().timeline.transitions[0].affected;
+    assert_eq!(
+        affected,
+        &vec![
+            TransitionCategory::Crossfade,
+            TransitionCategory::MitosisChance,
+            TransitionCategory::PopupInterval,
+            TransitionCategory::SoundInterval,
+        ]
+    );
+
+    let mut expected = behaviour;
+    expected.experience.as_mut().unwrap().timeline.transitions[0].affected = affected.clone();
+    assert_eq!(read, expected);
 }

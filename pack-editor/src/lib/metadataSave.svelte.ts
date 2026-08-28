@@ -23,8 +23,20 @@ async function writePending(): Promise<void> {
 	pending = null;
 	if (!metadata) return;
 	inFlight = (async () => {
-		await api.setPackMetadata(metadata);
-		await api.savePackMetadata();
+		const before = baseline;
+		if (!before || before.name !== metadata.name)
+			await api.setPackName(metadata.name, 'Edit pack name');
+		if (!before || before.creator !== metadata.creator)
+			await api.setPackCreator(metadata.creator, 'Edit pack creator');
+		if (!before || before.description !== metadata.description)
+			await api.setPackDescription(metadata.description, 'Edit pack description');
+		if (!before || before.version !== metadata.version)
+			await api.setPackVersion(metadata.version, 'Edit pack version');
+		if (
+			!before ||
+			JSON.stringify(before.recommended_mode) !== JSON.stringify(metadata.recommended_mode)
+		)
+			await api.setPackRecommendedMode(metadata.recommended_mode, 'Edit recommended mode');
 	})();
 	try {
 		await inFlight;

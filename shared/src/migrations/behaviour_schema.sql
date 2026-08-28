@@ -70,17 +70,18 @@ CREATE INDEX IF NOT EXISTS behaviour_stage_position ON behaviour_stage (position
 -- list is absent or matched, *and* no excluded tag is matched -- so exclusion is the only way to
 -- take one file out of a stage without editing the author's own vocabulary, which is what the
 -- editor's "Appears in" toggle needs. It is a column rather than a second table because everything
--- about the two sides is the same: both are tag associations, both are ordered, and both can be
--- owned by the stage. One `PRIMARY KEY` also states the invariant that keeps them coherent: a tag
--- cannot be on both sides of one stage's selection, because that stage would show nothing that
--- carries it while claiming to select by it.
+-- about the two sides is the same: both are tag associations and both can be owned by the stage.
+-- One `UNIQUE` constraint also states the invariant that keeps them coherent: a tag cannot be on
+-- both sides of one stage's selection, because that stage would show nothing that carries it while
+-- claiming to select by it.
 CREATE TABLE IF NOT EXISTS behaviour_stage_tag (
+    -- Tags are sets semantically. The generated id only gives their chips a stable insertion order.
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     stage_id TEXT NOT NULL REFERENCES behaviour_stage (id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
     owned INTEGER NOT NULL DEFAULT 0 CHECK (owned IN (0, 1)),
     excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0, 1)),
-    PRIMARY KEY (stage_id, tag_id)
+    UNIQUE (stage_id, tag_id)
 ) STRICT;
 
 -- The optional sub-structures of a stage get a table each: 0..1 rows says "absent" without a
@@ -145,20 +146,30 @@ CREATE TABLE IF NOT EXISTS behaviour_stage_event (
 -- Cascading from both ends: a transition only means anything between two stages that exist, so
 -- removing either takes it with them. The editor normalizes the timeline itself, but the database
 -- should not be able to hold a transition from nowhere.
+--
+-- No `position` column: a transition sits between one adjacent stage pair, so its place in the
+-- timeline *is* `from_stage`'s place in it, and `read_transitions` orders by that stage's
+-- position. Storing a copy would be a second answer to a question the endpoints already settle,
+-- free to disagree with them -- `normalize_timeline` only ever set it to `from_stage`'s position
+-- anyway. Nothing downstream reads the order regardless: `Transition` carries no index across the
+-- document, and the default mode finds one by scanning for matching endpoints.
 CREATE TABLE IF NOT EXISTS behaviour_transition (
     id TEXT PRIMARY KEY,
-    position INTEGER NOT NULL,
     from_stage TEXT NOT NULL REFERENCES behaviour_stage (id) ON DELETE CASCADE,
     to_stage TEXT NOT NULL REFERENCES behaviour_stage (id) ON DELETE CASCADE,
     duration_seconds REAL NOT NULL,
     easing TEXT NOT NULL
 ) STRICT;
-CREATE INDEX IF NOT EXISTS behaviour_transition_position ON behaviour_transition (position);
+CREATE INDEX IF NOT EXISTS behaviour_transition_from_stage
+    ON behaviour_transition (from_stage);
 
+-- `Transition::affected` is a set: the engine asks whether a category is in it, and the editor
+-- toggles one member at a time. The order the author happened to tick them in was never part of
+-- the answer, so the rows carry no `position` and are read back in category order -- which makes
+-- one set serialise one way, rather than however the last author clicked it together.
 CREATE TABLE IF NOT EXISTS behaviour_transition_category (
     transition_id TEXT NOT NULL REFERENCES behaviour_transition (id) ON DELETE CASCADE,
     category TEXT NOT NULL,
-    position INTEGER NOT NULL,
     PRIMARY KEY (transition_id, category)
 ) STRICT;
 
@@ -169,58 +180,63 @@ CREATE TABLE IF NOT EXISTS behaviour_transition_category (
 -- `AUTOINCREMENT` rather than a plain rowid: SQLite reuses the highest rowid once its row is gone,
 -- so removing the last entry and adding another would hand the new one the id the editor is still
 -- showing on the old one's Remove button. An id has to outlive the row it named.
+--
+-- That monotonic id is also the pool's order, which is why there is no `position` column here the
+-- way `behaviour_stage` and `behaviour_content_group` have one. A pool is only ever appended to
+-- (`add_text_item`) or rebuilt whole from the document in array order (`write_text_pool`), so
+-- ascending id *is* author order, and removing an entry leaves a hole that changes nothing.
+-- Reordering or inserting mid-pool would break that and want a real position column back.
 CREATE TABLE IF NOT EXISTS behaviour_text_item (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK (
         kind IN ('caption', 'prompt', 'notification')
     ),
-    position INTEGER NOT NULL,
     text TEXT NOT NULL,
     summary TEXT,
-    timeout_seconds REAL,
-    -- Pool entries have no identity outside the document, so a write addresses them by position
-    -- and upserts in place. That needs the position to be something to conflict on.
-    UNIQUE (kind, position)
+    timeout_seconds REAL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS behaviour_text_item_tag (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id INTEGER NOT NULL REFERENCES behaviour_text_item (id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
-    PRIMARY KEY (item_id, tag_id)
+    UNIQUE (item_id, tag_id)
 ) STRICT;
 
+-- Ordered by its `AUTOINCREMENT` id, for the same reason `behaviour_text_item` is: links are
+-- appended or rebuilt from the document in order, never reordered.
 CREATE TABLE IF NOT EXISTS behaviour_web_link (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    position INTEGER NOT NULL UNIQUE,
     url TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS behaviour_web_link_tag (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     link_id INTEGER NOT NULL REFERENCES behaviour_web_link (id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
-    PRIMARY KEY (link_id, tag_id)
+    UNIQUE (link_id, tag_id)
 ) STRICT;
 
--- `id` is the author-facing stable key the resolver turns into a mode option
--- (`content_group.<id>`), so it is the primary key rather than a surrogate.
+-- `key` is the author-facing stable name the resolver turns into a mode option
+-- (`content_group.<key>`), and `UNIQUE` because two groups answering to one option name is the
+-- collision the author has to resolve. It is not the primary key, though: an `AUTOINCREMENT`
+-- surrogate is, which buys two things. The list's order is that id, the way the text pools' is --
+-- groups are appended and never reordered, so there is no `position` column to keep dense. And
+-- the tag table hangs off an integer that never changes, so renaming a group is an UPDATE of one
+-- column rather than a foreign key moving under its own rows.
 CREATE TABLE IF NOT EXISTS behaviour_content_group (
-    id TEXT PRIMARY KEY,
-    position INTEGER NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,
     label TEXT NOT NULL,
     description TEXT,
     enabled_by_default INTEGER NOT NULL CHECK (enabled_by_default IN (0, 1))
 ) STRICT;
 
--- `ON UPDATE CASCADE` because the group's id is author-facing text, not a surrogate: renaming a
--- group is a rename of the key its rows point at, and without the cascade it silently orphans them.
 CREATE TABLE IF NOT EXISTS behaviour_content_group_tag (
-    group_id TEXT NOT NULL
-        REFERENCES behaviour_content_group (id) ON DELETE CASCADE ON UPDATE CASCADE,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES behaviour_content_group (id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
-    PRIMARY KEY (group_id, tag_id)
+    UNIQUE (group_id, tag_id)
 ) STRICT;
 
 -- Per-item behaviour attributes: what a pack author says about *this file*, rather than about a

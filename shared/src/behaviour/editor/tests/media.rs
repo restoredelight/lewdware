@@ -1,12 +1,12 @@
 use super::{pack, popups_of, stage_ids, timeline_pack, tx_on};
+use crate::behaviour::db::read_one_stage;
 use crate::behaviour::editor::media::edit_popup_entries;
 use crate::behaviour::editor::{
-    MediaSlots, audio_attributes, media_slots, popup_attributes, remove_stage, set_audio_volume,
-    set_experience_enabled, set_media_slot, set_popup_caption, set_popup_scale, set_popup_weight,
-    set_stage_audio_random, slot_value,
+    MediaSlots, audio_attributes, clear_media_slots, media_slots, popup_attributes, remove_stage,
+    set_audio_volume, set_experience_enabled, set_media_slot, set_popup_caption, set_popup_scale,
+    set_popup_weight, set_stage_audio_random, slot_value,
 };
 use crate::behaviour::schema::{AudioMedia, Behaviour, Content, MediaSlot};
-use crate::behaviour::storage::{self, read_one_stage};
 
 #[test]
 fn a_file_with_no_opinion_has_no_entry() {
@@ -18,7 +18,7 @@ fn a_file_with_no_opinion_has_no_entry() {
 fn setting_one_field_leaves_the_others_unset() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        assert!(set_popup_scale(tx, &[1], Some(2.0)).unwrap());
+        set_popup_scale(tx, &[1], Some(2.0)).unwrap();
     });
     let entry = popups_of(&conn, 1).unwrap();
     assert_eq!(entry.scale, Some(2.0));
@@ -66,19 +66,21 @@ fn clearing_the_last_field_drops_the_entry() {
 fn a_change_applies_across_a_selection() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        assert!(set_popup_weight(tx, &[1, 2], Some(5.0)).unwrap());
+        set_popup_weight(tx, &[1, 2], Some(5.0)).unwrap();
     });
     assert_eq!(popups_of(&conn, 1).unwrap().weight, Some(5.0));
     assert_eq!(popups_of(&conn, 2).unwrap().weight, Some(5.0));
 }
 
+/// Setting an attribute to what it already holds leaves it holding that, and is not an error.
 #[test]
-fn an_attribute_change_that_changes_nothing_reports_no_change() {
+fn an_attribute_set_to_what_it_already_holds_keeps_it() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
         set_popup_scale(tx, &[1], Some(2.0)).unwrap();
-        assert!(!set_popup_scale(tx, &[1], Some(2.0)).unwrap());
+        set_popup_scale(tx, &[1], Some(2.0)).unwrap();
     });
+    assert_eq!(popups_of(&conn, 1).unwrap().scale, Some(2.0));
 }
 
 /// Clearing a field on a file that never had an entry must not create one just to hold nothing.
@@ -86,7 +88,7 @@ fn an_attribute_change_that_changes_nothing_reports_no_change() {
 fn clearing_a_field_on_a_file_with_no_entry_writes_nothing() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        assert!(!set_popup_scale(tx, &[1], None).unwrap());
+        set_popup_scale(tx, &[1], None).unwrap();
     });
     assert_eq!(popups_of(&conn, 1), None);
 }
@@ -123,7 +125,7 @@ fn explicit_sound_pairings_round_trip() {
 fn audio_attributes_follow_the_same_rules() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        assert!(set_audio_volume(tx, &[3], Some(0.5)).unwrap());
+        set_audio_volume(tx, &[3], Some(0.5)).unwrap();
     });
     assert_eq!(
         audio_attributes(&conn, &[3]).unwrap(),
@@ -131,7 +133,7 @@ fn audio_attributes_follow_the_same_rules() {
     );
 
     tx_on(&mut conn, |tx| {
-        assert!(set_audio_volume(tx, &[3], None).unwrap());
+        set_audio_volume(tx, &[3], None).unwrap();
     });
     assert_eq!(audio_attributes(&conn, &[3]).unwrap(), []);
 }
@@ -148,7 +150,7 @@ fn the_pack_media_slots_round_trip() {
         ..Behaviour::new()
     };
     tx_on(&mut conn, |tx| {
-        storage::write(tx, &behaviour).unwrap();
+        behaviour.write(tx).unwrap();
     });
     assert_eq!(
         media_slots(&conn).unwrap(),
@@ -165,7 +167,7 @@ fn the_pack_media_slots_round_trip() {
 fn a_pack_slot_reads_back_what_was_written() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        assert!(set_media_slot(tx, &MediaSlot::Wallpaper, Some(1)).unwrap());
+        set_media_slot(tx, &MediaSlot::Wallpaper, Some(1)).unwrap();
     });
     assert_eq!(slot_value(&conn, &MediaSlot::Wallpaper).unwrap(), Some(1));
     assert_eq!(slot_value(&conn, &MediaSlot::Splash).unwrap(), None);
@@ -177,18 +179,21 @@ fn emptying_a_slot_clears_it() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
         set_media_slot(tx, &MediaSlot::Wallpaper, Some(1)).unwrap();
-        assert!(set_media_slot(tx, &MediaSlot::Wallpaper, None).unwrap());
+        set_media_slot(tx, &MediaSlot::Wallpaper, None).unwrap();
     });
     assert_eq!(slot_value(&conn, &MediaSlot::Wallpaper).unwrap(), None);
 }
 
+/// Pointing a slot at what it already holds leaves it holding that. It is written again rather
+/// than compared first, which costs an UPDATE and no undo entry.
 #[test]
-fn setting_a_slot_to_what_it_holds_reports_no_change() {
+fn setting_a_slot_to_what_it_holds_keeps_it() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
         set_media_slot(tx, &MediaSlot::Wallpaper, Some(1)).unwrap();
-        assert!(!set_media_slot(tx, &MediaSlot::Wallpaper, Some(1)).unwrap());
+        set_media_slot(tx, &MediaSlot::Wallpaper, Some(1)).unwrap();
     });
+    assert_eq!(slot_value(&conn, &MediaSlot::Wallpaper).unwrap(), Some(1));
 }
 
 #[test]
@@ -199,7 +204,7 @@ fn a_stages_optional_rows_are_created_when_a_slot_first_fills_one() {
     };
     assert_eq!(slot_value(&conn, &slot).unwrap(), None);
     tx_on(&mut conn, |tx| {
-        assert!(set_media_slot(tx, &slot, Some(1)).unwrap());
+        set_media_slot(tx, &slot, Some(1)).unwrap();
     });
     assert_eq!(slot_value(&conn, &slot).unwrap(), Some(1));
 
@@ -207,7 +212,7 @@ fn a_stages_optional_rows_are_created_when_a_slot_first_fills_one() {
         stage: "a".to_string(),
     };
     tx_on(&mut conn, |tx| {
-        assert!(set_media_slot(tx, &prompt, Some(3)).unwrap());
+        set_media_slot(tx, &prompt, Some(3)).unwrap();
     });
     assert_eq!(slot_value(&conn, &prompt).unwrap(), Some(3));
 }
@@ -263,4 +268,51 @@ fn filling_a_slot_while_the_timeline_is_off_keeps_the_stages() {
     });
     assert_eq!(stage_ids(&conn), ["a", "b"]);
     assert_eq!(slot_value(&conn, &MediaSlot::Wallpaper).unwrap(), Some(1));
+}
+
+#[test]
+fn clearing_media_slots_updates_every_slot_without_rewriting_the_document() {
+    let mut conn = timeline_pack(&["a", "b"]);
+    let cleared = [
+        MediaSlot::Wallpaper,
+        MediaSlot::StageWallpaper {
+            stage: "a".to_string(),
+        },
+        MediaSlot::StageAudio {
+            stage: "a".to_string(),
+        },
+        MediaSlot::StageEntrySound {
+            stage: "a".to_string(),
+        },
+        MediaSlot::StagePromptSound {
+            stage: "a".to_string(),
+        },
+    ];
+    let preserved = [
+        MediaSlot::Splash,
+        MediaSlot::StageEntrySplash {
+            stage: "a".to_string(),
+        },
+    ];
+    tx_on(&mut conn, |tx| {
+        set_media_slot(tx, &cleared[0], Some(1)).unwrap();
+        set_media_slot(tx, &cleared[1], Some(1)).unwrap();
+        for slot in &cleared[2..] {
+            set_media_slot(tx, slot, Some(3)).unwrap();
+        }
+        for slot in &preserved {
+            set_media_slot(tx, slot, Some(2)).unwrap();
+        }
+        clear_media_slots(tx, &[1, 3]).unwrap();
+        // Again, over slots already cleared: the UPDATEs match nothing and it stays cleared.
+        clear_media_slots(tx, &[1, 3]).unwrap();
+    });
+
+    for slot in cleared {
+        assert_eq!(slot_value(&conn, &slot).unwrap(), None);
+    }
+    for slot in preserved {
+        assert_eq!(slot_value(&conn, &slot).unwrap(), Some(2));
+    }
+    assert_eq!(stage_ids(&conn), ["a", "b"]);
 }

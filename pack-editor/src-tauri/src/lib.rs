@@ -205,8 +205,11 @@ pub fn run() {
             labels::add_artist_to_files,
             labels::remove_artist_from_files,
             metadata::get_pack_metadata,
-            metadata::set_pack_metadata,
-            metadata::save_pack_metadata,
+            metadata::set_pack_name,
+            metadata::set_pack_creator,
+            metadata::set_pack_description,
+            metadata::set_pack_version,
+            metadata::set_pack_recommended_mode,
             metadata::mark_pack_unsaved,
             // Behaviour: queries first, then one command per author action.
             behaviour::queries::get_behaviour_summary,

@@ -1,10 +1,10 @@
 use anyhow::{Result, bail};
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::stage::{set_stage_content_tags, set_stage_exclude_tags};
 use super::stage_tags::{stage_exclude_tag_name, stage_tag_name};
-use crate::behaviour::schema::Stage;
-use crate::behaviour::storage::read_one_stage;
+use crate::behaviour::db::{read_owned_stage_tag, read_stage_tags};
+use crate::behaviour::schema::{ContentSelection, Stage};
 
 // ── Which stages a file appears in ───────────────────────────────────────────
 //
@@ -38,34 +38,40 @@ pub struct StageTagCreation {
     pub excluded: bool,
 }
 
+/// Whether `tags` puts a file in this stage's content selection.
+pub fn selects_content(content: &ContentSelection, tags: &[String]) -> bool {
+    let included = match content.tags.as_deref() {
+        // No inclusion list at all is a stage that restricts nothing: every file appears in it.
+        None => true,
+        Some(restriction) => restriction.iter().any(|tag| tags.contains(tag)),
+    };
+    included && !content.exclude.iter().any(|tag| tags.contains(tag))
+}
+
 /// Whether `tags` puts a file in this stage.
 ///
 /// Included *and* not excluded. The order matters for reading it, not for the answer: exclusion
 /// always wins, which is what makes it usable as "take this one file out" regardless of why the
 /// file was in.
 pub fn selects(stage: &Stage, tags: &[String]) -> bool {
-    let included = match stage.content.tags.as_deref() {
-        // No inclusion list at all is a stage that restricts nothing: every file appears in it.
-        None => true,
-        Some(restriction) => restriction.iter().any(|tag| tags.contains(tag)),
-    };
-    included && !stage.content.exclude.iter().any(|tag| tags.contains(tag))
+    selects_content(&stage.content, tags)
 }
 
 /// The tag a membership toggle can add to `stage` without changing any other relationship.
 ///
 /// Only the stage's own tag, and only while this stage is its sole reference anywhere: the moment a
 /// caption or a content group also names it, adding it to a file says more than "appears here".
-fn dedicated_owned_tag(conn: &Connection, stage: &Stage, excluded: bool) -> Result<Option<String>> {
+fn dedicated_owned_tag(
+    conn: &Connection,
+    content: &ContentSelection,
+    excluded: bool,
+) -> Result<Option<String>> {
     let (owned, side) = if excluded {
-        (
-            stage.content.owned_exclude_tag.as_deref(),
-            &stage.content.exclude[..],
-        )
+        (content.owned_exclude_tag.as_deref(), &content.exclude[..])
     } else {
         (
-            stage.content.owned_tag.as_deref(),
-            stage.content.tags.as_deref().unwrap_or(&[]),
+            content.owned_tag.as_deref(),
+            content.tags.as_deref().unwrap_or(&[]),
         )
     };
     let Some(owned) = owned else {
@@ -74,7 +80,7 @@ fn dedicated_owned_tag(conn: &Connection, stage: &Stage, excluded: bool) -> Resu
     if !side.iter().any(|tag| tag == owned) {
         return Ok(None);
     }
-    let (content, experience): (u64, u64) = conn.query_row(
+    let (content_count, experience_count): (u64, u64) = conn.query_row(
         "SELECT (SELECT COUNT(*) FROM behaviour_content_group_tag t WHERE t.tag_id = tags.id)
                   + (SELECT COUNT(*) FROM behaviour_text_item_tag t WHERE t.tag_id = tags.id)
                   + (SELECT COUNT(*) FROM behaviour_web_link_tag t WHERE t.tag_id = tags.id),
@@ -83,7 +89,7 @@ fn dedicated_owned_tag(conn: &Connection, stage: &Stage, excluded: bool) -> Resu
         params![owned],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    Ok((content == 0 && experience == 1).then(|| owned.to_string()))
+    Ok((content_count == 0 && experience_count == 1).then(|| owned.to_string()))
 }
 
 /// The tags a file carries, as the pack holds them right now.
@@ -96,6 +102,46 @@ pub fn media_tags(conn: &Connection, media: u64) -> Result<Vec<String>> {
         .query_map(params![media], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<_>>()?;
     Ok(tags)
+}
+
+struct StageSelection {
+    id: String,
+    label: String,
+    content: ContentSelection,
+}
+
+fn read_stage_selection(conn: &Connection, id: &str) -> Result<Option<StageSelection>> {
+    let row: Option<(String, bool)> = conn
+        .query_row(
+            "SELECT label, restricts_content FROM behaviour_stage WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((label, restricts)) = row else {
+        return Ok(None);
+    };
+    let tags = if restricts {
+        Some(read_stage_tags(conn, id, false)?)
+    } else {
+        None
+    };
+    let exclude = read_stage_tags(conn, id, true)?;
+    let owned_tag = read_owned_stage_tag(conn, id, false)?;
+    let owned_exclude_tag = read_owned_stage_tag(conn, id, true)?;
+    Ok(Some(StageSelection {
+        id: id.to_string(),
+        label,
+        content: ContentSelection {
+            tags,
+            exclude,
+            owned_tag,
+            owned_exclude_tag,
+            wallpaper: None,
+            audio: None,
+            audio_random: false,
+        },
+    }))
 }
 
 /// Works out how to put `media` into `stage`, or take it out, and changes nothing.
@@ -120,12 +166,12 @@ pub fn plan_stage_membership(
     stage_id: &str,
     member: bool,
 ) -> Result<MembershipPlan> {
-    let Some(target) = read_one_stage(conn, stage_id)? else {
+    let Some(target) = read_stage_selection(conn, stage_id)? else {
         bail!("no stage {stage_id}");
     };
     let tags = media_tags(conn, media)?;
     let mut plan = MembershipPlan::default();
-    if selects(&target, &tags) == member {
+    if selects_content(&target.content, &tags) == member {
         return Ok(plan);
     }
 
@@ -143,10 +189,10 @@ pub fn plan_stage_membership(
             .filter(|tag| !plan.remove.contains(tag))
             .cloned()
             .collect();
-        if selects(&target, &without) {
+        if selects_content(&target.content, &without) {
             return Ok(plan);
         }
-        let tag = match dedicated_owned_tag(conn, &target, false)? {
+        let tag = match dedicated_owned_tag(conn, &target.content, false)? {
             Some(owned) => owned,
             None => {
                 let tag = stage_tag_name(conn, &target.label, None)?;
@@ -164,11 +210,11 @@ pub fn plan_stage_membership(
 
     // Leaving. Where the stage's own tag is the only thing putting this file here, take it off:
     // exact, and it leaves no contradictory pair on the file.
-    if let Some(owned) = dedicated_owned_tag(conn, &target, false)?
+    if let Some(owned) = dedicated_owned_tag(conn, &target.content, false)?
         && tags.contains(&owned)
     {
         let without: Vec<String> = tags.iter().filter(|tag| **tag != owned).cloned().collect();
-        if !selects(&target, &without) {
+        if !selects_content(&target.content, &without) {
             plan.remove.push(owned);
             return Ok(plan);
         }
@@ -176,7 +222,7 @@ pub fn plan_stage_membership(
 
     // Otherwise the file is here through the author's own tags, or because the stage restricts
     // nothing at all. Either way it leaves by being excluded.
-    let tag = match dedicated_owned_tag(conn, &target, true)? {
+    let tag = match dedicated_owned_tag(conn, &target.content, true)? {
         Some(owned) => owned,
         None => {
             let tag = stage_exclude_tag_name(conn, &target.label, None)?;
@@ -193,19 +239,30 @@ pub fn plan_stage_membership(
 }
 
 /// Gives the stage the tag [`plan`] minted for it, on the side it belongs and owned by the stage.
-pub fn apply_membership_creation(tx: &Transaction<'_>, plan: &MembershipPlan) -> Result<bool> {
+pub fn apply_membership_creation(tx: &Transaction<'_>, plan: &MembershipPlan) -> Result<()> {
     let Some(creation) = &plan.creation else {
-        return Ok(false);
+        return Ok(());
     };
-    let Some(stage) = read_one_stage(tx, &creation.stage)? else {
-        return Ok(false);
+    let restricts: Option<bool> = tx
+        .query_row(
+            "SELECT restricts_content FROM behaviour_stage WHERE id = ?",
+            params![&creation.stage],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(restricts) = restricts else {
+        return Ok(());
     };
     if creation.excluded {
-        let mut exclude = stage.content.exclude;
+        let mut exclude = read_stage_tags(tx, &creation.stage, true)?;
         exclude.push(creation.tag.clone());
         return set_stage_exclude_tags(tx, &creation.stage, &exclude, Some(&creation.tag));
     }
-    let mut tags = stage.content.tags.unwrap_or_default();
+    let mut tags = if restricts {
+        read_stage_tags(tx, &creation.stage, false)?
+    } else {
+        Vec::new()
+    };
     tags.push(creation.tag.clone());
     set_stage_content_tags(tx, &creation.stage, Some(&tags), Some(&creation.tag))
 }
@@ -215,5 +272,12 @@ pub fn apply_membership_creation(tx: &Transaction<'_>, plan: &MembershipPlan) ->
 /// The three states of `ContentSelection::tags` collapse to two here: an inclusion list, however
 /// empty, is a restriction; its absence is not. See `behaviour_stage.restricts_content`.
 pub fn stage_restricts_content(conn: &Connection, id: &str) -> Result<bool> {
-    Ok(read_one_stage(conn, id)?.is_some_and(|stage| stage.content.tags.is_some()))
+    let restricts: Option<bool> = conn
+        .query_row(
+            "SELECT restricts_content FROM behaviour_stage WHERE id = ?",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(restricts.unwrap_or(false))
 }

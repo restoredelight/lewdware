@@ -1,7 +1,6 @@
 use anyhow::Result;
 use rusqlite::{Connection, Transaction, params};
 
-use super::common::retain;
 use super::tags::{read_tags, write_tags};
 use crate::behaviour::schema::{ContentGroup, TextItem, WebLink};
 
@@ -10,7 +9,7 @@ use crate::behaviour::schema::{ContentGroup, TextItem, WebLink};
 pub fn read_text_pool(conn: &Connection, kind: &str) -> Result<Vec<TextItem>> {
     let mut statement = conn.prepare(
         "SELECT id, text, timeout_seconds, summary FROM behaviour_text_item WHERE kind = ? \
-         ORDER BY position",
+         ORDER BY id",
     )?;
     let rows: Vec<(i64, String, Option<f64>, Option<String>)> = statement
         .query_map(params![kind], |row| {
@@ -29,32 +28,15 @@ pub fn read_text_pool(conn: &Connection, kind: &str) -> Result<Vec<TextItem>> {
         .collect()
 }
 
-pub fn write_text_pool(
-    tx: &Transaction<'_>,
-    kind: &str,
-    items: &[TextItem],
-) -> Result<()> {
-    // Pool entries have no author-facing identity -- nothing outside the document refers to a
-    // caption -- so they are keyed by position and rewritten in place, rather than matched up.
-    tx.execute(
-        "DELETE FROM behaviour_text_item WHERE kind = ?1 AND position >= ?2",
-        params![kind, items.len() as i64],
-    )?;
-    for (position, item) in items.iter().enumerate() {
+/// Writes a pool into a table the caller has already emptied, in document order -- which the
+/// ascending ids the inserts mint then preserve, so the read above can order by id alone.
+pub fn write_text_pool(tx: &Transaction<'_>, kind: &str, items: &[TextItem]) -> Result<()> {
+    for item in items {
         let id: i64 = tx.query_row(
-            "INSERT INTO behaviour_text_item (kind, position, text, timeout_seconds, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(kind, position) DO UPDATE SET text = excluded.text,
-                                                       timeout_seconds = excluded.timeout_seconds,
-                                                       summary = excluded.summary
+            "INSERT INTO behaviour_text_item (kind, text, timeout_seconds, summary)
+             VALUES (?1, ?2, ?3, ?4)
              RETURNING id",
-            params![
-                kind,
-                position as i64,
-                item.text,
-                item.timeout_seconds,
-                item.summary
-            ],
+            params![kind, item.text, item.timeout_seconds, item.summary],
             |row| row.get(0),
         )?;
         write_tags(tx, "behaviour_text_item_tag", "item_id", &id, &item.tags)?;
@@ -63,7 +45,7 @@ pub fn write_text_pool(
 }
 
 pub fn read_web_links(conn: &Connection) -> Result<Vec<WebLink>> {
-    let mut statement = conn.prepare("SELECT id, url FROM behaviour_web_link ORDER BY position")?;
+    let mut statement = conn.prepare("SELECT id, url FROM behaviour_web_link ORDER BY id")?;
     let rows: Vec<(i64, String)> = statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
@@ -79,16 +61,11 @@ pub fn read_web_links(conn: &Connection) -> Result<Vec<WebLink>> {
 }
 
 pub fn write_web_links(tx: &Transaction<'_>, links: &[WebLink]) -> Result<()> {
-    tx.execute(
-        "DELETE FROM behaviour_web_link WHERE position >= ?",
-        params![links.len() as i64],
-    )?;
-    for (position, link) in links.iter().enumerate() {
+    for link in links {
         let id: i64 = tx.query_row(
-            "INSERT INTO behaviour_web_link (position, url) VALUES (?1, ?2)
-             ON CONFLICT(position) DO UPDATE SET url = excluded.url
+            "INSERT INTO behaviour_web_link (url) VALUES (?1)
              RETURNING id",
-            params![position as i64, link.url],
+            params![link.url],
             |row| row.get(0),
         )?;
         write_tags(tx, "behaviour_web_link_tag", "link_id", &id, &link.tags)?;
@@ -96,21 +73,30 @@ pub fn write_web_links(tx: &Transaction<'_>, links: &[WebLink]) -> Result<()> {
     Ok(())
 }
 
+/// Every group, in author order -- which is the surrogate id, since the rows are written in
+/// document order and only ever appended to afterwards. `ContentGroup::id` is the document's
+/// `key`; the surrogate never leaves this module and its neighbours.
 pub fn read_content_groups(conn: &Connection) -> Result<Vec<ContentGroup>> {
     let mut statement = conn.prepare(
-        "SELECT id, label, description, enabled_by_default
-         FROM behaviour_content_group ORDER BY position",
+        "SELECT id, key, label, description, enabled_by_default
+         FROM behaviour_content_group ORDER BY id",
     )?;
-    let rows: Vec<(String, String, Option<String>, bool)> = statement
+    let rows: Vec<(i64, String, String, Option<String>, bool)> = statement
         .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })?
         .collect::<rusqlite::Result<_>>()?;
     rows.into_iter()
-        .map(|(id, label, description, enabled_by_default)| {
+        .map(|(row_id, key, label, description, enabled_by_default)| {
             Ok(ContentGroup {
-                tags: read_tags(conn, "behaviour_content_group_tag", "group_id", &id)?,
-                id,
+                tags: read_tags(conn, "behaviour_content_group_tag", "group_id", &row_id)?,
+                id: key,
                 label,
                 description,
                 enabled_by_default,
@@ -119,38 +105,25 @@ pub fn read_content_groups(conn: &Connection) -> Result<Vec<ContentGroup>> {
         .collect()
 }
 
-pub fn write_content_groups(
-    tx: &Transaction<'_>,
-    groups: &[ContentGroup],
-) -> Result<()> {
-    retain(
-        tx,
-        "behaviour_content_group",
-        "id",
-        groups.iter().map(|group| group.id.as_str()),
-    )?;
-    for (position, group) in groups.iter().enumerate() {
-        tx.execute(
+pub fn write_content_groups(tx: &Transaction<'_>, groups: &[ContentGroup]) -> Result<()> {
+    for group in groups {
+        let row_id: i64 = tx.query_row(
             "INSERT INTO behaviour_content_group
-                 (id, position, label, description, enabled_by_default)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET position = excluded.position,
-                                           label = excluded.label,
-                                           description = excluded.description,
-                                           enabled_by_default = excluded.enabled_by_default",
+                 (key, label, description, enabled_by_default)
+             VALUES (?, ?, ?, ?) RETURNING id",
             params![
                 group.id,
-                position as i64,
                 group.label,
                 group.description,
                 group.enabled_by_default,
             ],
+            |row| row.get(0),
         )?;
         write_tags(
             tx,
             "behaviour_content_group_tag",
             "group_id",
-            &group.id,
+            &row_id,
             &group.tags,
         )?;
     }

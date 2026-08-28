@@ -11,7 +11,8 @@
 -- `pack_has_splash` hold (config.jsonc's `show_when`), but the guards below are defensive: a
 -- custom mode reusing this library, or a stale stored option value from before the pack changed,
 -- shouldn't turn an empty slot -- or one naming a file that has since been deleted -- into an
--- error.
+-- error. A slot containing the wrong media type is malformed pack data, though, and is reported
+-- when the engine tries to use it.
 --
 -- Sandbox has no timeline, so rule 4's literal trigger (a transition landing during a quiet
 -- phase) doesn't apply -- but dormancy is Sandbox's own active/inactive boundary, and leaving a
@@ -40,10 +41,11 @@ function M.apply_wallpaper(name_override)
 	local name = name_override or content().wallpaper
 	if not name then return end -- opt-in only: no wallpaper set, no feature
 
-	-- `get_image` rather than `get`: `lewdware.wallpaper.set` takes an image, and a slot pointing
-	-- at a video (or at a file that has since been deleted) reads as rule 5 -- skip, don't error.
-	local image = lewdware.media.get_image(name)
-	if not image then return end -- rule 5: no matching media, skip
+	local image = lewdware.media.get(name)
+	if not image then return end -- rule 5: missing media, skip
+	if image.type ~= "image" then
+		error("wallpaper media '" .. name .. "' is not an image (got " .. image.type .. ")")
+	end
 
 	lewdware.wallpaper.set(image)
 end
@@ -63,9 +65,12 @@ function M.show_splash(name_override)
 	-- animated GIF, and an animated GIF is a *video* once a pack is built (see `shared/src/encode.rs`
 	-- -- animated gif/apng/webp all probe as `FileInfo::Video`). Resolving images alone made every
 	-- animated splash silently take rule 5's skip branch and never appear at all, which is why this
-	-- is `get` rather than `get_image`; audio takes the same skip branch below.
+	-- is `get` rather than `get_image`.
 	local item = lewdware.media.get(name)
-	if not item or item.type == "audio" then return end -- rule 5: no usable media, skip
+	if not item then return end -- rule 5: missing media, skip
+	if item.type == "audio" then
+		error("splash media '" .. name .. "' must be an image or video (got audio)")
+	end
 
 	local opts = {
 		decorations = false,

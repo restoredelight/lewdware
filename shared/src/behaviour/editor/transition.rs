@@ -1,16 +1,15 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use rusqlite::{Transaction, params};
 
 use super::common::{exists, set_column};
 use super::timeline::transition_categories;
 use crate::behaviour::schema::{Easing, TransitionCategory};
-use crate::behaviour::storage::to_text;
 
 // ── Transitions ──────────────────────────────────────────────────────────────
 
 const NO_TRANSITION: &str = "that transition is no longer in the timeline";
 
-pub fn set_transition_duration(tx: &Transaction<'_>, id: &str, seconds: f64) -> Result<bool> {
+pub fn set_transition_duration(tx: &Transaction<'_>, id: &str, seconds: f64) -> Result<()> {
     set_column(
         tx,
         "behaviour_transition",
@@ -22,14 +21,14 @@ pub fn set_transition_duration(tx: &Transaction<'_>, id: &str, seconds: f64) -> 
     )
 }
 
-pub fn set_transition_easing(tx: &Transaction<'_>, id: &str, easing: Easing) -> Result<bool> {
+pub fn set_transition_easing(tx: &Transaction<'_>, id: &str, easing: Easing) -> Result<()> {
     set_column(
         tx,
         "behaviour_transition",
         "id",
         &id,
         "easing",
-        to_text(&easing)?,
+        easing,
         NO_TRANSITION,
     )
 }
@@ -42,23 +41,22 @@ pub fn set_transition_affected(
     tx: &Transaction<'_>,
     id: &str,
     affected: &[TransitionCategory],
-) -> Result<bool> {
-    if transition_categories(tx, id)? == affected {
-        return Ok(false);
+) -> Result<()> {
+    if !exists(tx, "behaviour_transition", "id", &id)? {
+        bail!("{NO_TRANSITION}");
     }
-    exists(tx, "behaviour_transition", "id", &id, NO_TRANSITION)?;
     tx.execute(
         "DELETE FROM behaviour_transition_category WHERE transition_id = ?",
         params![id],
     )?;
-    for (position, category) in affected.iter().enumerate() {
+    for category in affected {
         tx.execute(
-            "INSERT INTO behaviour_transition_category (transition_id, category, position)
-             VALUES (?1, ?2, ?3)",
-            params![id, to_text(category)?, position as i64],
+            "INSERT INTO behaviour_transition_category (transition_id, category)
+             VALUES (?1, ?2)",
+            params![id, category],
         )?;
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Turns one transition category on or off, expanding a legacy broad category first.
@@ -73,7 +71,7 @@ pub fn set_transition_category(
     id: &str,
     category: TransitionCategory,
     enabled: bool,
-) -> Result<bool> {
+) -> Result<()> {
     let mut affected = transition_categories(tx, id)?;
     if let Some(group) = legacy_group_of(category)
         && let Some(at) = affected.iter().position(|item| *item == group.0)

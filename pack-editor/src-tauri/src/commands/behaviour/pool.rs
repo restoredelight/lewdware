@@ -38,8 +38,7 @@ pub async fn add_text_item(
             pack.behaviour_edit(BehaviourAction::new(
                 label,
                 move |tx: &rusqlite::Transaction<'_>| {
-                    editor::add_text_item(tx, kind, &item)?;
-                    Ok(true)
+                    editor::add_text_item(tx, kind, &item).map(|_| ())
                 },
             ))
             .await

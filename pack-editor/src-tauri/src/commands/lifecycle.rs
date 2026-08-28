@@ -200,14 +200,9 @@ pub async fn import_edgeware_pack_dialog(
     // has no dependency on encoding having finished. This is what lets the pack editor's
     // Content/Experience tabs show real converted data immediately, rather than only once a
     // (potentially large) media pipeline finishes streaming in.
-    pack.replace_behaviour(behaviour, "Import Edgeware pack".to_string())
+    pack.initialize_from_conversion(behaviour, metadata)
         .await
         .map_err(|e| e.to_string())?;
-    pack.set_metadata(&metadata)
-        .await
-        .map_err(|e| e.to_string())?;
-    pack.save_metadata().await.map_err(|e| e.to_string())?;
-
     let info = PackInfo {
         id: pack.id().to_string(),
         name: pack.name(),
@@ -229,7 +224,7 @@ pub async fn import_edgeware_pack_dialog(
 
     tauri::async_runtime::spawn(import::run_import(
         pack_state,
-        Arc::from(source),
+        Arc::new(source),
         media,
         media_references,
         app,

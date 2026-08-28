@@ -25,7 +25,7 @@ const MIGRATION_2: &str = include_str!("../../../shared/src/migrations/behaviour
 
 const MIGRATIONS: &[&str] = &[MIGRATION_1, MIGRATION_2];
 
-/// The behaviour document's structural half (see `shared::behaviour::storage`), in an order that
+/// The behaviour document's structural half (see `shared::behaviour::Behaviour`), in an order that
 /// satisfies its foreign keys: parents before children, stages before the transitions between them.
 ///
 /// One list rather than three hand-written copies, because a table present in the export but
@@ -215,18 +215,11 @@ pub fn initialize_empty(connection: &Connection, metadata: &Metadata) -> Result<
          VALUES (1, NULL, ?, NULL)",
         [state],
     )?;
-    connection.execute(
-        "INSERT INTO pack_metadata(singleton, metadata) VALUES (1, ?)",
-        [metadata.to_buf()?],
-    )?;
+    metadata.insert(connection)?;
     Ok(())
 }
 
-pub fn import_runtime(
-    pooled: &mut Connection,
-    runtime_path: &Path,
-    metadata: &Metadata,
-) -> Result<String> {
+pub fn import_runtime(pooled: &mut Connection, runtime_path: &Path) -> Result<String> {
     initialize(pooled)?;
     migrate_runtime(runtime_path)?;
     let mut connection = dedicated_editor_connection(pooled)?;
@@ -246,8 +239,8 @@ pub fn import_runtime(
             params![generation, state, state],
         )?;
         tx.execute(
-            "INSERT INTO pack_metadata(singleton, metadata) VALUES (1, ?)",
-            [metadata.to_buf()?],
+            "INSERT INTO pack_metadata SELECT * FROM runtime.pack_metadata",
+            [],
         )?;
         tx.execute(
             "INSERT INTO media
@@ -283,11 +276,7 @@ pub fn import_runtime(
     Ok(generation)
 }
 
-pub fn replace_from_runtime(
-    pooled: &mut Connection,
-    runtime_path: &Path,
-    metadata: &Metadata,
-) -> Result<String> {
+pub fn replace_from_runtime(pooled: &mut Connection, runtime_path: &Path) -> Result<String> {
     migrate_runtime(runtime_path)?;
     let mut connection = dedicated_editor_connection(pooled)?;
     let generation = runtime_marker(runtime_path, ARCHIVE_GENERATION_KEY)?
@@ -314,9 +303,10 @@ pub fn replace_from_runtime(
              saved_state_id = ? WHERE singleton = 1",
             params![generation, state, state],
         )?;
+        tx.execute("DELETE FROM pack_metadata", [])?;
         tx.execute(
-            "UPDATE pack_metadata SET metadata = ? WHERE singleton = 1",
-            [metadata.to_buf()?],
+            "INSERT INTO pack_metadata SELECT * FROM runtime.pack_metadata",
+            [],
         )?;
         tx.execute(
             "INSERT INTO media
@@ -359,6 +349,10 @@ pub fn export_runtime(editor: &Connection, runtime_path: &Path) -> Result<()> {
     runtime.execute("ATTACH DATABASE ? AS editor", [editor.path().unwrap()])?;
     let result = (|| -> Result<()> {
         let tx = runtime.transaction()?;
+        tx.execute(
+            "INSERT INTO pack_metadata SELECT * FROM editor.pack_metadata",
+            [],
+        )?;
         tx.execute(
             "INSERT INTO media
              (id, file_name, file_type, \"offset\", length, width, height,
@@ -643,6 +637,12 @@ mod tests {
             let mut runtime = Connection::open(&runtime_path).unwrap();
             configure_connection(&runtime).unwrap();
             shared::db::migrate(&mut runtime).unwrap();
+            Metadata {
+                name: "Test pack".to_string(),
+                ..Default::default()
+            }
+            .insert(&runtime)
+            .unwrap();
             runtime
                 .execute_batch(
                     "ALTER TABLE behaviour_popup_media DROP COLUMN video_volume;
@@ -656,15 +656,7 @@ mod tests {
 
         let mut editor = Connection::open(directory.path().join("editor.db")).unwrap();
         configure_connection(&editor).unwrap();
-        import_runtime(
-            &mut editor,
-            &runtime_path,
-            &Metadata {
-                name: "Test pack".to_string(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        import_runtime(&mut editor, &runtime_path).unwrap();
 
         // The row came across, and the column the pack never had reads as "no opinion" rather
         // than as a level the author never chose.

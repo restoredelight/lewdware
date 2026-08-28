@@ -11,7 +11,21 @@ CREATE TABLE IF NOT EXISTS editor_state (
 ) STRICT;
 CREATE TABLE IF NOT EXISTS pack_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    metadata BLOB NOT NULL
+    name TEXT NOT NULL,
+    creator TEXT,
+    description TEXT,
+    version TEXT,
+    recommended_mode_kind TEXT
+        CHECK (recommended_mode_kind IS NULL OR recommended_mode_kind IN ('sandbox', 'experience', 'pack')),
+    recommended_mode_id INTEGER,
+    CHECK (
+        CASE recommended_mode_kind
+            WHEN 'sandbox' THEN recommended_mode_id IS NULL
+            WHEN 'experience' THEN recommended_mode_id IS NULL
+            WHEN 'pack' THEN recommended_mode_id IS NOT NULL
+            ELSE recommended_mode_kind IS NULL AND recommended_mode_id IS NULL
+        END
+    )
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS media (

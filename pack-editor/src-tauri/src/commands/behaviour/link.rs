@@ -23,8 +23,7 @@ pub async fn add_web_link(
             pack.behaviour_edit(BehaviourAction::new(
                 label,
                 move |tx: &rusqlite::Transaction<'_>| {
-                    editor::add_web_link(tx, &link)?;
-                    Ok(true)
+                    editor::add_web_link(tx, &link).map(|_| ())
                 },
             ))
             .await

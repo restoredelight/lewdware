@@ -1,12 +1,9 @@
 use rusqlite::{Connection, Transaction};
 
-use super::{
-    PoolKind, add_stage, popup_attributes, remove_stage, stages, text_pool, transitions,
-};
+use super::{PoolKind, add_stage, popup_attributes, remove_stage, stages, text_pool, transitions};
 use crate::behaviour::schema::{
     Behaviour, ContentSelection, Events, Experience, PopupMedia, Stage, TextItem, Timeline,
 };
-use crate::behaviour::storage;
 
 /// A migrated pack database. The editor module never needs media rows of its own — the entities
 /// here are text, links and groups — but the schema's foreign keys want a real database.
@@ -61,7 +58,7 @@ fn timeline_pack(stage_ids: &[&str]) -> Connection {
         ..Behaviour::new()
     };
     let tx = conn.transaction().unwrap();
-    storage::write(&tx, &behaviour).unwrap();
+    behaviour.write(&tx).unwrap();
     tx.commit().unwrap();
     // Written straight from a document, the stage ends are whatever the document said. Normalize
     // through a real edit so the fixture starts in the state the invariants describe.

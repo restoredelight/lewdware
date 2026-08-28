@@ -57,11 +57,9 @@ fn pack_with_image_bytes(image: &[u8]) -> (NamedTempFile, MediaPack) {
         name: "test-pack".to_string(),
         ..Default::default()
     };
-    let metadata_bytes = metadata.to_buf().unwrap();
+    metadata.insert(&db).unwrap();
     let mut header = Header::new();
-    header.metadata_offset = HEADER_SIZE as u64;
-    header.metadata_length = metadata_bytes.len() as u64;
-    header.index_offset = header.metadata_offset + header.metadata_length;
+    header.index_offset = HEADER_SIZE as u64;
 
     // The index has to be sized before the image offset is known, and writing that offset
     // back changes nothing about the index's size.
@@ -79,7 +77,6 @@ fn pack_with_image_bytes(image: &[u8]) -> (NamedTempFile, MediaPack) {
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(&header.to_buf().unwrap()).unwrap();
-    file.write_all(&metadata_bytes).unwrap();
     file.write_all(&db_bytes).unwrap();
     file.write_all(image).unwrap();
     file.flush().unwrap();
@@ -148,23 +145,19 @@ fn open_reads_deserialized_index() {
     )
     .unwrap();
 
-    let db_bytes = db.serialize(MAIN_DB).unwrap();
-
     let metadata = Metadata {
         name: "test-pack".to_string(),
         ..Default::default()
     };
-    let metadata_bytes = metadata.to_buf().unwrap();
+    metadata.insert(&db).unwrap();
 
     let mut header = Header::new();
-    header.metadata_offset = HEADER_SIZE as u64;
-    header.metadata_length = metadata_bytes.len() as u64;
-    header.index_offset = header.metadata_offset + header.metadata_length;
+    header.index_offset = HEADER_SIZE as u64;
+    let db_bytes = db.serialize(MAIN_DB).unwrap();
     header.index_length = db_bytes.len() as u64;
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(&header.to_buf().unwrap()).unwrap();
-    file.write_all(&metadata_bytes).unwrap();
     file.write_all(&db_bytes).unwrap();
     file.flush().unwrap();
 
@@ -293,24 +286,20 @@ fn a_real_pack_file_yields_its_behaviour_and_the_recommended_mode_hint() {
     let mut db = Connection::open_in_memory().unwrap();
     migrate(&mut db).unwrap();
 
-    let db_bytes = db.serialize(MAIN_DB).unwrap();
-
     let metadata = Metadata {
         name: "test-pack".to_string(),
         recommended_mode: Some(RecommendedMode::Experience),
         ..Default::default()
     };
-    let metadata_bytes = metadata.to_buf().unwrap();
+    metadata.insert(&db).unwrap();
+    let db_bytes = db.serialize(MAIN_DB).unwrap();
 
     let mut header = Header::new();
-    header.metadata_offset = HEADER_SIZE as u64;
-    header.metadata_length = metadata_bytes.len() as u64;
-    header.index_offset = header.metadata_offset + header.metadata_length;
+    header.index_offset = HEADER_SIZE as u64;
     header.index_length = db_bytes.len() as u64;
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(&header.to_buf().unwrap()).unwrap();
-    file.write_all(&metadata_bytes).unwrap();
     file.write_all(&db_bytes).unwrap();
     file.flush().unwrap();
 
@@ -346,18 +335,15 @@ fn get_video_data_opens_embedded_clip() {
     )
     .unwrap();
 
-    let db_bytes = db.serialize(MAIN_DB).unwrap();
-
     let metadata = Metadata {
         name: "test-pack".to_string(),
         ..Default::default()
     };
-    let metadata_bytes = metadata.to_buf().unwrap();
+    metadata.insert(&db).unwrap();
 
     let mut header = Header::new();
-    header.metadata_offset = HEADER_SIZE as u64;
-    header.metadata_length = metadata_bytes.len() as u64;
-    header.index_offset = header.metadata_offset + header.metadata_length;
+    header.index_offset = HEADER_SIZE as u64;
+    let db_bytes = db.serialize(MAIN_DB).unwrap();
     header.index_length = db_bytes.len() as u64;
     let video_offset = header.index_offset + header.index_length;
 
@@ -373,7 +359,6 @@ fn get_video_data_opens_embedded_clip() {
 
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(&header.to_buf().unwrap()).unwrap();
-    file.write_all(&metadata_bytes).unwrap();
     file.write_all(&db_bytes).unwrap();
     file.write_all(TEST_CLIP).unwrap();
     file.flush().unwrap();

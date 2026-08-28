@@ -49,20 +49,27 @@ pub fn record<T>(
     media_refs: &[u64],
     operation: impl FnOnce(&Transaction<'_>) -> Result<T>,
 ) -> Result<T> {
-    record_with_media_refs(connection, label, storage_bytes, |tx| {
+    let (value, _) = record_with_media_refs(connection, label, storage_bytes, |tx| {
         Ok((operation(tx)?, media_refs.to_vec()))
-    })
+    })?;
+    Ok(value)
 }
 
 /// Records an operation whose affected media IDs can only be known once its write transaction
 /// has begun. This keeps association-wide tag/artist edits and their reachability references at
 /// one precise database state.
+///
+/// The returned flag is whether an undo entry was actually banked -- that is, whether the
+/// operation left the tracked tables any different from how it found them. It is the honest
+/// answer to "did the document change", and the only one available here: an edit that writes a
+/// row back exactly as it was produces an empty changeset and is not a change, however much SQL
+/// it ran to get there. Callers use it to decide whether the pack now has unsaved work.
 pub fn record_with_media_refs<T>(
     connection: &mut Connection,
     label: &str,
     storage_bytes: u64,
     operation: impl FnOnce(&Transaction<'_>) -> Result<(T, Vec<u64>)>,
-) -> Result<T> {
+) -> Result<(T, bool)> {
     let mut session = Session::new(connection)?;
     session.set_enabled(false);
     for table in tracked_tables() {
@@ -92,7 +99,7 @@ pub fn record_with_media_refs<T>(
     session.changeset_strm(&mut forward)?;
     if forward.is_empty() {
         tx.commit()?;
-        return Ok(value);
+        return Ok((value, false));
     }
     let mut inverse = Vec::new();
     invert_strm(&mut Cursor::new(&forward), &mut inverse)?;
@@ -130,7 +137,7 @@ pub fn record_with_media_refs<T>(
     trim(&tx)?;
     collect_garbage(&tx)?;
     tx.commit()?;
-    Ok(value)
+    Ok((value, true))
 }
 
 pub fn undo(connection: &mut Connection) -> Result<Status> {
@@ -176,14 +183,18 @@ pub fn begin_media_import(connection: &mut Connection) -> Result<i64> {
     Ok(id)
 }
 
-pub fn record_media_visibility(
+pub fn record_media_visibility<T>(
     connection: &mut Connection,
     label: &str,
     media_ids: &[u64],
     deleted: bool,
-) -> Result<()> {
+    operation: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T> {
     if media_ids.is_empty() {
-        return Ok(());
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value = operation(&tx)?;
+        tx.commit()?;
+        return Ok(value);
     }
     let selected: Array = Rc::new(
         media_ids
@@ -191,7 +202,12 @@ pub fn record_media_visibility(
             .map(|id| Value::Integer(*id as i64))
             .collect(),
     );
-    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut session = Session::new(connection)?;
+    session.set_enabled(false);
+    for table in tracked_tables() {
+        session.attach(Some(table))?;
+    }
+    let tx = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
     let cursor: i64 = tx.query_row(
         "SELECT cursor FROM history_state WHERE singleton = 1",
         [],
@@ -212,14 +228,26 @@ pub fn record_media_visibility(
         params![&selected],
         |row| row.get(0),
     )?;
+    session.set_enabled(true);
+    let value = operation(&tx)?;
+    let mut forward = Vec::new();
+    session.changeset_strm(&mut forward)?;
+    let mut inverse = Vec::new();
+    if !forward.is_empty() {
+        invert_strm(&mut Cursor::new(&forward), &mut inverse)?;
+    }
+    session.set_enabled(false);
     let after_state = Uuid::new_v4().to_string();
     let history_id: i64 = tx.query_row(
         "INSERT INTO history_entries
-         (sequence, label, kind, payload, storage_bytes, before_state_id, after_state_id, status)
-         VALUES (?, ?, 'media_visibility', ?, ?, ?, ?, 'ready') RETURNING id",
+         (sequence, label, kind, forward_changeset, inverse_changeset, payload, storage_bytes,
+          before_state_id, after_state_id, status)
+         VALUES (?, ?, 'media_visibility', ?, ?, ?, ?, ?, ?, 'ready') RETURNING id",
         params![
             cursor,
             label,
+            (!forward.is_empty()).then_some(forward),
+            (!inverse.is_empty()).then_some(inverse),
             if deleted { "1" } else { "0" },
             storage_bytes,
             before_state,
@@ -247,7 +275,7 @@ pub fn record_media_visibility(
     trim(&tx)?;
     collect_garbage(&tx)?;
     tx.commit()?;
-    Ok(())
+    Ok(value)
 }
 
 /// Records that `history_id` touches `media_id`, so `collect_garbage` keeps that media's bytes for

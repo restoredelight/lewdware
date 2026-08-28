@@ -156,6 +156,30 @@ async fn save_and_reopen_preserves_metadata() {
 }
 
 #[tokio::test]
+async fn granular_metadata_edits_are_independent_undo_entries() {
+    let tmp = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let pack_path = tmp.path().join("metadata-fields.lwpack");
+    let pack = new_test_pack(&pack_path, data_dir.path(), "Original").await;
+
+    pack.set_metadata_name("Renamed".into(), "Edit pack name".into())
+        .await
+        .unwrap();
+    pack.set_metadata_creator(Some("Creator".into()), "Edit pack creator".into())
+        .await
+        .unwrap();
+    assert_eq!(pack.metadata().name, "Renamed");
+    assert_eq!(pack.metadata().creator.as_deref(), Some("Creator"));
+
+    pack.undo().await.unwrap();
+    assert_eq!(pack.metadata().name, "Renamed");
+    assert_eq!(pack.metadata().creator, None);
+
+    pack.undo().await.unwrap();
+    assert_eq!(pack.metadata().name, "Original");
+}
+
+#[tokio::test]
 async fn edits_during_snapshot_save_remain_dirty_and_are_not_written_into_that_snapshot() {
     let tmp = tempdir().unwrap();
     let data_dir = tempdir().unwrap();
@@ -195,15 +219,15 @@ async fn edits_during_snapshot_save_remain_dirty_and_are_not_written_into_that_s
     let mut header_buf = [0; HEADER_SIZE];
     file.read_exact(&mut header_buf).await.unwrap();
     let header = Header::from_buf(header_buf).unwrap();
-    file.seek(SeekFrom::Start(header.metadata_offset))
+    file.seek(SeekFrom::Start(header.index_offset))
         .await
         .unwrap();
-    let mut metadata_buf = vec![0; header.metadata_length as usize];
-    file.read_exact(&mut metadata_buf).await.unwrap();
-    assert_eq!(
-        Metadata::from_buf(&metadata_buf).unwrap().name,
-        "Before snapshot"
-    );
+    let mut db_buf = vec![0; header.index_length as usize];
+    file.read_exact(&mut db_buf).await.unwrap();
+    let db_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(db_file.path(), db_buf).unwrap();
+    let connection = rusqlite::Connection::open(db_file.path()).unwrap();
+    assert_eq!(Metadata::read(&connection).unwrap().name, "Before snapshot");
 }
 
 #[tokio::test]
@@ -407,7 +431,7 @@ async fn file_content_survives_save_and_reopen() {
 }
 
 #[tokio::test]
-async fn unsaved_recovery_prefers_dir_metadata() {
+async fn unsaved_recovery_reads_metadata_from_the_working_database() {
     let tmp = tempdir().unwrap();
     let data_dir = tempdir().unwrap();
     let pack_path = tmp.path().join("test.lwpack");
@@ -419,7 +443,6 @@ async fn unsaved_recovery_prefers_dir_metadata() {
     })
     .await
     .unwrap();
-    pack.save_metadata().await.unwrap();
     // Drop without calling save() — UNSAVED marker remains and dir is not cleaned up.
     drop(pack);
 
@@ -500,7 +523,7 @@ async fn unsaved_recovery_tolerates_a_readable_but_corrupt_archive_index() {
 }
 
 #[tokio::test]
-async fn damaged_metadata_backup_uses_the_authoritative_editor_database() {
+async fn metadata_needs_no_separate_recovery_file() {
     let tmp = tempdir().unwrap();
     let data_dir = tempdir().unwrap();
     let pack_path = tmp.path().join("test.lwpack");
@@ -513,9 +536,7 @@ async fn damaged_metadata_backup_uses_the_authoritative_editor_database() {
     })
     .await
     .unwrap();
-    tokio::fs::write(pack.dir().join("Metadata"), b"damaged")
-        .await
-        .unwrap();
+    assert!(!pack.dir().join("Metadata").exists());
     drop(pack);
 
     let recovered = MediaPack::open(pack_path, data_dir.path()).await.unwrap();

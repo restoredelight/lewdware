@@ -117,8 +117,8 @@ pub fn get_recent_packs() -> Vec<RecentPack> {
                 .is_some_and(|d| d.join("UNSAVED").is_file());
             if draft_exists {
                 if let Some(name) = draft_dir
-                    .and_then(|d| std::fs::read(d.join("Metadata")).ok())
-                    .and_then(|b| Metadata::from_buf(&b).ok())
+                    .and_then(|d| rusqlite::Connection::open(d.join("index.db")).ok())
+                    .and_then(|connection| Metadata::read(&connection).ok())
                     .map(|m| m.name)
                 {
                     r.name = name;

@@ -34,6 +34,13 @@ pub trait PackSource {
     fn list_dir(&self, path: &str) -> Vec<String>;
     /// Cheap existence check for validating media paths referenced in JSON.
     fn file_exists(&self, path: &str) -> bool;
+    /// Whether a file or directory exists at this pack-root-relative path.
+    fn path_exists(&self, path: &str) -> bool;
+    /// Whether the source root contains any path Edgeware recognizes as part of a pack.
+    fn has_pack_marker(&self) -> bool {
+        self.list_dir("").iter().any(|name| is_file_marker(name))
+            || DIR_MARKERS.iter().any(|path| self.path_exists(path))
+    }
     /// Copies a media file's bytes to `dest` on disk. Unlike `read_file` (small JSON only), this
     /// is for a front end that needs to pull potentially-large media bytes out for encoding --
     /// `convert()` itself never calls it.
@@ -73,6 +80,10 @@ impl PackSource for DirSource {
         self.root.join(path).is_file()
     }
 
+    fn path_exists(&self, path: &str) -> bool {
+        self.root.join(path).exists()
+    }
+
     fn extract_file(&self, path: &str, dest: &Path) -> io::Result<()> {
         fs::copy(self.root.join(path), dest).map(|_| ())
     }
@@ -86,6 +97,9 @@ pub struct ZipSource {
     /// Normalized (root-prefix-stripped), forward-slash file paths -- directory placeholder
     /// entries excluded. Sorted.
     entries: Vec<String>,
+    /// Explicit directory entries, normalized like `entries`. Needed to preserve an empty media
+    /// directory, which Edgeware itself accepts as a pack marker.
+    directories: BTreeSet<String>,
 }
 
 impl ZipSource {
@@ -113,6 +127,14 @@ impl ZipSource {
             .map(|name| name.to_string())
             .collect();
         entries.sort();
+        let directories = raw_names
+            .iter()
+            .filter(|name| name.ends_with('/'))
+            .filter_map(|name| name.strip_prefix(root_prefix.as_str()))
+            .map(|name| name.trim_end_matches('/'))
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect();
 
         // Touch the archive once so a corrupt central directory surfaces as an error here,
         // not on first use.
@@ -122,11 +144,22 @@ impl ZipSource {
             archive: Mutex::new(archive),
             root_prefix,
             entries,
+            directories,
         })
     }
 
     fn full_path(&self, path: &str) -> String {
         format!("{}{path}", self.root_prefix)
+    }
+
+    /// Whether the archive contains any path Edgeware recognizes as part of a pack.
+    pub fn has_pack_marker(&self) -> bool {
+        <Self as PackSource>::has_pack_marker(self)
+    }
+
+    /// Copies a media file from the archive to `dest`.
+    pub fn extract_file(&self, path: &str, dest: &Path) -> io::Result<()> {
+        <Self as PackSource>::extract_file(self, path, dest)
     }
 }
 
@@ -161,6 +194,17 @@ impl PackSource for ZipSource {
         self.entries.iter().any(|e| e == path)
     }
 
+    fn path_exists(&self, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        let child_prefix = format!("{path}/");
+        self.file_exists(path)
+            || self.directories.contains(path)
+            || self
+                .entries
+                .iter()
+                .any(|entry| entry.starts_with(&child_prefix))
+    }
+
     fn extract_file(&self, path: &str, dest: &Path) -> io::Result<()> {
         let full = self.full_path(path);
         let mut archive = self
@@ -174,7 +218,7 @@ impl PackSource for ZipSource {
     }
 }
 
-/// Recognizable contents of an Edgeware pack root: the JSON files a pack is described by, and the
+/// Paths Edgeware recognizes at a pack root: manifests/config, special-purpose files, and the
 /// directories its media lives in.
 const FILE_MARKERS: &[&str] = &[
     "index.json",
@@ -185,6 +229,15 @@ const FILE_MARKERS: &[&str] = &[
     "web.json",
     "config.json",
     "corruption.json",
+    "discord.dat",
+    "icon.ico",
+    "script.lua",
+    "wallpaper.png",
+    "loading_splash.png",
+    "loading_splash.gif",
+    "loading_splash.jpg",
+    "loading_splash.jpeg",
+    "loading_splash.bmp",
 ];
 const DIR_MARKERS: &[&str] = &["img", "vid", "aud", "hypno", "subliminals"];
 /// The one marker that is not evidence of a pack on its own.
@@ -193,6 +246,20 @@ const DIR_MARKERS: &[&str] = &["img", "vid", "aud", "hypno", "subliminals"];
 /// a preconfigured install has a `config.json` in a directory that holds no pack at all. Every
 /// other marker only ever appears inside a pack.
 const WEAK_MARKER: &str = "config.json";
+
+fn is_file_marker(name: &str) -> bool {
+    FILE_MARKERS.contains(&name)
+        || name.rsplit_once('.').is_some_and(|(stem, extension)| {
+            (stem.eq_ignore_ascii_case("wallpaper")
+                && ["png", "jpg", "jpeg", "bmp", "webp"]
+                    .iter()
+                    .any(|candidate| extension.eq_ignore_ascii_case(candidate)))
+                || (stem.eq_ignore_ascii_case("loading_splash")
+                    && ["png", "gif", "jpg", "jpeg", "bmp"]
+                        .iter()
+                        .any(|candidate| extension.eq_ignore_ascii_case(candidate)))
+        })
+}
 
 /// The directory inside the archive that holds the pack, as a prefix to strip from every entry
 /// (`""` when that is the archive's own root).
@@ -221,7 +288,7 @@ fn detect_root_prefix(names: &[String]) -> String {
             let recognized = if is_directory {
                 DIR_MARKERS.contains(segment)
             } else {
-                FILE_MARKERS.contains(segment)
+                is_file_marker(segment)
             };
             if recognized {
                 let prefix = match index {
@@ -291,6 +358,14 @@ mod tests {
     }
 
     #[test]
+    fn dir_source_recognizes_pack_markers_without_converted_content() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("info.json"), b"{}").unwrap();
+
+        assert!(DirSource::new(dir.path()).has_pack_marker());
+    }
+
+    #[test]
     fn zip_source_filters_junk_entries() {
         let dir = tempfile::tempdir().unwrap();
         let zip_path = dir.path().join("pack.zip");
@@ -313,6 +388,23 @@ mod tests {
     }
 
     #[test]
+    fn zip_source_preserves_an_empty_media_directory_as_a_pack_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("pack.zip");
+        {
+            let file = fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+            writer.add_directory("MyPack/img/", options).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let source = ZipSource::open(&zip_path).unwrap();
+        assert!(source.path_exists("img"));
+        assert!(source.has_pack_marker());
+    }
+
+    #[test]
     fn detect_root_prefix_no_wrapping_folder() {
         let names: Vec<String> = ["info.json", "img/a.png", "aud/b.mp3"]
             .iter()
@@ -327,6 +419,12 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
+        assert_eq!(detect_root_prefix(&names), "MyPack/");
+    }
+
+    #[test]
+    fn detect_root_prefix_recognizes_an_unsupported_pack_file() {
+        let names = vec!["MyPack/script.lua".to_string()];
         assert_eq!(detect_root_prefix(&names), "MyPack/");
     }
 

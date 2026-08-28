@@ -3,8 +3,6 @@ use std::collections::HashSet;
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::behaviour::storage::read_one_stage;
-
 // ── Naming a stage's own tag ─────────────────────────────────────────────────
 //
 // The editor gives a stage that restricts its content a tag of its own, because the "Appears in"
@@ -123,7 +121,7 @@ pub fn stage_owned_tags(conn: &Connection, id: &str) -> Result<Vec<OwnedStageTag
         "SELECT t.name, st.excluded FROM behaviour_stage_tag AS st
          JOIN tags AS t ON t.id = st.tag_id
          WHERE st.stage_id = ?1 AND st.owned = 1
-         ORDER BY st.excluded, st.position",
+         ORDER BY st.excluded, st.id",
     )?;
     let tags = statement
         .query_map(params![id], |row| {
@@ -169,19 +167,36 @@ pub fn stage_tag_shared(conn: &Connection, tag: &str, except: &str) -> Result<bo
 /// with it, exactly as the slot's own Remove does. Derived here rather than sent by the caller so
 /// that the list is the one the pack actually holds at the moment of the write.
 pub fn stage_scenery(conn: &Connection, id: &str) -> Result<Vec<u64>> {
-    let Some(stage) = read_one_stage(conn, id)? else {
+    let stage_media: Option<(Option<u64>, Option<u64>)> = conn
+        .query_row(
+            "SELECT wallpaper, audio FROM behaviour_stage WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((wallpaper, audio)) = stage_media else {
         return Ok(Vec::new());
     };
-    Ok([
-        stage.content.wallpaper,
-        stage.content.audio,
-        stage.on_enter.splash,
-        stage.on_enter.sound,
-        stage.prompt.sound,
-    ]
-    .into_iter()
-    .flatten()
-    .collect())
+    let entry_media: Option<(Option<u64>, Option<u64>)> = conn
+        .query_row(
+            "SELECT splash_media, sound_media FROM behaviour_stage_entry WHERE stage_id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let prompt_media: Option<Option<u64>> = conn
+        .query_row(
+            "SELECT sound_media FROM behaviour_stage_prompt WHERE stage_id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let (entry_splash, entry_sound) = entry_media.unwrap_or((None, None));
+    let prompt_sound = prompt_media.flatten();
+    Ok([wallpaper, audio, entry_splash, entry_sound, prompt_sound]
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 /// One stage's label, without reading the rest of it.
@@ -197,5 +212,12 @@ pub fn read_one_stage_label(conn: &Connection, id: &str) -> Result<Option<String
 
 /// The background track this stage names, if it names one rather than picking at random.
 pub fn stage_audio(conn: &Connection, id: &str) -> Result<Option<u64>> {
-    Ok(read_one_stage(conn, id)?.and_then(|stage| stage.content.audio))
+    Ok(conn
+        .query_row(
+            "SELECT audio FROM behaviour_stage WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, Option<u64>>(0),
+        )
+        .optional()?
+        .flatten())
 }

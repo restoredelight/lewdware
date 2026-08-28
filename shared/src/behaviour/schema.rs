@@ -1,33 +1,27 @@
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt::Display,
+};
 
-use serde::{Deserialize, Serialize};
+use anyhow::{Result, bail};
+use rusqlite::{Connection, OptionalExtension, ToSql, Transaction, params, types::FromSql};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-/// Data read by both default modes: captions, prompts, notifications, web links,
-/// the wallpaper/splash media references, and the content groups a user can toggle. See
-/// `behaviour-design/behaviour-tab.md` and `behaviour-design/default-mode.md` (Ownership).
-///
-/// Wallpaper and splash are single media *references*, not tag queries: one file each, held by
-/// id and resolved to a name by the engine before the modes see it. They were tag lists once,
-/// which asked an author to know that `wallpaper` was a mechanical tag and to keep it off
-/// ordinary media -- while every format they can come from is single-image anyway (Edgeware has one
-/// `wallpaper.png`, one `loading_splash.*`, and one wallpaper per corruption level). Both stay
-/// opt-in: `None` means the pack doesn't use engine-managed wallpaper/splash at all.
+use super::db::{
+    read_audio_media, read_content_groups, read_experience, read_popup_media, read_text_pool,
+    read_web_links, write_audio_media, write_content_groups, write_experience, write_popup_media,
+    write_text_pool, write_web_links,
+};
+
+const LEGACY_BLOB_KEY: &str = "behaviour";
+
+/// Data read by both default modes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Content {
-    /// Per-file popup attributes, keyed by media id. See [`PopupMedia`].
-    ///
-    /// A map rather than a list because the key is the address: unlike the pools, an entry is
-    /// edited, added and removed by media id, which is stable across everything except deleting
-    /// the file. That also makes it patchable field by field (`content.popups.42.scale`) instead
-    /// of by whole-array replacement.
-    ///
-    /// Serialized even when empty, like the pools and unlike the optional media slots. A patch
-    /// writes a missing key only as its *final* segment — inventing an intermediate one would
-    /// resurrect a section a stale editor is writing into (see `patch.rs`) — so a map that
-    /// vanished when empty would reject the first entry ever added to a pack.
+    /// Per-file popup attributes
     #[serde(default)]
     pub popups: BTreeMap<u64, PopupMedia>,
-    /// Per-file audio attributes, keyed by media id. See [`AudioMedia`] and `popups` above.
+    /// Per-file audio attributes
     #[serde(default)]
     pub audio: BTreeMap<u64, AudioMedia>,
     #[serde(default)]
@@ -40,20 +34,17 @@ pub struct Content {
     pub notifications: Vec<TextItem>,
     #[serde(default)]
     pub web_links: Vec<WebLink>,
-    /// Id of the media file used as the desktop wallpaper. `None` means the pack has no
-    /// wallpaper feature at all -- see this struct's doc comment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallpaper: Option<u64>,
-    /// Id of the media file shown as the startup splash. See `wallpaper`'s doc comment --
-    /// same reasoning, except that a splash may also be a video (an animated GIF probes as one;
-    /// see `shared/src/encode.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub splash: Option<u64>,
 }
 
+#[cfg(test)]
+#[path = "schema_tests/tests.rs"]
+mod schema_tests;
+
 impl Content {
-    /// Whether this document describes no content at all: no pools, no groups, and neither media
-    /// slot filled.
     pub fn is_empty(&self) -> bool {
         self.popups.is_empty()
             && self.audio.is_empty()
@@ -67,35 +58,17 @@ impl Content {
     }
 }
 
-/// One place in a behaviour document that points at a media file -- the address of a media slot,
-/// independent of what (if anything) currently fills it. Used by the Edgeware importer, which
-/// knows which file belongs in which slot long before that file has an id to record, and so fills
-/// each slot with [`Behaviour::fill_media_reference`] once its media really exists.
+/// One place in a behaviour table that points at a media file
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MediaSlot {
-    /// `Content::wallpaper`.
     Wallpaper,
-    /// `Content::splash`.
     Splash,
-    /// The wallpaper a timeline stage sets, addressed by stage id rather than by position: a
-    /// slot may be filled long after it was read, and ids are what survive editing in between.
-    StageWallpaper {
-        stage: String,
-    },
-    /// The background track a timeline stage selects. `None` retains the current track.
-    StageAudio {
-        stage: String,
-    },
-    StageEntrySplash {
-        stage: String,
-    },
-    StageEntrySound {
-        stage: String,
-    },
-    StagePromptSound {
-        stage: String,
-    },
+    StageWallpaper { stage: String },
+    StageAudio { stage: String },
+    StageEntrySplash { stage: String },
+    StageEntrySound { stage: String },
+    StagePromptSound { stage: String },
 }
 
 /// What a pack author says about one file used as popup content.
@@ -276,6 +249,18 @@ pub enum MonitorPreference {
     Primary,
 }
 
+impl ToSql for MonitorPreference {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        serialize_to_db_value(self)
+    }
+}
+
+impl FromSql for MonitorPreference {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        deserialize_from_db_value(value)
+    }
+}
+
 /// A single content-pool entry, taggable independently of any other entry in the same pool
 /// (unlike Edgeware's one-mood-per-item model, an item here can carry any number of tags — or
 /// none, matching lewdware's general tag model).
@@ -325,7 +310,7 @@ fn default_true() -> bool {
     true
 }
 
-/// The behaviour document, as every layer above `behaviour::storage` sees it.
+/// The behaviour document assembled from the pack's `behaviour_*` tables.
 ///
 /// It carries no version of its own. It used to, back when it was a JSON blob that had to
 /// describe its own shape; now it is rows, and the pack database's migration ledger says which
@@ -344,28 +329,79 @@ impl Behaviour {
         Self::default()
     }
 
+    /// Reads the pack's table-backed behaviour document.
+    ///
+    /// A pack that still contains the retired JSON blob cannot be represented faithfully by the
+    /// tables and is rejected rather than silently appearing empty.
+    pub fn read(conn: &Connection) -> Result<Self> {
+        let legacy_present: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pack_data WHERE name = ?)",
+            params![LEGACY_BLOB_KEY],
+            |row| row.get(0),
+        )?;
+        if legacy_present {
+            bail!(
+                "this pack's behaviour document predates the behaviour tables; re-import the pack \
+                 in the pack editor"
+            );
+        }
+
+        let (wallpaper, splash) = conn
+            .query_row(
+                "SELECT wallpaper, splash FROM behaviour_content WHERE singleton = 1",
+                [],
+                |row| Ok((row.get::<_, Option<u64>>(0)?, row.get::<_, Option<u64>>(1)?)),
+            )
+            .optional()?
+            .unwrap_or((None, None));
+        Ok(Self {
+            content: Content {
+                popups: read_popup_media(conn)?,
+                audio: read_audio_media(conn)?,
+                content_groups: read_content_groups(conn)?,
+                captions: read_text_pool(conn, "caption")?,
+                prompts: read_text_pool(conn, "prompt")?,
+                notifications: read_text_pool(conn, "notification")?,
+                web_links: read_web_links(conn)?,
+                wallpaper,
+                splash,
+            },
+            experience: read_experience(conn)?,
+        })
+    }
+
+    /// Replaces the table-backed behaviour document.
+    pub fn write(&self, tx: &Transaction<'_>) -> Result<()> {
+        tx.execute("DELETE FROM behaviour_content", [])?;
+        tx.execute("DELETE FROM behaviour_transition", [])?;
+        tx.execute("DELETE FROM behaviour_stage", [])?;
+        tx.execute("DELETE FROM behaviour_experience", [])?;
+        tx.execute("DELETE FROM behaviour_popup_media", [])?;
+        tx.execute("DELETE FROM behaviour_audio_media", [])?;
+        tx.execute("DELETE FROM behaviour_content_group", [])?;
+        tx.execute("DELETE FROM behaviour_text_item", [])?;
+        tx.execute("DELETE FROM behaviour_web_link", [])?;
+
+        let content = &self.content;
+        tx.execute(
+            "INSERT INTO behaviour_content (singleton, wallpaper, splash) VALUES (1, ?, ?)",
+            params![content.wallpaper, content.splash],
+        )?;
+        write_popup_media(tx, &content.popups)?;
+        write_audio_media(tx, &content.audio)?;
+        write_content_groups(tx, &content.content_groups)?;
+        write_text_pool(tx, "caption", &content.captions)?;
+        write_text_pool(tx, "prompt", &content.prompts)?;
+        write_text_pool(tx, "notification", &content.notifications)?;
+        write_web_links(tx, &content.web_links)?;
+        write_experience(tx, self.experience.as_ref())
+    }
+
     pub fn validate(&self) -> Vec<ValidationIssue> {
         let Some(experience) = &self.experience else {
             return vec![];
         };
         experience.timeline.validate()
-    }
-
-    /// Empties every slot pointing at `media` -- what deleting that file means for this document.
-    ///
-    /// Deletion is the only thing that can invalidate a reference now that slots hold ids: a
-    /// rename leaves the id alone, which is the whole point of step 1 in
-    /// `design/behaviour-storage.md`. Returns whether anything changed, so a caller can skip
-    /// re-persisting an untouched document.
-    pub fn clear_media_reference(&mut self, media: u64) -> bool {
-        let mut changed = false;
-        for (_, value) in self.media_reference_slots() {
-            if *value == Some(media) {
-                *value = None;
-                changed = true;
-            }
-        }
-        changed
     }
 
     /// Points `slot` at `media`, if that slot exists and is still empty.
@@ -795,12 +831,36 @@ pub enum EndStrategy {
     All,
 }
 
+impl ToSql for EndStrategy {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        serialize_to_db_value(self)
+    }
+}
+
+impl FromSql for EndStrategy {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        deserialize_from_db_value(value)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CountScope {
     #[default]
     Stage,
     Session,
+}
+
+impl ToSql for CountScope {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        serialize_to_db_value(self)
+    }
+}
+
+impl FromSql for CountScope {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        deserialize_from_db_value(value)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -811,6 +871,18 @@ pub enum EventKind {
     Notification,
     Prompt,
     Sound,
+}
+
+impl ToSql for EventKind {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        serialize_to_db_value(self)
+    }
+}
+
+impl FromSql for EventKind {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        deserialize_from_db_value(value)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -836,11 +908,51 @@ pub enum Easing {
     EaseInOut,
 }
 
+impl ToSql for Easing {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        serialize_to_db_value(self)
+    }
+}
+
+impl FromSql for Easing {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        deserialize_from_db_value(value)
+    }
+}
+
+#[derive(Debug)]
+struct NotSerializedToStringError;
+
+impl Display for NotSerializedToStringError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Value did not serialize to a string")
+    }
+}
+
+impl std::error::Error for NotSerializedToStringError {}
+
+fn serialize_to_db_value<T: Serialize>(
+    value: &T,
+) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(text)) => Ok(rusqlite::types::ToSqlOutput::from(text)),
+        Ok(_) => Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+            NotSerializedToStringError,
+        ))),
+        Err(err) => Err(rusqlite::Error::ToSqlConversionFailure(Box::new(err))),
+    }
+}
+
+fn deserialize_from_db_value<T: DeserializeOwned>(
+    value: rusqlite::types::ValueRef<'_>,
+) -> rusqlite::types::FromSqlResult<T> {
+    serde_json::from_value(serde_json::Value::String(value.as_str()?.to_string()))
+        .map_err(|err| rusqlite::types::FromSqlError::Other(Box::new(err)))
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TransitionCategory {
-    // Kept for documents written by early v3 editor builds. New editor versions
-    // use the field-level variants below.
     Events,
     Movement,
     Mitosis,
@@ -854,6 +966,18 @@ pub enum TransitionCategory {
     MovementMaximumSpeed,
     MitosisChance,
     MitosisCount,
+}
+
+impl ToSql for TransitionCategory {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        serialize_to_db_value(self)
+    }
+}
+
+impl FromSql for TransitionCategory {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        deserialize_from_db_value(value)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -963,18 +1087,6 @@ mod tests {
         let stage = &behaviour.experience.as_ref().unwrap().timeline.stages[0];
         assert_eq!(stage.content.wallpaper, Some(3));
         assert_eq!(stage.content.audio, Some(4));
-    }
-
-    #[test]
-    fn clearing_a_media_reference_covers_every_slot_pointing_at_it() {
-        // Deleting a file the base wallpaper and a stage both use has to clear both -- the
-        // referential integrity the pack editor's lifecycle needs.
-        let mut behaviour = behaviour_with_slots(1, 2, 1);
-
-        assert!(behaviour.clear_media_reference(1));
-        assert_eq!(behaviour.referenced_media_ids(), vec![2]);
-        // Nothing points at it any more, so there is nothing to re-persist.
-        assert!(!behaviour.clear_media_reference(1));
     }
 
     /// The point of holding ids: a file can be renamed freely without the document hearing about

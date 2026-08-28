@@ -188,6 +188,36 @@ async fn an_animated_splash_is_shown_like_any_other() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn splash_reports_when_the_reference_is_audio() {
+    LocalSet::new()
+        .run_until(async {
+            let content = Content {
+                splash: Some(FIXTURE_MEDIA),
+                ..Default::default()
+            };
+
+            let mut config = isolated_process_config();
+            config.insert("splash_enabled".to_string(), OptionValue::Boolean(true));
+
+            let mut harness = Harness::with_pack(
+                &real_default_mode_sources(),
+                pack_fixture_with_data(&[("intro.ogg", &[])], None),
+                content,
+                config,
+                all_capabilities(),
+                Volume::default(),
+            );
+            let err = harness.run_entrypoint("main.lua").unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("splash media 'intro.ogg' must be an image or video (got audio)"),
+                "unexpected error: {err}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn splash_disabled_never_spawns() {
     LocalSet::new()
         .run_until(async {

@@ -130,10 +130,11 @@ pub fn write_pack(
         written += 1;
     }
 
-    // Through the storage module: the document is rows now, so writing it is its business.
+    // The document writes its table-backed representation directly.
     let mut db = db;
     let tx = db.transaction()?;
-    shared::behaviour::storage::write(&tx, &conversion.behaviour)?;
+    conversion.metadata.insert(&tx)?;
+    conversion.behaviour.write(&tx)?;
     tx.commit()?;
 
     // Forces a full checkpoint into the main db file -- without this, data written under a WAL
@@ -147,17 +148,10 @@ pub fn write_pack(
     out.write_all(&db_bytes)?;
     let index_length = db_bytes.len() as u64;
 
-    let metadata_offset = index_offset + index_length;
-    let metadata_bytes = conversion.metadata.to_buf()?;
-    out.write_all(&metadata_bytes)?;
-    let metadata_length = metadata_bytes.len() as u64;
-
     let header = Header {
         id: Uuid::new_v4(),
         index_offset,
         index_length,
-        metadata_offset,
-        metadata_length,
     };
     out.seek(SeekFrom::Start(0))?;
     out.write_all(&header.to_buf()?)?;

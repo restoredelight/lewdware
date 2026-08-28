@@ -605,4 +605,25 @@ async fn renaming_media_leaves_the_slots_pointing_at_it_alone() {
     pack.remove_files(vec![media]).await.unwrap();
     let behaviour = read_pack_behaviour(&pack).await;
     assert_eq!(behaviour.content.wallpaper, None);
+
+    pack.undo().await.unwrap();
+    assert_eq!(
+        read_pack_behaviour(&pack).await.content.wallpaper,
+        Some(media)
+    );
+    assert!(pack
+        .get_files()
+        .await
+        .unwrap()
+        .iter()
+        .any(|file| file.id == media));
+
+    pack.redo().await.unwrap();
+    assert_eq!(read_pack_behaviour(&pack).await.content.wallpaper, None);
+    assert!(!pack
+        .get_files()
+        .await
+        .unwrap()
+        .iter()
+        .any(|file| file.id == media));
 }

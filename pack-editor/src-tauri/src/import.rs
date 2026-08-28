@@ -1,28 +1,3 @@
-//! "Import Edgeware pack" -- runs the `converter` crate against a source pack (directory or
-//! `.zip`) and streams the result into a freshly-created `MediaPack`, re-encoding media via the
-//! same ffmpeg sidecars/hardware encoder normal uploads use. See
-//! `behaviour-design/edgeware-compat.md` (the pack editor is the sole product conversion front
-//! end) and `design/release-plan.md`'s M6 bullet.
-//!
-//! Mirrors `encode.rs`'s `process_files`/`process_one_file` shape closely -- same
-//! extract-hash-encode-insert pipeline (hashing the extracted source, not the encoded output --
-//! see `import_one_media`'s own comment), just pulling input bytes from a `PackSource` instead of
-//! an already-local path. behaviour.json/metadata are written synchronously in the
-//! `import_edgeware_pack_dialog` command itself (`lib.rs`), before this module's media pipeline
-//! ever starts: they're keyed by tag, not by any specific media file's id, so they have no actual
-//! dependency on encoding having finished -- waiting for the whole (potentially large) media
-//! pipeline before the Content/Experience tabs had anything to show was an artificial delay, not a
-//! real one.
-//!
-//! The wallpaper/splash slots are the exception, because they reference media by *name* and a
-//! name isn't final until its file has arrived (a collision suffixes it; a duplicate or a failed
-//! encode means it never arrives at all). Those are left out of that first write and filled in by
-//! `fill_slots_for` the moment the file each one names lands -- per file, not once at the end, so
-//! a slot waits only on its own media rather than on the whole (potentially very long) pipeline.
-//! The pack still never carries a reference to a file it doesn't have: a name is only written
-//! once that exact file is in the pack. Whatever is still unclaimed when the pipeline ends named
-//! a file that never arrived, and stays empty.
-
 use std::{
     collections::HashMap,
     io,
@@ -32,7 +7,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context};
-use converter::{convert, ConversionOutput, ConvertedMedia, DirSource, PackSource, ZipSource};
+use converter::{convert, ConversionOutput, ConvertedMedia, ZipSource};
 use futures::{stream, StreamExt};
 use shared::behaviour::MediaSlot;
 use shared::encode::{encode_file, hash_file, HardwareEncoder};
@@ -76,49 +51,27 @@ impl std::fmt::Display for ImportErrorKind {
     }
 }
 
-/// Opens `source_path` as a `PackSource` (a directory or a `.zip` archive, going by whether the
-/// path is a directory) and runs the converter against it. Blocking (archive open, JSON/dir
-/// reads) -- callers should run this inside `spawn_blocking`. Kept synchronous and separate from
-/// the media pipeline below so a bad source (e.g. an unreadable zip) fails the Tauri command
-/// immediately, before any pack has been created or dialog shown for a destination.
-pub fn load(
-    source_path: &Path,
-) -> anyhow::Result<(Box<dyn PackSource + Send + Sync>, ConversionOutput)> {
-    let source: Box<dyn PackSource + Send + Sync> = if source_path.is_dir() {
-        Box::new(DirSource::new(source_path))
-    } else {
-        Box::new(
-            ZipSource::open(source_path)
-                .with_context(|| format!("opening {} as a zip archive", source_path.display()))?,
-        )
-    };
-    let output = convert(source.as_ref());
-
-    // Nothing recognizable was found. The converter has no way to distinguish "an Edgeware pack
-    // that happens to be empty" from "not an Edgeware pack" -- both simply produce nothing -- so
-    // this is where that judgement belongs, and it has to be a failure: succeeding leaves the
-    // author looking at a new, empty, untitled pack with no hint that their file was never read.
-    if output.media.is_empty() && output.behaviour.content.is_empty() {
+/// Opens an Edgeware `.zip` and runs the converter against it.
+pub fn load(source_path: &Path) -> anyhow::Result<(ZipSource, ConversionOutput)> {
+    let source = ZipSource::open(source_path)
+        .with_context(|| format!("opening {} as a zip archive", source_path.display()))?;
+    if !source.has_pack_marker() {
         bail!(
-            "{} doesn't contain an Edgeware pack -- no img/vid/aud media and no pack JSON was \
-             found in it",
+            "{} doesn't contain an Edgeware pack -- no recognized pack files or directories \
+             were found in it",
             source_path.display()
         );
     }
+    let output = convert(&source);
 
     Ok((source, output))
 }
 
-/// Streams `media` into the pack open in `pack_state`. Reuses the `upload:*` event names normal
-/// uploads emit (`start`/`added`/`error`/`file-done`/`done`) -- from the frontend's perspective,
-/// importing an Edgeware pack's media *is* a bulk upload; the only Edgeware-specific artifact (the
-/// converter's warnings) is returned directly from the Tauri command instead, since conversion
-/// itself already finished by the time this task starts (as did the behaviour.json/metadata write
-/// -- see this module's own doc comment).
+/// Streams `media` into the pack open in `pack_state`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_import(
     pack_state: crate::PackState,
-    source: Arc<dyn PackSource + Send + Sync>,
+    source: Arc<ZipSource>,
     media: Vec<ConvertedMedia>,
     media_references: Vec<(MediaSlot, String)>,
     app: tauri::AppHandle,
@@ -153,65 +106,27 @@ pub async fn run_import(
             return;
         }
     };
-    let history_id = {
-        let lock = pack_state.lock().await;
-        match lock.as_ref().filter(|pack| pack.id() == pack_id) {
-            Some(pack) => match pack.begin_media_import().await {
-                Ok(id) => id,
-                Err(error) => {
-                    let _ = app.emit(
-                        "upload:error",
-                        UploadErrorPayload::new(&dir, format!("Could not begin import: {error}")),
-                    );
-                    let _ = app.emit("upload:done", ());
-                    return;
-                }
-            },
-            None => return,
-        }
-    };
-
     let total = media.len();
     let _ = app.emit("upload:start", serde_json::json!({ "total": total }));
 
     let limit = available_parallelism().map(|x| x.get()).ok();
 
-    // The slot references held back from the behaviour write, keyed by the converted file name
-    // each one is waiting on (see `fill_slots_for`). Claimed and removed as files land -- one
-    // file can carry several slots (a stage wallpaper reusing the pack's primary), and whatever
-    // is still here at the end named a file that never arrived.
     let pending = Arc::new(Mutex::new(group_media_references(media_references)));
-
-    // Serializes the behaviour document's read-modify-write across the concurrent import tasks:
-    // two referenced files landing at once would otherwise both read the document as it was
-    // before either fill, and the second write would drop the first one's slot.
-    let behaviour_write = Arc::new(tokio::sync::Mutex::new(()));
 
     let process_all = stream::iter(media).for_each_concurrent(limit, |item| {
         let pack_state = pack_state.clone();
         let app = app.clone();
         let dir = dir.clone();
         let encoder = encoder.clone();
-        let upload_lock = upload_lock.clone();
         let source = source.clone();
         let staging = staging.clone();
         let pending = pending.clone();
-        let behaviour_write = behaviour_write.clone();
+
         async move {
             let source_path = item.source_path.clone();
             let suggested_name = item.suggested_name.clone();
-            match import_one_media(
-                &pack_state,
-                pack_id,
-                source,
-                item,
-                &dir,
-                &staging,
-                encoder,
-                &upload_lock,
-                history_id,
-            )
-            .await
+            match import_one_media(&pack_state, pack_id, source, item, &dir, &staging, encoder)
+                .await
             {
                 Ok(Some(media_file)) => {
                     let slots = pending
@@ -219,24 +134,11 @@ pub async fn run_import(
                         .unwrap()
                         .remove(&suggested_name)
                         .unwrap_or_default();
-                    // Before the slot fill, so the front end has the file in hand by the time a
-                    // slot points at it -- a slot naming media the media grid hasn't heard of
-                    // renders as missing until the next refresh.
+
                     let _ = app.emit("upload:added", &media_file);
+
                     if !slots.is_empty() {
-                        match fill_slots_for(
-                            &pack_state,
-                            pack_id,
-                            &behaviour_write,
-                            slots,
-                            media_file.id,
-                        )
-                        .await
-                        {
-                            // The front end fetched this document at the start of the import (see
-                            // `Start.svelte`), so its copy predates this write and nothing else
-                            // would ever tell it -- the slot stayed empty in the editor until the
-                            // pack was reopened.
+                        match fill_slots_for(&pack_state, pack_id, slots, media_file.id).await {
                             Ok(filled) if !filled.is_empty() => {
                                 let _ = app.emit("import:slots-filled", &filled);
                             }
@@ -271,36 +173,14 @@ pub async fn run_import(
     });
     tokio::pin!(process_all);
 
-    // Dropping the stream is the cancellation -- see encode::process_files.
     tokio::select! {
         _ = &mut process_all => {}
         _ = wait_cancelled(&mut cancel) => {}
     }
 
-    {
-        let lock = pack_state.lock().await;
-        if let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) {
-            if let Err(error) = pack.finish_media_import(history_id, None).await {
-                let _ = app.emit(
-                    "upload:error",
-                    UploadErrorPayload::new(
-                        &dir,
-                        format!("Could not finalize import history: {error}"),
-                    ),
-                );
-            }
-        }
-    }
-
     let _ = app.emit("upload:done", ());
 }
 
-/// The slot references `import_edgeware_pack_dialog` held back, indexed by the converted file
-/// name each one waits on, so an arriving file can claim its slots with one lookup.
-///
-/// Several slots can name the same file -- Edgeware packs routinely reuse the pack's primary
-/// wallpaper as a corruption level's, and `resolve_wallpaper` imports it once -- so this is a
-/// name to *many* slots, not a name to one.
 fn group_media_references(references: Vec<(MediaSlot, String)>) -> HashMap<String, Vec<MediaSlot>> {
     let mut grouped: HashMap<String, Vec<MediaSlot>> = HashMap::new();
     for (slot, name) in references {
@@ -309,43 +189,22 @@ fn group_media_references(references: Vec<(MediaSlot, String)>) -> HashMap<Strin
     grouped
 }
 
-/// Points the media slots (wallpaper/splash -- see `shared::behaviour::Content`) waiting on a
-/// just-imported file at the id it actually landed under.
-///
-/// Called as each referenced file arrives rather than once at the end, so the Content and
-/// Experience tabs fill in a slot as soon as its own media is really in the pack, instead of
-/// showing an empty one until the last of the pack's (potentially thousands of) files has been
-/// encoded. `prioritize_referenced_media` puts these files first in the import order for exactly
-/// this reason.
-///
-/// A slot whose file never arrives -- a duplicate, a failed encode, a cancelled import -- is
-/// simply never filled, which is the honest answer: `pack_has_wallpaper`/`pack_has_splash` then
-/// report the feature as absent rather than offering a toggle with nothing behind it.
-///
-/// Returns the slots that were actually filled, so the caller can tell the front end about a
-/// write it has no other way to learn about.
+/// Resolves media slots (wallpaper, splash, etc) waiting for an imported file.
 async fn fill_slots_for(
     pack_state: &crate::PackState,
     pack_id: Uuid,
-    behaviour_write: &tokio::sync::Mutex<()>,
     slots: Vec<MediaSlot>,
     media_id: u64,
 ) -> anyhow::Result<Vec<FilledSlot>> {
-    let _write_guard = behaviour_write.lock().await;
     let lock = pack_state.lock().await;
     let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) else {
         return Ok(Vec::new());
     };
-    // Fill, not set: a slot the author has already pointed somewhere keeps their choice. The
-    // converted document named a file, and this is the moment that file arrives -- but the author
-    // may have picked their own in the meantime, and the import must not overrule them.
-    //
-    // One targeted write per slot rather than a read-modify-write of the whole document: a
-    // document read while the timeline is switched off has no stages in it, so writing it back
-    // would delete them.
+
     let filled = pack
-        .fill_empty_slots(slots, media_id, "Set media slot".to_string())
+        .fill_empty_slots_from_conversion(slots, media_id)
         .await?;
+
     Ok(filled
         .into_iter()
         .map(|slot| FilledSlot { slot, media_id })
@@ -358,13 +217,11 @@ async fn fill_slots_for(
 async fn import_one_media(
     pack_state: &crate::PackState,
     pack_id: Uuid,
-    source: Arc<dyn PackSource + Send + Sync>,
+    source: Arc<ZipSource>,
     media: ConvertedMedia,
     dir: &Path,
     staging: &Arc<TempDir>,
     encoder: HardwareEncoder,
-    _upload_lock: &RwLock<()>,
-    history_id: i64,
 ) -> Result<Option<MediaFile>, ImportErrorKind> {
     let extract_path = staging.path().join(format!("source-{}", Uuid::new_v4()));
     let extract_dest = extract_path.clone();
@@ -453,12 +310,7 @@ async fn import_one_media(
         .map_err(|e| ImportErrorKind::Other(e.into()))?;
     encoded.path = final_path;
     let added = pack
-        .add_file_to_import(
-            encoded,
-            Path::new(&media.suggested_name),
-            hash,
-            Some(history_id),
-        )
+        .add_file_to_import(encoded, Path::new(&media.suggested_name), hash, None)
         .await
         .map_err(ImportErrorKind::PackError)?;
     // A bulk import skips a file the pack already has -- the copy that's here is as good, and a
@@ -481,18 +333,27 @@ async fn import_one_media(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::*;
 
-    fn source_dir(files: &[(&str, &str)]) -> tempfile::TempDir {
+    fn source_zip(files: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");
-        for (name, contents) in files {
-            let path = dir.path().join(name);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).expect("create parent");
-            }
-            std::fs::write(path, contents).expect("write fixture");
+        let file = std::fs::File::create(dir.path().join("pack.zip")).expect("create zip");
+        let mut archive = zip::ZipWriter::new(file);
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        for &(name, contents) in files {
+            archive.start_file(name, options).expect("start zip file");
+            archive
+                .write_all(contents.as_bytes())
+                .expect("write zip file");
         }
+        archive.finish().expect("finish zip");
         dir
+    }
+
+    fn load_test_zip(dir: &tempfile::TempDir) -> anyhow::Result<(ZipSource, ConversionOutput)> {
+        load(&dir.path().join("pack.zip"))
     }
 
     /// The bug this guards: a source that holds no pack converted to nothing *successfully*, so
@@ -501,13 +362,13 @@ mod tests {
     /// looked exactly like this before `detect_root_prefix` learned to find it.
     #[test]
     fn a_source_holding_no_pack_fails_rather_than_importing_nothing() {
-        let dir = source_dir(&[
+        let dir = source_zip(&[
             ("readme.txt", "not a pack"),
             ("src/main.py", "print('hi')"),
             ("assets/logo.png", "not media either, and not in img/"),
         ]);
 
-        let error = match load(dir.path()) {
+        let error = match load_test_zip(&dir) {
             Err(error) => error,
             Ok(_) => panic!("a source with no pack must not import"),
         };
@@ -519,14 +380,14 @@ mod tests {
         );
     }
 
-    /// The emptiness check must not tighten what counts as a pack: media alone, with no JSON of
+    /// Marker validation must not tighten what counts as a pack: media alone, with no JSON of
     /// any kind, is a perfectly ordinary Edgeware pack.
     #[test]
     fn a_pack_of_bare_media_still_imports() {
-        let dir = source_dir(&[("img/a.png", "image bytes"), ("aud/b.mp3", "audio bytes")]);
+        let dir = source_zip(&[("img/a.png", "image bytes"), ("aud/b.mp3", "audio bytes")]);
 
         let (_source, output) =
-            load(dir.path()).unwrap_or_else(|e| panic!("bare media is a pack: {e}"));
+            load_test_zip(&dir).unwrap_or_else(|e| panic!("bare media is a pack: {e}"));
         assert_eq!(output.media.len(), 2);
     }
 
@@ -563,11 +424,43 @@ mod tests {
     /// convert to a real behaviour document, even though nothing will be imported alongside it.
     #[test]
     fn a_pack_of_only_text_content_still_imports() {
-        let dir = source_dir(&[("captions.json", r#"{"default": ["a caption"]}"#)]);
+        let dir = source_zip(&[("captions.json", r#"{"default": ["a caption"]}"#)]);
 
         let (_source, output) =
-            load(dir.path()).unwrap_or_else(|e| panic!("text-only content is a pack: {e}"));
+            load_test_zip(&dir).unwrap_or_else(|e| panic!("text-only content is a pack: {e}"));
         assert!(output.media.is_empty());
         assert!(!output.behaviour.content.is_empty());
+    }
+
+    /// `info.json` is an Edgeware pack path even when there is nothing for the content converter
+    /// to emit. Conversion output is therefore not a reliable format probe.
+    #[test]
+    fn a_metadata_only_pack_still_imports() {
+        let dir = source_zip(&[("info.json", r#"{"name": "Empty on purpose"}"#)]);
+
+        let (_source, output) =
+            load_test_zip(&dir).unwrap_or_else(|e| panic!("metadata-only pack is valid: {e}"));
+        assert!(output.media.is_empty());
+        assert!(output.behaviour.content.is_empty());
+        assert_eq!(output.metadata.name, "Empty on purpose");
+    }
+
+    /// Edgeware's own importer treats the standard media directories as pack markers even when
+    /// they are empty.
+    #[test]
+    fn an_empty_media_directory_is_still_a_pack_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = std::fs::File::create(dir.path().join("pack.zip")).expect("create zip");
+        let mut archive = zip::ZipWriter::new(file);
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        archive
+            .add_directory("img/", options)
+            .expect("add img directory");
+        archive.finish().expect("finish zip");
+
+        let (_source, output) =
+            load_test_zip(&dir).unwrap_or_else(|e| panic!("empty img directory is a marker: {e}"));
+        assert!(output.media.is_empty());
+        assert!(output.behaviour.content.is_empty());
     }
 }

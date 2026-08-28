@@ -5,7 +5,6 @@ use indexmap::IndexMap;
 use shared::{
     behaviour::{Behaviour, ContentGroup},
     db::migrate,
-    encode::FileType,
     mode::{self, Metadata, ModeEntry, OptionType, OptionValue, Permission, StoredValue},
     theme::ThemeChoice,
     user_config::{AppConfig, AudioDeviceChoice, Mode},
@@ -153,6 +152,12 @@ fn write_pack(dir: &std::path::Path, behaviour: &Behaviour, media: &[(&str, &str
     {
         let mut conn = rusqlite::Connection::open(&db_path).unwrap();
         migrate(&mut conn).unwrap();
+        shared::pack::Metadata {
+            name: "Test pack".to_string(),
+            ..Default::default()
+        }
+        .insert(&conn)
+        .unwrap();
         for (name, file_type) in media {
             conn.execute(
                 "INSERT INTO media (file_name, file_type, offset, length, hash)
@@ -165,27 +170,18 @@ fn write_pack(dir: &std::path::Path, behaviour: &Behaviour, media: &[(&str, &str
         // hand-written blob would arrive with the wallpaper missing.
         let mut conn = conn;
         let tx = conn.transaction().unwrap();
-        shared::behaviour::storage::write(&tx, behaviour).unwrap();
+        behaviour.write(&tx).unwrap();
         tx.commit().unwrap();
     }
     let db_bytes = std::fs::read(&db_path).unwrap();
 
-    // `Metadata` in scope here is the *mode* one; the pack's is a different type.
-    let metadata = shared::pack::Metadata {
-        name: "Test pack".to_string(),
-        ..Default::default()
-    };
-    let metadata_bytes = metadata.to_buf().unwrap();
     let mut header = shared::pack::Header::new();
-    header.metadata_offset = shared::pack::HEADER_SIZE as u64;
-    header.metadata_length = metadata_bytes.len() as u64;
-    header.index_offset = header.metadata_offset + header.metadata_length;
+    header.index_offset = shared::pack::HEADER_SIZE as u64;
     header.index_length = db_bytes.len() as u64;
 
     let pack_path = dir.join("test.lwpack");
     let mut file = std::fs::File::create(&pack_path).unwrap();
     file.write_all(&header.to_buf().unwrap()).unwrap();
-    file.write_all(&metadata_bytes).unwrap();
     file.write_all(&db_bytes).unwrap();
     file.flush().unwrap();
     pack_path
@@ -203,12 +199,10 @@ fn behaviour_with_wallpaper(media: u64) -> Behaviour {
     }
 }
 
-/// `pack_has_wallpaper` is the whole reason the wallpaper toggle is offered, and it is now
-/// answered by looking the referenced file up in the pack rather than by trusting the
-/// reference. That lookup runs at load time against the pack's own index, so it is only ever
-/// as right as `load_pack`'s query -- exercised here end to end, from a real file.
+/// A filled wallpaper slot is enough to offer the wallpaper toggle. Pack storage normally keeps
+/// the reference valid; the engine reports a malformed media type when it tries to use it.
 #[test]
-fn a_wallpaper_reference_that_resolves_shows_the_toggle() {
+fn a_filled_wallpaper_slot_shows_the_toggle() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_pack(
         dir.path(),
@@ -217,8 +211,6 @@ fn a_wallpaper_reference_that_resolves_shows_the_toggle() {
     );
 
     let pack = load_pack(path).unwrap();
-    assert_eq!(pack.referenced_media.get(&1), Some(&FileType::Image));
-
     let state = test_state(Some(pack));
     let config = AppConfig {
         mode: Mode::Sandbox,
@@ -232,15 +224,10 @@ fn a_wallpaper_reference_that_resolves_shows_the_toggle() {
     );
 }
 
-/// The other half of the same fact: a slot the pack can't honour must report false rather than
-/// offer a toggle that does nothing.
-///
-/// Only the wrong-media-type case is reachable now. A slot naming a file the pack does not
-/// have used to be the other half of this test, and the foreign key on `behaviour_content`
-/// has since made it unrepresentable -- deleting the file nulls the slot, and writing a slot
-/// that points at nothing is refused (`shared::behaviour::storage`).
+/// Config does not duplicate the engine's media-type validation. Even a malformed pack with a
+/// video in its wallpaper slot presents the authored option; using it fails in the engine.
 #[test]
-fn a_wallpaper_reference_of_the_wrong_type_hides_the_toggle() {
+fn a_filled_wallpaper_slot_shows_the_toggle_regardless_of_media_type() {
     for file_type in ["video", "audio"] {
         let dir = tempfile::tempdir().unwrap();
         let path = write_pack(
@@ -258,8 +245,8 @@ fn a_wallpaper_reference_of_the_wrong_type_hides_the_toggle() {
             get_mode_options_for(&config, &state)
                 .pack_has
                 .get("pack_has_wallpaper"),
-            Some(&OptionValue::Boolean(false)),
-            "a {file_type} should not satisfy a wallpaper slot",
+            Some(&OptionValue::Boolean(true)),
+            "a filled slot should satisfy pack_has_wallpaper",
         );
     }
 }
@@ -271,7 +258,6 @@ fn loaded_pack(behaviour: Behaviour, modes: Vec<PackModeEntry>) -> LoadedPack {
         metadata: shared::pack::Metadata::default(),
         modes,
         behaviour,
-        referenced_media: HashMap::new(),
         recommended_mode: None,
     }
 }

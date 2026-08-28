@@ -129,8 +129,16 @@ export const api = {
 	deleteArtist: (artist: string) => invoke<void>('delete_artist', { artist }),
 
 	getPackMetadata: () => invoke<MetadataDto>('get_pack_metadata'),
-	setPackMetadata: (dto: MetadataDto) => invoke<void>('set_pack_metadata', { dto }),
-	savePackMetadata: () => invoke<void>('save_pack_metadata'),
+	setPackName: (value: string, label: string) =>
+		invoke<void>('set_pack_name', { value, label }),
+	setPackCreator: (value: string | null, label: string) =>
+		invoke<void>('set_pack_creator', { value, label }),
+	setPackDescription: (value: string | null, label: string) =>
+		invoke<void>('set_pack_description', { value, label }),
+	setPackVersion: (value: string | null, label: string) =>
+		invoke<void>('set_pack_version', { value, label }),
+	setPackRecommendedMode: (value: MetadataDto['recommended_mode'], label: string) =>
+		invoke<void>('set_pack_recommended_mode', { value, label }),
 
 	// ── Behaviour ────────────────────────────────────────────────────────────
 	//

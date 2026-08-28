@@ -1,6 +1,7 @@
 use rusqlite::{Connection, params};
 
 use super::{pack, timeline_pack, tx_on};
+use crate::behaviour::db::read_stages;
 use crate::behaviour::editor::membership::selects;
 use crate::behaviour::editor::stage_tags::MAX_SLUG;
 use crate::behaviour::editor::{
@@ -10,7 +11,6 @@ use crate::behaviour::editor::{
     stage_tag_name, stage_tag_shared,
 };
 use crate::behaviour::schema::ContentGroup;
-use crate::behaviour::storage::read_stages;
 
 // ── Naming a stage's tag, and membership ─────────────────────────────────────
 

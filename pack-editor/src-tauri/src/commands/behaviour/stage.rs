@@ -40,8 +40,7 @@ pub async fn add_stage(
     state
         .with_pack(async |pack| {
             pack.behaviour_edit(BehaviourAction::new(label, move |tx: &Transaction<'_>| {
-                editor::add_stage(tx, after.as_deref(), source.as_deref(), &name)?;
-                Ok(true)
+                editor::add_stage(tx, after.as_deref(), source.as_deref(), &name).map(|_| ())
             }))
             .await
         })
@@ -57,8 +56,7 @@ pub async fn duplicate_stage(
     state
         .with_pack(async |pack| {
             pack.behaviour_edit(BehaviourAction::new(label, move |tx: &Transaction<'_>| {
-                editor::duplicate_stage(tx, &id)?;
-                Ok(true)
+                editor::duplicate_stage(tx, &id).map(|_| ())
             }))
             .await
         })
@@ -263,7 +261,7 @@ pub async fn restrict_stage_content(
                         Some(std::slice::from_ref(&tag)),
                         Some(&tag),
                     ),
-                    None => Ok(false),
+                    None => Ok(()),
                 },
             ))
             .await

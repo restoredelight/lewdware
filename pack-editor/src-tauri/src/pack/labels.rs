@@ -6,16 +6,12 @@ use super::*;
 use crate::history;
 use anyhow::{bail, Result};
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
-use shared::{
-    behaviour::{storage as behaviour_storage, Behaviour},
-    tags,
-};
+use shared::{behaviour::Behaviour, tags};
 
-/// The stored behaviour document, assembled from the `behaviour_*` tables and what is left of the
-/// blob. See `shared::behaviour::storage` -- the split is entirely that module's business, and
-/// everything here goes on working with whole `Behaviour` values.
+/// The stored behaviour document, assembled from the `behaviour_*` tables. The mapping is entirely
+/// [`Behaviour`]'s business, and everything here goes on working with whole values.
 pub(super) fn read_behaviour(connection: &rusqlite::Connection) -> Result<Behaviour> {
-    behaviour_storage::read(connection)
+    Behaviour::read(connection)
 }
 
 pub(super) fn tag_media_ids(tx: &rusqlite::Transaction<'_>, tag: &str) -> Result<Vec<u64>> {

@@ -1,6 +1,5 @@
 use super::{pack, store};
 use crate::behaviour::schema::{AudioMedia, Behaviour, PopupMedia, SpawnRegion};
-use crate::behaviour::storage::read;
 
 /// An entry that says nothing is not a row. The editor clears an attribute by nulling it, and
 /// when the last one goes the entry has to stop existing rather than linger as a row of
@@ -21,14 +20,14 @@ fn an_entry_with_nothing_set_is_not_stored() {
         .audio
         .insert(3, AudioMedia { volume: Some(0.5) });
     store(&mut conn, &behaviour);
-    assert_eq!(read(&conn).unwrap(), behaviour);
+    assert_eq!(Behaviour::read(&conn).unwrap(), behaviour);
 
     // Clearing the last attribute of each removes the entry entirely.
     behaviour.content.popups.insert(1, PopupMedia::default());
     behaviour.content.audio.insert(3, AudioMedia::default());
     store(&mut conn, &behaviour);
 
-    let stored = read(&conn).unwrap();
+    let stored = Behaviour::read(&conn).unwrap();
     assert!(stored.content.popups.is_empty());
     assert!(stored.content.audio.is_empty());
     assert!(stored.content.is_empty(), "and the document is empty again");
@@ -58,7 +57,7 @@ fn a_region_is_all_four_columns_or_none_of_them() {
     store(&mut conn, &behaviour);
 
     assert_eq!(
-        read(&conn).unwrap().content.popups[&1].region,
+        Behaviour::read(&conn).unwrap().content.popups[&1].region,
         Some(SpawnRegion {
             x: 0.8,
             y: 0.0,
@@ -77,13 +76,13 @@ fn a_region_is_all_four_columns_or_none_of_them() {
     )
     .unwrap();
 
-    let stored = read(&conn).unwrap();
+    let stored = Behaviour::read(&conn).unwrap();
     assert_eq!(stored.content.popups[&1].region, None);
     assert_eq!(stored.content.popups[&1].weight, Some(2.0));
 }
 
 /// The whole reason these are rows rather than a map in the document: deleting a file takes
-/// its attributes with it, with no equivalent of `clear_media_reference` to remember to call.
+/// its attributes with it, with no explicit cleanup query to remember to call.
 /// A pairing pointing at the deleted file goes too, without disturbing the popup it belonged
 /// to.
 #[test]
@@ -106,7 +105,7 @@ fn deleting_a_file_cascades_its_attributes_away() {
 
     conn.execute("DELETE FROM media WHERE id = 3", []).unwrap();
 
-    let stored = read(&conn).unwrap();
+    let stored = Behaviour::read(&conn).unwrap();
     assert!(stored.content.audio.is_empty(), "its own entry is gone");
     assert_eq!(
         stored.content.popups.get(&1).map(|popup| popup.audio.len()),
@@ -120,7 +119,7 @@ fn deleting_a_file_cascades_its_attributes_away() {
     );
 
     conn.execute("DELETE FROM media WHERE id = 1", []).unwrap();
-    assert!(read(&conn).unwrap().content.popups.is_empty());
+    assert!(Behaviour::read(&conn).unwrap().content.popups.is_empty());
 }
 
 /// Pairings are a set: the mode picks one at random, so order carries no meaning and the same
@@ -147,7 +146,7 @@ fn pairings_are_a_set_not_a_list() {
     store(&mut conn, &behaviour);
 
     assert_eq!(
-        read(&conn).unwrap().content.popups[&1].audio,
+        Behaviour::read(&conn).unwrap().content.popups[&1].audio,
         vec![3, 4],
         "deduplicated and ordered, so a round-trip is stable",
     );

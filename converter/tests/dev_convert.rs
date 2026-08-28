@@ -17,7 +17,7 @@ use std::{
 };
 
 use rusqlite::Connection;
-use shared::pack::read_pack_metadata;
+use shared::pack::{HEADER_SIZE, Header, Metadata};
 
 fn tool_available(name: &str) -> bool {
     Command::new(name)
@@ -86,7 +86,22 @@ fn dev_convert_produces_a_loadable_pack() {
     assert!(status.success());
 
     let mut file = fs::File::open(&output_path).unwrap();
-    let (header, metadata) = read_pack_metadata(&mut file).unwrap();
+    let mut header_bytes = [0; HEADER_SIZE];
+    file.read_exact(&mut header_bytes).unwrap();
+    let header = Header::from_buf(header_bytes).unwrap();
+    file.seek(SeekFrom::Start(header.index_offset)).unwrap();
+    let mut db_bytes = vec![0; header.index_length as usize];
+    file.read_exact(&mut db_bytes).unwrap();
+    let mut connection = Connection::open_in_memory().unwrap();
+    connection
+        .deserialize_read_exact(
+            rusqlite::MAIN_DB,
+            db_bytes.as_slice(),
+            db_bytes.len(),
+            true,
+        )
+        .unwrap();
+    let metadata = Metadata::read(&connection).unwrap();
     assert_eq!(metadata.name, "Dev Convert Test Pack");
     assert_eq!(metadata.creator.as_deref(), Some("Test"));
 
@@ -111,7 +126,7 @@ fn dev_convert_produces_a_loadable_pack() {
         .unwrap();
     assert_eq!(tagged_count, 1, "only the image was tagged \"test\"");
 
-    let behaviour = shared::behaviour::storage::read(&db).unwrap();
+    let behaviour = shared::behaviour::Behaviour::read(&db).unwrap();
     assert_eq!(behaviour.content.content_groups.len(), 1);
     assert_eq!(behaviour.content.content_groups[0].id, "test");
     assert_eq!(behaviour.content.captions.len(), 1);

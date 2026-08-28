@@ -23,11 +23,7 @@ use crate::mode::{
 #[derive(Subcommand)]
 pub enum ModeCommand {
     /// Create a new lewdware mode
-    New {
-        /// Start from the default mode instead of a minimal template
-        #[arg(long)]
-        from_default: bool,
-    },
+    New,
     Build(BuildArgs),
     Dev(DevArgs),
     /// Update .types/lewdware.d.lua to match the installed lw version
@@ -36,7 +32,7 @@ pub enum ModeCommand {
 
 pub fn handle_mode_command(command: ModeCommand) -> Result<()> {
     match command {
-        ModeCommand::New { from_default } => create_new_mode(from_default),
+        ModeCommand::New => create_new_mode(),
         ModeCommand::Build(args) => build(args),
         ModeCommand::Dev(args) => dev(args),
         ModeCommand::Types => types(),
