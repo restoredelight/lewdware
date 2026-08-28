@@ -19,7 +19,7 @@ pub fn build_command(
     mode_path: Option<&Path>,
     dev: bool,
     dev_stream_id: Option<Uuid>,
-    overrides: &SessionOverrides,
+    overrides: Option<&SessionOverrides>,
 ) -> Result<tokio::process::Command> {
     let cmd = shared::binaries::find_engine_binary()
         .ok_or_else(|| anyhow!("could not find the lewdware-engine binary"))?;
@@ -39,16 +39,26 @@ pub fn build_command(
     // The episode's `mode_path` (a `lw dev` session pointed at a mode file on disk) is folded in
     // here rather than sent down a second channel, so that only one of the two can win and the
     // engine never has to arbitrate between them.
-    let overrides = SessionOverrides {
-        mode: overrides.mode.clone().or_else(|| {
-            mode_path.map(|path| Mode::File {
-                path: path.to_path_buf(),
+    let overrides = overrides
+        .map(|overrides| SessionOverrides {
+            mode: overrides.mode.clone().or_else(|| {
+                mode_path.map(|path| Mode::File {
+                    path: path.to_path_buf(),
+                })
+            }),
+            pack_path: overrides.pack_path.clone(),
+        })
+        .or_else(|| {
+            mode_path.map(|path| SessionOverrides {
+                mode: Some(Mode::File {
+                    path: path.to_path_buf(),
+                }),
+                pack_path: None,
             })
-        }),
-        pack_path: overrides.pack_path.clone(),
-    };
+        });
 
-    if let Some(value) = overrides.to_env_value()? {
+    if let Some(overrides) = overrides {
+        let value = overrides.to_env_value()?;
         cmd.env(shared::schedule::SESSION_OVERRIDES_ENV, value);
     }
 

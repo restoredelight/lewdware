@@ -72,20 +72,22 @@ pub fn normalize_timeline(tx: &Transaction<'_>, mut new_id: impl FnMut() -> Stri
     // timeline does not need carrying along: a transition is ordered by `from_stage`, so putting
     // it between these two stages is already all the ordering it has.
     let mut stmt = tx.prepare(
-        "SELECT s1.id, s2.id
+        "SELECT s1.id AS from_id, s2.id AS to_id
          FROM behaviour_stage s1
          JOIN behaviour_stage s2 ON s2.position = s1.position + 1
          ORDER BY s1.position",
     )?;
 
     let adjacent_pairs: Vec<(String, String)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .query_map([], |row| Ok((row.get("from_id")?, row.get("to_id")?)))?
         .collect::<rusqlite::Result<_>>()?;
 
     // Load existing transitions: (id, from_stage, to_stage)
     let mut trans_stmt = tx.prepare("SELECT id, from_stage, to_stage FROM behaviour_transition")?;
     let existing_transitions: Vec<(String, String, String)> = trans_stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .query_map([], |row| {
+            Ok((row.get("id")?, row.get("from_stage")?, row.get("to_stage")?))
+        })?
         .collect::<rusqlite::Result<_>>()?;
 
     let mut kept_trans_ids = HashSet::new();

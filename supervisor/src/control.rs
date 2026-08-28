@@ -113,7 +113,7 @@ struct SpawnSpec {
     dev_stream_id: Option<Uuid>,
     attempts: u32,
     rule_id: Option<Uuid>,
-    overrides: SessionOverrides,
+    overrides: Option<SessionOverrides>,
 }
 
 impl Default for SpawnSpec {
@@ -125,7 +125,7 @@ impl Default for SpawnSpec {
             dev_stream_id: None,
             attempts: 0,
             rule_id: None,
-            overrides: SessionOverrides::default(),
+            overrides: None,
         }
     }
 }
@@ -138,7 +138,7 @@ struct Episode {
     rule_id: Option<Uuid>,
     /// Kept so a restart after a crash comes back as the same session the rule asked for, rather
     /// than silently falling back to the global pack and mode.
-    overrides: SessionOverrides,
+    overrides: Option<SessionOverrides>,
     mode_path: Option<PathBuf>,
     dev: bool,
     pid: Option<u32>,
@@ -401,7 +401,7 @@ impl Control {
             mode_path.as_deref(),
             dev,
             dev_stream_id,
-            &overrides,
+            overrides.as_ref(),
         ) {
             Ok(cmd) => cmd,
             Err(err) => {

@@ -48,8 +48,8 @@ impl Metadata {
              FROM pack_metadata WHERE singleton = 1",
             [],
             |row| {
-                let kind: Option<String> = row.get(4)?;
-                let id: Option<u64> = row.get(5)?;
+                let kind: Option<String> = row.get("recommended_mode_kind")?;
+                let id: Option<u64> = row.get("recommended_mode_id")?;
                 let recommended_mode = match (kind.as_deref(), id) {
                     (None, None) => None,
                     (Some("sandbox"), None) => Some(RecommendedMode::Sandbox),
@@ -67,10 +67,10 @@ impl Metadata {
                     }
                 };
                 Ok(Self {
-                    name: row.get(0)?,
-                    creator: row.get(1)?,
-                    description: row.get(2)?,
-                    version: row.get(3)?,
+                    name: row.get("name")?,
+                    creator: row.get("creator")?,
+                    description: row.get("description")?,
+                    version: row.get("version")?,
                     recommended_mode,
                 })
             },

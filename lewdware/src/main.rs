@@ -109,12 +109,13 @@ fn main() -> Result<()> {
 
     let mut config = load_config().inspect_err(|err| report_fatal_startup_error(err))?;
 
-    // Per-rule overrides from the supervisor (`design/scheduling.md`, SessionOverrides). Empty for
-    // a manual session, which uses whatever `config.json` says. Read here rather than at the top of
-    // `main` so that a malformed value is reported the same way a bad config is, over a link that
-    // by now exists.
-    let overrides =
-        SessionOverrides::from_env().inspect_err(|err| report_fatal_startup_error(err))?;
+    // Per-rule overrides from the supervisor (`design/scheduling.md`, SessionOverrides). Absent
+    // for a manual session, which uses whatever `config.json` says. Read here rather than at the
+    // top of `main` so that a malformed value is reported the same way a bad config is, over a link
+    // that by now exists.
+    let overrides = SessionOverrides::from_env()
+        .inspect_err(|err| report_fatal_startup_error(err))?
+        .unwrap_or_default();
 
     // Applied after `load_config` so an override beats the stored setting, and before anything
     // reads either. A pack override changes which `Mode::Experience` options apply, since those are

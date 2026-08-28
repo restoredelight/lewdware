@@ -1,24 +1,24 @@
 use anyhow::Result;
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, Transaction, named_params, params};
 
 use super::tags::{read_tags, write_tags};
 use crate::behaviour::schema::{ContentGroup, TextItem, WebLink};
 
 pub fn read_text_pool(conn: &Connection, kind: &str) -> Result<Vec<TextItem>> {
     let mut statement = conn.prepare(
-        "SELECT id, text, timeout_seconds, summary FROM behaviour_text_item WHERE kind = ? \
+        "SELECT id, text, timeout_seconds, summary FROM behaviour_text_item WHERE kind = :kind \
          ORDER BY id",
     )?;
 
     statement
-        .query_and_then(params![kind], |row| {
-            let id: i64 = row.get(0)?;
+        .query_and_then(named_params![":kind": kind], |row| {
+            let id: i64 = row.get("id")?;
 
             Ok(TextItem {
-                text: row.get(1)?,
+                text: row.get("text")?,
                 tags: read_tags(conn, "behaviour_text_item_tag", "item_id", &id)?,
-                timeout_seconds: row.get(2)?,
-                summary: row.get(3)?,
+                timeout_seconds: row.get("timeout_seconds")?,
+                summary: row.get("summary")?,
             })
         })?
         .collect()
@@ -43,9 +43,9 @@ pub fn read_web_links(conn: &Connection) -> Result<Vec<WebLink>> {
     let mut statement = conn.prepare("SELECT id, url FROM behaviour_web_link ORDER BY id")?;
     statement
         .query_and_then([], |row| {
-            let id: i64 = row.get(0)?;
+            let id: i64 = row.get("id")?;
             Ok(WebLink {
-                url: row.get(1)?,
+                url: row.get("url")?,
                 tags: read_tags(conn, "behaviour_web_link_tag", "link_id", &id)?,
             })
         })?
@@ -73,14 +73,14 @@ pub fn read_content_groups(conn: &Connection) -> Result<Vec<ContentGroup>> {
 
     statement
         .query_and_then([], |row| {
-            let row_id: i64 = row.get(0)?;
+            let row_id: i64 = row.get("id")?;
 
             Ok(ContentGroup {
                 tags: read_tags(conn, "behaviour_content_group_tag", "group_id", &row_id)?,
-                id: row.get(1)?,
-                label: row.get(2)?,
-                description: row.get(3)?,
-                enabled_by_default: row.get(4)?,
+                id: row.get("key")?,
+                label: row.get("label")?,
+                description: row.get("description")?,
+                enabled_by_default: row.get("enabled_by_default")?,
             })
         })?
         .collect()

@@ -352,10 +352,10 @@ impl MediaPack {
                 let rows = statement
                     .query_map([], |row| {
                         Ok((
-                            row.get::<_, u64>(0)?,
-                            row.get::<_, Vec<u8>>(1)?,
-                            row.get::<_, u64>(2)?,
-                            row.get::<_, u64>(3)?,
+                            row.get::<_, u64>("id")?,
+                            row.get::<_, Vec<u8>>("hash")?,
+                            row.get::<_, u64>("offset")?,
+                            row.get::<_, u64>("length")?,
                         ))
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -458,7 +458,7 @@ impl MediaPack {
                 let mut statement =
                     connection.prepare("SELECT id, hash FROM media WHERE deleted = FALSE")?;
                 let rows = statement
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .query_map([], |row| Ok((row.get("id")?, row.get("hash")?)))?
                     .collect::<rusqlite::Result<_>>()?;
                 Ok(rows)
             })
@@ -474,7 +474,7 @@ impl MediaPack {
             )?;
             let rows = statement
                 .query_map([], |row| {
-                    Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?))
+                    Ok((row.get::<_, u64>("id")?, row.get::<_, Vec<u8>>("hash")?))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             for (id, hash) in rows {

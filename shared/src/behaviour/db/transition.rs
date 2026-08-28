@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, Transaction, named_params, params};
 
 use super::common::{retain, sql_array};
 use crate::behaviour::schema::{Transition, TransitionCategory};
@@ -16,12 +16,12 @@ pub fn read_transitions(conn: &Connection) -> Result<Vec<Transition>> {
     )?;
     statement
         .query_and_then([], |row| {
-            let id: String = row.get(0)?;
+            let id: String = row.get("id")?;
             Ok(Transition {
-                from_stage: row.get(1)?,
-                to_stage: row.get(2)?,
-                duration_seconds: row.get(3)?,
-                easing: row.get(4)?,
+                from_stage: row.get("from_stage")?,
+                to_stage: row.get("to_stage")?,
+                duration_seconds: row.get("duration_seconds")?,
+                easing: row.get("easing")?,
                 affected: read_transition_categories(conn, &id)?,
                 id,
             })
@@ -35,10 +35,12 @@ fn read_transition_categories(
 ) -> Result<Vec<TransitionCategory>> {
     let mut statement = conn.prepare(
         "SELECT category FROM behaviour_transition_category
-         WHERE transition_id = ? ORDER BY category",
+         WHERE transition_id = :transition_id ORDER BY category",
     )?;
     Ok(statement
-        .query_map(params![transition_id], |row| row.get(0))?
+        .query_map(named_params![":transition_id": transition_id], |row| {
+            row.get("category")
+        })?
         .collect::<rusqlite::Result<_>>()?)
 }
 

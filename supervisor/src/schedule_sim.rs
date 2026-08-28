@@ -19,9 +19,7 @@
 //!   opportunity in clumps, which costs more than the same minutes scattered.
 
 use chrono::{DateTime, Duration as ChronoDuration, Local, TimeZone};
-use shared::schedule::{
-    Frequency, Range, Rule, ScheduleConfig, SessionLength, SessionOverrides, TimeOfDay, Trigger,
-};
+use shared::schedule::{Frequency, Range, Rule, ScheduleConfig, SessionLength, TimeOfDay, Trigger};
 use uuid::Uuid;
 
 use crate::schedule::{PresenceSource, Rng, ScheduleEngine};
@@ -149,7 +147,7 @@ fn config_for(scenario: &Scenario) -> ScheduleConfig {
             length: SessionLength::Fixed {
                 minutes: scenario.session_minutes,
             },
-            overrides: SessionOverrides::default(),
+            overrides: None,
         }],
         quiet_hours: Vec::new(),
         grace_notification: false,

@@ -83,11 +83,13 @@ fn dedicated_owned_tag(
     let (content_count, experience_count): (u64, u64) = conn.query_row(
         "SELECT (SELECT COUNT(*) FROM behaviour_content_group_tag t WHERE t.tag_id = tags.id)
                   + (SELECT COUNT(*) FROM behaviour_text_item_tag t WHERE t.tag_id = tags.id)
-                  + (SELECT COUNT(*) FROM behaviour_web_link_tag t WHERE t.tag_id = tags.id),
+                  + (SELECT COUNT(*) FROM behaviour_web_link_tag t WHERE t.tag_id = tags.id)
+                    AS content_count,
                 (SELECT COUNT(*) FROM behaviour_stage_tag t WHERE t.tag_id = tags.id)
+                    AS experience_count
          FROM tags WHERE tags.name = ?1",
         params![owned],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get("content_count")?, row.get("experience_count")?)),
     )?;
     Ok((content_count == 0 && experience_count == 1).then(|| owned.to_string()))
 }
@@ -115,7 +117,7 @@ fn read_stage_selection(conn: &Connection, id: &str) -> Result<Option<StageSelec
         .query_row(
             "SELECT label, restricts_content FROM behaviour_stage WHERE id = ?1",
             params![id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get("label")?, row.get("restricts_content")?)),
         )
         .optional()?;
     let Some((label, restricts)) = row else {

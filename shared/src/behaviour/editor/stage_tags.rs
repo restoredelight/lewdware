@@ -126,8 +126,8 @@ pub fn stage_owned_tags(conn: &Connection, id: &str) -> Result<Vec<OwnedStageTag
     let tags = statement
         .query_map(params![id], |row| {
             Ok(OwnedStageTag {
-                tag: row.get(0)?,
-                excluded: row.get(1)?,
+                tag: row.get("name")?,
+                excluded: row.get("excluded")?,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -171,7 +171,7 @@ pub fn stage_scenery(conn: &Connection, id: &str) -> Result<Vec<u64>> {
         .query_row(
             "SELECT wallpaper, audio FROM behaviour_stage WHERE id = ?1",
             params![id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get("wallpaper")?, row.get("audio")?)),
         )
         .optional()?;
     let Some((wallpaper, audio)) = stage_media else {
@@ -181,7 +181,7 @@ pub fn stage_scenery(conn: &Connection, id: &str) -> Result<Vec<u64>> {
         .query_row(
             "SELECT splash_media, sound_media FROM behaviour_stage_entry WHERE stage_id = ?1",
             params![id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get("splash_media")?, row.get("sound_media")?)),
         )
         .optional()?;
     let prompt_media: Option<Option<u64>> = conn

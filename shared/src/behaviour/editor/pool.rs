@@ -51,14 +51,14 @@ pub fn text_pool(conn: &Connection, kind: PoolKind) -> Result<Vec<TextItemRow>> 
     )?;
     statement
         .query_and_then(params![kind], |row| {
-            let id: i64 = row.get(0)?;
+            let id: i64 = row.get("id")?;
             Ok(TextItemRow {
                 id,
                 item: TextItem {
-                    text: row.get(1)?,
+                    text: row.get("text")?,
                     tags: read_tags(conn, "behaviour_text_item_tag", "item_id", &id)?,
-                    timeout_seconds: row.get(2)?,
-                    summary: row.get(3)?,
+                    timeout_seconds: row.get("timeout_seconds")?,
+                    summary: row.get("summary")?,
                 },
             })
         })?

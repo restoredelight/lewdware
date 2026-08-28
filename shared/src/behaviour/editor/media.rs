@@ -178,7 +178,7 @@ pub fn media_slots(conn: &Connection) -> Result<MediaSlots> {
         .query_row(
             "SELECT wallpaper, splash FROM behaviour_content WHERE singleton = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get("wallpaper")?, row.get("splash")?)),
         )
         .optional()?
         .unwrap_or((None, None));

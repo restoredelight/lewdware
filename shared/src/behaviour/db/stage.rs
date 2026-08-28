@@ -1,11 +1,14 @@
 use anyhow::{Result, bail};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, named_params, params};
 
 use super::tags::tag_id;
-use crate::behaviour::{db::common::sql_array, schema::{
-    ContentSelection, CountScope, EndStrategy, EventCountCondition, EventKind, EventSchedule,
-    Events, Interval, Mitosis, Movement, Stage, StageEnd, StageEntry, StagePrompt,
-}};
+use crate::behaviour::{
+    db::common::sql_array,
+    schema::{
+        ContentSelection, CountScope, EndStrategy, EventCountCondition, EventKind, EventSchedule,
+        Events, Interval, Mitosis, Movement, Stage, StageEnd, StageEntry, StagePrompt,
+    },
+};
 
 pub fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
     read_stages_where(conn, "", &[])
@@ -63,19 +66,40 @@ fn read_stages_where(
 }
 
 pub fn read_stage_entry(conn: &Connection, stage: &str) -> Result<Option<StageEntry>> {
-    Ok(conn.query_row(
-        "SELECT splash_media, sound_media, popup_burst, notification_text FROM behaviour_stage_entry WHERE stage_id = ?",
-        params![stage],
-        |row| Ok(StageEntry { splash: row.get(0)?, sound: row.get(1)?, popup_burst: row.get(2)?, notification: row.get(3)? }),
-    ).optional()?)
+    Ok(conn
+        .query_row(
+            "SELECT splash_media, sound_media, popup_burst, notification_text
+         FROM behaviour_stage_entry WHERE stage_id = :stage",
+            named_params![":stage": stage],
+            |row| {
+                Ok(StageEntry {
+                    splash: row.get("splash_media")?,
+                    sound: row.get("sound_media")?,
+                    popup_burst: row.get("popup_burst")?,
+                    notification: row.get("notification_text")?,
+                })
+            },
+        )
+        .optional()?)
 }
 
 pub fn read_stage_prompt(conn: &Connection, stage: &str) -> Result<StagePrompt> {
-    Ok(conn.query_row(
-        "SELECT timeouts_enabled, timeout_multiplier, popup_burst, sound_media FROM behaviour_stage_prompt WHERE stage_id = ?",
-        params![stage],
-        |row| Ok(StagePrompt { timeouts_enabled: row.get(0)?, timeout_multiplier: row.get(1)?, popup_burst: row.get(2)?, sound: row.get(3)? }),
-    ).optional()?.unwrap_or_default())
+    Ok(conn
+        .query_row(
+            "SELECT timeouts_enabled, timeout_multiplier, popup_burst, sound_media
+         FROM behaviour_stage_prompt WHERE stage_id = :stage",
+            named_params![":stage": stage],
+            |row| {
+                Ok(StagePrompt {
+                    timeouts_enabled: row.get("timeouts_enabled")?,
+                    timeout_multiplier: row.get("timeout_multiplier")?,
+                    popup_burst: row.get("popup_burst")?,
+                    sound: row.get("sound_media")?,
+                })
+            },
+        )
+        .optional()?
+        .unwrap_or_default())
 }
 
 /// The tag this stage owns, if it has one.
@@ -94,11 +118,11 @@ pub fn read_owned_stage_tag(
         .query_row(
             "SELECT tags.name FROM behaviour_stage_tag
              JOIN tags ON tags.id = behaviour_stage_tag.tag_id
-             WHERE behaviour_stage_tag.stage_id = ?1 AND behaviour_stage_tag.owned = TRUE
-               AND behaviour_stage_tag.excluded = ?2
+             WHERE behaviour_stage_tag.stage_id = :stage AND behaviour_stage_tag.owned = TRUE
+               AND behaviour_stage_tag.excluded = :excluded
              ORDER BY behaviour_stage_tag.id LIMIT 1",
-            params![stage, excluded],
-            |row| row.get(0),
+            named_params![":stage": stage, ":excluded": excluded],
+            |row| row.get("name"),
         )
         .optional()?)
 }
@@ -108,11 +132,14 @@ pub fn read_stage_tags(conn: &Connection, stage: &str, excluded: bool) -> Result
     let mut statement = conn.prepare(
         "SELECT tags.name FROM behaviour_stage_tag
          JOIN tags ON tags.id = behaviour_stage_tag.tag_id
-         WHERE behaviour_stage_tag.stage_id = ?1 AND behaviour_stage_tag.excluded = ?2
+         WHERE behaviour_stage_tag.stage_id = :stage AND behaviour_stage_tag.excluded = :excluded
          ORDER BY behaviour_stage_tag.id",
     )?;
     let tags = statement
-        .query_map(params![stage, excluded], |row| row.get(0))?
+        .query_map(
+            named_params![":stage": stage, ":excluded": excluded],
+            |row| row.get("name"),
+        )?
         .collect::<rusqlite::Result<_>>()?;
     Ok(tags)
 }
@@ -188,15 +215,15 @@ pub fn read_stage_end(conn: &Connection, stage: &str) -> Result<Option<StageEnd>
     Ok(conn
         .query_row(
             "SELECT duration_seconds, strategy, event_kind, event_count, event_scope
-             FROM behaviour_stage_end WHERE stage_id = ?",
-            params![stage],
+             FROM behaviour_stage_end WHERE stage_id = :stage",
+            named_params![":stage": stage],
             |row| {
                 Ok((
-                    row.get::<_, Option<f64>>(0)?,
-                    row.get::<_, EndStrategy>(1)?,
-                    row.get::<_, Option<EventKind>>(2)?,
-                    row.get::<_, Option<u32>>(3)?,
-                    row.get::<_, Option<CountScope>>(4)?,
+                    row.get::<_, Option<f64>>("duration_seconds")?,
+                    row.get::<_, EndStrategy>("strategy")?,
+                    row.get::<_, Option<EventKind>>("event_kind")?,
+                    row.get::<_, Option<u32>>("event_count")?,
+                    row.get::<_, Option<CountScope>>("event_scope")?,
                 ))
             },
         )
@@ -221,12 +248,13 @@ pub fn read_stage_end(conn: &Connection, stage: &str) -> Result<Option<StageEnd>
 pub fn read_stage_movement(conn: &Connection, stage: &str) -> Result<Option<Movement>> {
     Ok(conn
         .query_row(
-            "SELECT minimum_speed, maximum_speed FROM behaviour_stage_movement WHERE stage_id = ?",
-            params![stage],
+            "SELECT minimum_speed, maximum_speed
+             FROM behaviour_stage_movement WHERE stage_id = :stage",
+            named_params![":stage": stage],
             |row| {
                 Ok(Movement {
-                    minimum_speed: row.get(0)?,
-                    maximum_speed: row.get(1)?,
+                    minimum_speed: row.get("minimum_speed")?,
+                    maximum_speed: row.get("maximum_speed")?,
                 })
             },
         )
@@ -236,12 +264,12 @@ pub fn read_stage_movement(conn: &Connection, stage: &str) -> Result<Option<Move
 pub fn read_stage_mitosis(conn: &Connection, stage: &str) -> Result<Option<Mitosis>> {
     Ok(conn
         .query_row(
-            "SELECT chance, count FROM behaviour_stage_mitosis WHERE stage_id = ?",
-            params![stage],
+            "SELECT chance, count FROM behaviour_stage_mitosis WHERE stage_id = :stage",
+            named_params![":stage": stage],
             |row| {
                 Ok(Mitosis {
-                    chance: row.get(0)?,
-                    count: row.get(1)?,
+                    chance: row.get("chance")?,
+                    count: row.get("count")?,
                 })
             },
         )
@@ -252,17 +280,17 @@ pub fn read_stage_events(conn: &Connection, stage: &str) -> Result<Events> {
     let mut statement = conn.prepare(
         "SELECT kind, interval_kind, seconds, minimum_seconds, maximum_seconds,
                 initial_delay_seconds, max_concurrent
-         FROM behaviour_stage_event WHERE stage_id = ?",
+         FROM behaviour_stage_event WHERE stage_id = :stage",
     )?;
     let mut events = Events::default();
-    let rows = statement.query_and_then(params![stage], |row| -> Result<_> {
-        let kind: EventKind = row.get(0)?;
-        let interval_kind: String = row.get(1)?;
-        let seconds: Option<f64> = row.get(2)?;
-        let minimum_seconds: Option<f64> = row.get(3)?;
-        let maximum_seconds: Option<f64> = row.get(4)?;
-        let initial_delay_seconds: Option<f64> = row.get(5)?;
-        let max_concurrent: Option<u32> = row.get(6)?;
+    let rows = statement.query_and_then(named_params![":stage": stage], |row| -> Result<_> {
+        let kind: EventKind = row.get("kind")?;
+        let interval_kind: String = row.get("interval_kind")?;
+        let seconds: Option<f64> = row.get("seconds")?;
+        let minimum_seconds: Option<f64> = row.get("minimum_seconds")?;
+        let maximum_seconds: Option<f64> = row.get("maximum_seconds")?;
+        let initial_delay_seconds: Option<f64> = row.get("initial_delay_seconds")?;
+        let max_concurrent: Option<u32> = row.get("max_concurrent")?;
 
         let interval = match interval_kind.as_str() {
             "fixed" => Interval::Fixed {

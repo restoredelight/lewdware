@@ -157,7 +157,7 @@ pub struct StartRequest {
     /// The rule's own pack and mode, handed to the engine in
     /// `shared::schedule::SESSION_OVERRIDES_ENV`. Sparse: an unset field inherits whatever
     /// `config.json` says.
-    pub overrides: SessionOverrides,
+    pub overrides: Option<SessionOverrides>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1060,7 +1060,7 @@ mod tests {
                 frequency: Frequency::PerDay { count },
             },
             length: SessionLength::Fixed { minutes: 20 },
-            overrides: SessionOverrides::default(),
+            overrides: None,
         }
     }
 
@@ -1072,7 +1072,7 @@ mod tests {
                 time: tod(hour, minute),
             },
             length: SessionLength::UntilStopped,
-            overrides: SessionOverrides::default(),
+            overrides: None,
         }
     }
 

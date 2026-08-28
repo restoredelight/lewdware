@@ -49,8 +49,8 @@ pub struct Rule {
     pub days: Days,
     pub trigger: Trigger,
     pub length: SessionLength,
-    #[serde(default)]
-    pub overrides: SessionOverrides,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<SessionOverrides>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -101,21 +101,13 @@ pub struct SessionOverrides {
 pub const SESSION_OVERRIDES_ENV: &str = "LEWDWARE_SESSION_OVERRIDES";
 
 impl SessionOverrides {
-    pub fn is_empty(&self) -> bool {
-        self.mode.is_none() && self.pack_path.is_none()
+    pub fn to_env_value(&self) -> anyhow::Result<String> {
+        Ok(serde_json::to_string(self)?)
     }
 
-    pub fn to_env_value(&self) -> anyhow::Result<Option<String>> {
-        if self.is_empty() {
-            return Ok(None);
-        }
-
-        Ok(Some(serde_json::to_string(self)?))
-    }
-
-    pub fn from_env() -> anyhow::Result<Self> {
+    pub fn from_env() -> anyhow::Result<Option<Self>> {
         let Some(raw) = std::env::var_os(SESSION_OVERRIDES_ENV) else {
-            return Ok(Self::default());
+            return Ok(None);
         };
 
         let raw = raw
@@ -125,9 +117,10 @@ impl SessionOverrides {
         Self::from_env_value(raw)
     }
 
-    pub fn from_env_value(raw: &str) -> anyhow::Result<Self> {
-        serde_json::from_str(raw)
-            .with_context(|| format!("could not parse {SESSION_OVERRIDES_ENV}"))
+    pub fn from_env_value(raw: &str) -> anyhow::Result<Option<Self>> {
+        let overrides: Self = serde_json::from_str(raw)
+            .with_context(|| format!("could not parse {SESSION_OVERRIDES_ENV}"))?;
+        Ok((overrides.mode.is_some() || overrides.pack_path.is_some()).then_some(overrides))
     }
 }
 
@@ -908,19 +901,18 @@ mod tests {
             pack_path: Some(PathBuf::from("/home/someone/a pack.lwpack")),
         };
 
-        let encoded = overrides.to_env_value().unwrap().expect("not empty");
+        let encoded = overrides.to_env_value().unwrap();
 
         assert_eq!(
             SessionOverrides::from_env_value(&encoded).unwrap(),
-            overrides
+            Some(overrides)
         );
     }
 
-    /// Nothing to override means the variable is never set, so the engine's unset path is the one
-    /// an ordinary session actually takes.
+    /// Nothing to override is represented by an absent environment variable.
     #[test]
-    fn empty_session_overrides_are_not_encoded() {
-        assert_eq!(SessionOverrides::default().to_env_value().unwrap(), None);
+    fn absent_session_overrides_are_not_encoded() {
+        assert_eq!(SessionOverrides::from_env_value("{}").unwrap(), None);
     }
 
     fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
@@ -956,7 +948,7 @@ mod tests {
                 frequency: Frequency::PerDay { count },
             },
             length: SessionLength::Fixed { minutes: 20 },
-            overrides: SessionOverrides::default(),
+            overrides: None,
         }
     }
 

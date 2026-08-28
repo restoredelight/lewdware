@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use anyhow::{bail, Result};
-use rusqlite::{params, Connection, Transaction};
+use anyhow::{Result, bail};
+use rusqlite::{Connection, Transaction, named_params, params};
 
 use crate::behaviour::{
     db::common::sql_array,
@@ -46,19 +46,24 @@ fn read_popup_media_where(
     ))?;
     statement
         .query_and_then(binds, |row| {
-            let media_id: u64 = row.get(0)?;
-            let region = (row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?);
+            let media_id: u64 = row.get("media_id")?;
+            let region = (
+                row.get("region_x")?,
+                row.get("region_y")?,
+                row.get("region_width")?,
+                row.get("region_height")?,
+            );
             Ok((
                 media_id,
                 PopupMedia {
-                    weight: row.get(1)?,
-                    scale: row.get(2)?,
+                    weight: row.get("weight")?,
+                    scale: row.get("scale")?,
                     region: read_region(region),
-                    monitor: row.get(7)?,
-                    caption: row.get(8)?,
-                    video_loop: row.get(9)?,
-                    video_audio: row.get(10)?,
-                    video_volume: row.get(11)?,
+                    monitor: row.get("monitor")?,
+                    caption: row.get("caption")?,
+                    video_loop: row.get("video_loop")?,
+                    video_audio: row.get("video_audio")?,
+                    video_volume: row.get("video_volume")?,
                     audio: read_popup_audio_pairs(conn, media_id)?,
                 },
             ))
@@ -87,20 +92,18 @@ fn read_region(
 fn read_popup_audio_pairs(conn: &Connection, popup: u64) -> Result<Vec<u64>> {
     let mut statement = conn.prepare(
         "SELECT audio_media_id FROM behaviour_popup_audio_pair
-         WHERE popup_media_id = ? ORDER BY audio_media_id",
+         WHERE popup_media_id = :popup ORDER BY audio_media_id",
     )?;
 
     Ok(statement
-        .query_map(params![popup], |row| row.get(0))?
+        .query_map(named_params![":popup": popup], |row| {
+            row.get("audio_media_id")
+        })?
         .collect::<rusqlite::Result<_>>()?)
 }
 
 pub fn write_popup_media(tx: &Transaction<'_>, popups: &BTreeMap<u64, PopupMedia>) -> Result<()> {
     for (media_id, entry) in popups {
-        if entry.is_empty() {
-            continue;
-        }
-
         write_one_popup_media(tx, *media_id, entry)?;
     }
 
@@ -186,9 +189,9 @@ pub fn read_audio_media(conn: &Connection) -> Result<BTreeMap<u64, AudioMedia>> 
     Ok(statement
         .query_map([], |row| {
             Ok((
-                row.get(0)?,
+                row.get("media_id")?,
                 AudioMedia {
-                    volume: row.get(1)?,
+                    volume: row.get("volume")?,
                 },
             ))
         })?
@@ -197,14 +200,14 @@ pub fn read_audio_media(conn: &Connection) -> Result<BTreeMap<u64, AudioMedia>> 
 
 pub fn write_audio_media(tx: &Transaction<'_>, audio: &BTreeMap<u64, AudioMedia>) -> Result<()> {
     for (media_id, entry) in audio {
-        if entry.is_empty() {
+        let Some(volume) = entry.volume else {
             continue;
-        }
+        };
         tx.execute(
             "INSERT INTO behaviour_audio_media (media_id, volume)
              VALUES (?, ?)
              ON CONFLICT(media_id) DO UPDATE SET volume = excluded.volume",
-            params![media_id, entry.volume],
+            params![media_id, volume],
         )?;
     }
     Ok(())

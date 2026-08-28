@@ -44,20 +44,6 @@ pub struct Content {
 #[path = "schema_tests/tests.rs"]
 mod schema_tests;
 
-impl Content {
-    pub fn is_empty(&self) -> bool {
-        self.popups.is_empty()
-            && self.audio.is_empty()
-            && self.content_groups.is_empty()
-            && self.captions.is_empty()
-            && self.prompts.is_empty()
-            && self.notifications.is_empty()
-            && self.web_links.is_empty()
-            && self.wallpaper.is_none()
-            && self.splash.is_none()
-    }
-}
-
 /// One place in a behaviour table that points at a media file
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -73,8 +59,8 @@ pub enum MediaSlot {
 
 /// What a pack author says about one file used as popup content.
 ///
-/// Every field is optional, and an entry with nothing set is not stored at all (see
-/// [`PopupMedia::is_empty`]) — "unset" has to stay distinguishable from "set to today's default",
+/// Every field is optional, and an entry with nothing set is not stored at all — "unset" has to
+/// stay distinguishable from "set to today's default",
 /// because defaults move under the user across engine releases. A mode reading this treats an
 /// absent field as "no opinion", never as a zero.
 ///
@@ -126,25 +112,6 @@ pub struct PopupMedia {
     pub audio: Vec<u64>,
 }
 
-impl PopupMedia {
-    /// Whether this entry says nothing, and so should not be stored.
-    ///
-    /// The editor clears an attribute by setting it to null; when the last one goes, the entry
-    /// stops existing rather than lingering as a row of NULLs. `read` never produces one, so the
-    /// distinction is invisible above this layer.
-    pub fn is_empty(&self) -> bool {
-        self.weight.is_none()
-            && self.scale.is_none()
-            && self.region.is_none()
-            && self.monitor.is_none()
-            && self.caption.is_none()
-            && self.video_loop.is_none()
-            && self.video_audio.is_none()
-            && self.video_volume.is_none()
-            && self.audio.is_empty()
-    }
-}
-
 /// What a pack author says about one audio file. See [`PopupMedia`] for the conventions; the same
 /// "absent means no opinion" rule applies.
 ///
@@ -159,13 +126,6 @@ pub struct AudioMedia {
     /// the user's volume rather than replacing it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume: Option<f64>,
-}
-
-impl AudioMedia {
-    /// See [`PopupMedia::is_empty`].
-    pub fn is_empty(&self) -> bool {
-        self.volume.is_none()
-    }
 }
 
 /// The part of a monitor a popup may spawn in, as fractions of its usable area — the

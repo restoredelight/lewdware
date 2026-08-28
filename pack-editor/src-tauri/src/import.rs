@@ -429,7 +429,7 @@ mod tests {
         let (_source, output) =
             load_test_zip(&dir).unwrap_or_else(|e| panic!("text-only content is a pack: {e}"));
         assert!(output.media.is_empty());
-        assert!(!output.behaviour.content.is_empty());
+        assert!(!output.behaviour.content.captions.is_empty());
     }
 
     /// `info.json` is an Edgeware pack path even when there is nothing for the content converter
@@ -441,7 +441,7 @@ mod tests {
         let (_source, output) =
             load_test_zip(&dir).unwrap_or_else(|e| panic!("metadata-only pack is valid: {e}"));
         assert!(output.media.is_empty());
-        assert!(output.behaviour.content.is_empty());
+        assert_eq!(output.behaviour.content, Content::default());
         assert_eq!(output.metadata.name, "Empty on purpose");
     }
 
@@ -461,6 +461,6 @@ mod tests {
         let (_source, output) =
             load_test_zip(&dir).unwrap_or_else(|e| panic!("empty img directory is a marker: {e}"));
         assert!(output.media.is_empty());
-        assert!(output.behaviour.content.is_empty());
+        assert_eq!(output.behaviour.content, Content::default());
     }
 }

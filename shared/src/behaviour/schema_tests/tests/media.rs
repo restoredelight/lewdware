@@ -1,5 +1,5 @@
 use super::{pack, store};
-use crate::behaviour::schema::{AudioMedia, Behaviour, PopupMedia, SpawnRegion};
+use crate::behaviour::schema::{AudioMedia, Behaviour, Content, PopupMedia, SpawnRegion};
 
 /// An entry that says nothing is not a row. The editor clears an attribute by nulling it, and
 /// when the last one goes the entry has to stop existing rather than linger as a row of
@@ -30,7 +30,11 @@ fn an_entry_with_nothing_set_is_not_stored() {
     let stored = Behaviour::read(&conn).unwrap();
     assert!(stored.content.popups.is_empty());
     assert!(stored.content.audio.is_empty());
-    assert!(stored.content.is_empty(), "and the document is empty again");
+    assert_eq!(
+        stored.content,
+        Content::default(),
+        "and the document is empty again"
+    );
     assert_eq!(
         conn.query_row(
             "SELECT COUNT(*) FROM behaviour_popup_media_fields",

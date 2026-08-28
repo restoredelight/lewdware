@@ -77,6 +77,11 @@ impl From<SessionOverridesDto> for SessionOverrides {
     }
 }
 
+fn overrides_option(value: SessionOverridesDto) -> Option<SessionOverrides> {
+    let overrides: SessionOverrides = value.into();
+    (overrides.mode.is_some() || overrides.pack_path.is_some()).then_some(overrides)
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RuleDto {
     /// Stable across list edits, so the supervisor's budget counters survive one. Serialises as a
@@ -96,7 +101,7 @@ impl From<Rule> for RuleDto {
             days: r.days,
             trigger: r.trigger,
             length: r.length,
-            overrides: r.overrides.into(),
+            overrides: r.overrides.map(Into::into).unwrap_or_default(),
         }
     }
 }
@@ -108,7 +113,7 @@ impl From<RuleDto> for Rule {
             days: r.days,
             trigger: r.trigger,
             length: r.length,
-            overrides: r.overrides.into(),
+            overrides: overrides_option(r.overrides),
         }
     }
 }

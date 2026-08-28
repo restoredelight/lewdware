@@ -3,10 +3,11 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
+    rc::Rc,
 };
 
 use image::{ImageFormat, ImageReader};
-use rusqlite::{Connection, MAIN_DB, Row, params, params_from_iter};
+use rusqlite::{Connection, MAIN_DB, Row, named_params, params, types::Value, vtab::array::Array};
 use shared::{
     db::migrate,
     pack::{HEADER_SIZE, Header, Metadata},
@@ -27,16 +28,6 @@ use crate::{
     },
 };
 
-/// A simple utility to repeat variables n times in a SQLite query (i.e. returns "?,?,?,?..." n
-/// times).
-fn repeat_vars(count: usize) -> String {
-    assert_ne!(count, 0);
-    let mut s = "?,".repeat(count);
-    // Remove trailing comma
-    s.pop();
-    s
-}
-
 /// A pack consisting of a header, raw media, and an SQLite database at the end. The database stores
 /// the pack metadata plus the offset and length of each image/video/audio file, which can be used
 /// to read it from the pack file.
@@ -55,6 +46,32 @@ struct MediaOpts {
     tags: Option<TagFilter>,
     random: bool,
     single: bool,
+}
+
+struct MediaParams {
+    name: Option<String>,
+    id: Option<u64>,
+    all_types: bool,
+    images: bool,
+    videos: bool,
+    audio: bool,
+    random_order: bool,
+    single_row: bool,
+    any_ids: Array,
+    any_count: usize,
+    any_enabled: bool,
+    all_ids: Array,
+    all_count: usize,
+    none_ids: Array,
+    none_enabled: bool,
+}
+
+fn array_param(ids: impl IntoIterator<Item = u64>) -> Array {
+    Rc::new(
+        ids.into_iter()
+            .map(|id| Value::Integer(id as i64))
+            .collect(),
+    )
 }
 
 impl MediaPack {
@@ -100,151 +117,89 @@ impl MediaPack {
         })
     }
 
-    fn build_sql(&self, opts: MediaOpts) -> (String, Vec<Box<dyn rusqlite::ToSql + '_>>) {
-        let mut sql = "
-            SELECT id, file_name, file_type, offset, length, width, height, duration, audio, transparent,
-                (SELECT group_concat(tags.name, char(31))
-                 FROM media_tags
-                 JOIN tags ON tags.id = media_tags.tag_id
-                 WHERE media_tags.media_id = media.id) AS tag_names
-            FROM media
-        "
-        .to_string();
-
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-        let mut where_queries = Vec::new();
-
-        if let Some(name) = &opts.name {
-            where_queries.push("file_name = ?".to_string());
-            params.push(Box::new(name.clone()));
-        }
-
-        if let Some(id) = opts.id {
-            where_queries.push("id = ?".to_string());
-            params.push(Box::new(id));
-        }
-
-        if let Some(query) = self.build_media_types_query(&opts.types) {
-            where_queries.push(query);
-        }
+    fn media_params(&self, opts: MediaOpts) -> MediaParams {
+        let mut any_ids = Vec::new();
+        let mut any_count = 0;
+        let mut all_ids = Vec::new();
+        let mut all_count = 0;
+        let mut none_ids = Vec::new();
+        let mut any_enabled = false;
+        let mut none_enabled = false;
 
         if let Some(filter) = &opts.tags {
-            // Tag conditions are expressed as EXISTS subqueries rather than a join, so a file
-            // matching several requested tags still yields a single row (no DISTINCT needed,
-            // and `ORDER BY RANDOM() LIMIT 1` stays uniform across files).
-            //
-            // Tags the pack doesn't define never match anything; they're dropped rather than
-            // treated as errors, since callers (e.g. the default mode) routinely probe for
-            // optional tags like `hypno` or `wallpaper` that a given pack may simply not have.
+            // Unknown tags are ignored for `any` and `none`, while an unknown `all` tag makes the
+            // filter unsatisfiable. The requested count preserves that distinction below.
+            any_ids = filter
+                .any
+                .iter()
+                .filter_map(|tag| self.tag_map.get(tag).copied())
+                .collect();
+            any_count = filter.any.len();
+            any_enabled = !any_ids.is_empty();
 
-            if !filter.any.is_empty() {
-                let tag_ids: Vec<u64> = filter
-                    .any
-                    .iter()
-                    .filter_map(|tag| self.tag_map.get(tag).copied())
-                    .collect();
+            all_ids = filter
+                .all
+                .iter()
+                .filter_map(|tag| self.tag_map.get(tag).copied())
+                .collect();
+            all_count = filter.all.len();
 
-                if tag_ids.is_empty() {
-                    // None of the requested tags exist in this pack, so nothing can match.
-                    where_queries.push("FALSE".to_string());
-                } else {
-                    where_queries.push(format!(
-                        "EXISTS (SELECT 1 FROM media_tags
-                         WHERE media_id = media.id AND tag_id IN ({}))",
-                        repeat_vars(tag_ids.len())
-                    ));
-
-                    for id in tag_ids {
-                        params.push(Box::new(id));
-                    }
-                }
-            }
-
-            for tag in &filter.all {
-                match self.tag_map.get(tag) {
-                    Some(id) => {
-                        where_queries.push(
-                            "EXISTS (SELECT 1 FROM media_tags
-                             WHERE media_id = media.id AND tag_id = ?)"
-                                .to_string(),
-                        );
-                        params.push(Box::new(*id));
-                    }
-                    // A required tag the pack doesn't define can never be satisfied.
-                    None => where_queries.push("FALSE".to_string()),
-                }
-            }
-
-            let none_ids: Vec<u64> = filter
+            none_ids = filter
                 .none
                 .iter()
                 .filter_map(|tag| self.tag_map.get(tag).copied())
                 .collect();
-
-            if !none_ids.is_empty() {
-                where_queries.push(format!(
-                    "NOT EXISTS (SELECT 1 FROM media_tags
-                     WHERE media_id = media.id AND tag_id IN ({}))",
-                    repeat_vars(none_ids.len())
-                ));
-
-                for id in none_ids {
-                    params.push(Box::new(id));
-                }
-            }
+            none_enabled = !none_ids.is_empty();
         }
 
-        if !where_queries.is_empty() {
-            sql.push_str(&format!("WHERE {} ", where_queries.join(" AND ")));
+        MediaParams {
+            name: opts.name,
+            id: opts.id,
+            all_types: opts.types == MediaTypes::ALL,
+            images: opts.types.image,
+            videos: opts.types.video,
+            audio: opts.types.audio,
+            random_order: opts.random,
+            single_row: opts.single,
+            any_ids: array_param(any_ids),
+            any_count,
+            any_enabled,
+            all_ids: array_param(all_ids),
+            all_count,
+            none_ids: array_param(none_ids),
+            none_enabled,
         }
-
-        if opts.random {
-            sql.push_str(" ORDER BY RANDOM() ");
-        }
-
-        if opts.single {
-            sql.push_str(" LIMIT 1 ");
-        }
-
-        (sql, params)
     }
 
     pub fn get_media(&self, name: String, types: MediaTypes) -> Result<Option<Media>> {
-        let (sql, params) = self.build_sql(MediaOpts {
-            name: Some(name),
-            id: None,
-            types,
-            tags: None,
-            random: false,
-            single: true,
-        });
-
-        let mut stmt = self.db.prepare(&sql)?;
-
-        stmt.query_and_then(params_from_iter(params), parse_media)?
-            .next()
-            .transpose()
+        Ok(self
+            .query_media(MediaOpts {
+                name: Some(name),
+                id: None,
+                types,
+                tags: None,
+                random: false,
+                single: true,
+            })?
+            .into_iter()
+            .next())
     }
 
     /// One file by its media id -- how the behaviour document's wallpaper/splash slots address
     /// media (see `shared::behaviour::Content`). `None` means the pack no longer has it, which
     /// for an id means it was deleted rather than merely renamed.
     pub fn get_media_by_id(&self, id: u64) -> Result<Option<Media>> {
-        let (sql, params) = self.build_sql(MediaOpts {
-            name: None,
-            id: Some(id),
-            types: MediaTypes::ALL,
-            tags: None,
-            random: false,
-            single: true,
-        });
-
-        let mut stmt = self.db.prepare(&sql)?;
-
-        stmt.query_and_then(params_from_iter(params), parse_media)?
-            .next()
-            .transpose()
+        Ok(self
+            .query_media(MediaOpts {
+                name: None,
+                id: Some(id),
+                types: MediaTypes::ALL,
+                tags: None,
+                random: false,
+                single: true,
+            })?
+            .into_iter()
+            .next())
     }
 
     pub fn random_media(
@@ -252,60 +207,97 @@ impl MediaPack {
         types: MediaTypes,
         tags: Option<TagFilter>,
     ) -> Result<Option<Media>> {
-        let (sql, params) = self.build_sql(MediaOpts {
-            name: None,
-            id: None,
-            types,
-            tags,
-            random: true,
-            single: true,
-        });
-
-        let mut stmt = self.db.prepare(&sql)?;
-
-        stmt.query_and_then(params_from_iter(params), parse_media)?
-            .next()
-            .transpose()
+        Ok(self
+            .query_media(MediaOpts {
+                name: None,
+                id: None,
+                types,
+                tags,
+                random: true,
+                single: true,
+            })?
+            .into_iter()
+            .next())
     }
 
     pub fn list_media(&self, types: MediaTypes, tags: Option<TagFilter>) -> Result<Vec<Media>> {
-        let (sql, params) = self.build_sql(MediaOpts {
+        self.query_media(MediaOpts {
             name: None,
             id: None,
             types,
             tags,
             random: false,
             single: false,
-        });
-
-        let mut stmt = self.db.prepare(&sql)?;
-
-        stmt.query_and_then(params_from_iter(params), parse_media)?
-            .collect()
+        })
     }
 
-    fn build_media_types_query(&self, types: &MediaTypes) -> Option<String> {
-        match *types {
-            MediaTypes::ALL => None,
-            MediaTypes::NONE => Some("FALSE".to_string()),
-            _ => {
-                let mut queries = Vec::new();
-
-                if types.image {
-                    queries.push("file_type = 'image'".to_string());
-                }
-
-                if types.video {
-                    queries.push("file_type = 'video'".to_string());
-                }
-
-                if types.audio {
-                    queries.push("file_type = 'audio'".to_string());
-                }
-
-                Some(format!("({})", queries.join(" OR ")))
-            }
-        }
+    fn query_media(&self, opts: MediaOpts) -> Result<Vec<Media>> {
+        let params = self.media_params(opts);
+        let MediaParams {
+            name,
+            id,
+            all_types,
+            images,
+            videos,
+            audio,
+            random_order,
+            single_row,
+            any_ids,
+            any_count,
+            any_enabled,
+            all_ids,
+            all_count,
+            none_ids,
+            none_enabled,
+        } = params;
+        let mut statement = self.db.prepare(
+            "SELECT id, file_name, file_type, offset, length, width, height, duration, audio, transparent,
+                    (SELECT group_concat(tags.name, char(31))
+                     FROM media_tags
+                     JOIN tags ON tags.id = media_tags.tag_id
+                     WHERE media_tags.media_id = media.id) AS tag_names
+             FROM media
+             WHERE (:name IS NULL OR file_name = :name)
+               AND (:id IS NULL OR id = :id)
+               AND (:all_types OR
+                    (:images AND file_type = 'image') OR
+                    (:videos AND file_type = 'video') OR
+                    (:audio AND file_type = 'audio'))
+               AND (:any_count = 0 OR (:any_enabled = TRUE AND EXISTS (SELECT 1 FROM media_tags
+                    WHERE media_id = media.id
+                      AND tag_id IN (SELECT value FROM rarray(:any_ids)))))
+               AND (:all_count = 0 OR
+                    (SELECT COUNT(*) FROM rarray(:all_ids)
+                     WHERE value IN (SELECT tag_id FROM media_tags WHERE media_id = media.id))
+                    = :all_count)
+               AND (:none_enabled = FALSE OR NOT EXISTS (SELECT 1 FROM media_tags
+                    WHERE media_id = media.id
+                      AND tag_id IN (SELECT value FROM rarray(:none_ids))))
+             ORDER BY CASE WHEN :random_order THEN RANDOM() ELSE 0 END
+             LIMIT CASE WHEN :single_row THEN 1 ELSE -1 END",
+        )?;
+        statement
+            .query_and_then(
+                named_params![
+                    ":name": name,
+                    ":id": id,
+                    ":all_types": all_types,
+                    ":images": images,
+                    ":videos": videos,
+                    ":audio": audio,
+                    ":random_order": random_order,
+                    ":single_row": single_row,
+                    ":any_ids": any_ids,
+                    ":any_count": any_count,
+                    ":any_enabled": any_enabled,
+                    ":all_ids": all_ids,
+                    ":all_count": all_count,
+                    ":none_ids": none_ids,
+                    ":none_enabled": none_enabled,
+                ],
+                parse_media,
+            )?
+            .collect()
     }
 
     pub async fn get_image_data(&self, id: u64, width: u32, height: u32) -> Result<ImageData> {

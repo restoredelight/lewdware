@@ -106,13 +106,19 @@ impl MediaPack {
                     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
                     let existing: Option<(u64, bool, u64)> = tx
                         .query_row(
-                            "SELECT m.id, m.deleted, COALESCE(l.length, p.length, 0)
+                            "SELECT m.id, m.deleted, COALESCE(l.length, p.length, 0) AS existing_size
                              FROM media m
                              LEFT JOIN loose_media l ON l.media_id = m.id
                              LEFT JOIN pack_media p ON p.media_id = m.id
                              WHERE m.hash = ?",
                             [hash_bytes],
-                            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                            |row| {
+                                Ok((
+                                    row.get("id")?,
+                                    row.get("deleted")?,
+                                    row.get("existing_size")?,
+                                ))
+                            },
                         )
                         .optional()?;
                     if let Some((id, deleted, existing_size)) = existing {
@@ -415,7 +421,7 @@ impl MediaPack {
         self.db_execute(move |conn| {
             let mut stmt = conn.prepare("SELECT id, file FROM modes ORDER BY id")?;
             let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?))
+                Ok((row.get::<_, u64>("id")?, row.get::<_, Vec<u8>>("file")?))
             })?;
             rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
         })

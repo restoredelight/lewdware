@@ -378,7 +378,7 @@ pub fn finish_media_import(
             .query_row(
                 "SELECT before_state_id, after_state_id FROM history_entries WHERE id = ?",
                 [history_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get("before_state_id")?, row.get("after_state_id")?)),
             )
             .optional()?;
         if let Some((before_state, after_state)) = entry {
@@ -469,13 +469,13 @@ fn apply_at_cursor(connection: &mut Connection, redo: bool) -> Result<Status> {
         [entry_id],
         |row| {
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<Vec<u8>>>(1)?,
-                row.get::<_, Option<Vec<u8>>>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>("kind")?,
+                row.get::<_, Option<Vec<u8>>>("forward_changeset")?,
+                row.get::<_, Option<Vec<u8>>>("inverse_changeset")?,
+                row.get::<_, String>("before_state_id")?,
+                row.get::<_, Option<String>>("after_state_id")?,
+                row.get::<_, String>("status")?,
+                row.get::<_, Option<String>>("payload")?,
             ))
         },
     );
@@ -551,7 +551,12 @@ pub fn status(connection: &Connection) -> Result<Status> {
             "SELECT label, status FROM history_entries
              WHERE id = (SELECT MAX(id) FROM history_entries WHERE id < ?)",
             [cursor],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>("label")?,
+                    row.get::<_, String>("status")?,
+                ))
+            },
         )
         .ok();
     let redo = connection
@@ -559,7 +564,12 @@ pub fn status(connection: &Connection) -> Result<Status> {
             "SELECT label, status FROM history_entries
              WHERE id = (SELECT MIN(id) FROM history_entries WHERE id >= ?)",
             [cursor],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>("label")?,
+                    row.get::<_, String>("status")?,
+                ))
+            },
         )
         .ok();
     let at_saved_state: bool = connection.query_row(
@@ -584,12 +594,12 @@ pub fn status(connection: &Connection) -> Result<Status> {
 fn trim(tx: &Transaction<'_>) -> Result<()> {
     loop {
         let (entries, bytes): (i64, i64) = tx.query_row(
-            "SELECT (SELECT COUNT(*) FROM history_entries WHERE id < hs.cursor),
+            "SELECT (SELECT COUNT(*) FROM history_entries WHERE id < hs.cursor) AS entries,
                     COALESCE((SELECT SUM(storage_bytes) FROM history_entries
-                              WHERE id < hs.cursor), 0)
+                              WHERE id < hs.cursor), 0) AS bytes
              FROM history_state hs WHERE singleton = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get("entries")?, row.get("bytes")?)),
         )?;
         if entries == 0 || (entries <= 100 && bytes <= 2 * 1024 * 1024 * 1024i64) {
             break;
@@ -599,7 +609,7 @@ fn trim(tx: &Transaction<'_>) -> Result<()> {
                 "SELECT id, status FROM history_entries
                  WHERE id = (SELECT MIN(id) FROM history_entries)",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get("id")?, row.get("status")?)),
             )
             .optional()?;
         // History can only be trimmed as an oldest-prefix operation. Removing a later ready
