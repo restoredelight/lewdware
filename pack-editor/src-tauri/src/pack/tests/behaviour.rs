@@ -1,8 +1,8 @@
 //! Behaviour-document edits: media slots, stages, captions, and what they retire.
 
 use shared::behaviour::{
-    Behaviour, ContentGroup, ContentSelection, EndStrategy, EventSchedule, Events, Interval,
-    Stage, StageEnd, TextItem, Timeline, Transition, WebLink,
+    Behaviour, ContentGroup, ContentSelection, EndStrategy, EventSchedule, Events, Interval, Stage,
+    StageEnd, TextItem, Timeline, Transition, WebLink,
 };
 use tempfile::tempdir;
 
@@ -573,6 +573,45 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
     assert!(read_pack_behaviour(&pack).await.content.captions.is_empty());
 }
 
+/// Popup field edits go through a view, but history records the sparse table changed by its
+/// trigger. Undo and redo therefore still restore the logical entry, including its absence.
+#[tokio::test]
+async fn a_popup_view_edit_is_undoable() {
+    let tmp = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let pack = new_test_pack(
+        &tmp.path().join("popup-view.lwpack"),
+        data_dir.path(),
+        "Popup view",
+    )
+    .await;
+    let media = insert_staged_audio(&pack, b"popup").await;
+
+    pack.behaviour_edit(BehaviourAction::new(
+        "Set popup scale",
+        move |tx: &Transaction<'_>| behaviour_editor::set_popup_scale(tx, &[media], Some(2.0)),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        read_pack_behaviour(&pack).await.content.popups[&media].scale,
+        Some(2.0),
+    );
+
+    pack.undo().await.unwrap();
+    assert!(!read_pack_behaviour(&pack)
+        .await
+        .content
+        .popups
+        .contains_key(&media));
+
+    pack.redo().await.unwrap();
+    assert_eq!(
+        read_pack_behaviour(&pack).await.content.popups[&media].scale,
+        Some(2.0),
+    );
+}
+
 /// Leaving one stage that shares its only tag with another stage. The stage gains an exclusion tag
 /// and the file gains it too, and that pair is one author action: the row that makes the tag mean
 /// something and the tag itself must undo together, or undo restores a file carrying a tag no stage
@@ -651,11 +690,7 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
     assert!(tags.contains(&"shared".to_string()));
     assert!(tags.contains(&"not-stage-leave".to_string()));
 
-    let stages = read_pack_behaviour(&pack)
-        .await
-        .timeline
-        .unwrap()
-        .stages;
+    let stages = read_pack_behaviour(&pack).await.timeline.unwrap().stages;
     assert_eq!(stages[0].content.exclude, ["not-stage-leave"]);
     assert_eq!(
         stages[0].content.owned_exclude_tag.as_deref(),
@@ -671,11 +706,7 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
     // One undo takes back the tag *and* the row that gives it meaning.
     pack.undo().await.unwrap();
     assert_eq!(pack.get_tags(media).await.unwrap(), vec!["shared"]);
-    let stages = read_pack_behaviour(&pack)
-        .await
-        .timeline
-        .unwrap()
-        .stages;
+    let stages = read_pack_behaviour(&pack).await.timeline.unwrap().stages;
     assert!(stages[0].content.exclude.is_empty());
     assert_eq!(stages[0].content.owned_exclude_tag, None);
 }
@@ -795,11 +826,7 @@ async fn restricting_a_stage_twice_is_the_same_as_restricting_it_once() {
         vec!["stage-peak"],
         "the first tag would be orphaned by a second"
     );
-    let stages = read_pack_behaviour(&pack)
-        .await
-        .timeline
-        .unwrap()
-        .stages;
+    let stages = read_pack_behaviour(&pack).await.timeline.unwrap().stages;
     assert_eq!(
         stages[0].content.tags.as_deref(),
         Some(&["stage-peak".to_string()][..])
@@ -807,11 +834,7 @@ async fn restricting_a_stage_twice_is_the_same_as_restricting_it_once() {
     // One undo, not two: an edit that changed nothing must not spend an entry, or the author has to
     // press undo twice to get back past a checkbox they ticked once.
     pack.undo().await.unwrap();
-    let stages = read_pack_behaviour(&pack)
-        .await
-        .timeline
-        .unwrap()
-        .stages;
+    let stages = read_pack_behaviour(&pack).await.timeline.unwrap().stages;
     assert_eq!(
         stages[0].content.tags, None,
         "one undo should have taken the restriction back off"
@@ -1145,12 +1168,7 @@ async fn editing_one_stage_records_a_changeset_the_size_of_that_stage() {
         "renaming one stage recorded {bytes} bytes of changeset, which is the whole document"
     );
     assert_eq!(
-        read_pack_behaviour(&pack)
-            .await
-            .timeline
-            .unwrap()
-            .stages[7]
-            .label,
+        read_pack_behaviour(&pack).await.timeline.unwrap().stages[7].label,
         "Renamed"
     );
 }
@@ -1501,11 +1519,7 @@ async fn renaming_a_stage_renames_both_of_the_tags_it_owns() {
         ]
     );
 
-    let stages = read_pack_behaviour(&pack)
-        .await
-        .timeline
-        .unwrap()
-        .stages;
+    let stages = read_pack_behaviour(&pack).await.timeline.unwrap().stages;
     assert_eq!(stages[0].content.owned_tag.as_deref(), Some("stage-climax"));
     assert_eq!(
         stages[0].content.owned_exclude_tag.as_deref(),

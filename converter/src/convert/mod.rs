@@ -113,9 +113,7 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
 
     // More than just the baseline level means the pack actually designs an escalating arc, not
     // just a static config.json-derived pace -- see `build_timeline_section`.
-    let has_timeline = timeline
-        .as_ref()
-        .is_some_and(|t| t.stages.len() > 1);
+    let has_timeline = timeline.as_ref().is_some_and(|t| t.stages.len() > 1);
 
     check_unsupported_files(source, &mut warnings);
     warn_unmapped_config_keys(&config, &mut warnings);
@@ -126,10 +124,7 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
         .file_exists("icon.ico")
         .then(|| "icon.ico".to_string());
 
-    let behaviour = Behaviour {
-        content,
-        timeline,
-    };
+    let behaviour = Behaviour { content, timeline };
     prioritize_referenced_media(&media_references, &mut media);
 
     ConversionOutput {

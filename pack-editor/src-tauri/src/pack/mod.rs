@@ -415,39 +415,29 @@ enum MetadataEdit {
 impl MetadataEdit {
     fn write(&self, connection: &rusqlite::Connection) -> Result<bool> {
         let changed = match self {
-            Self::Name(value) => {
-                connection.execute(
-                    "UPDATE pack_metadata SET name = ? WHERE singleton = 1 AND name IS NOT ?",
-                    params![value, value],
-                )?
-            }
-            Self::Creator(value) => {
-                connection.execute(
-                    "UPDATE pack_metadata SET creator = ? WHERE singleton = 1 AND creator IS NOT ?",
-                    params![value, value],
-                )?
-            }
-            Self::Description(value) => {
-                connection.execute(
-                    "UPDATE pack_metadata SET description = ?
+            Self::Name(value) => connection.execute(
+                "UPDATE pack_metadata SET name = ? WHERE singleton = 1 AND name IS NOT ?",
+                params![value, value],
+            )?,
+            Self::Creator(value) => connection.execute(
+                "UPDATE pack_metadata SET creator = ? WHERE singleton = 1 AND creator IS NOT ?",
+                params![value, value],
+            )?,
+            Self::Description(value) => connection.execute(
+                "UPDATE pack_metadata SET description = ?
                      WHERE singleton = 1 AND description IS NOT ?",
-                    params![value, value],
-                )?
-            }
-            Self::Version(value) => {
-                connection.execute(
-                    "UPDATE pack_metadata SET version = ? WHERE singleton = 1 AND version IS NOT ?",
-                    params![value, value],
-                )?
-            }
+                params![value, value],
+            )?,
+            Self::Version(value) => connection.execute(
+                "UPDATE pack_metadata SET version = ? WHERE singleton = 1 AND version IS NOT ?",
+                params![value, value],
+            )?,
             Self::RecommendedMode(value) => {
                 let (kind, id) = match value {
                     None => (None, None),
                     Some(shared::pack::RecommendedMode::Sandbox) => (Some("sandbox"), None),
                     Some(shared::pack::RecommendedMode::Experience) => (Some("experience"), None),
-                    Some(shared::pack::RecommendedMode::Pack { id }) => {
-                        (Some("pack"), Some(*id))
-                    }
+                    Some(shared::pack::RecommendedMode::Pack { id }) => (Some("pack"), Some(*id)),
                 };
                 connection.execute(
                     "UPDATE pack_metadata
@@ -1150,12 +1140,17 @@ impl MediaPack {
     async fn edit_metadata(&self, edit: MetadataEdit, label: String) -> Result<()> {
         let _handle = self.saving.read().await;
         let db_edit = edit.clone();
-        let changed = self.db_execute(move |mut connection| {
-            history::record(&mut connection, &label, 0, &[], |tx| db_edit.write(tx))
-        })
-        .await?;
+        let changed = self
+            .db_execute(move |mut connection| {
+                history::record(&mut connection, &label, 0, &[], |tx| db_edit.write(tx))
+            })
+            .await?;
         edit.update_cached(&mut self.metadata.write().unwrap());
-        if changed { self.mark_unsaved().await } else { Ok(()) }
+        if changed {
+            self.mark_unsaved().await
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn set_metadata_name(&self, value: String, label: String) -> Result<()> {
@@ -1163,7 +1158,8 @@ impl MediaPack {
     }
 
     pub async fn set_metadata_creator(&self, value: Option<String>, label: String) -> Result<()> {
-        self.edit_metadata(MetadataEdit::Creator(value), label).await
+        self.edit_metadata(MetadataEdit::Creator(value), label)
+            .await
     }
 
     pub async fn set_metadata_description(
@@ -1176,7 +1172,8 @@ impl MediaPack {
     }
 
     pub async fn set_metadata_version(&self, value: Option<String>, label: String) -> Result<()> {
-        self.edit_metadata(MetadataEdit::Version(value), label).await
+        self.edit_metadata(MetadataEdit::Version(value), label)
+            .await
     }
 
     pub async fn set_metadata_recommended_mode(

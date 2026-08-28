@@ -84,7 +84,8 @@ pub fn create_api<T: EventPoster>(
     // Mirrors `__lewdware_content` for the `timeline` section -- only
     // `default-modes/experience/src/main.lua` reads this (empty for Sandbox/custom modes).
     let timeline_value = lua.to_value_with(&timeline, for_lua)?;
-    lua.globals().set("__lewdware_timeline", timeline_value.clone())?;
+    lua.globals()
+        .set("__lewdware_timeline", timeline_value.clone())?;
     lua.globals().set("__lewdware_experience", timeline_value)?;
 
     api_table.set("config", config.into_lua(lua)?)?;

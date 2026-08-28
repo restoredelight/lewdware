@@ -79,8 +79,7 @@ fn a_stage_cannot_own_a_tag_it_does_not_select() {
 fn a_stages_selection_and_its_owned_tag_move_together() {
     let mut conn = timeline_pack(&["a", "b"]);
     tx_on(&mut conn, |tx| {
-        set_stage_content_tags(tx, "a", Some(&["stage-a".to_string()]), Some("stage-a"))
-                .unwrap();
+        set_stage_content_tags(tx, "a", Some(&["stage-a".to_string()]), Some("stage-a")).unwrap();
     });
     let stage = read_one_stage(&conn, "a").unwrap().unwrap();
     assert_eq!(
@@ -141,14 +140,14 @@ fn a_speed_needs_movement_to_be_switched_on_first() {
     }
     tx_on(&mut conn, |tx| {
         set_stage_movement(
-                tx,
-                "a",
-                Some(&Movement {
-                    minimum_speed: Some(50.0),
-                    maximum_speed: Some(150.0)
-                })
-            )
-            .unwrap();
+            tx,
+            "a",
+            Some(&Movement {
+                minimum_speed: Some(50.0),
+                maximum_speed: Some(150.0),
+            }),
+        )
+        .unwrap();
         set_stage_movement_speed(tx, "a", Some(80.0), None).unwrap();
     });
     let stage = read_one_stage(&conn, "a").unwrap().unwrap();

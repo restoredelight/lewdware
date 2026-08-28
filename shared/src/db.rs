@@ -74,13 +74,10 @@ fn migrate_inner(db: &mut rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-const MIGRATIONS: [&str; 2] = [
-    concat!(
-        include_str!("migrations/0001_init_schema.sql"),
-        include_str!("migrations/behaviour_schema.sql"),
-    ),
-    include_str!("migrations/behaviour_video_volume.sql"),
-];
+const MIGRATIONS: [&str; 1] = [concat!(
+    include_str!("migrations/0001_init_schema.sql"),
+    include_str!("migrations/behaviour_schema.sql"),
+)];
 
 #[cfg(test)]
 mod tests {

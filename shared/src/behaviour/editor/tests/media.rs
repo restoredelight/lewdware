@@ -1,10 +1,9 @@
 use super::{pack, popups_of, stage_ids, timeline_pack, tx_on};
 use crate::behaviour::db::read_one_stage;
-use crate::behaviour::editor::media::edit_popup_entries;
 use crate::behaviour::editor::{
     MediaSlots, audio_attributes, clear_media_slots, media_slots, popup_attributes, remove_stage,
-    set_audio_volume, set_media_slot, set_popup_caption, set_popup_scale, set_popup_weight,
-    set_stage_audio_random, set_timeline_enabled, slot_value,
+    set_audio_volume, set_media_slot, set_popup_audio, set_popup_caption, set_popup_scale,
+    set_popup_weight, set_stage_audio_random, set_timeline_enabled, slot_value,
 };
 use crate::behaviour::schema::{AudioMedia, Behaviour, Content, MediaSlot};
 
@@ -59,6 +58,16 @@ fn clearing_the_last_field_drops_the_entry() {
         set_popup_scale(tx, &[1], None).unwrap();
     });
     assert_eq!(popups_of(&conn, 1), None);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM behaviour_popup_media_fields",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+        .unwrap(),
+        0,
+        "the view trigger removes the empty backing row",
+    );
 }
 
 /// The inspector edits a selection, so one command has to reach every file in it.
@@ -109,14 +118,14 @@ fn an_empty_caption_clears_rather_than_stores() {
 fn explicit_sound_pairings_round_trip() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        edit_popup_entries(tx, &[1], |entry| entry.audio = vec![3]).unwrap();
+        set_popup_audio(tx, 1, &[3]).unwrap();
     });
     assert_eq!(popups_of(&conn, 1).unwrap().audio, [3]);
 
     // A set has no separate null: emptying the list is how a pairing is removed, and that leaves
     // the entry saying nothing.
     tx_on(&mut conn, |tx| {
-        edit_popup_entries(tx, &[1], |entry| entry.audio = vec![]).unwrap();
+        set_popup_audio(tx, 1, &[]).unwrap();
     });
     assert_eq!(popups_of(&conn, 1), None);
 }

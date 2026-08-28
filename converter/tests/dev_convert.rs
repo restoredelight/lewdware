@@ -94,12 +94,7 @@ fn dev_convert_produces_a_loadable_pack() {
     file.read_exact(&mut db_bytes).unwrap();
     let mut connection = Connection::open_in_memory().unwrap();
     connection
-        .deserialize_read_exact(
-            rusqlite::MAIN_DB,
-            db_bytes.as_slice(),
-            db_bytes.len(),
-            true,
-        )
+        .deserialize_read_exact(rusqlite::MAIN_DB, db_bytes.as_slice(), db_bytes.len(), true)
         .unwrap();
     let metadata = Metadata::read(&connection).unwrap();
     assert_eq!(metadata.name, "Dev Convert Test Pack");

@@ -31,7 +31,9 @@ pub async fn set_pack_creator(
     label: String,
 ) -> Result<(), String> {
     state
-        .with_pack_or((), async |pack| pack.set_metadata_creator(value, label).await)
+        .with_pack_or((), async |pack| {
+            pack.set_metadata_creator(value, label).await
+        })
         .await
 }
 
@@ -55,7 +57,9 @@ pub async fn set_pack_version(
     label: String,
 ) -> Result<(), String> {
     state
-        .with_pack_or((), async |pack| pack.set_metadata_version(value, label).await)
+        .with_pack_or((), async |pack| {
+            pack.set_metadata_version(value, label).await
+        })
         .await
 }
 

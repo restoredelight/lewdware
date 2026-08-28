@@ -242,10 +242,10 @@ CREATE TABLE IF NOT EXISTS behaviour_content_group_tag (
 -- Per-item behaviour attributes: what a pack author says about *this file*, rather than about a
 -- tag, a stage, or the pack as a whole.
 --
--- Every value column is nullable, and a row exists only where the author set something. "Unset"
--- has to stay distinguishable from "set to whatever happens to be today's default", because
--- defaults move under the user across engine releases -- see `behaviour-design/default-mode.md`'s
--- Ownership section. A row of all-NULLs is not written; `storage::write` drops it.
+-- Every value column is nullable, and a stored row exists only where the author set something.
+-- "Unset" has to stay distinguishable from "set to whatever happens to be today's default",
+-- because defaults move under the user across engine releases -- see
+-- `behaviour-design/default-mode.md`'s Ownership section.
 --
 -- `weight` is relative frequency, `scale` multiplies the size the mode would otherwise have
 -- chosen, the four `region_*` columns are the part of the monitor it may spawn in, `monitor` is
@@ -253,12 +253,17 @@ CREATE TABLE IF NOT EXISTS behaviour_content_group_tag (
 -- tag-matched pool), and the two `video_*` columns are the `VideoPopupOpts` fields that are
 -- properties of the clip rather than of the user.
 --
+-- The view has one row for every media item, including files with no stored attributes. That is
+-- what makes each inspector edit an UPDATE: its INSTEAD OF trigger creates the sparse backing row
+-- on the first non-NULL value and deletes it when the last value is cleared. The backing table's
+-- CHECK makes the no-empty-row rule true even for SQL that bypasses the view.
+--
 -- Four region columns rather than one `anchor TEXT`, which is what this started as. A region
 -- subsumes the nine anchors -- the engine centres a window too big for its region and clamps it to
 -- the screen, so a zero-size region names one placement exactly -- while also expressing
 -- "somewhere in the left half", which an anchor cannot. The four move together: all set, or all
 -- NULL.
-CREATE TABLE IF NOT EXISTS behaviour_popup_media (
+CREATE TABLE IF NOT EXISTS behaviour_popup_media_fields (
     media_id INTEGER PRIMARY KEY REFERENCES media (id) ON DELETE CASCADE,
     weight REAL,
     scale REAL,
@@ -269,8 +274,92 @@ CREATE TABLE IF NOT EXISTS behaviour_popup_media (
     monitor TEXT CHECK (monitor IN ('any', 'primary')),
     caption TEXT,
     video_loop INTEGER CHECK (video_loop IN (FALSE, TRUE)),
-    video_audio INTEGER CHECK (video_audio IN (FALSE, TRUE))
+    video_audio INTEGER CHECK (video_audio IN (FALSE, TRUE)),
+    video_volume REAL,
+    CHECK (weight IS NOT NULL
+        OR scale IS NOT NULL
+        OR region_x IS NOT NULL
+        OR region_y IS NOT NULL
+        OR region_width IS NOT NULL
+        OR region_height IS NOT NULL
+        OR monitor IS NOT NULL
+        OR caption IS NOT NULL
+        OR video_loop IS NOT NULL
+        OR video_audio IS NOT NULL
+        OR video_volume IS NOT NULL)
 ) STRICT;
+
+CREATE VIEW IF NOT EXISTS behaviour_popup_media AS
+SELECT media.id AS media_id,
+       fields.weight,
+       fields.scale,
+       fields.region_x,
+       fields.region_y,
+       fields.region_width,
+       fields.region_height,
+       fields.monitor,
+       fields.caption,
+       fields.video_loop,
+       fields.video_audio,
+       fields.video_volume
+FROM media
+LEFT JOIN behaviour_popup_media_fields AS fields ON fields.media_id = media.id;
+
+CREATE TRIGGER IF NOT EXISTS behaviour_popup_media_update
+INSTEAD OF UPDATE ON behaviour_popup_media
+BEGIN
+    SELECT RAISE(ABORT, 'behaviour popup media id cannot be changed')
+    WHERE NEW.media_id IS NOT OLD.media_id;
+
+    DELETE FROM behaviour_popup_media_fields
+    WHERE media_id = OLD.media_id
+      AND NEW.weight IS NULL
+      AND NEW.scale IS NULL
+      AND NEW.region_x IS NULL
+      AND NEW.region_y IS NULL
+      AND NEW.region_width IS NULL
+      AND NEW.region_height IS NULL
+      AND NEW.monitor IS NULL
+      AND NEW.caption IS NULL
+      AND NEW.video_loop IS NULL
+      AND NEW.video_audio IS NULL
+      AND NEW.video_volume IS NULL;
+
+    UPDATE behaviour_popup_media_fields
+    SET weight = NEW.weight,
+        scale = NEW.scale,
+        region_x = NEW.region_x,
+        region_y = NEW.region_y,
+        region_width = NEW.region_width,
+        region_height = NEW.region_height,
+        monitor = NEW.monitor,
+        caption = NEW.caption,
+        video_loop = NEW.video_loop,
+        video_audio = NEW.video_audio,
+        video_volume = NEW.video_volume
+    WHERE media_id = OLD.media_id;
+
+    INSERT INTO behaviour_popup_media_fields
+        (media_id, weight, scale, region_x, region_y, region_width, region_height,
+         monitor, caption, video_loop, video_audio, video_volume)
+    SELECT NEW.media_id, NEW.weight, NEW.scale,
+           NEW.region_x, NEW.region_y, NEW.region_width, NEW.region_height,
+           NEW.monitor, NEW.caption, NEW.video_loop, NEW.video_audio, NEW.video_volume
+    WHERE (NEW.weight IS NOT NULL
+        OR NEW.scale IS NOT NULL
+        OR NEW.region_x IS NOT NULL
+        OR NEW.region_y IS NOT NULL
+        OR NEW.region_width IS NOT NULL
+        OR NEW.region_height IS NOT NULL
+        OR NEW.monitor IS NOT NULL
+        OR NEW.caption IS NOT NULL
+        OR NEW.video_loop IS NOT NULL
+        OR NEW.video_audio IS NOT NULL
+        OR NEW.video_volume IS NOT NULL)
+      AND NOT EXISTS (
+          SELECT 1 FROM behaviour_popup_media_fields WHERE media_id = NEW.media_id
+      );
+END;
 
 -- Volume only. A `loop` column was considered and dropped: see `AudioMedia`'s doc comment -- it
 -- is expressible without an option, and as one it silently stops the background rotation.
@@ -285,12 +374,11 @@ CREATE TABLE IF NOT EXISTS behaviour_audio_media (
 -- A set, not a list: the mode picks one of the eligible sounds at random, so there is no order to
 -- preserve and no reason for the `position` column the document's other lists carry.
 --
--- The popup side references `behaviour_popup_media` rather than `media` directly, because in the
--- document a pairing is a *field of* the popup's entry (`PopupMedia::audio`) -- an entry that
--- exists precisely because it has something to say. Cascading from there keeps the two in step.
+-- Both sides reference media directly. A pairing is itself something the popup entry says, so it
+-- must be able to exist without manufacturing an all-NULL row in the scalar-field backing table.
 CREATE TABLE IF NOT EXISTS behaviour_popup_audio_pair (
     popup_media_id INTEGER NOT NULL
-        REFERENCES behaviour_popup_media (media_id) ON DELETE CASCADE,
+        REFERENCES media (id) ON DELETE CASCADE,
     audio_media_id INTEGER NOT NULL REFERENCES media (id) ON DELETE CASCADE,
     PRIMARY KEY (popup_media_id, audio_media_id)
 ) STRICT;

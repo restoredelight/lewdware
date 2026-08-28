@@ -8,10 +8,7 @@ use super::{harness::*, mode_support::*, *};
 async fn experience_stage_tag_restricts_background_audio() {
     LocalSet::new()
         .run_until(async {
-            const MEDIA: &[(&str, &[&str])] = &[
-                ("calm.ogg", &["soft"]),
-                ("harsh.ogg", &["harsh"]),
-            ];
+            const MEDIA: &[(&str, &[&str])] = &[("calm.ogg", &["soft"]), ("harsh.ogg", &["harsh"])];
 
             let timeline = levels_to_timeline(vec![Level {
                 tags: Some(vec!["harsh".to_string()]),

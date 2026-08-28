@@ -30,9 +30,9 @@ pub use link::{
 };
 pub use media::{
     MediaSlots, audio_attributes, clear_media_slots, is_media_referenced, media_slots,
-    popup_attributes, set_audio_volume, set_media_slot, set_popup_caption, set_popup_monitor,
-    set_popup_region, set_popup_scale, set_popup_video_audio, set_popup_video_loop,
-    set_popup_video_volume, set_popup_weight, slot_value,
+    popup_attributes, set_audio_volume, set_media_slot, set_popup_audio, set_popup_caption,
+    set_popup_monitor, set_popup_region, set_popup_scale, set_popup_video_audio,
+    set_popup_video_loop, set_popup_video_volume, set_popup_weight, slot_value,
 };
 pub use membership::{
     MembershipPlan, StageTagCreation, apply_membership_creation, media_tags, plan_stage_membership,

@@ -31,6 +31,25 @@ fn an_entry_with_nothing_set_is_not_stored() {
     assert!(stored.content.popups.is_empty());
     assert!(stored.content.audio.is_empty());
     assert!(stored.content.is_empty(), "and the document is empty again");
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM behaviour_popup_media_fields",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+        .unwrap(),
+        0,
+        "the SQL representation is sparse too",
+    );
+
+    assert!(
+        conn.execute(
+            "INSERT INTO behaviour_popup_media_fields (media_id) VALUES (1)",
+            [],
+        )
+        .is_err(),
+        "the backing table itself rejects an empty row",
+    );
 }
 
 /// The spawn region is one field across four columns, so it has two failure modes the other
@@ -150,6 +169,16 @@ fn pairings_are_a_set_not_a_list() {
         vec![3, 4],
         "deduplicated and ordered, so a round-trip is stable",
     );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM behaviour_popup_media_fields",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+        .unwrap(),
+        0,
+        "pairings do not need an all-NULL scalar row",
+    );
 }
 
 /// The diff-not-replace discipline, which is what keeps the editor's undo changesets the size
@@ -176,7 +205,7 @@ fn writing_one_entry_leaves_the_others_row_alone() {
 
     let rowid_before: i64 = conn
         .query_row(
-            "SELECT rowid FROM behaviour_popup_media WHERE media_id = 2",
+            "SELECT rowid FROM behaviour_popup_media_fields WHERE media_id = 2",
             [],
             |row| row.get(0),
         )
@@ -187,7 +216,7 @@ fn writing_one_entry_leaves_the_others_row_alone() {
 
     let rowid_after: i64 = conn
         .query_row(
-            "SELECT rowid FROM behaviour_popup_media WHERE media_id = 2",
+            "SELECT rowid FROM behaviour_popup_media_fields WHERE media_id = 2",
             [],
             |row| row.get(0),
         )

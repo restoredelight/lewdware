@@ -17,13 +17,7 @@ const MIGRATION_1: &str = concat!(
     include_str!("../../../shared/src/migrations/behaviour_schema.sql"),
 );
 
-/// `PopupMedia::video_volume`. Reached across into `shared` for the same reason `MIGRATION_1` is,
-/// and appended rather than folded into it because packs written against the eleven-column
-/// `behaviour_popup_media` already exist: see the file's own header. The ledger in `shared::db`
-/// carries the identical step, so a pack and a working copy of it stay the same shape.
-const MIGRATION_2: &str = include_str!("../../../shared/src/migrations/behaviour_video_volume.sql");
-
-const MIGRATIONS: &[&str] = &[MIGRATION_1, MIGRATION_2];
+const MIGRATIONS: &[&str] = &[MIGRATION_1];
 
 /// The behaviour document's structural half (see `shared::behaviour::Behaviour`), in an order that
 /// satisfies its foreign keys: parents before children, stages before the transitions between them.
@@ -50,7 +44,7 @@ pub const BEHAVIOUR_TABLES: &[&str] = &[
     "behaviour_web_link_tag",
     "behaviour_content_group",
     "behaviour_content_group_tag",
-    "behaviour_popup_media",
+    "behaviour_popup_media_fields",
     "behaviour_popup_audio_pair",
     "behaviour_audio_media",
 ];
@@ -65,7 +59,7 @@ pub const BEHAVIOUR_TABLES: &[&str] = &[
 /// media actually made it across" is exactly the right question in each. The runtime pack has no
 /// `deleted` column to ask about anyway.
 const MEDIA_KEYED_BEHAVIOUR_TABLES: &[(&str, &[&str])] = &[
-    ("behaviour_popup_media", &["media_id"]),
+    ("behaviour_popup_media_fields", &["media_id"]),
     (
         "behaviour_popup_audio_pair",
         &["popup_media_id", "audio_media_id"],
@@ -541,7 +535,7 @@ mod tests {
                         (3, 'kept.ogg', 'audio', x'02', FALSE);
                  INSERT INTO pack_media (media_id, generation_id, \"offset\", length)
                  VALUES (1, 'g', 0, 0), (2, 'g', 0, 0), (3, 'g', 0, 0);
-                 INSERT INTO behaviour_popup_media (media_id, scale)
+                 INSERT INTO behaviour_popup_media_fields (media_id, scale)
                  VALUES (1, 2.0), (2, 3.0);
                  INSERT INTO behaviour_audio_media (media_id, volume) VALUES (3, 0.5);
                  -- A pairing from a surviving popup to a file that is going away, and one that
@@ -561,7 +555,7 @@ mod tests {
         configure_connection(&runtime).unwrap();
 
         let popup_ids: Vec<u64> = runtime
-            .prepare("SELECT media_id FROM behaviour_popup_media ORDER BY media_id")
+            .prepare("SELECT media_id FROM behaviour_popup_media_fields ORDER BY media_id")
             .unwrap()
             .query_map([], |row| row.get(0))
             .unwrap()
@@ -619,55 +613,5 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("newer"));
-    }
-
-    /// Packs written before `video_volume` existed are on disk already, and the behaviour copy is
-    /// positional (`SELECT t.*`) -- so an unmigrated pack would arrive one value short of the
-    /// table it is going into and the import would fail on a file that is not corrupt at all.
-    /// `migrate_runtime` is what stops that; this is the test that says so.
-    #[test]
-    fn importing_a_pack_from_before_a_behaviour_column_brings_it_up_to_date() {
-        let directory = tempfile::tempdir().unwrap();
-
-        // A pack at schema 1, built by winding the current one back: the column gone and the
-        // ledger saying 1, which is the shape every pack written before this column is in. Wound
-        // back rather than hand-written, so the fixture cannot drift from the real schema.
-        let runtime_path = directory.path().join("pack.lwpack");
-        {
-            let mut runtime = Connection::open(&runtime_path).unwrap();
-            configure_connection(&runtime).unwrap();
-            shared::db::migrate(&mut runtime).unwrap();
-            Metadata {
-                name: "Test pack".to_string(),
-                ..Default::default()
-            }
-            .insert(&runtime)
-            .unwrap();
-            runtime
-                .execute_batch(
-                    "ALTER TABLE behaviour_popup_media DROP COLUMN video_volume;
-                     UPDATE migrations SET migration_index = 1;
-                     INSERT INTO media (id, file_name, file_type, \"offset\", length, hash)
-                     VALUES (1, 'clip.mp4', 'video', 0, 0, x'00');
-                     INSERT INTO behaviour_popup_media (media_id, scale) VALUES (1, 2.0);",
-                )
-                .unwrap();
-        }
-
-        let mut editor = Connection::open(directory.path().join("editor.db")).unwrap();
-        configure_connection(&editor).unwrap();
-        import_runtime(&mut editor, &runtime_path).unwrap();
-
-        // The row came across, and the column the pack never had reads as "no opinion" rather
-        // than as a level the author never chose.
-        let (scale, video_volume): (Option<f64>, Option<f64>) = editor
-            .query_row(
-                "SELECT scale, video_volume FROM behaviour_popup_media WHERE media_id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(scale, Some(2.0));
-        assert_eq!(video_volume, None);
     }
 }

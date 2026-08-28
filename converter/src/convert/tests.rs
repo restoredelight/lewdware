@@ -421,10 +421,11 @@ fn hypno_and_legacy_subliminal_media_is_skipped_with_a_warning() {
 fn popup_anchor_ignores_non_popup_media() {
     let (_dir, source) = source_with(&[("wallpaper.png", "w")]);
     let output = convert(&source);
-    let popup_anchor =
-        output.behaviour.timeline.as_ref().map(|timeline| {
-            anchor_seconds(&timeline.stages[0].events.popup).is_some()
-        });
+    let popup_anchor = output
+        .behaviour
+        .timeline
+        .as_ref()
+        .map(|timeline| anchor_seconds(&timeline.stages[0].events.popup).is_some());
     assert_ne!(popup_anchor, Some(true));
 
     let (_dir2, source2) = source_with(&[("wallpaper.png", "w"), ("img/a.png", "a")]);
@@ -511,10 +512,7 @@ fn config_json_pacing_alone_populates_anchors_but_still_recommends_sandbox() {
     let output = convert(&source);
     let timeline = output.behaviour.timeline.as_ref().unwrap();
     // 100% chance every 5000ms tick -> one event every 5 seconds.
-    assert_eq!(
-        anchor_seconds(&timeline.stages[0].events.popup),
-        Some(5.0)
-    );
+    assert_eq!(anchor_seconds(&timeline.stages[0].events.popup), Some(5.0));
     assert_eq!(
         output.metadata.recommended_mode,
         Some(RecommendedMode::Sandbox)
@@ -533,12 +531,7 @@ fn popup_anchor_sums_image_and_video_chance() {
     // 100% combined chance every 1000ms -> one event/sec.
     assert_eq!(
         anchor_seconds(
-            &output
-                .behaviour
-                .timeline
-                .as_ref()
-                .unwrap()
-                .stages[0]
+            &output.behaviour.timeline.as_ref().unwrap().stages[0]
                 .events
                 .popup
         ),
@@ -566,11 +559,7 @@ fn content_presence_defaults_an_anchor_on_when_no_config_signal_exists_anywhere(
     let output = convert(&source);
     assert!(!output.behaviour.content.web_links.is_empty());
     assert_eq!(
-        anchor_seconds(
-            &output.behaviour.timeline.unwrap().stages[0]
-                .events
-                .web
-        ),
+        anchor_seconds(&output.behaviour.timeline.unwrap().stages[0].events.web),
         Some(DEFAULT_WEB_PERIOD_SECONDS)
     );
 }
@@ -592,12 +581,7 @@ fn missing_delay_falls_back_to_edgewares_own_default() {
     // 100% chance every (default) 5000ms -> one event every 5 seconds.
     assert_eq!(
         anchor_seconds(
-            &output
-                .behaviour
-                .timeline
-                .as_ref()
-                .unwrap()
-                .stages[0]
+            &output.behaviour.timeline.as_ref().unwrap().stages[0]
                 .events
                 .prompt
         ),
@@ -705,14 +689,7 @@ fn launch_trigger_warns_and_still_produces_a_time_based_timeline() {
             .iter()
             .any(|w| w.kind == WarningKind::UnsupportedFeatureDropped)
     );
-    assert!(
-        !output
-            .behaviour
-            .timeline
-            .unwrap()
-            .stages
-            .is_empty()
-    );
+    assert!(!output.behaviour.timeline.unwrap().stages.is_empty());
 }
 
 #[test]
@@ -817,13 +794,7 @@ fn level_wallpaper_other_than_primary_gets_its_own_media_entry() {
         ),
     ]);
     let output = convert(&source);
-    let stage_count = output
-        .behaviour
-        .timeline
-        .as_ref()
-        .unwrap()
-        .stages
-        .len();
+    let stage_count = output.behaviour.timeline.as_ref().unwrap().stages.len();
     for index in 0..stage_count {
         assert_eq!(stage_slot_source(&output, index), Some("wallpaper2.png"));
     }

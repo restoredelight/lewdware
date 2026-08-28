@@ -27,11 +27,7 @@ fn an_empty_tag_selection_stays_distinct_from_no_selection() {
     };
     store(&mut conn, &behaviour);
 
-    let stages = Behaviour::read(&conn)
-        .unwrap()
-        .timeline
-        .unwrap()
-        .stages;
+    let stages = Behaviour::read(&conn).unwrap().timeline.unwrap().stages;
     assert_eq!(stages[0].content.tags, None);
     assert_eq!(stages[1].content.tags, Some(vec![]));
 }
@@ -62,11 +58,7 @@ fn an_empty_sub_structure_stays_distinct_from_an_absent_one() {
     };
     store(&mut conn, &behaviour);
 
-    let stages = Behaviour::read(&conn)
-        .unwrap()
-        .timeline
-        .unwrap()
-        .stages;
+    let stages = Behaviour::read(&conn).unwrap().timeline.unwrap().stages;
     assert_eq!(
         stages[0].movement,
         Some(Movement {
@@ -139,11 +131,7 @@ fn editing_one_stage_leaves_the_other_rows_untouched() {
     store(&mut conn, &behaviour);
 
     assert_eq!(before, rowids(&conn), "no stage row was replaced");
-    let stages = Behaviour::read(&conn)
-        .unwrap()
-        .timeline
-        .unwrap()
-        .stages;
+    let stages = Behaviour::read(&conn).unwrap().timeline.unwrap().stages;
     assert_eq!(stages[1].label, "Renamed");
 }
 
@@ -229,10 +217,7 @@ fn a_switched_off_timeline_reads_as_none_but_keeps_its_stages() {
     let tx = conn.transaction().unwrap();
     set_timeline_enabled(&tx, true).unwrap();
     tx.commit().unwrap();
-    assert_eq!(
-        Behaviour::read(&conn).unwrap().timeline,
-        behaviour.timeline
-    );
+    assert_eq!(Behaviour::read(&conn).unwrap().timeline, behaviour.timeline);
 }
 
 /// A pack that has never had a timeline has no section to switch on or off, and reads as `None`

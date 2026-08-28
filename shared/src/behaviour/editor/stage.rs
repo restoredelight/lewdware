@@ -3,10 +3,10 @@ use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::common::{add_tag, exists, remove_tag, set_column};
 use crate::behaviour::db::{
-    read_owned_stage_tag, read_stage_end, read_stage_entry,
-    read_stage_mitosis, read_stage_movement, read_stage_prompt, read_stage_tags,
-    write_one_stage_event, write_owned_stage_tag, write_stage_end, write_stage_entry,
-    write_stage_mitosis, write_stage_movement, write_stage_prompt, write_stage_tags,
+    read_owned_stage_tag, read_stage_end, read_stage_entry, read_stage_mitosis,
+    read_stage_movement, read_stage_prompt, read_stage_tags, write_one_stage_event,
+    write_owned_stage_tag, write_stage_end, write_stage_entry, write_stage_mitosis,
+    write_stage_movement, write_stage_prompt, write_stage_tags,
 };
 use crate::behaviour::schema::{
     EndStrategy, EventCountCondition, EventKind, EventSchedule, Mitosis, Movement, StageEnd,
@@ -254,11 +254,7 @@ pub fn set_stage_movement_speed(
 }
 
 /// Switches mitosis on or off. One command for the same reason as [`set_stage_movement`].
-pub fn set_stage_mitosis(
-    tx: &Transaction<'_>,
-    id: &str,
-    mitosis: Option<&Mitosis>,
-) -> Result<()> {
+pub fn set_stage_mitosis(tx: &Transaction<'_>, id: &str, mitosis: Option<&Mitosis>) -> Result<()> {
     if !exists(tx, "behaviour_stage", "id", &id)? {
         bail!("{NO_STAGE}");
     }
@@ -290,11 +286,7 @@ pub fn set_stage_mitosis_values(
 // `normalize` rather than by the author -- so a leaf setter refuses when there is none rather than
 // creating one, which would give the final stage an end it must not have.
 
-pub fn set_stage_end_duration(
-    tx: &Transaction<'_>,
-    id: &str,
-    seconds: Option<f64>,
-) -> Result<()> {
+pub fn set_stage_end_duration(tx: &Transaction<'_>, id: &str, seconds: Option<f64>) -> Result<()> {
     edit_stage_end(tx, id, |end| end.duration_seconds = seconds)
 }
 
@@ -306,11 +298,7 @@ pub fn set_stage_end_event_count(
     edit_stage_end(tx, id, |end| end.event_count = condition.cloned())
 }
 
-pub fn set_stage_end_strategy(
-    tx: &Transaction<'_>,
-    id: &str,
-    strategy: EndStrategy,
-) -> Result<()> {
+pub fn set_stage_end_strategy(tx: &Transaction<'_>, id: &str, strategy: EndStrategy) -> Result<()> {
     edit_stage_end(tx, id, |end| end.strategy = strategy)
 }
 

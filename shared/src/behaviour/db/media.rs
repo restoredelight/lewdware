@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
-use rusqlite::{Connection, Transaction, params};
+use anyhow::{bail, Result};
+use rusqlite::{params, Connection, Transaction};
 
 use crate::behaviour::{
     db::common::sql_array,
-    schema::{AudioMedia, MonitorPreference, PopupMedia, SpawnRegion},
+    schema::{AudioMedia, PopupMedia, SpawnRegion},
 };
 
 pub fn read_popup_media(conn: &Connection) -> Result<BTreeMap<u64, PopupMedia>> {
@@ -13,7 +13,7 @@ pub fn read_popup_media(conn: &Connection) -> Result<BTreeMap<u64, PopupMedia>> 
 }
 
 pub fn read_one_popup_media(conn: &Connection, id: u64) -> Result<Option<PopupMedia>> {
-    Ok(read_popup_media_where(conn, "WHERE media_id = ?", &[&id])?.remove(&id))
+    Ok(read_popup_media_where(conn, "AND popup.media_id = ?", &[&id])?.remove(&id))
 }
 
 fn read_popup_media_where(
@@ -22,9 +22,27 @@ fn read_popup_media_where(
     binds: &[&dyn rusqlite::ToSql],
 ) -> Result<BTreeMap<u64, PopupMedia>> {
     let mut statement = conn.prepare(&format!(
-        "SELECT media_id, weight, scale, region_x, region_y, region_width, region_height,
-                monitor, caption, video_loop, video_audio, video_volume
-         FROM behaviour_popup_media {filter} ORDER BY media_id"
+        "SELECT popup.media_id, popup.weight, popup.scale, popup.region_x, popup.region_y,
+                popup.region_width, popup.region_height, popup.monitor, popup.caption,
+                popup.video_loop, popup.video_audio, popup.video_volume
+         FROM behaviour_popup_media AS popup
+         WHERE (popup.weight IS NOT NULL
+             OR popup.scale IS NOT NULL
+             OR popup.region_x IS NOT NULL
+             OR popup.region_y IS NOT NULL
+             OR popup.region_width IS NOT NULL
+             OR popup.region_height IS NOT NULL
+             OR popup.monitor IS NOT NULL
+             OR popup.caption IS NOT NULL
+             OR popup.video_loop IS NOT NULL
+             OR popup.video_audio IS NOT NULL
+             OR popup.video_volume IS NOT NULL
+             OR EXISTS (
+                 SELECT 1 FROM behaviour_popup_audio_pair AS pair
+                 WHERE pair.popup_media_id = popup.media_id
+             ))
+         {filter}
+         ORDER BY popup.media_id"
     ))?;
     statement
         .query_and_then(binds, |row| {
@@ -62,7 +80,7 @@ fn read_region(
             .sanitized(),
         )
     } else {
-        return None;
+        None
     }
 }
 
@@ -91,31 +109,37 @@ pub fn write_popup_media(tx: &Transaction<'_>, popups: &BTreeMap<u64, PopupMedia
 
 /// Writes one file's popup attributes and its explicit sound pairings.
 ///
-/// The body of [`write_popup_media`]' loop, separated so the editor can set one file's attributes
-/// without re-upserting every other entry in the pack.
+/// The body of [`write_popup_media`]' loop, separated for whole-document writers.
 pub fn write_one_popup_media(
     tx: &Transaction<'_>,
     media_id: u64,
     entry: &PopupMedia,
 ) -> Result<()> {
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM media WHERE id = ?)",
+        [media_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        bail!("popup media {media_id} does not exist");
+    }
+
     let region = entry.region.map(SpawnRegion::sanitized);
     let monitor = entry.monitor.as_ref();
     tx.execute(
-        "INSERT INTO behaviour_popup_media
-             (media_id, weight, scale, region_x, region_y, region_width, region_height,
-              monitor, caption, video_loop, video_audio, video_volume)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(media_id) DO UPDATE SET weight = excluded.weight,
-                                             scale = excluded.scale,
-                                             region_x = excluded.region_x,
-                                             region_y = excluded.region_y,
-                                             region_width = excluded.region_width,
-                                             region_height = excluded.region_height,
-                                             monitor = excluded.monitor,
-                                             caption = excluded.caption,
-                                             video_loop = excluded.video_loop,
-                                             video_audio = excluded.video_audio,
-                                             video_volume = excluded.video_volume",
+        "UPDATE behaviour_popup_media
+         SET weight = ?2,
+             scale = ?3,
+             region_x = ?4,
+             region_y = ?5,
+             region_width = ?6,
+             region_height = ?7,
+             monitor = ?8,
+             caption = ?9,
+             video_loop = ?10,
+             video_audio = ?11,
+             video_volume = ?12
+         WHERE media_id = ?1",
         params![
             media_id,
             entry.weight,
@@ -135,7 +159,11 @@ pub fn write_one_popup_media(
     Ok(())
 }
 
-fn write_popup_audio_pairs(tx: &Transaction<'_>, popup: u64, audio: &[u64]) -> Result<()> {
+pub(crate) fn write_popup_audio_pairs(
+    tx: &Transaction<'_>,
+    popup: u64,
+    audio: &[u64],
+) -> Result<()> {
     tx.execute(
         "DELETE FROM behaviour_popup_audio_pair
          WHERE popup_media_id = ?1

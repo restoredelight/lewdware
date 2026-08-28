@@ -335,10 +335,7 @@ pub(super) fn levels_to_experience(levels: Vec<Level>) -> Timeline {
 /// Builds a single-level `Timeline` (just the baseline, no escalation at all) from a
 /// baseline `FrequencyAnchors`/`DesignValues` pair -- the common case for tests exercising
 /// anchor/design arithmetic in isolation from the timeline's own trigger mechanics.
-pub(super) fn timeline_with_baseline(
-    anchors: FrequencyAnchors,
-    design: DesignValues,
-) -> Timeline {
+pub(super) fn timeline_with_baseline(anchors: FrequencyAnchors, design: DesignValues) -> Timeline {
     levels_to_timeline(vec![Level {
         at_seconds: 0.0,
         at_popups: None,
@@ -348,13 +345,6 @@ pub(super) fn timeline_with_baseline(
         exclude: Vec::new(),
         wallpaper: None,
     }])
-}
-
-pub(super) fn experience_with_baseline(
-    anchors: FrequencyAnchors,
-    design: DesignValues,
-) -> Timeline {
-    timeline_with_baseline(anchors, design)
 }
 
 pub(super) fn as_str_sources(owned: &[(String, String)]) -> Vec<(&str, &str)> {

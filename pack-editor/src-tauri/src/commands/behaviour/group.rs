@@ -37,9 +37,7 @@ pub async fn add_content_group(
         .with_pack(async |pack| {
             pack.behaviour_edit(BehaviourAction::new(
                 label,
-                move |tx: &rusqlite::Transaction<'_>| {
-                    editor::add_content_group(tx, &group)
-                },
+                move |tx: &rusqlite::Transaction<'_>| editor::add_content_group(tx, &group),
             ))
             .await
         })

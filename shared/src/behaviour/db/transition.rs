@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::{Connection, Transaction, params};
 
 use super::common::{retain, sql_array};
-use crate::behaviour::schema::{Easing, Transition, TransitionCategory};
+use crate::behaviour::schema::{Transition, TransitionCategory};
 
 pub fn read_transitions(conn: &Connection) -> Result<Vec<Transition>> {
     // Ordered by where `from_stage` sits in the timeline, which is the only thing a transition's

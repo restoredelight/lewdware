@@ -4,8 +4,7 @@ use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::behaviour::db::{
-    read_one_stage, read_stages, read_timeline, read_transitions,
-    timeline_enabled, write_one_stage,
+    read_one_stage, read_stages, read_timeline, read_transitions, timeline_enabled, write_one_stage,
 };
 use crate::behaviour::schema::{Stage, Timeline, Transition, TransitionCategory};
 

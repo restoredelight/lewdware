@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use crate::behaviour::db::{read_one_popup_media, write_one_popup_media};
+use crate::behaviour::db::{read_one_popup_media, sql_array, write_popup_audio_pairs};
 use crate::behaviour::schema::{AudioMedia, MediaSlot, MonitorPreference, PopupMedia, SpawnRegion};
 
 // ── Per-file attributes ──────────────────────────────────────────────────────
@@ -50,42 +50,35 @@ pub fn audio_attributes(conn: &Connection, ids: &[u64]) -> Result<Vec<(u64, Audi
     Ok(found)
 }
 
-/// Applies `change` to every file in `ids`, dropping any entry left saying nothing.
+/// Updates one nullable popup field across an inspector selection.
 ///
-/// The prune is what keeps "the author has said nothing about this file" and "the author set every
-/// field to whatever today's default happens to be" from becoming the same stored state — defaults
-/// move under the user across engine releases, and an entry that says nothing must not pin a file
-/// against the ones that were current when it was written.
-pub fn edit_popup_entries(
+/// `behaviour_popup_media` has a row for every media item. Its update trigger materializes the
+/// sparse backing row when the first field is set and removes it when the last field is cleared,
+/// so callers only have to name the field the author actually changed.
+fn set_popup_column<T: rusqlite::ToSql>(
     tx: &Transaction<'_>,
     ids: &[u64],
-    change: impl Fn(&mut PopupMedia),
+    column: &str,
+    value: T,
 ) -> Result<()> {
-    for id in ids {
-        let mut after = read_one_popup_media(tx, *id)?.unwrap_or_default();
-        change(&mut after);
-        // An entry holding nothing but defaults is the absence of an entry, so it is stored as
-        // one. The DELETE matches no row when there was nothing there to begin with.
-        if after.is_empty() {
-            tx.execute(
-                "DELETE FROM behaviour_popup_media WHERE media_id = ?",
-                params![id],
-            )?;
-            continue;
-        }
-        write_one_popup_media(tx, *id, &after)?;
-    }
+    tx.execute(
+        &format!(
+            "UPDATE behaviour_popup_media SET {column} = ?2
+             WHERE media_id IN (SELECT value FROM rarray(?1))"
+        ),
+        params![sql_array(ids)?, value],
+    )?;
     Ok(())
 }
 
 /// How often these files are drawn relative to their neighbours.
 pub fn set_popup_weight(tx: &Transaction<'_>, ids: &[u64], weight: Option<f64>) -> Result<()> {
-    edit_popup_entries(tx, ids, |entry| entry.weight = weight)
+    set_popup_column(tx, ids, "weight", weight)
 }
 
 /// Multiplies the size the mode would otherwise have chosen.
 pub fn set_popup_scale(tx: &Transaction<'_>, ids: &[u64], scale: Option<f64>) -> Result<()> {
-    edit_popup_entries(tx, ids, |entry| entry.scale = scale)
+    set_popup_column(tx, ids, "scale", scale)
 }
 
 /// The part of the monitor these files may spawn in. One field, not four: a region is a rectangle,
@@ -95,7 +88,20 @@ pub fn set_popup_region(
     ids: &[u64],
     region: Option<SpawnRegion>,
 ) -> Result<()> {
-    edit_popup_entries(tx, ids, |entry| entry.region = region)
+    let region = region.map(SpawnRegion::sanitized);
+    tx.execute(
+        "UPDATE behaviour_popup_media
+         SET region_x = ?2, region_y = ?3, region_width = ?4, region_height = ?5
+         WHERE media_id IN (SELECT value FROM rarray(?1))",
+        params![
+            sql_array(ids)?,
+            region.map(|region| region.x),
+            region.map(|region| region.y),
+            region.map(|region| region.width),
+            region.map(|region| region.height),
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn set_popup_monitor(
@@ -103,30 +109,22 @@ pub fn set_popup_monitor(
     ids: &[u64],
     monitor: Option<MonitorPreference>,
 ) -> Result<()> {
-    edit_popup_entries(tx, ids, |entry| entry.monitor = monitor)
+    set_popup_column(tx, ids, "monitor", monitor)
 }
 
 /// A caption belonging to these files, as opposed to the tag-matched pool. An empty one is the
 /// absence of a caption rather than a caption of "".
 pub fn set_popup_caption(tx: &Transaction<'_>, ids: &[u64], caption: Option<&str>) -> Result<()> {
     let caption = caption.filter(|text| !text.is_empty());
-    edit_popup_entries(tx, ids, |entry| entry.caption = caption.map(str::to_string))
+    set_popup_column(tx, ids, "caption", caption)
 }
 
-pub fn set_popup_video_loop(
-    tx: &Transaction<'_>,
-    ids: &[u64],
-    value: Option<bool>,
-) -> Result<()> {
-    edit_popup_entries(tx, ids, |entry| entry.video_loop = value)
+pub fn set_popup_video_loop(tx: &Transaction<'_>, ids: &[u64], value: Option<bool>) -> Result<()> {
+    set_popup_column(tx, ids, "video_loop", value)
 }
 
-pub fn set_popup_video_audio(
-    tx: &Transaction<'_>,
-    ids: &[u64],
-    value: Option<bool>,
-) -> Result<()> {
-    edit_popup_entries(tx, ids, |entry| entry.video_audio = value)
+pub fn set_popup_video_audio(tx: &Transaction<'_>, ids: &[u64], value: Option<bool>) -> Result<()> {
+    set_popup_column(tx, ids, "video_audio", value)
 }
 
 /// This clip's soundtrack's own level. The audio-file counterpart is [`set_audio_volume`].
@@ -135,7 +133,12 @@ pub fn set_popup_video_volume(
     ids: &[u64],
     volume: Option<f64>,
 ) -> Result<()> {
-    edit_popup_entries(tx, ids, |entry| entry.video_volume = volume)
+    set_popup_column(tx, ids, "video_volume", volume)
+}
+
+/// Replaces one popup's explicit set of sound pairings.
+pub fn set_popup_audio(tx: &Transaction<'_>, popup: u64, audio: &[u64]) -> Result<()> {
+    write_popup_audio_pairs(tx, popup, audio)
 }
 
 /// This track's own level, for levelling a pack assembled from mixed sources.

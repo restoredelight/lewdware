@@ -365,7 +365,8 @@ impl Behaviour {
         tx.execute("DELETE FROM behaviour_transition", [])?;
         tx.execute("DELETE FROM behaviour_stage", [])?;
         tx.execute("DELETE FROM behaviour_timeline", [])?;
-        tx.execute("DELETE FROM behaviour_popup_media", [])?;
+        tx.execute("DELETE FROM behaviour_popup_audio_pair", [])?;
+        tx.execute("DELETE FROM behaviour_popup_media_fields", [])?;
         tx.execute("DELETE FROM behaviour_audio_media", [])?;
         tx.execute("DELETE FROM behaviour_content_group", [])?;
         tx.execute("DELETE FROM behaviour_text_item", [])?;
