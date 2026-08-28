@@ -161,6 +161,6 @@ fn editing_one_stage_leaves_its_neighbours_alone() {
 fn the_editors_timeline_is_the_documents_timeline() {
     let conn = timeline_pack(&["a", "b"]);
     let view = timeline(&conn).unwrap().unwrap();
-    let document = Behaviour::read(&conn).unwrap().experience.unwrap();
-    assert_eq!(view.timeline, document.timeline);
+    let document = Behaviour::read(&conn).unwrap().timeline.unwrap();
+    assert_eq!(view.timeline, document);
 }

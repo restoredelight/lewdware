@@ -48,7 +48,7 @@ pub(super) fn pack_fixture(with_image: bool) -> NamedTempFile {
     if with_image {
         db.execute(
             "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash) \
-             VALUES ('pic.avif', 'image', 0, 0, 64, 64, 0, x'00')",
+             VALUES ('pic.avif', 'image', 0, 0, 64, 64, FALSE, x'00')",
             [],
         )
         .unwrap();
@@ -109,7 +109,7 @@ pub(super) fn pack_fixture_with_tagged_video(tags: &[&str]) -> NamedTempFile {
 
     db.execute(
         "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, duration, audio, hash) \
-         VALUES ('clip.webm', 'video', 0, 0, 64, 64, 0, 1.5, 0, x'00')",
+         VALUES ('clip.webm', 'video', 0, 0, 64, 64, FALSE, 1.5, FALSE, x'00')",
         [],
     )
     .unwrap();
@@ -172,7 +172,7 @@ pub(super) fn pack_fixture_with_data(
         };
         db.execute(
             "INSERT INTO media (file_name, file_type, offset, length, width, height, duration, transparent, hash) \
-             VALUES (?, ?, 0, 0, 64, 64, 1.0, 0, ?)",
+             VALUES (?, ?, 0, 0, 64, 64, 1.0, FALSE, ?)",
             rusqlite::params![file_name, file_type, hash],
         )
         .unwrap();
@@ -583,16 +583,16 @@ pub(super) struct Harness {
 }
 
 impl Harness {
-    /// Like `with_pack`, but also injects a custom `Experience` section (anchors/design
-    /// values) as `__lewdware_experience` -- for exercising
+    /// Like `with_pack`, but also injects a custom `Timeline` section (anchors/design
+    /// values) as `__lewdware_timeline` -- for exercising
     /// `default-modes/experience/src/main.lua` end to end the same way `with_pack` exercises
     /// Sandbox's.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn with_pack_and_experience(
+    pub(super) fn with_pack_and_timeline(
         sources: &[(&str, &str)],
         pack_file: NamedTempFile,
         content: Content,
-        experience: Experience,
+        timeline: Timeline,
         mode_config: HashMap<String, OptionValue>,
         capabilities: Permissions,
         volume: Volume,
@@ -643,7 +643,7 @@ impl Harness {
                     // does -- a slot holds an id, and the modes are handed a file name.
                     config: mode_config,
                     content: lua_view(&content, &name_of),
-                    experience: lua_view(&experience, &name_of),
+                    timeline: lua_view(&timeline, &name_of),
                     chrome: ChromeDefaults::default(),
                     gpu_available: false,
                     dev_mode: false,
@@ -676,11 +676,11 @@ impl Harness {
         capabilities: Permissions,
         volume: Volume,
     ) -> Self {
-        Self::with_pack_and_experience(
+        Self::with_pack_and_timeline(
             sources,
             pack_file,
             content,
-            Experience::default(),
+            Timeline::default(),
             mode_config,
             capabilities,
             volume,

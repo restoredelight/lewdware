@@ -5,8 +5,8 @@
 
 local M = {}
 
-local experience = rawget(_G, "__lewdware_experience") or {}
-local timeline = experience.timeline or {}
+local timeline_raw = rawget(_G, "__lewdware_timeline") or rawget(_G, "__lewdware_experience") or {}
+local timeline = timeline_raw.stages and timeline_raw or timeline_raw.timeline or timeline_raw
 local stages = timeline.stages or {}
 local transitions = timeline.transitions or {}
 

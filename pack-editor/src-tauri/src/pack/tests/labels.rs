@@ -1,8 +1,7 @@
 //! Tags and artists, and how renaming or merging one carries through the document.
 
 use shared::behaviour::{
-    Behaviour, ContentGroup, ContentSelection, Events, Experience, Stage, TextItem, Timeline,
-    WebLink,
+    Behaviour, ContentGroup, ContentSelection, Events, Stage, TextItem, Timeline, WebLink,
 };
 use tempfile::tempdir;
 
@@ -185,28 +184,26 @@ async fn renaming_a_tag_carries_every_mention_in_the_document() {
             }],
             ..Default::default()
         },
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![Stage {
-                    id: "stage-1".to_string(),
-                    label: "Stage 1".to_string(),
-                    end: None,
-                    content: ContentSelection {
-                        tags: Some(vec!["old".to_string()]),
-                        owned_tag: None,
-                        wallpaper: None,
-                        audio: None,
-                        audio_random: false,
-                        ..ContentSelection::default()
-                    },
-                    events: Events::default(),
-                    movement: None,
-                    mitosis: None,
-                    on_enter: Default::default(),
-                    prompt: Default::default(),
-                }],
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: vec![Stage {
+                id: "stage-1".to_string(),
+                label: "Stage 1".to_string(),
+                end: None,
+                content: ContentSelection {
+                    tags: Some(vec!["old".to_string()]),
+                    owned_tag: None,
+                    wallpaper: None,
+                    audio: None,
+                    audio_random: false,
+                    ..ContentSelection::default()
+                },
+                events: Events::default(),
+                movement: None,
+                mitosis: None,
+                on_enter: Default::default(),
+                prompt: Default::default(),
+            }],
+            transitions: vec![],
             label: None,
         }),
     };
@@ -224,7 +221,7 @@ async fn renaming_a_tag_carries_every_mention_in_the_document() {
     assert_eq!(after.content.captions[0].tags, expected);
     assert_eq!(after.content.web_links[0].tags, expected);
     assert_eq!(
-        after.experience.unwrap().timeline.stages[0].content.tags,
+        after.timeline.unwrap().stages[0].content.tags,
         Some(expected)
     );
 }
@@ -375,24 +372,22 @@ async fn tag_rows_count_media_and_both_halves_of_the_document() {
             }],
             ..Default::default()
         },
-        experience: Some(shared::behaviour::Experience {
-            timeline: Timeline {
-                stages: vec![Stage {
-                    id: "s".to_string(),
-                    label: "Stage".to_string(),
-                    end: None,
-                    content: shared::behaviour::ContentSelection {
-                        tags: Some(vec!["shared".to_string()]),
-                        ..Default::default()
-                    },
-                    events: Default::default(),
-                    movement: None,
-                    mitosis: None,
-                    on_enter: Default::default(),
-                    prompt: Default::default(),
-                }],
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: vec![Stage {
+                id: "s".to_string(),
+                label: "Stage".to_string(),
+                end: None,
+                content: shared::behaviour::ContentSelection {
+                    tags: Some(vec!["shared".to_string()]),
+                    ..Default::default()
+                },
+                events: Default::default(),
+                movement: None,
+                mitosis: None,
+                on_enter: Default::default(),
+                prompt: Default::default(),
+            }],
+            transitions: vec![],
             label: None,
         }),
     };

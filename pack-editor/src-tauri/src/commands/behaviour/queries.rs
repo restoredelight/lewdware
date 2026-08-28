@@ -37,7 +37,7 @@ pub async fn get_behaviour_summary(state: State<'_, AppState>) -> Result<Behavio
                     content_groups: editor::content_groups(conn)?.len(),
                     has_timeline: timeline.is_some(),
                     timeline_enabled: timeline.as_ref().is_some_and(|view| view.enabled),
-                    timeline_label: timeline.and_then(|view| view.label),
+                    timeline_label: timeline.and_then(|view| view.timeline.label),
                 })
             })
             .await
@@ -63,7 +63,7 @@ pub async fn get_timeline(state: State<'_, AppState>) -> Result<Option<TimelineD
                     stages: view.timeline.stages,
                     transitions: view.timeline.transitions,
                     enabled: view.enabled,
-                    label: view.label,
+                    label: view.timeline.label,
                 }))
             })
             .await

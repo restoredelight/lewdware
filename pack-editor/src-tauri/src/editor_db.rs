@@ -33,7 +33,7 @@ const MIGRATIONS: &[&str] = &[MIGRATION_1, MIGRATION_2];
 /// kind of thing three parallel SQL blocks drift into.
 pub const BEHAVIOUR_TABLES: &[&str] = &[
     "behaviour_content",
-    "behaviour_experience",
+    "behaviour_timeline",
     "behaviour_stage",
     "behaviour_stage_tag",
     "behaviour_stage_end",
@@ -247,7 +247,7 @@ pub fn import_runtime(pooled: &mut Connection, runtime_path: &Path) -> Result<St
              (id, file_name, file_type, width, height, transparent, duration, audio,
               hash, thumbnail, source_url, deleted)
              SELECT id, file_name, file_type, width, height, transparent, duration, audio,
-                    hash, thumbnail, source_url, 0
+                    hash, thumbnail, source_url, FALSE
              FROM runtime.media",
             [],
         )?;
@@ -313,12 +313,12 @@ pub fn replace_from_runtime(pooled: &mut Connection, runtime_path: &Path) -> Res
              (id, file_name, file_type, width, height, transparent, duration, audio,
               hash, thumbnail, source_url, deleted)
              SELECT id, file_name, file_type, width, height, transparent, duration, audio,
-                    hash, thumbnail, source_url, 0 FROM runtime.media",
+                    hash, thumbnail, source_url, FALSE FROM runtime.media",
             [],
         )?;
         tx.execute(
             "INSERT INTO pack_media(media_id, generation_id, \"offset\", length)
-             SELECT id, ?, \"offset\", length FROM runtime.media",
+              SELECT id, ?, \"offset\", length FROM runtime.media",
             [&generation],
         )?;
         tx.execute("INSERT INTO tags SELECT * FROM runtime.tags", [])?;
@@ -362,21 +362,21 @@ pub fn export_runtime(editor: &Connection, runtime_path: &Path) -> Result<()> {
                     m.thumbnail, m.source_url
              FROM editor.media m
              JOIN editor.pack_media p ON p.media_id = m.id
-             WHERE m.deleted = 0",
+             WHERE m.deleted = FALSE",
             [],
         )?;
         tx.execute("INSERT INTO tags SELECT * FROM editor.tags", [])?;
         tx.execute(
             "INSERT INTO media_tags
              SELECT mt.* FROM editor.media_tags mt
-             JOIN editor.media m ON m.id = mt.media_id WHERE m.deleted = 0",
+             JOIN editor.media m ON m.id = mt.media_id WHERE m.deleted = FALSE",
             [],
         )?;
         tx.execute("INSERT INTO artists SELECT * FROM editor.artists", [])?;
         tx.execute(
             "INSERT INTO media_artists
              SELECT ma.* FROM editor.media_artists ma
-             JOIN editor.media m ON m.id = ma.media_id WHERE m.deleted = 0",
+             JOIN editor.media m ON m.id = ma.media_id WHERE m.deleted = FALSE",
             [],
         )?;
         tx.execute("INSERT INTO modes SELECT * FROM editor.modes", [])?;
@@ -460,10 +460,10 @@ pub fn reset_session(connection: &mut Connection, dirty: bool) -> Result<()> {
     tx.execute(
         "INSERT OR IGNORE INTO pending_file_deletions(path)
          SELECT l.path FROM loose_media l JOIN media m ON m.id = l.media_id
-         WHERE m.deleted = 1",
+         WHERE m.deleted = TRUE",
         [],
     )?;
-    tx.execute("DELETE FROM media WHERE deleted = 1", [])?;
+    tx.execute("DELETE FROM media WHERE deleted = TRUE", [])?;
     if dirty {
         tx.execute(
             "UPDATE editor_state SET current_state_id = ? WHERE singleton = 1",
@@ -536,9 +536,9 @@ mod tests {
         editor
             .execute_batch(
                 "INSERT INTO media (id, file_name, file_type, hash, deleted)
-                 VALUES (1, 'kept.png', 'image', x'00', 0),
-                        (2, 'removed.png', 'image', x'01', 1),
-                        (3, 'kept.ogg', 'audio', x'02', 0);
+                 VALUES (1, 'kept.png', 'image', x'00', FALSE),
+                        (2, 'removed.png', 'image', x'01', TRUE),
+                        (3, 'kept.ogg', 'audio', x'02', FALSE);
                  INSERT INTO pack_media (media_id, generation_id, \"offset\", length)
                  VALUES (1, 'g', 0, 0), (2, 'g', 0, 0), (3, 'g', 0, 0);
                  INSERT INTO behaviour_popup_media (media_id, scale)

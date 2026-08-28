@@ -65,7 +65,7 @@ async fn experience_timeline_tags_narrow_which_media_can_spawn() {
             let owned = wrapped_experience_mode_sources(SPAWN_NAME_CAPTURE_WRAP);
             let sources = as_str_sources(&owned);
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &sources,
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),
@@ -116,7 +116,7 @@ async fn experience_stage_selecting_no_content_spawns_nothing() {
             let mut config = base_experience_mode_config();
             config.insert("max_popups".to_string(), OptionValue::Integer(1_000));
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),
@@ -162,7 +162,7 @@ async fn experience_stage_with_no_tag_restriction_still_spawns_everything() {
             let mut config = base_experience_mode_config();
             config.insert("max_popups".to_string(), OptionValue::Integer(1_000));
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),
@@ -207,7 +207,7 @@ async fn experience_stage_selecting_no_content_is_silent() {
                 OptionValue::Boolean(true),
             );
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),
@@ -272,7 +272,7 @@ async fn experience_stage_exclusions_keep_media_out_of_a_stage_that_includes_it(
             );
             let sources = as_str_sources(&owned);
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &sources,
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),
@@ -335,7 +335,7 @@ async fn experience_stage_exclusions_work_without_any_inclusion_list() {
             );
             let sources = as_str_sources(&owned);
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &sources,
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),

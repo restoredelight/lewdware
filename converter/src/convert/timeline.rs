@@ -10,8 +10,8 @@ use serde_json::{Map, Value};
 use shared::behaviour::Content;
 use shared::behaviour::{
     ContentSelection, CountScope, Easing, EndStrategy, EventCountCondition, EventKind,
-    EventSchedule, Events, Experience, Interval, MediaSlot, Mitosis, Movement, Stage, StageEnd,
-    Timeline, Transition,
+    EventSchedule, Events, Interval, MediaSlot, Mitosis, Movement, Stage, StageEnd, Timeline,
+    Transition,
 };
 use shared::tags::NON_POPUP_TAG;
 
@@ -77,7 +77,7 @@ pub(super) fn mitosis(design: &DesignValues) -> Option<Mitosis> {
 /// the last level never gets an `end`, since there's nothing after it to transition to. One
 /// zero-duration, linear, unaffected `Transition` is synthesized per adjacent stage pair, since
 /// a cumulative level's values always apply instantly, never interpolated.
-pub(super) fn levels_to_experience(levels: Vec<Level>) -> (Experience, Vec<(MediaSlot, String)>) {
+pub(super) fn levels_to_timeline(levels: Vec<Level>) -> (Timeline, Vec<(MediaSlot, String)>) {
     let stages = levels
         .iter()
         .enumerate()
@@ -160,11 +160,9 @@ pub(super) fn levels_to_experience(levels: Vec<Level>) -> (Experience, Vec<(Medi
     // single-stage timeline has no progression, so it keeps the mode's own name.
     let label = (stages.len() > 1).then(|| "Corruption".to_string());
     (
-        Experience {
-            timeline: Timeline {
-                stages,
-                transitions,
-            },
+        Timeline {
+            stages,
+            transitions,
             label,
         },
         wallpapers,
@@ -636,20 +634,19 @@ pub(super) fn resolve_wallpaper(
     Some(name.to_string())
 }
 
-/// `corruption.json`/`config.json` -> `behaviour.experience`. `None` (not
-/// `Some(Experience::default())`) when neither contributes anything -- presence must stay
-/// structurally meaningful, matching `Behaviour::experience`'s own doc comment and
-/// `pack_has_experience`. With no `corruption.json` at all, `config.json`'s anchors alone still
-/// produce a valid one-level (baseline-only) `Timeline` -- exactly what "a purely
-/// statically-designed pack" is under the new per-level schema.
-pub(super) fn build_experience(
+/// `corruption.json`/`config.json` -> `behaviour.timeline`. `None` when neither contributes
+/// anything -- presence must stay structurally meaningful, matching `Behaviour::timeline`'s own
+/// doc comment and `pack_has_timeline`. With no `corruption.json` at all, `config.json`'s anchors
+/// alone still produce a valid one-level (baseline-only) `Timeline` -- exactly what "a purely
+/// statically-designed pack" is under the per-level schema.
+pub(super) fn build_timeline_section(
     corruption_levels: &[CorruptionLevel],
     content: &Content,
     config: &Map<String, Value>,
     source: &dyn PackSource,
     media: &mut Vec<ConvertedMedia>,
     warnings: &mut Vec<Warning>,
-) -> Option<(Experience, Vec<(MediaSlot, String)>)> {
+) -> Option<(Timeline, Vec<(MediaSlot, String)>)> {
     let delay_ms = config_number(config, "delay")
         .unwrap_or(DEFAULT_DELAY_MS)
         .max(1.0);
@@ -721,7 +718,7 @@ pub(super) fn build_experience(
         )
     };
 
-    Some(levels_to_experience(levels))
+    Some(levels_to_timeline(levels))
 }
 
 /// Every tag already live in the converted pack's flat tag namespace: the Edgeware mood names

@@ -60,7 +60,7 @@ async fn experience_prompt_timeout_closes_the_dialog() {
                 }],
                 ..Default::default()
             };
-            let experience = experience_with_baseline(
+            let timeline = timeline_with_baseline(
                 FrequencyAnchors {
                     prompt: Some(10.0),
                     ..Default::default()
@@ -69,11 +69,11 @@ async fn experience_prompt_timeout_closes_the_dialog() {
             );
             let mut config = isolated_experience_process_config();
             config.insert("prompts_enabled".into(), OptionValue::Boolean(true));
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture(false),
                 content,
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -106,7 +106,7 @@ async fn experience_scales_an_automatic_prompt_timeout() {
                 }],
                 ..Default::default()
             };
-            let mut experience = experience_with_baseline(
+            let mut timeline = timeline_with_baseline(
                 FrequencyAnchors {
                     prompt: Some(10.0),
                     ..Default::default()
@@ -114,14 +114,14 @@ async fn experience_scales_an_automatic_prompt_timeout() {
                 DesignValues::default(),
             );
             // A short prompt's automatic 15-second floor becomes 1.5 seconds at 0.1×.
-            experience.timeline.stages[0].prompt.timeout_multiplier = 0.1;
+            timeline.stages[0].prompt.timeout_multiplier = 0.1;
             let mut config = isolated_experience_process_config();
             config.insert("prompts_enabled".into(), OptionValue::Boolean(true));
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture(false),
                 content,
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -155,21 +155,21 @@ async fn experience_can_disable_per_prompt_timeouts_for_a_stage() {
                 }],
                 ..Default::default()
             };
-            let mut experience = experience_with_baseline(
+            let mut timeline = timeline_with_baseline(
                 FrequencyAnchors {
                     prompt: Some(10.0),
                     ..Default::default()
                 },
                 DesignValues::default(),
             );
-            experience.timeline.stages[0].prompt.timeouts_enabled = false;
+            timeline.stages[0].prompt.timeouts_enabled = false;
             let mut config = isolated_experience_process_config();
             config.insert("prompts_enabled".into(), OptionValue::Boolean(true));
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture(false),
                 content,
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -200,24 +200,24 @@ async fn experience_prompt_timeout_combines_popup_and_sound_consequences() {
                 }],
                 ..Default::default()
             };
-            let mut experience = experience_with_baseline(
+            let mut timeline = timeline_with_baseline(
                 FrequencyAnchors {
                     prompt: Some(10.0),
                     ..Default::default()
                 },
                 DesignValues::default(),
             );
-            experience.timeline.stages[0].prompt.popup_burst = Some(2);
-            experience.timeline.stages[0].prompt.sound = Some(2);
+            timeline.stages[0].prompt.popup_burst = Some(2);
+            timeline.stages[0].prompt.sound = Some(2);
             let mut config = isolated_experience_process_config();
             config.insert("prompts_enabled".into(), OptionValue::Boolean(true));
             config.insert("popup_audio_enabled".into(), OptionValue::Boolean(true));
             config.insert("images_enabled".into(), OptionValue::Boolean(true));
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture_with_data(MEDIA, None),
                 content,
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),

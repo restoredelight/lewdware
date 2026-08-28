@@ -65,30 +65,29 @@ behaviour:
       - url: "https://duckduckgo.com/?q=packs"
         tags:
           - low
-  experience:
-    timeline:
-      stages:
-        - id: stage-1
-          label: Stage 1
-          content: {}
-          events:
-            popup:
-              interval:
-                kind: fixed
-                seconds: 4.545454545454546
-            web:
-              interval:
-                kind: fixed
-                seconds: 300
-            notification:
-              interval:
-                kind: fixed
-                seconds: 300
-            prompt:
-              interval:
-                kind: fixed
-                seconds: 90
-      transitions: []
+  timeline:
+    stages:
+      - id: stage-1
+        label: Stage 1
+        content: {}
+        events:
+          popup:
+            interval:
+              kind: fixed
+              seconds: 4.545454545454546
+          web:
+            interval:
+              kind: fixed
+              seconds: 300
+          notification:
+            interval:
+              kind: fixed
+              seconds: 300
+          prompt:
+            interval:
+              kind: fixed
+              seconds: 90
+    transitions: []
 media:
   - source_path: wallpaper.png
     suggested_name: wallpaper.png

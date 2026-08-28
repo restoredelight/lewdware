@@ -24,12 +24,12 @@ fn timeline_only_sources_initialized() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-fn timeline_harness(sources: &[(&str, &str)], experience: Experience) -> Harness {
-    Harness::with_pack_and_experience(
+fn timeline_harness(sources: &[(&str, &str)], timeline: Timeline) -> Harness {
+    Harness::with_pack_and_timeline(
         sources,
         pack_fixture(false),
         Content::default(),
-        experience,
+        timeline,
         HashMap::new(),
         all_capabilities(),
         Volume::default(),
@@ -44,8 +44,8 @@ fn timeline_harness(sources: &[(&str, &str)], experience: Experience) -> Harness
 async fn experience_timeline_with_no_levels_stays_inert_forever() {
     LocalSet::new()
         .run_until(async {
-            let experience = Experience::default(); // no levels at all
-            let mut harness = timeline_harness(&timeline_only_sources_initialized(), experience);
+            let timeline = Timeline::default(); // no levels at all
+            let mut harness = timeline_harness(&timeline_only_sources_initialized(), timeline);
             harness.run_entrypoint("main.lua").unwrap();
             harness.advance(Duration::from_secs(3600)).await;
 
@@ -73,7 +73,7 @@ async fn experience_timeline_with_no_levels_stays_inert_forever() {
 async fn experience_timeline_advances_on_active_time_and_applies_level_values() {
     LocalSet::new()
         .run_until(async {
-            let experience = levels_to_experience(vec![
+            let timeline = levels_to_timeline(vec![
                 Level {
                     anchors: FrequencyAnchors {
                         popup: Some(1.0),
@@ -91,7 +91,7 @@ async fn experience_timeline_advances_on_active_time_and_applies_level_values() 
                     ..Default::default()
                 },
             ]);
-            let mut harness = timeline_harness(&timeline_only_sources_initialized(), experience);
+            let mut harness = timeline_harness(&timeline_only_sources_initialized(), timeline);
             harness.run_entrypoint("main.lua").unwrap();
 
             harness.advance(Duration::from_millis(4900)).await;
@@ -161,21 +161,19 @@ async fn experience_v3_holds_stage_then_interpolates_selected_transition_values(
                 on_enter: Default::default(),
                 prompt: Default::default(),
             };
-            let experience = Experience {
-                timeline: Timeline {
-                    stages: vec![first, second],
-                    transitions: vec![Transition {
-                        id: "edge".into(),
-                        from_stage: "first".into(),
-                        to_stage: "second".into(),
-                        duration_seconds: 1.0,
-                        easing: Easing::Linear,
-                        affected: vec![TransitionCategory::PopupInterval],
-                    }],
-                },
+            let timeline = Timeline {
+                stages: vec![first, second],
+                transitions: vec![Transition {
+                    id: "edge".into(),
+                    from_stage: "first".into(),
+                    to_stage: "second".into(),
+                    duration_seconds: 1.0,
+                    easing: Easing::Linear,
+                    affected: vec![TransitionCategory::PopupInterval],
+                }],
                 label: None,
             };
-            let mut harness = timeline_harness(&timeline_only_sources_initialized(), experience);
+            let mut harness = timeline_harness(&timeline_only_sources_initialized(), timeline);
             harness.run_entrypoint("main.lua").unwrap();
 
             harness.advance(Duration::from_millis(900)).await;
@@ -213,7 +211,7 @@ async fn experience_v3_holds_stage_then_interpolates_selected_transition_values(
 async fn experience_timeline_popup_count_trigger_advances_before_time_elapses() {
     LocalSet::new()
         .run_until(async {
-            let experience = levels_to_experience(vec![
+            let timeline = levels_to_timeline(vec![
                 Level {
                     anchors: FrequencyAnchors {
                         popup: Some(1.0),
@@ -233,7 +231,7 @@ async fn experience_timeline_popup_count_trigger_advances_before_time_elapses() 
             ]);
             // No `.init()` -- this test isolates popup-count-driven advancement from any
             // `at_seconds` timer.
-            let mut harness = timeline_harness(&timeline_only_sources(), experience);
+            let mut harness = timeline_harness(&timeline_only_sources(), timeline);
             harness.run_entrypoint("main.lua").unwrap();
 
             assert_eq!(
@@ -271,7 +269,7 @@ async fn experience_timeline_popup_count_trigger_advances_before_time_elapses() 
 async fn experience_timeline_rule6_time_fallback_when_popups_never_spawn() {
     LocalSet::new()
         .run_until(async {
-            let experience = levels_to_experience(vec![
+            let timeline = levels_to_timeline(vec![
                 Level::default(),
                 Level {
                     at_seconds: 2.0,
@@ -283,7 +281,7 @@ async fn experience_timeline_rule6_time_fallback_when_popups_never_spawn() {
                     ..Default::default()
                 },
             ]);
-            let mut harness = timeline_harness(&timeline_only_sources_initialized(), experience);
+            let mut harness = timeline_harness(&timeline_only_sources_initialized(), timeline);
             harness.run_entrypoint("main.lua").unwrap();
 
             harness.advance(Duration::from_millis(2100)).await;
@@ -302,8 +300,8 @@ async fn experience_timeline_rule6_time_fallback_when_popups_never_spawn() {
 async fn experience_timeline_order_independence_jumping_directly_matches_sequential() {
     LocalSet::new()
         .run_until(async {
-            fn two_level_experience() -> Experience {
-                levels_to_experience(vec![
+            fn two_level_timeline() -> Timeline {
+                levels_to_timeline(vec![
                     Level::default(), // baseline
                     Level {
                         at_seconds: 1_000.0,
@@ -334,7 +332,7 @@ async fn experience_timeline_order_independence_jumping_directly_matches_sequent
             end)()";
 
             // Sequential: reach level 1 (2 popups), observe it, then continue to level 2.
-            let mut sequential = timeline_harness(&timeline_only_sources(), two_level_experience());
+            let mut sequential = timeline_harness(&timeline_only_sources(), two_level_timeline());
             sequential.run_entrypoint("main.lua").unwrap();
             sequential.eval_number(
                 "(function() local t = require('timeline') t.on_popup_spawned() t.on_popup_spawned() return 1 end)()",
@@ -346,7 +344,7 @@ async fn experience_timeline_order_independence_jumping_directly_matches_sequent
             let sequential_final = sequential.eval_number(probe);
 
             // Direct jump: five popups in one batch, never separately observing level 1.
-            let mut direct = timeline_harness(&timeline_only_sources(), two_level_experience());
+            let mut direct = timeline_harness(&timeline_only_sources(), two_level_timeline());
             direct.run_entrypoint("main.lua").unwrap();
             let direct_final = direct.eval_number(
                 &format!(
@@ -383,7 +381,7 @@ async fn experience_timeline_wallpaper_override_reapplies_only_when_changed() {
                 }
             }
 
-            let experience = levels_to_experience(vec![
+            let timeline = levels_to_timeline(vec![
                 Level::default(),                   // baseline: no wallpaper override
                 level_at(1.0, Some(FIXTURE_MEDIA)), // baseline -> pic.avif: applies
                 level_at(2.0, None), // pic.avif -> baseline (unset): no-ops internally
@@ -397,11 +395,11 @@ async fn experience_timeline_wallpaper_override_reapplies_only_when_changed() {
             let mut config = base_experience_mode_config();
             config.insert("images_enabled".to_string(), OptionValue::Boolean(false));
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &sources,
                 pack_fixture(true),
                 Content::default(),
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -427,7 +425,7 @@ async fn experience_timeline_wallpaper_override_reapplies_only_when_changed() {
 async fn experience_timeline_max_popups_still_clamps_when_level_raises_rate() {
     LocalSet::new()
         .run_until(async {
-            let experience = levels_to_experience(vec![
+            let timeline = levels_to_timeline(vec![
                 Level {
                     anchors: FrequencyAnchors {
                         popup: Some(0.1),
@@ -448,11 +446,11 @@ async fn experience_timeline_max_popups_still_clamps_when_level_raises_rate() {
             let mut config = base_experience_mode_config();
             config.insert("max_popups".to_string(), OptionValue::Integer(2));
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture(true),
                 Content::default(),
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),

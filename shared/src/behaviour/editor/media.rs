@@ -290,7 +290,7 @@ pub fn set_media_slot(tx: &Transaction<'_>, slot: &MediaSlot, media: Option<u64>
             // Naming a track and "pick one at random" are alternatives, not both.
             if matches!(slot, MediaSlot::StageAudio { .. }) && media.is_some() {
                 tx.execute(
-                    "UPDATE behaviour_stage SET audio_random = 0 WHERE id = ?",
+                    "UPDATE behaviour_stage SET audio_random = FALSE WHERE id = ?",
                     params![stage],
                 )?;
             }

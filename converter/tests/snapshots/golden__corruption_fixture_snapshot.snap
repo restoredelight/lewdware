@@ -43,80 +43,79 @@ behaviour:
     prompts: []
     notifications: []
     web_links: []
-  experience:
-    timeline:
-      stages:
-        - id: stage-1
-          label: Stage 1
-          end:
-            duration_seconds: 120
-            event_count:
-              event: popup
-              count: 8
-              scope: session
-            strategy: any
-          content:
-            tags:
-              - corruption-moodless
-              - vanilla
-          events:
-            popup:
-              interval:
-                kind: fixed
-                seconds: 2
-        - id: stage-2
-          label: Stage 2
-          end:
-            duration_seconds: 120
-            event_count:
-              event: popup
-              count: 16
-              scope: session
-            strategy: any
-          content:
-            tags:
-              - corruption-moodless
-              - kinky
-              - vanilla
-          events:
-            popup:
-              interval:
-                kind: fixed
-                seconds: 2
-            prompt:
-              interval:
-                kind: fixed
-                seconds: 20
-        - id: stage-3
-          label: Stage 3
-          content:
-            tags:
-              - corrupted
-              - corruption-moodless
-              - kinky
-          events:
-            popup:
-              interval:
-                kind: fixed
-                seconds: 2
-            prompt:
-              interval:
-                kind: fixed
-                seconds: 20
-      transitions:
-        - id: transition-1
-          from_stage: stage-1
-          to_stage: stage-2
-          duration_seconds: 0
-          easing: linear
-          affected: []
-        - id: transition-2
-          from_stage: stage-2
-          to_stage: stage-3
-          duration_seconds: 0
-          easing: linear
-          affected: []
+  timeline:
     label: Corruption
+    stages:
+      - id: stage-1
+        label: Stage 1
+        end:
+          duration_seconds: 120
+          event_count:
+            event: popup
+            count: 8
+            scope: session
+          strategy: any
+        content:
+          tags:
+            - corruption-moodless
+            - vanilla
+        events:
+          popup:
+            interval:
+              kind: fixed
+              seconds: 2
+      - id: stage-2
+        label: Stage 2
+        end:
+          duration_seconds: 120
+          event_count:
+            event: popup
+            count: 16
+            scope: session
+          strategy: any
+        content:
+          tags:
+            - corruption-moodless
+            - kinky
+            - vanilla
+        events:
+          popup:
+            interval:
+              kind: fixed
+              seconds: 2
+          prompt:
+            interval:
+              kind: fixed
+              seconds: 20
+      - id: stage-3
+        label: Stage 3
+        content:
+          tags:
+            - corrupted
+            - corruption-moodless
+            - kinky
+        events:
+          popup:
+            interval:
+              kind: fixed
+              seconds: 2
+          prompt:
+            interval:
+              kind: fixed
+              seconds: 20
+    transitions:
+      - id: transition-1
+        from_stage: stage-1
+        to_stage: stage-2
+        duration_seconds: 0
+        easing: linear
+        affected: []
+      - id: transition-2
+        from_stage: stage-2
+        to_stage: stage-3
+        duration_seconds: 0
+        easing: linear
+        affected: []
 media:
   - source_path: wallpaper.png
     suggested_name: wallpaper.png

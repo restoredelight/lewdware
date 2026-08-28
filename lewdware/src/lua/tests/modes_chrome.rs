@@ -148,11 +148,11 @@ async fn sequence_leaves_every_windows_look_to_the_user() {
             let owned = wrapped_experience_mode_sources(THEME_CAPTURE_WRAP);
             let sources = as_str_sources(&owned);
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &sources,
                 pack_fixture(true),
                 Content::default(),
-                experience_with_baseline(
+                timeline_with_baseline(
                     FrequencyAnchors {
                         popup: Some(1.0),
                         ..Default::default()

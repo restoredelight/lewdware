@@ -4,7 +4,8 @@ use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::behaviour::db::{
-    read_one_stage, read_stages, read_timeline, read_transitions, write_one_stage,
+    read_one_stage, read_stages, read_timeline, read_transitions,
+    timeline_enabled, write_one_stage,
 };
 use crate::behaviour::schema::{Stage, Timeline, Transition, TransitionCategory};
 
@@ -26,7 +27,6 @@ pub const DEFAULT_STAGE_SECONDS: f64 = 300.0;
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineView {
     pub timeline: Timeline,
-    pub label: Option<String>,
     pub enabled: bool,
 }
 
@@ -125,13 +125,14 @@ pub fn normalize_timeline(tx: &Transaction<'_>, mut new_id: impl FnMut() -> Stri
 
 /// The timeline as the editor sees it, switched off or not. See [`TimelineView`].
 pub fn timeline(conn: &Connection) -> Result<Option<TimelineView>> {
-    Ok(
-        read_timeline(conn)?.map(|(timeline, label, enabled)| TimelineView {
+    if let Some(timeline) = read_timeline(conn)? {
+        Ok(Some(TimelineView {
             timeline,
-            label,
-            enabled,
-        }),
-    )
+            enabled: timeline_enabled(conn)?,
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Switches the pack's timeline on or off, keeping its stages either way.
@@ -140,9 +141,9 @@ pub fn timeline(conn: &Connection) -> Result<Option<TimelineView>> {
 /// call as switching back on. A toggle landing on the value already stored writes it again and
 /// still costs no undo entry: the upsert leaves the row as it found it, and an empty changeset is
 /// what "nothing changed" means here.
-pub fn set_experience_enabled(tx: &Transaction<'_>, enabled: bool) -> Result<()> {
+pub fn set_timeline_enabled(tx: &Transaction<'_>, enabled: bool) -> Result<()> {
     tx.execute(
-        "INSERT INTO behaviour_experience (singleton, label, enabled) VALUES (1, NULL, ?)
+        "INSERT INTO behaviour_timeline (singleton, enabled) VALUES (1, ?)
          ON CONFLICT(singleton) DO UPDATE SET enabled = excluded.enabled",
         params![enabled],
     )?;
@@ -153,9 +154,9 @@ pub fn set_experience_enabled(tx: &Transaction<'_>, enabled: bool) -> Result<()>
 ///
 /// Does nothing if the pack has no timeline section: a name for a timeline that does not exist is
 /// a stale editor writing into something that has since gone, not a reason to create one.
-pub fn set_experience_label(tx: &Transaction<'_>, label: Option<&str>) -> Result<()> {
+pub fn set_timeline_label(tx: &Transaction<'_>, label: Option<&str>) -> Result<()> {
     tx.execute(
-        "UPDATE behaviour_experience SET label = ? WHERE singleton = 1",
+        "UPDATE behaviour_timeline SET label = ? WHERE singleton = 1",
         params![label],
     )?;
     Ok(())
@@ -163,7 +164,7 @@ pub fn set_experience_label(tx: &Transaction<'_>, label: Option<&str>) -> Result
 
 fn ensure_timeline_exists(tx: &Transaction<'_>) -> Result<()> {
     let exists: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM behaviour_experience WHERE singleton = 1)",
+        "SELECT EXISTS(SELECT 1 FROM behaviour_timeline WHERE singleton = 1)",
         [],
         |row| row.get(0),
     )?;
@@ -239,14 +240,14 @@ pub fn add_stage(
         } else {
             tx.execute(
                 "INSERT INTO behaviour_stage (id, position, label, restricts_content)
-                 VALUES (?1, ?2, ?3, 0)",
+                 VALUES (?1, ?2, ?3, FALSE)",
                 params![new_stage_id, at_position, label],
             )?;
         }
     } else {
         tx.execute(
             "INSERT INTO behaviour_stage (id, position, label, restricts_content)
-             VALUES (?1, ?2, ?3, 0)",
+             VALUES (?1, ?2, ?3, FALSE)",
             params![new_stage_id, at_position, label],
         )?;
     }

@@ -78,7 +78,7 @@ impl MediaPack {
                 )?;
                 tx.execute(
                     "INSERT INTO snapshot_media(save_id, media_id)
-                 SELECT ?, id FROM media WHERE deleted = 0",
+                 SELECT ?, id FROM media WHERE deleted = FALSE",
                     [&save_id_for_session],
                 )?;
                 tx.commit()?;
@@ -183,7 +183,7 @@ impl MediaPack {
                 "SELECT COUNT(*) FROM save_snapshot.media m
                  JOIN save_snapshot.pack_media p ON p.media_id = m.id
                  JOIN main.media live ON live.id = m.id AND live.hash = m.hash
-                 WHERE m.deleted = 0",
+                 WHERE m.deleted = FALSE",
                 [],
                 |row| row.get(0),
             )?;
@@ -193,7 +193,7 @@ impl MediaPack {
                  FROM save_snapshot.media snapshot
                  JOIN save_snapshot.pack_media packed ON packed.media_id = snapshot.id
                  JOIN main.media live ON live.id = snapshot.id AND live.hash = snapshot.hash
-                 WHERE snapshot.deleted = 0
+                 WHERE snapshot.deleted = FALSE
                  ON CONFLICT(media_id) DO UPDATE SET
                    generation_id = excluded.generation_id,
                    \"offset\" = excluded.\"offset\", length = excluded.length",
@@ -347,7 +347,7 @@ impl MediaPack {
                     "SELECT m.id, m.hash, p.\"offset\", p.length
                      FROM media m JOIN pack_media p ON p.media_id = m.id
                      LEFT JOIN loose_media l ON l.media_id = m.id
-                     WHERE m.deleted = 1 AND l.media_id IS NULL",
+                     WHERE m.deleted = TRUE AND l.media_id IS NULL",
                 )?;
                 let rows = statement
                     .query_map([], |row| {
@@ -456,7 +456,7 @@ impl MediaPack {
             spawn_blocking(move || -> Result<std::collections::HashMap<u64, Vec<u8>>> {
                 let connection = snapshot_pool.get()?;
                 let mut statement =
-                    connection.prepare("SELECT id, hash FROM media WHERE deleted = 0")?;
+                    connection.prepare("SELECT id, hash FROM media WHERE deleted = FALSE")?;
                 let rows = statement
                     .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
                     .collect::<rusqlite::Result<_>>()?;
@@ -621,7 +621,7 @@ impl MediaPack {
                 let mut statement = conn.prepare(
                     "SELECT m.id, p.\"offset\", p.length FROM media m
                      JOIN pack_media p ON p.media_id = m.id
-                     WHERE m.deleted = 0 ORDER BY p.\"offset\"",
+                     WHERE m.deleted = FALSE ORDER BY p.\"offset\"",
                 )?;
                 let rows = statement
                     .query_map([], |row| {
@@ -674,7 +674,7 @@ impl MediaPack {
                     "SELECT m.id, l.path, l.length FROM media m
                      JOIN loose_media l ON l.media_id = m.id
                      LEFT JOIN pack_media p ON p.media_id = m.id
-                     WHERE m.deleted = 0 AND p.media_id IS NULL",
+                     WHERE m.deleted = FALSE AND p.media_id IS NULL",
                 )?;
                 let rows = statement
                     .query_map([], |row| {
@@ -706,13 +706,13 @@ impl MediaPack {
                             // then physically collect it only when no history/save snapshot retains
                             // it, matching every other media GC path.
                             tx.execute(
-                                "UPDATE media SET deleted = 1 WHERE id = ?
+                                "UPDATE media SET deleted = TRUE WHERE id = ?
                                  AND NOT EXISTS (SELECT 1 FROM pack_media WHERE media_id = media.id)
                                  AND EXISTS (SELECT 1 FROM loose_media WHERE media_id = media.id AND path = ?)",
                                 params![id, media_path],
                             )?;
                             tx.execute(
-                                "DELETE FROM media WHERE id = ? AND deleted = 1
+                                "DELETE FROM media WHERE id = ? AND deleted = TRUE
                                  AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = media.id)
                                  AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = media.id)",
                                 [id],
@@ -1177,13 +1177,13 @@ pub(super) fn release_snapshot_media_tx(
     tx.execute(
         "INSERT OR IGNORE INTO pending_file_deletions(path)
          SELECT l.path FROM loose_media l JOIN media m ON m.id = l.media_id
-         WHERE m.deleted = 1 AND m.id IN (SELECT value FROM rarray(?1))
+         WHERE m.deleted = TRUE AND m.id IN (SELECT value FROM rarray(?1))
            AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = m.id)
            AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = m.id)",
         params![selected],
     )?;
     tx.execute(
-        "DELETE FROM media WHERE deleted = 1
+        "DELETE FROM media WHERE deleted = TRUE
          AND id IN (SELECT value FROM rarray(?1))
          AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = media.id)
          AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = media.id)",

@@ -21,22 +21,22 @@ CREATE TABLE IF NOT EXISTS behaviour_content (
 ) STRICT;
 INSERT OR IGNORE INTO behaviour_content (singleton) VALUES (1);
 
--- Whether the pack has an `experience` section at all, and its optional mode-name override. A row
+-- Whether the pack has a `timeline` section at all, and its optional mode-name override. A row
 -- means it has one; no row means it does not.
 --
 -- `enabled` is the difference between "this pack has no timeline" and "this pack has a timeline the
--- author has switched off". Both read as `Experience: None` to the engine, the converter and `lw`
--- -- `read_experience` returns `None` for either -- but only the second keeps its stage rows, so
+-- author has switched off". Both read as `Timeline: None` to the engine, the converter and `lw`
+-- -- `read_timeline` returns `None` for either -- but only the second keeps its stage rows, so
 -- switching the timeline back on restores what was there.
 --
 -- A column rather than the absence of a row, because absence cannot hold anything. The editor used
--- to keep the suspended timeline in front-end memory (`store.suspendedExperience`), which lost it
+-- to keep the suspended timeline in front-end memory (`store.suspendedTimeline`), which lost it
 -- for good the moment the pack was closed and orphaned every stage wallpaper with it. See
 -- `design/behaviour-storage.md`, "Invariants to preserve".
-CREATE TABLE IF NOT EXISTS behaviour_experience (
+CREATE TABLE IF NOT EXISTS behaviour_timeline (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     label TEXT,
-    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))
+    enabled INTEGER NOT NULL DEFAULT TRUE CHECK (enabled IN (FALSE, TRUE))
 ) STRICT;
 
 -- `position` orders the timeline and is not UNIQUE on purpose: reordering rewrites positions one
@@ -48,10 +48,10 @@ CREATE TABLE IF NOT EXISTS behaviour_stage (
     -- `ContentSelection::tags` has three states: no restriction at all (`None`), or a set that may
     -- be empty (`Some([])`, "deliberately no content"). Absent rows cannot tell those apart, so
     -- the flag says which of the two an empty tag list means.
-    restricts_content INTEGER NOT NULL DEFAULT 0 CHECK (restricts_content IN (0, 1)),
+    restricts_content INTEGER NOT NULL DEFAULT FALSE CHECK (restricts_content IN (FALSE, TRUE)),
     wallpaper INTEGER REFERENCES media (id) ON DELETE SET NULL,
     audio INTEGER REFERENCES media (id) ON DELETE SET NULL,
-    audio_random INTEGER NOT NULL DEFAULT 0 CHECK (audio_random IN (0, 1))
+    audio_random INTEGER NOT NULL DEFAULT FALSE CHECK (audio_random IN (FALSE, TRUE))
 ) STRICT;
 CREATE INDEX IF NOT EXISTS behaviour_stage_position ON behaviour_stage (position);
 
@@ -79,8 +79,8 @@ CREATE TABLE IF NOT EXISTS behaviour_stage_tag (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     stage_id TEXT NOT NULL REFERENCES behaviour_stage (id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
-    owned INTEGER NOT NULL DEFAULT 0 CHECK (owned IN (0, 1)),
-    excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0, 1)),
+    owned INTEGER NOT NULL DEFAULT FALSE CHECK (owned IN (FALSE, TRUE)),
+    excluded INTEGER NOT NULL DEFAULT FALSE CHECK (excluded IN (FALSE, TRUE)),
     UNIQUE (stage_id, tag_id)
 ) STRICT;
 
@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS behaviour_stage_entry (
 -- Prompt behaviour the stage owns, as opposed to the prompt text itself.
 CREATE TABLE IF NOT EXISTS behaviour_stage_prompt (
     stage_id TEXT PRIMARY KEY REFERENCES behaviour_stage (id) ON DELETE CASCADE,
-    timeouts_enabled INTEGER NOT NULL DEFAULT 1 CHECK (timeouts_enabled IN (0, 1)),
+    timeouts_enabled INTEGER NOT NULL DEFAULT TRUE CHECK (timeouts_enabled IN (FALSE, TRUE)),
     -- Scales the prompt's explicit or automatically derived deadline.
     timeout_multiplier REAL NOT NULL DEFAULT 1,
     popup_burst INTEGER,
@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS behaviour_content_group (
     key TEXT NOT NULL UNIQUE,
     label TEXT NOT NULL,
     description TEXT,
-    enabled_by_default INTEGER NOT NULL CHECK (enabled_by_default IN (0, 1))
+    enabled_by_default INTEGER NOT NULL CHECK (enabled_by_default IN (FALSE, TRUE))
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS behaviour_content_group_tag (
@@ -268,8 +268,8 @@ CREATE TABLE IF NOT EXISTS behaviour_popup_media (
     region_height REAL,
     monitor TEXT CHECK (monitor IN ('any', 'primary')),
     caption TEXT,
-    video_loop INTEGER CHECK (video_loop IN (0, 1)),
-    video_audio INTEGER CHECK (video_audio IN (0, 1))
+    video_loop INTEGER CHECK (video_loop IN (FALSE, TRUE)),
+    video_audio INTEGER CHECK (video_audio IN (FALSE, TRUE))
 ) STRICT;
 
 -- Volume only. A `loop` column was considered and dropped: see `AudioMedia`'s doc comment -- it

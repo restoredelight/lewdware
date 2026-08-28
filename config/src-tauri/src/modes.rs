@@ -43,16 +43,15 @@ pub fn load_pack(path: PathBuf) -> anyhow::Result<LoadedPack> {
     let metadata = PackMetadata::read(&conn)?;
 
     let mut stmt = conn.prepare("SELECT id, file FROM modes")?;
-    let rows: Vec<(u64, Vec<u8>)> = stmt
-        .query_map([], |row| Ok((row.get("id")?, row.get("file")?)))?
-        .collect::<rusqlite::Result<_>>()?;
-
-    let mut modes = Vec::new();
-    for (id, data) in rows {
-        let mut cursor = Cursor::new(data);
-        let (_, metadata) = mode::read_mode_metadata(&mut cursor)?;
-        modes.push(PackModeEntry { id, metadata });
-    }
+    let modes = stmt
+        .query_and_then([], |row| {
+            let id = row.get("id")?;
+            let data: Vec<u8> = row.get("file")?;
+            let mut cursor = Cursor::new(data);
+            let (_, metadata) = mode::read_mode_metadata(&mut cursor)?;
+            Ok(PackModeEntry { id, metadata })
+        })?
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     // Assembled from the `behaviour_*` tables and what is left of the blob -- see
     // `shared::behaviour::Behaviour`. A pack whose document cannot be read at all still opens; it
@@ -138,16 +137,16 @@ pub fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
     // A pack that ships a timeline may also relabel the timeline mode (e.g. the Edgeware
     // converter emits "Corruption"); that label stands in for the mode's own name below. We
     // ignore a label on an empty timeline -- there'd be no progression to name.
-    let (recommended, experience_label) = {
+    let (recommended, timeline_label) = {
         let pack = state.pack.lock().unwrap();
         let recommended = pack.as_ref().and_then(|p| p.recommended_mode.clone());
-        let experience_label = pack.as_ref().and_then(|p| {
+        let timeline_label = pack.as_ref().and_then(|p| {
             p.behaviour
-                .experience
+                .timeline
                 .as_ref()
-                .and_then(|e| e.label.clone().filter(|_| !e.timeline.stages.is_empty()))
+                .and_then(|t| t.label.clone().filter(|_| !t.stages.is_empty()))
         });
-        (recommended, experience_label)
+        (recommended, timeline_label)
     };
 
     groups.push(ModeGroupDto {
@@ -165,7 +164,7 @@ pub fn build_mode_groups(state: &AppState) -> Vec<ModeGroupDto> {
             ModeEntryDto {
                 id: ModeIdDto::Experience,
                 name: builtin_mode_label(
-                    experience_label
+                    timeline_label
                         .as_deref()
                         .unwrap_or(&state.experience_mode.name),
                     matches!(recommended, Some(RecommendedMode::Experience)),

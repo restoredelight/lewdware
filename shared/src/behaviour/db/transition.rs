@@ -14,37 +14,32 @@ pub fn read_transitions(conn: &Connection) -> Result<Vec<Transition>> {
          JOIN behaviour_stage s ON s.id = t.from_stage
          ORDER BY s.position",
     )?;
-    let rows: Vec<(String, String, String, f64, Easing)> = statement
-        .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
+    statement
+        .query_and_then([], |row| {
+            let id: String = row.get(0)?;
+            Ok(Transition {
+                from_stage: row.get(1)?,
+                to_stage: row.get(2)?,
+                duration_seconds: row.get(3)?,
+                easing: row.get(4)?,
+                affected: read_transition_categories(conn, &id)?,
+                id,
+            })
         })?
-        .collect::<rusqlite::Result<_>>()?;
+        .collect()
+}
 
-    let mut categories = conn.prepare(
+fn read_transition_categories(
+    conn: &Connection,
+    transition_id: &str,
+) -> Result<Vec<TransitionCategory>> {
+    let mut statement = conn.prepare(
         "SELECT category FROM behaviour_transition_category
          WHERE transition_id = ? ORDER BY category",
     )?;
-    rows.into_iter()
-        .map(|(id, from_stage, to_stage, duration_seconds, easing)| {
-            let affected: Vec<TransitionCategory> = categories
-                .query_map(params![&id], |row| row.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            Ok(Transition {
-                id,
-                from_stage,
-                to_stage,
-                duration_seconds,
-                easing,
-                affected,
-            })
-        })
-        .collect()
+    Ok(statement
+        .query_map(params![transition_id], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
 }
 
 pub fn write_transitions(tx: &Transaction<'_>, transitions: &[Transition]) -> Result<()> {

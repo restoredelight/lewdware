@@ -57,7 +57,7 @@ pub fn effective_options(mode_schema: &Metadata, behaviour: &Behaviour) -> Effec
         );
     }
 
-    let mut pack_has = pack_has_constants(&behaviour.content, behaviour.experience.is_some());
+    let mut pack_has = pack_has_constants(&behaviour.content, behaviour.timeline.is_some());
     pack_has.extend(pack_uses_constants(behaviour));
 
     EffectiveSchema { entries, pack_has }
@@ -66,9 +66,9 @@ pub fn effective_options(mode_schema: &Metadata, behaviour: &Behaviour) -> Effec
 /// Timeline-derived constants
 fn pack_uses_constants(behaviour: &Behaviour) -> IndexMap<String, OptionValue> {
     let stages = behaviour
-        .experience
+        .timeline
         .as_ref()
-        .map(|experience| experience.timeline.stages.as_slice())
+        .map(|timeline| timeline.stages.as_slice())
         .unwrap_or_default();
 
     let mut map = IndexMap::new();
@@ -93,7 +93,7 @@ fn pack_uses_constants(behaviour: &Behaviour) -> IndexMap<String, OptionValue> {
 }
 
 /// Content-derived constants
-fn pack_has_constants(content: &Content, has_experience: bool) -> IndexMap<String, OptionValue> {
+fn pack_has_constants(content: &Content, has_timeline: bool) -> IndexMap<String, OptionValue> {
     let mut map = IndexMap::new();
     map.insert(
         "pack_has_captions".to_string(),
@@ -116,8 +116,12 @@ fn pack_has_constants(content: &Content, has_experience: bool) -> IndexMap<Strin
         OptionValue::Boolean(!content.content_groups.is_empty()),
     );
     map.insert(
+        "pack_has_timeline".to_string(),
+        OptionValue::Boolean(has_timeline),
+    );
+    map.insert(
         "pack_has_experience".to_string(),
-        OptionValue::Boolean(has_experience),
+        OptionValue::Boolean(has_timeline),
     );
     map.insert(
         "pack_has_wallpaper".to_string(),
@@ -289,7 +293,7 @@ mod tests {
             tags: vec!["kinky".to_string()],
             enabled_by_default: true,
         }];
-        behaviour.experience = Some(Default::default());
+        behaviour.timeline = Some(Default::default());
         // prompts/notifications/web_links left empty deliberately, so each flag
         // is checked independently rather than all flipping together.
 
@@ -301,6 +305,10 @@ mod tests {
         );
         assert_eq!(
             schema.pack_has.get("pack_has_content_groups"),
+            Some(&OptionValue::Boolean(true))
+        );
+        assert_eq!(
+            schema.pack_has.get("pack_has_timeline"),
             Some(&OptionValue::Boolean(true))
         );
         assert_eq!(
@@ -413,13 +421,11 @@ mod tests {
     }
 
     fn behaviour_with_stage(stage: crate::behaviour::schema::Stage) -> Behaviour {
-        use crate::behaviour::schema::{Experience, Timeline};
+        use crate::behaviour::schema::Timeline;
         Behaviour {
-            experience: Some(Experience {
-                timeline: Timeline {
-                    stages: vec![stage],
-                    transitions: vec![],
-                },
+            timeline: Some(Timeline {
+                stages: vec![stage],
+                transitions: vec![],
                 label: None,
             }),
             ..Behaviour::new()
@@ -540,7 +546,7 @@ mod tests {
 #[cfg(test)]
 mod shipped_mode_tests {
     use super::effective_options;
-    use crate::behaviour::schema::{Behaviour, Experience, Movement, Stage, Timeline};
+    use crate::behaviour::schema::{Behaviour, Movement, Stage, Timeline};
     use crate::mode::OptionValue;
 
     /// End-to-end over the real shipped bundle: the `show_when` gating has to survive `lw mode
@@ -592,11 +598,9 @@ mod shipped_mode_tests {
             prompt: Default::default(),
         };
         let with_movement = Behaviour {
-            experience: Some(Experience {
-                timeline: Timeline {
-                    stages: vec![stage],
-                    transitions: vec![],
-                },
+            timeline: Some(Timeline {
+                stages: vec![stage],
+                transitions: vec![],
                 label: None,
             }),
             ..Behaviour::new()

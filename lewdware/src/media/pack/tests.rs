@@ -48,7 +48,7 @@ fn pack_with_image_bytes(image: &[u8]) -> (NamedTempFile, MediaPack) {
     migrate(&mut db).unwrap();
     db.execute(
         "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash)
-         VALUES ('pic.avif', 'image', 0, 0, 8, 8, 0, x'00')",
+         VALUES ('pic.avif', 'image', 0, 0, 8, 8, FALSE, x'00')",
         [],
     )
     .unwrap();
@@ -129,13 +129,13 @@ fn open_reads_deserialized_index() {
     // any/all/none semantics (and duplicate rows) in the assertions below.
     db.execute(
         "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash)
-         VALUES ('pic.avif', 'image', 0, 0, 64, 32, 1, x'00')",
+         VALUES ('pic.avif', 'image', 0, 0, 64, 32, TRUE, x'00')",
         [],
     )
     .unwrap();
     db.execute(
         "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, hash)
-         VALUES ('other.avif', 'image', 0, 0, 16, 16, 0, x'01')",
+         VALUES ('other.avif', 'image', 0, 0, 16, 16, FALSE, x'01')",
         [],
     )
     .unwrap();
@@ -330,7 +330,7 @@ fn get_video_data_opens_embedded_clip() {
     migrate(&mut db).unwrap();
     db.execute(
         "INSERT INTO media (file_name, file_type, offset, length, width, height, transparent, duration, hash)
-         VALUES ('clip.mp4', 'video', 0, 0, 64, 48, 0, 1.0, x'00')",
+         VALUES ('clip.mp4', 'video', 0, 0, 64, 48, FALSE, 1.0, x'00')",
         [],
     )
     .unwrap();

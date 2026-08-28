@@ -18,17 +18,15 @@ pub struct WebLinkRow {
 /// Every web link, in author order.
 pub fn web_links(conn: &Connection) -> Result<Vec<WebLinkRow>> {
     let mut statement = conn.prepare("SELECT id, url FROM behaviour_web_link ORDER BY id")?;
-    let rows: Vec<(i64, String)> = statement
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<rusqlite::Result<_>>()?;
-    rows.into_iter()
-        .map(|(id, url)| {
+    statement
+        .query_and_then([], |row| {
+            let id: i64 = row.get(0)?;
             Ok(WebLinkRow {
                 id,
-                url,
+                url: row.get(1)?,
                 tags: read_tags(conn, "behaviour_web_link_tag", "link_id", &id)?,
             })
-        })
+        })?
         .collect()
 }
 

@@ -8,9 +8,9 @@ use rusqlite::{Connection, OptionalExtension, ToSql, Transaction, params, types:
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::db::{
-    read_audio_media, read_content_groups, read_experience, read_popup_media, read_text_pool,
-    read_web_links, write_audio_media, write_content_groups, write_experience, write_popup_media,
-    write_text_pool, write_web_links,
+    read_audio_media, read_content_groups, read_popup_media, read_text_pool,
+    read_timeline_if_enabled, read_web_links, write_audio_media, write_content_groups,
+    write_popup_media, write_text_pool, write_timeline, write_web_links,
 };
 
 const LEGACY_BLOB_KEY: &str = "behaviour";
@@ -187,8 +187,15 @@ pub struct SpawnRegion {
     pub height: f64,
 }
 
+fn make_finite(value: f64) -> f64 {
+    if value.is_finite() { value } else { 0.0 }
+}
+
+fn round_thousandth(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
+}
+
 impl SpawnRegion {
-    /// The whole monitor: what `PopupMedia::region` being absent means, spelled out.
     pub const FULL: Self = Self {
         x: 0.0,
         y: 0.0,
@@ -197,37 +204,19 @@ impl SpawnRegion {
     };
 
     /// This region with every edge inside the monitor and no negative or non-finite extent.
-    ///
-    /// The position is preserved where it can be: an over-large rectangle shrinks against the
-    /// far edge rather than sliding, which is what an author dragging one out expects.
-    ///
-    /// Rounded to a thousandth of the screen — a pixel on a 1920-wide monitor, which is below
-    /// anything an author can express or see. That is not cosmetic: clamping produces values like
-    /// `1.0 - 0.8`, and the editor decides whether to *store* a region at all by comparing it
-    /// against the full screen. Two implementations of this rule disagreeing in the last bit
-    /// would make that comparison answer differently on either side.
+    /// Rounded to the nearest thousandth.
     pub fn sanitized(self) -> Self {
-        fn finite(value: f64) -> f64 {
-            if value.is_finite() { value } else { 0.0 }
-        }
-
-        fn round(value: f64) -> f64 {
-            (value * 1000.0).round() / 1000.0
-        }
-
-        let x = finite(self.x).clamp(0.0, 1.0);
-        let y = finite(self.y).clamp(0.0, 1.0);
+        let x = make_finite(self.x).clamp(0.0, 1.0);
+        let y = make_finite(self.y).clamp(0.0, 1.0);
 
         Self {
-            x: round(x),
-            y: round(y),
-            width: round(finite(self.width).clamp(0.0, 1.0 - x)),
-            height: round(finite(self.height).clamp(0.0, 1.0 - y)),
+            x: round_thousandth(x),
+            y: round_thousandth(y),
+            width: round_thousandth(make_finite(self.width).clamp(0.0, 1.0 - x)),
+            height: round_thousandth(make_finite(self.height).clamp(0.0, 1.0 - y)),
         }
     }
 
-    /// Whether this is the whole monitor, and so says nothing the default does not already say.
-    /// The editor stores `None` instead of a full region, for the reason on [`PopupMedia`].
     pub fn is_full(&self) -> bool {
         self.sanitized() == Self::FULL
     }
@@ -321,7 +310,7 @@ pub struct Behaviour {
     #[serde(default)]
     pub content: Content,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub experience: Option<Experience>,
+    pub timeline: Option<Timeline>,
 }
 
 impl Behaviour {
@@ -366,7 +355,7 @@ impl Behaviour {
                 wallpaper,
                 splash,
             },
-            experience: read_experience(conn)?,
+            timeline: read_timeline_if_enabled(conn)?,
         })
     }
 
@@ -375,7 +364,7 @@ impl Behaviour {
         tx.execute("DELETE FROM behaviour_content", [])?;
         tx.execute("DELETE FROM behaviour_transition", [])?;
         tx.execute("DELETE FROM behaviour_stage", [])?;
-        tx.execute("DELETE FROM behaviour_experience", [])?;
+        tx.execute("DELETE FROM behaviour_timeline", [])?;
         tx.execute("DELETE FROM behaviour_popup_media", [])?;
         tx.execute("DELETE FROM behaviour_audio_media", [])?;
         tx.execute("DELETE FROM behaviour_content_group", [])?;
@@ -394,14 +383,18 @@ impl Behaviour {
         write_text_pool(tx, "prompt", &content.prompts)?;
         write_text_pool(tx, "notification", &content.notifications)?;
         write_web_links(tx, &content.web_links)?;
-        write_experience(tx, self.experience.as_ref())
+        if let Some(timeline) = self.timeline.as_ref() {
+            write_timeline(tx, timeline)?;
+        }
+
+        Ok(())
     }
 
     pub fn validate(&self) -> Vec<ValidationIssue> {
-        let Some(experience) = &self.experience else {
+        let Some(timeline) = &self.timeline else {
             return vec![];
         };
-        experience.timeline.validate()
+        timeline.validate()
     }
 
     /// Points `slot` at `media`, if that slot exists and is still empty.
@@ -424,9 +417,9 @@ impl Behaviour {
     /// quietly not covering it.
     fn media_reference_slots(&mut self) -> impl Iterator<Item = (MediaSlot, &mut Option<u64>)> {
         let stages = self
-            .experience
+            .timeline
             .iter_mut()
-            .flat_map(|experience| experience.timeline.stages.iter_mut())
+            .flat_map(|timeline| timeline.stages.iter_mut())
             .flat_map(|stage| {
                 let entry = &mut stage.on_enter;
                 let StageEntry { splash, sound, .. } = entry;
@@ -480,38 +473,33 @@ impl Behaviour {
             .into_iter()
             .flatten()
             .collect();
-        if let Some(experience) = &self.experience {
+        if let Some(timeline) = &self.timeline {
             ids.extend(
-                experience
-                    .timeline
+                timeline
                     .stages
                     .iter()
                     .filter_map(|stage| stage.content.wallpaper),
             );
             ids.extend(
-                experience
-                    .timeline
+                timeline
                     .stages
                     .iter()
                     .filter_map(|stage| stage.content.audio),
             );
             ids.extend(
-                experience
-                    .timeline
+                timeline
                     .stages
                     .iter()
                     .filter_map(|stage| stage.on_enter.splash),
             );
             ids.extend(
-                experience
-                    .timeline
+                timeline
                     .stages
                     .iter()
                     .filter_map(|stage| stage.on_enter.sound),
             );
             ids.extend(
-                experience
-                    .timeline
+                timeline
                     .stages
                     .iter()
                     .filter_map(|stage| stage.prompt.sound),
@@ -521,12 +509,10 @@ impl Behaviour {
     }
 }
 
-/// The `experience` section: Experience-mode-only data. Entirely expressed as a timeline of
-/// stages connected by transitions -- see `behaviour-design/default-mode.md`, "Transitions v1".
+/// The `timeline` section: Timeline-mode data. Expressed as an ordered sequence of stages
+/// connected by transitions.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct Experience {
-    #[serde(default)]
-    pub timeline: Timeline,
+pub struct Timeline {
     /// Optional per-pack display name for the built-in timeline mode. When a pack ships a
     /// timeline it can label how that mode is presented (`config`'s `build_mode_groups` shows
     /// this in place of the mode's own name) -- e.g. the Edgeware converter emits "Corruption",
@@ -534,10 +520,6 @@ pub struct Experience {
     /// name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct Timeline {
     #[serde(default)]
     pub stages: Vec<Stage>,
     #[serde(default)]
@@ -551,19 +533,19 @@ impl Timeline {
         for (index, stage) in self.stages.iter().enumerate() {
             if !ids.insert(stage.id.as_str()) {
                 issues.push(ValidationIssue::error(
-                    format!("experience.timeline.stages[{index}].id"),
+                    format!("timeline.stages[{index}].id"),
                     "Stage IDs must be unique",
                 ));
             }
             let final_stage = index + 1 == self.stages.len();
             if final_stage && stage.end.is_some() {
                 issues.push(ValidationIssue::error(
-                    format!("experience.timeline.stages[{index}].end"),
+                    format!("timeline.stages[{index}].end"),
                     "The final stage must run until the session ends",
                 ));
             } else if !final_stage && stage.end.is_none() {
                 issues.push(ValidationIssue::error(
-                    format!("experience.timeline.stages[{index}].end"),
+                    format!("timeline.stages[{index}].end"),
                     "Every non-final stage needs an ending condition",
                 ));
             }
@@ -572,7 +554,7 @@ impl Timeline {
                 && end.event_count.is_none()
             {
                 issues.push(ValidationIssue::error(
-                    format!("experience.timeline.stages[{index}].end"),
+                    format!("timeline.stages[{index}].end"),
                     "An ending condition needs a duration or event count",
                 ));
             }
@@ -587,7 +569,7 @@ impl Timeline {
                 .count();
             if matches != 1 {
                 issues.push(ValidationIssue::error(
-                    format!("experience.timeline.transitions[{index}]"),
+                    format!("timeline.transitions[{index}]"),
                     "Each adjacent pair of stages needs exactly one transition",
                 ));
             }
@@ -1007,8 +989,8 @@ pub enum ValidationSeverity {
 #[cfg(test)]
 mod tests {
     use super::{
-        Behaviour, Content, ContentSelection, EndStrategy, Events, Experience, MediaSlot, Stage,
-        StageEnd, Timeline,
+        Behaviour, Content, ContentSelection, EndStrategy, Events, MediaSlot, Stage, StageEnd,
+        Timeline,
     };
 
     #[test]
@@ -1024,24 +1006,22 @@ mod tests {
         let mut behaviour = Behaviour::new();
         behaviour.content.wallpaper = Some(wallpaper);
         behaviour.content.splash = Some(splash);
-        behaviour.experience = Some(Experience {
-            timeline: Timeline {
-                stages: vec![Stage {
-                    id: "stage-1".to_string(),
-                    label: "Stage 1".to_string(),
-                    end: None,
-                    content: ContentSelection {
-                        wallpaper: Some(stage_wallpaper),
-                        ..ContentSelection::default()
-                    },
-                    events: Events::default(),
-                    movement: None,
-                    mitosis: None,
-                    on_enter: Default::default(),
-                    prompt: Default::default(),
-                }],
-                transitions: vec![],
-            },
+        behaviour.timeline = Some(Timeline {
+            stages: vec![Stage {
+                id: "stage-1".to_string(),
+                label: "Stage 1".to_string(),
+                end: None,
+                content: ContentSelection {
+                    wallpaper: Some(stage_wallpaper),
+                    ..ContentSelection::default()
+                },
+                events: Events::default(),
+                movement: None,
+                mitosis: None,
+                on_enter: Default::default(),
+                prompt: Default::default(),
+            }],
+            transitions: vec![],
             label: None,
         });
         behaviour
@@ -1054,8 +1034,8 @@ mod tests {
         // Mid-import: the wallpaper and the stage's are still empty (their files haven't landed),
         // while the author has already picked a splash by hand.
         let mut behaviour = Behaviour::new();
-        behaviour.experience = behaviour_with_slots(1, 2, 3).experience;
-        behaviour.experience.as_mut().unwrap().timeline.stages[0]
+        behaviour.timeline = behaviour_with_slots(1, 2, 3).timeline;
+        behaviour.timeline.as_mut().unwrap().stages[0]
             .content
             .wallpaper = None;
         behaviour.content.splash = Some(99);
@@ -1084,7 +1064,7 @@ mod tests {
 
         assert_eq!(behaviour.content.wallpaper, Some(1));
         assert_eq!(behaviour.content.splash, Some(99));
-        let stage = &behaviour.experience.as_ref().unwrap().timeline.stages[0];
+        let stage = &behaviour.timeline.as_ref().unwrap().stages[0];
         assert_eq!(stage.content.wallpaper, Some(3));
         assert_eq!(stage.content.audio, Some(4));
     }
@@ -1101,44 +1081,39 @@ mod tests {
     }
 
     #[test]
-    fn experience_presence_is_distinguishable_from_absence() {
-        let with_experience = Behaviour {
-            experience: Some(Experience::default()),
+    fn timeline_presence_is_distinguishable_from_absence() {
+        let with_timeline = Behaviour {
+            timeline: Some(Timeline::default()),
             ..Behaviour::new()
         };
-        let without_experience = Behaviour::new();
+        let without_timeline = Behaviour::new();
 
-        assert!(with_experience.experience.is_some());
-        assert!(without_experience.experience.is_none());
+        assert!(with_timeline.timeline.is_some());
+        assert!(without_timeline.timeline.is_none());
     }
 
     #[test]
     fn validation_reports_final_stage_and_transition_structure() {
         let mut behaviour = Behaviour::new();
-        behaviour.experience = Some(Experience {
-            timeline: Timeline {
-                stages: vec![Stage {
-                    id: "only".into(),
-                    label: "Only".into(),
-                    end: Some(StageEnd {
-                        duration_seconds: Some(10.0),
-                        event_count: None,
-                        strategy: EndStrategy::Any,
-                    }),
-                    content: Default::default(),
-                    events: Default::default(),
-                    movement: None,
-                    mitosis: None,
-                    on_enter: Default::default(),
-                    prompt: Default::default(),
-                }],
-                transitions: vec![],
-            },
+        behaviour.timeline = Some(Timeline {
+            stages: vec![Stage {
+                id: "only".into(),
+                label: "Only".into(),
+                end: Some(StageEnd {
+                    duration_seconds: Some(10.0),
+                    event_count: None,
+                    strategy: EndStrategy::Any,
+                }),
+                content: Default::default(),
+                events: Default::default(),
+                movement: None,
+                mitosis: None,
+                on_enter: Default::default(),
+                prompt: Default::default(),
+            }],
+            transitions: vec![],
             label: None,
         });
-        assert_eq!(
-            behaviour.validate()[0].path,
-            "experience.timeline.stages[0].end"
-        );
+        assert_eq!(behaviour.validate()[0].path, "timeline.stages[0].end");
     }
 }

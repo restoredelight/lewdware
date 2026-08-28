@@ -4,16 +4,16 @@ use shared::user_config::Volume;
 
 use super::{harness::*, mode_support::*, *};
 
-/// The hole this closes: a stage's tag set already reached popups, captions, notifications,
-/// web links and prompts, but not the background music -- so "this stage is
-/// about X" meant everything about it except what you could hear.
 #[tokio::test(start_paused = true)]
-async fn experience_background_audio_follows_the_stages_tag_set() {
+async fn experience_stage_tag_restricts_background_audio() {
     LocalSet::new()
         .run_until(async {
-            const MEDIA: &[(&str, &[&str])] = &[("calm.ogg", &["calm"]), ("harsh.ogg", &["harsh"])];
+            const MEDIA: &[(&str, &[&str])] = &[
+                ("calm.ogg", &["soft"]),
+                ("harsh.ogg", &["harsh"]),
+            ];
 
-            let experience = levels_to_experience(vec![Level {
+            let timeline = levels_to_timeline(vec![Level {
                 tags: Some(vec!["harsh".to_string()]),
                 ..Default::default()
             }]);
@@ -24,11 +24,11 @@ async fn experience_background_audio_follows_the_stages_tag_set() {
                 OptionValue::Boolean(true),
             );
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -53,7 +53,7 @@ async fn experience_stage_audio_switches_once_and_none_retains_it() {
     LocalSet::new()
         .run_until(async {
             const MEDIA: &[(&str, &[&str])] = &[("first.ogg", &[]), ("second.ogg", &[])];
-            let mut experience = levels_to_experience(vec![
+            let mut timeline = levels_to_timeline(vec![
                 Level::default(),
                 Level {
                     at_seconds: 0.1,
@@ -64,8 +64,8 @@ async fn experience_stage_audio_switches_once_and_none_retains_it() {
                     ..Default::default()
                 },
             ]);
-            experience.timeline.stages[0].content.audio = Some(1);
-            experience.timeline.stages[1].content.audio = Some(2);
+            timeline.stages[0].content.audio = Some(1);
+            timeline.stages[1].content.audio = Some(2);
             // Third remains None: it must retain second. Repeating the second id would likewise
             // compare equal and avoid a restart.
             let mut config = isolated_experience_process_config();
@@ -73,11 +73,11 @@ async fn experience_stage_audio_switches_once_and_none_retains_it() {
                 "background_audio_enabled".into(),
                 OptionValue::Boolean(true),
             );
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -106,14 +106,14 @@ async fn experience_scheduled_sounds_count_towards_stage_end() {
             };
 
             const MEDIA: &[(&str, &[&str])] = &[("sting.ogg", &[shared::tags::POPUP_AUDIO_TAG])];
-            let mut experience = levels_to_experience(vec![
+            let mut timeline = levels_to_timeline(vec![
                 Level::default(),
                 Level {
                     at_seconds: 100.0,
                     ..Default::default()
                 },
             ]);
-            let first = &mut experience.timeline.stages[0];
+            let first = &mut timeline.stages[0];
             first.events.sound = Some(EventSchedule {
                 interval: Interval::Fixed { seconds: 0.05 },
                 initial_delay_seconds: Some(0.01),
@@ -131,11 +131,11 @@ async fn experience_scheduled_sounds_count_towards_stage_end() {
 
             let mut config = isolated_experience_process_config();
             config.insert("popup_audio_enabled".into(), OptionValue::Boolean(true));
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -166,28 +166,28 @@ async fn experience_crossfade_starts_the_next_track_before_the_transition_ends()
             use shared::behaviour::TransitionCategory;
 
             const MEDIA: &[(&str, &[&str])] = &[("first.ogg", &[]), ("second.ogg", &[])];
-            let mut experience = levels_to_experience(vec![
+            let mut timeline = levels_to_timeline(vec![
                 Level::default(),
                 Level {
                     at_seconds: 0.1,
                     ..Default::default()
                 },
             ]);
-            experience.timeline.stages[0].content.audio = Some(1);
-            experience.timeline.stages[1].content.audio = Some(2);
-            experience.timeline.transitions[0].duration_seconds = 1.0;
-            experience.timeline.transitions[0].affected = vec![TransitionCategory::Crossfade];
+            timeline.stages[0].content.audio = Some(1);
+            timeline.stages[1].content.audio = Some(2);
+            timeline.transitions[0].duration_seconds = 1.0;
+            timeline.transitions[0].affected = vec![TransitionCategory::Crossfade];
 
             let mut config = isolated_experience_process_config();
             config.insert(
                 "background_audio_enabled".into(),
                 OptionValue::Boolean(true),
             );
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -238,7 +238,7 @@ async fn experience_background_audio_falls_back_when_no_track_carries_the_stages
         .run_until(async {
             const MEDIA: &[(&str, &[&str])] = &[("art.avif", &["kinky"]), ("music.ogg", &[])];
 
-            let experience = levels_to_experience(vec![Level {
+            let timeline = levels_to_timeline(vec![Level {
                 tags: Some(vec!["kinky".to_string()]),
                 ..Default::default()
             }]);
@@ -249,11 +249,11 @@ async fn experience_background_audio_falls_back_when_no_track_carries_the_stages
                 OptionValue::Boolean(true),
             );
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture_with_data(MEDIA, None),
                 Content::default(),
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),

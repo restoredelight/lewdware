@@ -620,13 +620,13 @@ fn collect_garbage(tx: &Transaction<'_>) -> Result<()> {
     tx.execute(
         "INSERT OR IGNORE INTO pending_file_deletions(path)
          SELECT l.path FROM loose_media l JOIN media m ON m.id = l.media_id
-         WHERE m.deleted = 1
+         WHERE m.deleted = TRUE
            AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = m.id)
            AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = m.id)",
         [],
     )?;
     tx.execute(
-        "DELETE FROM media WHERE deleted = 1
+        "DELETE FROM media WHERE deleted = TRUE
            AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = media.id)
            AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = media.id)",
         [],

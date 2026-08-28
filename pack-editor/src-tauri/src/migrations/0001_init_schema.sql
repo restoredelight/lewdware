@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS media (
     hash BLOB NOT NULL UNIQUE,
     thumbnail BLOB,
     source_url TEXT,
-    deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
+    deleted INTEGER NOT NULL DEFAULT FALSE CHECK (deleted IN (FALSE, TRUE))
 ) STRICT;
 CREATE INDEX IF NOT EXISTS media_hash_index ON media (hash);
 

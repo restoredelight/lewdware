@@ -3,8 +3,8 @@ use crate::behaviour::db::read_one_stage;
 use crate::behaviour::editor::media::edit_popup_entries;
 use crate::behaviour::editor::{
     MediaSlots, audio_attributes, clear_media_slots, media_slots, popup_attributes, remove_stage,
-    set_audio_volume, set_experience_enabled, set_media_slot, set_popup_caption, set_popup_scale,
-    set_popup_weight, set_stage_audio_random, slot_value,
+    set_audio_volume, set_media_slot, set_popup_caption, set_popup_scale, set_popup_weight,
+    set_stage_audio_random, set_timeline_enabled, slot_value,
 };
 use crate::behaviour::schema::{AudioMedia, Behaviour, Content, MediaSlot};
 
@@ -263,7 +263,7 @@ fn a_slot_on_a_removed_stage_is_refused() {
 fn filling_a_slot_while_the_timeline_is_off_keeps_the_stages() {
     let mut conn = timeline_pack(&["a", "b"]);
     tx_on(&mut conn, |tx| {
-        set_experience_enabled(tx, false).unwrap();
+        set_timeline_enabled(tx, false).unwrap();
         set_media_slot(tx, &MediaSlot::Wallpaper, Some(1)).unwrap();
     });
     assert_eq!(stage_ids(&conn), ["a", "b"]);

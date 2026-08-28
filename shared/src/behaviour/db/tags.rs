@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rusqlite::{Connection, Transaction, params};
 
-use super::common::integer_array;
+use crate::behaviour::db::common::sql_array;
 
 // ── Tags ─────────────────────────────────────────────────────────────────────
 //
@@ -37,13 +37,15 @@ pub fn write_tags(
         .iter()
         .map(|tag| tag_id(tx, tag))
         .collect::<Result<Vec<_>>>()?;
+
     tx.execute(
         &format!(
             "DELETE FROM {table} WHERE {key} = ?1
              AND tag_id NOT IN (SELECT value FROM rarray(?2))"
         ),
-        params![owner, integer_array(ids.iter().copied())],
+        params![owner, sql_array(ids.clone())?],
     )?;
+
     for id in ids {
         tx.execute(
             &format!(
@@ -53,6 +55,7 @@ pub fn write_tags(
             params![owner, id],
         )?;
     }
+
     Ok(())
 }
 

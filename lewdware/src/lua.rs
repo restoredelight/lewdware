@@ -14,7 +14,7 @@ use std::{cell::RefCell, collections::HashMap, fs::File, io::Cursor, rc::Rc, syn
 use anyhow::bail;
 use mlua::{ExternalResult, Lua, StdLib};
 use shared::{
-    behaviour::{Content, Experience, effective_config, effective_options},
+    behaviour::{Content, Timeline, effective_config, effective_options},
     mode::{
         Metadata, OptionValue, StoredValue, VERSION_MAJOR, read_mode_metadata, resolve_options,
     },
@@ -190,7 +190,7 @@ fn resolve_mode_config(
         return (
             mode_config,
             lua_view(&Content::default(), |_| None),
-            lua_view(&Experience::default(), |_| None),
+            lua_view(&Timeline::default(), |_| None),
         );
     }
 
@@ -208,8 +208,9 @@ fn resolve_mode_config(
             .inspect_err(|err| tracing::warn!("Failed to look up media #{id}: {err}"))
             .ok()
             .flatten()
+            .map(|media| media.name)
     };
-    let name_of = |id: u64| media_of(id).map(|media| media.name);
+    let name_of = |id: u64| media_of(id);
 
     let schema = effective_options(metadata, &behaviour);
     let resolved = effective_config(&schema, &stored);
@@ -217,7 +218,7 @@ fn resolve_mode_config(
     (
         resolved,
         lua_view(&behaviour.content, name_of),
-        lua_view(&behaviour.experience.unwrap_or_default(), name_of),
+        lua_view(&behaviour.timeline.unwrap_or_default(), name_of),
     )
 }
 
@@ -227,7 +228,7 @@ fn resolve_mode_config(
 /// Slots hold ids so that renaming a file cannot break them (`design/behaviour-storage.md`, step
 /// 1), but the modes ask the media API for a *name* --
 /// `lewdware.media.get_image(content().wallpaper)` in `default-modes/shared/lib/wallpaper.lua`.
-/// Resolving on the way out keeps the private `__lewdware_content`/`__lewdware_experience`
+/// Resolving on the way out keeps the private `__lewdware_content`/`__lewdware_timeline`/`__lewdware_experience`
 /// channels, the public Lua API and every mode exactly as they were when slots held names.
 ///
 /// A slot pointing at media the pack no longer has loses its key entirely, which reads to a mode
@@ -246,11 +247,12 @@ fn lua_view<T: serde::Serialize>(
         resolve_slot(content, "wallpaper", &name_of);
         resolve_slot(content, "splash", &name_of);
     }
-    if let Some(stages) = value
-        .get_mut("timeline")
-        .and_then(|timeline| timeline.get_mut("stages"))
-        .and_then(serde_json::Value::as_array_mut)
-    {
+    let stages = if value.get("stages").is_some() {
+        value.get_mut("stages")
+    } else {
+        value.get_mut("timeline").and_then(|t| t.get_mut("stages"))
+    };
+    if let Some(stages) = stages.and_then(serde_json::Value::as_array_mut) {
         for stage in stages {
             if let Some(content) = stage
                 .get_mut("content")
@@ -382,7 +384,7 @@ pub fn start_lua_thread<T: EventPoster>(
 
         let entrypoint = metadata.entrypoint.clone();
 
-        let (mode_config, content, experience) = resolve_mode_config(
+        let (mode_config, content, timeline) = resolve_mode_config(
             &metadata,
             &config.mode,
             &config.mode_options,
@@ -430,7 +432,7 @@ pub fn start_lua_thread<T: EventPoster>(
                 pack_info,
                 config: mode_config,
                 content,
-                experience,
+                timeline,
                 chrome: ChromeDefaults::from(config.as_ref()),
                 gpu_available,
                 dev_mode,

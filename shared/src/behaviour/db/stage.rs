@@ -1,12 +1,11 @@
 use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use super::common::integer_array;
 use super::tags::tag_id;
-use crate::behaviour::schema::{
+use crate::behaviour::{db::common::sql_array, schema::{
     ContentSelection, CountScope, EndStrategy, EventCountCondition, EventKind, EventSchedule,
     Events, Interval, Mitosis, Movement, Stage, StageEnd, StageEntry, StagePrompt,
-};
+}};
 
 pub fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
     read_stages_where(conn, "", &[])
@@ -95,7 +94,7 @@ pub fn read_owned_stage_tag(
         .query_row(
             "SELECT tags.name FROM behaviour_stage_tag
              JOIN tags ON tags.id = behaviour_stage_tag.tag_id
-             WHERE behaviour_stage_tag.stage_id = ?1 AND behaviour_stage_tag.owned = 1
+             WHERE behaviour_stage_tag.stage_id = ?1 AND behaviour_stage_tag.owned = TRUE
                AND behaviour_stage_tag.excluded = ?2
              ORDER BY behaviour_stage_tag.id LIMIT 1",
             params![stage, excluded],
@@ -140,7 +139,7 @@ pub fn write_stage_tags(
     tx.execute(
         "DELETE FROM behaviour_stage_tag WHERE stage_id = ?1
          AND tag_id NOT IN (SELECT value FROM rarray(?2))",
-        params![stage, integer_array(keeping.into_iter())],
+        params![stage, sql_array(keeping)?],
     )?;
     for (side, ids) in [(false, &included), (true, &excluded)] {
         for id in ids {
@@ -169,15 +168,15 @@ pub fn write_owned_stage_tag(
     owned: Option<&str>,
 ) -> Result<()> {
     tx.execute(
-        "UPDATE behaviour_stage_tag SET owned = 0
-         WHERE stage_id = ?1 AND owned = 1 AND excluded = ?3
+        "UPDATE behaviour_stage_tag SET owned = FALSE
+         WHERE stage_id = ?1 AND owned = TRUE AND excluded = ?3
          AND tag_id IS NOT (SELECT id FROM tags WHERE name = ?2)",
         params![stage, owned, excluded],
     )?;
     if let Some(tag) = owned {
         tx.execute(
-            "UPDATE behaviour_stage_tag SET owned = 1
-             WHERE stage_id = ?1 AND owned = 0 AND excluded = ?3
+            "UPDATE behaviour_stage_tag SET owned = TRUE
+             WHERE stage_id = ?1 AND owned = FALSE AND excluded = ?3
              AND tag_id = (SELECT id FROM tags WHERE name = ?2)",
             params![stage, tag, excluded],
         )?;
@@ -249,61 +248,48 @@ pub fn read_stage_mitosis(conn: &Connection, stage: &str) -> Result<Option<Mitos
         .optional()?)
 }
 
-/// One `behaviour_stage_event` row. Which interval columns carry a value depends on
-/// `interval_kind`, mirroring the `Interval` enum's own tag.
-struct EventRow {
-    kind: EventKind,
-    interval_kind: String,
-    seconds: Option<f64>,
-    minimum_seconds: Option<f64>,
-    maximum_seconds: Option<f64>,
-    initial_delay_seconds: Option<f64>,
-    max_concurrent: Option<u32>,
-}
-
 pub fn read_stage_events(conn: &Connection, stage: &str) -> Result<Events> {
     let mut statement = conn.prepare(
         "SELECT kind, interval_kind, seconds, minimum_seconds, maximum_seconds,
                 initial_delay_seconds, max_concurrent
          FROM behaviour_stage_event WHERE stage_id = ?",
     )?;
-    let rows: Vec<EventRow> = statement
-        .query_map(params![stage], |row| {
-            Ok(EventRow {
-                kind: row.get(0)?,
-                interval_kind: row.get(1)?,
-                seconds: row.get(2)?,
-                minimum_seconds: row.get(3)?,
-                maximum_seconds: row.get(4)?,
-                initial_delay_seconds: row.get(5)?,
-                max_concurrent: row.get(6)?,
-            })
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-
     let mut events = Events::default();
-    for row in rows {
-        let interval = match row.interval_kind.as_str() {
+    let rows = statement.query_and_then(params![stage], |row| -> Result<_> {
+        let kind: EventKind = row.get(0)?;
+        let interval_kind: String = row.get(1)?;
+        let seconds: Option<f64> = row.get(2)?;
+        let minimum_seconds: Option<f64> = row.get(3)?;
+        let maximum_seconds: Option<f64> = row.get(4)?;
+        let initial_delay_seconds: Option<f64> = row.get(5)?;
+        let max_concurrent: Option<u32> = row.get(6)?;
+
+        let interval = match interval_kind.as_str() {
             "fixed" => Interval::Fixed {
-                seconds: row.seconds.unwrap_or_default(),
+                seconds: seconds.unwrap_or_default(),
             },
             "random" => Interval::Random {
-                minimum_seconds: row.minimum_seconds.unwrap_or_default(),
-                maximum_seconds: row.maximum_seconds.unwrap_or_default(),
+                minimum_seconds: minimum_seconds.unwrap_or_default(),
+                maximum_seconds: maximum_seconds.unwrap_or_default(),
             },
             other => bail!("unknown event interval kind {other:?}"),
         };
-        let schedule = Some(EventSchedule {
+        let schedule = EventSchedule {
             interval,
-            initial_delay_seconds: row.initial_delay_seconds,
-            max_concurrent: row.max_concurrent,
-        });
-        match row.kind {
-            EventKind::Popup => events.popup = schedule,
-            EventKind::Web => events.web = schedule,
-            EventKind::Notification => events.notification = schedule,
-            EventKind::Prompt => events.prompt = schedule,
-            EventKind::Sound => events.sound = schedule,
+            initial_delay_seconds,
+            max_concurrent,
+        };
+        Ok((kind, schedule))
+    })?;
+
+    for item in rows {
+        let (kind, schedule) = item?;
+        match kind {
+            EventKind::Popup => events.popup = Some(schedule),
+            EventKind::Web => events.web = Some(schedule),
+            EventKind::Notification => events.notification = Some(schedule),
+            EventKind::Prompt => events.prompt = Some(schedule),
+            EventKind::Sound => events.sound = Some(schedule),
         }
     }
     Ok(events)

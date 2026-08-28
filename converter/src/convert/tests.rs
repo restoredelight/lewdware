@@ -25,7 +25,7 @@ fn slot_source(output: &ConversionOutput, slot: MediaSlot) -> Option<&str> {
 }
 
 fn stage_slot_source(output: &ConversionOutput, index: usize) -> Option<&str> {
-    let stages = &output.behaviour.experience.as_ref()?.timeline.stages;
+    let stages = &output.behaviour.timeline.as_ref()?.stages;
     slot_source(
         output,
         MediaSlot::StageWallpaper {
@@ -422,15 +422,15 @@ fn popup_anchor_ignores_non_popup_media() {
     let (_dir, source) = source_with(&[("wallpaper.png", "w")]);
     let output = convert(&source);
     let popup_anchor =
-        output.behaviour.experience.as_ref().map(|experience| {
-            anchor_seconds(&experience.timeline.stages[0].events.popup).is_some()
+        output.behaviour.timeline.as_ref().map(|timeline| {
+            anchor_seconds(&timeline.stages[0].events.popup).is_some()
         });
     assert_ne!(popup_anchor, Some(true));
 
     let (_dir2, source2) = source_with(&[("wallpaper.png", "w"), ("img/a.png", "a")]);
     let output2 = convert(&source2);
-    let experience = output2.behaviour.experience.unwrap();
-    assert!(anchor_seconds(&experience.timeline.stages[0].events.popup).is_some());
+    let timeline = output2.behaviour.timeline.unwrap();
+    assert!(anchor_seconds(&timeline.stages[0].events.popup).is_some());
 }
 
 #[test]
@@ -499,7 +499,7 @@ fn no_config_or_corruption_recommends_sandbox_with_no_experience_section() {
         output.metadata.recommended_mode,
         Some(RecommendedMode::Sandbox)
     );
-    assert_eq!(output.behaviour.experience, None);
+    assert_eq!(output.behaviour.timeline, None);
 }
 
 #[test]
@@ -509,10 +509,10 @@ fn config_json_pacing_alone_populates_anchors_but_still_recommends_sandbox() {
         r#"{"delay": 5000, "popupMod": 100, "vidMod": 0, "webMod": 0}"#,
     )]);
     let output = convert(&source);
-    let experience = output.behaviour.experience.as_ref().unwrap();
+    let timeline = output.behaviour.timeline.as_ref().unwrap();
     // 100% chance every 5000ms tick -> one event every 5 seconds.
     assert_eq!(
-        anchor_seconds(&experience.timeline.stages[0].events.popup),
+        anchor_seconds(&timeline.stages[0].events.popup),
         Some(5.0)
     );
     assert_eq!(
@@ -520,7 +520,7 @@ fn config_json_pacing_alone_populates_anchors_but_still_recommends_sandbox() {
         Some(RecommendedMode::Sandbox)
     );
     // No corruption.json -> just the one baseline stage, no escalation.
-    assert_eq!(experience.timeline.stages.len(), 1);
+    assert_eq!(timeline.stages.len(), 1);
 }
 
 #[test]
@@ -535,10 +535,9 @@ fn popup_anchor_sums_image_and_video_chance() {
         anchor_seconds(
             &output
                 .behaviour
-                .experience
+                .timeline
                 .as_ref()
                 .unwrap()
-                .timeline
                 .stages[0]
                 .events
                 .popup
@@ -551,7 +550,7 @@ fn popup_anchor_sums_image_and_video_chance() {
 fn zero_chance_key_leaves_that_anchor_absent() {
     let (_dir, source) = source_with(&[("config.json", r#"{"webMod": 0}"#)]);
     let output = convert(&source);
-    assert!(output.behaviour.experience.is_none());
+    assert!(output.behaviour.timeline.is_none());
 }
 
 #[test]
@@ -568,7 +567,7 @@ fn content_presence_defaults_an_anchor_on_when_no_config_signal_exists_anywhere(
     assert!(!output.behaviour.content.web_links.is_empty());
     assert_eq!(
         anchor_seconds(
-            &output.behaviour.experience.unwrap().timeline.stages[0]
+            &output.behaviour.timeline.unwrap().stages[0]
                 .events
                 .web
         ),
@@ -583,7 +582,7 @@ fn no_content_and_no_config_signal_leaves_the_anchor_absent() {
     let (_dir, source) = source_with(&[("index.json", r#"{"default": {"captions": ["hi"]}}"#)]);
     let output = convert(&source);
     assert!(output.behaviour.content.web_links.is_empty());
-    assert!(output.behaviour.experience.is_none());
+    assert!(output.behaviour.timeline.is_none());
 }
 
 #[test]
@@ -595,10 +594,9 @@ fn missing_delay_falls_back_to_edgewares_own_default() {
         anchor_seconds(
             &output
                 .behaviour
-                .experience
+                .timeline
                 .as_ref()
                 .unwrap()
-                .timeline
                 .stages[0]
                 .events
                 .prompt
@@ -625,7 +623,7 @@ fn corruption_timeline_recommends_experience_with_cumulative_tags() {
         output.metadata.recommended_mode,
         Some(RecommendedMode::Experience)
     );
-    let timeline = &output.behaviour.experience.as_ref().unwrap().timeline;
+    let timeline = output.behaviour.timeline.as_ref().unwrap();
     assert_eq!(timeline.stages.len(), 2);
     // Stage 1 is applied immediately (Edgeware applies it at session start, not after one
     // corruption_time interval) -- see `build_timeline`. It also doubles as the new schema's
@@ -661,7 +659,7 @@ fn popup_trigger_derives_at_popups_from_corruption_popups() {
         ),
     ]);
     let output = convert(&source);
-    let timeline = output.behaviour.experience.unwrap().timeline;
+    let timeline = output.behaviour.timeline.unwrap();
     // The popup-count trigger for reaching stage 1 (from the baseline stage 0) is encoded
     // as stage 0's own `end` condition -- there's nothing before stage 0 to derive a trigger
     // for, matching the old schema's "ignored for the baseline level" rule.
@@ -682,7 +680,7 @@ fn timed_trigger_never_sets_at_popups() {
         r#"{"moods": {"1": {"add": [], "remove": []}, "2": {"add": [], "remove": []}}, "wallpapers": {}, "config": {}}"#,
     )]);
     let output = convert(&source);
-    let timeline = output.behaviour.experience.unwrap().timeline;
+    let timeline = output.behaviour.timeline.unwrap();
     assert!(
         timeline
             .stages
@@ -710,9 +708,8 @@ fn launch_trigger_warns_and_still_produces_a_time_based_timeline() {
     assert!(
         !output
             .behaviour
-            .experience
-            .unwrap()
             .timeline
+            .unwrap()
             .stages
             .is_empty()
     );
@@ -766,7 +763,7 @@ fn per_level_promptmod_overrides_convert_into_real_per_level_prompt_anchors() {
         }"#,
     )]);
     let output = convert(&source);
-    let timeline = &output.behaviour.experience.unwrap().timeline;
+    let timeline = &output.behaviour.timeline.unwrap();
     assert_eq!(timeline.stages.len(), 4);
     assert_eq!(
         anchor_seconds(&timeline.stages[0].events.prompt),
@@ -822,10 +819,9 @@ fn level_wallpaper_other_than_primary_gets_its_own_media_entry() {
     let output = convert(&source);
     let stage_count = output
         .behaviour
-        .experience
+        .timeline
         .as_ref()
         .unwrap()
-        .timeline
         .stages
         .len();
     for index in 0..stage_count {
@@ -882,7 +878,7 @@ fn missing_level_wallpaper_file_warns_and_leaves_no_override() {
             .iter()
             .any(|w| w.kind == WarningKind::UnreadableMediaFile)
     );
-    let timeline = output.behaviour.experience.unwrap().timeline;
+    let timeline = output.behaviour.timeline.unwrap();
     assert_eq!(timeline.stages[0].content.wallpaper, None);
 }
 
@@ -904,7 +900,7 @@ fn moodless_media_alongside_a_timeline_gets_tagged_into_every_level() {
         .unwrap();
     assert_eq!(untagged.tags, vec![MOODLESS_TAG.to_string()]);
 
-    let timeline = output.behaviour.experience.unwrap().timeline;
+    let timeline = output.behaviour.timeline.unwrap();
     for stage in &timeline.stages {
         assert!(
             stage
@@ -948,7 +944,7 @@ fn no_moodless_media_means_no_synthetic_tag_anywhere() {
             .iter()
             .any(|m| m.tags.contains(&MOODLESS_TAG.to_string()))
     );
-    let timeline = output.behaviour.experience.unwrap().timeline;
+    let timeline = output.behaviour.timeline.unwrap();
     assert!(
         !timeline.stages[0]
             .content
@@ -1001,7 +997,7 @@ fn a_mood_inside_the_reserved_namespace_is_escaped_everywhere_it_lands() {
         output.behaviour.content.content_groups[0].tags,
         vec![escaped.clone()]
     );
-    let timeline = output.behaviour.experience.unwrap().timeline;
+    let timeline = output.behaviour.timeline.unwrap();
     assert!(
         timeline.stages[0]
             .content
@@ -1046,7 +1042,7 @@ fn moodless_tag_dodges_a_real_mood_of_the_same_name() {
         .unwrap();
     assert_eq!(a.tags, vec!["corruption-moodless".to_string()]);
 
-    let timeline = output.behaviour.experience.unwrap().timeline;
+    let timeline = output.behaviour.timeline.unwrap();
     let stage_tags = |i: usize| timeline.stages[i].content.tags.clone().unwrap();
     // Stage 1 (index 0) adds the real mood; both tags are present and independent.
     assert!(stage_tags(0).contains(&"corruption-moodless".to_string()));

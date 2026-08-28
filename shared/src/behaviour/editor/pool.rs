@@ -49,23 +49,19 @@ pub fn text_pool(conn: &Connection, kind: PoolKind) -> Result<Vec<TextItemRow>> 
         "SELECT id, text, timeout_seconds, summary FROM behaviour_text_item
          WHERE kind = ? ORDER BY id",
     )?;
-    let rows: Vec<(i64, String, Option<f64>, Option<String>)> = statement
-        .query_map(params![kind], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    rows.into_iter()
-        .map(|(id, text, timeout_seconds, summary)| {
+    statement
+        .query_and_then(params![kind], |row| {
+            let id: i64 = row.get(0)?;
             Ok(TextItemRow {
                 id,
                 item: TextItem {
-                    text,
+                    text: row.get(1)?,
                     tags: read_tags(conn, "behaviour_text_item_tag", "item_id", &id)?,
-                    timeout_seconds,
-                    summary,
+                    timeout_seconds: row.get(2)?,
+                    summary: row.get(3)?,
                 },
             })
-        })
+        })?
         .collect()
 }
 

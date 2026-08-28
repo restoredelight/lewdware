@@ -260,12 +260,12 @@ pub(super) fn mitosis(design: &DesignValues) -> Option<shared::behaviour::Mitosi
     }
 }
 
-/// Converts a cumulative `Vec<Level>` into a real `Experience`: each level becomes a
+/// Converts a cumulative `Vec<Level>` into a real `Timeline`: each level becomes a
 /// `Stage`, and a level's `at_seconds`/`at_popups` (the trigger for *reaching* it) becomes
 /// the *previous* stage's `StageEnd` (the condition for *leaving* it) -- the last level never
 /// gets an `end`. One zero-duration, linear, unaffected `Transition` is synthesized per
 /// adjacent stage pair, since a cumulative level's values always apply instantly.
-pub(super) fn levels_to_experience(levels: Vec<Level>) -> Experience {
+pub(super) fn levels_to_timeline(levels: Vec<Level>) -> Timeline {
     use shared::behaviour::{
         ContentSelection, CountScope, Easing, EndStrategy, EventCountCondition, EventKind, Events,
         Stage, StageEnd, Timeline, Transition,
@@ -321,23 +321,25 @@ pub(super) fn levels_to_experience(levels: Vec<Level>) -> Experience {
             affected: vec![],
         })
         .collect();
-    Experience {
-        timeline: Timeline {
-            stages,
-            transitions,
-        },
+    Timeline {
+        stages,
+        transitions,
         label: None,
     }
 }
 
-/// Builds a single-level `Experience` (just the baseline, no escalation at all) from a
+pub(super) fn levels_to_experience(levels: Vec<Level>) -> Timeline {
+    levels_to_timeline(levels)
+}
+
+/// Builds a single-level `Timeline` (just the baseline, no escalation at all) from a
 /// baseline `FrequencyAnchors`/`DesignValues` pair -- the common case for tests exercising
 /// anchor/design arithmetic in isolation from the timeline's own trigger mechanics.
-pub(super) fn experience_with_baseline(
+pub(super) fn timeline_with_baseline(
     anchors: FrequencyAnchors,
     design: DesignValues,
-) -> Experience {
-    levels_to_experience(vec![Level {
+) -> Timeline {
+    levels_to_timeline(vec![Level {
         at_seconds: 0.0,
         at_popups: None,
         anchors,
@@ -346,6 +348,13 @@ pub(super) fn experience_with_baseline(
         exclude: Vec::new(),
         wallpaper: None,
     }])
+}
+
+pub(super) fn experience_with_baseline(
+    anchors: FrequencyAnchors,
+    design: DesignValues,
+) -> Timeline {
+    timeline_with_baseline(anchors, design)
 }
 
 pub(super) fn as_str_sources(owned: &[(String, String)]) -> Vec<(&str, &str)> {

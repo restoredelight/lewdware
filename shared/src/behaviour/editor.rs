@@ -57,8 +57,8 @@ pub use stage_tags::{
     stage_owned_tags, stage_scenery, stage_tag_name, stage_tag_shared,
 };
 pub use timeline::{
-    TimelineView, add_stage, duplicate_stage, move_stage, remove_stage, set_experience_enabled,
-    set_experience_label, stages, timeline, transitions,
+    TimelineView, add_stage, duplicate_stage, move_stage, remove_stage, set_timeline_enabled,
+    set_timeline_label, stages, timeline, transitions,
 };
 pub use transition::{
     set_transition_affected, set_transition_category, set_transition_duration,

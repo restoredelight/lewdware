@@ -1,8 +1,8 @@
 //! Behaviour-document edits: media slots, stages, captions, and what they retire.
 
 use shared::behaviour::{
-    Behaviour, ContentGroup, ContentSelection, EndStrategy, EventSchedule, Events, Experience,
-    Interval, Stage, StageEnd, TextItem, Timeline, Transition, WebLink,
+    Behaviour, ContentGroup, ContentSelection, EndStrategy, EventSchedule, Events, Interval,
+    Stage, StageEnd, TextItem, Timeline, Transition, WebLink,
 };
 use tempfile::tempdir;
 
@@ -425,21 +425,19 @@ async fn clearing_a_slot_keeps_a_file_another_slot_still_references() {
     let shared = insert_staged_audio(&pack, b"shared").await;
 
     let behaviour = Behaviour {
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![Stage {
-                    id: "stage-1".to_string(),
-                    label: "Stage 1".to_string(),
-                    end: None,
-                    content: ContentSelection::default(),
-                    events: Events::default(),
-                    movement: None,
-                    mitosis: None,
-                    on_enter: Default::default(),
-                    prompt: Default::default(),
-                }],
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: vec![Stage {
+                id: "stage-1".to_string(),
+                label: "Stage 1".to_string(),
+                end: None,
+                content: ContentSelection::default(),
+                events: Events::default(),
+                movement: None,
+                mitosis: None,
+                on_enter: Default::default(),
+                prompt: Default::default(),
+            }],
+            transitions: vec![],
             label: None,
         }),
         ..Behaviour::default()
@@ -614,11 +612,9 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
     };
     pack.replace_behaviour(
         Behaviour {
-            experience: Some(Experience {
-                timeline: Timeline {
-                    stages: vec![make_stage("leave"), make_stage("keep")],
-                    transitions: vec![],
-                },
+            timeline: Some(Timeline {
+                stages: vec![make_stage("leave"), make_stage("keep")],
+                transitions: vec![],
                 label: None,
             }),
             ..Behaviour::default()
@@ -657,9 +653,8 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
 
     let stages = read_pack_behaviour(&pack)
         .await
-        .experience
-        .unwrap()
         .timeline
+        .unwrap()
         .stages;
     assert_eq!(stages[0].content.exclude, ["not-stage-leave"]);
     assert_eq!(
@@ -678,9 +673,8 @@ async fn a_stage_membership_rewrite_is_one_undoable_edit() {
     assert_eq!(pack.get_tags(media).await.unwrap(), vec!["shared"]);
     let stages = read_pack_behaviour(&pack)
         .await
-        .experience
-        .unwrap()
         .timeline
+        .unwrap()
         .stages;
     assert!(stages[0].content.exclude.is_empty());
     assert_eq!(stages[0].content.owned_exclude_tag, None);
@@ -773,11 +767,9 @@ async fn restricting_a_stage_twice_is_the_same_as_restricting_it_once() {
     };
     pack.replace_behaviour(
         Behaviour {
-            experience: Some(Experience {
-                timeline: Timeline {
-                    stages: vec![stage],
-                    transitions: vec![],
-                },
+            timeline: Some(Timeline {
+                stages: vec![stage],
+                transitions: vec![],
                 label: None,
             }),
             ..Behaviour::default()
@@ -805,9 +797,8 @@ async fn restricting_a_stage_twice_is_the_same_as_restricting_it_once() {
     );
     let stages = read_pack_behaviour(&pack)
         .await
-        .experience
-        .unwrap()
         .timeline
+        .unwrap()
         .stages;
     assert_eq!(
         stages[0].content.tags.as_deref(),
@@ -818,9 +809,8 @@ async fn restricting_a_stage_twice_is_the_same_as_restricting_it_once() {
     pack.undo().await.unwrap();
     let stages = read_pack_behaviour(&pack)
         .await
-        .experience
-        .unwrap()
         .timeline
+        .unwrap()
         .stages;
     assert_eq!(
         stages[0].content.tags, None,
@@ -896,11 +886,9 @@ async fn removing_a_stage_retires_its_wallpaper_in_one_undo_entry() {
         prompt: Default::default(),
     };
     let behaviour = Behaviour {
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![stage("stage-1"), stage("stage-2")],
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: vec![stage("stage-1"), stage("stage-2")],
+            transitions: vec![],
             label: None,
         }),
         ..Behaviour::default()
@@ -939,9 +927,8 @@ async fn removing_a_stage_retires_its_wallpaper_in_one_undo_entry() {
     assert_eq!(
         read_pack_behaviour(&pack)
             .await
-            .experience
-            .unwrap()
             .timeline
+            .unwrap()
             .stages
             .len(),
         1
@@ -959,7 +946,7 @@ async fn removing_a_stage_retires_its_wallpaper_in_one_undo_entry() {
     pack.undo().await.unwrap();
 
     let behaviour = read_pack_behaviour(&pack).await;
-    let stages = behaviour.experience.unwrap().timeline.stages;
+    let stages = behaviour.timeline.unwrap().stages;
     assert_eq!(stages.len(), 2);
     assert_eq!(
         stages[1].content.wallpaper,
@@ -1031,21 +1018,19 @@ async fn suspending_the_timeline_retires_nothing() {
     let scenery = insert_staged_audio(&pack, b"stage wallpaper").await;
 
     let behaviour = Behaviour {
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![Stage {
-                    id: "stage-1".to_string(),
-                    label: "Stage 1".to_string(),
-                    end: None,
-                    content: ContentSelection::default(),
-                    events: Events::default(),
-                    movement: None,
-                    mitosis: None,
-                    on_enter: Default::default(),
-                    prompt: Default::default(),
-                }],
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: vec![Stage {
+                id: "stage-1".to_string(),
+                label: "Stage 1".to_string(),
+                end: None,
+                content: ContentSelection::default(),
+                events: Events::default(),
+                movement: None,
+                mitosis: None,
+                on_enter: Default::default(),
+                prompt: Default::default(),
+            }],
+            transitions: vec![],
             label: None,
         }),
         ..Behaviour::default()
@@ -1067,12 +1052,12 @@ async fn suspending_the_timeline_retires_nothing() {
     let edit = pack
         .behaviour_edit(BehaviourAction::new(
             "Disable timeline",
-            |tx: &Transaction<'_>| behaviour_editor::set_experience_enabled(tx, false),
+            |tx: &Transaction<'_>| behaviour_editor::set_timeline_enabled(tx, false),
         ))
         .await
         .unwrap();
 
-    assert!(read_pack_behaviour(&pack).await.experience.is_none());
+    assert!(read_pack_behaviour(&pack).await.timeline.is_none());
     assert!(edit.deleted_ids.is_empty());
     assert!(
         pack.get_files()
@@ -1121,13 +1106,11 @@ async fn editing_one_stage_records_a_changeset_the_size_of_that_stage() {
                 .collect(),
             ..Default::default()
         },
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: (0..20)
-                    .map(|index| stage(&format!("stage-{index}")))
-                    .collect(),
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: (0..20)
+                .map(|index| stage(&format!("stage-{index}")))
+                .collect(),
+            transitions: vec![],
             label: None,
         }),
     };
@@ -1164,9 +1147,8 @@ async fn editing_one_stage_records_a_changeset_the_size_of_that_stage() {
     assert_eq!(
         read_pack_behaviour(&pack)
             .await
-            .experience
-            .unwrap()
             .timeline
+            .unwrap()
             .stages[7]
             .label,
         "Renamed"
@@ -1195,11 +1177,9 @@ async fn stage_wallpaper_slots_are_addressed_by_stage_id() {
         prompt: Default::default(),
     };
     let behaviour = Behaviour {
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![stage("stage-1"), stage("stage-2")],
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: vec![stage("stage-1"), stage("stage-2")],
+            transitions: vec![],
             label: None,
         }),
         ..Behaviour::default()
@@ -1220,7 +1200,7 @@ async fn stage_wallpaper_slots_are_addressed_by_stage_id() {
         .unwrap();
     let behaviour = pack.get_behaviour().await.unwrap();
 
-    let stages = &behaviour.experience.as_ref().unwrap().timeline.stages;
+    let stages = &behaviour.timeline.as_ref().unwrap().stages;
     assert!(stages[0].content.wallpaper.is_some());
     assert_ne!(stages[0].content.wallpaper, stages[1].content.wallpaper);
     assert_eq!(
@@ -1356,66 +1336,64 @@ async fn content_and_experience_behaviour_survives_save_and_reopen() {
         tags: vec![],
     });
     behaviour.content.wallpaper = Some(1);
-    behaviour.experience = Some(Experience {
-        timeline: Timeline {
-            stages: vec![
-                Stage {
-                    id: "stage-1".to_string(),
-                    label: "Stage 1".to_string(),
-                    end: Some(StageEnd {
-                        duration_seconds: Some(300.0),
-                        event_count: None,
-                        strategy: EndStrategy::Any,
+    behaviour.timeline = Some(Timeline {
+        stages: vec![
+            Stage {
+                id: "stage-1".to_string(),
+                label: "Stage 1".to_string(),
+                end: Some(StageEnd {
+                    duration_seconds: Some(300.0),
+                    event_count: None,
+                    strategy: EndStrategy::Any,
+                }),
+                content: ContentSelection::default(),
+                events: Events {
+                    popup: Some(EventSchedule {
+                        interval: Interval::Fixed { seconds: 30.0 },
+                        initial_delay_seconds: None,
+                        max_concurrent: None,
                     }),
-                    content: ContentSelection::default(),
-                    events: Events {
-                        popup: Some(EventSchedule {
-                            interval: Interval::Fixed { seconds: 30.0 },
-                            initial_delay_seconds: None,
-                            max_concurrent: None,
-                        }),
-                        ..Events::default()
-                    },
-                    movement: None,
-                    mitosis: None,
-                    on_enter: Default::default(),
-                    prompt: Default::default(),
+                    ..Events::default()
                 },
-                Stage {
-                    id: "stage-2".to_string(),
-                    label: "Stage 2".to_string(),
-                    end: None,
-                    content: ContentSelection {
-                        tags: Some(vec!["kinky".to_string()]),
-                        owned_tag: None,
-                        wallpaper: None,
-                        audio: None,
-                        audio_random: false,
-                        ..ContentSelection::default()
-                    },
-                    events: Events {
-                        popup: Some(EventSchedule {
-                            interval: Interval::Fixed { seconds: 45.0 },
-                            initial_delay_seconds: None,
-                            max_concurrent: None,
-                        }),
-                        ..Events::default()
-                    },
-                    movement: None,
-                    mitosis: None,
-                    on_enter: Default::default(),
-                    prompt: Default::default(),
+                movement: None,
+                mitosis: None,
+                on_enter: Default::default(),
+                prompt: Default::default(),
+            },
+            Stage {
+                id: "stage-2".to_string(),
+                label: "Stage 2".to_string(),
+                end: None,
+                content: ContentSelection {
+                    tags: Some(vec!["kinky".to_string()]),
+                    owned_tag: None,
+                    wallpaper: None,
+                    audio: None,
+                    audio_random: false,
+                    ..ContentSelection::default()
                 },
-            ],
-            transitions: vec![Transition {
-                id: "transition-1".to_string(),
-                from_stage: "stage-1".to_string(),
-                to_stage: "stage-2".to_string(),
-                duration_seconds: 0.0,
-                easing: Default::default(),
-                affected: vec![],
-            }],
-        },
+                events: Events {
+                    popup: Some(EventSchedule {
+                        interval: Interval::Fixed { seconds: 45.0 },
+                        initial_delay_seconds: None,
+                        max_concurrent: None,
+                    }),
+                    ..Events::default()
+                },
+                movement: None,
+                mitosis: None,
+                on_enter: Default::default(),
+                prompt: Default::default(),
+            },
+        ],
+        transitions: vec![Transition {
+            id: "transition-1".to_string(),
+            from_stage: "stage-1".to_string(),
+            to_stage: "stage-2".to_string(),
+            duration_seconds: 0.0,
+            easing: Default::default(),
+            affected: vec![],
+        }],
         label: None,
     });
 
@@ -1468,21 +1446,19 @@ async fn renaming_a_stage_renames_both_of_the_tags_it_owns() {
     let media = insert_staged_audio(&pack, b"member").await;
     pack.replace_behaviour(
         Behaviour {
-            experience: Some(Experience {
-                timeline: Timeline {
-                    stages: vec![Stage {
-                        id: "peak".to_string(),
-                        label: "Peak".to_string(),
-                        end: None,
-                        content: ContentSelection::default(),
-                        events: Events::default(),
-                        movement: None,
-                        mitosis: None,
-                        on_enter: Default::default(),
-                        prompt: Default::default(),
-                    }],
-                    transitions: vec![],
-                },
+            timeline: Some(Timeline {
+                stages: vec![Stage {
+                    id: "peak".to_string(),
+                    label: "Peak".to_string(),
+                    end: None,
+                    content: ContentSelection::default(),
+                    events: Events::default(),
+                    movement: None,
+                    mitosis: None,
+                    on_enter: Default::default(),
+                    prompt: Default::default(),
+                }],
+                transitions: vec![],
                 label: None,
             }),
             ..Behaviour::default()
@@ -1527,9 +1503,8 @@ async fn renaming_a_stage_renames_both_of_the_tags_it_owns() {
 
     let stages = read_pack_behaviour(&pack)
         .await
-        .experience
-        .unwrap()
         .timeline
+        .unwrap()
         .stages;
     assert_eq!(stages[0].content.owned_tag.as_deref(), Some("stage-climax"));
     assert_eq!(

@@ -10,12 +10,12 @@ setter!(
     /// Nothing is retired: switching off drops every stage *on purpose*, and a cleanup driven by
     /// "what stopped being referenced?" would delete every stage wallpaper the moment the author
     /// toggled it.
-    set_timeline_enabled(enabled: bool) |tx| editor::set_experience_enabled(tx, enabled)
+    set_timeline_enabled(enabled: bool) |tx| editor::set_timeline_enabled(tx, enabled)
 );
 
 setter!(
     /// The mode-name override. `None` leaves the mode its own name ("Sequence").
     set_timeline_label(value: Option<String>) |tx| {
-        editor::set_experience_label(tx, value.as_deref())
+        editor::set_timeline_label(tx, value.as_deref())
     }
 );

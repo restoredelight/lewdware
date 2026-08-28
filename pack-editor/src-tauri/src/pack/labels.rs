@@ -73,7 +73,7 @@ pub(super) fn run_tag_actions_before_write(
                     None => {
                         outcome.changed |= tx.execute(
                             "INSERT OR IGNORE INTO media_tags (media_id, tag_id)
-                             SELECT id, ? FROM media WHERE deleted = 0",
+                             SELECT id, ? FROM media WHERE deleted = FALSE",
                             params![tag_id],
                         )? > 0;
                         let live = live_media_ids(tx)?;
@@ -164,7 +164,7 @@ pub(super) fn tag_is_claimed(tx: &rusqlite::Transaction<'_>, tag: &str) -> Resul
              SELECT 1 FROM media_tags mt
              JOIN tags t ON t.id = mt.tag_id
              JOIN media m ON m.id = mt.media_id
-             WHERE t.name = ? AND m.deleted = 0)",
+             WHERE t.name = ? AND m.deleted = FALSE)",
         params![tag],
         |row| row.get(0),
     )?;
@@ -188,7 +188,7 @@ pub(super) fn tag_is_claimed(tx: &rusqlite::Transaction<'_>, tag: &str) -> Resul
 }
 
 pub(super) fn live_media_ids(tx: &rusqlite::Transaction<'_>) -> Result<Vec<u64>> {
-    let mut statement = tx.prepare("SELECT id FROM media WHERE deleted = 0")?;
+    let mut statement = tx.prepare("SELECT id FROM media WHERE deleted = FALSE")?;
     let ids = statement
         .query_map([], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
@@ -212,7 +212,7 @@ impl MediaPack {
             let mut stmt = conn.prepare(
                 "SELECT tags.name, COUNT(media.id) FROM tags
                  LEFT JOIN media_tags ON media_tags.tag_id = tags.id
-                 LEFT JOIN media ON media.id = media_tags.media_id AND media.deleted = 0
+                 LEFT JOIN media ON media.id = media_tags.media_id AND media.deleted = FALSE
                  GROUP BY tags.id ORDER BY tags.name COLLATE NOCASE",
             )?;
             let rows = stmt.query_map([], |row| {
@@ -252,7 +252,7 @@ impl MediaPack {
                         (SELECT COUNT(*) FROM behaviour_stage_tag t WHERE t.tag_id = tags.id)
                  FROM tags
                  LEFT JOIN media_tags ON media_tags.tag_id = tags.id
-                 LEFT JOIN media ON media.id = media_tags.media_id AND media.deleted = 0
+                 LEFT JOIN media ON media.id = media_tags.media_id AND media.deleted = FALSE
                  GROUP BY tags.id ORDER BY tags.name COLLATE NOCASE",
             )?;
             let rows = statement.query_map([], |row| {
@@ -286,7 +286,7 @@ impl MediaPack {
             let mut usage = Vec::new();
             let (wallpaper, splash): (Option<u64>, Option<u64>) = conn
                 .query_row(
-                    "SELECT wallpaper, splash FROM behaviour_content WHERE singleton = 1",
+                    "SELECT wallpaper, splash FROM behaviour_content",
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
@@ -671,7 +671,7 @@ impl MediaPack {
             let mut stmt = conn.prepare(
                 "SELECT artists.name, COUNT(media.id) FROM artists
                  LEFT JOIN media_artists ON media_artists.artist_id = artists.id
-                 LEFT JOIN media ON media.id = media_artists.media_id AND media.deleted = 0
+                 LEFT JOIN media ON media.id = media_artists.media_id AND media.deleted = FALSE
                  GROUP BY artists.id ORDER BY artists.name COLLATE NOCASE",
             )?;
             let rows = stmt.query_map([], |row| {

@@ -1,10 +1,10 @@
 use rusqlite::Connection;
 
 use super::{pack, stage, store};
-use crate::behaviour::editor::{set_experience_enabled, timeline as read_timeline};
+use crate::behaviour::editor::{set_timeline_enabled, timeline as read_timeline};
 use crate::behaviour::schema::{
-    Behaviour, Easing, EventSchedule, Experience, Interval, Mitosis, Movement, Timeline,
-    Transition, TransitionCategory,
+    Behaviour, Easing, EventSchedule, Interval, Mitosis, Movement, Timeline, Transition,
+    TransitionCategory,
 };
 
 /// The three-state tag field. "No restriction" and "restricted to nothing" are different
@@ -18,11 +18,9 @@ fn an_empty_tag_selection_stays_distinct_from_no_selection() {
     restricted.content.tags = Some(vec![]);
 
     let behaviour = Behaviour {
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![unrestricted, restricted],
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: vec![unrestricted, restricted],
+            transitions: vec![],
             label: None,
         }),
         ..Behaviour::new()
@@ -31,9 +29,8 @@ fn an_empty_tag_selection_stays_distinct_from_no_selection() {
 
     let stages = Behaviour::read(&conn)
         .unwrap()
-        .experience
-        .unwrap()
         .timeline
+        .unwrap()
         .stages;
     assert_eq!(stages[0].content.tags, None);
     assert_eq!(stages[1].content.tags, Some(vec![]));
@@ -56,11 +53,9 @@ fn an_empty_sub_structure_stays_distinct_from_an_absent_one() {
     let absent = stage("b");
 
     let behaviour = Behaviour {
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![present, absent],
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: vec![present, absent],
+            transitions: vec![],
             label: None,
         }),
         ..Behaviour::new()
@@ -69,9 +64,8 @@ fn an_empty_sub_structure_stays_distinct_from_an_absent_one() {
 
     let stages = Behaviour::read(&conn)
         .unwrap()
-        .experience
-        .unwrap()
         .timeline
+        .unwrap()
         .stages;
     assert_eq!(
         stages[0].movement,
@@ -97,17 +91,17 @@ fn an_empty_sub_structure_stays_distinct_from_an_absent_one() {
 fn a_suspended_timeline_is_distinct_from_an_unlabelled_one() {
     let mut conn = pack();
     let with_timeline = Behaviour {
-        experience: Some(Experience::default()),
+        timeline: Some(Timeline::default()),
         ..Behaviour::new()
     };
     store(&mut conn, &with_timeline);
     assert_eq!(
-        Behaviour::read(&conn).unwrap().experience,
-        Some(Experience::default())
+        Behaviour::read(&conn).unwrap().timeline,
+        Some(Timeline::default())
     );
 
     store(&mut conn, &Behaviour::new());
-    assert_eq!(Behaviour::read(&conn).unwrap().experience, None);
+    assert_eq!(Behaviour::read(&conn).unwrap().timeline, None);
 }
 
 /// The reason writes diff instead of replacing: undo is a changeset, so a wholesale rewrite
@@ -117,11 +111,9 @@ fn a_suspended_timeline_is_distinct_from_an_unlabelled_one() {
 fn editing_one_stage_leaves_the_other_rows_untouched() {
     let mut conn = pack();
     let mut behaviour = Behaviour {
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![stage("a"), stage("b"), stage("c")],
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: vec![stage("a"), stage("b"), stage("c")],
+            transitions: vec![],
             label: None,
         }),
         ..Behaviour::new()
@@ -143,15 +135,14 @@ fn editing_one_stage_leaves_the_other_rows_untouched() {
     };
     let before = rowids(&conn);
 
-    behaviour.experience.as_mut().unwrap().timeline.stages[1].label = "Renamed".to_string();
+    behaviour.timeline.as_mut().unwrap().stages[1].label = "Renamed".to_string();
     store(&mut conn, &behaviour);
 
     assert_eq!(before, rowids(&conn), "no stage row was replaced");
     let stages = Behaviour::read(&conn)
         .unwrap()
-        .experience
-        .unwrap()
         .timeline
+        .unwrap()
         .stages;
     assert_eq!(stages[1].label, "Renamed");
 }
@@ -173,25 +164,23 @@ fn removing_a_stage_takes_its_children_and_transitions() {
         max_concurrent: None,
     });
     let mut behaviour = Behaviour {
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![first, stage("b")],
-                transitions: vec![Transition {
-                    id: "t1".to_string(),
-                    from_stage: "a".to_string(),
-                    to_stage: "b".to_string(),
-                    duration_seconds: 0.0,
-                    easing: Easing::Linear,
-                    affected: vec![TransitionCategory::Events],
-                }],
-            },
+        timeline: Some(Timeline {
+            stages: vec![first, stage("b")],
+            transitions: vec![Transition {
+                id: "t1".to_string(),
+                from_stage: "a".to_string(),
+                to_stage: "b".to_string(),
+                duration_seconds: 0.0,
+                easing: Easing::Linear,
+                affected: vec![TransitionCategory::Events],
+            }],
             label: None,
         }),
         ..Behaviour::new()
     };
     store(&mut conn, &behaviour);
 
-    let timeline = &mut behaviour.experience.as_mut().unwrap().timeline;
+    let timeline = behaviour.timeline.as_mut().unwrap();
     timeline.stages.remove(0);
     timeline.transitions.clear();
     store(&mut conn, &behaviour);
@@ -208,18 +197,16 @@ fn removing_a_stage_takes_its_children_and_transitions() {
     );
 }
 
-/// Suspension is the whole reason `behaviour_experience.enabled` exists: the engine must see a
+/// Suspension is the whole reason `behaviour_timeline.enabled` exists: the engine must see a
 /// switched-off timeline as no timeline at all, while the editor must still be able to show the
 /// stages so switching it back on returns what was there.
 #[test]
 fn a_switched_off_timeline_reads_as_none_but_keeps_its_stages() {
     let mut conn = pack();
     let behaviour = Behaviour {
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![stage("a"), stage("b")],
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: vec![stage("a"), stage("b")],
+            transitions: vec![],
             label: Some("Corruption".to_string()),
         }),
         ..Behaviour::new()
@@ -227,24 +214,24 @@ fn a_switched_off_timeline_reads_as_none_but_keeps_its_stages() {
     store(&mut conn, &behaviour);
 
     let tx = conn.transaction().unwrap();
-    set_experience_enabled(&tx, false).unwrap();
+    set_timeline_enabled(&tx, false).unwrap();
     tx.commit().unwrap();
 
     // What the engine, the converter and `lw` see.
-    assert_eq!(Behaviour::read(&conn).unwrap().experience, None);
+    assert_eq!(Behaviour::read(&conn).unwrap().timeline, None);
 
     // What the editor sees.
     let view = read_timeline(&conn).unwrap().unwrap();
     assert!(!view.enabled);
-    assert_eq!(view.label.as_deref(), Some("Corruption"));
+    assert_eq!(view.timeline.label.as_deref(), Some("Corruption"));
     assert_eq!(view.timeline.stages.len(), 2);
 
     let tx = conn.transaction().unwrap();
-    set_experience_enabled(&tx, true).unwrap();
+    set_timeline_enabled(&tx, true).unwrap();
     tx.commit().unwrap();
     assert_eq!(
-        Behaviour::read(&conn).unwrap().experience,
-        behaviour.experience
+        Behaviour::read(&conn).unwrap().timeline,
+        behaviour.timeline
     );
 }
 
@@ -253,7 +240,7 @@ fn a_switched_off_timeline_reads_as_none_but_keeps_its_stages() {
 #[test]
 fn a_pack_with_no_timeline_has_no_timeline_view_at_all() {
     let conn = pack();
-    assert_eq!(Behaviour::read(&conn).unwrap().experience, None);
+    assert_eq!(Behaviour::read(&conn).unwrap().timeline, None);
     assert_eq!(read_timeline(&conn).unwrap(), None);
 }
 
@@ -263,7 +250,7 @@ fn a_pack_with_no_timeline_has_no_timeline_view_at_all() {
 fn switching_on_a_pack_with_no_timeline_creates_the_section() {
     let mut conn = pack();
     let tx = conn.transaction().unwrap();
-    set_experience_enabled(&tx, true).unwrap();
+    set_timeline_enabled(&tx, true).unwrap();
     tx.commit().unwrap();
 
     let view = read_timeline(&conn).unwrap().unwrap();
@@ -279,8 +266,8 @@ fn switching_on_a_pack_with_no_timeline_creates_the_section() {
 fn switching_to_the_current_value_keeps_it() {
     let mut conn = pack();
     let tx = conn.transaction().unwrap();
-    set_experience_enabled(&tx, true).unwrap();
-    set_experience_enabled(&tx, true).unwrap();
+    set_timeline_enabled(&tx, true).unwrap();
+    set_timeline_enabled(&tx, true).unwrap();
     tx.commit().unwrap();
     assert!(read_timeline(&conn).unwrap().unwrap().enabled);
 }
@@ -291,18 +278,18 @@ fn switching_to_the_current_value_keeps_it() {
 fn a_whole_document_write_unsuspends_the_timeline() {
     let mut conn = pack();
     let behaviour = Behaviour {
-        experience: Some(Experience::default()),
+        timeline: Some(Timeline::default()),
         ..Behaviour::new()
     };
     store(&mut conn, &behaviour);
     let tx = conn.transaction().unwrap();
-    set_experience_enabled(&tx, false).unwrap();
+    set_timeline_enabled(&tx, false).unwrap();
     tx.commit().unwrap();
-    assert_eq!(Behaviour::read(&conn).unwrap().experience, None);
+    assert_eq!(Behaviour::read(&conn).unwrap().timeline, None);
 
     store(&mut conn, &behaviour);
     assert_eq!(
-        Behaviour::read(&conn).unwrap().experience,
-        Some(Experience::default())
+        Behaviour::read(&conn).unwrap().timeline,
+        Some(Timeline::default())
     );
 }

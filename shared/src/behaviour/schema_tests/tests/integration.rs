@@ -3,9 +3,8 @@ use std::collections::BTreeMap;
 use super::{pack, stage, store};
 use crate::behaviour::schema::{
     AudioMedia, Behaviour, ContentGroup, CountScope, Easing, EndStrategy, EventCountCondition,
-    EventKind, EventSchedule, Experience, Interval, Mitosis, MonitorPreference, Movement,
-    PopupMedia, SpawnRegion, StageEnd, StageEntry, TextItem, Timeline, Transition,
-    TransitionCategory, WebLink,
+    EventKind, EventSchedule, Interval, Mitosis, MonitorPreference, Movement, PopupMedia,
+    SpawnRegion, StageEnd, StageEntry, TextItem, Timeline, Transition, TransitionCategory, WebLink,
 };
 
 #[test]
@@ -132,23 +131,21 @@ fn a_full_document_survives_the_round_trip() {
             wallpaper: Some(1),
             splash: Some(2),
         },
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: vec![first, stage("b")],
-                transitions: vec![Transition {
-                    id: "t1".to_string(),
-                    from_stage: "a".to_string(),
-                    to_stage: "b".to_string(),
-                    duration_seconds: 12.5,
-                    easing: Easing::EaseInOut,
-                    affected: vec![
-                        TransitionCategory::MitosisChance,
-                        TransitionCategory::PopupInterval,
-                        TransitionCategory::SoundInterval,
-                        TransitionCategory::Crossfade,
-                    ],
-                }],
-            },
+        timeline: Some(Timeline {
+            stages: vec![first, stage("b")],
+            transitions: vec![Transition {
+                id: "t1".to_string(),
+                from_stage: "a".to_string(),
+                to_stage: "b".to_string(),
+                duration_seconds: 12.5,
+                easing: Easing::EaseInOut,
+                affected: vec![
+                    TransitionCategory::MitosisChance,
+                    TransitionCategory::PopupInterval,
+                    TransitionCategory::SoundInterval,
+                    TransitionCategory::Crossfade,
+                ],
+            }],
             label: Some("Corruption".to_string()),
         }),
     };
@@ -159,7 +156,7 @@ fn a_full_document_survives_the_round_trip() {
     // `affected` is a set, and the rows carry no order of their own, so it comes back in category
     // order however the document listed it -- deliberately not the order written above. Everything
     // else is compared as written.
-    let affected = &read.experience.as_ref().unwrap().timeline.transitions[0].affected;
+    let affected = &read.timeline.as_ref().unwrap().transitions[0].affected;
     assert_eq!(
         affected,
         &vec![
@@ -171,6 +168,6 @@ fn a_full_document_survives_the_round_trip() {
     );
 
     let mut expected = behaviour;
-    expected.experience.as_mut().unwrap().timeline.transitions[0].affected = affected.clone();
+    expected.timeline.as_mut().unwrap().transitions[0].affected = affected.clone();
     assert_eq!(read, expected);
 }

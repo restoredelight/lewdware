@@ -256,7 +256,7 @@ pub(super) fn fill_media_slot_tx(
     // picker's answer can be stale by the time it gets here.
     let exists = tx
         .query_row(
-            "SELECT 1 FROM media WHERE id = ? AND deleted = 0",
+            "SELECT 1 FROM media WHERE id = ? AND deleted = FALSE",
             params![media_id],
             |_| Ok(()),
         )

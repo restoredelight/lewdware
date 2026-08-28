@@ -116,16 +116,15 @@ fn real_test_pack_converts_without_hard_error() {
         );
     }
 
-    let experience = output
+    let timeline = output
         .behaviour
-        .experience
+        .timeline
         .as_ref()
-        .expect("corruption.json should produce an experience section");
+        .expect("corruption.json should produce a timeline section");
     assert_eq!(
         output.metadata.recommended_mode,
         Some(shared::pack::RecommendedMode::Experience)
     );
-    let timeline = &experience.timeline;
     assert_eq!(timeline.stages.len(), 5);
     // Stage 1 (index 0) applies immediately, matching Edgeware's own "applied at session start"
     // semantics -- see `build_timeline`; it also doubles as the new schema's baseline stage, so

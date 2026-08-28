@@ -14,7 +14,7 @@ use super::{harness::*, mode_support::*, *};
 async fn experience_popup_spawns_at_anchor_over_pace_interval() {
     LocalSet::new()
         .run_until(async {
-            let experience = experience_with_baseline(
+            let timeline = timeline_with_baseline(
                 FrequencyAnchors {
                     popup: Some(2.0),
                     ..Default::default()
@@ -25,11 +25,11 @@ async fn experience_popup_spawns_at_anchor_over_pace_interval() {
             let mut config = base_experience_mode_config();
             config.insert("pace".to_string(), OptionValue::Number(2.0));
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture(true),
                 Content::default(),
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -54,15 +54,15 @@ async fn experience_popup_spawns_at_anchor_over_pace_interval() {
 async fn experience_missing_popup_anchor_never_spawns() {
     LocalSet::new()
         .run_until(async {
-            let experience = Experience::default(); // no anchors at all
+            let timeline = Timeline::default(); // no anchors at all
 
             let harness_config = base_experience_mode_config();
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &real_experience_mode_sources(),
                 pack_fixture(true),
                 Content::default(),
-                experience,
+                timeline,
                 harness_config,
                 all_capabilities(),
                 Volume::default(),
@@ -91,7 +91,7 @@ async fn experience_notification_anchor_scaled_by_pace() {
                 }],
                 ..Default::default()
             };
-            let experience = experience_with_baseline(
+            let timeline = timeline_with_baseline(
                 FrequencyAnchors {
                     notification: Some(2.0),
                     ..Default::default()
@@ -105,11 +105,11 @@ async fn experience_notification_anchor_scaled_by_pace() {
             let owned = wrapped_experience_mode_sources(COUNTING_NOTIFICATION_WRAP);
             let sources = as_str_sources(&owned);
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &sources,
                 pack_fixture(false),
                 content,
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -138,7 +138,7 @@ async fn experience_notifications_off_switch_wins_over_present_anchor() {
                 }],
                 ..Default::default()
             };
-            let experience = experience_with_baseline(
+            let timeline = timeline_with_baseline(
                 FrequencyAnchors {
                     notification: Some(1.0),
                     ..Default::default()
@@ -155,11 +155,11 @@ async fn experience_notifications_off_switch_wins_over_present_anchor() {
             let owned = wrapped_experience_mode_sources(COUNTING_NOTIFICATION_WRAP);
             let sources = as_str_sources(&owned);
 
-            let mut harness = Harness::with_pack_and_experience(
+            let mut harness = Harness::with_pack_and_timeline(
                 &sources,
                 pack_fixture(false),
                 content,
-                experience,
+                timeline,
                 config,
                 all_capabilities(),
                 Volume::default(),
@@ -171,5 +171,3 @@ async fn experience_notifications_off_switch_wins_over_present_anchor() {
         })
         .await;
 }
-
-// ─── Transitions (timeline) ─────────────────────────────────────────────────

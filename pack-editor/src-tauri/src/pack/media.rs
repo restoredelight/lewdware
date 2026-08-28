@@ -120,7 +120,7 @@ impl MediaPack {
                             tx.commit()?;
                             return Ok(AddFileResult::Duplicate(id));
                         }
-                        tx.execute("UPDATE media SET deleted = 0 WHERE id = ?", [id])?;
+                        tx.execute("UPDATE media SET deleted = FALSE WHERE id = ?", [id])?;
                         if let Some(history_id) = history_id {
                             history::add_imported_media(&tx, history_id, id, existing_size)?;
                         }
@@ -303,13 +303,13 @@ impl MediaPack {
             tx.execute(
                 "INSERT OR IGNORE INTO pending_file_deletions(path)
                  SELECT l.path FROM loose_media l JOIN media m ON m.id = l.media_id
-                 WHERE m.deleted = 1 AND m.id IN (SELECT value FROM rarray(?))
+                 WHERE m.deleted = TRUE AND m.id IN (SELECT value FROM rarray(?))
                    AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = m.id)
                    AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = m.id)",
                 params![&selected],
             )?;
             tx.execute(
-                "DELETE FROM media WHERE deleted = 1
+                "DELETE FROM media WHERE deleted = TRUE
                  AND id IN (SELECT value FROM rarray(?))
                  AND NOT EXISTS (SELECT 1 FROM snapshot_media s WHERE s.media_id = media.id)
                  AND NOT EXISTS (SELECT 1 FROM history_media_refs h WHERE h.media_id = media.id)",
@@ -333,7 +333,7 @@ impl MediaPack {
                  FROM media m
                  LEFT JOIN loose_media l ON l.media_id = m.id
                  LEFT JOIN pack_media p ON p.media_id = m.id
-                 WHERE m.deleted = 0",
+                 WHERE m.deleted = FALSE",
             )?;
             let mut files: Vec<MediaFile> = {
                 let rows = stmt.query_and_then([], |row| -> Result<_> {
@@ -494,7 +494,7 @@ impl MediaPack {
             .db_execute(move |conn| {
                 Ok(conn
                     .query_row(
-                        "SELECT id FROM media WHERE hash = ? AND deleted = 0",
+                        "SELECT id FROM media WHERE hash = ? AND deleted = FALSE",
                         params![hash_bytes],
                         |row| row.get(0),
                     )
@@ -516,7 +516,7 @@ impl MediaPack {
         self.db_execute(move |conn| {
             Ok(conn
                 .query_row(
-                    "SELECT 1 FROM media WHERE hash = ? AND deleted = 0",
+                    "SELECT 1 FROM media WHERE hash = ? AND deleted = FALSE",
                     params![hash_bytes],
                     |_| Ok(1),
                 )

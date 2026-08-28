@@ -2,7 +2,7 @@ use rusqlite::{Connection, Transaction};
 
 use super::{PoolKind, add_stage, popup_attributes, remove_stage, stages, text_pool, transitions};
 use crate::behaviour::schema::{
-    Behaviour, ContentSelection, Events, Experience, PopupMedia, Stage, TextItem, Timeline,
+    Behaviour, ContentSelection, Events, PopupMedia, Stage, TextItem, Timeline,
 };
 
 /// A migrated pack database. The editor module never needs media rows of its own — the entities
@@ -48,11 +48,9 @@ fn texts(conn: &Connection, kind: PoolKind) -> Vec<String> {
 fn timeline_pack(stage_ids: &[&str]) -> Connection {
     let mut conn = pack();
     let behaviour = Behaviour {
-        experience: Some(Experience {
-            timeline: Timeline {
-                stages: stage_ids.iter().map(|id| stage(id)).collect(),
-                transitions: vec![],
-            },
+        timeline: Some(Timeline {
+            stages: stage_ids.iter().map(|id| stage(id)).collect(),
+            transitions: vec![],
             label: None,
         }),
         ..Behaviour::new()

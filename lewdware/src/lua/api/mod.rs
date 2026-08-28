@@ -33,8 +33,8 @@ pub struct ApiOptions {
     /// resolved for Lua by `lua::lua_view` -- media slots carry file names here, not the ids the
     /// document stores.
     pub content: serde_json::Value,
-    /// The behaviour `experience` section for `Mode::Experience`, resolved the same way.
-    pub experience: serde_json::Value,
+    /// The behaviour `timeline` section, resolved the same way.
+    pub timeline: serde_json::Value,
     /// The user's own window look, applied to any window the mode does not theme itself.
     pub chrome: ChromeDefaults,
     pub gpu_available: bool,
@@ -54,7 +54,7 @@ pub fn create_api<T: EventPoster>(
         pack_info,
         config,
         content,
-        experience,
+        timeline,
         chrome,
         gpu_available,
         dev_mode,
@@ -81,11 +81,11 @@ pub fn create_api<T: EventPoster>(
     let content_value = lua.to_value_with(&content, for_lua)?;
     lua.globals().set("__lewdware_content", content_value)?;
 
-    // Mirrors `__lewdware_content` for the `experience` section -- only
+    // Mirrors `__lewdware_content` for the `timeline` section -- only
     // `default-modes/experience/src/main.lua` reads this (empty for Sandbox/custom modes).
-    let experience_value = lua.to_value_with(&experience, for_lua)?;
-    lua.globals()
-        .set("__lewdware_experience", experience_value)?;
+    let timeline_value = lua.to_value_with(&timeline, for_lua)?;
+    lua.globals().set("__lewdware_timeline", timeline_value.clone())?;
+    lua.globals().set("__lewdware_experience", timeline_value)?;
 
     api_table.set("config", config.into_lua(lua)?)?;
 

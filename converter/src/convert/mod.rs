@@ -95,7 +95,7 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
         &mut warnings,
     );
 
-    let (experience, stage_wallpapers) = match build_experience(
+    let (timeline, stage_wallpapers) = match build_timeline_section(
         &corruption_levels,
         &content,
         &config,
@@ -103,19 +103,19 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
         &mut media,
         &mut warnings,
     ) {
-        Some((experience, wallpapers)) => (Some(experience), wallpapers),
+        Some((timeline, wallpapers)) => (Some(timeline), wallpapers),
         None => (None, Vec::new()),
     };
     media_references.extend(stage_wallpapers);
-    // After `build_experience`, so a file the timeline's stages pull in counts as converted --
+    // After `build_timeline_section`, so a file the timeline's stages pull in counts as converted --
     // see `warn_untagged_media_moods`.
     warn_untagged_media_moods(&index, &media, &mut warnings);
 
     // More than just the baseline level means the pack actually designs an escalating arc, not
-    // just a static config.json-derived pace -- see `build_experience`.
-    let has_timeline = experience
+    // just a static config.json-derived pace -- see `build_timeline_section`.
+    let has_timeline = timeline
         .as_ref()
-        .is_some_and(|e| e.timeline.stages.len() > 1);
+        .is_some_and(|t| t.stages.len() > 1);
 
     check_unsupported_files(source, &mut warnings);
     warn_unmapped_config_keys(&config, &mut warnings);
@@ -128,7 +128,7 @@ pub fn convert(source: &dyn PackSource) -> ConversionOutput {
 
     let behaviour = Behaviour {
         content,
-        experience,
+        timeline,
     };
     prioritize_referenced_media(&media_references, &mut media);
 

@@ -39,8 +39,8 @@ fn stage(id: &str) -> Stage {
 }
 
 /// Everything the structural half can express, in one document, through a full round trip.
-#[path = "tests/experience.rs"]
-mod experience;
+#[path = "tests/timeline.rs"]
+mod timeline;
 #[path = "tests/facade.rs"]
 mod facade;
 #[path = "tests/integration.rs"]
