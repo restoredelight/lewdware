@@ -173,6 +173,80 @@ async fn pending_import_is_not_trimmed_by_concurrent_history_entries() {
         .unwrap();
     assert!(pending_exists);
     pack.finish_media_import(history_id, None).await.unwrap();
+
+    // An import that brought nothing drops its own entry, from the middle of a hundred and five
+    // later ones. Nothing renumbers and the cursor is not adjusted, so what has to hold is that
+    // the entries after the gap are still reachable and still in order.
+    let (pending_left, entries): (bool, i64) = pack
+        .db_execute(move |connection| {
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM history_entries WHERE id = ?),
+                            (SELECT COUNT(*) FROM history_entries)",
+                    [history_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(Into::into)
+        })
+        .await
+        .unwrap();
+    assert!(!pending_left, "the empty import discarded its own entry");
+    assert_eq!(entries, 105, "and took nothing else with it");
+
+    async fn stored(pack: &MediaPack) -> u64 {
+        let blob = pack.get_pack_data("test").await.unwrap().unwrap();
+        u64::from_le_bytes(blob.try_into().unwrap())
+    }
+    assert_eq!(stored(&pack).await, 104);
+    assert!(pack.history_status().await.unwrap().can_undo);
+    pack.undo().await.unwrap();
+    assert_eq!(stored(&pack).await, 103);
+    pack.undo().await.unwrap();
+    assert_eq!(stored(&pack).await, 102);
+    pack.redo().await.unwrap();
+    assert_eq!(stored(&pack).await, 103);
+}
+
+/// History is capped, and going over it drops the oldest entries. Nothing renumbers when that
+/// happens -- the cursor is an id boundary, so removing a row from below it moves nothing -- which
+/// leaves the survivors to prove they are still in order themselves. Each undo has to walk back
+/// exactly one write, all the way down to the oldest entry that survived, and then stop.
+#[tokio::test]
+async fn trimming_the_oldest_entries_leaves_the_rest_undoable_in_order() {
+    let output = tempdir().unwrap();
+    let data = tempdir().unwrap();
+    let pack = new_test_pack(&output.path().join("trim.lwpack"), data.path(), "Trim").await;
+
+    async fn stored(pack: &MediaPack) -> u64 {
+        let blob = pack.get_pack_data("counter").await.unwrap().unwrap();
+        u64::from_le_bytes(blob.try_into().unwrap())
+    }
+
+    for index in 0u64..105 {
+        pack.set_pack_data("counter", index.to_le_bytes().to_vec())
+            .await
+            .unwrap();
+    }
+    assert_eq!(stored(&pack).await, 104);
+
+    let entries: i64 = pack
+        .db_execute(|connection| {
+            connection
+                .query_row("SELECT COUNT(*) FROM history_entries", [], |row| row.get(0))
+                .map_err(Into::into)
+        })
+        .await
+        .unwrap();
+    assert_eq!(entries, 100, "the five oldest entries were trimmed");
+
+    // The hundred that survived, newest first. Undoing the write that stored `n` leaves `n - 1`.
+    for expected in (4u64..104).rev() {
+        pack.undo().await.unwrap();
+        assert_eq!(stored(&pack).await, expected);
+    }
+
+    // And nothing below them: the writes that stored 0 through 3 went with their entries.
+    assert!(!pack.history_status().await.unwrap().can_undo);
 }
 
 #[tokio::test]

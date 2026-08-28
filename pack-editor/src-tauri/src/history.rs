@@ -82,7 +82,7 @@ pub fn record_with_media_refs<T>(
         [],
         |row| row.get(0),
     )?;
-    tx.execute("DELETE FROM history_entries WHERE sequence >= ?", [cursor])?;
+    tx.execute("DELETE FROM history_entries WHERE id >= ?", [cursor])?;
     collect_garbage(&tx)?;
     let before_state: String = tx.query_row(
         "SELECT current_state_id FROM editor_state WHERE singleton = 1",
@@ -106,11 +106,10 @@ pub fn record_with_media_refs<T>(
     let after_state = Uuid::new_v4().to_string();
     let history_id: i64 = tx.query_row(
         "INSERT INTO history_entries
-         (sequence, label, kind, forward_changeset, inverse_changeset, payload,
+         (label, kind, forward_changeset, inverse_changeset, payload,
           storage_bytes, before_state_id, after_state_id, status)
-         VALUES (?, ?, 'changeset', ?, ?, NULL, ?, ?, ?, 'ready') RETURNING id",
+         VALUES (?, 'changeset', ?, ?, NULL, ?, ?, ?, 'ready') RETURNING id",
         params![
-            cursor,
             label,
             forward,
             inverse,
@@ -128,7 +127,7 @@ pub fn record_with_media_refs<T>(
     }
     tx.execute(
         "UPDATE history_state SET cursor = ? WHERE singleton = 1",
-        [cursor + 1],
+        [history_id + 1],
     )?;
     tx.execute(
         "UPDATE editor_state SET current_state_id = ? WHERE singleton = 1",
@@ -155,7 +154,7 @@ pub fn begin_media_import(connection: &mut Connection) -> Result<i64> {
         [],
         |row| row.get(0),
     )?;
-    tx.execute("DELETE FROM history_entries WHERE sequence >= ?", [cursor])?;
+    tx.execute("DELETE FROM history_entries WHERE id >= ?", [cursor])?;
     collect_garbage(&tx)?;
     let before_state: String = tx.query_row(
         "SELECT current_state_id FROM editor_state WHERE singleton = 1",
@@ -163,17 +162,17 @@ pub fn begin_media_import(connection: &mut Connection) -> Result<i64> {
         |row| row.get(0),
     )?;
     let after_state = Uuid::new_v4().to_string();
-    let id = tx.query_row(
+    let id: i64 = tx.query_row(
         "INSERT INTO history_entries
-         (sequence, label, kind, storage_bytes, before_state_id, after_state_id, status)
-         VALUES (?, 'Import still in progress', 'media_visibility', 0, ?, ?, 'pending')
+         (label, kind, storage_bytes, before_state_id, after_state_id, status)
+         VALUES ('Import still in progress', 'media_visibility', 0, ?, ?, 'pending')
          RETURNING id",
-        params![cursor, before_state, after_state],
+        params![before_state, after_state],
         |row| row.get(0),
     )?;
     tx.execute(
         "UPDATE history_state SET cursor = ? WHERE singleton = 1",
-        [cursor + 1],
+        [id + 1],
     )?;
     tx.execute(
         "UPDATE editor_state SET current_state_id = ? WHERE singleton = 1",
@@ -213,7 +212,7 @@ pub fn record_media_visibility<T>(
         [],
         |row| row.get(0),
     )?;
-    tx.execute("DELETE FROM history_entries WHERE sequence >= ?", [cursor])?;
+    tx.execute("DELETE FROM history_entries WHERE id >= ?", [cursor])?;
     collect_garbage(&tx)?;
     let before_state: String = tx.query_row(
         "SELECT current_state_id FROM editor_state WHERE singleton = 1",
@@ -240,11 +239,10 @@ pub fn record_media_visibility<T>(
     let after_state = Uuid::new_v4().to_string();
     let history_id: i64 = tx.query_row(
         "INSERT INTO history_entries
-         (sequence, label, kind, forward_changeset, inverse_changeset, payload, storage_bytes,
+         (label, kind, forward_changeset, inverse_changeset, payload, storage_bytes,
           before_state_id, after_state_id, status)
-         VALUES (?, ?, 'media_visibility', ?, ?, ?, ?, ?, ?, 'ready') RETURNING id",
+         VALUES (?, 'media_visibility', ?, ?, ?, ?, ?, ?, 'ready') RETURNING id",
         params![
-            cursor,
             label,
             (!forward.is_empty()).then_some(forward),
             (!inverse.is_empty()).then_some(inverse),
@@ -266,7 +264,7 @@ pub fn record_media_visibility<T>(
     )?;
     tx.execute(
         "UPDATE history_state SET cursor = ? WHERE singleton = 1",
-        [cursor + 1],
+        [history_id + 1],
     )?;
     tx.execute(
         "UPDATE editor_state SET current_state_id = ? WHERE singleton = 1",
@@ -376,24 +374,22 @@ pub fn finish_media_import(
         return status(connection);
     }
     if count == 0 {
-        let entry: Option<(i64, String, Option<String>)> = tx
+        let entry: Option<(String, Option<String>)> = tx
             .query_row(
-                "SELECT sequence, before_state_id, after_state_id
-                 FROM history_entries WHERE id = ?",
+                "SELECT before_state_id, after_state_id FROM history_entries WHERE id = ?",
                 [history_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if let Some((sequence, before_state, after_state)) = entry {
+        if let Some((before_state, after_state)) = entry {
             tx.execute("DELETE FROM history_entries WHERE id = ?", [history_id])?;
+            // The entry that followed it inherits the state this one started from, so the chain
+            // still joins up across the gap. The cursor needs no adjusting at all: it is an id
+            // boundary, and removing one row does not move the rows either side of it.
             tx.execute(
-                "UPDATE history_entries SET before_state_id = ? WHERE sequence = ?",
-                params![before_state, sequence + 1],
-            )?;
-            shift_sequences_down(&tx, Some(sequence))?;
-            tx.execute(
-                "UPDATE history_state SET cursor = MAX(0, cursor - 1) WHERE singleton = 1 AND cursor > ?",
-                [sequence],
+                "UPDATE history_entries SET before_state_id = ?
+                 WHERE id = (SELECT MIN(id) FROM history_entries WHERE id > ?)",
+                params![before_state, history_id],
             )?;
             if let Some(after_state) = after_state {
                 tx.execute(
@@ -448,15 +444,29 @@ fn apply_at_cursor(connection: &mut Connection, redo: bool) -> Result<Status> {
         [],
         |row| row.get(0),
     )?;
-    let sequence = if redo { cursor } else { cursor - 1 };
-    if sequence < 0 {
+    // The entry either side of the boundary: the nearest one at or above it to redo, the nearest
+    // one below it to undo. Absent means there is nothing that way, which is the whole of the
+    // "already at the end" check -- there is no separate arithmetic to run off.
+    let entry_id: Option<i64> = tx
+        .query_row(
+            if redo {
+                "SELECT MIN(id) FROM history_entries WHERE id >= ?"
+            } else {
+                "SELECT MAX(id) FROM history_entries WHERE id < ?"
+            },
+            [cursor],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(entry_id) = entry_id else {
         return status(&tx);
-    }
+    };
     let row = tx.query_row(
         "SELECT kind, forward_changeset, inverse_changeset, before_state_id,
                 after_state_id, status, payload
-         FROM history_entries WHERE sequence = ?",
-        [sequence],
+         FROM history_entries WHERE id = ?",
+        [entry_id],
         |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -494,9 +504,8 @@ fn apply_at_cursor(connection: &mut Connection, redo: bool) -> Result<Status> {
             };
             tx.execute(
                 "UPDATE media SET deleted = ? WHERE id IN
-                 (SELECT media_id FROM history_media_refs
-                  WHERE history_id = (SELECT id FROM history_entries WHERE sequence = ?))",
-                params![deleted, sequence],
+                 (SELECT media_id FROM history_media_refs WHERE history_id = ?)",
+                params![deleted, entry_id],
             )?;
             // An entry that folded a second operation in (see `record_into_pending`) carries its
             // changeset too, and the two are one action -- they move together or the author gets
@@ -511,7 +520,9 @@ fn apply_at_cursor(connection: &mut Connection, redo: bool) -> Result<Status> {
         }
         _ => bail!("unsupported history entry kind {kind}"),
     }
-    let next_cursor = if redo { cursor + 1 } else { cursor - 1 };
+    // Redoing leaves the boundary past the entry just applied; undoing leaves it *at* that entry,
+    // which is what makes the same entry the next one to redo.
+    let next_cursor = if redo { entry_id + 1 } else { entry_id };
     let state = if redo {
         after_state.ok_or_else(|| anyhow::anyhow!("history entry has no after state"))?
     } else {
@@ -535,20 +546,18 @@ pub fn status(connection: &Connection) -> Result<Status> {
         [],
         |row| row.get(0),
     )?;
-    let undo = if cursor > 0 {
-        connection
-            .query_row(
-                "SELECT label, status FROM history_entries WHERE sequence = ?",
-                [cursor - 1],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .ok()
-    } else {
-        None
-    };
+    let undo = connection
+        .query_row(
+            "SELECT label, status FROM history_entries
+             WHERE id = (SELECT MAX(id) FROM history_entries WHERE id < ?)",
+            [cursor],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .ok();
     let redo = connection
         .query_row(
-            "SELECT label, status FROM history_entries WHERE sequence = ?",
+            "SELECT label, status FROM history_entries
+             WHERE id = (SELECT MIN(id) FROM history_entries WHERE id >= ?)",
             [cursor],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
@@ -567,61 +576,42 @@ pub fn status(connection: &Connection) -> Result<Status> {
     })
 }
 
+/// Drops the oldest entries until history is back inside its count and size limits.
+///
+/// Deleting the oldest moves nothing: the cursor is an id boundary, and taking a row from below it
+/// leaves every other row on the side it was already on. The loop still terminates because each
+/// pass removes one of the entries `entries` counts.
 fn trim(tx: &Transaction<'_>) -> Result<()> {
     loop {
-        let (cursor, entries, bytes): (i64, i64, i64) = tx.query_row(
-            "SELECT hs.cursor,
-                    (SELECT COUNT(*) FROM history_entries WHERE sequence < hs.cursor),
+        let (entries, bytes): (i64, i64) = tx.query_row(
+            "SELECT (SELECT COUNT(*) FROM history_entries WHERE id < hs.cursor),
                     COALESCE((SELECT SUM(storage_bytes) FROM history_entries
-                              WHERE sequence < hs.cursor), 0)
+                              WHERE id < hs.cursor), 0)
              FROM history_state hs WHERE singleton = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        if cursor == 0 || (entries <= 100 && bytes <= 2 * 1024 * 1024 * 1024i64) {
+        if entries == 0 || (entries <= 100 && bytes <= 2 * 1024 * 1024 * 1024i64) {
             break;
         }
-        let oldest_status: Option<String> = tx
+        let oldest: Option<(i64, String)> = tx
             .query_row(
-                "SELECT status FROM history_entries WHERE sequence = 0",
+                "SELECT id, status FROM history_entries
+                 WHERE id = (SELECT MIN(id) FROM history_entries)",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
         // History can only be trimmed as an oldest-prefix operation. Removing a later ready
         // entry from underneath a pending import would leave a state/changeset gap, so allow a
         // temporary overage until that import finalizes and becomes trimmable.
-        if oldest_status.as_deref() != Some("ready") {
+        let Some((oldest_id, oldest_status)) = oldest else {
+            break;
+        };
+        if oldest_status != "ready" {
             break;
         }
-        tx.execute("DELETE FROM history_entries WHERE sequence = 0", [])?;
-        shift_sequences_down(tx, None)?;
-        tx.execute(
-            "UPDATE history_state SET cursor = cursor - 1 WHERE singleton = 1",
-            [],
-        )?;
-    }
-    Ok(())
-}
-
-/// Shift sequence values without depending on SQLite's row-update order under the UNIQUE
-/// constraint. The negative intermediate values cannot collide with live history sequences.
-fn shift_sequences_down(tx: &Transaction<'_>, after: Option<i64>) -> Result<()> {
-    if let Some(after) = after {
-        tx.execute(
-            "UPDATE history_entries SET sequence = -sequence - 1 WHERE sequence > ?",
-            [after],
-        )?;
-        tx.execute(
-            "UPDATE history_entries SET sequence = -sequence - 2 WHERE sequence < ?",
-            [-after - 1],
-        )?;
-    } else {
-        tx.execute("UPDATE history_entries SET sequence = -sequence - 1", [])?;
-        tx.execute(
-            "UPDATE history_entries SET sequence = -sequence - 2 WHERE sequence < 0",
-            [],
-        )?;
+        tx.execute("DELETE FROM history_entries WHERE id = ?", [oldest_id])?;
     }
     Ok(())
 }

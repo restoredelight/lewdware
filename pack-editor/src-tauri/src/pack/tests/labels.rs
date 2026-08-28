@@ -301,7 +301,7 @@ async fn undoing_a_merge_recovers_source_target_and_dual_associations_atomically
                     "SELECT COUNT(*) FROM history_media_refs
                      WHERE history_id = (SELECT id FROM history_entries
                                          WHERE label = 'Merge tags'
-                                         ORDER BY sequence DESC LIMIT 1)",
+                                         ORDER BY id DESC LIMIT 1)",
                     [],
                     |row| row.get(0),
                 )

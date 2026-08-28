@@ -86,9 +86,18 @@ CREATE TABLE IF NOT EXISTS pack_data (
     blob BLOB NOT NULL
 ) STRICT;
 
+-- `id` orders history as well as identifying it, which is why it is `AUTOINCREMENT`: entries are
+-- appended, and the id SQLite mints is therefore always past every id already there. There is no
+-- separate `sequence` column, and nothing renumbers.
+--
+-- `history_state.cursor` is what made a dense sequence look necessary. It is an *id boundary*, not
+-- a count: entries below it are done and undoable, entries at or above it are undone and redoable,
+-- and past the newest entry it holds a sentinel one greater than the last id minted. Trimming the
+-- oldest entry, or dropping a pending one from the middle, then removes a row and moves nothing --
+-- where a dense sequence had to shift every surviving row (through negative intermediates, to dodge
+-- its own UNIQUE constraint) and drag the cursor along behind them.
 CREATE TABLE IF NOT EXISTS history_entries (
-    id INTEGER PRIMARY KEY,
-    sequence INTEGER NOT NULL UNIQUE,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     label TEXT NOT NULL,
     kind TEXT NOT NULL,
     forward_changeset BLOB,

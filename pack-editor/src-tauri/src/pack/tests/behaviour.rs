@@ -1146,7 +1146,7 @@ async fn editing_one_stage_records_a_changeset_the_size_of_that_stage() {
         .db_execute(|conn| {
             conn.query_row(
                 "SELECT LENGTH(forward_changeset) + LENGTH(inverse_changeset)
-                 FROM history_entries ORDER BY sequence DESC LIMIT 1",
+                 FROM history_entries ORDER BY id DESC LIMIT 1",
                 [],
                 |row| row.get(0),
             )
@@ -1277,7 +1277,7 @@ async fn editing_one_caption_records_a_changeset_the_size_of_that_caption() {
         .db_execute(|conn| {
             conn.query_row(
                 "SELECT LENGTH(forward_changeset) + LENGTH(inverse_changeset)
-                 FROM history_entries ORDER BY sequence DESC LIMIT 1",
+                 FROM history_entries ORDER BY id DESC LIMIT 1",
                 [],
                 |row| row.get(0),
             )
