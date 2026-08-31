@@ -33,7 +33,7 @@
 	const wallpaperUsable = $derived(canRestoreOriginal || restore.kind === 'image');
 
 	const stopKeyDisplay = $derived(
-		recording ? 'Press a key…' : store.config ? formatKey(store.config.stop_button) : ''
+		recording ? 'Press a key...' : store.config ? formatKey(store.config.stop_button) : ''
 	);
 
 	onMount(async () => {
@@ -212,7 +212,7 @@
 					onkeydown={handleKeyDown}
 					onblur={() => (recording = false)}
 				>
-					{#if recording}<span class="font-normal italic">Press a key…</span>{:else}<kbd
+					{#if recording}<span class="font-normal italic">Press a key...</span>{:else}<kbd
 							>{stopKeyDisplay}</kbd
 						>{/if}
 				</button>
@@ -295,7 +295,7 @@
 										size="compact"
 										disabled={picking}
 										loading={adoptingImage}
-										onclick={pickImage}>Choose…</Button
+										onclick={pickImage}>Choose...</Button
 									>
 								</div>
 							{/if}

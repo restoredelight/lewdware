@@ -285,7 +285,7 @@ pub async fn restrict_stage_content(
 setter!(
     /// Adds a tag to the list that keeps media *out* of this stage.
     ///
-    /// Exclusion wins over inclusion, so this is how a stage says "everything except…" — and the
+    /// Exclusion wins over inclusion, so this is how a stage says "everything except..." — and the
     /// only way to take one file out of a stage without editing the author's own vocabulary.
     add_stage_exclude_tag(id: String, tag: String) |tx| {
         editor::add_stage_exclude_tag(tx, &id, &tag)

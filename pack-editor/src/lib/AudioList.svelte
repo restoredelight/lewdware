@@ -372,7 +372,7 @@
 										await editAudioVolume(
 											[file.id],
 											value === 1 ? null : value,
-											`Set volume for “${file.file_name}”`
+											`Set volume for "${file.file_name}"`
 										);
 										// Now that the query has the answer. Skipped if the author has
 										// moved the thumb again since, because a later release owns it.
@@ -403,7 +403,7 @@
 			<EmptyState
 				title="Add audio to this pack"
 				description="Import music or sound effects. New audio starts as background audio; mark the sounds meant for popups on their own row."
-				actionLabel="Import files…"
+				actionLabel="Import files..."
 				onclick={() => api.addFilesDialog()}
 			/>
 		</div>

@@ -23,7 +23,7 @@ impl MediaPack {
     pub async fn set_pack_data(&self, name: &str, blob: Vec<u8>) -> Result<()> {
         let _handle = self.saving.read().await;
         let name = name.to_string();
-        let label = format!("Edit pack data “{name}”");
+        let label = format!("Edit pack data \"{name}\"");
         self.db_execute(move |mut connection| {
             history::record(&mut connection, &label, 0, &[], |tx| {
                 tx.execute(

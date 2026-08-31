@@ -30,7 +30,7 @@
 
 	async function launch() {
 		engineAction = 'launch';
-		taskFeedback.progress('engine', 'Launching Lewdware…');
+		taskFeedback.progress('engine', 'Launching Lewdware...');
 		try {
 			if (!(await store.saveConfig())) throw new Error('settings could not be saved');
 			await api.launchLewdware();
@@ -46,7 +46,7 @@
 
 	async function stop() {
 		engineAction = 'stop';
-		taskFeedback.progress('engine', 'Stopping Lewdware…');
+		taskFeedback.progress('engine', 'Stopping Lewdware...');
 		try {
 			await api.stopLewdware();
 			taskFeedback.success('engine', 'Lewdware stopped');

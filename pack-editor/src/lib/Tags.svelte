@@ -62,7 +62,7 @@
 	mergeNote="References will be combined and duplicates removed."
 	deleteDescription={(row) =>
 		`This removes the tag from ${row.media['all-media']} media item(s) and ${row.total} Content/Experience reference(s). No media files will be deleted.`}
-	onrename={(from, to) => edit(api.renameTag(from, to), `Rename tag “${from}”`, from, to)}
-	onmerge={(from, to) => edit(api.mergeTag(from, to), `Merge tag “${from}”`, from, to)}
-	ondelete={(tag) => edit(api.deleteTag(tag), `Delete tag “${tag}”`, tag, null)}
+	onrename={(from, to) => edit(api.renameTag(from, to), `Rename tag "${from}"`, from, to)}
+	onmerge={(from, to) => edit(api.mergeTag(from, to), `Merge tag "${from}"`, from, to)}
+	ondelete={(tag) => edit(api.deleteTag(tag), `Delete tag "${tag}"`, tag, null)}
 />

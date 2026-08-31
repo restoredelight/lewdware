@@ -35,7 +35,7 @@
 			pendingClose = true;
 			taskFeedback.progress(
 				'save',
-				'Finishing save before closing…',
+				'Finishing save before closing...',
 				store.saveDone,
 				store.saveTotal || null
 			);
@@ -76,7 +76,7 @@
 		history.finalize(token, {
 			label:
 				files.length === 1
-					? `Import “${files[0].file_name}”`
+					? `Import "${files[0].file_name}"`
 					: `Import ${files.length} media items`,
 			storageBytes: files.reduce((total, file) => total + file.size, 0)
 		});
@@ -133,7 +133,7 @@
 				store.saveActive = true;
 				store.saveDone = e.payload.saved;
 				store.saveTotal = e.payload.total;
-				taskFeedback.progress('save', 'Saving pack…', e.payload.saved, e.payload.total);
+				taskFeedback.progress('save', 'Saving pack...', e.payload.saved, e.payload.total);
 			}),
 			listen('save:in-place', () => {
 				store.saveBlocksPreviews = true;

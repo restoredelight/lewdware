@@ -88,7 +88,7 @@
 			if (!mode) return;
 			modes = [...modes, mode];
 			history.record({
-				label: `Add mode “${mode.name}”`
+				label: `Add mode "${mode.name}"`
 			});
 		} catch (cause) {
 			error = String(cause);
@@ -111,7 +111,7 @@
 			await api.removeMode(mode.id);
 			modes = modes.filter((item) => item.id !== mode.id);
 			history.record({
-				label: `Remove mode “${mode.name}”`,
+				label: `Remove mode "${mode.name}"`,
 				storageBytes: mode.size
 			});
 		} catch (cause) {
@@ -130,7 +130,7 @@
 	{#snippet actions()}
 		{#if loaded && modes.length > 0}
 			<Button variant="primary" onclick={addMode} disabled={adding} loading={addingMode}
-				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add mode…</Button
+				><span class="h-4 w-4"><Icon src={Plus} mini /></span> Add mode...</Button
 			>
 		{/if}
 	{/snippet}
@@ -165,7 +165,7 @@
 		<EmptyState
 			title="No custom modes"
 			description="Add a built .lwmode file to distribute its Lua scripts and option specification with this pack."
-			actionLabel="Add mode…"
+			actionLabel="Add mode..."
 			onclick={addMode}
 		/>
 	{:else}
@@ -203,7 +203,7 @@
 
 {#if removing}
 	<Dialog
-		title={`Remove “${removing.name}”?`}
+		title={`Remove "${removing.name}"?`}
 		description="The mode’s Lua scripts and option specification will be removed from this pack. You can undo this change from the editor history."
 		buttons={[
 			{ label: 'Cancel', onclick: () => (removing = null) },

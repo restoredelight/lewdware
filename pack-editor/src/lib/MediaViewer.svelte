@@ -84,7 +84,7 @@
 	 * percentage inside it resolves against a width derived from the media itself, which is
 	 * circular — the engine drops it on the first layout pass and applies it on the second, which
 	 * is a video rendering too wide and then snapping in. The first fix wrote that length as
-	 * `calc(100vw - …)` over the rail width and the padding, which worked and left two constants
+	 * `calc(100vw - ...)` over the rail width and the padding, which worked and left two constants
 	 * to keep in step by hand for no reason: the box is right here, and a `ResizeObserver` knows
 	 * how big it is.
 	 *
@@ -182,7 +182,7 @@
 		if ((next ?? undefined) === attributesFor(stored.current, file.id).caption) return;
 		// The caption alone is never bulk-applied, whatever the scope: it is a sentence about this
 		// picture, and writing one file's words onto twenty others is not an edit anybody means.
-		void popupEdits.caption([file.id], next, `Set caption for “${file.file_name}”`);
+		void popupEdits.caption([file.id], next, `Set caption for "${file.file_name}"`);
 	}
 </script>
 

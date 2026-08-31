@@ -14,7 +14,7 @@
 
 	const sortValue = $derived(`${store.mediaTab.sortBy}:${store.mediaTab.sortDir}`);
 	const filtersActive = $derived(store.mediaFiltersActive);
-	const searchPlaceholder = $derived(view === 'audio' ? 'Search audio…' : 'Search media…');
+	const searchPlaceholder = $derived(view === 'audio' ? 'Search audio...' : 'Search media...');
 	const fileCount = $derived.by(() => {
 		const total = store.mediaScopeFiles.length;
 		const visible = store.filteredFiles.length;
@@ -240,7 +240,7 @@
 						close();
 						api.addFilesDialog();
 					}}
-					class="hover:bg-bg w-full px-3 py-2 text-left text-xs">Add files…</button
+					class="hover:bg-bg w-full px-3 py-2 text-left text-xs">Add files...</button
 				>
 				<button
 					role="menuitem"
@@ -248,7 +248,7 @@
 						close();
 						api.addFolderDialog();
 					}}
-					class="hover:bg-bg w-full px-3 py-2 text-left text-xs">Add folder…</button
+					class="hover:bg-bg w-full px-3 py-2 text-left text-xs">Add folder...</button
 				>
 			</div>
 		{/snippet}

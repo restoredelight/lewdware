@@ -150,7 +150,7 @@
 	}
 
 	function plural(label: string) {
-		return count === 1 ? `${label} for “${file.file_name}”` : `${label} for ${count} items`;
+		return count === 1 ? `${label} for "${file.file_name}"` : `${label} for ${count} items`;
 	}
 
 	function pointerFraction(event: PointerEvent, box: DOMRect) {

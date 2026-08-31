@@ -15,7 +15,7 @@
 		 * How the header's action lines up against the title block.
 		 *
 		 * `end` for a control that reads as a peer of the description (a search box); `start` for
-		 * one that belongs to the page as a whole (Add mode…).
+		 * one that belongs to the page as a whole (Add mode...).
 		 */
 		align?: 'start' | 'end';
 		/** A failure worth showing above the content rather than swallowing into a toast. */

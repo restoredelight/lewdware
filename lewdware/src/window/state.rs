@@ -667,7 +667,7 @@ mod tests {
             PhysicalPosition::new(10.0, 10.0),
             2.09375,
         );
-        // 10 / 2.09375 = 4.776…
+        // 10 / 2.09375 = 4.776...
         assert_eq!(moved, LogicalPosition::new(5, 5));
     }
 }

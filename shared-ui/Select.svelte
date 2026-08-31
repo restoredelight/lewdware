@@ -161,7 +161,7 @@
 		onclick={() => (open ? closeList() : openList())}
 		onkeydown={keydown}
 	>
-		<span class="value">{selected?.label ?? 'Select…'}</span><span
+		<span class="value">{selected?.label ?? 'Select...'}</span><span
 			class="chevron"
 			aria-hidden="true"><Icon src={ChevronDown} mini /></span
 		>

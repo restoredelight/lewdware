@@ -559,7 +559,7 @@
 												<Button
 													size="compact"
 													variant="secondary"
-													onclick={() => pickRulePack(rule)}>Choose pack…</Button
+													onclick={() => pickRulePack(rule)}>Choose pack...</Button
 												>
 												{#if rule.overrides.pack_path}
 													<Button
@@ -698,7 +698,7 @@
 					<div class="min-w-0 flex-1">
 						<h3 class="text-text m-0 text-sm font-medium">Gap before the next session</h3>
 						<p class="text-muted m-0 mt-1 text-xs">
-							Follows every scheduled session, however it ends, and keeps “3 times a day” from
+							Follows every scheduled session, however it ends, and keeps "3 times a day" from
 							arriving as three in a row. Cancelling a grace notification starts the same gap.
 						</p>
 					</div>

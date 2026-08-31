@@ -12,7 +12,7 @@
 	let {
 		tags,
 		suggestions = [],
-		placeholder = 'Add tag…',
+		placeholder = 'Add tag...',
 		label = 'Tags',
 		onadd,
 		onremove

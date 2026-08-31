@@ -236,7 +236,7 @@ class AppStore {
 		if (!this.config) return false;
 		const snapshot = $state.snapshot(this.config);
 		this.pendingSaves += 1;
-		taskFeedback.progress('save', 'Saving settings…');
+		taskFeedback.progress('save', 'Saving settings...');
 		const operation = this.saveQueue.then(() => api.saveConfig(snapshot));
 		this.saveQueue = operation.catch(() => {});
 		try {
@@ -473,7 +473,7 @@ class AppStore {
 		try {
 			const result = await api.pickPack(() => this.setWorking('pick-pack', true));
 			if (!result || !this.config) return;
-			taskFeedback.progress('pack', 'Opening pack…');
+			taskFeedback.progress('pack', 'Opening pack...');
 			this.config = { ...this.config, pack_path: result.pack_path };
 			this.packMetadata = result.pack_metadata;
 			if (result.first_mode) await this.setMode(result.first_mode, result.mode_groups);
@@ -489,7 +489,7 @@ class AppStore {
 
 	async removePack() {
 		this.setBusy('pack', true);
-		taskFeedback.progress('pack', 'Removing pack…');
+		taskFeedback.progress('pack', 'Removing pack...');
 		try {
 			await api.removePack();
 			if (!this.config) return;
@@ -509,7 +509,7 @@ class AppStore {
 	async setMode(modeId: ModeId, groups?: ModeGroupDto[]) {
 		if (!this.config) return;
 		this.setBusy('mode', true);
-		taskFeedback.progress('mode', 'Changing mode…');
+		taskFeedback.progress('mode', 'Changing mode...');
 		const previousMode = this.config.mode;
 		let modeSaved = false;
 		try {
@@ -555,7 +555,7 @@ class AppStore {
 
 	async removeUploadedMode(path: string) {
 		this.setBusy('mode', true);
-		taskFeedback.progress('mode', 'Removing uploaded mode…');
+		taskFeedback.progress('mode', 'Removing uploaded mode...');
 		try {
 			const groups = await api.removeUploadedMode(path);
 			this.modeGroups = groups;

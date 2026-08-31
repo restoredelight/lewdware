@@ -4,7 +4,7 @@
 	// the user, so it stays quiet -- see `shared-ui/DESIGN.md`, "Don't flash".
 </script>
 
-<p class="loading">Loading…</p>
+<p class="loading">Loading...</p>
 
 <style>
 	.loading {

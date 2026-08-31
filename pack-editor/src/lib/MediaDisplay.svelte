@@ -72,7 +72,7 @@
 	 * The fitted width is knowable in advance, though: it is whichever of the media's own width,
 	 * the container, and the height cap binds first, and CSS can say all three. `min()` of the
 	 * three with `height: auto` and the ratio reproduces exactly what `width: auto; max-width:
-	 * 100%; max-height: …` settles on — from the first frame instead of the second.
+	 * 100%; max-height: ...` settles on — from the first frame instead of the second.
 	 *
 	 * Only as long as every term resolves on that first frame, which is what `maxWidth` is for:
 	 * a percentage against a containing block that sizes to this element is circular, and a term

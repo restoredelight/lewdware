@@ -218,7 +218,7 @@
 					onclick={openPack}
 					loading={working === 'open'}
 					disabled={busy !== null}
-					title={`Open pack (${modifierLabel}+O)`}>Open pack…</Button
+					title={`Open pack (${modifierLabel}+O)`}>Open pack...</Button
 				>
 			</article>
 		</div>
@@ -271,7 +271,7 @@
 				size="compact"
 				onclick={importEdgeware}
 				loading={working === 'import'}
-				disabled={busy !== null}>Import Edgeware pack…</Button
+				disabled={busy !== null}>Import Edgeware pack...</Button
 			>
 		</div>
 

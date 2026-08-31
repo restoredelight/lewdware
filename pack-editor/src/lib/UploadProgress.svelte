@@ -188,7 +188,7 @@
 						disabled={stopping}
 						onclick={stop}
 						title="Stop processing remaining files; completed imports will stay in the pack"
-						>{stopping ? 'Stopping…' : 'Stop'}</button
+						>{stopping ? 'Stopping...' : 'Stop'}</button
 					>
 				</div>
 			{:else}

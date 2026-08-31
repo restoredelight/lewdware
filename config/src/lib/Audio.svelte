@@ -56,7 +56,7 @@
 		// so a device renamed since it was chosen shows its current name.
 		...store.audioDevices.map((device) => ({ value: device.id, label: device.name })),
 		// A saved device that isn't in the list keeps an entry of its own, so the picker shows that
-		// something *is* chosen instead of falling through to `Select`'s "Select…" placeholder and
+		// something *is* chosen instead of falling through to `Select`'s "Select..." placeholder and
 		// reading as though nothing were. Named from the choice we stored -- this is the one case
 		// that name exists for. Disabled, since it can't be picked afresh.
 		...(missingDevice && chosen
@@ -146,7 +146,7 @@
 					<div class="flex items-center justify-between gap-3">
 						<p class="text-muted m-0 font-mono text-[11px]">
 							{#if store.audioDevicesLoading}
-								Detecting outputs…
+								Detecting outputs...
 							{:else if missingDevice && chosen}
 								<span class="text-[var(--color-warning)]">
 									{chosen.name} isn’t connected — sound falls back to the system default

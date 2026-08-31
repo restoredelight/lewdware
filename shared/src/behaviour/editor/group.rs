@@ -17,7 +17,7 @@ pub fn add_content_group(tx: &Transaction<'_>, group: &ContentGroup) -> Result<(
     )?;
 
     if taken {
-        bail!("a content group named “{}” already exists", group.id);
+        bail!("a content group named \"{}\" already exists", group.id);
     }
 
     let row_id: i64 = tx.query_row(

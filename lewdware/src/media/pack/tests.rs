@@ -1,5 +1,3 @@
-use std::io::Write as _;
-
 use ffmpeg_next as ffmpeg;
 use shared::pack::HEADER_SIZE;
 

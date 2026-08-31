@@ -37,6 +37,6 @@ export async function setAudioRole(ids: number[], role: AudioRole): Promise<void
 		);
 	await invalidate(keys.stageMemberships);
 	history.record({
-		label: `Move ${affected.length === 1 ? `“${affected[0].file_name}”` : `${affected.length} audio files`} to ${role === 'popup' ? 'Popup' : 'Background'}`
+		label: `Move ${affected.length === 1 ? `"${affected[0].file_name}"` : `${affected.length} audio files`} to ${role === 'popup' ? 'Popup' : 'Background'}`
 	});
 }

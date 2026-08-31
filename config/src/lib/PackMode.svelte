@@ -256,7 +256,7 @@
 	const unmetForMode = $derived(store.modeNeedsPermissions.filter((p) => !isGranted(p)));
 
 	function permissionSentence(permissions: Permission[]): string {
-		const names = permissions.map((p) => `“${permissionLabels[p]}”`);
+		const names = permissions.map((p) => `"${permissionLabels[p]}"`);
 		if (names.length === 1) return names[0];
 		return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 	}
@@ -458,7 +458,7 @@
 							variant="secondary"
 							disabled={store.isBusy('pack')}
 							loading={store.isWorking('pick-pack')}
-							onclick={() => store.pickPack()}>Change pack…</Button
+							onclick={() => store.pickPack()}>Change pack...</Button
 						>
 					</div>
 				</Card>
@@ -475,7 +475,7 @@
 						variant="primary"
 						disabled={store.isBusy('pack')}
 						loading={store.isWorking('pick-pack')}
-						onclick={() => store.pickPack()}>Choose pack…</Button
+						onclick={() => store.pickPack()}>Choose pack...</Button
 					>
 				</Card>
 			{/if}
@@ -590,7 +590,7 @@
 
 {#if pendingRemoval}
 	<Dialog
-		title={pendingRemoval.kind === 'pack' ? 'Remove pack?' : `Remove “${pendingRemoval.name}”?`}
+		title={pendingRemoval.kind === 'pack' ? 'Remove pack?' : `Remove "${pendingRemoval.name}"?`}
 		description={pendingRemoval.kind === 'pack'
 			? 'Lewdware cannot launch until another pack is selected. Your pack file will not be deleted.'
 			: 'This removes the uploaded mode from Lewdware. If it is selected, Lewdware will switch to a built-in mode.'}

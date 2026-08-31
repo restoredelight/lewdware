@@ -76,7 +76,7 @@
 					type="url"
 					size="compact"
 					value={draft}
-					placeholder="https://…"
+					placeholder="https://..."
 					oninput={set}
 					onchange={() => commit()}
 				/>

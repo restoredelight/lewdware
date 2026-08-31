@@ -112,7 +112,7 @@
 				label="Make an existing tag toggleable"
 				value={quickCreateTag}
 				options={[
-					{ value: '', label: 'Make tag toggleable…' },
+					{ value: '', label: 'Make tag toggleable...' },
 					...availableToggleTags.map((tag) => ({ value: tag, label: tag }))
 				]}
 				onchange={(value) => {
@@ -200,7 +200,7 @@
 
 {#if removing}
 	<Dialog
-		title={`Remove “${removing.label}”?`}
+		title={`Remove "${removing.label}"?`}
 		description="This content group will be removed. Its tags and matching media will remain available, and you can undo this change from the editor history."
 		buttons={[
 			{ label: 'Cancel', onclick: () => (removing = null) },

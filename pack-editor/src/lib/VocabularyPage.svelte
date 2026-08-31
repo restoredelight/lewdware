@@ -132,7 +132,7 @@
 		// Checked against every name in the pack, not the ones the search happens to be showing:
 		// a name hidden by the query still collides.
 		if (mode === 'rename' && rows.some((row) => row.name === target)) {
-			error = `A ${noun} named “${target}” already exists. Merge the ${noun}s instead.`;
+			error = `A ${noun} named "${target}" already exists. Merge the ${noun}s instead.`;
 			return;
 		}
 		const source = editing;
@@ -158,7 +158,7 @@
 				label={`Search ${title.toLowerCase()}`}
 				hideLabel
 				value={query}
-				placeholder={`Search ${title.toLowerCase()}…`}
+				placeholder={`Search ${title.toLowerCase()}...`}
 				oninput={(next) => (query = next)}
 			/>
 		</div>
@@ -226,7 +226,7 @@
 					<div class="edit-row" role="row">
 						<div role="cell">
 							<strong>
-								{mode === 'rename' ? `Rename “${row.name}”` : `Merge “${row.name}” into`}
+								{mode === 'rename' ? `Rename "${row.name}"` : `Merge "${row.name}" into`}
 							</strong>
 							<small>{mode === 'rename' ? renameNote : mergeNote}</small>
 						</div>
@@ -274,7 +274,7 @@
 
 {#if deleting}
 	<Dialog
-		title={`Delete “${deleting.name}”?`}
+		title={`Delete "${deleting.name}"?`}
 		description={deleteDescription(deleting)}
 		buttons={[
 			{ label: 'Cancel', onclick: () => (deleting = null) },

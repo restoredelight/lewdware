@@ -25,7 +25,7 @@
 	const name = $derived('tag' in filter ? filter.tag : filter.artist);
 </script>
 
-<Popover width="compact" label={`Media for “${name}”`}>
+<Popover width="compact" label={`Media for "${name}"`}>
 	{#snippet trigger(toggle, open)}
 		<Button
 			size="compact"
@@ -33,7 +33,7 @@
 			ariaHaspopup="menu"
 			ariaExpanded={open}
 			disabled={counts['all-media'] === 0}
-			title={`Show the media for “${name}”`}
+			title={`Show the media for "${name}"`}
 			onclick={toggle}><Icon src={MagnifyingGlass} mini size="14px" /> Media</Button
 		>
 	{/snippet}

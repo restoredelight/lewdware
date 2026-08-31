@@ -2,7 +2,7 @@
 	// Stands in front of a view that cannot render until its data has arrived.
 	//
 	// Content and Experience were both in that position, and both answered it the same way: fetch on
-	// mount, show "Loading…" until it lands, offer a retry if it doesn't, and flush any half-typed
+	// mount, show "Loading..." until it lands, offer a retry if it doesn't, and flush any half-typed
 	// field on the way out. That is four things to get right and no reason for either tab to know
 	// about them, so they are here and the tabs are what goes inside.
 	//
@@ -50,5 +50,5 @@
 		/>
 	</div>
 {:else}
-	<p class="text-muted p-6 text-sm">Loading…</p>
+	<p class="text-muted p-6 text-sm">Loading...</p>
 {/if}

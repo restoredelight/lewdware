@@ -99,8 +99,8 @@
 
 {#if pendingAddition}
 	<Dialog
-		title={`Add “${file.file_name}” to ${pendingAddition.label}?`}
-		description={`Tags being removed: ${pendingAddition.tagsToRemove.map((tag) => `“${tag}”`).join(', ')}`}
+		title={`Add "${file.file_name}" to ${pendingAddition.label}?`}
+		description={`Tags being removed: ${pendingAddition.tagsToRemove.map((tag) => `"${tag}"`).join(', ')}`}
 		buttons={[
 			{ label: 'Cancel', onclick: () => (pendingAddition = null) },
 			{ label: 'Add anyway', primary: true, onclick: confirmAddition }

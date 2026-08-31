@@ -78,7 +78,7 @@
 			if (result.deleted_id != null) store.removeFilesById([result.deleted_id], true);
 			slotChanged(`Set ${title.toLowerCase()}`, result.file.size);
 			if (!result.added) {
-				taskFeedback.confirm('slot', `Already in this pack as “${result.file.file_name}”`);
+				taskFeedback.confirm('slot', `Already in this pack as "${result.file.file_name}"`);
 			}
 		} catch (error) {
 			taskFeedback.error('slot', String(error));

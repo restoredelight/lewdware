@@ -111,14 +111,14 @@
 			removingClaims.stages.length === 0 &&
 			removingClaims.content === 0
 		)
-			return ` Its tag “${tag}” is unused and goes with it.`;
+			return ` Its tag "${tag}" is unused and goes with it.`;
 		const parts: string[] = [];
 		const { media, stages: others, content } = removingClaims;
 		if (media > 0) parts.push(`${media} file${media === 1 ? '' : 's'}`);
 		if (others.length > 0)
-			parts.push(others.length === 1 ? `“${others[0]}”` : `${others.length} other stages`);
+			parts.push(others.length === 1 ? `"${others[0]}"` : `${others.length} other stages`);
 		if (content > 0) parts.push(`${content} content ${content === 1 ? 'entry' : 'entries'}`);
-		return ` Its tag “${tag}” is on ${parts.join(', ')}, and is kept unless you remove it too.`;
+		return ` Its tag "${tag}" is on ${parts.join(', ')}, and is kept unless you remove it too.`;
 	}
 
 	function confirmRemove(alsoRemoveTag = false) {
@@ -177,7 +177,7 @@
 
 {#if removing}
 	<Dialog
-		title={`Remove “${removing.label}”?`}
+		title={`Remove "${removing.label}"?`}
 		description={`This stage and its settings will be removed. Transitions to its neighbours will be reset.${
 			removing.content.wallpaper ? ' Its wallpaper is cleared with it.' : ''
 		}${removing.content.audio ? ' Its audio slot is cleared with it.' : ''}${removalNote()}`}
@@ -189,7 +189,7 @@
 			(removingClaims.media > 0 || removingClaims.stages.length > 0 || removingClaims.content > 0)
 				? [
 						{
-							label: `Remove stage and “${removingClaims.tag}”`,
+							label: `Remove stage and "${removingClaims.tag}"`,
 							destructive: true,
 							onclick: () => confirmRemove(true)
 						}

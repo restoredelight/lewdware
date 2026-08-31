@@ -465,7 +465,7 @@ lewdware.media = {}
 ---config) is enforced in the engine's media manager, below this API, as an
 ---extra `none` clause on every query — media the user has excluded is never
 ---returned, no matter what the filter says. For anything these clauses can't
----express (disjunctions of intersections, …), fetch with `list()` and
+---express (disjunctions of intersections, ...), fetch with `list()` and
 ---filter/combine in Lua.
 ---@field any? string[] Match media with at least one of these tags.
 ---@field all? string[] Match media with every one of these tags.

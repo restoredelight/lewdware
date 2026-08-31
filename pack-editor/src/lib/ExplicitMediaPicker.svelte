@@ -83,9 +83,9 @@
 		{/if}
 		<div class="actions">
 			<Button size="compact" disabled={busy} onclick={() => (open = !open)}>
-				{mediaId == null ? 'Choose from pack…' : 'Replace from pack…'}
+				{mediaId == null ? 'Choose from pack...' : 'Replace from pack...'}
 			</Button>
-			<Button size="compact" disabled={busy} onclick={upload}>Upload…</Button>
+			<Button size="compact" disabled={busy} onclick={upload}>Upload...</Button>
 			{#if mediaId != null && onclear}
 				<Button
 					variant="destructive"
@@ -107,7 +107,7 @@
 					type="search"
 					size="compact"
 					value={query}
-					placeholder={kind === 'audio' ? 'Search audio…' : 'Search media…'}
+					placeholder={kind === 'audio' ? 'Search audio...' : 'Search media...'}
 					oninput={(value) => (query = value)}
 				/>
 			</div>

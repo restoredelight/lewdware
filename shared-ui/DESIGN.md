@@ -48,7 +48,7 @@ There are **two layers**, and they must stay in sync:
 - **Each app's `app.css`** (`config/src/app.css`,
   `pack-editor/src/lib/app.css`) — a Tailwind `@theme` block that mirrors the same
   hex values as `--color-*` tokens, so Tailwind utilities (`bg-surface`,
-  `text-muted`, …) and app-level component CSS that uses `--color-*` resolve
+  `text-muted`, ...) and app-level component CSS that uses `--color-*` resolve
   correctly.
 
 So the same color exists under two names: `--ui-surface` **and** `--color-surface`,
@@ -62,7 +62,7 @@ theme unless the user asks.
 
 ## Palette
 
-| Token (`--ui-…` / `--color-…`)  | Hex                   | Role                                         |
+| Token (`--ui-...` / `--color-...`)  | Hex                   | Role                                         |
 | ------------------------------- | --------------------- | -------------------------------------------- |
 | `bg`                            | `#0a0809`             | Warm black — app background                  |
 | `surface`                       | `#141113`             | Panel surface                                |
@@ -110,7 +110,7 @@ Carmine is powerful only because it's rare. One red used to mean "primary,"
    screen forever. The rule there: **the carmine fill follows the live next step.**
    Launch holds it while it is enabled, and page actions are `secondary`. Where
    Launch is _disabled_ or absent, the page's own call to action takes the fill —
-   "Choose pack…" in the no-pack empty state (Launch is disabled without a pack) and
+   "Choose pack..." in the no-pack empty state (Launch is disabled without a pack) and
    "Try again" on the load-error screen (the footer isn't rendered at all).
 
 2. **Selection = edge, not fill.** Active nav items, stages, grid selection use the

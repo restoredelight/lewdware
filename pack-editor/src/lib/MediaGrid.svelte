@@ -173,7 +173,7 @@
 		) {
 			items.push(
 				await MenuItem.new({
-					text: selCount === 1 ? 'Edit popup…' : `Edit ${selCount} popups…`,
+					text: selCount === 1 ? 'Edit popup...' : `Edit ${selCount} popups...`,
 					action: () => void openSelectionEditor()
 				}),
 				await PredefinedMenuItem.new({ item: 'Separator' })

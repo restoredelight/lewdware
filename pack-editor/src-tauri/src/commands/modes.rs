@@ -84,7 +84,7 @@ pub async fn add_mode_dialog(
         let current = embedded_mode(id, &existing)?;
         if current.stable_id == candidate.stable_id {
             return Err(format!(
-                "“{}” is already included in this pack",
+                "\"{}\" is already included in this pack",
                 current.name
             ));
         }

@@ -178,7 +178,7 @@
 	 * Puts a tag or an artist on the whole selection, or takes it off.
 	 *
 	 * The undo entry counts only the files the edit actually changed, not the files it was sent
-	 * for: "Add tag “spiral” to 3 items" over a selection of twenty already carrying it would
+	 * for: "Add tag "spiral" to 3 items" over a selection of twenty already carrying it would
 	 * describe work that did not happen.
 	 */
 	async function editLabel(field: 'tags' | 'artists', value: string, add: boolean) {
@@ -208,8 +208,8 @@
 		history.record({
 			label:
 				affected === 1
-					? `${verb} ${noun} “${value}”`
-					: `${verb} ${noun} “${value}” ${add ? 'to' : 'from'} ${affected} items`
+					? `${verb} ${noun} "${value}"`
+					: `${verb} ${noun} "${value}" ${add ? 'to' : 'from'} ${affected} items`
 		});
 	}
 
@@ -222,7 +222,7 @@
 		await api.setFileSourceUrl(id, after);
 		store.updateFileSourceUrl(id, after, true);
 		history.record({
-			label: `Set source for “${primary.file_name}”`
+			label: `Set source for "${primary.file_name}"`
 		});
 	}
 	async function rename() {
@@ -237,7 +237,7 @@
 			// move or break one.
 			await api.setFileTitle(id, after);
 			store.updateFileName(id, after, true);
-			history.record({ label: `Rename “${before}”` });
+			history.record({ label: `Rename "${before}"` });
 		} catch (error) {
 			titleError = String(error);
 			titleValue = primary.file_name;
@@ -289,7 +289,7 @@
 			tags={summary.common}
 			{suggestions}
 			label={selCount === 1 ? title : `${title} on all selected items`}
-			placeholder={selCount === 1 ? `Add ${noun}…` : 'Add to all…'}
+			placeholder={selCount === 1 ? `Add ${noun}...` : 'Add to all...'}
 			onadd={(value) => editLabel(field, value, true)}
 			onremove={(value) => editLabel(field, value, false)}
 		/>
@@ -387,7 +387,7 @@
 						<h2>Popup</h2>
 					</div>
 					<Button size="compact" onclick={() => openSelectionEditor()}>
-						{selCount === 1 ? 'Edit this popup…' : `Edit ${selCount} popups…`}
+						{selCount === 1 ? 'Edit this popup...' : `Edit ${selCount} popups...`}
 					</Button>
 				</section>
 			{/if}
@@ -436,7 +436,7 @@
 								}}
 							/>
 							<IconButton
-								label={`Copy file name “${primary.file_name}”`}
+								label={`Copy file name "${primary.file_name}"`}
 								onclick={() => copyFileName(primary.file_name)}
 								><Icon src={ClipboardDocument} mini size="15px" /></IconButton
 							>
@@ -449,7 +449,7 @@
 							<input
 								id={`media-source-${primary.id}`}
 								type="url"
-								placeholder="https://…"
+								placeholder="https://..."
 								bind:value={sourceValue}
 								onblur={saveSource}
 								onkeydown={(event) => {
@@ -462,7 +462,7 @@
 							/>
 							{#if primary.source_url}
 								<IconButton
-									label={`Open source “${primary.source_url}”`}
+									label={`Open source "${primary.source_url}"`}
 									onclick={() => window.open(primary.source_url!, '_blank', 'noopener')}
 									><Icon src={Eye} mini size="15px" /></IconButton
 								>

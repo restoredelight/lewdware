@@ -98,7 +98,7 @@ class Entry<T> {
 				// A reply for a pack that is no longer open describes something the author has
 				// closed. Adopting it would show the previous pack's content under this one's name
 				// — and the pack that *is* open has not been asked yet, so ask now. Without this the
-				// view stays on "Loading…" until some unrelated invalidation happens by.
+				// view stays on "Loading..." until some unrelated invalidation happens by.
 				if (store.packId !== packId) this.refetchWanted = true;
 				else {
 					this.value = value;
@@ -196,7 +196,7 @@ export function query<T>(key: string | (() => string), fetcher: () => Promise<T>
 	//
 	// A cached answer is *kept* when the last view reading it goes away, and shown again to the
 	// next one while a fresh copy is fetched behind it. That is what stops undo — which remounts
-	// the whole tab — from blanking the surface to "Loading…" and taking the author's scroll
+	// the whole tab — from blanking the surface to "Loading..." and taking the author's scroll
 	// position with it.
 	$effect(() => {
 		const entry = current;

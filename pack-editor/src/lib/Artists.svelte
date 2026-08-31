@@ -81,7 +81,7 @@
 	mergeNote="References will be combined and duplicates removed."
 	deleteDescription={(row) =>
 		`This removes the artist from ${row.media['all-media']} media item(s). No media files will be deleted.`}
-	onrename={(from, to) => edit(api.renameArtist(from, to), `Rename artist “${from}”`, from, to)}
-	onmerge={(from, to) => edit(api.mergeArtist(from, to), `Merge artist “${from}”`, from, to)}
-	ondelete={(artist) => edit(api.deleteArtist(artist), `Delete artist “${artist}”`, artist, null)}
+	onrename={(from, to) => edit(api.renameArtist(from, to), `Rename artist "${from}"`, from, to)}
+	onmerge={(from, to) => edit(api.mergeArtist(from, to), `Merge artist "${from}"`, from, to)}
+	ondelete={(artist) => edit(api.deleteArtist(artist), `Delete artist "${artist}"`, artist, null)}
 />

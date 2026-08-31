@@ -60,12 +60,12 @@ class PackSave {
 	#announce(mode: SaveMode) {
 		if (store.uploading) {
 			if (mode === 'save-as')
-				taskFeedback.warning('save', 'Waiting for the import to finish before Save As…');
+				taskFeedback.warning('save', 'Waiting for the import to finish before Save As...');
 			else if (!store.packHasDestination)
-				taskFeedback.warning('save', 'Waiting for the import to finish before the first save…');
+				taskFeedback.warning('save', 'Waiting for the import to finish before the first save...');
 			else taskFeedback.warning('save', 'Saving now — unfinished uploads won’t be included');
 		} else if (mode === 'save' && store.packHasDestination) {
-			taskFeedback.progress('save', 'Saving pack…');
+			taskFeedback.progress('save', 'Saving pack...');
 		}
 	}
 
@@ -79,7 +79,7 @@ class PackSave {
 		this.#announce(mode);
 		const chosen = () => {
 			this.destinationChosen = true;
-			taskFeedback.progress('save', 'Saving pack…');
+			taskFeedback.progress('save', 'Saving pack...');
 		};
 		try {
 			await flushPendingWrites();
@@ -91,7 +91,7 @@ class PackSave {
 			return { info, error: null };
 		} catch (error) {
 			// The backend only emits save:done on success, so a failed save would otherwise leave
-			// the "Saving… X/Y" progress bar stuck on screen forever.
+			// the "Saving... X/Y" progress bar stuck on screen forever.
 			store.endSave();
 			taskFeedback.error('save', `Save failed: ${String(error)}`);
 			return { info: null, error };

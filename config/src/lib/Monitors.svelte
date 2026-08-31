@@ -21,7 +21,7 @@
 		<section class="flex flex-col gap-2">
 			{#if store.monitorsLoading}
 				<Card class="border-dashed !border-[var(--ui-border-strong)] p-6 text-center">
-					<p class="text-muted m-0 text-xs" role="status">Detecting monitors…</p>
+					<p class="text-muted m-0 text-xs" role="status">Detecting monitors...</p>
 				</Card>
 			{:else if store.monitorsError}
 				<Card

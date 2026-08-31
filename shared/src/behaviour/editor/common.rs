@@ -39,13 +39,12 @@ pub fn exists(
     Ok(found)
 }
 
-/// Adds `tag` to an owner's selection, at the end. Already having it is not an error, and not a
-/// change either -- the conflict clause makes it a write that writes nothing.
+/// Add `tag` to `item`.
 pub fn add_tag(
     tx: &Transaction<'_>,
     table: &str,
     key: &str,
-    owner: &dyn rusqlite::ToSql,
+    item: &dyn rusqlite::ToSql,
     tag: &str,
 ) -> Result<()> {
     let id = crate::behaviour::db::tag_id(tx, tag)?;
@@ -54,18 +53,18 @@ pub fn add_tag(
             "INSERT INTO {table} ({key}, tag_id) VALUES (?1, ?2)
              ON CONFLICT({key}, tag_id) DO NOTHING"
         ),
-        params![owner, id],
+        params![item, id],
     )?;
 
     Ok(())
 }
 
-/// Removes `tag` from an owner's selection. Not having it is not an error.
+/// Remove `tag` from `item`
 pub fn remove_tag(
     tx: &Transaction<'_>,
     table: &str,
     key: &str,
-    owner: &dyn rusqlite::ToSql,
+    item: &dyn rusqlite::ToSql,
     tag: &str,
 ) -> Result<()> {
     tx.execute(
@@ -73,7 +72,7 @@ pub fn remove_tag(
             "DELETE FROM {table} WHERE {key} = ?1
              AND tag_id = (SELECT id FROM tags WHERE name = ?2)"
         ),
-        params![owner, tag],
+        params![item, tag],
     )?;
 
     Ok(())

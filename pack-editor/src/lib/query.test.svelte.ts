@@ -100,7 +100,7 @@ describe('the query cache', () => {
 	});
 
 	// Undo remounts the whole tab. If the cached answer went with the old subtree, every undo would
-	// blank the surface to "Loading…" and take the author's scroll position with it.
+	// blank the surface to "Loading..." and take the author's scroll position with it.
 	it('keeps showing its last answer across a remount', async () => {
 		const fetcher = vi.fn().mockResolvedValue('value');
 		const first = mount(() => query('k', fetcher));
@@ -261,7 +261,7 @@ describe('invalidating a query that is already fetching', () => {
 describe('changing packs while a query is in flight', () => {
 	// The overlap the other two tests miss: a reply for the pack that was open when the request went
 	// out is correctly discarded — but the pack that *is* open has not been asked yet. Without a
-	// follow-up the view stays on "Loading…" until some unrelated invalidation happens by.
+	// follow-up the view stays on "Loading..." until some unrelated invalidation happens by.
 	it('asks again for the pack that is now open', async () => {
 		let release!: (value: string) => void;
 		const fetcher = vi

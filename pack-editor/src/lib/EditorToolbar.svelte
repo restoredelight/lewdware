@@ -63,7 +63,7 @@
 	 */
 	const recoveryTitle = $derived(
 		store.recoveryStatus === 'pending'
-			? 'Backing up changes…'
+			? 'Backing up changes...'
 			: store.packHasDestination
 				? 'Unsaved changes — backed up locally'
 				: 'Draft — backed up locally; choose a destination on first save'
@@ -111,7 +111,7 @@
 			disabled={!history.canUndo}
 			onclick={onundo}
 			title={history.undoLabel
-				? `Undo “${history.undoLabel}” (${modifierLabel}+Z)`
+				? `Undo "${history.undoLabel}" (${modifierLabel}+Z)`
 				: `Undo (${modifierLabel}+Z)`}
 		>
 			<span class="h-4 w-4"><Icon src={ArrowUturnLeft} mini /></span>
@@ -121,7 +121,7 @@
 			disabled={!history.canRedo}
 			onclick={onredo}
 			title={history.redoLabel
-				? `Redo “${history.redoLabel}” (${modifierLabel}+Shift+Z)`
+				? `Redo "${history.redoLabel}" (${modifierLabel}+Shift+Z)`
 				: `Redo (${modifierLabel}+Shift+Z)`}
 		>
 			<span class="h-4 w-4"><Icon src={ArrowUturnRight} mini /></span>
@@ -156,7 +156,7 @@
 						onsaveas();
 					}}
 					class="hover:bg-bg flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40"
-					><span>Save As…</span><kbd class="text-muted text-[10px]">{modifierLabel}+Shift+S</kbd
+					><span>Save As...</span><kbd class="text-muted text-[10px]">{modifierLabel}+Shift+S</kbd
 					></button
 				>
 				{#if !store.packSaved && store.packHasDestination}<button

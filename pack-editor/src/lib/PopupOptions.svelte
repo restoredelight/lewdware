@@ -89,7 +89,7 @@
 	$effect(() => onvideovolume(liveVideoVolume));
 
 	function plural(label: string) {
-		return count === 1 ? `${label} for “${file.file_name}”` : `${label} for ${count} items`;
+		return count === 1 ? `${label} for "${file.file_name}"` : `${label} for ${count} items`;
 	}
 
 	// Only where the dimensions are known and the selection agrees: across mixed media a single
@@ -147,7 +147,7 @@
 		     see is exactly what the frame exists to replace. -->
 		<p class="reading">{sizeReading}</p>
 		<p class="reading">{region.mixed ? 'Mixed' : describeRegion(region.value)}</p>
-		<Button onclick={onplace}>Size &amp; position…</Button>
+		<Button onclick={onplace}>Size &amp; position...</Button>
 	</section>
 
 	<section>

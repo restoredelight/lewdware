@@ -26,7 +26,7 @@
 
 	type Props = {
 		stageId: string;
-		/** Jumps to another stage or to a transition -- the "then change to…" line at the bottom. */
+		/** Jumps to another stage or to a transition -- the "then change to..." line at the bottom. */
 		onselect: (id: string) => void;
 	};
 
@@ -234,7 +234,7 @@
 						)}
 				/>
 				{#if stage.content.owned_tag}<p class="owned-note">
-						“{stage.content.owned_tag}” is this stage's own tag — the editor renames it with the
+						"{stage.content.owned_tag}" is this stage's own tag — the editor renames it with the
 						stage, and the Popups tab uses it to put files in and out of this stage.
 					</p>{/if}{/if}
 			<div class="toggle-row">
@@ -257,7 +257,7 @@
 					)}
 			/>
 			{#if stage.content.owned_exclude_tag}<p class="owned-note">
-					“{stage.content.owned_exclude_tag}” is this stage's own exclusion tag — every file you
+					"{stage.content.owned_exclude_tag}" is this stage's own exclusion tag — every file you
 					take out of this stage from the Popups tab carries it.
 				</p>{/if}
 			<MediaSlot
@@ -266,7 +266,7 @@
 				title="Wallpaper"
 				description="The wallpaper this stage sets. Every stage writes it outright, so leaving it empty is what keeps the one already in effect."
 				emptyNote={inheritedWallpaper
-					? `Keeps “${inheritedWallpaper}”.`
+					? `Keeps "${inheritedWallpaper}".`
 					: 'Keeps whatever wallpaper is already in effect.'}
 				reveal={store.experienceTargetStageId === stage.id}
 				onrevealed={() => (store.experienceTargetStageId = null)}

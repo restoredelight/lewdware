@@ -120,7 +120,7 @@
 	}
 
 	async function openLogs() {
-		taskFeedback.progress('logs', 'Opening logs folder…');
+		taskFeedback.progress('logs', 'Opening logs folder...');
 		try {
 			await api.openLogs();
 			taskFeedback.success('logs', 'Logs folder opened');
@@ -256,7 +256,7 @@
 					<div class="p-4">
 						<p class="text-muted m-0 text-xs">Lewdware</p>
 						<p class="text-text m-0 mt-0.5 font-mono text-[11.5px]">
-							{diagnostics?.system.lewdware_version ?? 'Loading…'}
+							{diagnostics?.system.lewdware_version ?? 'Loading...'}
 						</p>
 					</div>
 					<div class="min-w-0 p-4">
@@ -265,13 +265,13 @@
 							class="text-text m-0 mt-0.5 truncate font-mono text-[11.5px]"
 							title={diagnostics?.system.os}
 						>
-							{diagnostics?.system.os ?? 'Loading…'}
+							{diagnostics?.system.os ?? 'Loading...'}
 						</p>
 					</div>
 					<div class="p-4">
 						<p class="text-muted m-0 text-xs">Architecture</p>
 						<p class="text-text m-0 mt-0.5 font-mono text-[11.5px]">
-							{diagnostics?.system.architecture ?? 'Loading…'}
+							{diagnostics?.system.architecture ?? 'Loading...'}
 						</p>
 					</div>
 				</Card>
@@ -351,7 +351,7 @@
 								class="text-muted m-0 flex min-h-28 items-center justify-center p-6 text-center text-xs"
 								role="status"
 							>
-								Loading logs…
+								Loading logs...
 							</p>
 						{:else if displayedLogs.length === 0}
 							<p

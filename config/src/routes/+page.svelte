@@ -79,7 +79,7 @@
 			</div>
 		{:else if !store.ready}
 			<div class="flex flex-1 items-center justify-center">
-				<p class="text-muted text-sm" role="status">Loading settings…</p>
+				<p class="text-muted text-sm" role="status">Loading settings...</p>
 			</div>
 		{:else if store.activeTab === 'pack_mode'}
 			<PackMode />

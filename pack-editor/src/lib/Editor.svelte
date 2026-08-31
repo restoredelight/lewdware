@@ -219,7 +219,7 @@
 		const label = undoing ? history.undoLabel : history.redoLabel;
 		const verb = undoing ? 'Undoing' : 'Redoing';
 		try {
-			taskFeedback.progress('history', label ? `${verb} “${label}”…` : `${verb} change…`);
+			taskFeedback.progress('history', label ? `${verb} "${label}"...` : `${verb} change...`);
 			// A pending write that fails must not block getting back to a good state: it never
 			// reached the pack, so there is nothing of it to undo, and `mutate` has already said so.
 			await flushPendingWrites().catch(() => {});
@@ -299,7 +299,7 @@
 			closePackAfterSave = true;
 			taskFeedback.progress(
 				'save',
-				'Finishing save before closing pack…',
+				'Finishing save before closing pack...',
 				store.saveDone,
 				store.saveTotal || null
 			);
@@ -368,7 +368,7 @@
 				: store.filteredFiles.findIndex((file) => file.id === store.mediaTab.gridActiveId);
 		taskFeedback.progress(
 			'media-removal',
-			`Removing ${ids.length} media item${ids.length === 1 ? '' : 's'}…`
+			`Removing ${ids.length} media item${ids.length === 1 ? '' : 's'}...`
 		);
 		try {
 			// Deleting a file clears any slot that named it -- see `MediaPack::remove_files`, and
@@ -379,7 +379,7 @@
 			const record = {
 				label:
 					removed.length === 1
-						? `Remove “${removed[0].file_name}”`
+						? `Remove "${removed[0].file_name}"`
 						: `Remove ${removed.length} media items`,
 				storageBytes: removed.reduce((total, file) => total + file.size, 0)
 			};
@@ -471,9 +471,9 @@
 									<EmptyState
 										title="Add media to this pack"
 										description="Import images, videos, or audio files. You can also drag files or folders anywhere onto this window."
-										actionLabel="Import files…"
+										actionLabel="Import files..."
 										onclick={() => api.addFilesDialog()}
-										secondaryActionLabel="Import folder…"
+										secondaryActionLabel="Import folder..."
 										onsecondary={() => api.addFolderDialog()}
 									/>
 								</div>
@@ -555,7 +555,7 @@
 			: `Remove ${removalCount} items from pack?`}
 		description={`${
 			removalCount === 1
-				? `“${removalFile?.file_name ?? 'This item'}” will be removed from this pack.`
+				? `"${removalFile?.file_name ?? 'This item'}" will be removed from this pack.`
 				: `These ${removalCount} media items will be removed from this pack.`
 		}${
 			removalUsage.length > 0 ? ` This also clears ${formatList(removalUsage)}.` : ''
@@ -564,7 +564,7 @@
 			{ label: 'Cancel', disabled: removingMedia, onclick: () => store.cancelMediaRemoval() },
 			{
 				label: removingMedia
-					? 'Removing…'
+					? 'Removing...'
 					: removalCount === 1
 						? 'Remove item'
 						: `Remove ${removalCount} items`,
