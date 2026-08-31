@@ -1,5 +1,5 @@
 use super::{pack, store};
-use crate::behaviour::schema::{Behaviour, TextItem};
+use crate::behaviour::schema::{Behaviour, Caption};
 
 /// What the tag joins are for. A tag list in the document is a foreign key into `tags`, so a
 /// tag the author typed into a caption is a real tag the pack has -- which is what lets
@@ -9,11 +9,9 @@ fn a_tag_named_by_the_document_becomes_a_real_tag() {
     let mut conn = pack();
     let behaviour = Behaviour {
         content: crate::behaviour::Content {
-            captions: vec![TextItem {
+            captions: vec![Caption {
                 text: "Obey.".to_string(),
                 tags: vec!["fresh".to_string()],
-                timeout_seconds: None,
-                summary: None,
             }],
             ..Default::default()
         },

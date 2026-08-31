@@ -6,22 +6,19 @@ use super::common::{add_tag, exists, remove_tag, set_column};
 use crate::behaviour::db::{read_tags, write_tags};
 use crate::behaviour::schema::WebLink;
 
-/// One web link, with the row id the editor addresses it by.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WebLinkRow {
+pub struct WebLinkRecord {
     pub id: i64,
     pub url: String,
     pub tags: Vec<String>,
 }
-// ── Web links ────────────────────────────────────────────────────────────────
 
-/// Every web link, in author order.
-pub fn web_links(conn: &Connection) -> Result<Vec<WebLinkRow>> {
+pub fn web_links(conn: &Connection) -> Result<Vec<WebLinkRecord>> {
     let mut statement = conn.prepare("SELECT id, url FROM behaviour_web_link ORDER BY id")?;
     statement
         .query_and_then([], |row| {
             let id: i64 = row.get("id")?;
-            Ok(WebLinkRow {
+            Ok(WebLinkRecord {
                 id,
                 url: row.get("url")?,
                 tags: read_tags(conn, "behaviour_web_link_tag", "link_id", &id)?,
@@ -30,10 +27,6 @@ pub fn web_links(conn: &Connection) -> Result<Vec<WebLinkRow>> {
         .collect()
 }
 
-/// Appends a web link, returning its new id.
-///
-/// Appending is the only way in: the id the insert mints is what orders the list, so a new link
-/// lands at the end by construction.
 pub fn add_web_link(tx: &Transaction<'_>, link: &WebLink) -> Result<i64> {
     let id: i64 = tx.query_row(
         "INSERT INTO behaviour_web_link (url) VALUES (?1) RETURNING id",
@@ -44,13 +37,10 @@ pub fn add_web_link(tx: &Transaction<'_>, link: &WebLink) -> Result<i64> {
     Ok(id)
 }
 
-/// Removes a web link, leaving the rest in the order they were already in.
 pub fn remove_web_link(tx: &Transaction<'_>, id: i64) -> Result<()> {
     tx.execute("DELETE FROM behaviour_web_link WHERE id = ?", params![id])?;
     Ok(())
 }
-
-// ── Web links ────────────────────────────────────────────────────────────────
 
 const NO_WEB_LINK: &str = "that web link is no longer in the pack";
 

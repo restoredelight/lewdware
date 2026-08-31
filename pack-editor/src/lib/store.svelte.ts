@@ -1,4 +1,4 @@
-import { EXPLICIT_ONLY_TAG, NON_POPUP_TAG, POPUP_AUDIO_TAG, withoutManagedTags } from './tags.js';
+import { withoutManagedTags } from './tags.js';
 import type {
 	ConversionWarning,
 	Experience,
@@ -248,13 +248,8 @@ class AppStore {
 		const belongs =
 			file != null &&
 			(view === 'all-media' ||
-				(view === 'audio' &&
-					file.file_info.type === 'audio' &&
-					!file.tags.includes(EXPLICIT_ONLY_TAG)) ||
-				(view === 'popups' &&
-					file.file_info.type !== 'audio' &&
-					!file.tags.includes(NON_POPUP_TAG) &&
-					!file.tags.includes(EXPLICIT_ONLY_TAG)));
+				(view === 'audio' && file.file_info.type === 'audio' && !file.explicit_only) ||
+				(view === 'popups' && file.popup_eligible));
 		if (!belongs) return false;
 
 		this.setActiveView(view);
@@ -389,19 +384,10 @@ class AppStore {
 	 * members out of it, and All media shows all of it, which is the honest picture of what a
 	 * custom mode's `lewdware.media.*` draws from.
 	 */
-	popupFiles = $derived(
-		this.files.filter(
-			(file) =>
-				file.file_info.type !== 'audio' &&
-				!file.tags.includes(NON_POPUP_TAG) &&
-				!file.tags.includes(EXPLICIT_ONLY_TAG)
-		)
-	);
+	popupFiles = $derived(this.files.filter((file) => file.popup_eligible));
 	/** The Audio tab's universe. Both roles: the sections split it, the tab owns all of it. */
 	audioFiles = $derived(
-		this.files.filter(
-			(file) => file.file_info.type === 'audio' && !file.tags.includes(EXPLICIT_ONLY_TAG)
-		)
+		this.files.filter((file) => file.file_info.type === 'audio' && !file.explicit_only)
 	);
 	/**
 	 * How much media carries each tag / each artist, per media tab.
@@ -445,7 +431,7 @@ class AppStore {
 		const filtered = files.filter((file) => {
 			if (typeFilter !== 'all' && file.file_info.type !== typeFilter) return false;
 			if (roleFilter !== 'all' && file.file_info.type === 'audio') {
-				if ((roleFilter === 'popup') !== file.tags.includes(POPUP_AUDIO_TAG)) return false;
+				if (roleFilter !== file.audio_role) return false;
 			}
 			if (query && !file.file_name.toLowerCase().includes(query)) return false;
 			if (tagFilter.size > 0 && !file.tags.some((tag) => tagFilter.has(tag))) return false;

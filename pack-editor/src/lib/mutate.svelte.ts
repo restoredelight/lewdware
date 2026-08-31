@@ -34,20 +34,30 @@ import { taskFeedback } from '$ui/taskFeedback.svelte.js';
  * Returns true if it landed. Callers that need to know can check; most do not, because the refetch
  * shows whatever really happened either way.
  */
-export async function mutate(
-	run: () => Promise<BehaviourOutcome | void>,
-	options: { label: string; invalidates: string[] }
+export async function mutate<Result>(
+	run: () => Promise<Result>,
+	options: {
+		label: string;
+		invalidates: string[];
+		/** Returns `null` when the backend deliberately did not apply an edit. */
+		outcome?: (result: Result) => BehaviourOutcome | void | null;
+	}
 ): Promise<boolean> {
 	try {
 		// Most commands report nothing back: they set one field, and the surfaces showing it
 		// refetch. Only the few that retire media or edit tags have something the front end could
 		// not have worked out for itself.
-		const outcome = (await run()) ?? {
-			deleted_ids: [],
-			removed_tags: [],
-			renamed_tags: [],
-			media_tags: []
-		};
+		const result = await run();
+		const mappedOutcome = options.outcome?.(result);
+		if (mappedOutcome === null) return false;
+		const outcome = mappedOutcome ??
+			(result as BehaviourOutcome | void) ?? {
+				deleted_ids: [],
+				removed_tags: [],
+				renamed_tags: [],
+				media_tags: []
+			};
+		if (outcome === null) return false;
 		// Scenery that left with the edit — the wallpaper a removed stage was the only user of. It
 		// went in the same transaction, so the grid drops it here rather than through a command of
 		// its own. Reported rather than assumed: whether it left is the backend's decision.

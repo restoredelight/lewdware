@@ -177,22 +177,13 @@ pub fn stage_scenery(conn: &Connection, id: &str) -> Result<Vec<u64>> {
     let Some((wallpaper, audio)) = stage_media else {
         return Ok(Vec::new());
     };
-    let entry_media: Option<(Option<u64>, Option<u64>)> = conn
+    let (entry_splash, entry_sound, prompt_sound): (Option<u64>, Option<u64>, Option<u64>) = conn
         .query_row(
-            "SELECT splash_media, sound_media FROM behaviour_stage_entry WHERE stage_id = ?1",
-            params![id],
-            |row| Ok((row.get("splash_media")?, row.get("sound_media")?)),
-        )
-        .optional()?;
-    let prompt_media: Option<Option<u64>> = conn
-        .query_row(
-            "SELECT sound_media FROM behaviour_stage_prompt WHERE stage_id = ?1",
-            params![id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let (entry_splash, entry_sound) = entry_media.unwrap_or((None, None));
-    let prompt_sound = prompt_media.flatten();
+        "SELECT entry_splash_media, entry_sound_media, prompt_sound_media
+             FROM behaviour_stage WHERE id = ?1",
+        params![id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
     Ok([wallpaper, audio, entry_splash, entry_sound, prompt_sound]
         .into_iter()
         .flatten()

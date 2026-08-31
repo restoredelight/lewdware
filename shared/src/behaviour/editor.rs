@@ -25,7 +25,7 @@ pub use group::{
     set_content_group_label,
 };
 pub use link::{
-    WebLinkRow, add_web_link, add_web_link_tag, remove_web_link, remove_web_link_tag,
+    WebLinkRecord, add_web_link, add_web_link_tag, remove_web_link, remove_web_link_tag,
     set_web_link_url, web_links,
 };
 pub use media::{
@@ -35,13 +35,13 @@ pub use media::{
     set_popup_video_loop, set_popup_video_volume, set_popup_weight, slot_value,
 };
 pub use membership::{
-    MembershipPlan, StageTagCreation, apply_membership_creation, media_tags, plan_stage_membership,
-    selects, stage_restricts_content,
+    MembershipPlan, StageMembership, StageTagCreation, apply_membership_creation, media_tags,
+    plan_stage_membership, stage_membership, stage_restricts_content,
 };
 pub use pool::{
-    PoolKind, TextItemRow, add_text_item, add_text_item_tag, remove_text_item,
-    remove_text_item_tag, set_text_item_summary, set_text_item_text, set_text_item_timeout,
-    text_pool,
+    PoolKind, TextItemRow, add_caption, add_notification, add_prompt, add_text_item_tag,
+    remove_text_item, remove_text_item_tag, set_caption_text, set_notification_body,
+    set_notification_summary, set_prompt_text, set_prompt_timeout, text_pool,
 };
 pub use stage::{
     add_stage_exclude_tag, add_stage_tag, remove_stage_exclude_tag, remove_stage_tag,

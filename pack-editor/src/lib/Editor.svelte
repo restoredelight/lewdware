@@ -162,7 +162,7 @@
 			const perFile = await Promise.all(
 				store.pendingMediaRemoval.map((id) => api.getMediaUsage(id))
 			);
-			return [...new Set(perFile.flat())];
+			return [...new Set(perFile.flat().map((usage) => usage.label))];
 		}
 	);
 

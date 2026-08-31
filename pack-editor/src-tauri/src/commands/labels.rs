@@ -2,7 +2,7 @@
 
 use tauri::State;
 
-use crate::pack::{ArtistSummary, TagRow, TagSummary};
+use crate::pack::{ArtistSummary, MediaUsage, TagRow, TagSummary};
 use crate::AppState;
 
 #[tauri::command]
@@ -66,9 +66,12 @@ pub async fn get_tag_rows(state: State<'_, AppState>) -> Result<Vec<TagRow>, Str
         .await
 }
 
-/// Every media slot pointing at `id`, named the way the author would recognize it.
+/// Every behaviour slot pointing at `id`, with a target the UI can navigate to.
 #[tauri::command]
-pub async fn get_media_usage(state: State<'_, AppState>, id: u64) -> Result<Vec<String>, String> {
+pub async fn get_media_usage(
+    state: State<'_, AppState>,
+    id: u64,
+) -> Result<Vec<MediaUsage>, String> {
     state
         .with_pack_or(vec![], async |pack| pack.get_media_usage(id).await)
         .await

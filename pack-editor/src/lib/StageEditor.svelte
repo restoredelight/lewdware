@@ -48,7 +48,7 @@
 	);
 	const isLast = $derived(index === stages.length - 1);
 
-	const invalidates = [keys.timeline, keys.summary, keys.tags];
+	const invalidates = [keys.timeline, keys.stageMemberships, keys.summary, keys.tags];
 
 	/** Sends one field of this stage. Nothing else about the stage travels with the change. */
 	function write(run: () => Promise<unknown>, label: string) {

@@ -206,7 +206,7 @@ fn setting_a_slot_to_what_it_holds_keeps_it() {
 }
 
 #[test]
-fn a_stages_optional_rows_are_created_when_a_slot_first_fills_one() {
+fn a_stage_slot_can_be_filled_without_rewriting_the_timeline() {
     let mut conn = timeline_pack(&["a", "b"]);
     let slot = MediaSlot::StageEntrySplash {
         stage: "a".to_string(),

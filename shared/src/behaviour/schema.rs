@@ -27,11 +27,11 @@ pub struct Content {
     #[serde(default)]
     pub content_groups: Vec<ContentGroup>,
     #[serde(default)]
-    pub captions: Vec<TextItem>,
+    pub captions: Vec<Caption>,
     #[serde(default)]
-    pub prompts: Vec<TextItem>,
+    pub prompts: Vec<Prompt>,
     #[serde(default)]
-    pub notifications: Vec<TextItem>,
+    pub notifications: Vec<Notification>,
     #[serde(default)]
     pub web_links: Vec<WebLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,6 +55,45 @@ pub enum MediaSlot {
     StageEntrySplash { stage: String },
     StageEntrySound { stage: String },
     StagePromptSound { stage: String },
+}
+
+impl MediaSlot {
+    pub fn slot_column(&self) -> SlotColumn<'_> {
+        let (table, column, stage) = match self {
+            MediaSlot::Wallpaper => ("behaviour_content", "wallpaper", None),
+            MediaSlot::Splash => ("behaviour_content", "splash", None),
+            MediaSlot::StageWallpaper { stage } => ("behaviour_stage", "wallpaper", Some(stage)),
+            MediaSlot::StageAudio { stage } => ("behaviour_stage", "audio", Some(stage)),
+            MediaSlot::StageEntrySplash { stage } => {
+                ("behaviour_stage", "entry_splash_media", Some(stage))
+            }
+            MediaSlot::StageEntrySound { stage } => {
+                ("behaviour_stage", "entry_sound_media", Some(stage))
+            }
+            MediaSlot::StagePromptSound { stage } => {
+                ("behaviour_stage", "prompt_sound_media", Some(stage))
+            }
+        };
+
+        SlotColumn {
+            table,
+            column,
+            key: if table == "behaviour_stage" {
+                "id"
+            } else {
+                "stage_id"
+            },
+            stage: stage.map(String::as_str),
+        }
+    }
+}
+
+/// Where a `MediaSlot` lives
+pub struct SlotColumn<'a> {
+    pub table: &'static str,
+    pub column: &'static str,
+    pub key: &'static str,
+    pub stage: Option<&'a str>,
 }
 
 /// What a pack author says about one file used as popup content.
@@ -210,21 +249,33 @@ impl FromSql for MonitorPreference {
     }
 }
 
-/// A single content-pool entry, taggable independently of any other entry in the same pool
-/// (unlike Edgeware's one-mood-per-item model, an item here can carry any number of tags — or
-/// none, matching lewdware's general tag model).
+/// A caption selected from the pool for a popup.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TextItem {
+pub struct Caption {
     pub text: String,
     /// Which media tags this applies to; empty means "applies regardless of media/context"
     /// (subsumes Edgeware's separate `default` bucket).
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Only prompts use this. Absent means the default mode derives a deadline from the prompt's
-    /// character count.
+}
+
+/// A prompt and its optional author-selected answer deadline.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Prompt {
+    pub text: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Absent means the default mode derives a deadline from the prompt's character count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<f64>,
-    /// Only notifications use this: the desktop notification's title, with `text` as its body.
+}
+
+/// A desktop notification: `text` is its body and `summary` is its optional title.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Notification {
+    pub text: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// Absent (or empty) means the notification is shown with no title, which is what every
     /// converted Edgeware pack gets — Edgeware notifications are bodies only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -308,9 +359,9 @@ impl Behaviour {
                 popups: read_popup_media(conn)?,
                 audio: read_audio_media(conn)?,
                 content_groups: read_content_groups(conn)?,
-                captions: read_text_pool(conn, "caption")?,
-                prompts: read_text_pool(conn, "prompt")?,
-                notifications: read_text_pool(conn, "notification")?,
+                captions: read_text_pool(conn)?,
+                prompts: read_text_pool(conn)?,
+                notifications: read_text_pool(conn)?,
                 web_links: read_web_links(conn)?,
                 wallpaper,
                 splash,
@@ -340,9 +391,9 @@ impl Behaviour {
         write_popup_media(tx, &content.popups)?;
         write_audio_media(tx, &content.audio)?;
         write_content_groups(tx, &content.content_groups)?;
-        write_text_pool(tx, "caption", &content.captions)?;
-        write_text_pool(tx, "prompt", &content.prompts)?;
-        write_text_pool(tx, "notification", &content.notifications)?;
+        write_text_pool(tx, &content.captions)?;
+        write_text_pool(tx, &content.prompts)?;
+        write_text_pool(tx, &content.notifications)?;
         write_web_links(tx, &content.web_links)?;
         if let Some(timeline) = self.timeline.as_ref() {
             write_timeline(tx, timeline)?;

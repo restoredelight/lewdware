@@ -44,6 +44,7 @@ fn read_popup_media_where(
          {filter}
          ORDER BY popup.media_id"
     ))?;
+
     statement
         .query_and_then(binds, |row| {
             let media_id: u64 = row.get("media_id")?;
@@ -111,8 +112,6 @@ pub fn write_popup_media(tx: &Transaction<'_>, popups: &BTreeMap<u64, PopupMedia
 }
 
 /// Writes one file's popup attributes and its explicit sound pairings.
-///
-/// The body of [`write_popup_media`]' loop, separated for whole-document writers.
 pub fn write_one_popup_media(
     tx: &Transaction<'_>,
     media_id: u64,
@@ -123,6 +122,7 @@ pub fn write_one_popup_media(
         [media_id],
         |row| row.get(0),
     )?;
+
     if !exists {
         bail!("popup media {media_id} does not exist");
     }
@@ -158,7 +158,9 @@ pub fn write_one_popup_media(
             entry.video_volume,
         ],
     )?;
+
     write_popup_audio_pairs(tx, media_id, &entry.audio)?;
+
     Ok(())
 }
 
@@ -173,6 +175,7 @@ pub(crate) fn write_popup_audio_pairs(
            AND audio_media_id NOT IN (SELECT value FROM rarray(?2))",
         params![popup, sql_array(audio)?],
     )?;
+
     for audio_media_id in audio {
         tx.execute(
             "INSERT OR IGNORE INTO behaviour_popup_audio_pair (popup_media_id, audio_media_id)
@@ -180,12 +183,14 @@ pub(crate) fn write_popup_audio_pairs(
             params![popup, audio_media_id],
         )?;
     }
+
     Ok(())
 }
 
 pub fn read_audio_media(conn: &Connection) -> Result<BTreeMap<u64, AudioMedia>> {
     let mut statement =
         conn.prepare("SELECT media_id, volume FROM behaviour_audio_media ORDER BY media_id")?;
+
     Ok(statement
         .query_map([], |row| {
             Ok((
@@ -203,6 +208,7 @@ pub fn write_audio_media(tx: &Transaction<'_>, audio: &BTreeMap<u64, AudioMedia>
         let Some(volume) = entry.volume else {
             continue;
         };
+
         tx.execute(
             "INSERT INTO behaviour_audio_media (media_id, volume)
              VALUES (?, ?)
@@ -210,5 +216,6 @@ pub fn write_audio_media(tx: &Transaction<'_>, audio: &BTreeMap<u64, AudioMedia>
             params![media_id, volume],
         )?;
     }
+
     Ok(())
 }

@@ -42,11 +42,9 @@ async fn open_popup_sets_title_from_matching_caption() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                captions: vec![shared::behaviour::TextItem {
+                captions: vec![shared::behaviour::Caption {
                     text: "Obey.".to_string(),
                     tags: vec!["red".to_string()],
-                    timeout_seconds: None,
-                    summary: None,
                 }],
                 ..Default::default()
             };
@@ -292,11 +290,9 @@ async fn open_popup_skips_caption_silently_when_pool_empty_or_unmatched() {
             for content in [
                 Content::default(),
                 Content {
-                    captions: vec![shared::behaviour::TextItem {
+                    captions: vec![shared::behaviour::Caption {
                         text: "Obey.".to_string(),
                         tags: vec!["nonexistent".to_string()],
-                        timeout_seconds: None,
-                        summary: None,
                     }],
                     ..Default::default()
                 },
@@ -327,11 +323,9 @@ async fn captions_disabled_via_config_leaves_title_unset() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                captions: vec![shared::behaviour::TextItem {
+                captions: vec![shared::behaviour::Caption {
                     text: "Obey.".to_string(),
                     tags: vec![],
-                    timeout_seconds: None,
-                    summary: None,
                 }],
                 ..Default::default()
             };

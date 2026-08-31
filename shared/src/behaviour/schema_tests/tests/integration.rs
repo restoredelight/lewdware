@@ -2,10 +2,33 @@ use std::collections::BTreeMap;
 
 use super::{pack, stage, store};
 use crate::behaviour::schema::{
-    AudioMedia, Behaviour, ContentGroup, CountScope, Easing, EndStrategy, EventCountCondition,
-    EventKind, EventSchedule, Interval, Mitosis, MonitorPreference, Movement, PopupMedia,
-    SpawnRegion, StageEnd, StageEntry, TextItem, Timeline, Transition, TransitionCategory, WebLink,
+    AudioMedia, Behaviour, Caption, ContentGroup, CountScope, Easing, EndStrategy,
+    EventCountCondition, EventKind, EventSchedule, Interval, Mitosis, MonitorPreference, Movement,
+    Notification, PopupMedia, Prompt, SpawnRegion, StageEnd, StageEntry, Timeline, Transition,
+    TransitionCategory, WebLink,
 };
+
+#[test]
+fn flat_text_rows_are_validated_into_their_domain_types() {
+    for (kind, timeout_seconds, summary) in [
+        ("caption", Some(10.0), None),
+        ("prompt", None, Some("not a prompt title")),
+        ("notification", Some(10.0), None),
+    ] {
+        let conn = pack();
+        conn.execute(
+            "INSERT INTO behaviour_text_item (kind, text, timeout_seconds, summary)
+             VALUES (?1, 'invalid', ?2, ?3)",
+            rusqlite::params![kind, timeout_seconds, summary],
+        )
+        .unwrap();
+
+        assert!(
+            Behaviour::read(&conn).is_err(),
+            "accepted invalid {kind} row"
+        );
+    }
+}
 
 #[test]
 fn a_full_document_survives_the_round_trip() {
@@ -99,29 +122,23 @@ fn a_full_document_survives_the_round_trip() {
                 enabled_by_default: false,
             }],
             captions: vec![
-                TextItem {
+                Caption {
                     text: "Obey.".to_string(),
                     tags: vec!["kinky".to_string()],
-                    timeout_seconds: None,
-                    summary: None,
                 },
-                TextItem {
+                Caption {
                     text: "Good.".to_string(),
                     tags: vec![],
-                    timeout_seconds: None,
-                    summary: None,
                 },
             ],
-            prompts: vec![TextItem {
+            prompts: vec![Prompt {
                 text: "Type this.".to_string(),
                 tags: vec![],
                 timeout_seconds: Some(30.0),
-                summary: None,
             }],
-            notifications: vec![TextItem {
+            notifications: vec![Notification {
                 text: "Ping.".to_string(),
                 tags: vec!["soft".to_string()],
-                timeout_seconds: None,
                 summary: Some("Attention".to_string()),
             }],
             web_links: vec![WebLink {

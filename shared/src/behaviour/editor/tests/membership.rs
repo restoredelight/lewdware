@@ -2,13 +2,13 @@ use rusqlite::{Connection, params};
 
 use super::{pack, timeline_pack, tx_on};
 use crate::behaviour::db::read_stages;
-use crate::behaviour::editor::membership::selects;
+use crate::behaviour::editor::membership::selects_content;
 use crate::behaviour::editor::stage_tags::MAX_SLUG;
 use crate::behaviour::editor::{
     MembershipPlan, OwnedStageTag, StageTagCreation, add_content_group, apply_membership_creation,
     media_tags, plan_stage_membership, remove_stage_tag, set_stage_content_tags,
-    set_stage_exclude_tags, set_stage_label, stage_exclude_tag_name, stage_owned_tags,
-    stage_tag_name, stage_tag_shared,
+    set_stage_exclude_tags, set_stage_label, stage_exclude_tag_name, stage_membership,
+    stage_owned_tags, stage_tag_name, stage_tag_shared,
 };
 use crate::behaviour::schema::ContentGroup;
 
@@ -160,6 +160,32 @@ fn a_file_can_leave_a_stage_that_restricts_nothing() {
 }
 
 #[test]
+fn membership_rows_are_calculated_from_the_stored_stages() {
+    let conn = membership_pack(&[
+        ("early", "Early", Some(&["soft"])),
+        ("late", "Late", Some(&["kinky"])),
+    ]);
+    tag_file(&conn, 1, &["kinky"]);
+
+    let rows = stage_membership(&conn, 1).unwrap();
+    assert_eq!(
+        rows,
+        [
+            crate::behaviour::editor::StageMembership {
+                id: "early".to_string(),
+                label: "Early".to_string(),
+                member: false,
+            },
+            crate::behaviour::editor::StageMembership {
+                id: "late".to_string(),
+                label: "Late".to_string(),
+                member: true,
+            },
+        ]
+    );
+}
+
+#[test]
 fn joining_reuses_the_stages_own_tag_and_nothing_else() {
     let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
     tx_on(&mut conn, |tx| {
@@ -282,8 +308,11 @@ fn leaving_one_stage_leaves_only_that_stage() {
 
     let stages = read_stages(&conn).unwrap();
     let tags = media_tags(&conn, 1).unwrap();
-    assert!(!selects(&stages[0], &tags), "left Peak");
-    assert!(selects(&stages[1], &tags), "but stayed in Climax");
+    assert!(!selects_content(&stages[0].content, &tags), "left Peak");
+    assert!(
+        selects_content(&stages[1].content, &tags),
+        "but stayed in Climax"
+    );
     assert!(
         tags.contains(&"intense".to_string()),
         "and kept its own tag"
@@ -302,8 +331,8 @@ fn rejoining_a_stage_undoes_the_exclusion_rather_than_layering_over_it() {
         apply_membership_creation(tx, &plan).unwrap();
     });
     settle(&mut conn, 1, &plan);
-    assert!(!selects(
-        &read_stages(&conn).unwrap()[0],
+    assert!(!selects_content(
+        &read_stages(&conn).unwrap()[0].content,
         &media_tags(&conn, 1).unwrap()
     ));
 
@@ -315,10 +344,29 @@ fn rejoining_a_stage_undoes_the_exclusion_rather_than_layering_over_it() {
     assert_eq!(plan.remove, ["not-stage-peak"]);
     assert!(plan.apply.is_empty(), "{plan:?}");
     settle(&mut conn, 1, &plan);
-    assert!(selects(
-        &read_stages(&conn).unwrap()[0],
+    assert!(selects_content(
+        &read_stages(&conn).unwrap()[0].content,
         &media_tags(&conn, 1).unwrap()
     ));
+}
+
+#[test]
+fn joining_reports_exclusion_tags_that_are_not_dedicated_to_the_stage() {
+    let mut conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
+    tx_on(&mut conn, |tx| {
+        set_stage_exclude_tags(
+            tx,
+            "peak",
+            &["not-stage-peak".to_string(), "no-audio".to_string()],
+            Some("not-stage-peak"),
+        )
+        .unwrap();
+    });
+    tag_file(&conn, 1, &["not-stage-peak", "no-audio"]);
+
+    let plan = plan_stage_membership(&conn, 1, "peak", true).unwrap();
+    assert_eq!(plan.remove, ["not-stage-peak", "no-audio"]);
+    assert_eq!(plan.non_owned_removals, ["no-audio"]);
 }
 
 /// An exclusion tag left on the file would silently override the tag the join just added.
@@ -377,9 +425,9 @@ fn an_excluded_file_is_out_however_it_got_in() {
         set_stage_exclude_tags(tx, "peak", &["not-stage-peak".to_string()], None).unwrap();
     });
     let stage = &read_stages(&conn).unwrap()[0];
-    assert!(selects(stage, &["intense".to_string()]));
-    assert!(!selects(
-        stage,
+    assert!(selects_content(&stage.content, &["intense".to_string()]));
+    assert!(!selects_content(
+        &stage.content,
         &["intense".to_string(), "not-stage-peak".to_string()]
     ));
 }

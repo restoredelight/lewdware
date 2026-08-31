@@ -261,6 +261,10 @@ export const keys = {
 	contentGroups: 'behaviour:content_groups',
 	mediaSlots: 'behaviour:slots',
 	timeline: 'behaviour:timeline',
+	stageMembership: (media: number) => `behaviour:stage_membership:${media}`,
+	stageMemberships: 'behaviour:stage_membership:',
+	stageRemovalImpact: (id: string) => `behaviour:stage_removal:${id}`,
+	mediaUsage: (id: number) => `media:usage:${id}`,
 	popupAttributes: (ids: number[]) => `behaviour:popup:${ids.join(',')}`,
 	audioAttributes: (ids: number[]) => `behaviour:audio:${ids.join(',')}`,
 	/** Everything the behaviour document backs — the prefix undo and discard invalidate. */

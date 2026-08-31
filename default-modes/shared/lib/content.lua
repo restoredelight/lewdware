@@ -65,7 +65,8 @@ local function eligible_for(item_tags, filter)
 end
 
 --- Pick a uniformly-random eligible entry from `pool` (an array of tables with a
---- `tags: string[]` field -- a `TextItem` or `WebLink`). Returns nil if the pool is empty or
+--- `tags: string[]` field -- a caption, prompt, notification, or `WebLink`). Returns nil if the
+--- pool is empty or
 --- every entry is filtered out -- interaction rule 5 (empty pools are skip-and-continue, never
 --- errors): callers must treat nil as "skip this beat", never assert/error on it.
 ---

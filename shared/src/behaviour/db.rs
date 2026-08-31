@@ -14,9 +14,9 @@ mod transition;
 
 pub(crate) use common::sql_array;
 
-pub use content::{
-    read_content_groups, read_text_pool, read_web_links, write_content_groups, write_text_pool,
-    write_web_links,
+pub(crate) use content::{
+    read_content_groups, read_text_pool, read_text_pool_rows, read_web_links, write_content_groups,
+    write_text_pool, write_web_links,
 };
 pub(crate) use media::write_popup_audio_pairs;
 pub use media::{

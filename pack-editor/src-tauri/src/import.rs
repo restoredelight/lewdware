@@ -335,6 +335,8 @@ async fn import_one_media(
 mod tests {
     use std::io::Write;
 
+    use shared::behaviour::Content;
+
     use super::*;
 
     fn source_zip(files: &[(&str, &str)]) -> tempfile::TempDir {

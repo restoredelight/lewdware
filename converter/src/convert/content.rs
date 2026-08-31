@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use crate::model::{CorruptionLevel, EdgewareIndex, EdgewareMood, WebEntry};
 use crate::slug::unique_slug;
-use shared::behaviour::{Content, ContentGroup, TextItem, WebLink};
+use shared::behaviour::{Caption, Content, ContentGroup, Notification, Prompt, WebLink};
 use shared::tags;
 
 pub(super) fn build_content_groups(
@@ -26,48 +26,39 @@ pub(super) fn build_content_groups(
         .collect()
 }
 
-/// Builds a `TextItem` pool from `default_pool` (untagged) plus each mood's own pool (tagged
+/// Builds a text pool from `default_pool` (untagged) plus each mood's own pool (tagged
 /// `[mood.name]`), via `pool` selecting which `MoodBase` field to read. Shared by captions,
 /// prompts and notifications -- they're all `{ tags: string[] }` pools over the
 /// same mood structure.
-pub(super) fn text_items(
+fn tagged_texts(
     default_pool: &[String],
     moods: &[EdgewareMood],
     pool: impl Fn(&crate::model::MoodBase) -> &Vec<String>,
-) -> Vec<TextItem> {
-    let mut items: Vec<TextItem> = default_pool
+) -> Vec<(String, Vec<String>)> {
+    let mut items: Vec<(String, Vec<String>)> = default_pool
         .iter()
-        .map(|text| TextItem {
-            text: text.clone(),
-            tags: vec![],
-            timeout_seconds: None,
-            summary: None,
-        })
+        .map(|text| (text.clone(), vec![]))
         .collect();
     for mood in moods {
         for text in pool(&mood.base) {
-            items.push(TextItem {
-                text: text.clone(),
-                tags: vec![mood.name.clone()],
-                timeout_seconds: None,
-                summary: None,
-            });
+            items.push((text.clone(), vec![mood.name.clone()]));
         }
     }
     items
 }
 
 pub(super) fn populate_captions(index: &EdgewareIndex, content: &mut Content) {
-    content.captions = text_items(&index.default.captions, &index.moods, |base| &base.captions);
+    content.captions = tagged_texts(&index.default.captions, &index.moods, |base| &base.captions)
+        .into_iter()
+        .map(|(text, tags)| Caption { text, tags })
+        .collect();
     // Fold the close-button label into captions (per `behaviour-design/edgeware-compat.md`) --
     // only when the author actually set it, so a pack that never touched `popupClose` doesn't
     // get Edgeware's own boilerplate ("I Submit <3") injected as a fake caption.
     if let Some(popup_close) = &index.default_extra.popup_close {
-        content.captions.push(TextItem {
+        content.captions.push(Caption {
             text: popup_close.clone(),
             tags: vec![],
-            timeout_seconds: None,
-            summary: None,
         });
     }
 }
@@ -99,13 +90,27 @@ pub(super) fn escape_managed_mood_names(index: &mut EdgewareIndex, levels: &mut 
 /// Edgeware's own submit-button label (`promptSubmit`/`subtext`) has nowhere to go: every prompt
 /// submits with a plain "Submit", so the pack's override is read past rather than carried over.
 pub(super) fn populate_prompts(index: &EdgewareIndex, content: &mut Content) {
-    content.prompts = text_items(&index.default.prompts, &index.moods, |base| &base.prompts);
+    content.prompts = tagged_texts(&index.default.prompts, &index.moods, |base| &base.prompts)
+        .into_iter()
+        .map(|(text, tags)| Prompt {
+            text,
+            tags,
+            timeout_seconds: None,
+        })
+        .collect();
 }
 
 pub(super) fn populate_notifications(index: &EdgewareIndex, content: &mut Content) {
-    content.notifications = text_items(&index.default.notifications, &index.moods, |base| {
+    content.notifications = tagged_texts(&index.default.notifications, &index.moods, |base| {
         &base.notifications
-    });
+    })
+    .into_iter()
+    .map(|(text, tags)| Notification {
+        text,
+        tags,
+        summary: None,
+    })
+    .collect();
 }
 
 pub(super) fn populate_web_links(index: &EdgewareIndex, content: &mut Content) {

@@ -3,12 +3,6 @@ use rusqlite::{Connection, Transaction, params};
 
 use crate::behaviour::db::common::sql_array;
 
-// ── Tags ─────────────────────────────────────────────────────────────────────
-//
-// Every tag list in the document is a join to `tags`. That is what makes renaming a tag
-// `UPDATE tags SET name`, merging one a re-point, and deleting one a cascade, instead of a pass
-// over the whole document rewriting strings (the late `Behaviour::rewrite_tag`).
-
 pub fn read_tags(
     conn: &Connection,
     table: &str,
@@ -60,15 +54,12 @@ pub fn write_tags(
 }
 
 /// The id of `name`, creating the tag if the pack does not have it yet.
-///
-/// A tag the document names *is* a tag the pack has -- that is what the foreign key asserts. So a
-/// tag typed into a caption or a content group becomes a real row, and shows up in the Tags tab
-/// with no media attached, rather than existing only as a string inside the document.
 pub fn tag_id(tx: &Transaction<'_>, name: &str) -> Result<i64> {
     tx.execute(
         "INSERT OR IGNORE INTO tags (name) VALUES (?)",
         params![name],
     )?;
+
     Ok(
         tx.query_row("SELECT id FROM tags WHERE name = ?", params![name], |row| {
             row.get(0)

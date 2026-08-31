@@ -6,6 +6,7 @@ use super::*;
 use crate::history;
 use anyhow::{bail, Result};
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use serde::Serialize;
 use shared::{behaviour::Behaviour, tags};
 
 /// The stored behaviour document, assembled from the `behaviour_*` tables. The mapping is entirely
@@ -281,7 +282,7 @@ impl MediaPack {
     ///
     /// Includes stages of a switched-off timeline, deliberately: those slots still exist, and a
     /// removal would still empty them.
-    pub async fn get_media_usage(&self, media: u64) -> Result<Vec<String>> {
+    pub async fn get_media_usage(&self, media: u64) -> Result<Vec<MediaUsage>> {
         self.db_execute(move |conn| {
             let mut usage = Vec::new();
             let (wallpaper, splash): (Option<u64>, Option<u64>) = conn
@@ -293,19 +294,28 @@ impl MediaPack {
                 .optional()?
                 .unwrap_or((None, None));
             if wallpaper == Some(media) {
-                usage.push("the pack wallpaper".to_string());
+                usage.push(MediaUsage {
+                    label: "Wallpaper".to_string(),
+                    target: MediaUsageTarget::Wallpaper,
+                });
             }
             if splash == Some(media) {
-                usage.push("the splash".to_string());
+                usage.push(MediaUsage {
+                    label: "Splash".to_string(),
+                    target: MediaUsageTarget::Splash,
+                });
             }
             let mut statement = conn.prepare(
-                "SELECT label FROM behaviour_stage WHERE wallpaper = ? ORDER BY position",
+                "SELECT id, label FROM behaviour_stage WHERE wallpaper = ? ORDER BY position",
             )?;
-            let stages: Vec<String> = statement
-                .query_map(params![media], |row| row.get(0))?
+            let stages: Vec<(String, String)> = statement
+                .query_map(params![media], |row| Ok((row.get(0)?, row.get(1)?)))?
                 .collect::<rusqlite::Result<_>>()?;
-            for label in stages {
-                usage.push(format!("the wallpaper for \u{201c}{label}\u{201d}"));
+            for (id, label) in stages {
+                usage.push(MediaUsage {
+                    label: format!("Wallpaper for \u{201c}{label}\u{201d}"),
+                    target: MediaUsageTarget::Stage { id },
+                });
             }
             Ok(usage)
         })
@@ -788,6 +798,20 @@ impl MediaPack {
         }).await?;
         self.mark_unsaved().await
     }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MediaUsageTarget {
+    Wallpaper,
+    Splash,
+    Stage { id: String },
+}
+
+#[derive(Serialize)]
+pub struct MediaUsage {
+    pub label: String,
+    pub target: MediaUsageTarget,
 }
 
 /// Get-or-create a tag and attach it to one media file. Used for the managed markers, which is

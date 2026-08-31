@@ -1,8 +1,8 @@
 <script lang="ts">
+	import Dialog from '$ui/Dialog.svelte';
 	import { api } from './api.js';
 	import { mutate } from './mutate.svelte.js';
 	import { keys, query } from './query.svelte.js';
-	import { stageMembership } from './stageMembership.js';
 	import type { MediaFile } from './types.js';
 
 	type Props = {
@@ -13,32 +13,66 @@
 
 	let { file, label = 'Appears in', compact = false }: Props = $props();
 
-	const timeline = query(keys.timeline, api.timeline.get);
-	const allStages = $derived(timeline.current?.stages ?? []);
-	const stages = $derived(stageMembership(allStages, file.tags));
+	const membership = query(
+		() => keys.stageMembership(file.id),
+		() => api.stage.membership(file.id)
+	);
+	const stages = $derived(membership.current ?? []);
 
-	const invalidates = [keys.timeline, keys.tags, keys.summary];
+	const invalidates = $derived([
+		keys.timeline,
+		keys.stageMembership(file.id),
+		keys.tags,
+		keys.summary
+	]);
+	let pendingAddition = $state<{ id: string; label: string; tagsToRemove: string[] } | null>(null);
 
 	/**
 	 * Sends one membership change, and sends only the click.
 	 *
-	 * Nothing here is destructive and nothing needs confirming: both directions are additive on a
-	 * tag the editor owns — joining adds the stage's own tag, leaving adds its exclusion tag — so
-	 * the author's own vocabulary is never edited to move one file. Which tag, and whether the
-	 * stage has to be given one first, is decided backend-side against the pack as it stands.
+	 * The backend plans the change before it writes. If joining would remove a tag that is not the
+	 * stage's dedicated exclusion tag, it returns those tags for confirmation instead of editing.
 	 *
 	 * The file's tag list follows from `BehaviourOutcome` once the write lands, rather than being
 	 * changed here on the way out: an edit that fails has to leave the grid showing what is really
 	 * stored.
 	 */
+	function changeMembership(
+		stage: { id: string; label: string },
+		member: boolean,
+		approvedTagRemovals: string[] = []
+	) {
+		const label = member
+			? `Add \u201c${file.file_name}\u201d to ${stage.label}`
+			: `Remove \u201c${file.file_name}\u201d from ${stage.label}`;
+		void mutate(
+			() => api.stage.setMembership(file.id, stage.id, member, approvedTagRemovals, label),
+			{
+				label,
+				invalidates,
+				outcome: (result) => {
+					if (result.kind === 'confirmation_required') {
+						pendingAddition = { id: stage.id, label: stage.label, tagsToRemove: result.tags };
+						return null;
+					}
+					return result.outcome;
+				}
+			}
+		);
+	}
+
 	function toggle(row: (typeof stages)[number]) {
-		const label = row.member
-			? `Remove \u201c${file.file_name}\u201d from ${row.label}`
-			: `Add \u201c${file.file_name}\u201d to ${row.label}`;
-		void mutate(() => api.stage.setMembership(file.id, row.id, !row.member, label), {
-			label,
-			invalidates
-		});
+		if (row.member) {
+			changeMembership(row, false);
+			return;
+		}
+		changeMembership(row, true);
+	}
+
+	function confirmAddition() {
+		const pending = pendingAddition;
+		pendingAddition = null;
+		if (pending) changeMembership(pending, true, pending.tagsToRemove);
 	}
 </script>
 
@@ -61,6 +95,18 @@
 			{/each}
 		</div>
 	</section>
+{/if}
+
+{#if pendingAddition}
+	<Dialog
+		title={`Add “${file.file_name}” to ${pendingAddition.label}?`}
+		description={`Tags being removed: ${pendingAddition.tagsToRemove.map((tag) => `“${tag}”`).join(', ')}`}
+		buttons={[
+			{ label: 'Cancel', onclick: () => (pendingAddition = null) },
+			{ label: 'Add anyway', primary: true, onclick: confirmAddition }
+		]}
+		onclose={() => (pendingAddition = null)}
+	/>
 {/if}
 
 <style>

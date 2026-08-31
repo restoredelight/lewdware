@@ -16,18 +16,20 @@
 	import { api } from './api.js';
 	import { mutate } from './mutate.svelte.js';
 	import { keys, query } from './query.svelte.js';
-	import { tagClaims } from './stageTags.js';
 	import { store } from './store.svelte.js';
 	import type { Stage } from './types.js';
 
 	const timeline = query(keys.timeline, api.timeline.get);
-	const tagRows = query(keys.tags, api.getTagRows);
 	const stages = $derived(timeline.current?.stages ?? []);
 	const transitions = $derived(timeline.current?.transitions ?? []);
-	const invalidates = [keys.timeline, keys.summary, keys.tags];
+	const invalidates = [keys.timeline, keys.stageMemberships, keys.summary, keys.tags];
 
 	let activeId = $state(store.experienceActiveId ?? '');
 	let removing = $state<Stage | null>(null);
+	const removalImpact = query(
+		() => keys.stageRemovalImpact(removing?.id ?? ''),
+		() => api.stage.removalImpact(removing?.id ?? '')
+	);
 
 	$effect(() => {
 		store.experienceActiveId = activeId || null;
@@ -99,17 +101,17 @@
 	// brings back the whole stage rather than a stage without its wallpaper.
 
 	/** What still holds the tag of the stage being removed, for the confirmation to say out loud. */
-	const removingClaims = $derived.by(() => {
-		const tag = removing?.content.owned_tag;
-		if (!tag || !removing) return null;
-		const contentUses = tagRows.current?.find((row) => row.name === tag)?.content_uses ?? 0;
-		return tagClaims(stages, tag, removing.id, store.files, contentUses);
-	});
+	const removingClaims = $derived(removalImpact.current);
 
 	function removalNote() {
-		const tag = removing?.content.owned_tag;
+		const tag = removingClaims?.tag;
 		if (!tag || !removingClaims) return '';
-		if (!removingClaims.claimed) return ` Its tag “${tag}” is unused and goes with it.`;
+		if (
+			removingClaims.media === 0 &&
+			removingClaims.stages.length === 0 &&
+			removingClaims.content === 0
+		)
+			return ` Its tag “${tag}” is unused and goes with it.`;
 		const parts: string[] = [];
 		const { media, stages: others, content } = removingClaims;
 		if (media > 0) parts.push(`${media} file${media === 1 ? '' : 's'}`);
@@ -183,10 +185,11 @@
 			{ label: 'Cancel', onclick: () => (removing = null) },
 			// Offered, never the default: an owned tag is almost always on media, and losing that
 			// classification to a restructuring is a much worse trade than an unused tag left behind.
-			...(removingClaims?.claimed
+			...(removingClaims &&
+			(removingClaims.media > 0 || removingClaims.stages.length > 0 || removingClaims.content > 0)
 				? [
 						{
-							label: `Remove stage and “${removing.content.owned_tag}”`,
+							label: `Remove stage and “${removingClaims.tag}”`,
 							destructive: true,
 							onclick: () => confirmRemove(true)
 						}

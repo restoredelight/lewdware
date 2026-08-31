@@ -1,11 +1,12 @@
-use super::{item, pack, popups_of, timeline_pack, tx_on};
+use super::{caption, notification, pack, popups_of, prompt, timeline_pack, tx_on};
 use crate::behaviour::db::read_one_stage;
 use crate::behaviour::editor::{
-    PoolKind, add_text_item, add_text_item_tag, remove_text_item, set_media_slot, set_popup_scale,
-    set_popup_weight, set_stage_audio_random, set_stage_content_tags, set_stage_end_duration,
-    set_stage_entry_notification, set_stage_event, set_stage_movement, set_stage_movement_speed,
-    set_stage_prompt_timeout_multiplier, set_text_item_summary, set_text_item_text,
-    set_text_item_timeout, set_transition_duration, set_transition_easing, text_pool, transitions,
+    PoolKind, add_caption, add_notification, add_prompt, add_text_item_tag, remove_text_item,
+    set_caption_text, set_media_slot, set_notification_body, set_notification_summary,
+    set_popup_scale, set_popup_weight, set_prompt_text, set_prompt_timeout, set_stage_audio_random,
+    set_stage_content_tags, set_stage_end_duration, set_stage_entry_notification, set_stage_event,
+    set_stage_movement, set_stage_movement_speed, set_stage_prompt_timeout_multiplier,
+    set_transition_duration, set_transition_easing, text_pool, transitions,
 };
 use crate::behaviour::schema::{Easing, EventKind, EventSchedule, Interval, MediaSlot, Movement};
 
@@ -19,13 +20,13 @@ fn two_fields_of_one_entry_do_not_clobber_each_other() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_text_item(tx, PoolKind::Notification, &item("body")).unwrap();
+        id = add_notification(tx, &notification("body")).unwrap();
         // Both writes are built against the entry as it was *before* either of them.
-        set_text_item_summary(tx, id, Some("title")).unwrap();
-        set_text_item_text(tx, id, "new body").unwrap();
+        set_notification_summary(tx, id, Some("title")).unwrap();
+        set_notification_body(tx, id, "new body").unwrap();
     });
 
-    let stored = &text_pool(&conn, PoolKind::Notification).unwrap()[0].item;
+    let stored = &text_pool(&conn, PoolKind::Notification).unwrap()[0];
     assert_eq!(stored.summary.as_deref(), Some("title"));
     assert_eq!(stored.text, "new body");
 }
@@ -38,11 +39,11 @@ fn a_setter_accepts_the_value_already_stored() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_text_item(tx, PoolKind::Caption, &item("same")).unwrap();
-        set_text_item_text(tx, id, "same").unwrap();
-        set_text_item_timeout(tx, id, None).unwrap();
+        id = add_prompt(tx, &prompt("same")).unwrap();
+        set_prompt_text(tx, id, "same").unwrap();
+        set_prompt_timeout(tx, id, None).unwrap();
     });
-    let stored = &text_pool(&conn, PoolKind::Caption).unwrap()[0].item;
+    let stored = &text_pool(&conn, PoolKind::Prompt).unwrap()[0];
     assert_eq!(stored.text, "same");
     assert_eq!(stored.timeout_seconds, None);
 }
@@ -54,12 +55,25 @@ fn a_setter_refuses_a_row_that_is_gone() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_text_item(tx, PoolKind::Caption, &item("gone")).unwrap();
+        id = add_caption(tx, &caption("gone")).unwrap();
         remove_text_item(tx, id).unwrap();
     });
     let tx = conn.transaction().unwrap();
-    assert!(set_text_item_text(&tx, id, "back").is_err());
+    assert!(set_caption_text(&tx, id, "back").is_err());
     assert!(add_text_item_tag(&tx, id, "imp").is_err());
+}
+
+#[test]
+fn a_pool_setter_refuses_an_entry_of_another_kind() {
+    let mut conn = pack();
+    let mut id = 0;
+    tx_on(&mut conn, |tx| {
+        id = add_prompt(tx, &prompt("question")).unwrap();
+    });
+
+    let tx = conn.transaction().unwrap();
+    assert!(set_caption_text(&tx, id, "not a caption").is_err());
+    assert!(set_notification_summary(&tx, id, Some("not a notification")).is_err());
 }
 
 /// Ownership is recorded on the association row, so a stage cannot own a tag it does not select by.

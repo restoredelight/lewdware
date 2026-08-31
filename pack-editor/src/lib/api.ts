@@ -6,6 +6,7 @@ import type {
 	AudioMedia,
 	BehaviourOutcome,
 	BehaviourSummary,
+	Caption,
 	ContentGroup,
 	EmbeddedMode,
 	EventCountCondition,
@@ -15,24 +16,29 @@ import type {
 	ImportResult,
 	MediaFile,
 	MediaServerInfo,
+	MediaUsage,
 	MediaSlot,
 	MediaSlots,
+	MembershipOutcome,
 	MetadataDto,
 	Mitosis,
 	MonitorPreference,
 	Movement,
+	Notification,
 	PackInfo,
 	PoolKind,
 	PopupChanges,
 	PopupMedia,
+	Prompt,
 	RecentPack,
 	SlotCleared,
 	SlotFilled,
 	SpawnRegion,
 	Stage,
+	StageMembershipRow,
+	StageRemovalImpact,
 	TagRow,
 	TagSummary,
-	TextItem,
 	TextItemRow,
 	TimelineDto,
 	Transition,
@@ -113,7 +119,7 @@ export const api = {
 	getTagSummaries: () => invoke<TagSummary[]>('get_tag_summaries'),
 	getTagRows: () => invoke<TagRow[]>('get_tag_rows'),
 	/** Every media slot pointing at `id`, named the way the author would recognize it. */
-	getMediaUsage: (id: number) => invoke<string[]>('get_media_usage', { id }),
+	getMediaUsage: (id: number) => invoke<MediaUsage[]>('get_media_usage', { id }),
 	renameTag: (from: string, to: string) => invoke<void>('rename_tag', { from, to }),
 	mergeTag: (from: string, to: string) => invoke<void>('merge_tag', { from, to }),
 	deleteTag: (tag: string) => invoke<void>('delete_tag', { tag }),
@@ -129,8 +135,7 @@ export const api = {
 	deleteArtist: (artist: string) => invoke<void>('delete_artist', { artist }),
 
 	getPackMetadata: () => invoke<MetadataDto>('get_pack_metadata'),
-	setPackName: (value: string, label: string) =>
-		invoke<void>('set_pack_name', { value, label }),
+	setPackName: (value: string, label: string) => invoke<void>('set_pack_name', { value, label }),
 	setPackCreator: (value: string | null, label: string) =>
 		invoke<void>('set_pack_creator', { value, label }),
 	setPackDescription: (value: string | null, label: string) =>
@@ -157,20 +162,28 @@ export const api = {
 
 	pool: {
 		get: (kind: PoolKind) => invoke<TextItemRow[]>('get_text_pool', { kind }),
-		setText: (id: number, text: string, label: string) =>
-			invoke<void>('set_text_item_text', { id, text, label }),
-		setSummary: (id: number, summary: string | null, label: string) =>
-			invoke<void>('set_text_item_summary', { id, summary, label }),
-		setTimeout: (id: number, seconds: number | null, label: string) =>
-			invoke<void>('set_text_item_timeout', { id, seconds, label }),
+		setCaptionText: (id: number, text: string, label: string) =>
+			invoke<void>('set_caption_text', { id, text, label }),
+		setPromptText: (id: number, text: string, label: string) =>
+			invoke<void>('set_prompt_text', { id, text, label }),
+		setNotificationBody: (id: number, text: string, label: string) =>
+			invoke<void>('set_notification_body', { id, text, label }),
+		setNotificationSummary: (id: number, summary: string | null, label: string) =>
+			invoke<void>('set_notification_summary', { id, summary, label }),
+		setPromptTimeout: (id: number, seconds: number | null, label: string) =>
+			invoke<void>('set_prompt_timeout', { id, seconds, label }),
 		// One chip at a time: two removals built from the same fetched list would each put the
 		// other's tag back.
 		addTag: (id: number, tag: string, label: string) =>
 			invoke<void>('add_text_item_tag', { id, tag, label }),
 		removeTag: (id: number, tag: string, label: string) =>
 			invoke<void>('remove_text_item_tag', { id, tag, label }),
-		add: (kind: PoolKind, item: TextItem, label: string) =>
-			invoke<BehaviourOutcome>('add_text_item', { kind, item, label }),
+		addCaption: (caption: Caption, label: string) =>
+			invoke<BehaviourOutcome>('add_caption', { caption, label }),
+		addPrompt: (prompt: Prompt, label: string) =>
+			invoke<BehaviourOutcome>('add_prompt', { prompt, label }),
+		addNotification: (notification: Notification, label: string) =>
+			invoke<BehaviourOutcome>('add_notification', { notification, label }),
 		remove: (id: number, label: string) => invoke<void>('remove_text_item', { id, label })
 	},
 
@@ -213,6 +226,8 @@ export const api = {
 	},
 
 	stage: {
+		membership: (media: number) => invoke<StageMembershipRow[]>('get_stage_membership', { media }),
+		removalImpact: (id: string) => invoke<StageRemovalImpact>('get_stage_removal_impact', { id }),
 		add: (after: string | null, source: string | null, name: string, label: string) =>
 			invoke<BehaviourOutcome>('add_stage', { after, source, name, label }),
 		duplicate: (id: string, label: string) =>
@@ -248,12 +263,23 @@ export const api = {
 		/**
 		 * Puts one file into a stage, or takes it out — the "Appears in" strip.
 		 *
-		 * Nothing but the click travels: which tag joining uses, and the fresh tags that leaving a
-		 * stage shared with another one needs, are worked out inside the transaction that writes
-		 * them. The tag changes it came to arrive back in {@link BehaviourOutcome.media_tags}.
+		 * The backend works out the exact tag changes. A join which would remove non-owned tags
+		 * returns `confirmation_required`; retry with the tags the author approved to apply it.
 		 */
-		setMembership: (media: number, stage: string, member: boolean, label: string) =>
-			invoke<BehaviourOutcome>('set_stage_membership', { media, stage, member, label }),
+		setMembership: (
+			media: number,
+			stage: string,
+			member: boolean,
+			approvedTagRemovals: string[],
+			label: string
+		) =>
+			invoke<MembershipOutcome>('set_stage_membership', {
+				media,
+				stage,
+				member,
+				approvedTagRemovals,
+				label
+			}),
 		addTag: (id: string, tag: string, label: string) =>
 			invoke<void>('add_stage_tag', { id, tag, label }),
 		removeTag: (id: string, tag: string, label: string) =>

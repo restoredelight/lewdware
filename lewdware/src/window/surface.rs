@@ -81,7 +81,7 @@ fn pack_rgba(px: &[u8]) -> u32 {
 
 /// Write one run of RGBA bytes starting at `pixel_offset` (in pixels, not bytes).
 fn blit_rgba_run(dst: &mut [u32], pixel_offset: usize, data: &[u8]) {
-    for (i, px) in data.chunks_exact(4).enumerate() {
+    for (i, px) in data.as_chunks::<4>().0.iter().enumerate() {
         dst[pixel_offset + i] = pack_rgba(px);
     }
 }

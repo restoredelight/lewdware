@@ -12,12 +12,17 @@ const file = (id: number, file_name: string, tags: string[] = []): MediaFile =>
 		hash: `h${id}`,
 		size: 1,
 		source_url: null,
+		popup_eligible: !tags.includes(NON_POPUP_TAG) && !tags.includes(EXPLICIT_ONLY_TAG),
+		explicit_only: tags.includes(EXPLICIT_ONLY_TAG),
+		audio_role: null,
 		file_info: { type: 'image', width: 1, height: 1, transparent: false }
 	}) as MediaFile;
 
 const audio = (id: number, file_name: string, tags: string[] = []): MediaFile => ({
 	...file(id, file_name, tags),
-	file_info: { type: 'audio', duration: 10 }
+	file_info: { type: 'audio', duration: 10 },
+	popup_eligible: false,
+	audio_role: tags.includes(POPUP_AUDIO_TAG) ? 'popup' : 'background'
 });
 
 describe('editor section context', () => {

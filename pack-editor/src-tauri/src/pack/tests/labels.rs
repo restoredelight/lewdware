@@ -1,7 +1,7 @@
 //! Tags and artists, and how renaming or merging one carries through the document.
 
 use shared::behaviour::{
-    Behaviour, ContentGroup, ContentSelection, Events, Stage, TextItem, Timeline, WebLink,
+    Behaviour, Caption, ContentGroup, ContentSelection, Events, Stage, Timeline, WebLink,
 };
 use tempfile::tempdir;
 
@@ -132,11 +132,9 @@ async fn merging_a_tag_into_one_an_entry_already_has_leaves_a_single_mention() {
 
     let behaviour = Behaviour {
         content: shared::behaviour::Content {
-            captions: vec![TextItem {
+            captions: vec![Caption {
                 text: "Obey.".to_string(),
                 tags: vec!["source".to_string(), "target".to_string()],
-                timeout_seconds: None,
-                summary: None,
             }],
             ..Default::default()
         },
@@ -172,11 +170,9 @@ async fn renaming_a_tag_carries_every_mention_in_the_document() {
                 tags: vec!["old".to_string()],
                 enabled_by_default: true,
             }],
-            captions: vec![TextItem {
+            captions: vec![Caption {
                 text: "Obey.".to_string(),
                 tags: vec!["old".to_string()],
-                timeout_seconds: None,
-                summary: None,
             }],
             web_links: vec![WebLink {
                 url: "https://example.com".to_string(),
@@ -236,11 +232,9 @@ async fn tag_management_updates_associations_and_behaviour_together() {
     pack.add_tags(media, vec!["old".to_string()]).await.unwrap();
 
     let mut behaviour = Behaviour::default();
-    behaviour.content.captions = vec![TextItem {
+    behaviour.content.captions = vec![Caption {
         text: "Obey.".to_string(),
         tags: vec!["old".to_string()],
-        timeout_seconds: None,
-        summary: None,
     }];
     pack.replace_behaviour(behaviour.clone(), "Seed behaviour".to_string())
         .await
@@ -278,11 +272,9 @@ async fn undoing_a_merge_recovers_source_target_and_dual_associations_atomically
         .await
         .unwrap();
     let mut before = Behaviour::default();
-    before.content.captions = vec![TextItem {
+    before.content.captions = vec![Caption {
         text: "Obey.".to_string(),
         tags: vec!["source".into()],
-        timeout_seconds: None,
-        summary: None,
     }];
     pack.replace_behaviour(before.clone(), "Seed behaviour".to_string())
         .await
@@ -333,11 +325,9 @@ async fn undoing_a_deleted_tag_recovers_associations_and_behaviour() {
         .await
         .unwrap();
     let mut before = Behaviour::default();
-    before.content.captions = vec![TextItem {
+    before.content.captions = vec![Caption {
         text: "Obey.".to_string(),
         tags: vec!["restore-me".into()],
-        timeout_seconds: None,
-        summary: None,
     }];
     pack.replace_behaviour(before.clone(), "Seed behaviour".to_string())
         .await
@@ -364,11 +354,9 @@ async fn tag_rows_count_media_and_both_halves_of_the_document() {
 
     let behaviour = Behaviour {
         content: shared::behaviour::Content {
-            captions: vec![TextItem {
+            captions: vec![Caption {
                 text: "Obey.".to_string(),
                 tags: vec!["shared".to_string(), "caption-only".to_string()],
-                timeout_seconds: None,
-                summary: None,
             }],
             ..Default::default()
         },

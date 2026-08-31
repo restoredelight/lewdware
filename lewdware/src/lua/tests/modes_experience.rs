@@ -83,10 +83,9 @@ async fn experience_notification_anchor_scaled_by_pace() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                notifications: vec![shared::behaviour::TextItem {
+                notifications: vec![shared::behaviour::Notification {
                     text: "hi".to_string(),
                     tags: vec![],
-                    timeout_seconds: None,
                     summary: None,
                 }],
                 ..Default::default()
@@ -130,10 +129,9 @@ async fn experience_notifications_off_switch_wins_over_present_anchor() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                notifications: vec![shared::behaviour::TextItem {
+                notifications: vec![shared::behaviour::Notification {
                     text: "hi".to_string(),
                     tags: vec![],
-                    timeout_seconds: None,
                     summary: None,
                 }],
                 ..Default::default()

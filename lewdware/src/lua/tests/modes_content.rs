@@ -10,11 +10,9 @@ async fn content_picker_matches_media_tags_over_empty_bucket() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                captions: vec![shared::behaviour::TextItem {
+                captions: vec![shared::behaviour::Caption {
                     text: "kinky".to_string(),
                     tags: vec!["kinky".to_string()],
-                    timeout_seconds: None,
-                    summary: None,
                 }],
                 ..Default::default()
             };
@@ -51,17 +49,13 @@ async fn content_picker_falls_back_to_empty_tag_item_when_no_match() {
         .run_until(async {
             let content = Content {
                 captions: vec![
-                    shared::behaviour::TextItem {
+                    shared::behaviour::Caption {
                         text: "untagged".to_string(),
                         tags: vec![],
-                        timeout_seconds: None,
-                        summary: None,
                     },
-                    shared::behaviour::TextItem {
+                    shared::behaviour::Caption {
                         text: "kinky".to_string(),
                         tags: vec!["kinky".to_string()],
-                        timeout_seconds: None,
-                        summary: None,
                     },
                 ],
                 ..Default::default()
@@ -130,16 +124,14 @@ async fn content_picker_excludes_disabled_content_group_tags() {
                     enabled_by_default: true,
                 }],
                 notifications: vec![
-                    shared::behaviour::TextItem {
+                    shared::behaviour::Notification {
                         text: "vanilla".to_string(),
                         tags: vec![],
-                        timeout_seconds: None,
                         summary: None,
                     },
-                    shared::behaviour::TextItem {
+                    shared::behaviour::Notification {
                         text: "kinky".to_string(),
                         tags: vec!["kinky".to_string()],
-                        timeout_seconds: None,
                         summary: None,
                     },
                 ],
@@ -181,10 +173,9 @@ async fn content_picker_standalone_mode_ignores_own_tags() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                notifications: vec![shared::behaviour::TextItem {
+                notifications: vec![shared::behaviour::Notification {
                     text: "obey".to_string(),
                     tags: vec!["hypno".to_string()],
-                    timeout_seconds: None,
                     summary: None,
                 }],
                 ..Default::default()

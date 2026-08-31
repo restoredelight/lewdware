@@ -33,8 +33,6 @@ pub const BEHAVIOUR_TABLES: &[&str] = &[
     "behaviour_stage_end",
     "behaviour_stage_movement",
     "behaviour_stage_mitosis",
-    "behaviour_stage_entry",
-    "behaviour_stage_prompt",
     "behaviour_stage_event",
     "behaviour_transition",
     "behaviour_transition_category",

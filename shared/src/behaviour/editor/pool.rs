@@ -2,14 +2,10 @@ use anyhow::{Result, bail};
 use rusqlite::{Connection, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use super::common::{add_tag, exists, remove_tag, set_column};
-use crate::behaviour::db::{read_tags, write_tags};
-use crate::behaviour::schema::TextItem;
+use super::common::{add_tag, exists, remove_tag};
+use crate::behaviour::db::{read_text_pool_rows, write_tags};
+use crate::behaviour::schema::{Caption, Notification, Prompt};
 
-/// Which of the three text pools an item belongs to.
-///
-/// The pools share a table and differ only in which one a mode draws from, so this is the `kind`
-/// column rather than three near-identical types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PoolKind {
@@ -34,50 +30,115 @@ impl rusqlite::ToSql for PoolKind {
     }
 }
 
-/// One text-pool entry, with the row id the editor addresses it by.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextItemRow {
     pub id: i64,
-    #[serde(flatten)]
-    pub item: TextItem,
+    pub text: String,
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
-// ── Text pools ───────────────────────────────────────────────────────────────
+
+/// The shared table's flat insert shape. Only the concrete public add functions can construct it.
+struct TextItemDraft<'a> {
+    kind: PoolKind,
+    text: &'a str,
+    tags: &'a [String],
+    timeout_seconds: Option<f64>,
+    summary: Option<&'a str>,
+}
 
 /// One pool's entries, in author order.
 pub fn text_pool(conn: &Connection, kind: PoolKind) -> Result<Vec<TextItemRow>> {
-    let mut statement = conn.prepare(
-        "SELECT id, text, timeout_seconds, summary FROM behaviour_text_item
-         WHERE kind = ? ORDER BY id",
-    )?;
-    statement
-        .query_and_then(params![kind], |row| {
-            let id: i64 = row.get("id")?;
-            Ok(TextItemRow {
+    match kind {
+        PoolKind::Caption => Ok(read_text_pool_rows::<Caption>(conn)?
+            .into_iter()
+            .map(|(id, item)| TextItemRow {
                 id,
-                item: TextItem {
-                    text: row.get("text")?,
-                    tags: read_tags(conn, "behaviour_text_item_tag", "item_id", &id)?,
-                    timeout_seconds: row.get("timeout_seconds")?,
-                    summary: row.get("summary")?,
-                },
+                text: item.text,
+                tags: item.tags,
+                timeout_seconds: None,
+                summary: None,
             })
-        })?
-        .collect()
+            .collect()),
+        PoolKind::Prompt => Ok(read_text_pool_rows::<Prompt>(conn)?
+            .into_iter()
+            .map(|(id, item)| TextItemRow {
+                id,
+                text: item.text,
+                tags: item.tags,
+                timeout_seconds: item.timeout_seconds,
+                summary: None,
+            })
+            .collect()),
+        PoolKind::Notification => Ok(read_text_pool_rows::<Notification>(conn)?
+            .into_iter()
+            .map(|(id, item)| TextItemRow {
+                id,
+                text: item.text,
+                tags: item.tags,
+                timeout_seconds: None,
+                summary: item.summary,
+            })
+            .collect()),
+    }
 }
 
-/// Appends an entry to `kind`'s pool, returning its new id.
-///
-/// Appending is the only way in: the id the insert mints is what orders the pool, so a new entry
-/// lands at the end by construction.
-pub fn add_text_item(tx: &Transaction<'_>, kind: PoolKind, item: &TextItem) -> Result<i64> {
+fn add_text_item(tx: &Transaction<'_>, item: TextItemDraft<'_>) -> Result<i64> {
     let id: i64 = tx.query_row(
         "INSERT INTO behaviour_text_item (kind, text, timeout_seconds, summary)
          VALUES (?1, ?2, ?3, ?4) RETURNING id",
-        params![kind, item.text, item.timeout_seconds, item.summary],
+        params![item.kind, item.text, item.timeout_seconds, item.summary],
         |row| row.get(0),
     )?;
-    write_tags(tx, "behaviour_text_item_tag", "item_id", &id, &item.tags)?;
+
+    write_tags(tx, "behaviour_text_item_tag", "item_id", &id, item.tags)?;
+
     Ok(id)
+}
+
+/// Appends a caption, returning its new editor row id.
+pub fn add_caption(tx: &Transaction<'_>, caption: &Caption) -> Result<i64> {
+    add_text_item(
+        tx,
+        TextItemDraft {
+            kind: PoolKind::Caption,
+            text: &caption.text,
+            tags: &caption.tags,
+            timeout_seconds: None,
+            summary: None,
+        },
+    )
+}
+
+/// Appends a prompt, returning its new editor row id.
+pub fn add_prompt(tx: &Transaction<'_>, prompt: &Prompt) -> Result<i64> {
+    add_text_item(
+        tx,
+        TextItemDraft {
+            kind: PoolKind::Prompt,
+            text: &prompt.text,
+            tags: &prompt.tags,
+            timeout_seconds: prompt.timeout_seconds,
+            summary: None,
+        },
+    )
+}
+
+/// Appends a notification, returning its new editor row id.
+pub fn add_notification(tx: &Transaction<'_>, notification: &Notification) -> Result<i64> {
+    add_text_item(
+        tx,
+        TextItemDraft {
+            kind: PoolKind::Notification,
+            text: &notification.text,
+            tags: &notification.tags,
+            timeout_seconds: None,
+            summary: notification.summary.as_deref(),
+        },
+    )
 }
 
 /// Removes an entry, leaving the rest of the pool in the order it was already in.
@@ -90,49 +151,62 @@ pub fn remove_text_item(tx: &Transaction<'_>, id: i64) -> Result<()> {
 
 const NO_TEXT_ITEM: &str = "that entry is no longer in the pack";
 
-pub fn set_text_item_text(tx: &Transaction<'_>, id: i64, text: &str) -> Result<()> {
-    set_column(
-        tx,
-        "behaviour_text_item",
-        "id",
-        &id,
-        "text",
-        text.to_string(),
-        NO_TEXT_ITEM,
-    )
+fn set_pool_item_column<T: rusqlite::ToSql>(
+    tx: &Transaction<'_>,
+    kind: PoolKind,
+    id: i64,
+    column: &str,
+    value: T,
+) -> Result<()> {
+    let updated = tx.execute(
+        &format!("UPDATE behaviour_text_item SET {column} = ?3 WHERE id = ?1 AND kind = ?2"),
+        params![id, kind, value],
+    )?;
+
+    if updated == 0 {
+        bail!("{NO_TEXT_ITEM}");
+    }
+
+    Ok(())
 }
 
-/// The notification's title. `None` is a notification shown with no title, which is what every
-/// converted Edgeware pack gets — a blank one is the absence of a title, not a title of "".
-pub fn set_text_item_summary(tx: &Transaction<'_>, id: i64, summary: Option<&str>) -> Result<()> {
-    set_column(
+pub fn set_caption_text(tx: &Transaction<'_>, id: i64, text: &str) -> Result<()> {
+    set_pool_item_column(tx, PoolKind::Caption, id, "text", text)
+}
+
+pub fn set_prompt_text(tx: &Transaction<'_>, id: i64, text: &str) -> Result<()> {
+    set_pool_item_column(tx, PoolKind::Prompt, id, "text", text)
+}
+
+pub fn set_notification_body(tx: &Transaction<'_>, id: i64, text: &str) -> Result<()> {
+    set_pool_item_column(tx, PoolKind::Notification, id, "text", text)
+}
+
+/// The notification's title
+pub fn set_notification_summary(
+    tx: &Transaction<'_>,
+    id: i64,
+    summary: Option<&str>,
+) -> Result<()> {
+    set_pool_item_column(
         tx,
-        "behaviour_text_item",
-        "id",
-        &id,
+        PoolKind::Notification,
+        id,
         "summary",
         summary.map(str::to_string),
-        NO_TEXT_ITEM,
     )
 }
 
 /// A prompt's answer deadline. `None` asks the mode to derive one from the prompt's length.
-pub fn set_text_item_timeout(tx: &Transaction<'_>, id: i64, seconds: Option<f64>) -> Result<()> {
-    set_column(
-        tx,
-        "behaviour_text_item",
-        "id",
-        &id,
-        "timeout_seconds",
-        seconds,
-        NO_TEXT_ITEM,
-    )
+pub fn set_prompt_timeout(tx: &Transaction<'_>, id: i64, seconds: Option<f64>) -> Result<()> {
+    set_pool_item_column(tx, PoolKind::Prompt, id, "timeout_seconds", seconds)
 }
 
 pub fn add_text_item_tag(tx: &Transaction<'_>, id: i64, tag: &str) -> Result<()> {
     if !exists(tx, "behaviour_text_item", "id", &id)? {
         bail!("{NO_TEXT_ITEM}");
     }
+
     add_tag(tx, "behaviour_text_item_tag", "item_id", &id, tag)
 }
 

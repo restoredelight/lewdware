@@ -14,14 +14,8 @@ pub fn read_stages(conn: &Connection) -> Result<Vec<Stage>> {
     read_stages_where(conn, "", &[])
 }
 
-/// One stage, or `None` if the timeline no longer holds it.
-///
-/// The editor reads a single stage far more often than it reads the whole timeline — every
-/// keystroke in a stage's label compares against it — so this narrows the query rather than
-/// filtering [`read_stages`]' result, which would read every stage and its seven child tables to
-/// answer a question about one.
 pub fn read_one_stage(conn: &Connection, id: &str) -> Result<Option<Stage>> {
-    Ok(read_stages_where(conn, "WHERE id = ?", &[&id])?.pop())
+    Ok(read_stages_where(conn, "WHERE id = ?", params![id])?.pop())
 }
 
 fn read_stages_where(
@@ -30,7 +24,10 @@ fn read_stages_where(
     params: &[&dyn rusqlite::ToSql],
 ) -> Result<Vec<Stage>> {
     let mut statement = conn.prepare(&format!(
-        "SELECT id, label, restricts_content, wallpaper, audio, audio_random FROM behaviour_stage \
+        "SELECT id, label, restricts_content, wallpaper, audio, audio_random, \
+                entry_splash_media, entry_sound_media, entry_popup_burst, entry_notification_text, \
+                prompt_timeouts_enabled, prompt_timeout_multiplier, prompt_popup_burst, prompt_sound_media \
+         FROM behaviour_stage \
          {filter} ORDER BY position"
     ))?;
 
@@ -56,8 +53,18 @@ fn read_stages_where(
                 events: read_stage_events(conn, &id)?,
                 movement: read_stage_movement(conn, &id)?,
                 mitosis: read_stage_mitosis(conn, &id)?,
-                on_enter: read_stage_entry(conn, &id)?.unwrap_or_default(),
-                prompt: read_stage_prompt(conn, &id)?,
+                on_enter: StageEntry {
+                    splash: row.get("entry_splash_media")?,
+                    sound: row.get("entry_sound_media")?,
+                    popup_burst: row.get("entry_popup_burst")?,
+                    notification: row.get("entry_notification_text")?,
+                },
+                prompt: StagePrompt {
+                    timeouts_enabled: row.get("prompt_timeouts_enabled")?,
+                    timeout_multiplier: row.get("prompt_timeout_multiplier")?,
+                    popup_burst: row.get("prompt_popup_burst")?,
+                    sound: row.get("prompt_sound_media")?,
+                },
                 id,
                 label: row.get("label")?,
             })
@@ -68,15 +75,15 @@ fn read_stages_where(
 pub fn read_stage_entry(conn: &Connection, stage: &str) -> Result<Option<StageEntry>> {
     Ok(conn
         .query_row(
-            "SELECT splash_media, sound_media, popup_burst, notification_text
-         FROM behaviour_stage_entry WHERE stage_id = :stage",
+            "SELECT entry_splash_media, entry_sound_media, entry_popup_burst, entry_notification_text
+         FROM behaviour_stage WHERE id = :stage",
             named_params![":stage": stage],
             |row| {
                 Ok(StageEntry {
-                    splash: row.get("splash_media")?,
-                    sound: row.get("sound_media")?,
-                    popup_burst: row.get("popup_burst")?,
-                    notification: row.get("notification_text")?,
+                    splash: row.get("entry_splash_media")?,
+                    sound: row.get("entry_sound_media")?,
+                    popup_burst: row.get("entry_popup_burst")?,
+                    notification: row.get("entry_notification_text")?,
                 })
             },
         )
@@ -86,15 +93,15 @@ pub fn read_stage_entry(conn: &Connection, stage: &str) -> Result<Option<StageEn
 pub fn read_stage_prompt(conn: &Connection, stage: &str) -> Result<StagePrompt> {
     Ok(conn
         .query_row(
-            "SELECT timeouts_enabled, timeout_multiplier, popup_burst, sound_media
-         FROM behaviour_stage_prompt WHERE stage_id = :stage",
+            "SELECT prompt_timeouts_enabled, prompt_timeout_multiplier, prompt_popup_burst, prompt_sound_media
+         FROM behaviour_stage WHERE id = :stage",
             named_params![":stage": stage],
             |row| {
                 Ok(StagePrompt {
-                    timeouts_enabled: row.get("timeouts_enabled")?,
-                    timeout_multiplier: row.get("timeout_multiplier")?,
-                    popup_burst: row.get("popup_burst")?,
-                    sound: row.get("sound_media")?,
+                    timeouts_enabled: row.get("prompt_timeouts_enabled")?,
+                    timeout_multiplier: row.get("prompt_timeout_multiplier")?,
+                    popup_burst: row.get("prompt_popup_burst")?,
+                    sound: row.get("prompt_sound_media")?,
                 })
             },
         )
@@ -102,13 +109,6 @@ pub fn read_stage_prompt(conn: &Connection, stage: &str) -> Result<StagePrompt> 
         .unwrap_or_default())
 }
 
-/// The tag this stage owns, if it has one.
-///
-/// Reads the flag off the association row rather than off the stage, which is what keeps ownership
-/// and membership from drifting apart: a tag the stage no longer selects by has no row to carry the
-/// flag, so it is no longer owned. `LIMIT 1` because a stage owns at most one — the editor creates
-/// exactly one per stage — and a document that somehow named two would be an ambiguity, not a
-/// feature.
 pub fn read_owned_stage_tag(
     conn: &Connection,
     stage: &str,
@@ -127,7 +127,6 @@ pub fn read_owned_stage_tag(
         .optional()?)
 }
 
-/// One side of a stage's selection: the tags it includes by, or the tags it excludes by.
 pub fn read_stage_tags(conn: &Connection, stage: &str, excluded: bool) -> Result<Vec<String>> {
     let mut statement = conn.prepare(
         "SELECT tags.name FROM behaviour_stage_tag
@@ -144,12 +143,6 @@ pub fn read_stage_tags(conn: &Connection, stage: &str, excluded: bool) -> Result
     Ok(tags)
 }
 
-/// Both sides at once, because they share a table and a primary key.
-///
-/// Written together rather than through [`write_tags`] twice: the rows to delete are the ones on
-/// *neither* side, and a per-side pass would delete the other side's rows on its way through. The
-/// shared key is also what enforces that a tag is not on both sides — an `INSERT` moving a tag
-/// across takes the same row with it rather than making a second one.
 pub fn write_stage_tags(
     tx: &Transaction<'_>,
     stage: &str,
@@ -161,33 +154,30 @@ pub fn write_stage_tags(
             .map(|tag| tag_id(tx, tag))
             .collect::<Result<Vec<_>>>()
     };
+
     let (included, excluded) = (ids(include)?, ids(exclude)?);
     let keeping: Vec<i64> = included.iter().chain(excluded.iter()).copied().collect();
+
     tx.execute(
-        "DELETE FROM behaviour_stage_tag WHERE stage_id = ?1
-         AND tag_id NOT IN (SELECT value FROM rarray(?2))",
-        params![stage, sql_array(keeping)?],
+        "DELETE FROM behaviour_stage_tag WHERE stage_id = :stage
+         AND tag_id NOT IN (SELECT value FROM rarray(:keeping))",
+        named_params![":stage": stage, ":keeping": sql_array(keeping)?],
     )?;
+
     for (side, ids) in [(false, &included), (true, &excluded)] {
         for id in ids {
             tx.execute(
                 "INSERT INTO behaviour_stage_tag (stage_id, tag_id, excluded)
-                 VALUES (?1, ?2, ?3)
+                 VALUES (:stage, :id, :side)
                  ON CONFLICT(stage_id, tag_id) DO UPDATE SET excluded = excluded.excluded",
-                params![stage, id, side],
+                named_params![":stage": stage, ":id": id, ":side": side],
             )?;
         }
     }
     Ok(())
 }
 
-/// Marks `owned` on the stage's row for that tag, and clears it on the rest.
-///
-/// Runs after [`write_tags`], which has already reconciled which rows exist: a tag the document no
-/// longer lists has no row left to mark, so naming one that is not in `tags` silently owns nothing
-/// rather than resurrecting the association. That is the invariant the schema comment states, kept
-/// here rather than validated — an owned tag outside the selection is not a document a writer can
-/// produce, and refusing it would turn a stale editor's harmless patch into a failed save.
+/// Claim a tag as owned by a stage
 pub fn write_owned_stage_tag(
     tx: &Transaction<'_>,
     stage: &str,
@@ -196,53 +186,53 @@ pub fn write_owned_stage_tag(
 ) -> Result<()> {
     tx.execute(
         "UPDATE behaviour_stage_tag SET owned = FALSE
-         WHERE stage_id = ?1 AND owned = TRUE AND excluded = ?3
-         AND tag_id IS NOT (SELECT id FROM tags WHERE name = ?2)",
-        params![stage, owned, excluded],
+         WHERE stage_id = :stage AND owned = TRUE AND excluded = :excluded
+         AND tag_id IS NOT (SELECT id FROM tags WHERE name = :owned)",
+        named_params![":stage": stage, ":owned": owned, ":excluded": excluded],
     )?;
+
     if let Some(tag) = owned {
         tx.execute(
             "UPDATE behaviour_stage_tag SET owned = TRUE
-             WHERE stage_id = ?1 AND owned = FALSE AND excluded = ?3
-             AND tag_id = (SELECT id FROM tags WHERE name = ?2)",
-            params![stage, tag, excluded],
+             WHERE stage_id = :stage AND owned = FALSE AND excluded = :excluded
+             AND tag_id = (SELECT id FROM tags WHERE name = :tag)",
+            named_params![":stage": stage, ":tag": tag, ":excluded": excluded],
         )?;
     }
+
     Ok(())
 }
 
 pub fn read_stage_end(conn: &Connection, stage: &str) -> Result<Option<StageEnd>> {
     Ok(conn
-        .query_row(
+        .query_row_and_then(
             "SELECT duration_seconds, strategy, event_kind, event_count, event_scope
              FROM behaviour_stage_end WHERE stage_id = :stage",
             named_params![":stage": stage],
             |row| {
-                Ok((
-                    row.get::<_, Option<f64>>("duration_seconds")?,
-                    row.get::<_, EndStrategy>("strategy")?,
-                    row.get::<_, Option<EventKind>>("event_kind")?,
-                    row.get::<_, Option<u32>>("event_count")?,
-                    row.get::<_, Option<CountScope>>("event_scope")?,
-                ))
+                let duration_seconds = row.get::<_, Option<f64>>("duration_seconds")?;
+                let strategy = row.get::<_, EndStrategy>("strategy")?;
+                let kind = row.get::<_, Option<EventKind>>("event_kind")?;
+                let count = row.get::<_, Option<u32>>("event_count")?;
+                let scope = row.get::<_, Option<CountScope>>("event_scope")?;
+
+                let event_count = match (kind, count, scope) {
+                    (Some(event), Some(count), Some(scope)) => Some(EventCountCondition {
+                        event,
+                        count,
+                        scope,
+                    }),
+                    _ => None,
+                };
+
+                Ok(StageEnd {
+                    duration_seconds,
+                    event_count,
+                    strategy,
+                })
             },
         )
-        .optional()?
-        .map(|(duration_seconds, strategy, kind, count, scope)| {
-            let event_count = match (kind, count, scope) {
-                (Some(event), Some(count), Some(scope)) => Some(EventCountCondition {
-                    event,
-                    count,
-                    scope,
-                }),
-                _ => None,
-            };
-            StageEnd {
-                duration_seconds,
-                event_count,
-                strategy,
-            }
-        }))
+        .optional()?)
 }
 
 pub fn read_stage_movement(conn: &Connection, stage: &str) -> Result<Option<Movement>> {
@@ -283,6 +273,7 @@ pub fn read_stage_events(conn: &Connection, stage: &str) -> Result<Events> {
          FROM behaviour_stage_event WHERE stage_id = :stage",
     )?;
     let mut events = Events::default();
+
     let rows = statement.query_and_then(named_params![":stage": stage], |row| -> Result<_> {
         let kind: EventKind = row.get("kind")?;
         let interval_kind: String = row.get("interval_kind")?;
@@ -302,11 +293,13 @@ pub fn read_stage_events(conn: &Connection, stage: &str) -> Result<Events> {
             },
             other => bail!("unknown event interval kind {other:?}"),
         };
+
         let schedule = EventSchedule {
             interval,
             initial_delay_seconds,
             max_concurrent,
         };
+
         Ok((kind, schedule))
     })?;
 
@@ -330,30 +323,27 @@ pub fn write_stages(tx: &Transaction<'_>, stages: &[Stage]) -> Result<()> {
     Ok(())
 }
 
-/// Writes one stage and every table hanging off it, at `position` in the timeline.
-///
-/// The body of [`write_stages`]' loop, separated so the editor can write a single stage without
-/// rewriting the timeline around it — which is the whole point of editing one stage at a time.
 pub fn write_one_stage(tx: &Transaction<'_>, position: i64, stage: &Stage) -> Result<()> {
     tx.execute(
         "INSERT INTO behaviour_stage (id, position, label, restricts_content, wallpaper, audio, audio_random)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+         VALUES (:id, :position, :label, :restricts_content, :wallpaper, :audio, :audio_random)
          ON CONFLICT(id) DO UPDATE SET position = excluded.position,
                                        label = excluded.label,
                                        restricts_content = excluded.restricts_content,
                                        wallpaper = excluded.wallpaper,
                                        audio = excluded.audio,
                                        audio_random = excluded.audio_random",
-        params![
-            stage.id,
-            position,
-            stage.label,
-            stage.content.tags.is_some(),
-            stage.content.wallpaper,
-            stage.content.audio,
-            stage.content.audio_random,
+        named_params![
+            ":id": stage.id,
+            ":position": position,
+            ":label": stage.label,
+            ":restricts_content": stage.content.tags.is_some(),
+            ":wallpaper": stage.content.wallpaper,
+            ":audio": stage.content.audio,
+            ":audio_random": stage.content.audio_random,
         ],
     )?;
+
     write_stage_tags(
         tx,
         &stage.id,
@@ -377,6 +367,7 @@ pub fn write_one_stage(tx: &Transaction<'_>, position: i64, stage: &Stage) -> Re
     )?;
     write_stage_prompt(tx, &stage.id, &stage.prompt)?;
     write_stage_events(tx, &stage.id, &stage.events)?;
+
     Ok(())
 }
 
@@ -385,53 +376,37 @@ pub fn write_stage_entry(
     stage: &str,
     entry: Option<&StageEntry>,
 ) -> Result<()> {
-    let Some(entry) = entry else {
-        tx.execute(
-            "DELETE FROM behaviour_stage_entry WHERE stage_id = ?",
-            params![stage],
-        )?;
-        return Ok(());
-    };
+    let entry = entry.cloned().unwrap_or_default();
+
     tx.execute(
-        "INSERT INTO behaviour_stage_entry (stage_id, splash_media, sound_media, popup_burst, notification_text)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(stage_id) DO UPDATE SET splash_media = excluded.splash_media,
-             sound_media = excluded.sound_media, popup_burst = excluded.popup_burst,
-             notification_text = excluded.notification_text",
+        "UPDATE behaviour_stage SET entry_splash_media = ?1, entry_sound_media = ?2,
+             entry_popup_burst = ?3, entry_notification_text = ?4 WHERE id = ?5",
         params![
-            stage,
             entry.splash,
             entry.sound,
             entry.popup_burst,
-            entry.notification
+            entry.notification,
+            stage,
         ],
     )?;
+
     Ok(())
 }
 
 pub fn write_stage_prompt(tx: &Transaction<'_>, stage: &str, prompt: &StagePrompt) -> Result<()> {
-    if prompt == &StagePrompt::default() {
-        tx.execute(
-            "DELETE FROM behaviour_stage_prompt WHERE stage_id = ?",
-            params![stage],
-        )?;
-        return Ok(());
-    }
     tx.execute(
-        "INSERT INTO behaviour_stage_prompt
-             (stage_id, timeouts_enabled, timeout_multiplier, popup_burst, sound_media)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(stage_id) DO UPDATE SET timeouts_enabled = excluded.timeouts_enabled,
-             timeout_multiplier = excluded.timeout_multiplier,
-             popup_burst = excluded.popup_burst, sound_media = excluded.sound_media",
+        "UPDATE behaviour_stage SET prompt_timeouts_enabled = ?1,
+             prompt_timeout_multiplier = ?2, prompt_popup_burst = ?3,
+             prompt_sound_media = ?4 WHERE id = ?5",
         params![
-            stage,
             prompt.timeouts_enabled,
             prompt.timeout_multiplier,
             prompt.popup_burst,
-            prompt.sound
+            prompt.sound,
+            stage,
         ],
     )?;
+
     Ok(())
 }
 
@@ -443,6 +418,7 @@ pub fn write_stage_end(tx: &Transaction<'_>, stage: &str, end: Option<&StageEnd>
         )?;
         return Ok(());
     };
+
     let (kind, count, scope) = match &end.event_count {
         Some(condition) => (
             Some(condition.event),
@@ -451,24 +427,26 @@ pub fn write_stage_end(tx: &Transaction<'_>, stage: &str, end: Option<&StageEnd>
         ),
         None => (None, None, None),
     };
+
     tx.execute(
         "INSERT INTO behaviour_stage_end
              (stage_id, duration_seconds, strategy, event_kind, event_count, event_scope)
-         VALUES (?, ?, ?, ?, ?, ?)
+         VALUES (:stage, :duration_seconds, :strategy, :kind, :count, :scope)
          ON CONFLICT(stage_id) DO UPDATE SET duration_seconds = excluded.duration_seconds,
                                              strategy = excluded.strategy,
                                              event_kind = excluded.event_kind,
                                              event_count = excluded.event_count,
                                              event_scope = excluded.event_scope",
-        params![
-            stage,
-            end.duration_seconds,
-            end.strategy,
-            kind,
-            count,
-            scope
+        named_params![
+            ":stage": stage,
+            ":duration_seconds": end.duration_seconds,
+            ":strategy": end.strategy,
+            ":kind": kind,
+            ":count": count,
+            ":scope": scope
         ],
     )?;
+
     Ok(())
 }
 
@@ -484,13 +462,19 @@ pub fn write_stage_movement(
         )?;
         return Ok(());
     };
+
     tx.execute(
         "INSERT INTO behaviour_stage_movement (stage_id, minimum_speed, maximum_speed)
-         VALUES (?, ?, ?)
+         VALUES (:stage, :minimum_speed, :maximum_speed)
          ON CONFLICT(stage_id) DO UPDATE SET minimum_speed = excluded.minimum_speed,
                                              maximum_speed = excluded.maximum_speed",
-        params![stage, movement.minimum_speed, movement.maximum_speed],
+        named_params![
+            ":stage": stage,
+            ":minimum_speed": movement.minimum_speed,
+            ":maximum_speed": movement.maximum_speed
+        ],
     )?;
+
     Ok(())
 }
 
@@ -506,11 +490,13 @@ pub fn write_stage_mitosis(
         )?;
         return Ok(());
     };
+
     tx.execute(
-        "INSERT INTO behaviour_stage_mitosis (stage_id, chance, count) VALUES (?, ?, ?)
+        "INSERT INTO behaviour_stage_mitosis (stage_id, chance, count) VALUES (:stage, :chance, :count)
          ON CONFLICT(stage_id) DO UPDATE SET chance = excluded.chance, count = excluded.count",
-        params![stage, mitosis.chance, mitosis.count],
+        named_params![":stage": stage, ":chance": mitosis.chance, ":count": mitosis.count],
     )?;
+
     Ok(())
 }
 
@@ -527,6 +513,7 @@ pub fn write_one_stage_event(
         )?;
         return Ok(());
     };
+
     let (interval_kind, seconds, minimum, maximum) = match schedule.interval {
         Interval::Fixed { seconds } => ("fixed", Some(seconds), None, None),
         Interval::Random {
@@ -534,11 +521,12 @@ pub fn write_one_stage_event(
             maximum_seconds,
         } => ("random", None, Some(minimum_seconds), Some(maximum_seconds)),
     };
+
     tx.execute(
         "INSERT INTO behaviour_stage_event
              (stage_id, kind, interval_kind, seconds, minimum_seconds, maximum_seconds,
               initial_delay_seconds, max_concurrent)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (:stage, :kind, :interval_kind, :seconds, :minimum, :maximum, :initial_delay_seconds, :max_concurrent)
          ON CONFLICT(stage_id, kind) DO UPDATE SET
              interval_kind = excluded.interval_kind,
              seconds = excluded.seconds,
@@ -546,17 +534,18 @@ pub fn write_one_stage_event(
              maximum_seconds = excluded.maximum_seconds,
              initial_delay_seconds = excluded.initial_delay_seconds,
              max_concurrent = excluded.max_concurrent",
-        params![
-            stage,
-            kind,
-            interval_kind,
-            seconds,
-            minimum,
-            maximum,
-            schedule.initial_delay_seconds,
-            schedule.max_concurrent,
+        named_params![
+            ":stage": stage,
+            ":kind": kind,
+            ":interval_kind": interval_kind,
+            ":seconds": seconds,
+            ":minimum": minimum,
+            ":maximum": maximum,
+            ":initial_delay_seconds": schedule.initial_delay_seconds,
+            ":max_concurrent": schedule.max_concurrent,
         ],
     )?;
+
     Ok(())
 }
 
@@ -568,8 +557,10 @@ pub fn write_stage_events(tx: &Transaction<'_>, stage: &str, events: &Events) ->
         (EventKind::Prompt, events.prompt.as_ref()),
         (EventKind::Sound, events.sound.as_ref()),
     ];
+
     for (kind, schedule) in scheduled {
         write_one_stage_event(tx, stage, kind, schedule)?;
     }
+
     Ok(())
 }

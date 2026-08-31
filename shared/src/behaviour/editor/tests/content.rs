@@ -1,22 +1,24 @@
-use super::{item, pack, texts, tx_on};
+use super::{caption, notification, pack, prompt, texts, tx_on};
 use crate::behaviour::editor::{
-    PoolKind, add_content_group, add_text_item, add_web_link, content_groups, remove_text_item,
-    set_text_item_text, text_pool, web_links,
+    PoolKind, add_caption, add_content_group, add_notification, add_prompt, add_web_link,
+    content_groups, remove_text_item, set_caption_text, text_pool, web_links,
 };
-use crate::behaviour::schema::{Behaviour, Content, ContentGroup, TextItem, WebLink};
+use crate::behaviour::schema::{
+    Behaviour, Caption, Content, ContentGroup, Notification, Prompt, WebLink,
+};
 
 #[test]
 fn a_pool_entry_round_trips_with_its_id() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_text_item(tx, PoolKind::Caption, &item("first")).unwrap();
+        id = add_caption(tx, &caption("first")).unwrap();
     });
 
     let rows = text_pool(&conn, PoolKind::Caption).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, id);
-    assert_eq!(rows[0].item.text, "first");
+    assert_eq!(rows[0].text, "first");
 }
 
 /// The point of the module: an edit names the row it means, so it cannot land on a neighbour if
@@ -27,12 +29,12 @@ fn editing_one_entry_leaves_its_neighbours_alone() {
     let mut ids = vec![];
     tx_on(&mut conn, |tx| {
         for text in ["one", "two", "three"] {
-            ids.push(add_text_item(tx, PoolKind::Caption, &item(text)).unwrap());
+            ids.push(add_caption(tx, &caption(text)).unwrap());
         }
     });
 
     tx_on(&mut conn, |tx| {
-        set_text_item_text(tx, ids[1], "edited").unwrap();
+        set_caption_text(tx, ids[1], "edited").unwrap();
     });
 
     assert_eq!(texts(&conn, PoolKind::Caption), ["one", "edited", "three"]);
@@ -46,10 +48,10 @@ fn removing_an_entry_closes_the_gap() {
     let mut ids = vec![];
     tx_on(&mut conn, |tx| {
         for text in ["one", "two", "three"] {
-            ids.push(add_text_item(tx, PoolKind::Caption, &item(text)).unwrap());
+            ids.push(add_caption(tx, &caption(text)).unwrap());
         }
         remove_text_item(tx, ids[0]).unwrap();
-        add_text_item(tx, PoolKind::Caption, &item("four")).unwrap();
+        add_caption(tx, &caption("four")).unwrap();
     });
     assert_eq!(texts(&conn, PoolKind::Caption), ["two", "three", "four"]);
 }
@@ -58,31 +60,54 @@ fn removing_an_entry_closes_the_gap() {
 fn the_three_pools_do_not_see_each_other() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        add_text_item(tx, PoolKind::Caption, &item("a caption")).unwrap();
-        add_text_item(tx, PoolKind::Prompt, &item("a prompt")).unwrap();
-        add_text_item(tx, PoolKind::Notification, &item("a notification")).unwrap();
+        add_caption(tx, &caption("a caption")).unwrap();
+        add_prompt(
+            tx,
+            &Prompt {
+                timeout_seconds: Some(12.0),
+                ..prompt("a prompt")
+            },
+        )
+        .unwrap();
+        add_notification(
+            tx,
+            &Notification {
+                summary: Some("A title".to_string()),
+                ..notification("a notification")
+            },
+        )
+        .unwrap();
     });
     assert_eq!(texts(&conn, PoolKind::Caption), ["a caption"]);
     assert_eq!(texts(&conn, PoolKind::Prompt), ["a prompt"]);
     assert_eq!(texts(&conn, PoolKind::Notification), ["a notification"]);
+    assert_eq!(
+        text_pool(&conn, PoolKind::Prompt).unwrap()[0].timeout_seconds,
+        Some(12.0)
+    );
+    assert_eq!(
+        text_pool(&conn, PoolKind::Notification).unwrap()[0]
+            .summary
+            .as_deref(),
+        Some("A title")
+    );
 }
 
 #[test]
 fn an_entrys_tags_round_trip_and_become_real_tags() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        add_text_item(
+        add_caption(
             tx,
-            PoolKind::Caption,
-            &TextItem {
+            &Caption {
                 tags: vec!["imp".to_string(), "succubus".to_string()],
-                ..item("tagged")
+                ..caption("tagged")
             },
         )
         .unwrap();
     });
     let rows = text_pool(&conn, PoolKind::Caption).unwrap();
-    assert_eq!(rows[0].item.tags, ["imp", "succubus"]);
+    assert_eq!(rows[0].tags, ["imp", "succubus"]);
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM tags", [], |row| row.get(0))
         .unwrap();
@@ -146,7 +171,7 @@ fn a_duplicate_group_id_is_refused() {
 fn what_the_editor_writes_the_engine_reads() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        add_text_item(tx, PoolKind::Caption, &item("hello")).unwrap();
+        add_caption(tx, &caption("hello")).unwrap();
         add_web_link(
             tx,
             &WebLink {
@@ -172,7 +197,10 @@ fn what_the_editor_writes_the_engine_reads() {
     assert_eq!(
         document.content,
         Content {
-            captions: vec![item("hello")],
+            captions: vec![Caption {
+                text: "hello".to_string(),
+                tags: vec![],
+            }],
             web_links: vec![WebLink {
                 url: "https://example.invalid".to_string(),
                 tags: vec![],

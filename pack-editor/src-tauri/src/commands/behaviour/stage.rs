@@ -18,6 +18,7 @@
 //! whatever it last fetched and sent along. See [`BehaviourAction::retiring`].
 
 use rusqlite::Transaction;
+use serde::Serialize;
 use shared::behaviour::editor;
 use shared::behaviour::{
     EndStrategy, EventCountCondition, EventKind, EventSchedule, Mitosis, Movement,
@@ -27,6 +28,18 @@ use tauri::State;
 use super::setter;
 use crate::pack::{BehaviourAction, BehaviourOutcome, Prepared, TagAction};
 use crate::AppState;
+
+/// The result of changing one file's membership in a stage.
+///
+/// A join that would remove author-controlled tags stops here. The caller must show those tags and
+/// retry with each one approved; the command plans again while it still holds the pack lock before
+/// it writes anything.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MembershipOutcome {
+    Applied { outcome: BehaviourOutcome },
+    ConfirmationRequired { tags: Vec<String> },
+}
 
 /// Adds a stage after `after`, copying `source`'s settings if given.
 #[tauri::command]
@@ -294,33 +307,53 @@ setter!(
 /// join by, an exclusion tag to be kept out by — and minting it, selecting by it and putting it on
 /// the file are one transaction, so they cannot come apart under undo.
 ///
-/// Nothing about it is destructive. Both directions are additive on a tag the editor owns, so the
-/// author's own vocabulary is never edited to move one file — see [`editor::plan_stage_membership`].
+/// Leaving is additive on a tag the editor owns. Joining can remove exclusion tags, so it first
+/// reports every removal that is not the stage's dedicated owned exclusion tag. Retrying with those
+/// tags approved performs the same plan while the pack lock is still held.
 #[tauri::command]
 pub async fn set_stage_membership(
     state: State<'_, AppState>,
     media: u64,
     stage: String,
     member: bool,
+    approved_tag_removals: Vec<String>,
     label: String,
-) -> Result<BehaviourOutcome, String> {
+) -> Result<MembershipOutcome, String> {
     state
         .with_pack(async |pack| {
-            pack.behaviour_edit(BehaviourAction::planned(
-                label,
-                move |tx: &Transaction<'_>| {
-                    let plan = editor::plan_stage_membership(tx, media, &stage, member)?;
-                    Ok(Prepared {
-                        tag_actions: membership_tag_actions(media, &plan),
-                        value: plan,
-                        retiring: Vec::new(),
-                    })
-                },
-                |tx: &Transaction<'_>, plan: editor::MembershipPlan| {
-                    editor::apply_membership_creation(tx, &plan)
-                },
-            ))
-            .await
+            let planning_stage = stage.clone();
+            let required = pack
+                .behaviour_query(move |conn| {
+                    Ok(
+                        editor::plan_stage_membership(conn, media, &planning_stage, member)?
+                            .non_owned_removals,
+                    )
+                })
+                .await?;
+            if required
+                .iter()
+                .any(|tag| !approved_tag_removals.contains(tag))
+            {
+                return Ok(MembershipOutcome::ConfirmationRequired { tags: required });
+            }
+
+            let outcome = pack
+                .behaviour_edit(BehaviourAction::planned(
+                    label,
+                    move |tx: &Transaction<'_>| {
+                        let plan = editor::plan_stage_membership(tx, media, &stage, member)?;
+                        Ok(Prepared {
+                            tag_actions: membership_tag_actions(media, &plan),
+                            value: plan,
+                            retiring: Vec::new(),
+                        })
+                    },
+                    |tx: &Transaction<'_>, plan: editor::MembershipPlan| {
+                        editor::apply_membership_creation(tx, &plan)
+                    },
+                ))
+                .await?;
+            Ok(MembershipOutcome::Applied { outcome })
         })
         .await
 }

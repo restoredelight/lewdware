@@ -9,10 +9,9 @@ async fn notifications_fire_at_configured_frequency() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                notifications: vec![shared::behaviour::TextItem {
+                notifications: vec![shared::behaviour::Notification {
                     text: "hi".to_string(),
                     tags: vec![],
-                    timeout_seconds: None,
                     summary: None,
                 }],
                 ..Default::default()
@@ -48,7 +47,7 @@ async fn notifications_fire_at_configured_frequency() {
 }
 
 /// Records what the last notification was actually shown with, rather than only that one was:
-/// `TextItem.summary` is the pack author's title, and a mode that dropped it on the floor
+/// `Notification.summary` is the pack author's title, and a mode that dropped it on the floor
 /// would look identical to `COUNTING_NOTIFICATION_WRAP`.
 const RECORDING_NOTIFICATION_WRAP: &str = r#"
     SUMMARY = ""
@@ -66,10 +65,9 @@ async fn notifications_carry_the_authors_title() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                notifications: vec![shared::behaviour::TextItem {
+                notifications: vec![shared::behaviour::Notification {
                     text: "hi".to_string(),
                     tags: vec![],
-                    timeout_seconds: None,
                     summary: Some("Attention".to_string()),
                 }],
                 ..Default::default()
@@ -112,10 +110,9 @@ async fn notifications_without_a_title_pass_no_summary() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                notifications: vec![shared::behaviour::TextItem {
+                notifications: vec![shared::behaviour::Notification {
                     text: "hi".to_string(),
                     tags: vec![],
-                    timeout_seconds: None,
                     summary: None,
                 }],
                 ..Default::default()
@@ -197,10 +194,9 @@ async fn notifications_disabled_never_fires() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                notifications: vec![shared::behaviour::TextItem {
+                notifications: vec![shared::behaviour::Notification {
                     text: "hi".to_string(),
                     tags: vec![],
-                    timeout_seconds: None,
                     summary: None,
                 }],
                 ..Default::default()
@@ -240,10 +236,9 @@ async fn notifications_pause_while_dormant() {
     LocalSet::new()
         .run_until(async {
             let content = Content {
-                notifications: vec![shared::behaviour::TextItem {
+                notifications: vec![shared::behaviour::Notification {
                     text: "hi".to_string(),
                     tags: vec![],
-                    timeout_seconds: None,
                     summary: None,
                 }],
                 ..Default::default()

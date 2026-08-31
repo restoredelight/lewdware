@@ -51,7 +51,17 @@ CREATE TABLE IF NOT EXISTS behaviour_stage (
     restricts_content INTEGER NOT NULL DEFAULT FALSE CHECK (restricts_content IN (FALSE, TRUE)),
     wallpaper INTEGER REFERENCES media (id) ON DELETE SET NULL,
     audio INTEGER REFERENCES media (id) ON DELETE SET NULL,
-    audio_random INTEGER NOT NULL DEFAULT FALSE CHECK (audio_random IN (FALSE, TRUE))
+    audio_random INTEGER NOT NULL DEFAULT FALSE CHECK (audio_random IN (FALSE, TRUE)),
+    -- Entry and prompt settings are always represented in Rust (with defaults), so they belong
+    -- on the stage rather than in optional 0..1 extension rows.
+    entry_splash_media INTEGER REFERENCES media (id) ON DELETE SET NULL,
+    entry_sound_media INTEGER REFERENCES media (id) ON DELETE SET NULL,
+    entry_popup_burst INTEGER,
+    entry_notification_text TEXT,
+    prompt_timeouts_enabled INTEGER NOT NULL DEFAULT TRUE CHECK (prompt_timeouts_enabled IN (FALSE, TRUE)),
+    prompt_timeout_multiplier REAL NOT NULL DEFAULT 1,
+    prompt_popup_burst INTEGER,
+    prompt_sound_media INTEGER REFERENCES media (id) ON DELETE SET NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS behaviour_stage_position ON behaviour_stage (position);
 
@@ -84,9 +94,10 @@ CREATE TABLE IF NOT EXISTS behaviour_stage_tag (
     UNIQUE (stage_id, tag_id)
 ) STRICT;
 
--- The optional sub-structures of a stage get a table each: 0..1 rows says "absent" without a
--- `has_*` flag beside every column, and `Some(Movement { .. all None })` stays distinct from
--- `None`, which a flat nullable column set could not express.
+-- Optional sub-structures whose absence is semantically distinct get a table each: 0..1 rows says
+-- "absent" without a `has_*` flag beside every column, and `Some(Movement { .. all None })` stays
+-- distinct from `None`, which a flat nullable column set could not express. Entry and prompt use
+-- plain Rust structs with defaults, so their fields live directly on `behaviour_stage` instead.
 CREATE TABLE IF NOT EXISTS behaviour_stage_end (
     stage_id TEXT PRIMARY KEY REFERENCES behaviour_stage (id) ON DELETE CASCADE,
     duration_seconds REAL,
@@ -107,25 +118,6 @@ CREATE TABLE IF NOT EXISTS behaviour_stage_mitosis (
     stage_id TEXT PRIMARY KEY REFERENCES behaviour_stage (id) ON DELETE CASCADE,
     chance REAL,
     count INTEGER
-) STRICT;
-
--- What the stage does on entry: a splash, a sound, a burst of popups, a notification.
-CREATE TABLE IF NOT EXISTS behaviour_stage_entry (
-    stage_id TEXT PRIMARY KEY REFERENCES behaviour_stage (id) ON DELETE CASCADE,
-    splash_media INTEGER REFERENCES media (id) ON DELETE SET NULL,
-    sound_media INTEGER REFERENCES media (id) ON DELETE SET NULL,
-    popup_burst INTEGER,
-    notification_text TEXT
-) STRICT;
-
--- Prompt behaviour the stage owns, as opposed to the prompt text itself.
-CREATE TABLE IF NOT EXISTS behaviour_stage_prompt (
-    stage_id TEXT PRIMARY KEY REFERENCES behaviour_stage (id) ON DELETE CASCADE,
-    timeouts_enabled INTEGER NOT NULL DEFAULT TRUE CHECK (timeouts_enabled IN (FALSE, TRUE)),
-    -- Scales the prompt's explicit or automatically derived deadline.
-    timeout_multiplier REAL NOT NULL DEFAULT 1,
-    popup_burst INTEGER,
-    sound_media INTEGER REFERENCES media (id) ON DELETE SET NULL
 ) STRICT;
 
 -- One row per event kind the stage schedules. `interval_kind` picks which of the interval columns
@@ -175,15 +167,16 @@ CREATE TABLE IF NOT EXISTS behaviour_transition_category (
 
 -- The three text pools share a table: they are the same shape (some text, some tags) and differ
 -- only in which pool a mode draws from, so `kind` is the pool rather than three near-identical
--- tables and three near-identical readers. `summary` is `TextItem::summary`, a title alongside the
--- body; only the 'notification' kind uses it.
+-- tables and three near-identical readers. `summary` belongs to the `Notification` domain type, a
+-- title alongside the body; only the 'notification' kind uses it.
 -- `AUTOINCREMENT` rather than a plain rowid: SQLite reuses the highest rowid once its row is gone,
 -- so removing the last entry and adding another would hand the new one the id the editor is still
 -- showing on the old one's Remove button. An id has to outlive the row it named.
 --
 -- That monotonic id is also the pool's order, which is why there is no `position` column here the
 -- way `behaviour_stage` and `behaviour_content_group` have one. A pool is only ever appended to
--- (`add_text_item`) or rebuilt whole from the document in array order (`write_text_pool`), so
+-- (the three `add_*` editor functions) or rebuilt whole from the document in array order
+-- (`write_text_pool`), so
 -- ascending id *is* author order, and removing an entry leaves a hole that changes nothing.
 -- Reordering or inserting mid-pool would break that and want a real position column back.
 CREATE TABLE IF NOT EXISTS behaviour_text_item (

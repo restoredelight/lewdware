@@ -184,7 +184,7 @@
 	// One row, not the selection: the row control is attached to a file the author is pointing at,
 	// while the inspector's own control says how many items it is about to change.
 	async function changeRole(file: MediaFile, role: AudioRole) {
-		if (audioRole(file.tags) === role) return;
+		if (audioRole(file) === role) return;
 		roleBusy = true;
 		try {
 			await setAudioRole([file.id], role);
@@ -276,7 +276,7 @@
 		<span class="sr-only" aria-live="polite">{selection.announcement}</span>
 		<div class="rows" style={`height: ${listHeight}px`}>
 			{#each visible as { file, index } (file.id)}
-				{@const role = audioRole(file.tags)}
+				{@const role = audioRole(file)}
 				{@const selected = store.mediaTab.selectedIds.has(file.id)}
 				<!-- Focus stays on the list, which points at the active row with `aria-activedescendant`;
 				     `tabindex="-1"` makes the row a legal target for that, and the keyboard handler it
@@ -384,11 +384,11 @@
 						</div>
 						<StageMembership
 							{file}
-							label={audioRole(file.tags) === 'background' ? 'Plays in' : 'Stage tags'}
+							label={audioRole(file) === 'background' ? 'Plays in' : 'Stage tags'}
 							compact
 						/>
 						<p class="detail-note">
-							{audioRole(file.tags) === 'popup'
+							{audioRole(file) === 'popup'
 								? 'Matched to popups by its tags. Pair it with specific popups from the Popups tab.'
 								: 'Plays in the background rotation, narrowed by the timeline stage’s tags. A pack with one background track repeats it.'}
 						</p>

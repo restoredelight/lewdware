@@ -150,7 +150,7 @@ mod tests {
     use super::{
         CONTENT_GROUP_KEY_PREFIX, CONTENT_GROUPS_ENTRY_KEY, effective_config, effective_options,
     };
-    use crate::behaviour::schema::{Behaviour, ContentGroup, TextItem};
+    use crate::behaviour::schema::{Behaviour, Caption, ContentGroup};
     use crate::mode::{Metadata, ModeEntry, ModeOption, OptionType, OptionValue, StoredValue};
 
     fn empty_mode_schema() -> Metadata {
@@ -280,11 +280,9 @@ mod tests {
     #[test]
     fn pack_has_facts_reflect_populated_content() {
         let mut behaviour = Behaviour::new();
-        behaviour.content.captions = vec![TextItem {
+        behaviour.content.captions = vec![Caption {
             text: "hi".to_string(),
             tags: vec![],
-            timeout_seconds: None,
-            summary: None,
         }];
         behaviour.content.content_groups = vec![ContentGroup {
             id: "kinky".to_string(),

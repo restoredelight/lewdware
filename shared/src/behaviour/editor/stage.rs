@@ -145,8 +145,8 @@ pub fn set_stage_event(
 }
 
 // The stage's entry and prompt blocks are not optional in the schema -- `StageEntry` and
-// `StagePrompt` are plain structs with defaults, not `Option`s -- so a leaf setter can create the
-// row it needs rather than requiring a parent to be switched on first.
+// `StagePrompt` are plain structs with defaults, and their fields live on the stage row -- so a
+// leaf setter can update them without requiring a parent to be switched on first.
 
 pub fn set_stage_entry_notification(
     tx: &Transaction<'_>,

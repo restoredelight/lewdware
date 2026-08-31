@@ -3,7 +3,6 @@
 	import { store } from './store.svelte.js';
 	import type { FileInfo } from './types.js';
 	import TagInput from '$ui/TagInput.svelte';
-	import { NON_POPUP_TAG } from './tags.js';
 	import Button from '$ui/Button.svelte';
 	import { api } from './api.js';
 	import { onMount } from 'svelte';
@@ -18,7 +17,7 @@
 	import { taskFeedback } from '$ui/taskFeedback.svelte.js';
 	import { formatDuration, formatFileSize } from './format.js';
 	import { clampScroll } from '$ui/scroll';
-	import { keys, query } from './query.svelte.js';
+	import { invalidate, keys, query } from './query.svelte.js';
 
 	function infoRows(info: FileInfo, size: number): { label: string; value: string }[] {
 		const rows =
@@ -46,8 +45,10 @@
 	const primary = $derived(store.primaryFile);
 	// The inspector is mounted alongside the grid, so it fetches what it shows rather than reading
 	// a document the media tabs would otherwise have to keep resident.
-	const slots = query(keys.mediaSlots, api.getMediaSlots);
-	const timeline = query(keys.timeline, api.timeline.get);
+	const usage = query(
+		() => keys.mediaUsage(primary?.id ?? 0),
+		() => api.getMediaUsage(primary?.id ?? 0)
+	);
 	const selected = $derived(store.selectedFiles);
 	// Only in the tab that owns the role. All media is an inventory surface -- it lists every file
 	// the pack has, for a custom mode's sake as much as anyone's, and a control that only the
@@ -69,7 +70,7 @@
 	);
 	const selectedAudioRole = $derived.by((): AudioRole | null => {
 		if (!selectedAudio) return null;
-		const roles = new Set(selected.map((file) => audioRole(file.tags)));
+		const roles = new Set(selected.map((file) => audioRole(file)));
 		return roles.size === 1 ? ([...roles][0] ?? null) : null;
 	});
 	const showPreview = $derived(
@@ -86,29 +87,20 @@
 		}[] = [];
 		if (primary.file_info.type === 'audio')
 			uses.push({
-				label: `${audioRole(primary.tags) === 'popup' ? 'Popup' : 'Background'} audio`,
+				label: `${audioRole(primary) === 'popup' ? 'Popup' : 'Background'} audio`,
 				target: { kind: 'media', view: 'audio' }
 			});
-		else if (!primary.tags.includes(NON_POPUP_TAG))
+		else if (primary.popup_eligible)
 			uses.push({ label: 'Popup', target: { kind: 'media', view: 'popups' } });
-		if (slots.current?.wallpaper === primary.id)
-			uses.push({
-				label: 'Wallpaper',
-				target: { kind: 'content', tab: 'wallpaper', slot: 'wallpaper' }
-			});
-		if (slots.current?.splash === primary.id)
-			uses.push({
-				label: 'Splash',
-				target: { kind: 'content', tab: 'wallpaper', slot: 'splash' }
-			});
-		// Stage wallpapers come from the timeline rather than from `get_media_usage`, because the
-		// inspector needs the stage's id to link to it, not just a sentence naming it.
-		for (const stage of timeline.current?.stages ?? [])
-			if (stage.content.wallpaper === primary.id)
+		for (const item of usage.current ?? []) {
+			if (item.target.kind === 'stage')
+				uses.push({ label: item.label, target: { kind: 'experience', stageId: item.target.id } });
+			else
 				uses.push({
-					label: `Wallpaper for “${stage.label}”`,
-					target: { kind: 'experience', stageId: stage.id }
+					label: item.label,
+					target: { kind: 'content', tab: 'wallpaper', slot: item.target.kind }
 				});
+		}
 		return uses;
 	});
 	const showUsedAs = $derived(store.activeView === 'all-media' && usedAs.length > 0);
@@ -202,6 +194,7 @@
 				await api.removeTagFromFiles(ids, value);
 				store.removeTagFromFiles(ids, value, true);
 			}
+			await invalidate(keys.stageMemberships);
 		} else if (add) {
 			await api.addArtistToFiles(ids, value);
 			store.addArtistToFiles(ids, value, true);

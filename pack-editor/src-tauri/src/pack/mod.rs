@@ -4,6 +4,8 @@ mod media;
 mod save;
 mod view;
 
+pub(crate) use labels::MediaUsage;
+
 use save::process_pending_file_deletions;
 #[cfg(test)]
 use view::resolve_range;
@@ -57,6 +59,9 @@ pub struct MediaFile {
     pub artists: Vec<String>,
     pub source_url: Option<String>,
     pub size: u64,
+    pub popup_eligible: bool,
+    pub explicit_only: bool,
+    pub audio_role: Option<String>,
 }
 
 /// Every table where a behaviour document references a tag. Merging a tag re-points each of them;

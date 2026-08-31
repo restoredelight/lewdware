@@ -225,12 +225,16 @@ impl MediaPack {
         Ok(Some(AddOutcome::Added(MediaFile {
             id,
             file_name,
-            file_info,
             hash: hash.to_string(),
             tags: vec![],
             artists: encoded_file.artists,
             source_url: encoded_file.source_url,
             size,
+            popup_eligible: !matches!(&file_info, FileInfo::Audio { .. }),
+            explicit_only: false,
+            audio_role: matches!(&file_info, FileInfo::Audio { .. })
+                .then(|| "background".to_string()),
+            file_info,
         })))
     }
 
@@ -359,6 +363,9 @@ impl MediaPack {
                         artists: vec![],
                         source_url: row.get("source_url")?,
                         size: row.get::<_, Option<u64>>("length")?.unwrap_or(0),
+                        popup_eligible: false,
+                        explicit_only: false,
+                        audio_role: None,
                     })
                 })?;
                 rows.collect::<Result<Vec<_>>>()?
@@ -379,6 +386,20 @@ impl MediaPack {
                 if let Some(&idx) = id_to_idx.get(&media_id) {
                     files[idx].tags.push(tag_name);
                 }
+            }
+
+            for file in &mut files {
+                file.explicit_only = file.tags.iter().any(|tag| tag == tags::EXPLICIT_ONLY_TAG);
+                file.popup_eligible = !matches!(&file.file_info, FileInfo::Audio { .. })
+                    && !file.explicit_only
+                    && !file.tags.iter().any(|tag| tag == tags::NON_POPUP_TAG);
+                file.audio_role = matches!(&file.file_info, FileInfo::Audio { .. }).then(|| {
+                    if file.tags.iter().any(|tag| tag == tags::POPUP_AUDIO_TAG) {
+                        "popup".to_string()
+                    } else {
+                        "background".to_string()
+                    }
+                });
             }
 
             let mut artist_stmt = conn.prepare(

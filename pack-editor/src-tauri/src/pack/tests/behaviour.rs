@@ -1,8 +1,8 @@
 //! Behaviour-document edits: media slots, stages, captions, and what they retire.
 
 use shared::behaviour::{
-    Behaviour, ContentGroup, ContentSelection, EndStrategy, EventSchedule, Events, Interval, Stage,
-    StageEnd, TextItem, Timeline, Transition, WebLink,
+    Behaviour, Caption, ContentGroup, ContentSelection, EndStrategy, EventSchedule, Events,
+    Interval, Stage, StageEnd, Timeline, Transition, WebLink,
 };
 use tempfile::tempdir;
 
@@ -18,12 +18,10 @@ use shared::encode::EncodedFile;
 /// the same entry instead; this checks both halves really do move together, in both
 /// directions.
 /// A caption with nothing else said about it, which is all these tests need one to be.
-fn caption(text: &str) -> TextItem {
-    TextItem {
+fn caption(text: &str) -> Caption {
+    Caption {
         text: text.to_string(),
         tags: vec![],
-        timeout_seconds: None,
-        summary: None,
     }
 }
 
@@ -504,7 +502,7 @@ async fn an_edit_cannot_undo_a_backend_change_it_never_saw() {
     pack.behaviour_edit(BehaviourAction::new(
         "Edit caption",
         |tx: &Transaction<'_>| {
-            behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("typed"))?;
+            behaviour_editor::add_caption(tx, &caption("typed"))?;
             Ok(())
         },
     ))
@@ -532,8 +530,7 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
     pack.behaviour_edit(BehaviourAction::new(
         "Add caption",
         move |tx: &Transaction<'_>| {
-            *created.lock().unwrap() =
-                behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("typed"))?;
+            *created.lock().unwrap() = behaviour_editor::add_caption(tx, &caption("typed"))?;
             Ok(())
         },
     ))
@@ -543,7 +540,7 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
 
     pack.behaviour_edit(BehaviourAction::new(
         "Edit caption",
-        move |tx: &Transaction<'_>| behaviour_editor::set_text_item_text(tx, id, "edited"),
+        move |tx: &Transaction<'_>| behaviour_editor::set_caption_text(tx, id, "edited"),
     ))
     .await
     .unwrap();
@@ -553,7 +550,7 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
     // The same value again: an `oninput` that changed nothing.
     pack.behaviour_edit(BehaviourAction::new(
         "Edit caption",
-        move |tx: &Transaction<'_>| behaviour_editor::set_text_item_text(tx, id, "edited"),
+        move |tx: &Transaction<'_>| behaviour_editor::set_caption_text(tx, id, "edited"),
     ))
     .await
     .unwrap();
@@ -854,8 +851,7 @@ async fn a_rejected_edit_leaves_the_document_untouched() {
     pack.behaviour_edit(BehaviourAction::new(
         "Add caption",
         move |tx: &Transaction<'_>| {
-            *created.lock().unwrap() =
-                behaviour_editor::add_text_item(tx, PoolKind::Caption, &caption("kept"))?;
+            *created.lock().unwrap() = behaviour_editor::add_caption(tx, &caption("kept"))?;
             Ok(())
         },
     ))
@@ -868,8 +864,8 @@ async fn a_rejected_edit_leaves_the_document_untouched() {
             "Edit caption",
             move |tx: &Transaction<'_>| {
                 // Both edits are one author action, so the good one must not land on its own.
-                behaviour_editor::set_text_item_text(tx, good, "changed")?;
-                behaviour_editor::set_text_item_text(tx, good + 999, "no such entry")
+                behaviour_editor::set_caption_text(tx, good, "changed")?;
+                behaviour_editor::set_caption_text(tx, good + 999, "no such entry")
             },
         ))
         .await
@@ -1120,11 +1116,9 @@ async fn editing_one_stage_records_a_changeset_the_size_of_that_stage() {
     let behaviour = Behaviour {
         content: shared::behaviour::Content {
             captions: (0..200)
-                .map(|index| TextItem {
+                .map(|index| Caption {
                     text: format!("Caption number {index}, padded out to have some length."),
                     tags: vec![],
-                    timeout_seconds: None,
-                    summary: None,
                 })
                 .collect(),
             ..Default::default()
@@ -1246,11 +1240,9 @@ async fn editing_one_caption_records_a_changeset_the_size_of_that_caption() {
     let behaviour = Behaviour {
         content: shared::behaviour::Content {
             captions: (0..200)
-                .map(|index| TextItem {
+                .map(|index| Caption {
                     text: format!("Caption number {index}, padded out to have some length."),
                     tags: vec![],
-                    timeout_seconds: None,
-                    summary: None,
                 })
                 .collect(),
             ..Default::default()
@@ -1265,7 +1257,7 @@ async fn editing_one_caption_records_a_changeset_the_size_of_that_caption() {
         "Edit caption",
         |tx: &Transaction<'_>| {
             let target = behaviour_editor::text_pool(tx, PoolKind::Caption)?[99].id;
-            behaviour_editor::set_text_item_text(tx, target, "Edited.")
+            behaviour_editor::set_caption_text(tx, target, "Edited.")
         },
     ))
     .await
@@ -1343,11 +1335,9 @@ async fn content_and_experience_behaviour_survives_save_and_reopen() {
         tags: vec!["kinky".to_string()],
         enabled_by_default: true,
     });
-    behaviour.content.captions.push(TextItem {
+    behaviour.content.captions.push(Caption {
         text: "Obey.".to_string(),
         tags: vec!["kinky".to_string()],
-        timeout_seconds: None,
-        summary: None,
     });
     behaviour.content.web_links.push(WebLink {
         url: "https://duckduckgo.com/?q=edgeware packs".to_string(),

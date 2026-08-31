@@ -7,9 +7,9 @@ pub use resolver::{
     CONTENT_GROUP_KEY_PREFIX, EffectiveSchema, effective_config, effective_options,
 };
 pub use schema::{
-    AudioMedia, Behaviour, Content, ContentGroup, ContentSelection, CountScope, Easing,
+    AudioMedia, Behaviour, Caption, Content, ContentGroup, ContentSelection, CountScope, Easing,
     EndStrategy, EventCountCondition, EventKind, EventSchedule, Events, Interval, MediaSlot,
-    Mitosis, MonitorPreference, Movement, PopupMedia, SpawnRegion, Stage, StageEnd, StageEntry,
-    StagePrompt, TextItem, Timeline, Transition, TransitionCategory, ValidationIssue,
+    Mitosis, MonitorPreference, Movement, Notification, PopupMedia, Prompt, SpawnRegion, Stage,
+    StageEnd, StageEntry, StagePrompt, Timeline, Transition, TransitionCategory, ValidationIssue,
     ValidationSeverity, WebLink,
 };

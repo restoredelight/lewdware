@@ -5,15 +5,13 @@ use super::common::{retain, sql_array};
 use crate::behaviour::schema::{Transition, TransitionCategory};
 
 pub fn read_transitions(conn: &Connection) -> Result<Vec<Transition>> {
-    // Ordered by where `from_stage` sits in the timeline, which is the only thing a transition's
-    // place in it ever meant. The join is an inner one deliberately: a transition whose endpoint
-    // is gone is not a transition, and the foreign key already cascades it away.
     let mut statement = conn.prepare(
         "SELECT t.id, t.from_stage, t.to_stage, t.duration_seconds, t.easing
          FROM behaviour_transition t
          JOIN behaviour_stage s ON s.id = t.from_stage
          ORDER BY s.position",
     )?;
+
     statement
         .query_and_then([], |row| {
             let id: String = row.get("id")?;
@@ -37,6 +35,7 @@ fn read_transition_categories(
         "SELECT category FROM behaviour_transition_category
          WHERE transition_id = :transition_id ORDER BY category",
     )?;
+
     Ok(statement
         .query_map(named_params![":transition_id": transition_id], |row| {
             row.get("category")
@@ -51,6 +50,7 @@ pub fn write_transitions(tx: &Transaction<'_>, transitions: &[Transition]) -> Re
         "id",
         transitions.iter().map(|t| t.id.as_str()),
     )?;
+
     for transition in transitions {
         tx.execute(
             "INSERT INTO behaviour_transition
@@ -68,11 +68,13 @@ pub fn write_transitions(tx: &Transaction<'_>, transitions: &[Transition]) -> Re
                 transition.easing,
             ],
         )?;
+
         tx.execute(
             "DELETE FROM behaviour_transition_category WHERE transition_id = ?1
              AND category NOT IN (SELECT value FROM rarray(?2))",
             params![transition.id, sql_array(transition.affected.iter())?,],
         )?;
+
         for category in &transition.affected {
             tx.execute(
                 "INSERT INTO behaviour_transition_category (transition_id, category)
@@ -82,5 +84,6 @@ pub fn write_transitions(tx: &Transaction<'_>, transitions: &[Transition]) -> Re
             )?;
         }
     }
+
     Ok(())
 }

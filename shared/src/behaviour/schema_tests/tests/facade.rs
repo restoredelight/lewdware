@@ -1,7 +1,7 @@
 use rusqlite::params;
 
 use super::{pack, store};
-use crate::behaviour::schema::{Behaviour, TextItem, Timeline};
+use crate::behaviour::schema::{Behaviour, Caption, Timeline};
 
 /// The point of the whole step: a slot is a foreign key now, so pointing one at media the pack
 /// does not have is refused by the database rather than discovered later.
@@ -29,11 +29,9 @@ fn the_document_no_longer_touches_pack_data() {
     let mut conn = pack();
     let behaviour = Behaviour {
         content: crate::behaviour::Content {
-            captions: vec![TextItem {
+            captions: vec![Caption {
                 text: "Obey.".to_string(),
                 tags: vec!["kinky".to_string()],
-                timeout_seconds: None,
-                summary: None,
             }],
             wallpaper: Some(1),
             ..Default::default()

@@ -1,6 +1,6 @@
 //! The queries: what each surface reads when it renders.
 
-use shared::behaviour::editor::{self, MediaSlots, PoolKind, TextItemRow, WebLinkRow};
+use shared::behaviour::editor::{self, MediaSlots, PoolKind, TextItemRow, WebLinkRecord};
 use shared::behaviour::{AudioMedia, ContentGroup, PopupMedia, Stage, Transition};
 use tauri::State;
 
@@ -54,6 +54,14 @@ pub struct TimelineDto {
     label: Option<String>,
 }
 
+#[derive(serde::Serialize)]
+pub struct StageRemovalImpact {
+    tag: Option<String>,
+    media: u64,
+    stages: Vec<String>,
+    content: u64,
+}
+
 #[tauri::command]
 pub async fn get_timeline(state: State<'_, AppState>) -> Result<Option<TimelineDto>, String> {
     state
@@ -67,6 +75,52 @@ pub async fn get_timeline(state: State<'_, AppState>) -> Result<Option<TimelineD
                 }))
             })
             .await
+        })
+        .await
+}
+
+/// The timeline membership rows one media inspector renders, already evaluated against its tags.
+#[tauri::command]
+pub async fn get_stage_membership(
+    state: State<'_, AppState>,
+    media: u64,
+) -> Result<Vec<editor::StageMembership>, String> {
+    state
+        .with_pack(async |pack| {
+            pack.behaviour_query(move |conn| editor::stage_membership(conn, media))
+                .await
+        })
+        .await
+}
+
+#[tauri::command]
+pub async fn get_stage_removal_impact(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<StageRemovalImpact, String> {
+    state
+        .with_pack(async |pack| {
+            pack.behaviour_query(move |conn| {
+                let tag = editor::stage_owned_tags(conn, &id)?
+                    .into_iter()
+                    .find(|owned| !owned.excluded)
+                    .map(|owned| owned.tag);
+                let Some(tag) = tag else {
+                    return Ok(StageRemovalImpact { tag: None, media: 0, stages: vec![], content: 0 });
+                };
+                let media = conn.query_row(
+                    "SELECT COUNT(*) FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?1",
+                    [&tag], |row| row.get(0),
+                )?;
+                let stages = conn.prepare(
+                    "SELECT s.label FROM behaviour_stage_tag st JOIN tags t ON t.id = st.tag_id JOIN behaviour_stage s ON s.id = st.stage_id WHERE t.name = ?1 AND s.id <> ?2 ORDER BY s.position",
+                )?.query_map([&tag, &id], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+                let content = conn.query_row(
+                    "SELECT (SELECT COUNT(*) FROM behaviour_content_group_tag x JOIN tags t ON t.id = x.tag_id WHERE t.name = ?1) + (SELECT COUNT(*) FROM behaviour_text_item_tag x JOIN tags t ON t.id = x.tag_id WHERE t.name = ?1) + (SELECT COUNT(*) FROM behaviour_web_link_tag x JOIN tags t ON t.id = x.tag_id WHERE t.name = ?1)",
+                    [&tag], |row| row.get(0),
+                )?;
+                Ok(StageRemovalImpact { tag: Some(tag), media, stages, content })
+            }).await
         })
         .await
 }
@@ -124,7 +178,7 @@ pub async fn get_text_pool(
 }
 
 #[tauri::command]
-pub async fn get_web_links(state: State<'_, AppState>) -> Result<Vec<WebLinkRow>, String> {
+pub async fn get_web_links(state: State<'_, AppState>) -> Result<Vec<WebLinkRecord>, String> {
     state
         .with_pack(async |pack| pack.behaviour_query(editor::web_links).await)
         .await

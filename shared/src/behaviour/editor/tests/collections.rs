@@ -1,11 +1,11 @@
-use super::{item, pack, timeline_pack, tx_on};
+use super::{caption, pack, timeline_pack, tx_on};
 use crate::behaviour::db::read_one_stage;
 use crate::behaviour::editor::{
-    PoolKind, add_stage_tag, add_text_item, add_text_item_tag, remove_stage_tag, remove_text_item,
+    PoolKind, add_caption, add_stage_tag, add_text_item_tag, remove_stage_tag, remove_text_item,
     remove_text_item_tag, set_stage_content_tags, set_transition_affected, set_transition_category,
     text_pool, transitions,
 };
-use crate::behaviour::schema::{TextItem, TransitionCategory};
+use crate::behaviour::schema::{Caption, TransitionCategory};
 
 // ── One item of a collection ─────────────────────────────────────────────────
 
@@ -16,22 +16,18 @@ fn two_tag_removals_do_not_restore_each_other() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_text_item(
+        id = add_caption(
             tx,
-            PoolKind::Caption,
-            &TextItem {
+            &Caption {
                 tags: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-                ..item("tagged")
+                ..caption("tagged")
             },
         )
         .unwrap();
         remove_text_item_tag(tx, id, "a").unwrap();
         remove_text_item_tag(tx, id, "b").unwrap();
     });
-    assert_eq!(
-        text_pool(&conn, PoolKind::Caption).unwrap()[0].item.tags,
-        ["c"]
-    );
+    assert_eq!(text_pool(&conn, PoolKind::Caption).unwrap()[0].tags, ["c"]);
 }
 
 /// Both are ordinary writes that happen to write nothing, not errors and not duplicates.
@@ -40,13 +36,13 @@ fn adding_a_tag_twice_leaves_one_and_removing_an_absent_one_is_harmless() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_text_item(tx, PoolKind::Caption, &item("tagged")).unwrap();
+        id = add_caption(tx, &caption("tagged")).unwrap();
         add_text_item_tag(tx, id, "imp").unwrap();
         add_text_item_tag(tx, id, "imp").unwrap();
         remove_text_item_tag(tx, id, "absent").unwrap();
     });
     assert_eq!(
-        text_pool(&conn, PoolKind::Caption).unwrap()[0].item.tags,
+        text_pool(&conn, PoolKind::Caption).unwrap()[0].tags,
         ["imp"]
     );
 }
@@ -56,12 +52,11 @@ fn readding_a_removed_tag_puts_it_last() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_text_item(
+        id = add_caption(
             tx,
-            PoolKind::Caption,
-            &TextItem {
+            &Caption {
                 tags: vec!["first".to_string(), "second".to_string()],
-                ..item("tagged")
+                ..caption("tagged")
             },
         )
         .unwrap();
@@ -69,7 +64,7 @@ fn readding_a_removed_tag_puts_it_last() {
         add_text_item_tag(tx, id, "first").unwrap();
     });
     assert_eq!(
-        text_pool(&conn, PoolKind::Caption).unwrap()[0].item.tags,
+        text_pool(&conn, PoolKind::Caption).unwrap()[0].tags,
         ["second", "first"]
     );
 }
@@ -141,13 +136,13 @@ fn a_removed_entrys_id_is_never_given_to_the_next_one() {
     let mut conn = pack();
     let mut gone = 0;
     tx_on(&mut conn, |tx| {
-        add_text_item(tx, PoolKind::Caption, &item("first")).unwrap();
-        gone = add_text_item(tx, PoolKind::Caption, &item("last")).unwrap();
+        add_caption(tx, &caption("first")).unwrap();
+        gone = add_caption(tx, &caption("last")).unwrap();
         remove_text_item(tx, gone).unwrap();
     });
     let mut added = 0;
     tx_on(&mut conn, |tx| {
-        added = add_text_item(tx, PoolKind::Caption, &item("new")).unwrap();
+        added = add_caption(tx, &caption("new")).unwrap();
     });
     assert_ne!(added, gone, "a stale Remove would have taken the new entry");
 }

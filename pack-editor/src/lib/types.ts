@@ -19,7 +19,29 @@ export interface MediaFile {
 	artists: string[];
 	source_url: string | null;
 	size: number;
+	popup_eligible: boolean;
+	explicit_only: boolean;
+	audio_role: 'background' | 'popup' | null;
 }
+
+/** One stage as a media inspector displays it. Membership is evaluated by the backend. */
+export interface StageMembershipRow {
+	id: string;
+	label: string;
+	member: boolean;
+}
+
+export interface StageRemovalImpact {
+	tag: string | null;
+	media: number;
+	stages: string[];
+	content: number;
+}
+
+export type MediaUsage =
+	| { label: string; target: { kind: 'wallpaper' } }
+	| { label: string; target: { kind: 'splash' } }
+	| { label: string; target: { kind: 'stage'; id: string } };
 /**
  * One tag, with everything the Tags tab shows — mirrors `pack::TagRow`.
  *
@@ -108,12 +130,20 @@ export interface MediaServerInfo {
 
 // behaviour.json (shared/src/behaviour/schema.rs) -- field names are the exact JSON keys.
 
-export interface TextItem {
+export interface TaggedText {
 	text: string;
 	tags: string[];
-	/** Prompts only: the answer deadline, in seconds. */
+}
+
+export interface Caption extends TaggedText {}
+
+export interface Prompt extends TaggedText {
+	/** The answer deadline, in seconds. */
 	timeout_seconds?: number;
-	/** Notifications only: the title shown above the notification's body (`text`). */
+}
+
+export interface Notification extends TaggedText {
+	/** The title shown above the notification's body (`text`). */
 	summary?: string;
 }
 
@@ -195,9 +225,9 @@ export interface Content {
 	/** Per-file audio attributes, keyed by media id. */
 	audio: Record<string, AudioMedia>;
 	content_groups: ContentGroup[];
-	captions: TextItem[];
-	prompts: TextItem[];
-	notifications: TextItem[];
+	captions: Caption[];
+	prompts: Prompt[];
+	notifications: Notification[];
 	web_links: WebLink[];
 	/** Id of the media file used as the wallpaper; absent means the pack has no wallpaper. */
 	wallpaper?: number;
@@ -409,9 +439,16 @@ export interface BehaviourOutcome {
 	media_tags: [number, string, boolean][];
 }
 
+/** A stage-membership edit either landed or needs approval for the named tag removals. */
+export type MembershipOutcome =
+	| { kind: 'applied'; outcome: BehaviourOutcome }
+	| { kind: 'confirmation_required'; tags: string[] };
+
 /** One text-pool entry with the row id the editor addresses it by — mirrors `editor::TextItemRow`. */
-export interface TextItemRow extends TextItem {
+export interface TextItemRow extends TaggedText {
 	id: number;
+	timeout_seconds?: number;
+	summary?: string;
 }
 
 /** One web link with its row id — mirrors `editor::WebLinkRow`. */

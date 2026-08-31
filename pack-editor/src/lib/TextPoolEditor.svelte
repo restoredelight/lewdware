@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PoolKind, TextItem, TextItemRow } from './types.js';
+	import type { PoolKind, TextItemRow } from './types.js';
 	import ContentList from './ContentList.svelte';
 	import TagPicker from './TagPicker.svelte';
 	import { api } from './api.js';
@@ -42,12 +42,34 @@
 		void mutate(run, { label, invalidates });
 	}
 
+	function setText(id: number, text: string, label: string) {
+		switch (poolKey) {
+			case 'caption':
+				return api.pool.setCaptionText(id, text, label);
+			case 'prompt':
+				return api.pool.setPromptText(id, text, label);
+			case 'notification':
+				return api.pool.setNotificationBody(id, text, label);
+		}
+	}
+
 	// Awaited, not fired and forgotten: `ContentList` reveals and focuses the new entry once this
 	// resolves, and an entry that does not exist yet cannot be revealed — it would scroll to the
 	// previous last card instead.
 	async function addItem() {
-		await mutate(() => api.pool.add(poolKey, { text: '', tags: [] }, `Add ${noun.toLowerCase()}`), {
-			label: `Add ${noun.toLowerCase()}`,
+		const label = `Add ${noun.toLowerCase()}`;
+		const add = () => {
+			switch (poolKey) {
+				case 'caption':
+					return api.pool.addCaption({ text: '', tags: [] }, label);
+				case 'prompt':
+					return api.pool.addPrompt({ text: '', tags: [] }, label);
+				case 'notification':
+					return api.pool.addNotification({ text: '', tags: [] }, label);
+			}
+		};
+		await mutate(add, {
+			label,
 			invalidates
 		});
 	}
@@ -100,7 +122,7 @@
 				label="Edit notification title"
 				{invalidates}
 				oncommit={(value: string, label: string) =>
-					api.pool.setSummary(
+					api.pool.setNotificationSummary(
 						item.id,
 						// Stored only when it says something: a blank title is the absence of one,
 						// and the notification is shown body-only.
@@ -129,7 +151,7 @@
 				value={item.text}
 				label={`Edit ${noun.toLowerCase()}`}
 				{invalidates}
-				oncommit={(value: string, label: string) => api.pool.setText(item.id, value, label)}
+				oncommit={(value: string, label: string) => setText(item.id, value, label)}
 			>
 				{#snippet field(draft, set, commit)}
 					<textarea
@@ -160,7 +182,7 @@
 				label="Edit prompt time limit"
 				{invalidates}
 				oncommit={(seconds: number | null, label: string) =>
-					api.pool.setTimeout(item.id, seconds, label)}
+					api.pool.setPromptTimeout(item.id, seconds, label)}
 			>
 				{#snippet field(draft, set, commit)}
 					<NumberField
