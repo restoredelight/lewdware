@@ -204,7 +204,7 @@ fn joining_reuses_the_stages_own_tag_and_nothing_else() {
 
 #[test]
 fn joining_by_an_author_tag_would_say_more_than_appears_here_so_it_makes_its_own() {
-    // `intense` is the author's, and may also drive a content group or a text pool.
+    // `intense` is the author's, and may also drive a content group or content entry.
     let conn = membership_pack(&[("peak", "Peak", Some(&["intense"]))]);
     let plan = plan_stage_membership(&conn, 1, "peak", true).unwrap();
     assert_eq!(
@@ -220,7 +220,7 @@ fn joining_by_an_author_tag_would_say_more_than_appears_here_so_it_makes_its_own
 }
 
 /// The heart of it. A stage selecting by the author's own word can only lose a file by that file
-/// losing the word -- which would also drop it from every content group and text pool naming it.
+/// losing the word -- which would also drop it from every content group and content entry naming it.
 /// So the file is excluded instead, and its own tags are left exactly as the author wrote them.
 #[test]
 fn leaving_never_takes_off_a_tag_the_author_chose() {

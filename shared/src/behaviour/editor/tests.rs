@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Transaction};
 
-use super::{PoolKind, add_stage, popup_attributes, remove_stage, stages, text_pool, transitions};
+use super::{add_stage, captions, popup_attributes, remove_stage, stages, transitions};
 use crate::behaviour::schema::{
     Behaviour, Caption, ContentSelection, Events, Notification, PopupMedia, Prompt, Stage, Timeline,
 };
@@ -50,8 +50,8 @@ fn tx_on(conn: &mut Connection, body: impl FnOnce(&Transaction<'_>)) {
     tx.commit().unwrap();
 }
 
-fn texts(conn: &Connection, kind: PoolKind) -> Vec<String> {
-    text_pool(conn, kind)
+fn caption_texts(conn: &Connection) -> Vec<String> {
+    captions(conn)
         .unwrap()
         .into_iter()
         .map(|row| row.text)

@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use rusqlite::{Transaction, params};
 
-/// Writes one column of an existing row.
+/// Write one column of an existing row.
 pub fn set_column<T: rusqlite::ToSql>(
     tx: &Transaction<'_>,
     table: &str,

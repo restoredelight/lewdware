@@ -1,6 +1,8 @@
 //! The queries: what each surface reads when it renders.
 
-use shared::behaviour::editor::{self, MediaSlots, PoolKind, TextItemRow, WebLinkRecord};
+use shared::behaviour::editor::{
+    self, CaptionRecord, MediaSlots, NotificationRecord, PromptRecord, WebLinkRecord,
+};
 use shared::behaviour::{AudioMedia, ContentGroup, PopupMedia, Stage, Transition};
 use tauri::State;
 
@@ -30,9 +32,9 @@ pub async fn get_behaviour_summary(state: State<'_, AppState>) -> Result<Behavio
             pack.behaviour_query(|conn: &rusqlite::Connection| {
                 let timeline = editor::timeline(conn)?;
                 Ok(BehaviourSummary {
-                    captions: editor::text_pool(conn, PoolKind::Caption)?.len(),
-                    prompts: editor::text_pool(conn, PoolKind::Prompt)?.len(),
-                    notifications: editor::text_pool(conn, PoolKind::Notification)?.len(),
+                    captions: editor::captions(conn)?.len(),
+                    prompts: editor::prompts(conn)?.len(),
+                    notifications: editor::notifications(conn)?.len(),
                     web_links: editor::web_links(conn)?.len(),
                     content_groups: editor::content_groups(conn)?.len(),
                     has_timeline: timeline.is_some(),
@@ -116,7 +118,7 @@ pub async fn get_stage_removal_impact(
                     "SELECT s.label FROM behaviour_stage_tag st JOIN tags t ON t.id = st.tag_id JOIN behaviour_stage s ON s.id = st.stage_id WHERE t.name = ?1 AND s.id <> ?2 ORDER BY s.position",
                 )?.query_map([&tag, &id], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
                 let content = conn.query_row(
-                    "SELECT (SELECT COUNT(*) FROM behaviour_content_group_tag x JOIN tags t ON t.id = x.tag_id WHERE t.name = ?1) + (SELECT COUNT(*) FROM behaviour_text_item_tag x JOIN tags t ON t.id = x.tag_id WHERE t.name = ?1) + (SELECT COUNT(*) FROM behaviour_web_link_tag x JOIN tags t ON t.id = x.tag_id WHERE t.name = ?1)",
+                    "SELECT (SELECT COUNT(*) FROM behaviour_content_group_tag x JOIN tags t ON t.id = x.tag_id WHERE t.name = ?1) + (SELECT COUNT(*) FROM behaviour_content_entry_tag x JOIN tags t ON t.id = x.tag_id WHERE t.name = ?1)",
                     [&tag], |row| row.get(0),
                 )?;
                 Ok(StageRemovalImpact { tag: Some(tag), media, stages, content })
@@ -165,15 +167,25 @@ pub async fn get_audio_attributes(
 }
 
 #[tauri::command]
-pub async fn get_text_pool(
-    state: State<'_, AppState>,
-    kind: PoolKind,
-) -> Result<Vec<TextItemRow>, String> {
+pub async fn get_captions(state: State<'_, AppState>) -> Result<Vec<CaptionRecord>, String> {
     state
-        .with_pack(async |pack| {
-            pack.behaviour_query(move |conn: &rusqlite::Connection| editor::text_pool(conn, kind))
-                .await
-        })
+        .with_pack(async |pack| pack.behaviour_query(editor::captions).await)
+        .await
+}
+
+#[tauri::command]
+pub async fn get_prompts(state: State<'_, AppState>) -> Result<Vec<PromptRecord>, String> {
+    state
+        .with_pack(async |pack| pack.behaviour_query(editor::prompts).await)
+        .await
+}
+
+#[tauri::command]
+pub async fn get_notifications(
+    state: State<'_, AppState>,
+) -> Result<Vec<NotificationRecord>, String> {
+    state
+        .with_pack(async |pack| pack.behaviour_query(editor::notifications).await)
         .await
 }
 

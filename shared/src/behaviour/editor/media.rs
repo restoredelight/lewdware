@@ -9,11 +9,13 @@ use crate::behaviour::schema::{
 
 pub fn popup_attributes(conn: &Connection, ids: &[u64]) -> Result<Vec<(u64, PopupMedia)>> {
     let mut found = Vec::new();
+
     for id in ids {
         if let Some(entry) = read_one_popup_media(conn, *id)? {
             found.push((*id, entry));
         }
     }
+
     Ok(found)
 }
 

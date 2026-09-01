@@ -5,16 +5,16 @@
 	import { mutate } from './mutate.svelte.js';
 	import DebouncedField from './DebouncedField.svelte';
 	import { keys, query } from './query.svelte.js';
-	import type { WebLink, WebLinkRow } from './types.js';
+	import type { WebLink, WebLinkRecord } from './types.js';
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Field from '$ui/Field.svelte';
 	import Dialog from '$ui/Dialog.svelte';
 
-	const stored = query(keys.webLinks, api.link.get);
+	const stored = query(keys.webLinks, api.webLink.get);
 	const links = $derived(stored.current ?? []);
 	const invalidates = [keys.webLinks, keys.summary];
 
-	let removing = $state<WebLinkRow | null>(null);
+	let removing = $state<WebLinkRecord | null>(null);
 
 	/** Sends one field of one link. Nothing else about the link travels with it. */
 	function write(run: () => Promise<void>, label: string) {
@@ -22,7 +22,7 @@
 	}
 
 	async function addLink() {
-		await mutate(() => api.link.add({ url: '', tags: [] }, 'Add web link'), {
+		await mutate(() => api.webLink.add({ url: '', tags: [] }, 'Add web link'), {
 			label: 'Add web link',
 			invalidates
 		});
@@ -35,14 +35,14 @@
 			removing = link;
 			return;
 		}
-		write(() => api.link.remove(link.id, 'Remove web link'), 'Remove web link');
+		write(() => api.webLink.remove(link.id, 'Remove web link'), 'Remove web link');
 	}
 
 	function confirmRemove() {
 		if (!removing) return;
 		const link = removing;
 		removing = null;
-		write(() => api.link.remove(link.id, 'Remove web link'), 'Remove web link');
+		write(() => api.webLink.remove(link.id, 'Remove web link'), 'Remove web link');
 	}
 </script>
 
@@ -68,7 +68,7 @@
 			value={link.url}
 			label="Edit web link"
 			{invalidates}
-			oncommit={(value: string, label: string) => api.link.setUrl(link.id, value, label)}
+			oncommit={(value: string, label: string) => api.webLink.setUrl(link.id, value, label)}
 		>
 			{#snippet field(draft, set, commit)}
 				<Field
@@ -88,7 +88,9 @@
 			onchange={(tag, added, label) =>
 				write(
 					() =>
-						added ? api.link.addTag(link.id, tag, label) : api.link.removeTag(link.id, tag, label),
+						added
+							? api.webLink.addTag(link.id, tag, label)
+							: api.webLink.removeTag(link.id, tag, label),
 					label
 				)}
 		/>

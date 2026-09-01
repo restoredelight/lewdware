@@ -9,24 +9,21 @@ use crate::behaviour::schema::{
 };
 
 #[test]
-fn flat_text_rows_are_validated_into_their_domain_types() {
+fn invalid_content_entry_shapes_are_rejected_by_the_database() {
     for (kind, timeout_seconds, summary) in [
         ("caption", Some(10.0), None),
         ("prompt", None, Some("not a prompt title")),
         ("notification", Some(10.0), None),
+        ("web_link", Some(10.0), None),
     ] {
         let conn = pack();
-        conn.execute(
-            "INSERT INTO behaviour_text_item (kind, text, timeout_seconds, summary)
+        let result = conn.execute(
+            "INSERT INTO behaviour_content_entry (kind, value, timeout_seconds, summary)
              VALUES (?1, 'invalid', ?2, ?3)",
             rusqlite::params![kind, timeout_seconds, summary],
-        )
-        .unwrap();
-
-        assert!(
-            Behaviour::read(&conn).is_err(),
-            "accepted invalid {kind} row"
         );
+
+        assert!(result.is_err(), "accepted invalid {kind} row");
     }
 }
 

@@ -34,7 +34,7 @@
 	}
 
 	// Awaited: `ContentList` reveals and focuses the new entry once this resolves. See
-	// `TextPoolEditor.addItem`.
+	// `MessageEntriesEditor.addItem`.
 	async function addGroup() {
 		await mutate(
 			() =>

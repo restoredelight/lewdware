@@ -1,28 +1,28 @@
-use super::{caption, notification, pack, prompt, texts, tx_on};
+use super::{caption, caption_texts, notification, pack, prompt, tx_on};
 use crate::behaviour::editor::{
-    PoolKind, add_caption, add_content_group, add_notification, add_prompt, add_web_link,
-    content_groups, remove_text_item, set_caption_text, text_pool, web_links,
+    add_caption, add_content_group, add_notification, add_prompt, add_web_link, captions,
+    content_groups, notifications, prompts, remove_caption, set_caption_text, web_links,
 };
 use crate::behaviour::schema::{
     Behaviour, Caption, Content, ContentGroup, Notification, Prompt, WebLink,
 };
 
 #[test]
-fn a_pool_entry_round_trips_with_its_id() {
+fn a_content_entry_round_trips_with_its_id() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
         id = add_caption(tx, &caption("first")).unwrap();
     });
 
-    let rows = text_pool(&conn, PoolKind::Caption).unwrap();
+    let rows = captions(&conn).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, id);
     assert_eq!(rows[0].text, "first");
 }
 
 /// The point of the module: an edit names the row it means, so it cannot land on a neighbour if
-/// the pool has shifted under the editor since it last looked.
+/// the collection has shifted under the editor since it last looked.
 #[test]
 fn editing_one_entry_leaves_its_neighbours_alone() {
     let mut conn = pack();
@@ -37,27 +37,27 @@ fn editing_one_entry_leaves_its_neighbours_alone() {
         set_caption_text(tx, ids[1], "edited").unwrap();
     });
 
-    assert_eq!(texts(&conn, PoolKind::Caption), ["one", "edited", "three"]);
+    assert_eq!(caption_texts(&conn), ["one", "edited", "three"]);
 }
 
-/// `(kind, position)` is unique, so a removal has to close the gap it leaves or the next append
-/// collides with it.
+/// Removing an entry leaves the remaining ids in their existing order, and a later append follows
+/// them even though the id sequence now has a gap.
 #[test]
-fn removing_an_entry_closes_the_gap() {
+fn removing_an_entry_preserves_order_before_the_next_append() {
     let mut conn = pack();
     let mut ids = vec![];
     tx_on(&mut conn, |tx| {
         for text in ["one", "two", "three"] {
             ids.push(add_caption(tx, &caption(text)).unwrap());
         }
-        remove_text_item(tx, ids[0]).unwrap();
+        remove_caption(tx, ids[0]).unwrap();
         add_caption(tx, &caption("four")).unwrap();
     });
-    assert_eq!(texts(&conn, PoolKind::Caption), ["two", "three", "four"]);
+    assert_eq!(caption_texts(&conn), ["two", "three", "four"]);
 }
 
 #[test]
-fn the_three_pools_do_not_see_each_other() {
+fn the_four_content_collections_do_not_see_each_other() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
         add_caption(tx, &caption("a caption")).unwrap();
@@ -77,18 +77,22 @@ fn the_three_pools_do_not_see_each_other() {
             },
         )
         .unwrap();
+        add_web_link(
+            tx,
+            &WebLink {
+                url: "https://example.invalid".to_string(),
+                tags: vec![],
+            },
+        )
+        .unwrap();
     });
-    assert_eq!(texts(&conn, PoolKind::Caption), ["a caption"]);
-    assert_eq!(texts(&conn, PoolKind::Prompt), ["a prompt"]);
-    assert_eq!(texts(&conn, PoolKind::Notification), ["a notification"]);
+    assert_eq!(caption_texts(&conn), ["a caption"]);
+    assert_eq!(prompts(&conn).unwrap()[0].text, "a prompt");
+    assert_eq!(notifications(&conn).unwrap()[0].text, "a notification");
+    assert_eq!(web_links(&conn).unwrap()[0].url, "https://example.invalid");
+    assert_eq!(prompts(&conn).unwrap()[0].timeout_seconds, Some(12.0));
     assert_eq!(
-        text_pool(&conn, PoolKind::Prompt).unwrap()[0].timeout_seconds,
-        Some(12.0)
-    );
-    assert_eq!(
-        text_pool(&conn, PoolKind::Notification).unwrap()[0]
-            .summary
-            .as_deref(),
+        notifications(&conn).unwrap()[0].summary.as_deref(),
         Some("A title")
     );
 }
@@ -106,7 +110,7 @@ fn an_entrys_tags_round_trip_and_become_real_tags() {
         )
         .unwrap();
     });
-    let rows = text_pool(&conn, PoolKind::Caption).unwrap();
+    let rows = captions(&conn).unwrap();
     assert_eq!(rows[0].tags, ["imp", "succubus"]);
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM tags", [], |row| row.get(0))

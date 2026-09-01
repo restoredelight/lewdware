@@ -9,24 +9,27 @@
 //! the original `behaviour::editor::*` API.
 
 mod common;
-mod group;
-mod link;
+mod content;
+mod content_group;
 mod media;
 mod membership;
-mod pool;
 mod stage;
 mod stage_tags;
 mod timeline;
 mod transition;
 
-pub use group::{
+pub use content::{
+    CaptionRecord, NotificationRecord, PromptRecord, WebLinkRecord, add_caption, add_caption_tag,
+    add_notification, add_notification_tag, add_prompt, add_prompt_tag, add_web_link,
+    add_web_link_tag, captions, notifications, prompts, remove_caption, remove_caption_tag,
+    remove_notification, remove_notification_tag, remove_prompt, remove_prompt_tag,
+    remove_web_link, remove_web_link_tag, set_caption_text, set_notification_body,
+    set_notification_summary, set_prompt_text, set_prompt_timeout, set_web_link_url, web_links,
+};
+pub use content_group::{
     add_content_group, add_content_group_tag, content_groups, remove_content_group,
     remove_content_group_tag, set_content_group_description, set_content_group_enabled_by_default,
     set_content_group_label,
-};
-pub use link::{
-    WebLinkRecord, add_web_link, add_web_link_tag, remove_web_link, remove_web_link_tag,
-    set_web_link_url, web_links,
 };
 pub use media::{
     MediaSlots, audio_attributes, clear_media_slots, is_media_referenced, media_slots,
@@ -37,11 +40,6 @@ pub use media::{
 pub use membership::{
     MembershipPlan, StageMembership, StageTagCreation, apply_membership_creation, media_tags,
     plan_stage_membership, stage_membership, stage_restricts_content,
-};
-pub use pool::{
-    PoolKind, TextItemRow, add_caption, add_notification, add_prompt, add_text_item_tag,
-    remove_text_item, remove_text_item_tag, set_caption_text, set_notification_body,
-    set_notification_summary, set_prompt_text, set_prompt_timeout, text_pool,
 };
 pub use stage::{
     add_stage_exclude_tag, add_stage_tag, remove_stage_exclude_tag, remove_stage_tag,

@@ -1,12 +1,13 @@
 use super::{caption, notification, pack, popups_of, prompt, timeline_pack, tx_on};
 use crate::behaviour::db::read_one_stage;
 use crate::behaviour::editor::{
-    PoolKind, add_caption, add_notification, add_prompt, add_text_item_tag, remove_text_item,
-    set_caption_text, set_media_slot, set_notification_body, set_notification_summary,
-    set_popup_scale, set_popup_weight, set_prompt_text, set_prompt_timeout, set_stage_audio_random,
-    set_stage_content_tags, set_stage_end_duration, set_stage_entry_notification, set_stage_event,
-    set_stage_movement, set_stage_movement_speed, set_stage_prompt_timeout_multiplier,
-    set_transition_duration, set_transition_easing, text_pool, transitions,
+    add_caption, add_caption_tag, add_notification, add_prompt, notifications, prompts,
+    remove_caption, set_caption_text, set_media_slot, set_notification_body,
+    set_notification_summary, set_popup_scale, set_popup_weight, set_prompt_text,
+    set_prompt_timeout, set_stage_audio_random, set_stage_content_tags, set_stage_end_duration,
+    set_stage_entry_notification, set_stage_event, set_stage_movement, set_stage_movement_speed,
+    set_stage_prompt_timeout_multiplier, set_transition_duration, set_transition_easing,
+    transitions,
 };
 use crate::behaviour::schema::{Easing, EventKind, EventSchedule, Interval, MediaSlot, Movement};
 
@@ -26,7 +27,7 @@ fn two_fields_of_one_entry_do_not_clobber_each_other() {
         set_notification_body(tx, id, "new body").unwrap();
     });
 
-    let stored = &text_pool(&conn, PoolKind::Notification).unwrap()[0];
+    let stored = &notifications(&conn).unwrap()[0];
     assert_eq!(stored.summary.as_deref(), Some("title"));
     assert_eq!(stored.text, "new body");
 }
@@ -43,7 +44,7 @@ fn a_setter_accepts_the_value_already_stored() {
         set_prompt_text(tx, id, "same").unwrap();
         set_prompt_timeout(tx, id, None).unwrap();
     });
-    let stored = &text_pool(&conn, PoolKind::Prompt).unwrap()[0];
+    let stored = &prompts(&conn).unwrap()[0];
     assert_eq!(stored.text, "same");
     assert_eq!(stored.timeout_seconds, None);
 }
@@ -56,15 +57,15 @@ fn a_setter_refuses_a_row_that_is_gone() {
     let mut id = 0;
     tx_on(&mut conn, |tx| {
         id = add_caption(tx, &caption("gone")).unwrap();
-        remove_text_item(tx, id).unwrap();
+        remove_caption(tx, id).unwrap();
     });
     let tx = conn.transaction().unwrap();
     assert!(set_caption_text(&tx, id, "back").is_err());
-    assert!(add_text_item_tag(&tx, id, "imp").is_err());
+    assert!(add_caption_tag(&tx, id, "imp").is_err());
 }
 
 #[test]
-fn a_pool_setter_refuses_an_entry_of_another_kind() {
+fn a_content_setter_refuses_an_entry_of_another_kind() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {

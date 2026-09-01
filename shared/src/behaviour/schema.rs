@@ -8,9 +8,9 @@ use rusqlite::{Connection, OptionalExtension, ToSql, Transaction, params, types:
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::db::{
-    read_audio_media, read_content_groups, read_popup_media, read_text_pool,
-    read_timeline_if_enabled, read_web_links, write_audio_media, write_content_groups,
-    write_popup_media, write_text_pool, write_timeline, write_web_links,
+    read_audio_media, read_content_groups, read_entries, read_popup_media,
+    read_timeline_if_enabled, write_audio_media, write_content_groups, write_entries,
+    write_popup_media, write_timeline,
 };
 
 const LEGACY_BLOB_KEY: &str = "behaviour";
@@ -359,10 +359,10 @@ impl Behaviour {
                 popups: read_popup_media(conn)?,
                 audio: read_audio_media(conn)?,
                 content_groups: read_content_groups(conn)?,
-                captions: read_text_pool(conn)?,
-                prompts: read_text_pool(conn)?,
-                notifications: read_text_pool(conn)?,
-                web_links: read_web_links(conn)?,
+                captions: read_entries(conn)?,
+                prompts: read_entries(conn)?,
+                notifications: read_entries(conn)?,
+                web_links: read_entries(conn)?,
                 wallpaper,
                 splash,
             },
@@ -380,8 +380,7 @@ impl Behaviour {
         tx.execute("DELETE FROM behaviour_popup_media_fields", [])?;
         tx.execute("DELETE FROM behaviour_audio_media", [])?;
         tx.execute("DELETE FROM behaviour_content_group", [])?;
-        tx.execute("DELETE FROM behaviour_text_item", [])?;
-        tx.execute("DELETE FROM behaviour_web_link", [])?;
+        tx.execute("DELETE FROM behaviour_content_entry", [])?;
 
         let content = &self.content;
         tx.execute(
@@ -391,10 +390,10 @@ impl Behaviour {
         write_popup_media(tx, &content.popups)?;
         write_audio_media(tx, &content.audio)?;
         write_content_groups(tx, &content.content_groups)?;
-        write_text_pool(tx, &content.captions)?;
-        write_text_pool(tx, &content.prompts)?;
-        write_text_pool(tx, &content.notifications)?;
-        write_web_links(tx, &content.web_links)?;
+        write_entries(tx, &content.captions)?;
+        write_entries(tx, &content.prompts)?;
+        write_entries(tx, &content.notifications)?;
+        write_entries(tx, &content.web_links)?;
         if let Some(timeline) = self.timeline.as_ref() {
             write_timeline(tx, timeline)?;
         }
@@ -682,7 +681,7 @@ pub struct ContentSelection {
     /// the extreme stuff", which an inclusion list can only express by enumerating everything else.
     /// And it is the only way to take one file out of one stage without editing the author's own
     /// vocabulary: a stage selecting by `intense` can only lose a file by that file losing
-    /// `intense`, which would also drop it from every content group and text pool naming the tag.
+    /// `intense`, which would also drop it from every content group and content entry naming the tag.
     /// Excluding is additive and says exactly one thing.
     ///
     /// Empty is the default and means what it says. There is no `None` state, because "excludes

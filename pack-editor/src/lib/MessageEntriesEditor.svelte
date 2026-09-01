@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { PoolKind, TextItemRow } from './types.js';
 	import ContentList from './ContentList.svelte';
 	import TagPicker from './TagPicker.svelte';
 	import { api } from './api.js';
@@ -12,30 +11,61 @@
 	import NumberField from '$ui/NumberField.svelte';
 	import { automaticPromptTimeout } from './promptTimeout.js';
 
+	type MessageKind = 'caption' | 'prompt' | 'notification';
+	type MessageRecord = {
+		id: number;
+		text: string;
+		tags: string[];
+		timeout_seconds?: number;
+		summary?: string;
+	};
+
 	type Props = {
 		title: string;
-		poolKey: PoolKind;
+		kind: MessageKind;
 		idPrefix: string;
 	};
 
-	let { title, poolKey, idPrefix }: Props = $props();
+	let { title, kind, idPrefix }: Props = $props();
 
 	// Each entry carries the row id the backend addresses it by, so an edit names the entry the
 	// author is looking at rather than the position it happened to be in when the view rendered.
 	const stored = query(
-		() => keys.textPool(poolKey),
-		() => api.pool.get(poolKey)
+		() => entryKey(kind),
+		() => getEntries(kind)
 	);
-	const pool = $derived(stored.current ?? []);
-	// Notifications are the one pool whose entry is two fields: the desktop notification's title
+	const entries = $derived(stored.current ?? []);
+	// Notifications are the one message whose entry is two fields: the desktop notification's title
 	// and its body. Everywhere else `text` is the whole entry, and an unlabelled box is clearer
 	// than a labelled one.
-	const titled = $derived(poolKey === 'notification');
+	const titled = $derived(kind === 'notification');
 	// "Caption", "Prompt" -- what the undo list should call one of these.
 	const noun = $derived(title.replace(/s$/, ''));
-	let removing = $state<TextItemRow | null>(null);
+	let removing = $state<MessageRecord | null>(null);
 
-	const invalidates = $derived([keys.textPool(poolKey), keys.summary]);
+	const invalidates = $derived([entryKey(kind), keys.summary]);
+
+	function entryKey(entryKind: MessageKind): string {
+		switch (entryKind) {
+			case 'caption':
+				return keys.captions;
+			case 'prompt':
+				return keys.prompts;
+			case 'notification':
+				return keys.notifications;
+		}
+	}
+
+	async function getEntries(entryKind: MessageKind): Promise<MessageRecord[]> {
+		switch (entryKind) {
+			case 'caption':
+				return api.caption.get();
+			case 'prompt':
+				return api.prompt.get();
+			case 'notification':
+				return api.notification.get();
+		}
+	}
 
 	/** Sends one field of one entry. Nothing else about the entry travels with it. */
 	function write(run: () => Promise<void>, label: string) {
@@ -43,13 +73,13 @@
 	}
 
 	function setText(id: number, text: string, label: string) {
-		switch (poolKey) {
+		switch (kind) {
 			case 'caption':
-				return api.pool.setCaptionText(id, text, label);
+				return api.caption.setText(id, text, label);
 			case 'prompt':
-				return api.pool.setPromptText(id, text, label);
+				return api.prompt.setText(id, text, label);
 			case 'notification':
-				return api.pool.setNotificationBody(id, text, label);
+				return api.notification.setBody(id, text, label);
 		}
 	}
 
@@ -59,13 +89,13 @@
 	async function addItem() {
 		const label = `Add ${noun.toLowerCase()}`;
 		const add = () => {
-			switch (poolKey) {
+			switch (kind) {
 				case 'caption':
-					return api.pool.addCaption({ text: '', tags: [] }, label);
+					return api.caption.add({ text: '', tags: [] }, label);
 				case 'prompt':
-					return api.pool.addPrompt({ text: '', tags: [] }, label);
+					return api.prompt.add({ text: '', tags: [] }, label);
 				case 'notification':
-					return api.pool.addNotification({ text: '', tags: [] }, label);
+					return api.notification.add({ text: '', tags: [] }, label);
 			}
 		};
 		await mutate(add, {
@@ -74,15 +104,43 @@
 		});
 	}
 
+	function removeEntry(id: number, label: string): Promise<void> {
+		switch (kind) {
+			case 'caption':
+				return api.caption.remove(id, label);
+			case 'prompt':
+				return api.prompt.remove(id, label);
+			case 'notification':
+				return api.notification.remove(id, label);
+		}
+	}
+
+	function setTag(id: number, tag: string, added: boolean, label: string): Promise<void> {
+		switch (kind) {
+			case 'caption':
+				return added
+					? api.caption.addTag(id, tag, label)
+					: api.caption.removeTag(id, tag, label);
+			case 'prompt':
+				return added
+					? api.prompt.addTag(id, tag, label)
+					: api.prompt.removeTag(id, tag, label);
+			case 'notification':
+				return added
+					? api.notification.addTag(id, tag, label)
+					: api.notification.removeTag(id, tag, label);
+		}
+	}
+
 	function removeItem(index: number) {
-		const item = pool[index];
+		const item = entries[index];
 		if (!item) return;
 		if (item.text.trim() || item.summary?.trim() || item.tags.length > 0) {
 			removing = item;
 			return;
 		}
 		write(
-			() => api.pool.remove(item.id, `Remove ${noun.toLowerCase()}`),
+			() => removeEntry(item.id, `Remove ${noun.toLowerCase()}`),
 			`Remove ${noun.toLowerCase()}`
 		);
 	}
@@ -92,7 +150,7 @@
 		const item = removing;
 		removing = null;
 		write(
-			() => api.pool.remove(item.id, `Remove ${noun.toLowerCase()}`),
+			() => removeEntry(item.id, `Remove ${noun.toLowerCase()}`),
 			`Remove ${noun.toLowerCase()}`
 		);
 	}
@@ -100,7 +158,7 @@
 
 <ContentList
 	label={title}
-	items={pool}
+	items={entries}
 	entryLabel={noun}
 	addLabel={`Add ${noun.toLowerCase()}`}
 	focusSelector={titled ? 'input' : 'textarea'}
@@ -122,7 +180,7 @@
 				label="Edit notification title"
 				{invalidates}
 				oncommit={(value: string, label: string) =>
-					api.pool.setNotificationSummary(
+					api.notification.setSummary(
 						item.id,
 						// Stored only when it says something: a blank title is the absence of one,
 						// and the notification is shown body-only.
@@ -170,19 +228,15 @@
 			tags={item.tags}
 			id={`${idPrefix}-${index}`}
 			onchange={(tag, added, label) =>
-				write(
-					() =>
-						added ? api.pool.addTag(item.id, tag, label) : api.pool.removeTag(item.id, tag, label),
-					label
-				)}
+				write(() => setTag(item.id, tag, added, label), label)}
 		/>
-		{#if poolKey === 'prompt'}
+		{#if kind === 'prompt'}
 			<DebouncedField
 				value={item.timeout_seconds ?? null}
 				label="Edit prompt time limit"
 				{invalidates}
 				oncommit={(seconds: number | null, label: string) =>
-					api.pool.setPromptTimeout(item.id, seconds, label)}
+					api.prompt.setTimeout(item.id, seconds, label)}
 			>
 				{#snippet field(draft, set, commit)}
 					<NumberField

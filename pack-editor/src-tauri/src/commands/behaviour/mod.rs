@@ -17,9 +17,8 @@
 //! belongs to the front end. It addresses nothing.
 
 pub mod attributes;
+pub mod content;
 pub mod group;
-pub mod link;
-pub mod pool;
 pub mod queries;
 pub mod stage;
 pub mod timeline;

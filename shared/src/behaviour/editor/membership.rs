@@ -69,8 +69,7 @@ fn dedicated_owned_tag(
 
     let (content_count, experience_count): (u64, u64) = conn.query_row(
         "SELECT (SELECT COUNT(*) FROM behaviour_content_group_tag t WHERE t.tag_id = tags.id)
-                  + (SELECT COUNT(*) FROM behaviour_text_item_tag t WHERE t.tag_id = tags.id)
-                  + (SELECT COUNT(*) FROM behaviour_web_link_tag t WHERE t.tag_id = tags.id)
+                  + (SELECT COUNT(*) FROM behaviour_content_entry_tag t WHERE t.tag_id = tags.id)
                     AS content_count,
                 (SELECT COUNT(*) FROM behaviour_stage_tag t WHERE t.tag_id = tags.id)
                     AS experience_count

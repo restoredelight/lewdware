@@ -15,8 +15,8 @@ mod transition;
 pub(crate) use common::sql_array;
 
 pub(crate) use content::{
-    read_content_groups, read_text_pool, read_text_pool_rows, read_web_links, write_content_groups,
-    write_text_pool, write_web_links,
+    ContentEntry, insert_entry, read_content_groups, read_entries, read_entry_rows,
+    write_content_groups, write_entries,
 };
 pub(crate) use media::write_popup_audio_pairs;
 pub use media::{
@@ -28,6 +28,6 @@ pub use stage::{
     write_one_stage_event, write_owned_stage_tag, write_stage_end, write_stage_entry,
     write_stage_mitosis, write_stage_movement, write_stage_prompt, write_stage_tags,
 };
-pub use tags::{read_tags, tag_id, write_tags};
+pub use tags::{tag_id, write_tags};
 pub use timeline::{read_timeline, read_timeline_if_enabled, timeline_enabled, write_timeline};
 pub use transition::read_transitions;

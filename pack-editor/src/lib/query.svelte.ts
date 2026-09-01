@@ -256,7 +256,9 @@ export function resetQueries(): void {
  */
 export const keys = {
 	summary: 'behaviour:summary',
-	textPool: (kind: string) => `behaviour:pool:${kind}`,
+	captions: 'behaviour:captions',
+	prompts: 'behaviour:prompts',
+	notifications: 'behaviour:notifications',
 	webLinks: 'behaviour:web_links',
 	contentGroups: 'behaviour:content_groups',
 	mediaSlots: 'behaviour:slots',

@@ -68,8 +68,7 @@ pub struct MediaFile {
 /// deleting one relies on their `ON DELETE CASCADE` instead.
 const TAG_JOIN_TABLES: &[(&str, &str)] = &[
     ("behaviour_stage_tag", "stage_id"),
-    ("behaviour_text_item_tag", "item_id"),
-    ("behaviour_web_link_tag", "link_id"),
+    ("behaviour_content_entry_tag", "entry_id"),
     ("behaviour_content_group_tag", "group_id"),
 ];
 
@@ -234,7 +233,7 @@ pub enum TagAction {
     /// edit would mean the author's stage cannot be renamed because a *tag* name collides. The
     /// stage keeps the tag it had, under the name it had, which is the honest outcome.
     Rename { from: String, to: String },
-    /// Deletes `tag` if nothing claims it: no media carries it, and no stage, text pool, web link
+    /// Deletes `tag` if nothing claims it: no media carries it, and no stage or content entry
     /// or content group names it in the patched document. Otherwise leaves it entirely alone.
     ///
     /// The condition is re-checked here rather than trusted from the front end, because the front

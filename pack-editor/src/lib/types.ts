@@ -299,7 +299,7 @@ export interface ContentSelection {
 	 * how a stage says "everything except the extreme stuff", and it is the only way to take one
 	 * file out of one stage without editing the author's own vocabulary — a stage selecting by
 	 * `intense` could otherwise only lose a file by that file losing `intense`, which would drop it
-	 * from every content group and text pool naming the tag too.
+	 * from every content group and message or link entry naming the tag too.
 	 *
 	 * Absent and empty mean the same thing. There is no "unrestricted" state, because excluding
 	 * nothing is what every stage does until the author says otherwise.
@@ -444,22 +444,25 @@ export type MembershipOutcome =
 	| { kind: 'applied'; outcome: BehaviourOutcome }
 	| { kind: 'confirmation_required'; tags: string[] };
 
-/** One text-pool entry with the row id the editor addresses it by — mirrors `editor::TextItemRow`. */
-export interface TextItemRow extends TaggedText {
+/** One stored caption with the row id the editor addresses it by. */
+export interface CaptionRecord extends Caption {
 	id: number;
-	timeout_seconds?: number;
-	summary?: string;
 }
 
-/** One web link with its row id — mirrors `editor::WebLinkRow`. */
-export interface WebLinkRow {
+/** One stored prompt with the row id the editor addresses it by. */
+export interface PromptRecord extends Prompt {
 	id: number;
-	url: string;
-	tags: string[];
 }
 
-/** Which of the three text pools an entry belongs to. */
-export type PoolKind = 'caption' | 'prompt' | 'notification';
+/** One stored notification with the row id the editor addresses it by. */
+export interface NotificationRecord extends Notification {
+	id: number;
+}
+
+/** One stored web link with the row id the editor addresses it by. */
+export interface WebLinkRecord extends WebLink {
+	id: number;
+}
 
 /** The pack-wide media slots — mirrors `editor::MediaSlots`. */
 export interface MediaSlots {

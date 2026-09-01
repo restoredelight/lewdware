@@ -4,7 +4,7 @@
 	import { store } from './store.svelte.js';
 	import type { ContentTab } from './store.svelte.js';
 	import BehaviourGate from './BehaviourGate.svelte';
-	import TextPoolEditor from './TextPoolEditor.svelte';
+	import MessageEntriesEditor from './MessageEntriesEditor.svelte';
 	import ContentGroupsEditor from './ContentGroupsEditor.svelte';
 	import MediaSlot from './MediaSlot.svelte';
 	import WebLinksEditor from './WebLinksEditor.svelte';
@@ -134,11 +134,15 @@
 					{#if store.contentTab === 'groups'}
 						<ContentGroupsEditor />
 					{:else if store.contentTab === 'captions'}
-						<TextPoolEditor title="Captions" poolKey="caption" idPrefix="caption" />
+						<MessageEntriesEditor title="Captions" kind="caption" idPrefix="caption" />
 					{:else if store.contentTab === 'prompts'}
-						<TextPoolEditor title="Prompts" poolKey="prompt" idPrefix="prompt" />
+						<MessageEntriesEditor title="Prompts" kind="prompt" idPrefix="prompt" />
 					{:else if store.contentTab === 'notifications'}
-						<TextPoolEditor title="Notifications" poolKey="notification" idPrefix="notification" />
+						<MessageEntriesEditor
+							title="Notifications"
+							kind="notification"
+							idPrefix="notification"
+						/>
 					{:else if store.contentTab === 'web_links'}
 						<WebLinksEditor />
 					{:else if store.contentTab === 'wallpaper'}

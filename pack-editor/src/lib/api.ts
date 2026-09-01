@@ -7,6 +7,7 @@ import type {
 	BehaviourOutcome,
 	BehaviourSummary,
 	Caption,
+	CaptionRecord,
 	ContentGroup,
 	EmbeddedMode,
 	EventCountCondition,
@@ -25,11 +26,12 @@ import type {
 	MonitorPreference,
 	Movement,
 	Notification,
+	NotificationRecord,
 	PackInfo,
-	PoolKind,
 	PopupChanges,
 	PopupMedia,
 	Prompt,
+	PromptRecord,
 	RecentPack,
 	SlotCleared,
 	SlotFilled,
@@ -39,12 +41,11 @@ import type {
 	StageRemovalImpact,
 	TagRow,
 	TagSummary,
-	TextItemRow,
 	TimelineDto,
 	Transition,
 	TransitionValue,
 	WebLink,
-	WebLinkRow
+	WebLinkRecord
 } from './types.js';
 
 async function invokeAfterSelection<T>(
@@ -160,35 +161,51 @@ export const api = {
 	getBehaviourSummary: () => invoke<BehaviourSummary>('get_behaviour_summary'),
 	getMediaSlots: () => invoke<MediaSlots>('get_media_slots'),
 
-	pool: {
-		get: (kind: PoolKind) => invoke<TextItemRow[]>('get_text_pool', { kind }),
-		setCaptionText: (id: number, text: string, label: string) =>
+	caption: {
+		get: () => invoke<CaptionRecord[]>('get_captions'),
+		setText: (id: number, text: string, label: string) =>
 			invoke<void>('set_caption_text', { id, text, label }),
-		setPromptText: (id: number, text: string, label: string) =>
-			invoke<void>('set_prompt_text', { id, text, label }),
-		setNotificationBody: (id: number, text: string, label: string) =>
-			invoke<void>('set_notification_body', { id, text, label }),
-		setNotificationSummary: (id: number, summary: string | null, label: string) =>
-			invoke<void>('set_notification_summary', { id, summary, label }),
-		setPromptTimeout: (id: number, seconds: number | null, label: string) =>
-			invoke<void>('set_prompt_timeout', { id, seconds, label }),
-		// One chip at a time: two removals built from the same fetched list would each put the
-		// other's tag back.
 		addTag: (id: number, tag: string, label: string) =>
-			invoke<void>('add_text_item_tag', { id, tag, label }),
+			invoke<void>('add_caption_tag', { id, tag, label }),
 		removeTag: (id: number, tag: string, label: string) =>
-			invoke<void>('remove_text_item_tag', { id, tag, label }),
-		addCaption: (caption: Caption, label: string) =>
+			invoke<void>('remove_caption_tag', { id, tag, label }),
+		add: (caption: Caption, label: string) =>
 			invoke<BehaviourOutcome>('add_caption', { caption, label }),
-		addPrompt: (prompt: Prompt, label: string) =>
-			invoke<BehaviourOutcome>('add_prompt', { prompt, label }),
-		addNotification: (notification: Notification, label: string) =>
-			invoke<BehaviourOutcome>('add_notification', { notification, label }),
-		remove: (id: number, label: string) => invoke<void>('remove_text_item', { id, label })
+		remove: (id: number, label: string) => invoke<void>('remove_caption', { id, label })
 	},
 
-	link: {
-		get: () => invoke<WebLinkRow[]>('get_web_links'),
+	prompt: {
+		get: () => invoke<PromptRecord[]>('get_prompts'),
+		setText: (id: number, text: string, label: string) =>
+			invoke<void>('set_prompt_text', { id, text, label }),
+		setTimeout: (id: number, seconds: number | null, label: string) =>
+			invoke<void>('set_prompt_timeout', { id, seconds, label }),
+		addTag: (id: number, tag: string, label: string) =>
+			invoke<void>('add_prompt_tag', { id, tag, label }),
+		removeTag: (id: number, tag: string, label: string) =>
+			invoke<void>('remove_prompt_tag', { id, tag, label }),
+		add: (prompt: Prompt, label: string) =>
+			invoke<BehaviourOutcome>('add_prompt', { prompt, label }),
+		remove: (id: number, label: string) => invoke<void>('remove_prompt', { id, label })
+	},
+
+	notification: {
+		get: () => invoke<NotificationRecord[]>('get_notifications'),
+		setBody: (id: number, text: string, label: string) =>
+			invoke<void>('set_notification_body', { id, text, label }),
+		setSummary: (id: number, summary: string | null, label: string) =>
+			invoke<void>('set_notification_summary', { id, summary, label }),
+		addTag: (id: number, tag: string, label: string) =>
+			invoke<void>('add_notification_tag', { id, tag, label }),
+		removeTag: (id: number, tag: string, label: string) =>
+			invoke<void>('remove_notification_tag', { id, tag, label }),
+		add: (notification: Notification, label: string) =>
+			invoke<BehaviourOutcome>('add_notification', { notification, label }),
+		remove: (id: number, label: string) => invoke<void>('remove_notification', { id, label })
+	},
+
+	webLink: {
+		get: () => invoke<WebLinkRecord[]>('get_web_links'),
 		setUrl: (id: number, url: string, label: string) =>
 			invoke<void>('set_web_link_url', { id, url, label }),
 		addTag: (id: number, tag: string, label: string) =>

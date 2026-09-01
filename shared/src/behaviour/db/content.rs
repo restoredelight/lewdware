@@ -4,18 +4,18 @@ use rusqlite::{Connection, Transaction, named_params, params};
 use super::tags::{read_tags, write_tags};
 use crate::behaviour::schema::{Caption, ContentGroup, Notification, Prompt, WebLink};
 
-pub(crate) struct TextItemParts {
-    text: String,
+pub(crate) struct ContentEntryParts {
+    value: String,
     tags: Vec<String>,
     timeout_seconds: Option<f64>,
     summary: Option<String>,
 }
 
-pub(crate) trait TextPoolItem: Sized {
+pub(crate) trait ContentEntry: Sized {
     const KIND: &'static str;
 
-    fn try_from_parts(parts: TextItemParts) -> Result<Self>;
-    fn text(&self) -> &str;
+    fn try_from_parts(parts: ContentEntryParts) -> Result<Self>;
+    fn value(&self) -> &str;
     fn tags(&self) -> &[String];
     fn timeout_seconds(&self) -> Option<f64> {
         None
@@ -25,20 +25,20 @@ pub(crate) trait TextPoolItem: Sized {
     }
 }
 
-impl TextPoolItem for Caption {
+impl ContentEntry for Caption {
     const KIND: &'static str = "caption";
 
-    fn try_from_parts(parts: TextItemParts) -> Result<Self> {
+    fn try_from_parts(parts: ContentEntryParts) -> Result<Self> {
         if parts.timeout_seconds.is_some() || parts.summary.is_some() {
             bail!("a caption row contains prompt or notification fields");
         }
         Ok(Self {
-            text: parts.text,
+            text: parts.value,
             tags: parts.tags,
         })
     }
 
-    fn text(&self) -> &str {
+    fn value(&self) -> &str {
         &self.text
     }
 
@@ -47,21 +47,21 @@ impl TextPoolItem for Caption {
     }
 }
 
-impl TextPoolItem for Prompt {
+impl ContentEntry for Prompt {
     const KIND: &'static str = "prompt";
 
-    fn try_from_parts(parts: TextItemParts) -> Result<Self> {
+    fn try_from_parts(parts: ContentEntryParts) -> Result<Self> {
         if parts.summary.is_some() {
             bail!("a prompt row contains notification fields");
         }
         Ok(Self {
-            text: parts.text,
+            text: parts.value,
             tags: parts.tags,
             timeout_seconds: parts.timeout_seconds,
         })
     }
 
-    fn text(&self) -> &str {
+    fn value(&self) -> &str {
         &self.text
     }
 
@@ -74,21 +74,21 @@ impl TextPoolItem for Prompt {
     }
 }
 
-impl TextPoolItem for Notification {
+impl ContentEntry for Notification {
     const KIND: &'static str = "notification";
 
-    fn try_from_parts(parts: TextItemParts) -> Result<Self> {
+    fn try_from_parts(parts: ContentEntryParts) -> Result<Self> {
         if parts.timeout_seconds.is_some() {
             bail!("a notification row contains prompt fields");
         }
         Ok(Self {
-            text: parts.text,
+            text: parts.value,
             tags: parts.tags,
             summary: parts.summary,
         })
     }
 
-    fn text(&self) -> &str {
+    fn value(&self) -> &str {
         &self.text
     }
 
@@ -101,16 +101,38 @@ impl TextPoolItem for Notification {
     }
 }
 
-pub(crate) fn read_text_pool<T: TextPoolItem>(conn: &Connection) -> Result<Vec<T>> {
-    Ok(read_text_pool_rows(conn)?
+impl ContentEntry for WebLink {
+    const KIND: &'static str = "web_link";
+
+    fn try_from_parts(parts: ContentEntryParts) -> Result<Self> {
+        if parts.timeout_seconds.is_some() || parts.summary.is_some() {
+            bail!("a web-link row contains prompt or notification fields");
+        }
+        Ok(Self {
+            url: parts.value,
+            tags: parts.tags,
+        })
+    }
+
+    fn value(&self) -> &str {
+        &self.url
+    }
+
+    fn tags(&self) -> &[String] {
+        &self.tags
+    }
+}
+
+pub(crate) fn read_entries<T: ContentEntry>(conn: &Connection) -> Result<Vec<T>> {
+    Ok(read_entry_rows(conn)?
         .into_iter()
         .map(|(_, item)| item)
         .collect())
 }
 
-pub(crate) fn read_text_pool_rows<T: TextPoolItem>(conn: &Connection) -> Result<Vec<(i64, T)>> {
+pub(crate) fn read_entry_rows<T: ContentEntry>(conn: &Connection) -> Result<Vec<(i64, T)>> {
     let mut statement = conn.prepare(
-        "SELECT id, text, timeout_seconds, summary FROM behaviour_text_item WHERE kind = :kind \
+        "SELECT id, value, timeout_seconds, summary FROM behaviour_content_entry WHERE kind = :kind \
          ORDER BY id",
     )?;
 
@@ -120,9 +142,9 @@ pub(crate) fn read_text_pool_rows<T: TextPoolItem>(conn: &Connection) -> Result<
 
             Ok((
                 id,
-                T::try_from_parts(TextItemParts {
-                    text: row.get("text")?,
-                    tags: read_tags(conn, "behaviour_text_item_tag", "item_id", &id)?,
+                T::try_from_parts(ContentEntryParts {
+                    value: row.get("value")?,
+                    tags: read_tags(conn, "behaviour_content_entry_tag", "entry_id", &id)?,
                     timeout_seconds: row.get("timeout_seconds")?,
                     summary: row.get("summary")?,
                 })?,
@@ -131,43 +153,33 @@ pub(crate) fn read_text_pool_rows<T: TextPoolItem>(conn: &Connection) -> Result<
         .collect()
 }
 
-pub(crate) fn write_text_pool<T: TextPoolItem>(tx: &Transaction<'_>, items: &[T]) -> Result<()> {
+pub(crate) fn insert_entry<T: ContentEntry>(tx: &Transaction<'_>, item: &T) -> Result<i64> {
+    let id: i64 = tx.query_row(
+        "INSERT INTO behaviour_content_entry (kind, value, timeout_seconds, summary)
+         VALUES (?1, ?2, ?3, ?4)
+         RETURNING id",
+        params![
+            T::KIND,
+            item.value(),
+            item.timeout_seconds(),
+            item.summary()
+        ],
+        |row| row.get(0),
+    )?;
+
+    write_tags(
+        tx,
+        "behaviour_content_entry_tag",
+        "entry_id",
+        &id,
+        item.tags(),
+    )?;
+    Ok(id)
+}
+
+pub(crate) fn write_entries<T: ContentEntry>(tx: &Transaction<'_>, items: &[T]) -> Result<()> {
     for item in items {
-        let id: i64 = tx.query_row(
-            "INSERT INTO behaviour_text_item (kind, text, timeout_seconds, summary)
-             VALUES (?1, ?2, ?3, ?4)
-             RETURNING id",
-            params![T::KIND, item.text(), item.timeout_seconds(), item.summary()],
-            |row| row.get(0),
-        )?;
-
-        write_tags(tx, "behaviour_text_item_tag", "item_id", &id, item.tags())?;
-    }
-    Ok(())
-}
-
-pub fn read_web_links(conn: &Connection) -> Result<Vec<WebLink>> {
-    let mut statement = conn.prepare("SELECT id, url FROM behaviour_web_link ORDER BY id")?;
-    statement
-        .query_and_then([], |row| {
-            let id: i64 = row.get("id")?;
-            Ok(WebLink {
-                url: row.get("url")?,
-                tags: read_tags(conn, "behaviour_web_link_tag", "link_id", &id)?,
-            })
-        })?
-        .collect()
-}
-
-pub fn write_web_links(tx: &Transaction<'_>, links: &[WebLink]) -> Result<()> {
-    for link in links {
-        let id: i64 = tx.query_row(
-            "INSERT INTO behaviour_web_link (url) VALUES (?1)
-             RETURNING id",
-            params![link.url],
-            |row| row.get(0),
-        )?;
-        write_tags(tx, "behaviour_web_link_tag", "link_id", &id, &link.tags)?;
+        insert_entry(tx, item)?;
     }
     Ok(())
 }

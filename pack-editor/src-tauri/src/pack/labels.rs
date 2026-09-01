@@ -248,8 +248,7 @@ impl MediaPack {
                         COUNT(DISTINCT media.id),
                         (SELECT COUNT(*) FROM behaviour_content_group_tag t
                              WHERE t.tag_id = tags.id)
-                          + (SELECT COUNT(*) FROM behaviour_text_item_tag t WHERE t.tag_id = tags.id)
-                          + (SELECT COUNT(*) FROM behaviour_web_link_tag t WHERE t.tag_id = tags.id),
+                          + (SELECT COUNT(*) FROM behaviour_content_entry_tag t WHERE t.tag_id = tags.id),
                         (SELECT COUNT(*) FROM behaviour_stage_tag t WHERE t.tag_id = tags.id)
                  FROM tags
                  LEFT JOIN media_tags ON media_tags.tag_id = tags.id

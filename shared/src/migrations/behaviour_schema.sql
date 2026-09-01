@@ -165,55 +165,47 @@ CREATE TABLE IF NOT EXISTS behaviour_transition_category (
     PRIMARY KEY (transition_id, category)
 ) STRICT;
 
--- The three text pools share a table: they are the same shape (some text, some tags) and differ
--- only in which pool a mode draws from, so `kind` is the pool rather than three near-identical
--- tables and three near-identical readers. `summary` belongs to the `Notification` domain type, a
--- title alongside the body; only the 'notification' kind uses it.
+-- The four inline content collections share a table: every entry is an ordered string with tags,
+-- and `kind` says which collection it belongs to. `summary` belongs only to notifications and
+-- `timeout_seconds` only to prompts; the second CHECK keeps those type-specific fields out of the
+-- other row shapes. A web link's value is its URL.
 -- `AUTOINCREMENT` rather than a plain rowid: SQLite reuses the highest rowid once its row is gone,
 -- so removing the last entry and adding another would hand the new one the id the editor is still
 -- showing on the old one's Remove button. An id has to outlive the row it named.
 --
--- That monotonic id is also the pool's order, which is why there is no `position` column here the
--- way `behaviour_stage` and `behaviour_content_group` have one. A pool is only ever appended to
--- (the three `add_*` editor functions) or rebuilt whole from the document in array order
--- (`write_text_pool`), so
+-- That monotonic id is also the collection's order, which is why there is no `position` column
+-- here the way `behaviour_stage` and `behaviour_content_group` have one. A collection is only
+-- appended to (the four `add_*` editor functions) or rebuilt whole from the document in array
+-- order (`write_entries`), so
 -- ascending id *is* author order, and removing an entry leaves a hole that changes nothing.
--- Reordering or inserting mid-pool would break that and want a real position column back.
-CREATE TABLE IF NOT EXISTS behaviour_text_item (
+-- Reordering or inserting mid-collection would break that and want a real position column back.
+CREATE TABLE IF NOT EXISTS behaviour_content_entry (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK (
-        kind IN ('caption', 'prompt', 'notification')
+        kind IN ('caption', 'prompt', 'notification', 'web_link')
     ),
-    text TEXT NOT NULL,
+    value TEXT NOT NULL,
     summary TEXT,
-    timeout_seconds REAL
+    timeout_seconds REAL,
+    CHECK (
+        (kind = 'caption' AND summary IS NULL AND timeout_seconds IS NULL)
+        OR (kind = 'prompt' AND summary IS NULL)
+        OR (kind = 'notification' AND timeout_seconds IS NULL)
+        OR (kind = 'web_link' AND summary IS NULL AND timeout_seconds IS NULL)
+    )
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS behaviour_text_item_tag (
+CREATE TABLE IF NOT EXISTS behaviour_content_entry_tag (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL REFERENCES behaviour_text_item (id) ON DELETE CASCADE,
+    entry_id INTEGER NOT NULL REFERENCES behaviour_content_entry (id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
-    UNIQUE (item_id, tag_id)
-) STRICT;
-
--- Ordered by its `AUTOINCREMENT` id, for the same reason `behaviour_text_item` is: links are
--- appended or rebuilt from the document in order, never reordered.
-CREATE TABLE IF NOT EXISTS behaviour_web_link (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    url TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS behaviour_web_link_tag (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    link_id INTEGER NOT NULL REFERENCES behaviour_web_link (id) ON DELETE CASCADE,
-    tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
-    UNIQUE (link_id, tag_id)
+    UNIQUE (entry_id, tag_id)
 ) STRICT;
 
 -- `key` is the author-facing stable name the resolver turns into a mode option
 -- (`content_group.<key>`), and `UNIQUE` because two groups answering to one option name is the
 -- collision the author has to resolve. It is not the primary key, though: an `AUTOINCREMENT`
--- surrogate is, which buys two things. The list's order is that id, the way the text pools' is --
+-- surrogate is, which buys two things. The list's order is that id, like the content entries' --
 -- groups are appended and never reordered, so there is no `position` column to keep dense. And
 -- the tag table hangs off an integer that never changes, so renaming a group is an UPDATE of one
 -- column rather than a foreign key moving under its own rows.

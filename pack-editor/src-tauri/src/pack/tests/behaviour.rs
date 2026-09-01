@@ -8,7 +8,7 @@ use tempfile::tempdir;
 
 use super::*;
 use rusqlite::Transaction;
-use shared::behaviour::editor::{self as behaviour_editor, PoolKind};
+use shared::behaviour::editor as behaviour_editor;
 use shared::behaviour::MediaSlot;
 use shared::encode::EncodedFile;
 
@@ -1229,7 +1229,7 @@ async fn stage_wallpaper_slots_are_addressed_by_stage_id() {
 }
 
 /// The other half of the changeset win, and the one the design doc promised loudest: typing in
-/// a text pool is the commonest debounced edit there is, and it used to store the whole
+/// a message entry is the commonest debounced edit there is, and it used to store the whole
 /// document twice per pause.
 #[tokio::test]
 async fn editing_one_caption_records_a_changeset_the_size_of_that_caption() {
@@ -1256,7 +1256,7 @@ async fn editing_one_caption_records_a_changeset_the_size_of_that_caption() {
     pack.behaviour_edit(BehaviourAction::new(
         "Edit caption",
         |tx: &Transaction<'_>| {
-            let target = behaviour_editor::text_pool(tx, PoolKind::Caption)?[99].id;
+            let target = behaviour_editor::captions(tx)?[99].id;
             behaviour_editor::set_caption_text(tx, target, "Edited.")
         },
     ))
