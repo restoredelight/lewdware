@@ -416,6 +416,7 @@ fn pack_has_facts_reach_the_dto_for_default_mode() {
     let behaviour = Behaviour {
         content: shared::behaviour::Content {
             web_links: vec![WebLink {
+                id: 0,
                 url: "https://example.com".to_string(),
                 tags: Vec::new(),
             }],

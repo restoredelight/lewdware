@@ -18,7 +18,8 @@ fn two_tag_removals_do_not_restore_each_other() {
     tx_on(&mut conn, |tx| {
         id = add_caption(
             tx,
-            &Caption {
+            Caption {
+                id: 0,
                 tags: vec!["a".to_string(), "b".to_string(), "c".to_string()],
                 ..caption("tagged")
             },
@@ -36,7 +37,7 @@ fn adding_a_tag_twice_leaves_one_and_removing_an_absent_one_is_harmless() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_caption(tx, &caption("tagged")).unwrap();
+        id = add_caption(tx, caption("tagged")).unwrap();
         add_caption_tag(tx, id, "imp").unwrap();
         add_caption_tag(tx, id, "imp").unwrap();
         remove_caption_tag(tx, id, "absent").unwrap();
@@ -51,7 +52,8 @@ fn readding_a_removed_tag_puts_it_last() {
     tx_on(&mut conn, |tx| {
         id = add_caption(
             tx,
-            &Caption {
+            Caption {
+                id: 0,
                 tags: vec!["first".to_string(), "second".to_string()],
                 ..caption("tagged")
             },
@@ -130,13 +132,13 @@ fn a_removed_entrys_id_is_never_given_to_the_next_one() {
     let mut conn = pack();
     let mut gone = 0;
     tx_on(&mut conn, |tx| {
-        add_caption(tx, &caption("first")).unwrap();
-        gone = add_caption(tx, &caption("last")).unwrap();
+        add_caption(tx, caption("first")).unwrap();
+        gone = add_caption(tx, caption("last")).unwrap();
         remove_caption(tx, gone).unwrap();
     });
     let mut added = 0;
     tx_on(&mut conn, |tx| {
-        added = add_caption(tx, &caption("new")).unwrap();
+        added = add_caption(tx, caption("new")).unwrap();
     });
     assert_ne!(added, gone, "a stale Remove would have taken the new entry");
 }

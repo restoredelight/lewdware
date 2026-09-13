@@ -21,7 +21,7 @@ fn two_fields_of_one_entry_do_not_clobber_each_other() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_notification(tx, &notification("body")).unwrap();
+        id = add_notification(tx, notification("body")).unwrap();
         // Both writes are built against the entry as it was *before* either of them.
         set_notification_summary(tx, id, Some("title")).unwrap();
         set_notification_body(tx, id, "new body").unwrap();
@@ -40,7 +40,7 @@ fn a_setter_accepts_the_value_already_stored() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_prompt(tx, &prompt("same")).unwrap();
+        id = add_prompt(tx, prompt("same")).unwrap();
         set_prompt_text(tx, id, "same").unwrap();
         set_prompt_timeout(tx, id, None).unwrap();
     });
@@ -56,7 +56,7 @@ fn a_setter_refuses_a_row_that_is_gone() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_caption(tx, &caption("gone")).unwrap();
+        id = add_caption(tx, caption("gone")).unwrap();
         remove_caption(tx, id).unwrap();
     });
     let tx = conn.transaction().unwrap();
@@ -69,7 +69,7 @@ fn a_content_setter_refuses_an_entry_of_another_kind() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_prompt(tx, &prompt("question")).unwrap();
+        id = add_prompt(tx, prompt("question")).unwrap();
     });
 
     let tx = conn.transaction().unwrap();

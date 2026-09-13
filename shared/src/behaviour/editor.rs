@@ -19,12 +19,12 @@ mod timeline;
 mod transition;
 
 pub use content::{
-    CaptionRecord, NotificationRecord, PromptRecord, WebLinkRecord, add_caption, add_caption_tag,
-    add_notification, add_notification_tag, add_prompt, add_prompt_tag, add_web_link,
-    add_web_link_tag, captions, notifications, prompts, remove_caption, remove_caption_tag,
-    remove_notification, remove_notification_tag, remove_prompt, remove_prompt_tag,
-    remove_web_link, remove_web_link_tag, set_caption_text, set_notification_body,
-    set_notification_summary, set_prompt_text, set_prompt_timeout, set_web_link_url, web_links,
+    add_caption, add_caption_tag, add_notification, add_notification_tag, add_prompt,
+    add_prompt_tag, add_web_link, add_web_link_tag, captions, notifications, prompts,
+    remove_caption, remove_caption_tag, remove_notification, remove_notification_tag,
+    remove_prompt, remove_prompt_tag, remove_web_link, remove_web_link_tag, set_caption_text,
+    set_notification_body, set_notification_summary, set_prompt_text, set_prompt_timeout,
+    set_web_link_url, web_links,
 };
 pub use content_group::{
     add_content_group, add_content_group_tag, content_groups, remove_content_group,

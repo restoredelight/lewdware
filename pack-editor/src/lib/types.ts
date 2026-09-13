@@ -135,19 +135,24 @@ export interface TaggedText {
 	tags: string[];
 }
 
-export interface Caption extends TaggedText {}
+export interface Caption extends TaggedText {
+	id: number;
+}
 
 export interface Prompt extends TaggedText {
+	id: number;
 	/** The answer deadline, in seconds. */
 	timeout_seconds?: number;
 }
 
 export interface Notification extends TaggedText {
+	id: number;
 	/** The title shown above the notification's body (`text`). */
 	summary?: string;
 }
 
 export interface WebLink {
+	id: number;
 	url: string;
 	tags: string[];
 }
@@ -443,26 +448,6 @@ export interface BehaviourOutcome {
 export type MembershipOutcome =
 	| { kind: 'applied'; outcome: BehaviourOutcome }
 	| { kind: 'confirmation_required'; tags: string[] };
-
-/** One stored caption with the row id the editor addresses it by. */
-export interface CaptionRecord extends Caption {
-	id: number;
-}
-
-/** One stored prompt with the row id the editor addresses it by. */
-export interface PromptRecord extends Prompt {
-	id: number;
-}
-
-/** One stored notification with the row id the editor addresses it by. */
-export interface NotificationRecord extends Notification {
-	id: number;
-}
-
-/** One stored web link with the row id the editor addresses it by. */
-export interface WebLinkRecord extends WebLink {
-	id: number;
-}
 
 /** The pack-wide media slots — mirrors `editor::MediaSlots`. */
 export interface MediaSlots {

@@ -23,6 +23,7 @@ fn pack() -> Connection {
 
 fn caption(text: &str) -> Caption {
     Caption {
+        id: 0,
         text: text.to_string(),
         tags: vec![],
     }
@@ -30,6 +31,7 @@ fn caption(text: &str) -> Caption {
 
 fn prompt(text: &str) -> Prompt {
     Prompt {
+        id: 0,
         text: text.to_string(),
         tags: vec![],
         timeout_seconds: None,
@@ -38,6 +40,7 @@ fn prompt(text: &str) -> Prompt {
 
 fn notification(text: &str) -> Notification {
     Notification {
+        id: 0,
         text: text.to_string(),
         tags: vec![],
         summary: None,

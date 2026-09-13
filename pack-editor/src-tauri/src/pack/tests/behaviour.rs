@@ -20,6 +20,7 @@ use shared::encode::EncodedFile;
 /// A caption with nothing else said about it, which is all these tests need one to be.
 fn caption(text: &str) -> Caption {
     Caption {
+        id: 0,
         text: text.to_string(),
         tags: vec![],
     }
@@ -45,6 +46,7 @@ async fn conversion_initialization_does_not_occupy_undo_history() {
         .content
         .captions
         .push(caption("converted caption"));
+    converted.content.captions[0].id = 1;
     let metadata = Metadata {
         name: "Converted pack".to_string(),
         description: Some("Converted description".to_string()),
@@ -502,7 +504,7 @@ async fn an_edit_cannot_undo_a_backend_change_it_never_saw() {
     pack.behaviour_edit(BehaviourAction::new(
         "Edit caption",
         |tx: &Transaction<'_>| {
-            behaviour_editor::add_caption(tx, &caption("typed"))?;
+            behaviour_editor::add_caption(tx, caption("typed"))?;
             Ok(())
         },
     ))
@@ -530,7 +532,7 @@ async fn an_edit_that_changes_nothing_records_no_history_entry() {
     pack.behaviour_edit(BehaviourAction::new(
         "Add caption",
         move |tx: &Transaction<'_>| {
-            *created.lock().unwrap() = behaviour_editor::add_caption(tx, &caption("typed"))?;
+            *created.lock().unwrap() = behaviour_editor::add_caption(tx, caption("typed"))?;
             Ok(())
         },
     ))
@@ -851,7 +853,7 @@ async fn a_rejected_edit_leaves_the_document_untouched() {
     pack.behaviour_edit(BehaviourAction::new(
         "Add caption",
         move |tx: &Transaction<'_>| {
-            *created.lock().unwrap() = behaviour_editor::add_caption(tx, &caption("kept"))?;
+            *created.lock().unwrap() = behaviour_editor::add_caption(tx, caption("kept"))?;
             Ok(())
         },
     ))
@@ -1117,6 +1119,7 @@ async fn editing_one_stage_records_a_changeset_the_size_of_that_stage() {
         content: shared::behaviour::Content {
             captions: (0..200)
                 .map(|index| Caption {
+                    id: 0,
                     text: format!("Caption number {index}, padded out to have some length."),
                     tags: vec![],
                 })
@@ -1241,6 +1244,7 @@ async fn editing_one_caption_records_a_changeset_the_size_of_that_caption() {
         content: shared::behaviour::Content {
             captions: (0..200)
                 .map(|index| Caption {
+                    id: 0,
                     text: format!("Caption number {index}, padded out to have some length."),
                     tags: vec![],
                 })
@@ -1336,10 +1340,12 @@ async fn content_and_experience_behaviour_survives_save_and_reopen() {
         enabled_by_default: true,
     });
     behaviour.content.captions.push(Caption {
+        id: 1,
         text: "Obey.".to_string(),
         tags: vec!["kinky".to_string()],
     });
     behaviour.content.web_links.push(WebLink {
+        id: 2,
         url: "https://duckduckgo.com/?q=edgeware packs".to_string(),
         tags: vec![],
     });

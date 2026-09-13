@@ -10,6 +10,7 @@ async fn prompt_dialog_spawns_with_pool_text_and_submit_label() {
         .run_until(async {
             let content = Content {
                 prompts: vec![shared::behaviour::Prompt {
+                    id: 0,
                     text: "Well?".to_string(),
                     tags: vec![],
                     timeout_seconds: None,
@@ -52,6 +53,7 @@ async fn experience_prompt_timeout_closes_the_dialog() {
         .run_until(async {
             let content = Content {
                 prompts: vec![shared::behaviour::Prompt {
+                    id: 0,
                     text: "Well?".into(),
                     tags: vec![],
                     timeout_seconds: Some(0.2),
@@ -97,6 +99,7 @@ async fn experience_scales_an_automatic_prompt_timeout() {
         .run_until(async {
             let content = Content {
                 prompts: vec![shared::behaviour::Prompt {
+                    id: 0,
                     text: "Well?".into(),
                     tags: vec![],
                     timeout_seconds: None,
@@ -145,6 +148,7 @@ async fn experience_can_disable_per_prompt_timeouts_for_a_stage() {
         .run_until(async {
             let content = Content {
                 prompts: vec![shared::behaviour::Prompt {
+                    id: 0,
                     text: "Well?".into(),
                     tags: vec![],
                     timeout_seconds: Some(0.2),
@@ -189,6 +193,7 @@ async fn experience_prompt_timeout_combines_popup_and_sound_consequences() {
             const MEDIA: &[(&str, &[&str])] = &[("popup.avif", &[]), ("wrong.ogg", &[])];
             let content = Content {
                 prompts: vec![shared::behaviour::Prompt {
+                    id: 0,
                     text: "Well?".into(),
                     tags: vec![],
                     timeout_seconds: Some(0.2),
@@ -250,6 +255,7 @@ async fn wrong_answer_popup_effect_is_a_noop_when_popups_are_disabled() {
         .run_until(async {
             let content = Content {
                 prompts: vec![shared::behaviour::Prompt {
+                    id: 0,
                     text: "Well?".into(),
                     tags: vec![],
                     timeout_seconds: None,
@@ -293,6 +299,7 @@ async fn a_prompt_closes_only_once_its_text_has_been_typed_back() {
     async fn spawn_one_prompt_dialog() -> Harness {
         let content = Content {
             prompts: vec![shared::behaviour::Prompt {
+                id: 0,
                 text: "Well?".to_string(),
                 tags: vec![],
                 timeout_seconds: None,
@@ -417,6 +424,7 @@ async fn prompts_pause_while_dormant() {
         .run_until(async {
             let content = Content {
                 prompts: vec![shared::behaviour::Prompt {
+                    id: 0,
                     text: "Well?".to_string(),
                     tags: vec![],
                     timeout_seconds: None,

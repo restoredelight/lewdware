@@ -3,7 +3,7 @@ use std::{
     fmt::Display,
 };
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, ToSql, Transaction, params, types::FromSql};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -12,8 +12,6 @@ use super::db::{
     read_timeline_if_enabled, write_audio_media, write_content_groups, write_entries,
     write_popup_media, write_timeline,
 };
-
-const LEGACY_BLOB_KEY: &str = "behaviour";
 
 /// Data read by both default modes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -252,6 +250,10 @@ impl FromSql for MonitorPreference {
 /// A caption selected from the pool for a popup.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Caption {
+    /// Stable identifier for this content entry. `0` is an unassigned id used while creating a
+    /// new entry; the database assigns its actual id when it is stored.
+    #[serde(default)]
+    pub id: i64,
     pub text: String,
     /// Which media tags this applies to; empty means "applies regardless of media/context"
     /// (subsumes Edgeware's separate `default` bucket).
@@ -262,6 +264,8 @@ pub struct Caption {
 /// A prompt and its optional author-selected answer deadline.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Prompt {
+    #[serde(default)]
+    pub id: i64,
     pub text: String,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -273,6 +277,8 @@ pub struct Prompt {
 /// A desktop notification: `text` is its body and `summary` is its optional title.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Notification {
+    #[serde(default)]
+    pub id: i64,
     pub text: String,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -284,6 +290,8 @@ pub struct Notification {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WebLink {
+    #[serde(default)]
+    pub id: i64,
     pub url: String,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -329,23 +337,7 @@ impl Behaviour {
         Self::default()
     }
 
-    /// Reads the pack's table-backed behaviour document.
-    ///
-    /// A pack that still contains the retired JSON blob cannot be represented faithfully by the
-    /// tables and is rejected rather than silently appearing empty.
     pub fn read(conn: &Connection) -> Result<Self> {
-        let legacy_present: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM pack_data WHERE name = ?)",
-            params![LEGACY_BLOB_KEY],
-            |row| row.get(0),
-        )?;
-        if legacy_present {
-            bail!(
-                "this pack's behaviour document predates the behaviour tables; re-import the pack \
-                 in the pack editor"
-            );
-        }
-
         let (wallpaper, splash) = conn
             .query_row(
                 "SELECT wallpaper, splash FROM behaviour_content WHERE singleton = 1",

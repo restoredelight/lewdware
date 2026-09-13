@@ -281,6 +281,7 @@ mod tests {
     fn pack_has_facts_reflect_populated_content() {
         let mut behaviour = Behaviour::new();
         behaviour.content.captions = vec![Caption {
+            id: 0,
             text: "hi".to_string(),
             tags: vec![],
         }];

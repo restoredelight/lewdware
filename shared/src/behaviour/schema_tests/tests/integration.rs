@@ -120,25 +120,30 @@ fn a_full_document_survives_the_round_trip() {
             }],
             captions: vec![
                 Caption {
+                    id: 1,
                     text: "Obey.".to_string(),
                     tags: vec!["kinky".to_string()],
                 },
                 Caption {
+                    id: 2,
                     text: "Good.".to_string(),
                     tags: vec![],
                 },
             ],
             prompts: vec![Prompt {
+                id: 3,
                 text: "Type this.".to_string(),
                 tags: vec![],
                 timeout_seconds: Some(30.0),
             }],
             notifications: vec![Notification {
+                id: 4,
                 text: "Ping.".to_string(),
                 tags: vec!["soft".to_string()],
                 summary: Some("Attention".to_string()),
             }],
             web_links: vec![WebLink {
+                id: 5,
                 url: "https://duckduckgo.com/?q=one".to_string(),
                 tags: vec!["kinky".to_string()],
             }],

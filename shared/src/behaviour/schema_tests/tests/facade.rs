@@ -30,6 +30,7 @@ fn the_document_no_longer_touches_pack_data() {
     let behaviour = Behaviour {
         content: crate::behaviour::Content {
             captions: vec![Caption {
+                id: 1,
                 text: "Obey.".to_string(),
                 tags: vec!["kinky".to_string()],
             }],

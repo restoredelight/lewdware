@@ -10,6 +10,7 @@ async fn notifications_fire_at_configured_frequency() {
         .run_until(async {
             let content = Content {
                 notifications: vec![shared::behaviour::Notification {
+                    id: 0,
                     text: "hi".to_string(),
                     tags: vec![],
                     summary: None,
@@ -66,6 +67,7 @@ async fn notifications_carry_the_authors_title() {
         .run_until(async {
             let content = Content {
                 notifications: vec![shared::behaviour::Notification {
+                    id: 0,
                     text: "hi".to_string(),
                     tags: vec![],
                     summary: Some("Attention".to_string()),
@@ -111,6 +113,7 @@ async fn notifications_without_a_title_pass_no_summary() {
         .run_until(async {
             let content = Content {
                 notifications: vec![shared::behaviour::Notification {
+                    id: 0,
                     text: "hi".to_string(),
                     tags: vec![],
                     summary: None,
@@ -195,6 +198,7 @@ async fn notifications_disabled_never_fires() {
         .run_until(async {
             let content = Content {
                 notifications: vec![shared::behaviour::Notification {
+                    id: 0,
                     text: "hi".to_string(),
                     tags: vec![],
                     summary: None,
@@ -237,6 +241,7 @@ async fn notifications_pause_while_dormant() {
         .run_until(async {
             let content = Content {
                 notifications: vec![shared::behaviour::Notification {
+                    id: 0,
                     text: "hi".to_string(),
                     tags: vec![],
                     summary: None,

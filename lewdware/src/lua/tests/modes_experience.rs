@@ -84,6 +84,7 @@ async fn experience_notification_anchor_scaled_by_pace() {
         .run_until(async {
             let content = Content {
                 notifications: vec![shared::behaviour::Notification {
+                    id: 0,
                     text: "hi".to_string(),
                     tags: vec![],
                     summary: None,
@@ -130,6 +131,7 @@ async fn experience_notifications_off_switch_wins_over_present_anchor() {
         .run_until(async {
             let content = Content {
                 notifications: vec![shared::behaviour::Notification {
+                    id: 0,
                     text: "hi".to_string(),
                     tags: vec![],
                     summary: None,

@@ -1,7 +1,8 @@
 //! The queries: what each surface reads when it renders.
 
-use shared::behaviour::editor::{
-    self, CaptionRecord, MediaSlots, NotificationRecord, PromptRecord, WebLinkRecord,
+use shared::behaviour::{
+    editor::{self, MediaSlots},
+    Caption, Notification, Prompt, WebLink,
 };
 use shared::behaviour::{AudioMedia, ContentGroup, PopupMedia, Stage, Transition};
 use tauri::State;
@@ -167,30 +168,28 @@ pub async fn get_audio_attributes(
 }
 
 #[tauri::command]
-pub async fn get_captions(state: State<'_, AppState>) -> Result<Vec<CaptionRecord>, String> {
+pub async fn get_captions(state: State<'_, AppState>) -> Result<Vec<Caption>, String> {
     state
         .with_pack(async |pack| pack.behaviour_query(editor::captions).await)
         .await
 }
 
 #[tauri::command]
-pub async fn get_prompts(state: State<'_, AppState>) -> Result<Vec<PromptRecord>, String> {
+pub async fn get_prompts(state: State<'_, AppState>) -> Result<Vec<Prompt>, String> {
     state
         .with_pack(async |pack| pack.behaviour_query(editor::prompts).await)
         .await
 }
 
 #[tauri::command]
-pub async fn get_notifications(
-    state: State<'_, AppState>,
-) -> Result<Vec<NotificationRecord>, String> {
+pub async fn get_notifications(state: State<'_, AppState>) -> Result<Vec<Notification>, String> {
     state
         .with_pack(async |pack| pack.behaviour_query(editor::notifications).await)
         .await
 }
 
 #[tauri::command]
-pub async fn get_web_links(state: State<'_, AppState>) -> Result<Vec<WebLinkRecord>, String> {
+pub async fn get_web_links(state: State<'_, AppState>) -> Result<Vec<WebLink>, String> {
     state
         .with_pack(async |pack| pack.behaviour_query(editor::web_links).await)
         .await

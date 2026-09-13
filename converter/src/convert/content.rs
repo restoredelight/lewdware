@@ -50,13 +50,14 @@ fn tagged_texts(
 pub(super) fn populate_captions(index: &EdgewareIndex, content: &mut Content) {
     content.captions = tagged_texts(&index.default.captions, &index.moods, |base| &base.captions)
         .into_iter()
-        .map(|(text, tags)| Caption { text, tags })
+        .map(|(text, tags)| Caption { id: 0, text, tags })
         .collect();
     // Fold the close-button label into captions (per `behaviour-design/edgeware-compat.md`) --
     // only when the author actually set it, so a pack that never touched `popupClose` doesn't
     // get Edgeware's own boilerplate ("I Submit <3") injected as a fake caption.
     if let Some(popup_close) = &index.default_extra.popup_close {
         content.captions.push(Caption {
+            id: 0,
             text: popup_close.clone(),
             tags: vec![],
         });
@@ -93,6 +94,7 @@ pub(super) fn populate_prompts(index: &EdgewareIndex, content: &mut Content) {
     content.prompts = tagged_texts(&index.default.prompts, &index.moods, |base| &base.prompts)
         .into_iter()
         .map(|(text, tags)| Prompt {
+            id: 0,
             text,
             tags,
             timeout_seconds: None,
@@ -106,6 +108,7 @@ pub(super) fn populate_notifications(index: &EdgewareIndex, content: &mut Conten
     })
     .into_iter()
     .map(|(text, tags)| Notification {
+        id: 0,
         text,
         tags,
         summary: None,
@@ -130,6 +133,7 @@ fn append_web_links(links: &mut Vec<WebLink>, entries: &[WebEntry], tags: &[Stri
     for entry in entries {
         if entry.args.is_empty() {
             links.push(WebLink {
+                id: 0,
                 url: entry.url.clone(),
                 tags: tags.to_vec(),
             });
@@ -138,6 +142,7 @@ fn append_web_links(links: &mut Vec<WebLink>, entries: &[WebEntry], tags: &[Stri
             links.extend(entry.args.iter().filter_map(|suffix| {
                 let url = format!("{}{suffix}", entry.url);
                 seen.insert(url.clone()).then(|| WebLink {
+                    id: 0,
                     url,
                     tags: tags.to_vec(),
                 })
@@ -165,10 +170,12 @@ mod web_link_tests {
             links,
             [
                 WebLink {
+                    id: 0,
                     url: "https://example.invalid/?q=one".to_string(),
                     tags: tags.to_vec(),
                 },
                 WebLink {
+                    id: 0,
                     url: "https://example.invalid/?q=two".to_string(),
                     tags: tags.to_vec(),
                 },
@@ -189,6 +196,7 @@ mod web_link_tests {
         assert_eq!(
             links,
             [WebLink {
+                id: 0,
                 url: "https://example.invalid/".to_string(),
                 tags: vec![],
             }]

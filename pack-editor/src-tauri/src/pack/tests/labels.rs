@@ -133,6 +133,7 @@ async fn merging_a_tag_into_one_an_entry_already_has_leaves_a_single_mention() {
     let behaviour = Behaviour {
         content: shared::behaviour::Content {
             captions: vec![Caption {
+                id: 0,
                 text: "Obey.".to_string(),
                 tags: vec!["source".to_string(), "target".to_string()],
             }],
@@ -171,10 +172,12 @@ async fn renaming_a_tag_carries_every_mention_in_the_document() {
                 enabled_by_default: true,
             }],
             captions: vec![Caption {
+                id: 0,
                 text: "Obey.".to_string(),
                 tags: vec!["old".to_string()],
             }],
             web_links: vec![WebLink {
+                id: 0,
                 url: "https://example.com".to_string(),
                 tags: vec!["old".to_string()],
             }],
@@ -233,6 +236,7 @@ async fn tag_management_updates_associations_and_behaviour_together() {
 
     let mut behaviour = Behaviour::default();
     behaviour.content.captions = vec![Caption {
+        id: 0,
         text: "Obey.".to_string(),
         tags: vec!["old".to_string()],
     }];
@@ -273,6 +277,7 @@ async fn undoing_a_merge_recovers_source_target_and_dual_associations_atomically
         .unwrap();
     let mut before = Behaviour::default();
     before.content.captions = vec![Caption {
+        id: 0,
         text: "Obey.".to_string(),
         tags: vec!["source".into()],
     }];
@@ -326,6 +331,7 @@ async fn undoing_a_deleted_tag_recovers_associations_and_behaviour() {
         .unwrap();
     let mut before = Behaviour::default();
     before.content.captions = vec![Caption {
+        id: 0,
         text: "Obey.".to_string(),
         tags: vec!["restore-me".into()],
     }];
@@ -355,6 +361,7 @@ async fn tag_rows_count_media_and_both_halves_of_the_document() {
     let behaviour = Behaviour {
         content: shared::behaviour::Content {
             captions: vec![Caption {
+                id: 0,
                 text: "Obey.".to_string(),
                 tags: vec!["shared".to_string(), "caption-only".to_string()],
             }],

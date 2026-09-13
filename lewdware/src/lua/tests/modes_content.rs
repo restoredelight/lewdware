@@ -11,6 +11,7 @@ async fn content_picker_matches_media_tags_over_empty_bucket() {
         .run_until(async {
             let content = Content {
                 captions: vec![shared::behaviour::Caption {
+                    id: 0,
                     text: "kinky".to_string(),
                     tags: vec!["kinky".to_string()],
                 }],
@@ -50,10 +51,12 @@ async fn content_picker_falls_back_to_empty_tag_item_when_no_match() {
             let content = Content {
                 captions: vec![
                     shared::behaviour::Caption {
+                        id: 0,
                         text: "untagged".to_string(),
                         tags: vec![],
                     },
                     shared::behaviour::Caption {
+                        id: 0,
                         text: "kinky".to_string(),
                         tags: vec!["kinky".to_string()],
                     },
@@ -125,11 +128,13 @@ async fn content_picker_excludes_disabled_content_group_tags() {
                 }],
                 notifications: vec![
                     shared::behaviour::Notification {
+                        id: 0,
                         text: "vanilla".to_string(),
                         tags: vec![],
                         summary: None,
                     },
                     shared::behaviour::Notification {
+                        id: 0,
                         text: "kinky".to_string(),
                         tags: vec!["kinky".to_string()],
                         summary: None,
@@ -174,6 +179,7 @@ async fn content_picker_standalone_mode_ignores_own_tags() {
         .run_until(async {
             let content = Content {
                 notifications: vec![shared::behaviour::Notification {
+                    id: 0,
                     text: "obey".to_string(),
                     tags: vec!["hypno".to_string()],
                     summary: None,

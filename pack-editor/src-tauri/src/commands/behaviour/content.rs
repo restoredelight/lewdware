@@ -45,7 +45,7 @@ macro_rules! add_entry_command {
                 .with_pack(async |pack| {
                     pack.behaviour_edit(BehaviourAction::new(
                         label,
-                        move |tx: &rusqlite::Transaction<'_>| $add(tx, &$argument).map(|_| ()),
+                        move |tx: &rusqlite::Transaction<'_>| $add(tx, $argument).map(|_| ()),
                     ))
                     .await
                 })

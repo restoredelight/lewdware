@@ -5,7 +5,7 @@
 	import { mutate } from './mutate.svelte.js';
 	import DebouncedField from './DebouncedField.svelte';
 	import { keys, query } from './query.svelte.js';
-	import type { WebLink, WebLinkRecord } from './types.js';
+	import type { WebLink } from './types.js';
 	import EmptyState from '$ui/EmptyState.svelte';
 	import Field from '$ui/Field.svelte';
 	import Dialog from '$ui/Dialog.svelte';
@@ -14,7 +14,7 @@
 	const links = $derived(stored.current ?? []);
 	const invalidates = [keys.webLinks, keys.summary];
 
-	let removing = $state<WebLinkRecord | null>(null);
+	let removing = $state<WebLink | null>(null);
 
 	/** Sends one field of one link. Nothing else about the link travels with it. */
 	function write(run: () => Promise<void>, label: string) {

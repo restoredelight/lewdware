@@ -12,7 +12,7 @@ fn a_content_entry_round_trips_with_its_id() {
     let mut conn = pack();
     let mut id = 0;
     tx_on(&mut conn, |tx| {
-        id = add_caption(tx, &caption("first")).unwrap();
+        id = add_caption(tx, caption("first")).unwrap();
     });
 
     let rows = captions(&conn).unwrap();
@@ -29,7 +29,7 @@ fn editing_one_entry_leaves_its_neighbours_alone() {
     let mut ids = vec![];
     tx_on(&mut conn, |tx| {
         for text in ["one", "two", "three"] {
-            ids.push(add_caption(tx, &caption(text)).unwrap());
+            ids.push(add_caption(tx, caption(text)).unwrap());
         }
     });
 
@@ -48,10 +48,10 @@ fn removing_an_entry_preserves_order_before_the_next_append() {
     let mut ids = vec![];
     tx_on(&mut conn, |tx| {
         for text in ["one", "two", "three"] {
-            ids.push(add_caption(tx, &caption(text)).unwrap());
+            ids.push(add_caption(tx, caption(text)).unwrap());
         }
         remove_caption(tx, ids[0]).unwrap();
-        add_caption(tx, &caption("four")).unwrap();
+        add_caption(tx, caption("four")).unwrap();
     });
     assert_eq!(caption_texts(&conn), ["two", "three", "four"]);
 }
@@ -60,10 +60,11 @@ fn removing_an_entry_preserves_order_before_the_next_append() {
 fn the_four_content_collections_do_not_see_each_other() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        add_caption(tx, &caption("a caption")).unwrap();
+        add_caption(tx, caption("a caption")).unwrap();
         add_prompt(
             tx,
-            &Prompt {
+            Prompt {
+                id: 0,
                 timeout_seconds: Some(12.0),
                 ..prompt("a prompt")
             },
@@ -71,7 +72,8 @@ fn the_four_content_collections_do_not_see_each_other() {
         .unwrap();
         add_notification(
             tx,
-            &Notification {
+            Notification {
+                id: 0,
                 summary: Some("A title".to_string()),
                 ..notification("a notification")
             },
@@ -79,7 +81,8 @@ fn the_four_content_collections_do_not_see_each_other() {
         .unwrap();
         add_web_link(
             tx,
-            &WebLink {
+            WebLink {
+                id: 0,
                 url: "https://example.invalid".to_string(),
                 tags: vec![],
             },
@@ -103,7 +106,8 @@ fn an_entrys_tags_round_trip_and_become_real_tags() {
     tx_on(&mut conn, |tx| {
         add_caption(
             tx,
-            &Caption {
+            Caption {
+                id: 0,
                 tags: vec!["imp".to_string(), "succubus".to_string()],
                 ..caption("tagged")
             },
@@ -122,11 +126,13 @@ fn an_entrys_tags_round_trip_and_become_real_tags() {
 fn a_web_link_round_trips_with_its_tags() {
     let mut conn = pack();
     let link = WebLink {
+        id: 0,
         url: "https://example.invalid".to_string(),
         tags: vec!["imp".to_string()],
     };
+    let link_clone = link.clone();
     tx_on(&mut conn, |tx| {
-        add_web_link(tx, &link).unwrap();
+        add_web_link(tx, link_clone).unwrap();
     });
     let rows = web_links(&conn).unwrap();
     assert_eq!(rows.len(), 1);
@@ -175,10 +181,11 @@ fn a_duplicate_group_id_is_refused() {
 fn what_the_editor_writes_the_engine_reads() {
     let mut conn = pack();
     tx_on(&mut conn, |tx| {
-        add_caption(tx, &caption("hello")).unwrap();
+        add_caption(tx, caption("hello")).unwrap();
         add_web_link(
             tx,
-            &WebLink {
+            WebLink {
+                id: 0,
                 url: "https://example.invalid".to_string(),
                 tags: vec![],
             },
@@ -202,10 +209,12 @@ fn what_the_editor_writes_the_engine_reads() {
         document.content,
         Content {
             captions: vec![Caption {
+                id: 1,
                 text: "hello".to_string(),
                 tags: vec![],
             }],
             web_links: vec![WebLink {
+                id: 2,
                 url: "https://example.invalid".to_string(),
                 tags: vec![],
             }],

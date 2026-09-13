@@ -10,6 +10,7 @@ fn a_tag_named_by_the_document_becomes_a_real_tag() {
     let behaviour = Behaviour {
         content: crate::behaviour::Content {
             captions: vec![Caption {
+                id: 0,
                 text: "Obey.".to_string(),
                 tags: vec!["fresh".to_string()],
             }],

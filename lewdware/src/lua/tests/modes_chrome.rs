@@ -99,6 +99,7 @@ async fn sandbox_leaves_every_windows_look_to_the_user() {
         .run_until(async {
             let content = Content {
                 prompts: vec![shared::behaviour::Prompt {
+                    id: 0,
                     text: "Well?".to_string(),
                     tags: vec![],
                     timeout_seconds: None,

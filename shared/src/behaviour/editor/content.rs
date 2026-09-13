@@ -1,102 +1,39 @@
 use anyhow::{Result, bail};
 use rusqlite::{Connection, Transaction, params};
-use serde::{Deserialize, Serialize};
 
 use super::common::{add_tag, remove_tag};
-use crate::behaviour::db::{ContentEntry, insert_entry, read_entry_rows};
+use crate::behaviour::db::{ContentEntry, insert_entry, read_entries};
 use crate::behaviour::schema::{Caption, Notification, Prompt, WebLink};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CaptionRecord {
-    pub id: i64,
-    pub text: String,
-    pub tags: Vec<String>,
+pub fn captions(conn: &Connection) -> Result<Vec<Caption>> {
+    read_entries(conn)
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PromptRecord {
-    pub id: i64,
-    pub text: String,
-    pub tags: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_seconds: Option<f64>,
+pub fn prompts(conn: &Connection) -> Result<Vec<Prompt>> {
+    read_entries(conn)
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NotificationRecord {
-    pub id: i64,
-    pub text: String,
-    pub tags: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
+pub fn notifications(conn: &Connection) -> Result<Vec<Notification>> {
+    read_entries(conn)
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WebLinkRecord {
-    pub id: i64,
-    pub url: String,
-    pub tags: Vec<String>,
+pub fn web_links(conn: &Connection) -> Result<Vec<WebLink>> {
+    read_entries(conn)
 }
 
-pub fn captions(conn: &Connection) -> Result<Vec<CaptionRecord>> {
-    Ok(read_entry_rows::<Caption>(conn)?
-        .into_iter()
-        .map(|(id, caption)| CaptionRecord {
-            id,
-            text: caption.text,
-            tags: caption.tags,
-        })
-        .collect())
-}
-
-pub fn prompts(conn: &Connection) -> Result<Vec<PromptRecord>> {
-    Ok(read_entry_rows::<Prompt>(conn)?
-        .into_iter()
-        .map(|(id, prompt)| PromptRecord {
-            id,
-            text: prompt.text,
-            tags: prompt.tags,
-            timeout_seconds: prompt.timeout_seconds,
-        })
-        .collect())
-}
-
-pub fn notifications(conn: &Connection) -> Result<Vec<NotificationRecord>> {
-    Ok(read_entry_rows::<Notification>(conn)?
-        .into_iter()
-        .map(|(id, notification)| NotificationRecord {
-            id,
-            text: notification.text,
-            tags: notification.tags,
-            summary: notification.summary,
-        })
-        .collect())
-}
-
-pub fn web_links(conn: &Connection) -> Result<Vec<WebLinkRecord>> {
-    Ok(read_entry_rows::<WebLink>(conn)?
-        .into_iter()
-        .map(|(id, link)| WebLinkRecord {
-            id,
-            url: link.url,
-            tags: link.tags,
-        })
-        .collect())
-}
-
-pub fn add_caption(tx: &Transaction<'_>, caption: &Caption) -> Result<i64> {
+pub fn add_caption(tx: &Transaction<'_>, caption: Caption) -> Result<i64> {
     insert_entry(tx, caption)
 }
 
-pub fn add_prompt(tx: &Transaction<'_>, prompt: &Prompt) -> Result<i64> {
+pub fn add_prompt(tx: &Transaction<'_>, prompt: Prompt) -> Result<i64> {
     insert_entry(tx, prompt)
 }
 
-pub fn add_notification(tx: &Transaction<'_>, notification: &Notification) -> Result<i64> {
+pub fn add_notification(tx: &Transaction<'_>, notification: Notification) -> Result<i64> {
     insert_entry(tx, notification)
 }
 
-pub fn add_web_link(tx: &Transaction<'_>, link: &WebLink) -> Result<i64> {
+pub fn add_web_link(tx: &Transaction<'_>, link: WebLink) -> Result<i64> {
     insert_entry(tx, link)
 }
 

@@ -7,7 +7,6 @@ import type {
 	BehaviourOutcome,
 	BehaviourSummary,
 	Caption,
-	CaptionRecord,
 	ContentGroup,
 	EmbeddedMode,
 	EventCountCondition,
@@ -26,12 +25,10 @@ import type {
 	MonitorPreference,
 	Movement,
 	Notification,
-	NotificationRecord,
 	PackInfo,
 	PopupChanges,
 	PopupMedia,
 	Prompt,
-	PromptRecord,
 	RecentPack,
 	SlotCleared,
 	SlotFilled,
@@ -45,7 +42,6 @@ import type {
 	Transition,
 	TransitionValue,
 	WebLink,
-	WebLinkRecord
 } from './types.js';
 
 async function invokeAfterSelection<T>(
@@ -162,20 +158,20 @@ export const api = {
 	getMediaSlots: () => invoke<MediaSlots>('get_media_slots'),
 
 	caption: {
-		get: () => invoke<CaptionRecord[]>('get_captions'),
+		get: () => invoke<Caption[]>('get_captions'),
 		setText: (id: number, text: string, label: string) =>
 			invoke<void>('set_caption_text', { id, text, label }),
 		addTag: (id: number, tag: string, label: string) =>
 			invoke<void>('add_caption_tag', { id, tag, label }),
 		removeTag: (id: number, tag: string, label: string) =>
 			invoke<void>('remove_caption_tag', { id, tag, label }),
-		add: (caption: Caption, label: string) =>
+		add: (caption: Omit<Caption, 'id'>, label: string) =>
 			invoke<BehaviourOutcome>('add_caption', { caption, label }),
 		remove: (id: number, label: string) => invoke<void>('remove_caption', { id, label })
 	},
 
 	prompt: {
-		get: () => invoke<PromptRecord[]>('get_prompts'),
+		get: () => invoke<Prompt[]>('get_prompts'),
 		setText: (id: number, text: string, label: string) =>
 			invoke<void>('set_prompt_text', { id, text, label }),
 		setTimeout: (id: number, seconds: number | null, label: string) =>
@@ -184,13 +180,13 @@ export const api = {
 			invoke<void>('add_prompt_tag', { id, tag, label }),
 		removeTag: (id: number, tag: string, label: string) =>
 			invoke<void>('remove_prompt_tag', { id, tag, label }),
-		add: (prompt: Prompt, label: string) =>
+		add: (prompt: Omit<Prompt, 'id'>, label: string) =>
 			invoke<BehaviourOutcome>('add_prompt', { prompt, label }),
 		remove: (id: number, label: string) => invoke<void>('remove_prompt', { id, label })
 	},
 
 	notification: {
-		get: () => invoke<NotificationRecord[]>('get_notifications'),
+		get: () => invoke<Notification[]>('get_notifications'),
 		setBody: (id: number, text: string, label: string) =>
 			invoke<void>('set_notification_body', { id, text, label }),
 		setSummary: (id: number, summary: string | null, label: string) =>
@@ -199,20 +195,20 @@ export const api = {
 			invoke<void>('add_notification_tag', { id, tag, label }),
 		removeTag: (id: number, tag: string, label: string) =>
 			invoke<void>('remove_notification_tag', { id, tag, label }),
-		add: (notification: Notification, label: string) =>
+		add: (notification: Omit<Notification, 'id'>, label: string) =>
 			invoke<BehaviourOutcome>('add_notification', { notification, label }),
 		remove: (id: number, label: string) => invoke<void>('remove_notification', { id, label })
 	},
 
 	webLink: {
-		get: () => invoke<WebLinkRecord[]>('get_web_links'),
+		get: () => invoke<WebLink[]>('get_web_links'),
 		setUrl: (id: number, url: string, label: string) =>
 			invoke<void>('set_web_link_url', { id, url, label }),
 		addTag: (id: number, tag: string, label: string) =>
 			invoke<void>('add_web_link_tag', { id, tag, label }),
 		removeTag: (id: number, tag: string, label: string) =>
 			invoke<void>('remove_web_link_tag', { id, tag, label }),
-		add: (link: WebLink, label: string) =>
+		add: (link: Omit<WebLink, 'id'>, label: string) =>
 			invoke<BehaviourOutcome>('add_web_link', { link, label }),
 		remove: (id: number, label: string) => invoke<void>('remove_web_link', { id, label })
 	},

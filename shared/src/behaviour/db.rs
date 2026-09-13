@@ -15,8 +15,8 @@ mod transition;
 pub(crate) use common::sql_array;
 
 pub(crate) use content::{
-    ContentEntry, insert_entry, read_content_groups, read_entries, read_entry_rows,
-    write_content_groups, write_entries,
+    ContentEntry, insert_entry, read_content_groups, read_entries, write_content_groups,
+    write_entries,
 };
 pub(crate) use media::write_popup_audio_pairs;
 pub use media::{

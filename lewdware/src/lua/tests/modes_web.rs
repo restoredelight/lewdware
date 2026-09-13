@@ -10,6 +10,7 @@ async fn web_link_opens_its_url() {
         .run_until(async {
             let content = Content {
                 web_links: vec![shared::behaviour::WebLink {
+                    id: 0,
                     url: "https://example.com/".to_string(),
                     tags: vec![],
                 }],
@@ -77,6 +78,7 @@ async fn web_opening_pauses_while_dormant() {
         .run_until(async {
             let content = Content {
                 web_links: vec![shared::behaviour::WebLink {
+                    id: 0,
                     url: "https://example.com/".to_string(),
                     tags: vec![],
                 }],
