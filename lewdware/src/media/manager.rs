@@ -16,6 +16,7 @@ use tokio::{sync::mpsc::unbounded_channel, task::LocalSet};
 
 use crate::{
     audio::AudioPlayer,
+    cues::CueEvents,
     error::LewdwareError,
     lua::{ItemId, Media, MediaType},
     media::{ExtractedFile, ImageData, pack::MediaPack},
@@ -71,6 +72,7 @@ pub enum MediaRequirement {
         media_id: u64,
         loop_audio: bool,
         volume: f32,
+        cue_events: CueEvents,
     },
 }
 
@@ -358,6 +360,7 @@ async fn handle_request<T: EventPoster>(
                     media_id,
                     loop_audio,
                     volume,
+                    cue_events,
                 } => pack
                     .get_audio_data(media_id)
                     .and_then(|source| {
@@ -366,6 +369,7 @@ async fn handle_request<T: EventPoster>(
                             Arc::new(AtomicBool::new(loop_audio)),
                             volume,
                             Some((item_id, event_poster.clone())),
+                            Some(cue_events),
                         )
                         .and_then(|x| x.ok_or(anyhow::anyhow!("No audio stream available")))
                         .map_err(MediaError::AudioError)

@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{Arc, atomic::AtomicBool, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -9,11 +9,12 @@ use rodio::{MixerDeviceSink, Player};
 
 use crate::{
     app::{EventPoster, UserEvent},
+    cues::CueEvents,
     lua::{Easing, ItemId, VolumeFadeOpts},
     media::MediaSource,
 };
 
-use super::decode::setup_decoder;
+use super::decode::{AddCue, TrackClock, TrackCues, setup_decoder};
 
 struct VolumeFade {
     id: u64,
@@ -29,6 +30,10 @@ pub struct AudioPlayer {
     sink: Arc<Player>,
     volume: f32,
     volume_fade: Option<VolumeFade>,
+    /// Reaches the output thread, where cues are timed. `None` for a player built without cues
+    /// (a video's soundtrack, whose cues go by the frames instead).
+    cue_tx: Option<mpsc::Sender<AddCue>>,
+    clock: TrackClock,
 }
 
 impl AudioPlayer {
@@ -37,8 +42,17 @@ impl AudioPlayer {
         loop_audio: Arc<AtomicBool>,
         volume: f32,
         event_poster: Option<(ItemId, T)>,
+        cue_events: Option<CueEvents>,
     ) -> Result<Option<Self>> {
-        let (stream, sink) = match setup_decoder(source, loop_audio)? {
+        let (cue_tx, cues) = match cue_events {
+            Some(events) => {
+                let (tx, rx) = mpsc::channel();
+                (Some(tx), Some(TrackCues::new(rx, events)))
+            }
+            None => (None, None),
+        };
+
+        let (stream, sink, clock) = match setup_decoder(source, loop_audio, cues)? {
             Some(x) => x,
             None => return Ok(None),
         };
@@ -58,6 +72,8 @@ impl AudioPlayer {
             sink,
             volume,
             volume_fade: None,
+            cue_tx,
+            clock,
         }))
     }
 
@@ -115,11 +131,27 @@ impl AudioPlayer {
         self.volume_fade.is_some()
     }
 
+    /// Fire `cue_id` whenever playback reaches `time` into the track.
+    pub fn add_cue(&self, cue_id: u64, time: Duration) {
+        if let Some(tx) = &self.cue_tx {
+            let _ = tx.send(AddCue { cue_id, time });
+        }
+    }
+
     pub fn stop(&self) {
         self.sink.stop();
     }
 
+    /// How far into the track playback has got. Padding played while the decoder catches up
+    /// doesn't count, so this stays in step with the audio actually heard.
     pub fn position(&self) -> Duration {
+        self.clock.position()
+    }
+
+    /// How much the output has played, padding included. Unlike [`Self::position`] this keeps
+    /// moving while the decoder is behind, so it only stops for good once the track has run out
+    /// or the output itself has stopped.
+    pub fn output_position(&self) -> Duration {
         self.sink.get_pos()
     }
 }

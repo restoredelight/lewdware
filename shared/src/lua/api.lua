@@ -395,6 +395,27 @@ function VideoWindow:set_volume(volume) end
 ---@return boolean
 function VideoWindow:fade_volume(opts, cb) end
 
+---Run a function when playback reaches a point in the video. Use this rather than
+---[lewdware.after()](lua://lewdware.after) to sync something to the video: the cue follows the
+---frames actually on screen, so it stays in step however the video loads, lags or is paused.
+---
+---The function runs with the first frame shown at or after `time`. A looping video runs it once
+---every time round. A `time` past the end of the video runs it when the video reaches its end
+---(before `on_close()`, if the video isn't looping). A cue added after playback has already passed
+---its time first runs on the next loop.
+---
+
+---```lua
+---local window = lewdware.popup.video(video)
+---window:on_time(12500, function()
+---  lewdware.popup.text("Now!")
+---end)
+---```
+---@param time number How far into the video, in milliseconds.
+---@param cb fun()
+---@return boolean
+function VideoWindow:on_time(time, cb) end
+
 ---@class DialogWindow : Window
 ---@field type "'dialog'"
 DialogWindow = {}
@@ -820,11 +841,26 @@ AudioHandle = {}
 ---@return AudioHandle
 function lewdware.play_audio(audio, opts) end
 
----Register a function to run when the audio track finishes. If the audio file is set to loop,
----this will be called every time the audio file loops.
+---Register a function to run when playback ends for good: a track that isn't looping reaches its
+---end, `stop()` is called, or the track can't be played at all. A looping track never finishes on
+---its own, so this doesn't run each time it loops -- use
+---[AudioHandle:on_time()](lua://AudioHandle.on_time) with a time of 0 for that.
 ---@param cb fun()
 ---@return boolean
 function AudioHandle:on_finish(cb) end
+
+---Run a function when playback reaches a point in the track. Use this rather than
+---[lewdware.after()](lua://lewdware.after) to sync something to the audio: the cue follows the
+---audio as it is actually played, so it stays in step however the track loads, stutters or is
+---paused.
+---
+---A looping track runs the function once every time round. A `time` past the end of the track
+---runs it when the track reaches its end (before `on_finish()`, if the track isn't looping). A
+---cue added after playback has already passed its time first runs on the next loop.
+---@param time number How far into the track, in milliseconds.
+---@param cb fun()
+---@return boolean
+function AudioHandle:on_time(time, cb) end
 
 ---Pause the audio track.
 ---@return boolean

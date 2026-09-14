@@ -5,7 +5,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     app::EventPoster,
-    lua::{ItemId, Media, dev_log::log_noop, request::AudioRequestSender, window::Easing},
+    lua::{
+        ItemId, Media,
+        cue::{self, CueOwner, CueRegistry, SharedCueRegistry},
+        dev_log::log_noop,
+        request::AudioRequestSender,
+        window::Easing,
+    },
 };
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone, Copy)]
@@ -28,6 +34,7 @@ pub struct AudioHandle<T: EventPoster> {
     audio: Media,
     request_sender: AudioRequestSender<T>,
     state: RefCell<AudioState>,
+    cues: SharedCueRegistry,
     dev_mode: bool,
 }
 
@@ -68,6 +75,27 @@ impl<T: EventPoster> UserData for AudioHandle<T> {
 
             Ok(())
         });
+
+        methods.add_method(
+            "on_time",
+            |lua, this, (millis, callback): (f64, mlua::Function)| {
+                let owner = CueOwner {
+                    registry: &this.cues,
+                    closed: this.state.try_borrow().into_lua_err()?.finished,
+                    what: "AudioHandle:on_time()",
+                    dev_mode: this.dev_mode,
+                };
+                cue::on_time(lua, owner, millis, callback, |cue_id, time| {
+                    match this.request_sender.add_cue(cue_id, time) {
+                        Ok(()) => Ok(true),
+                        // Finished on the engine's side, and the event saying so is still on
+                        // its way.
+                        Err(crate::error::LewdwareError::AudioHandleNotFound) => Ok(false),
+                        Err(err) => Err(err),
+                    }
+                })
+            },
+        );
 
         methods.add_method("pause", |lua, this, _: ()| {
             this.guarded(lua, "AudioHandle:pause()", || {
@@ -113,6 +141,7 @@ impl<T: EventPoster> UserData for AudioHandle<T> {
             this.guarded(lua, "AudioHandle:stop()", || {
                 this.request_sender.stop().into_lua_err()?;
                 this.state.try_borrow_mut().into_lua_err()?.finished = true;
+                CueRegistry::clear(&this.cues).into_lua_err()?;
                 Ok(())
             })
         });
@@ -131,6 +160,7 @@ impl<T: EventPoster> AudioHandle<T> {
             audio,
             request_sender,
             state: RefCell::new(AudioState::new()),
+            cues: SharedCueRegistry::default(),
             dev_mode,
         }
     }
@@ -162,6 +192,7 @@ impl<T: EventPoster> AudioHandle<T> {
             state.finished = true;
             state.finish_callbacks.clone()
         };
+        CueRegistry::clear(&self.cues)?;
 
         for cb in callbacks {
             if let Err(err) = cb.call::<()>(()) {
@@ -170,6 +201,10 @@ impl<T: EventPoster> AudioHandle<T> {
         }
 
         Ok(())
+    }
+
+    pub fn on_cue(&self, cue_id: u64) -> anyhow::Result<()> {
+        CueRegistry::fire(&self.cues, cue_id)
     }
 
     pub fn on_volume_fade_finished(&self, fade_id: u64) -> anyhow::Result<()> {

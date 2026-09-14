@@ -11,6 +11,7 @@ use crate::{app::LewdwareApp, utils::report_fatal_startup_error, wgpu::WgpuState
 
 mod app;
 mod audio;
+mod cues;
 mod error;
 mod lua;
 mod media;

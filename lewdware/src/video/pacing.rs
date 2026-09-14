@@ -13,15 +13,25 @@ const PERIOD: Duration = Duration::from_millis(30);
 /// A decoder wired to a channel already holding frames at `pts`, playing, with no audio.
 /// The sender is dropped, so running off the end of the list reports `Finish`.
 fn decoder(pts: &[Duration]) -> (VideoDecoder, Receiver<Video>) {
-    let (tx, rx) = sync_channel(pts.len());
-    let (recycle_tx, recycle_rx) = sync_channel(pts.len().max(1));
+    let frames: Vec<_> = pts.iter().map(|&pts| (pts, 0, pts)).collect();
+    decoder_with_passes(&frames)
+}
 
-    for &pts in pts {
+/// [`decoder`], with each frame given as `(pts, pass, pass_pts)`.
+pub(super) fn decoder_with_passes(
+    frames: &[(Duration, u64, Duration)],
+) -> (VideoDecoder, Receiver<Video>) {
+    let (tx, rx) = sync_channel(frames.len());
+    let (recycle_tx, recycle_rx) = sync_channel(frames.len().max(1));
+
+    for &(pts, pass, pass_pts) in frames {
         tx.send(VideoFrame {
             frame: Video::empty(),
             hardware_frame: None,
             pts,
             duration: PERIOD,
+            pass,
+            pass_pts,
             recycle_tx: recycle_tx.clone(),
         })
         .expect("channel sized for every frame");
@@ -46,6 +56,7 @@ fn decoder(pts: &[Duration]) -> (VideoDecoder, Receiver<Video>) {
         paused: false,
         lag_count: 0,
         loop_video: Arc::new(AtomicBool::new(false)),
+        cues: VideoCues::default(),
     };
 
     // The recycle receiver is returned rather than dropped so `VideoFrame::drop` has somewhere

@@ -5,6 +5,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     mpsc::{self, SyncSender},
 };
+use std::time::Duration;
 
 use crate::{
     app::{EventPoster, UserEvent},
@@ -277,6 +278,13 @@ impl<T: EventPoster> WindowRequestSender<T> {
         )
     }
 
+    pub fn add_video_cue(&self, cue_id: u64, time: Duration) -> Result<bool> {
+        window_found(
+            self.send(|tx| WindowAction::AddVideoCue { tx, cue_id, time })
+                .flatten(),
+        )
+    }
+
     pub fn set_text(&self, text: Option<String>) -> Result<bool> {
         window_found(self.send(|tx| WindowAction::SetText { tx, text }).flatten())
     }
@@ -356,6 +364,10 @@ impl<T: EventPoster> AudioRequestSender<T> {
 
     pub fn stop(&self) -> Result<()> {
         self.send(|tx| AudioAction::Stop { tx })
+    }
+
+    pub fn add_cue(&self, cue_id: u64, time: Duration) -> Result<()> {
+        self.send(|tx| AudioAction::AddCue { tx, cue_id, time })
     }
 }
 
@@ -455,6 +467,11 @@ pub enum WindowAction {
         tx: mpsc::Sender<Result<()>>,
         loop_video: bool,
     },
+    AddVideoCue {
+        tx: mpsc::Sender<Result<()>>,
+        cue_id: u64,
+        time: Duration,
+    },
     Move {
         id: u64,
         tx: mpsc::Sender<Result<()>>,
@@ -510,5 +527,10 @@ pub enum AudioAction {
     },
     Stop {
         tx: mpsc::Sender<()>,
+    },
+    AddCue {
+        tx: mpsc::Sender<()>,
+        cue_id: u64,
+        time: Duration,
     },
 }

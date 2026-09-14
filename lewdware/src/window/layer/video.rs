@@ -184,6 +184,14 @@ impl VideoLayer {
     pub fn set_loop(&self, loop_video: bool) {
         self.decoder.set_loop(loop_video);
     }
+
+    pub fn add_cue(&mut self, cue_id: u64, time: Duration) {
+        self.decoder.add_cue(cue_id, time);
+    }
+
+    pub fn take_fired_cues(&mut self) -> std::vec::Drain<'_, u64> {
+        self.decoder.take_fired_cues()
+    }
 }
 
 // BT.709 YCbCr → linear RGB (clipped). Limited range scales Y from [16,235] and Cb/Cr from

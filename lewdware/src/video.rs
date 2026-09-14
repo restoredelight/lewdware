@@ -17,6 +17,7 @@ use winit::event_loop::EventLoopProxy;
 use crate::{
     app::UserEvent,
     audio::AudioPlayer,
+    cues::CueList,
     media::MediaSource,
     zero_copy::{HardwareFrame, initialize_hardware_device, preferred_hw_type},
 };
@@ -135,6 +136,20 @@ pub struct VideoDecoder {
     paused: bool,
     lag_count: u32,
     loop_video: Arc<AtomicBool>,
+    cues: VideoCues,
+}
+
+/// Cues on a video are timed by the frames as they go up, in microseconds from the start of the
+/// pass: a cue fires with the first frame shown at or after its time.
+#[derive(Default)]
+struct VideoCues {
+    list: CueList,
+    /// The pass the last frame shown belongs to.
+    pass: u64,
+    /// That frame's timestamp within its pass; `None` until a frame has gone up.
+    reached: Option<u64>,
+    /// Fired but not yet collected by [`VideoDecoder::take_fired_cues`].
+    fired: Vec<u64>,
 }
 
 pub struct VideoFrame {
@@ -146,6 +161,11 @@ pub struct VideoFrame {
     /// actually needs it — every other frame is displaced by its successor's `pts` — but it comes
     /// from the frame itself, so it is right even where the frame rate varies.
     pub duration: Duration,
+    /// Which pass through the video this frame belongs to, counting from zero; it goes up by one
+    /// each time the video loops.
+    pub pass: u64,
+    /// `pts`, measured from the start of this frame's own pass rather than of playback.
+    pub pass_pts: Duration,
     pub recycle_tx: SyncSender<Video>,
 }
 
@@ -187,6 +207,7 @@ impl VideoDecoder {
                 loop_video.clone(),
                 volume,
                 None,
+                None,
             ) {
                 Ok(Some(audio_player)) => Some(audio_player),
                 Ok(None) => None,
@@ -218,6 +239,7 @@ impl VideoDecoder {
             tolerance: Duration::from_millis(200),
             paused: true,
             lag_count: 0,
+            cues: VideoCues::default(),
         })
     }
 
@@ -247,11 +269,52 @@ impl VideoDecoder {
             return NextFrame::None;
         }
 
-        if self.audio_player.is_some() && !self.audio_stalled {
+        let next = if self.audio_player.is_some() && !self.audio_stalled {
             self.next_frame_audio_master()
         } else {
             self.next_frame_clock_master()
+        };
+
+        match &next {
+            NextFrame::Ready(frame) => self.frame_shown(frame.pass, frame.pass_pts),
+            NextFrame::Finish => {
+                let VideoCues { list, fired, .. } = &mut self.cues;
+                list.finish(|cue_id| fired.push(cue_id));
+            }
+            NextFrame::None => {}
         }
+
+        next
+    }
+
+    fn frame_shown(&mut self, pass: u64, pass_pts: Duration) {
+        let VideoCues {
+            list,
+            pass: current_pass,
+            reached,
+            fired,
+        } = &mut self.cues;
+
+        if pass != *current_pass {
+            list.new_pass(|cue_id| fired.push(cue_id));
+            *current_pass = pass;
+        }
+
+        let position = pass_pts.as_micros() as u64;
+        *reached = Some(position);
+        list.reach(position, |cue_id| fired.push(cue_id));
+    }
+
+    /// Fire `cue_id` whenever playback reaches `time` into the video.
+    pub fn add_cue(&mut self, cue_id: u64, time: Duration) {
+        self.cues
+            .list
+            .add(cue_id, time.as_micros() as u64, self.cues.reached);
+    }
+
+    /// The cues that have fired since this was last called, in order.
+    pub fn take_fired_cues(&mut self) -> std::vec::Drain<'_, u64> {
+        self.cues.fired.drain(..)
     }
 
     fn next_frame_clock_master(&mut self) -> NextFrame {
@@ -305,8 +368,9 @@ impl VideoDecoder {
     /// Whether the audio clock has stopped advancing, judged only from moments when we were
     /// waiting on it with the sink told to play.
     ///
-    /// rodio refreshes the position every 5ms for as long as the source is yielding samples, and
-    /// stops entirely once it runs dry — the position then sits at its final value for good. So a
+    /// `position` is the output's ([`AudioPlayer::output_position`]), padding included. rodio
+    /// refreshes it every 5ms for as long as the source is yielding samples, and stops entirely
+    /// once it runs dry — the position then sits at its final value for good. So a
     /// position that has not moved in [`AUDIO_STALL_TIMEOUT`] is not a slow clock, it is a stopped
     /// one, and no amount of further waiting will move it.
     ///
@@ -344,7 +408,11 @@ impl VideoDecoder {
     }
 
     fn next_frame_audio_master(&mut self) -> NextFrame {
-        let Some(position) = self.audio_player.as_ref().map(AudioPlayer::position) else {
+        let Some((position, output_position)) = self
+            .audio_player
+            .as_ref()
+            .map(|player| (player.position(), player.output_position()))
+        else {
             return self.next_frame_clock_master();
         };
 
@@ -356,8 +424,10 @@ impl VideoDecoder {
 
             // We have just told the sink to play and are waiting on it to catch up. If it is not
             // moving, it is never going to, and waiting on it forever leaves a window that cannot
-            // close -- see `audio_clock_has_stalled`.
-            if self.audio_clock_has_stalled(position, Instant::now()) {
+            // close -- see `audio_clock_has_stalled`. That is judged on the output, not the track
+            // position: the track position also sits still while the audio decoder is behind,
+            // which is a wait worth sitting out rather than a reason to give up on the audio.
+            if self.audio_clock_has_stalled(output_position, Instant::now()) {
                 self.fall_back_to_wall_clock();
                 return self.next_frame_clock_master();
             }
@@ -543,18 +613,28 @@ fn spawn_video_stream(
     })
 }
 
+/// Where a decoded frame sits on the timeline.
+#[derive(Clone, Copy)]
+struct FrameTiming {
+    pts: Duration,
+    duration: Duration,
+    pass: u64,
+    pass_pts: Duration,
+}
+
 fn hw_frame_to_video_frame(
     decoded: &mut Video,
     recycle_tx: &SyncSender<Video>,
-    pts: Duration,
-    duration: Duration,
+    timing: FrameTiming,
 ) -> Result<VideoFrame, ()> {
     if let Some(frame) = HardwareFrame::from_decoder_frame(decoded) {
         return Ok(VideoFrame {
             frame: Video::empty(),
             hardware_frame: Some(frame),
-            pts,
-            duration,
+            pts: timing.pts,
+            duration: timing.duration,
+            pass: timing.pass,
+            pass_pts: timing.pass_pts,
             recycle_tx: recycle_tx.clone(),
         });
     }
@@ -570,8 +650,10 @@ fn hw_frame_to_video_frame(
     Ok(VideoFrame {
         frame: sw,
         hardware_frame: None,
-        pts,
-        duration,
+        pts: timing.pts,
+        duration: timing.duration,
+        pass: timing.pass,
+        pass_pts: timing.pass_pts,
         recycle_tx: recycle_tx.clone(),
     })
 }
@@ -656,13 +738,12 @@ fn take_decoded_frame(
     hw_pix_fmt: Option<ffi::AVPixelFormat>,
     recycle_rx: &Receiver<Video>,
     recycle_tx: &SyncSender<Video>,
-    pts: Duration,
-    duration: Duration,
+    timing: FrameTiming,
 ) -> Option<VideoFrame> {
     if let Some(hw_fmt) = hw_pix_fmt
         && unsafe { (*decoded.as_ptr()).format } == hw_fmt as i32
     {
-        return hw_frame_to_video_frame(decoded, recycle_tx, pts, duration).ok();
+        return hw_frame_to_video_frame(decoded, recycle_tx, timing).ok();
     }
 
     // Software decode, or a hardware decoder that handed back a system-memory frame anyway: swap
@@ -673,8 +754,10 @@ fn take_decoded_frame(
     Some(VideoFrame {
         frame,
         hardware_frame: None,
-        pts,
-        duration,
+        pts: timing.pts,
+        duration: timing.duration,
+        pass: timing.pass,
+        pass_pts: timing.pass_pts,
         recycle_tx: recycle_tx.clone(),
     })
 }
@@ -772,6 +855,7 @@ fn decode_video(
     let mut decoded = Video::empty();
 
     let mut current_loop_offset = Duration::ZERO;
+    let mut pass = 0;
     let mut last_pts_duration = Duration::ZERO;
     // How long the final frame of the pass stays up, which is what the next pass has to start
     // after. Seeded with the stream's nominal duration in case a pass yields no frames at all.
@@ -791,8 +875,12 @@ fn decode_video(
                         hw_pix_fmt,
                         &recycle_rx,
                         &recycle_tx,
-                        pts + current_loop_offset,
-                        duration,
+                        FrameTiming {
+                            pts: pts + current_loop_offset,
+                            duration,
+                            pass,
+                            pass_pts: pts,
+                        },
                     ) else {
                         continue;
                     };
@@ -821,8 +909,12 @@ fn decode_video(
                 hw_pix_fmt,
                 &recycle_rx,
                 &recycle_tx,
-                pts + current_loop_offset,
-                duration,
+                FrameTiming {
+                    pts: pts + current_loop_offset,
+                    duration,
+                    pass,
+                    pass_pts: pts,
+                },
             ) else {
                 continue;
             };
@@ -838,6 +930,7 @@ fn decode_video(
 
         ictx.seek(0, ..0)?;
         decoder.flush();
+        pass += 1;
         // The next pass starts one whole video-length on, so the closing frame gets exactly its
         // own time on screen and the seam is invisible. Falling back through the last frame's
         // declared duration to the stream average only matters for a container that states no
@@ -850,6 +943,9 @@ fn decode_video(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod cues;
 
 #[cfg(test)]
 mod pacing;

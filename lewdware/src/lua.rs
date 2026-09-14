@@ -1,5 +1,6 @@
 mod api;
 mod audio;
+mod cue;
 mod dev_log;
 mod interval;
 mod media;
@@ -86,6 +87,11 @@ pub enum Event {
     VolumeFadeFinish {
         id: ItemId,
         fade_id: u64,
+    },
+    /// Playback of a video or audio track reached a cue registered with `on_time()`.
+    Cue {
+        id: ItemId,
+        cue_id: u64,
     },
 }
 
@@ -621,6 +627,13 @@ impl<T: EventPoster> LuaRuntime<T> {
             Event::AudioFinish { id } => {
                 if let Some(audio) = self.get_audio_handle(id)? {
                     audio.on_finish()?;
+                }
+            }
+            Event::Cue { id, cue_id } => {
+                if let Some(audio) = self.get_audio_handle(id)? {
+                    audio.on_cue(cue_id)?;
+                } else if let Some(window) = self.get_window(id)? {
+                    window.inner_window().on_cue(cue_id)?;
                 }
             }
             Event::WindowClicked { id } => {

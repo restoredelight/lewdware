@@ -228,6 +228,22 @@ impl LewdwareApp {
                         _ => Err(LewdwareError::Internal("Invalid window type")),
                     })
                     .is_ok(),
+                WindowAction::AddVideoCue { tx, cue_id, time } => tx
+                    .send(match entry.get_mut() {
+                        ItemSlot::Window(popup) => popup
+                            .add_cue(cue_id, time)
+                            .then_some(())
+                            .ok_or(LewdwareError::Internal("Invalid window type")),
+                        ItemSlot::Pending(PendingItem {
+                            opts: PendingItemOpts::Video { pending_cues, .. },
+                            ..
+                        }) => {
+                            pending_cues.push((cue_id, time));
+                            Ok(())
+                        }
+                        _ => Err(LewdwareError::Internal("Invalid window type")),
+                    })
+                    .is_ok(),
                 WindowAction::Move { id, tx, opts } => tx
                     .send(match entry.get_mut() {
                         ItemSlot::Window(popup) => popup.state.start_move(id, opts),
@@ -428,6 +444,17 @@ impl LewdwareApp {
                                 },
                             ..
                         }) => *pending_volume_fade = opts.map(|opts| (id, opts)),
+                        _ => {}
+                    }
+                    tx.send(()).is_ok()
+                }
+                AudioAction::AddCue { tx, cue_id, time } => {
+                    match entry.get_mut() {
+                        ItemSlot::Audio(player) => player.add_cue(cue_id, time),
+                        ItemSlot::Pending(PendingItem {
+                            opts: PendingItemOpts::Audio { pending_cues, .. },
+                            ..
+                        }) => pending_cues.push((cue_id, time)),
                         _ => {}
                     }
                     tx.send(()).is_ok()

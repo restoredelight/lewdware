@@ -5,6 +5,7 @@ use winit::{
     event_loop::ActiveEventLoop,
 };
 
+use crate::cues::CueEvents;
 use crate::error::{LewdwareError, MonitorError, Result};
 use crate::lua::{
     self, DialogElement, FadeOpts, ItemId, MediaData, MoveOpts, PopupSpawnOpts, TextStyle,
@@ -177,6 +178,7 @@ impl LewdwareApp {
                 paused: false,
                 volume,
                 pending_volume_fade: None,
+                pending_cues: Vec::new(),
                 video: requirement.id,
             },
             vec![requirement],
@@ -279,6 +281,7 @@ impl LewdwareApp {
             media_id,
             loop_audio,
             volume,
+            cue_events: CueEvents::new(id, self.lua_event_tx.clone()),
         });
 
         self.insert_pending_item(
@@ -288,6 +291,7 @@ impl LewdwareApp {
                 volume,
                 audio: requirement.id,
                 pending_volume_fade: None,
+                pending_cues: Vec::new(),
             },
             vec![requirement],
             event_loop,
@@ -367,11 +371,15 @@ impl LewdwareApp {
                 volume,
                 audio,
                 pending_volume_fade,
+                pending_cues,
             } => {
                 let mut player = requirements.take_audio(audio)?;
                 player.set_volume(volume);
                 if let Some((id, opts)) = pending_volume_fade {
                     player.start_volume_fade(id, Some(opts));
+                }
+                for (cue_id, time) in pending_cues {
+                    player.add_cue(cue_id, time);
                 }
                 if !paused {
                     player.play();
@@ -424,10 +432,15 @@ impl LewdwareApp {
                 paused,
                 volume,
                 pending_volume_fade,
+                pending_cues,
                 loop_video: _,
             } => {
                 let (state, target) = self.create_window(id, window, event_loop)?;
-                let decoder = requirements.take_video(video)?;
+                let mut decoder = requirements.take_video(video)?;
+                // Before the popup is built, since building it can already draw a frame.
+                for (cue_id, time) in pending_cues {
+                    decoder.add_cue(cue_id, time);
+                }
                 let mut popup =
                     Popup::new_video(state, target, decoder).map_err(LewdwareError::WindowError)?;
                 Self::apply_pending_mutations(

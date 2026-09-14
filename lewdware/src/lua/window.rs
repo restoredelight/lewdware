@@ -8,6 +8,7 @@ use crate::{
     lua::{
         DialogElementUpdate, ItemId, Media, WindowProps,
         api::{Anchor, Coord},
+        cue::{self, CueOwner, CueRegistry, SharedCueRegistry},
         dev_log::log_noop,
         request::WindowRequestSender,
     },
@@ -141,6 +142,22 @@ impl<T: EventPoster> UserData for VideoWindow<T> {
                 Ok(this
                     .inner_window
                     .report_noop(lua, "VideoWindow:fade_volume()", result))
+            },
+        );
+
+        methods.add_method(
+            "on_time",
+            |lua, this, (millis, callback): (f64, mlua::Function)| {
+                let inner_window = &this.inner_window;
+                let owner = CueOwner {
+                    registry: &inner_window.cues,
+                    closed: inner_window.state.try_borrow().into_lua_err()?.closed,
+                    what: "VideoWindow:on_time()",
+                    dev_mode: inner_window.dev_mode,
+                };
+                cue::on_time(lua, owner, millis, callback, |cue_id, time| {
+                    inner_window.request_sender.add_video_cue(cue_id, time)
+                })
             },
         );
 
@@ -368,6 +385,9 @@ pub struct InnerWindow<T: EventPoster> {
     outer_width: u32,
     outer_height: u32,
     state: RefCell<InnerWindowState>,
+    /// `VideoWindow:on_time()`'s cues. Kept here rather than on `VideoWindow` so `close()`, which
+    /// every window shares, can drop them the moment it returns.
+    cues: SharedCueRegistry,
     monitor: Monitor,
     request_sender: WindowRequestSender<T>,
     dev_mode: bool,
@@ -426,6 +446,7 @@ impl<T: EventPoster> InnerWindow<T> {
             outer_width: props.outer_width,
             outer_height: props.outer_height,
             state: RefCell::new(InnerWindowState::new(props.x, props.y)),
+            cues: SharedCueRegistry::default(),
             monitor: props.monitor,
             request_sender: request_tx,
             dev_mode,
@@ -492,6 +513,7 @@ impl<T: EventPoster> InnerWindow<T> {
                     .try_borrow_mut()
                     .into_lua_err()?
                     .closed = true;
+                CueRegistry::clear(&this.inner_window().cues).into_lua_err()?;
             }
 
             Ok(this
@@ -646,6 +668,7 @@ impl<T: EventPoster> InnerWindow<T> {
 
     pub fn on_close(&self) -> anyhow::Result<()> {
         self.state.try_borrow_mut().into_lua_err()?.closed = true;
+        CueRegistry::clear(&self.cues)?;
 
         let callbacks = {
             let state = self.state.try_borrow()?;
@@ -699,6 +722,10 @@ impl<T: EventPoster> InnerWindow<T> {
         }
 
         Ok(())
+    }
+
+    pub fn on_cue(&self, cue_id: u64) -> anyhow::Result<()> {
+        CueRegistry::fire(&self.cues, cue_id)
     }
 
     pub fn on_move_finished(&self, move_id: u64, x: i32, y: i32) -> anyhow::Result<()> {

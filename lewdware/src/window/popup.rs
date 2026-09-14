@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::Result;
 use winit::event::WindowEvent;
@@ -140,6 +141,7 @@ impl Popup {
         };
 
         let status = self.layer.prepare_gpu(&self.state, &frame)?;
+        self.send_fired_cues();
         if status == LayerStatus::Finished {
             return Ok(RenderOutcome {
                 submission: None,
@@ -177,6 +179,7 @@ impl Popup {
         let frame = CpuFrame { content };
 
         let status = self.layer.prepare_cpu(&frame)?;
+        self.send_fired_cues();
         if status == LayerStatus::Finished {
             return Ok(RenderOutcome {
                 submission: None,
@@ -196,6 +199,24 @@ impl Popup {
         self.layer.flush_events(&self.state);
 
         Ok(RenderOutcome::default())
+    }
+
+    /// Forward the cues a video fired while preparing its frame. Sent before a finished video's
+    /// window is torn down, so they reach Lua ahead of its `WindowClosed`.
+    fn send_fired_cues(&mut self) {
+        let Layer::Video(layer) = &mut self.layer else {
+            return;
+        };
+
+        for cue_id in layer.take_fired_cues() {
+            let event = crate::lua::Event::Cue {
+                id: self.state.popup_id(),
+                cue_id,
+            };
+            if self.state.lua_event_tx().send(event).is_err() {
+                tracing::debug!("Couldn't send Cue event: Lua thread has shut down");
+            }
+        }
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) {
@@ -307,6 +328,14 @@ impl Popup {
             return false;
         };
         layer.set_loop(loop_video);
+        true
+    }
+
+    pub fn add_cue(&mut self, cue_id: u64, time: Duration) -> bool {
+        let Layer::Video(layer) = &mut self.layer else {
+            return false;
+        };
+        layer.add_cue(cue_id, time);
         true
     }
 }

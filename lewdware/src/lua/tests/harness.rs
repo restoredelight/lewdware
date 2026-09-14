@@ -271,6 +271,11 @@ pub(super) enum Recorded {
         volume: f32,
         duration: u64,
     },
+    AddCue {
+        id: ItemId,
+        cue_id: u64,
+        time: Duration,
+    },
     SpawnDialog,
     SpawnText,
     CloseWindow {
@@ -477,6 +482,13 @@ pub(super) fn run_fake_handler(
                     WindowAction::SetVideoLoop { tx, .. } => {
                         let _ = tx.send(Ok(()));
                     }
+                    WindowAction::AddVideoCue { tx, cue_id, time } => {
+                        recorded
+                            .lock()
+                            .unwrap()
+                            .push(Recorded::AddCue { id, cue_id, time });
+                        let _ = tx.send(Ok(()));
+                    }
                     WindowAction::SetText { tx, .. } => {
                         let _ = tx.send(Ok(()));
                     }
@@ -554,6 +566,13 @@ pub(super) fn run_fake_handler(
                 AudioAction::Stop { tx } => {
                     let _ = tx.send(());
                     let _ = event_tx.send(Event::AudioFinish { id });
+                }
+                AudioAction::AddCue { tx, cue_id, time } => {
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push(Recorded::AddCue { id, cue_id, time });
+                    let _ = tx.send(());
                 }
             },
         }

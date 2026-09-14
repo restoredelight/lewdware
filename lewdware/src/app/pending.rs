@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, atomic::AtomicBool},
+    time::Duration,
 };
 
 use crate::{
@@ -91,6 +92,7 @@ pub enum PendingItemOpts {
         paused: bool,
         volume: f32,
         pending_volume_fade: Option<(u64, VolumeFadeOpts)>,
+        pending_cues: PendingCues,
     },
     Dialog {
         window: PendingWindowOpts,
@@ -106,8 +108,12 @@ pub enum PendingItemOpts {
         paused: bool,
         volume: f32,
         pending_volume_fade: Option<(u64, VolumeFadeOpts)>,
+        pending_cues: PendingCues,
     },
 }
+
+/// Cues registered, as `(cue id, time)`, before the media they belong to has loaded.
+pub type PendingCues = Vec<(u64, Duration)>;
 
 impl PendingItemOpts {
     pub fn is_window(&self) -> bool {
@@ -196,6 +202,7 @@ mod tests {
                 volume: 1.0,
                 audio: RequirementId(99),
                 pending_volume_fade: None,
+                pending_cues: Vec::new(),
             },
             requirements,
         }

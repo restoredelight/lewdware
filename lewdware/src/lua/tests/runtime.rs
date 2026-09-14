@@ -1086,3 +1086,211 @@ async fn hostile_mode_sees_every_denied_capability_as_false() {
         })
         .await;
 }
+
+const CUE_VIDEO: &str = r#"
+    VIDEO = {
+        id = 0,
+        name = "test",
+        type = "video",
+        width = 64,
+        height = 64,
+        duration = 1.0,
+        transparent = false,
+    }
+"#;
+
+fn recorded_cues(harness: &Harness) -> Vec<Recorded> {
+    harness
+        .recorded()
+        .into_iter()
+        .filter(|recorded| matches!(recorded, Recorded::AddCue { .. }))
+        .collect()
+}
+
+fn cue_event(cue_id: u64) -> Event {
+    Event::Cue {
+        id: ItemId(0),
+        cue_id,
+    }
+}
+
+/// A cue reaches the engine with its time, and its callback runs every time the engine says it was
+/// reached -- a looping video reaches it once a pass.
+#[tokio::test(start_paused = true)]
+async fn video_window_on_time_fires_each_time_it_is_reached() {
+    LocalSet::new()
+        .run_until(async {
+            let mut harness = Harness::new(
+                &[
+                    ("video.lua", CUE_VIDEO),
+                    (
+                        "main.lua",
+                        r#"
+                            require("video")
+                            local window = lewdware.popup.video(VIDEO)
+
+                            FIRED = 0
+                            assert(window:on_time(1500.5, function() FIRED = FIRED + 1 end) == true)
+                        "#,
+                    ),
+                ],
+                false,
+            );
+
+            harness.run_entrypoint("main.lua").unwrap();
+            assert_eq!(
+                recorded_cues(&harness),
+                vec![Recorded::AddCue {
+                    id: ItemId(0),
+                    cue_id: 0,
+                    time: Duration::from_micros(1_500_500),
+                }]
+            );
+
+            harness.send_event(cue_event(0));
+            harness.send_event(cue_event(0));
+            harness.pump_events();
+            assert_eq!(harness.eval_number("FIRED"), 2.0);
+        })
+        .await;
+}
+
+/// Once `close()` returns, cues never run -- even one already queued -- and `on_time` is a no-op.
+#[tokio::test(start_paused = true)]
+async fn closing_a_video_window_drops_its_cues() {
+    LocalSet::new()
+        .run_until(async {
+            let mut harness = Harness::new(
+                &[
+                    ("video.lua", CUE_VIDEO),
+                    (
+                        "main.lua",
+                        r#"
+                            require("video")
+                            WINDOW = lewdware.popup.video(VIDEO)
+
+                            FIRED = 0
+                            WINDOW:on_time(100, function() FIRED = FIRED + 1 end)
+                        "#,
+                    ),
+                    (
+                        "close.lua",
+                        r#"
+                            assert(WINDOW:close() == true)
+                            assert(
+                                WINDOW:on_time(100, function() FIRED = FIRED + 1 end) == false,
+                                "on_time on a closed window is a no-op"
+                            )
+                        "#,
+                    ),
+                ],
+                false,
+            );
+
+            harness.run_entrypoint("main.lua").unwrap();
+
+            // Queued before the close, delivered after it.
+            harness.send_event(cue_event(0));
+            harness.run_entrypoint("close.lua").unwrap();
+
+            assert_eq!(harness.eval_number("FIRED"), 0.0);
+            assert_eq!(
+                recorded_cues(&harness).len(),
+                1,
+                "the no-op cue never reached the engine"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn audio_handle_on_time_fires_until_the_handle_finishes() {
+    LocalSet::new()
+        .run_until(async {
+            let mut harness = Harness::new(
+                &[
+                    (
+                        "main.lua",
+                        r#"
+                            AUDIO = lewdware.play_audio(
+                                { id = 0, name = "test", type = "audio", duration = 1.0 }
+                            )
+
+                            FIRED = {}
+                            AUDIO:on_time(250, function() table.insert(FIRED, "first") end)
+                            AUDIO:on_time(0, function() table.insert(FIRED, "second") end)
+                        "#,
+                    ),
+                    (
+                        "after_finish.lua",
+                        r#"
+                            assert(
+                                AUDIO:on_time(10, function() end) == false,
+                                "on_time on a finished handle is a no-op"
+                            )
+                        "#,
+                    ),
+                ],
+                false,
+            );
+
+            harness.run_entrypoint("main.lua").unwrap();
+            assert_eq!(
+                recorded_cues(&harness),
+                vec![
+                    Recorded::AddCue {
+                        id: ItemId(0),
+                        cue_id: 0,
+                        time: Duration::from_millis(250),
+                    },
+                    Recorded::AddCue {
+                        id: ItemId(0),
+                        cue_id: 1,
+                        time: Duration::ZERO,
+                    },
+                ]
+            );
+
+            harness.send_event(cue_event(1));
+            harness.send_event(cue_event(0));
+            harness.pump_events();
+            assert_eq!(
+                harness.eval_string("table.concat(FIRED, ',')"),
+                "second,first"
+            );
+
+            harness.send_event(Event::AudioFinish { id: ItemId(0) });
+            harness.send_event(cue_event(0));
+            harness.pump_events();
+            assert_eq!(
+                harness.eval_string("table.concat(FIRED, ',')"),
+                "second,first"
+            );
+
+            harness.run_entrypoint("after_finish.lua").unwrap();
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn on_time_rejects_a_negative_time() {
+    LocalSet::new()
+        .run_until(async {
+            let mut harness = Harness::new(
+                &[(
+                    "main.lua",
+                    r#"
+                        local audio = lewdware.play_audio(
+                            { id = 0, name = "test", type = "audio", duration = 1.0 }
+                        )
+                        audio:on_time(-1, function() end)
+                    "#,
+                )],
+                false,
+            );
+
+            let err = harness.run_entrypoint("main.lua").unwrap_err();
+            assert!(err.to_string().contains("non-negative"), "{err}");
+        })
+        .await;
+}

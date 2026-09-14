@@ -2,7 +2,7 @@ use std::{
     num::NonZero,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -16,9 +16,14 @@ use ffmpeg_next::{
     format::{Sample, sample},
     frame,
 };
-use rodio::{MixerDeviceSink, Player, buffer::SamplesBuffer, source::UniformSourceIterator};
+use rodio::{
+    MixerDeviceSink, Player, Source, buffer::SamplesBuffer, source::UniformSourceIterator,
+};
 
-use crate::media::{MediaSource, bounded_input::BoundedInput};
+use crate::{
+    cues::{CueEvents, CueList},
+    media::{MediaSource, bounded_input::BoundedInput},
+};
 
 use super::device::{open_sink, record_device_open};
 
@@ -36,6 +41,13 @@ pub struct AudioFrames {
 }
 
 const MAX_EMPTY_PASSES: u32 = 3;
+
+/// One step of [`AudioFrames::next`].
+pub enum Decoded {
+    Samples(SamplesBuffer),
+    /// The track ended and has gone back to the start: what follows is the next pass.
+    Looped,
+}
 
 impl AudioFrames {
     /// `None` when the source carries no audio at all.
@@ -63,12 +75,13 @@ impl AudioFrames {
         }))
     }
 
-    /// The next buffer of samples, or `None` once the track has finished and is not to be looped.
-    pub fn next_buffer(&mut self) -> Option<SamplesBuffer> {
+    /// The next buffer of samples, or a marker that the track just looped; `None` once the track
+    /// has finished and is not to be looped.
+    pub fn next(&mut self) -> Option<Decoded> {
         loop {
             if let Some(buffer) = self.take_ready() {
                 self.empty_passes = 0;
-                return Some(buffer);
+                return Some(Decoded::Samples(buffer));
             }
 
             if let Some(packet) = self.next_packet() {
@@ -82,7 +95,7 @@ impl AudioFrames {
 
             if let Some(buffer) = self.take_ready() {
                 self.empty_passes = 0;
-                return Some(buffer);
+                return Some(Decoded::Samples(buffer));
             }
 
             if !self.loop_audio.load(Ordering::Relaxed) {
@@ -104,6 +117,8 @@ impl AudioFrames {
             }
 
             self.decoder.flush();
+
+            return Some(Decoded::Looped);
         }
     }
 
@@ -154,84 +169,263 @@ const DECODE_QUEUE_BUFFERS: usize = 32;
 const DECODE_CHUNK_FRAMES: usize = 1024;
 const UNDERRUN_SILENCE: Duration = Duration::from_millis(10);
 
-struct DecodedBuffers {
-    rx: mpsc::Receiver<SamplesBuffer>,
-    first: Option<SamplesBuffer>,
-    channels: NonZero<u16>,
-    rate: NonZero<u32>,
+/// Samples converted to the output device's format, and which pass through the track they
+/// belong to.
+struct Chunk {
+    pass: u64,
+    samples: Vec<f32>,
 }
 
-impl DecodedBuffers {
-    fn start(frames: AudioFrames, channels: NonZero<u16>, rate: NonZero<u32>) -> Option<Self> {
-        let (tx, rx) = mpsc::sync_channel(DECODE_QUEUE_BUFFERS);
+/// Decode and resample `frames` on a thread of its own, queueing the result in chunks.
+///
+/// The resampler is rebuilt for every pass, so a chunk never straddles a loop: every sample in
+/// it belongs to the pass it is labelled with, which is what lets [`TrackSource`] know exactly
+/// where each pass starts.
+fn spawn_decode_thread(
+    mut frames: AudioFrames,
+    channels: NonZero<u16>,
+    rate: NonZero<u32>,
+) -> mpsc::Receiver<Chunk> {
+    let (tx, rx) = mpsc::sync_channel(DECODE_QUEUE_BUFFERS);
+    let chunk_samples = DECODE_CHUNK_FRAMES * channels.get() as usize;
 
-        thread::spawn(move || {
-            let decoded = rodio::source::from_fn({
-                let mut frames = frames;
-                move || frames.next_buffer()
+    thread::spawn(move || {
+        for pass in 0.. {
+            let mut looped = false;
+
+            let decoded = rodio::source::from_fn(|| match frames.next()? {
+                Decoded::Samples(buffer) => Some(buffer),
+                Decoded::Looped => {
+                    looped = true;
+                    None
+                }
             });
             let mut resampled = UniformSourceIterator::new(decoded, channels, rate);
 
-            let chunk_samples = DECODE_CHUNK_FRAMES * channels.get() as usize;
-
             loop {
-                let mut chunk = Vec::with_capacity(chunk_samples);
-                for _ in 0..chunk_samples {
-                    match resampled.next() {
-                        Some(sample) => chunk.push(sample),
-                        None => break,
-                    }
-                }
-
-                if chunk.is_empty() {
+                let samples: Vec<f32> = resampled.by_ref().take(chunk_samples).collect();
+                if samples.is_empty() {
                     break;
                 }
 
-                let finished = chunk.len() < chunk_samples;
+                let finished = samples.len() < chunk_samples;
 
-                if tx.send(SamplesBuffer::new(channels, rate, chunk)).is_err() || finished {
+                if tx.send(Chunk { pass, samples }).is_err() {
+                    return;
+                }
+                if finished {
                     break;
                 }
             }
-        });
 
-        let first = rx.recv().ok()?;
+            drop(resampled);
+            if !looped {
+                return;
+            }
+        }
+    });
 
-        Some(Self {
-            channels,
+    rx
+}
+
+/// A cue to start timing, on its way to the output thread.
+pub struct AddCue {
+    pub cue_id: u64,
+    pub time: Duration,
+}
+
+/// The cue state a [`TrackSource`] keeps: all of it lives on the output thread, and new cues
+/// reach it as [`AddCue`]s.
+pub struct TrackCues {
+    list: CueList,
+    commands: mpsc::Receiver<AddCue>,
+    events: CueEvents,
+    /// The frame, counted from the start of the current pass, about to be played. Padding
+    /// silence is not counted: it is not part of the track.
+    frame: u64,
+    /// `list.next_due()`, cached so the per-frame check is one comparison.
+    next_due: u64,
+}
+
+impl TrackCues {
+    pub fn new(commands: mpsc::Receiver<AddCue>, events: CueEvents) -> Self {
+        Self {
+            list: CueList::default(),
+            commands,
+            events,
+            frame: 0,
+            next_due: u64::MAX,
+        }
+    }
+
+    fn apply_commands(&mut self, rate: NonZero<u32>) {
+        while let Ok(AddCue { cue_id, time }) = self.commands.try_recv() {
+            let position = (time.as_secs_f64() * rate.get() as f64).round() as u64;
+            self.list.add(cue_id, position, self.frame.checked_sub(1));
+        }
+        self.refresh_next_due();
+    }
+
+    fn new_pass(&mut self) {
+        let events = &self.events;
+        self.list.new_pass(|cue_id| events.fire(cue_id));
+        self.frame = 0;
+        self.refresh_next_due();
+    }
+
+    fn finish(&mut self) {
+        let events = &self.events;
+        self.list.finish(|cue_id| events.fire(cue_id));
+        self.refresh_next_due();
+    }
+
+    /// The next frame is about to be played.
+    #[inline]
+    fn advance(&mut self) {
+        if self.frame >= self.next_due {
+            let events = &self.events;
+            self.list.reach(self.frame, |cue_id| events.fire(cue_id));
+            self.refresh_next_due();
+        }
+        self.frame += 1;
+    }
+
+    fn refresh_next_due(&mut self) {
+        self.next_due = self.list.next_due().unwrap_or(u64::MAX);
+    }
+}
+
+/// How far into the track playback has got, counting only the track's own audio: unlike
+/// rodio's `Player::get_pos`, the silence played while the decoder catches up doesn't move it.
+/// Loops don't reset it, so it keeps counting from where the last pass left off.
+#[derive(Clone)]
+pub struct TrackClock {
+    frames: Arc<AtomicU64>,
+    rate: NonZero<u32>,
+}
+
+impl TrackClock {
+    fn new(rate: NonZero<u32>) -> Self {
+        Self {
+            frames: Arc::new(AtomicU64::new(0)),
             rate,
-            first: Some(first),
-            rx,
-        })
-    }
-
-    fn next(&mut self) -> Option<SamplesBuffer> {
-        if let Some(first) = self.first.take() {
-            return Some(first);
-        }
-
-        match self.rx.try_recv() {
-            Ok(buffer) => Some(buffer),
-            Err(mpsc::TryRecvError::Empty) => Some(self.silence()),
-            Err(mpsc::TryRecvError::Disconnected) => None,
         }
     }
 
-    fn silence(&self) -> SamplesBuffer {
-        let frames = (self.rate.get() as u128 * UNDERRUN_SILENCE.as_micros() / 1_000_000) as usize;
+    pub fn position(&self) -> Duration {
+        let frames = self.frames.load(Ordering::Relaxed) as u128;
+        Duration::from_nanos((frames * 1_000_000_000 / self.rate.get() as u128) as u64)
+    }
+}
 
-        SamplesBuffer::new(
-            self.channels,
-            self.rate,
-            vec![0.0; frames * self.channels.get() as usize],
-        )
+/// The track as the output device plays it: the decode thread's chunks, with silence standing in
+/// whenever the decoder falls behind.
+///
+/// This runs on the output thread and is pulled a sample at a time just before each is played,
+/// so it is where the [`TrackClock`] and cues can be timed against what is actually heard. It is deliberately not a
+/// `from_fn` chain of buffers: rodio's `chain` pulls its first buffer the moment it is built, long
+/// before anything plays.
+struct TrackSource {
+    rx: mpsc::Receiver<Chunk>,
+    /// The first chunk, received up front to find out whether there is any audio at all.
+    first: Option<Chunk>,
+    samples: Vec<f32>,
+    position: usize,
+    pass: u64,
+    /// Padding samples still to play.
+    silence: usize,
+    channels: NonZero<u16>,
+    rate: NonZero<u32>,
+    /// Frames of the track played so far, mirrored into `clock`.
+    played: u64,
+    clock: TrackClock,
+    cues: Option<TrackCues>,
+}
+
+impl TrackSource {
+    fn start_chunk(&mut self, chunk: Chunk) {
+        if let Some(cues) = &mut self.cues {
+            cues.apply_commands(self.rate);
+            if chunk.pass != self.pass {
+                cues.new_pass();
+            }
+        }
+
+        self.pass = chunk.pass;
+        self.samples = chunk.samples;
+        self.position = 0;
+    }
+}
+
+impl Iterator for TrackSource {
+    type Item = f32;
+
+    #[inline]
+    fn next(&mut self) -> Option<f32> {
+        if self.silence > 0 {
+            self.silence -= 1;
+            return Some(0.0);
+        }
+
+        if self.position >= self.samples.len() {
+            let chunk = match self.first.take() {
+                Some(chunk) => chunk,
+                None => match self.rx.try_recv() {
+                    Ok(chunk) => chunk,
+                    Err(mpsc::TryRecvError::Empty) => {
+                        let frames = (self.rate.get() as u128 * UNDERRUN_SILENCE.as_micros()
+                            / 1_000_000) as usize;
+                        self.silence = frames * self.channels.get() as usize - 1;
+                        return Some(0.0);
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        if let Some(cues) = &mut self.cues {
+                            cues.finish();
+                        }
+                        return None;
+                    }
+                },
+            };
+            self.start_chunk(chunk);
+        }
+
+        if self.position.is_multiple_of(self.channels.get() as usize) {
+            if let Some(cues) = &mut self.cues {
+                cues.advance();
+            }
+            self.played += 1;
+            self.clock.frames.store(self.played, Ordering::Relaxed);
+        }
+
+        let sample = self.samples.get(self.position).copied();
+        self.position += 1;
+        sample
+    }
+}
+
+impl Source for TrackSource {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> NonZero<u16> {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> NonZero<u32> {
+        self.rate
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        None
     }
 }
 
 pub fn setup_decoder(
     source: MediaSource,
     loop_audio: Arc<AtomicBool>,
-) -> Result<Option<(MixerDeviceSink, Player)>> {
+    cues: Option<TrackCues>,
+) -> Result<Option<(MixerDeviceSink, Player, TrackClock)>> {
     let frames = match AudioFrames::open(source, loop_audio)? {
         Some(frames) => frames,
         None => return Ok(None),
@@ -244,19 +438,33 @@ pub fn setup_decoder(
     stream.log_on_drop(false);
 
     let config = stream.config();
-    let Some(mut decoded) =
-        DecodedBuffers::start(frames, config.channel_count(), config.sample_rate())
-    else {
+    let (channels, rate) = (config.channel_count(), config.sample_rate());
+
+    let rx = spawn_decode_thread(frames, channels, rate);
+    let Ok(first) = rx.recv() else {
         return Ok(None);
     };
 
     let sink = Player::connect_new(stream.mixer());
     sink.pause();
 
-    let source = rodio::source::from_fn(move || decoded.next());
-    sink.append(source);
+    let clock = TrackClock::new(rate);
 
-    Ok(Some((stream, sink)))
+    sink.append(TrackSource {
+        rx,
+        first: Some(first),
+        samples: Vec::new(),
+        position: 0,
+        pass: 0,
+        silence: 0,
+        channels,
+        rate,
+        played: 0,
+        clock: clock.clone(),
+        cues,
+    });
+
+    Ok(Some((stream, sink, clock)))
 }
 
 fn convert_audio_frame(frame: &frame::Audio) -> Result<Vec<f32>> {
@@ -445,7 +653,10 @@ mod sidecar {
         let mut frames = frames(&path, false);
         let mut samples = 0;
         let mut rate = 0;
-        while let Some(buffer) = frames.next_buffer() {
+        while let Some(decoded) = frames.next() {
+            let Decoded::Samples(buffer) = decoded else {
+                panic!("a track that isn't looping reported a loop");
+            };
             rate = buffer.sample_rate().get();
             samples += count_samples(&buffer);
         }
@@ -468,7 +679,7 @@ mod sidecar {
         let once = {
             let mut frames = frames(&path, false);
             let mut samples = 0;
-            while let Some(buffer) = frames.next_buffer() {
+            while let Some(Decoded::Samples(buffer)) = frames.next() {
                 samples += count_samples(&buffer);
             }
             samples
@@ -478,8 +689,8 @@ mod sidecar {
         for pass in 1..=3 {
             let mut samples = 0;
             let mut buffers = 0;
-            while samples < once {
-                let buffer = frames.next_buffer().expect("a looping source never ends");
+            while let Decoded::Samples(buffer) = frames.next().expect("a looping source never ends")
+            {
                 samples += count_samples(&buffer);
 
                 buffers += 1;
@@ -490,9 +701,185 @@ mod sidecar {
             }
 
             assert!(
-                samples < once + once / 10,
-                "pass {pass} ran {samples} samples past the {once} of a single pass, so a pass boundary was missed"
+                samples.abs_diff(once) < once / 10,
+                "pass {pass} decoded {samples} samples between loops, against {once} in a single pass"
             );
         }
+    }
+}
+
+/// The clock and cue timing in [`TrackSource`], fed hand-made chunks so no decoder or output
+/// device is involved.
+#[cfg(test)]
+mod track_source {
+    use super::*;
+    use crate::lua::{Event, ItemId};
+
+    const RATE: u32 = 1000;
+
+    struct Track {
+        source: TrackSource,
+        chunks: mpsc::SyncSender<Chunk>,
+        commands: mpsc::Sender<AddCue>,
+        clock: TrackClock,
+        events: tokio::sync::mpsc::UnboundedReceiver<Event>,
+    }
+
+    /// A stereo track at 1000 frames a second, so a frame and a millisecond are the same thing.
+    fn track() -> Track {
+        let (chunks, rx) = mpsc::sync_channel(16);
+        let (commands, commands_rx) = mpsc::channel();
+        let (events_tx, events) = tokio::sync::mpsc::unbounded_channel();
+        let clock = TrackClock::new(NonZero::new(RATE).unwrap());
+
+        let source = TrackSource {
+            rx,
+            first: None,
+            samples: Vec::new(),
+            position: 0,
+            pass: 0,
+            silence: 0,
+            channels: NonZero::new(2).unwrap(),
+            rate: NonZero::new(RATE).unwrap(),
+            played: 0,
+            clock: clock.clone(),
+            cues: Some(TrackCues::new(
+                commands_rx,
+                CueEvents::new(ItemId(7), events_tx),
+            )),
+        };
+
+        Track {
+            source,
+            chunks,
+            commands,
+            clock,
+            events,
+        }
+    }
+
+    impl Track {
+        fn chunk(&self, pass: u64, frames: usize) {
+            self.chunks
+                .send(Chunk {
+                    pass,
+                    samples: vec![0.5; frames * 2],
+                })
+                .unwrap();
+        }
+
+        fn cue(&self, cue_id: u64, millis: u64) {
+            self.commands
+                .send(AddCue {
+                    cue_id,
+                    time: Duration::from_millis(millis),
+                })
+                .unwrap();
+        }
+
+        /// Play `frames` frames, returning the cues fired along the way.
+        fn play(&mut self, frames: usize) -> Vec<u64> {
+            for _ in 0..frames * 2 {
+                self.source.next();
+            }
+            self.fired()
+        }
+
+        fn fired(&mut self) -> Vec<u64> {
+            let mut fired = Vec::new();
+            while let Ok(event) = self.events.try_recv() {
+                match event {
+                    Event::Cue { id, cue_id } => {
+                        assert_eq!(id, ItemId(7));
+                        fired.push(cue_id);
+                    }
+                    _ => panic!("unexpected event"),
+                }
+            }
+            fired
+        }
+    }
+
+    #[test]
+    fn a_cue_fires_on_the_frame_it_names_not_the_chunk() {
+        let mut track = track();
+        track.cue(1, 250);
+        track.chunk(0, 1000);
+
+        assert_eq!(track.play(250), Vec::<u64>::new());
+        assert_eq!(track.play(1), vec![1]);
+    }
+
+    #[test]
+    fn padding_silence_does_not_count_towards_a_cue() {
+        let mut track = track();
+        track.cue(1, 150);
+        track.chunk(0, 100);
+
+        assert_eq!(track.play(100), Vec::<u64>::new());
+
+        // The decoder falls behind: play a whole second of padding.
+        assert_eq!(track.play(1000), Vec::<u64>::new());
+
+        track.chunk(0, 100);
+        assert_eq!(track.play(50), Vec::<u64>::new());
+        assert_eq!(track.play(1), vec![1]);
+    }
+
+    #[test]
+    fn cues_restart_with_each_pass() {
+        let mut track = track();
+        track.cue(1, 50);
+        track.cue(2, 5000);
+        track.chunk(0, 100);
+        track.chunk(1, 100);
+
+        assert_eq!(track.play(51), vec![1]);
+        // Crossing into the next pass fires the cue past the end, then the early one again.
+        assert_eq!(track.play(100), vec![2, 1]);
+    }
+
+    #[test]
+    fn the_end_of_the_track_fires_what_is_left() {
+        let mut track = track();
+        track.cue(1, 5000);
+        track.chunk(0, 10);
+
+        assert_eq!(track.play(10), Vec::<u64>::new());
+        // Drop the decode side, as the decode thread does once a track that isn't looping ends.
+        drop(std::mem::replace(
+            &mut track.chunks,
+            mpsc::sync_channel(1).0,
+        ));
+        assert_eq!(track.source.next(), None);
+        assert_eq!(track.fired(), vec![1]);
+    }
+
+    #[test]
+    fn padding_silence_does_not_move_the_clock() {
+        let mut track = track();
+        track.chunk(0, 100);
+
+        track.play(100);
+        assert_eq!(track.clock.position(), Duration::from_millis(100));
+
+        // A whole second of padding while the decoder catches up: a clock that counted it would
+        // now be a second ahead of the audio actually heard.
+        track.play(1000);
+        assert_eq!(track.clock.position(), Duration::from_millis(100));
+
+        track.chunk(0, 100);
+        track.play(40);
+        assert_eq!(track.clock.position(), Duration::from_millis(140));
+    }
+
+    #[test]
+    fn the_clock_carries_on_through_a_loop() {
+        let mut track = track();
+        track.chunk(0, 100);
+        track.chunk(1, 100);
+
+        track.play(150);
+        assert_eq!(track.clock.position(), Duration::from_millis(150));
     }
 }
