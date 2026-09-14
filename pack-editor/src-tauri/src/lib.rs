@@ -3,6 +3,7 @@ mod editor_db;
 mod encode;
 mod history;
 mod import;
+mod keep_awake;
 mod media_server;
 mod pack;
 mod thumbnail;

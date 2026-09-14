@@ -82,6 +82,7 @@ pub async fn run_import(
     // See encode::process_files: lifecycle operations drain this whole batch, not just one
     // file's final commit, before replacing or deleting the pack working directory.
     let _batch_guard = upload_lock.read().await;
+    let _awake = crate::keep_awake::acquire("Importing an Edgeware pack").await;
     let (dir, pack_id) = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {

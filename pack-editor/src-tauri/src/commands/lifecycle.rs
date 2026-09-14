@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, State};
 use super::recents::{forget_draft, remember_draft, remember_pack};
 use super::MetadataDto;
 use crate::pack::MediaPack;
-use crate::{history, import, AppState};
+use crate::{history, import, keep_awake, AppState};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PackInfo {
@@ -266,6 +266,7 @@ pub async fn save_pack(
         app.emit("picker:save-destination-selected", ())
             .map_err(|e| e.to_string())?;
         let _uploads = state.upload_lock.write().await;
+        let _awake = keep_awake::acquire("Saving a pack").await;
         let pack = state
             .pack
             .lock()
@@ -312,6 +313,7 @@ pub async fn save_pack(
 
     let pack = state.pack.lock().await.as_ref().cloned();
     if let Some(pack) = pack {
+        let _awake = keep_awake::acquire("Saving a pack").await;
         let progress_app = app.clone();
         let fallback_app = app.clone();
         pack.save_with_in_place_notification(
@@ -371,6 +373,7 @@ pub async fn save_pack_as_dialog(
     let _uploads = state.upload_lock.write().await;
     let pack = state.pack.lock().await.as_ref().cloned();
     if let Some(pack) = pack {
+        let _awake = keep_awake::acquire("Saving a pack").await;
         let was_untitled = pack.path().is_none();
         let draft_id = was_untitled.then(|| pack.id());
         let app_cb = app.clone();

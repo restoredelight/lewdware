@@ -192,6 +192,7 @@ pub async fn process_files(
     // for the complete batch gives those operations a reliable way to cancel and drain imports,
     // including their pending history entry, rather than merely waiting for the final DB commit.
     let _batch_guard = upload_lock.read().await;
+    let _awake = crate::keep_awake::acquire("Importing media into a pack").await;
     let total = paths.len();
     let _ = app.emit("upload:start", serde_json::json!({ "total": total }));
 
@@ -331,6 +332,7 @@ pub async fn process_file_into_slot(
     label: String,
 ) -> anyhow::Result<(AddOutcome, Option<u64>)> {
     let _batch_guard = upload_lock.read().await;
+    let _awake = crate::keep_awake::acquire("Importing media into a pack").await;
     let (dir, pack_id) = {
         let lock = pack_state.lock().await;
         let pack = lock.as_ref().context("No pack is open")?;
