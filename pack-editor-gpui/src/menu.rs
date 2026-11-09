@@ -8,7 +8,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, ElementId, SharedString, Window};
 
 use crate::theme::{self, c};
-use crate::ui::{Button, Size, Variant};
+use gpui_kit::assets::IconName;
+
+use crate::ui::{Button, IconButton, Size, Variant};
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
@@ -65,6 +67,9 @@ impl MenuEntry {
 pub struct Menu {
     id: ElementId,
     label: SharedString,
+    icon: Option<IconName>,
+    /// The trigger is just the icon, with the label as its tooltip.
+    icon_only: bool,
     variant: Variant,
     disabled: bool,
     entries: Vec<MenuEntry>,
@@ -75,6 +80,8 @@ impl Menu {
         Self {
             id: id.into(),
             label: label.into(),
+            icon: None,
+            icon_only: false,
             variant: Variant::Quiet,
             disabled: false,
             entries: Vec::new(),
@@ -91,6 +98,19 @@ impl Menu {
         self
     }
 
+    /// An icon before the trigger's label.
+    pub fn icon(mut self, icon: IconName) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// The trigger is `icon` alone, named by the label in a tooltip.
+    pub fn icon_only(mut self, icon: IconName) -> Self {
+        self.icon = Some(icon);
+        self.icon_only = true;
+        self
+    }
+
     pub fn entry(mut self, entry: MenuEntry) -> Self {
         self.entries.push(entry);
         self
@@ -102,16 +122,30 @@ impl RenderOnce for Menu {
         let open_state = window.use_keyed_state(self.id.clone(), cx, |_, _| false);
         let open = *open_state.read(cx) && !self.disabled;
         let toggle = open_state.clone();
-        let trigger = Button::new("trigger", self.label)
-            .variant(self.variant)
-            .size(Size::Compact)
-            .disabled(self.disabled)
-            .on_click(move |_, _, cx| {
-                toggle.update(cx, |open, cx| {
-                    *open = !*open;
-                    cx.notify();
-                })
-            });
+        let on_toggle = move |_: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut App| {
+            toggle.update(cx, |open, cx| {
+                *open = !*open;
+                cx.notify();
+            })
+        };
+        let trigger = match self.icon {
+            Some(icon) if self.icon_only => IconButton::new("trigger", icon, self.label)
+                .disabled(self.disabled)
+                .on_click(on_toggle)
+                .into_any_element(),
+            icon => {
+                let button = Button::new("trigger", self.label)
+                    .variant(self.variant)
+                    .size(Size::Compact)
+                    .disabled(self.disabled)
+                    .on_click(on_toggle);
+                match icon {
+                    Some(icon) => button.icon(icon),
+                    None => button,
+                }
+                .into_any_element()
+            }
+        };
 
         let menu = open.then(|| {
             let close = open_state.clone();

@@ -15,6 +15,7 @@
 #   wait SECONDS        sleep
 #   recents             print the recent-packs list as it is on disk now
 #   metrics             print RSS, GPU memory and active preview/decode threads
+#   cursor              print the pointer image's size and hotspot (tells arrow from hand)
 #
 # The window fills the 1200x800 virtual screen, so window and screen coordinates are the same.
 #
@@ -176,6 +177,11 @@ while [[ $# -gt 0 ]]; do
             sleep 0.5; shift 3 ;;
         type) xdotool type --delay 30 "$1"; sleep 0.5; shift ;;
         wait) sleep "$1"; shift ;;
+        cursor)
+            python3 -I -c 'from Xlib import display
+d = display.Display(); d.xfixes_query_version()
+i = d.xfixes_get_cursor_image(d.screen().root)
+print("cursor %dx%d hot %d,%d sum %d" % (i.width, i.height, i.xhot, i.yhot, sum(i.cursor_image) % 100000))' ;;
         recents) cat "$tmp/data/Lewdware Pack Editor/recent-packs.json" 2>/dev/null || echo "(none)"; echo ;;
         metrics)
             python3 - "$app_pid" <<'PY'

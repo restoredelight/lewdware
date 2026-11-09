@@ -107,7 +107,8 @@ impl Viewer {
             .current()
             .and_then(|id| self.editor.read(cx).session().media().get(id).cloned())
         else {
-            self.preview.update(cx, |preview, cx| preview.clear(window, cx));
+            self.preview
+                .update(cx, |preview, cx| preview.clear(window, cx));
             return;
         };
         self.preview
@@ -247,7 +248,9 @@ impl Render for Viewer {
                                         .text_color(c(theme::MUTED))
                                         .cursor_pointer()
                                         .hover(|style| {
-                                            style.bg(c(theme::SURFACE_RAISED)).text_color(c(theme::TEXT))
+                                            style
+                                                .bg(c(theme::SURFACE_RAISED))
+                                                .text_color(c(theme::TEXT))
                                         })
                                         .child(gpui_kit::assets::IconName::Close)
                                         .on_click(move |_, _, cx| {

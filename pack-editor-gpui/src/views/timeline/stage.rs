@@ -137,6 +137,7 @@ impl TimelineView {
             )
             .child(
                 action("move-up", "Move up")
+                    .icon(gpui_kit::assets::IconName::ArrowUp)
                     .disabled(index == 0)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.move_stage(up.clone(), index.saturating_sub(1), window, cx)
@@ -144,16 +145,22 @@ impl TimelineView {
             )
             .child(
                 action("move-down", "Move down")
+                    .icon(gpui_kit::assets::IconName::ArrowDown)
                     .disabled(index + 1 == count)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.move_stage(down.clone(), index + 1, window, cx)
                     })),
             )
-            .child(action("duplicate", "Duplicate").on_click(cx.listener(
-                move |this, _, window, cx| this.duplicate_stage(copy.clone(), window, cx),
-            )))
+            .child(
+                action("duplicate", "Duplicate")
+                    .icon(gpui_kit::assets::IconName::Copy)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.duplicate_stage(copy.clone(), window, cx)
+                    })),
+            )
             .child(
                 Button::new(SharedString::from(format!("{id}-remove")), "Remove")
+                    .icon(gpui_kit::assets::IconName::Trash)
                     .variant(Variant::Destructive)
                     .size(Size::Compact)
                     .disabled(count == 1)

@@ -111,21 +111,29 @@ impl MediaBrowser {
         let inspector = cx.new(|cx| Inspector::new(tab, editor.clone(), window, cx));
 
         let mut subscriptions = vec![
-            cx.subscribe_in(&editor, window, |this, _, event: &EditorEvent, window, cx| {
-                let EditorEvent::Changed(changes) = event;
-                if changes
-                    .scopes
-                    .intersects(Scope::Media | Scope::Tags | Scope::Artists)
-                {
-                    this.refresh(window, cx);
-                }
-            }),
-            cx.subscribe_in(&search, window, |this, input, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.filter.query = input.read(cx).value().to_string();
-                    this.refresh(window, cx);
-                }
-            }),
+            cx.subscribe_in(
+                &editor,
+                window,
+                |this, _, event: &EditorEvent, window, cx| {
+                    let EditorEvent::Changed(changes) = event;
+                    if changes
+                        .scopes
+                        .intersects(Scope::Media | Scope::Tags | Scope::Artists)
+                    {
+                        this.refresh(window, cx);
+                    }
+                },
+            ),
+            cx.subscribe_in(
+                &search,
+                window,
+                |this, input, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        this.filter.query = input.read(cx).value().to_string();
+                        this.refresh(window, cx);
+                    }
+                },
+            ),
             cx.subscribe_in(
                 &inspector,
                 window,
@@ -200,7 +208,12 @@ impl MediaBrowser {
         cx.notify();
     }
 
-    fn set_filter(&mut self, change: impl FnOnce(&mut MediaFilter), window: &mut Window, cx: &mut Context<Self>) {
+    fn set_filter(
+        &mut self,
+        change: impl FnOnce(&mut MediaFilter),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         change(&mut self.filter);
         self.refresh(window, cx);
     }
@@ -355,7 +368,11 @@ impl MediaBrowser {
         cx.notify();
     }
 
-    fn removal_dialog(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn removal_dialog(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
         let removal = self.removing.as_ref()?;
         let count = removal.ids.len();
         let name = (count == 1)
@@ -367,7 +384,10 @@ impl MediaBrowser {
             None => format!("These {count} media items will be removed from this pack."),
         };
         if !removal.clears.is_empty() {
-            description.push_str(&format!(" This also clears {}.", list_words(&removal.clears)));
+            description.push_str(&format!(
+                " This also clears {}.",
+                list_words(&removal.clears)
+            ));
         }
         description.push_str(if count == 1 {
             " The original file on your computer will not be deleted."
@@ -419,8 +439,7 @@ impl MediaBrowser {
             return;
         }
         let editor = self.editor.clone();
-        let viewer =
-            cx.new(|cx| Viewer::new(editor, ids, id, walking_selection, window, cx));
+        let viewer = cx.new(|cx| Viewer::new(editor, ids, id, walking_selection, window, cx));
         let subscription = cx.subscribe_in(
             &viewer,
             window,
@@ -451,36 +470,6 @@ impl MediaBrowser {
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────────────────────
-
-    fn header(&self) -> impl IntoElement {
-        let (title, lede) = match self.tab {
-            MediaTab::Popups => (
-                "Popups",
-                "The images and videos the built-in modes spawn as popups.",
-            ),
-            MediaTab::Audio => (
-                "Audio",
-                "The built-in modes (Sandbox and Sequence) play background audio for the session \
-                 and popup audio when a popup appears, one sound at a time. Custom modes can \
-                 query the same files and tags, but choose their own playback.",
-            ),
-            MediaTab::AllMedia => (
-                "All media",
-                "Everything in the pack, including wallpapers, splashes and subliminals. Custom \
-                 modes can draw from all of it.",
-            ),
-        };
-        div()
-            .flex_none()
-            .px_4()
-            .pt_4()
-            .pb_3()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(ui::page_title(title))
-            .child(ui::hint(lede))
-    }
 
     fn filter_menu(&self, menu: Menu, cx: &mut Context<Self>) -> impl IntoElement {
         let (label, selected, kind) = match menu {
@@ -516,10 +505,16 @@ impl MediaBrowser {
             .cursor_pointer()
             .hover(|style| style.bg(c(theme::SURFACE_RAISED)))
             .child(label)
-            .when(count > 0, |this| this.child(ui::readout(count.to_string()).text_color(c(theme::TEXT))))
+            .when(count > 0, |this| {
+                this.child(ui::readout(count.to_string()).text_color(c(theme::TEXT)))
+            })
             .on_click(move |_, _, cx| {
                 toggle.update(cx, |this, cx| {
-                    this.menu = if this.menu == Some(menu) { None } else { Some(menu) };
+                    this.menu = if this.menu == Some(menu) {
+                        None
+                    } else {
+                        Some(menu)
+                    };
                     cx.notify();
                 })
             });
@@ -554,12 +549,10 @@ impl MediaBrowser {
                         })
                     })
                     .when(names.is_empty(), |this| {
-                        this.child(
-                            div().px_2().py(px(6.)).child(ui::hint(match menu {
-                                Menu::Tags => "No tags yet.",
-                                Menu::Artists => "No artists yet.",
-                            })),
-                        )
+                        this.child(div().px_2().py(px(6.)).child(ui::hint(match menu {
+                            Menu::Tags => "No tags yet.",
+                            Menu::Artists => "No artists yet.",
+                        })))
                     })
                     .children(names.into_iter().enumerate().map(move |(index, name)| {
                         let checked = selected.contains(&name);
@@ -616,7 +609,9 @@ impl MediaBrowser {
                 ],
             )
             .on_change(move |role, window, cx| {
-                entity.update(cx, |this, cx| this.set_filter(|f| f.role = role, window, cx))
+                entity.update(cx, |this, cx| {
+                    this.set_filter(|f| f.role = role, window, cx)
+                })
             })
             .into_any_element()
         } else {
@@ -631,7 +626,9 @@ impl MediaBrowser {
             }
             Select::new("kind-filter", self.filter.kind, options)
                 .on_change(move |kind, window, cx| {
-                    entity.update(cx, |this, cx| this.set_filter(|f| f.kind = kind, window, cx))
+                    entity.update(cx, |this, cx| {
+                        this.set_filter(|f| f.kind = kind, window, cx)
+                    })
                 })
                 .into_any_element()
         };
@@ -722,6 +719,9 @@ impl MediaBrowser {
             })
             .child(div().flex_1())
             .child(ui::readout(count))
+            .child(crate::shell::import_menu(
+                self.editor.read(cx).saving.is_some(),
+            ))
     }
 
     fn empty(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -745,7 +745,7 @@ impl MediaBrowser {
             .child(ui::hint(if filtered {
                 "Nothing matches the current search, type, tag or artist filters."
             } else {
-                "Importing media isn't ported to this editor yet."
+                "Import files or a folder, or drop them onto the window."
             }))
             .when(filtered, |this| {
                 this.child(
@@ -796,8 +796,15 @@ impl MediaBrowser {
                                 _ => thumbs.want(file.id),
                             };
                             let missing = thumbs.is_missing(file.id);
-                            tile(file, thumbnail, missing, &selection, focused, browser.clone())
-                                .into_any_element()
+                            tile(
+                                file,
+                                thumbnail,
+                                missing,
+                                &selection,
+                                focused,
+                                browser.clone(),
+                            )
+                            .into_any_element()
                         }))
                 })
                 .collect()
@@ -858,8 +865,14 @@ impl MediaBrowser {
             range
                 .filter_map(|index| media.get(list[index]))
                 .map(|file| {
-                    audio_row(file, &selection, focused, browser.clone(), editor_entity.clone())
-                        .into_any_element()
+                    audio_row(
+                        file,
+                        &selection,
+                        focused,
+                        browser.clone(),
+                        editor_entity.clone(),
+                    )
+                    .into_any_element()
                 })
                 .collect()
         })
@@ -1058,7 +1071,9 @@ fn audio_row(
         .border_b_1()
         .border_color(c(theme::BORDER))
         .when(selected, |this| this.bg(c(theme::SURFACE_RAISED)))
-        .when(!selected, |this| this.hover(|style| style.bg(c(theme::SURFACE))))
+        .when(!selected, |this| {
+            this.hover(|style| style.bg(c(theme::SURFACE)))
+        })
         .child(
             // The selection edge, or the focus ring's left side on the active row.
             div()
@@ -1084,7 +1099,10 @@ fn audio_row(
                         .text_size(px(12.5))
                         .child(file.file_name.clone()),
                 )
-                .child(ui::readout(format!("{duration} - {}", format_size(file.size)))),
+                .child(ui::readout(format!(
+                    "{duration} - {}",
+                    format_size(file.size)
+                ))),
         )
         .child(
             div()
@@ -1127,7 +1145,6 @@ impl Render for MediaBrowser {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.header())
             .child(self.toolbar(cx))
             .child(
                 div()

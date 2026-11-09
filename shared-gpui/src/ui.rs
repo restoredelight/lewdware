@@ -2,9 +2,12 @@
 //! `shared-ui/*.svelte`. gpui-component is still used for the heavier widgets (inputs, selects,
 //! scrolling); these are the pieces whose look is specific enough to be worth owning.
 
+use gpui_kit::assets::IconName;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, App, ClickEvent, ElementId, FontWeight, SharedString, Window};
 
+use crate::icons::icon;
 use crate::theme::{self, c};
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
@@ -33,6 +36,7 @@ pub enum Size {
 pub struct Button {
     id: ElementId,
     label: SharedString,
+    icon: Option<IconName>,
     variant: Variant,
     size: Size,
     disabled: bool,
@@ -46,6 +50,7 @@ impl Button {
         Self {
             id: id.into(),
             label: label.into(),
+            icon: None,
             variant: Variant::Secondary,
             size: Size::Normal,
             disabled: false,
@@ -57,6 +62,12 @@ impl Button {
 
     pub fn variant(mut self, variant: Variant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    /// An icon before the label.
+    pub fn icon(mut self, icon: IconName) -> Self {
+        self.icon = Some(icon);
         self
     }
 
@@ -128,6 +139,7 @@ impl RenderOnce for Button {
             .flex()
             .items_center()
             .justify_center()
+            .gap(px(6.))
             .px_3()
             .h(match self.size {
                 Size::Compact => theme::CONTROL_COMPACT,
@@ -141,6 +153,7 @@ impl RenderOnce for Button {
             .text_color(fg)
             .text_size(px(12.))
             .font_weight(FontWeight::SEMIBOLD)
+            .children(self.icon.map(|name| icon(name).size(px(14.))))
             .child(self.label)
             .when(self.disabled, |this| this.opacity(0.45))
             .when(self.loading, |this| this.opacity(0.7))
@@ -154,12 +167,79 @@ impl RenderOnce for Button {
     }
 }
 
-/// One entry in the vertical settings nav (`shared-ui/Tabs.svelte`, vertical). Active is the
-/// raised surface plus a 2px carmine edge with the text left white: the edge carries the accent.
+/// A square, borderless button holding one icon, named by a tooltip (the Svelte `IconButton`).
+/// Muted until hovered, like a quiet button.
+#[derive(IntoElement)]
+pub struct IconButton {
+    id: ElementId,
+    icon: IconName,
+    tooltip: SharedString,
+    disabled: bool,
+    on_click: Option<ClickHandler>,
+}
+
+impl IconButton {
+    pub fn new(id: impl Into<ElementId>, icon: IconName, tooltip: impl Into<SharedString>) -> Self {
+        Self {
+            id: id.into(),
+            icon,
+            tooltip: tooltip.into(),
+            disabled: false,
+            on_click: None,
+        }
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn on_click(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Box::new(handler));
+        self
+    }
+}
+
+impl RenderOnce for IconButton {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let tooltip = self.tooltip;
+        div()
+            .id(self.id)
+            .flex_none()
+            .size(theme::CONTROL_COMPACT)
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(theme::RADIUS_MD)
+            .text_color(c(theme::MUTED))
+            .child(icon(self.icon).size(px(16.)))
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .when(self.disabled, |this| this.opacity(0.45))
+            .when(!self.disabled, |this| {
+                this.cursor_pointer()
+                    .hover(|style| {
+                        style
+                            .bg(c(theme::SURFACE_RAISED))
+                            .text_color(c(theme::TEXT))
+                    })
+                    .when_some(self.on_click, |this, handler| {
+                        this.on_click(move |event, window, cx| handler(event, window, cx))
+                    })
+            })
+    }
+}
+
+/// One entry in a vertical nav. Active is a raised, filled row with white text; the rest are
+/// muted until hovered. (The 2px carmine edge was dropped from the nav in November 2026; see
+/// `shared-ui/DESIGN.md`.)
 #[derive(IntoElement)]
 pub struct NavItem {
     id: ElementId,
     label: SharedString,
+    icon: Option<IconName>,
     active: bool,
     on_click: Option<ClickHandler>,
 }
@@ -169,9 +249,15 @@ impl NavItem {
         Self {
             id: id.into(),
             label: label.into(),
+            icon: None,
             active,
             on_click: None,
         }
+    }
+
+    pub fn icon(mut self, icon: IconName) -> Self {
+        self.icon = Some(icon);
+        self
     }
 
     pub fn on_click(
@@ -188,26 +274,25 @@ impl RenderOnce for NavItem {
         div()
             .id(self.id)
             .w_full()
-            .px_3()
-            .py_2()
-            .rounded(theme::RADIUS_SM)
-            .border_l_2()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .px_2()
+            .py(px(7.))
+            .rounded(theme::RADIUS_MD)
             .text_size(px(12.))
             .font_weight(FontWeight::SEMIBOLD)
-            .truncate()
             .cursor_pointer()
             .map(|this| {
                 if self.active {
-                    this.bg(c(theme::SURFACE_RAISED))
-                        .border_color(c(theme::ACCENT_HOVER))
-                        .text_color(c(theme::TEXT))
+                    this.bg(c(theme::SURFACE_RAISED)).text_color(c(theme::TEXT))
                 } else {
-                    this.border_color(gpui_kit::transparent_black())
-                        .text_color(c(theme::MUTED))
+                    this.text_color(c(theme::MUTED))
                         .hover(|style| style.text_color(c(theme::TEXT)))
                 }
             })
-            .child(self.label)
+            .children(self.icon.map(|name| icon(name).size(px(15.))))
+            .child(div().min_w_0().truncate().child(self.label))
             .when_some(self.on_click, |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })
@@ -275,6 +360,25 @@ pub fn seam() -> gpui_kit::Div {
 }
 
 /// The standard page frame: a scrolling column with a title and lede, capped at 896px wide.
+/// A scrolling page of sections with no title over them: the pack editor's tabs, whose names
+/// the sidebar already shows.
+pub fn page_body(
+    id: &'static str,
+    sections: impl IntoIterator<Item = gpui_kit::AnyElement>,
+) -> impl IntoElement {
+    div().id(id).flex_1().min_h_0().overflow_y_scroll().child(
+        div()
+            .mx_auto()
+            .w_full()
+            .max_w(px(896.))
+            .p_8()
+            .flex()
+            .flex_col()
+            .gap_6()
+            .children(sections),
+    )
+}
+
 pub fn page(
     id: &'static str,
     title: &'static str,
@@ -659,10 +763,10 @@ pub fn checkbox(checked: bool) -> gpui_kit::Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(11.))
-        .font_weight(FontWeight::BOLD)
         .text_color(c(theme::TEXT))
-        .when(checked, |this| this.child("✓"))
+        .when(checked, |this| {
+            this.child(icon(IconName::Check).size(px(12.)))
+        })
 }
 
 pub struct DialogAction {

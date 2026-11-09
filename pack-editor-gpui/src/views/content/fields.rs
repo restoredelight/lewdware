@@ -8,6 +8,7 @@
 //! A tag field is the same input with suggestions under it: Enter adds the highlighted tag (or
 //! creates the typed one) and stays open for the next; leaving it adds nothing.
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::prelude::*;
 use gpui_kit::Focusable as _;
@@ -429,11 +430,14 @@ impl ContentView {
             .editing
             .as_ref()
             .filter(|editing| editing.field == field);
+        // The display matches the input's own padding (gpui-component pads a single-line input
+        // 10px across, a textarea 10px across and 8px down, even without its frame), so the text
+        // doesn't move when the field opens for editing.
         let shell = div()
             .id(field.element_id())
             .w_full()
             .min_h(min_height)
-            .px_2()
+            .px(INPUT_PX)
             .flex()
             .gap_2()
             .rounded(theme::RADIUS_SM)
@@ -441,7 +445,7 @@ impl ContentView {
             .bg(c(theme::BG))
             .text_size(px(12.))
             .when(!multiline, |this| this.items_center())
-            .when(multiline, |this| this.items_start().py(px(5.)));
+            .when(multiline, |this| this.items_start().py(px(8.)));
         let suffix = suffix.map(ui_suffix);
         match editing {
             Some(editing) => {
@@ -461,8 +465,9 @@ impl ContentView {
                 };
                 shell
                     .border_color(c(theme::FOCUS))
-                    // The textarea brings its own padding.
+                    // The input brings its own padding; a suffix keeps the right edge's.
                     .when(multiline, |this| this.p_0())
+                    .when(!multiline, |this| this.pl_0())
                     .capture_key_down(move |event, window, cx| {
                         if event.keystroke.key == "escape" {
                             cx.stop_propagation();
@@ -487,7 +492,8 @@ impl ContentView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .when(!multiline, |this| this.truncate())
+                            // The input's right padding, so a suffix stays put too.
+                            .when(!multiline, |this| this.pr(INPUT_PX).truncate())
                             .text_color(c(if empty { theme::MUTED } else { theme::TEXT }))
                             .child(SharedString::from(if empty {
                                 placeholder.to_string()
@@ -683,15 +689,17 @@ impl ContentView {
                     .rounded(theme::RADIUS_SM)
                     .border_1()
                     .border_color(gpui_kit::transparent_black())
+                    .gap_1()
                     .text_size(px(12.))
                     .text_color(c(theme::MUTED))
-                    .cursor_text()
+                    .cursor_pointer()
                     .hover(|style| {
                         style
                             .border_color(c(theme::BORDER_STRONG))
                             .text_color(c(theme::TEXT))
                     })
-                    .child("Add tag...")
+                    .child(crate::icons::icon(IconName::Plus).size(px(12.)))
+                    .child("Add tag")
                     .on_click(move |_, window, cx| {
                         let field = field.clone();
                         entity.update(cx, |this, cx| this.start_editing(field, window, cx));
@@ -711,6 +719,10 @@ impl ContentView {
             .into_any_element()
     }
 }
+
+/// gpui-component's horizontal padding inside an input (its default size), which the display
+/// state of a field copies.
+const INPUT_PX: gpui_kit::Pixels = px(10.);
 
 /// A unit drawn inside a field's right edge, in the readout face.
 fn ui_suffix(suffix: &'static str) -> impl IntoElement {

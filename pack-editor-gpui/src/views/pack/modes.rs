@@ -381,6 +381,7 @@ impl Render for ModesView {
                             .child(ui::section_title("Custom modes"))
                             .child(
                                 Button::new("add-mode", "Add mode...")
+                                    .icon(gpui_kit::assets::IconName::Plus)
                                     .variant(Variant::Secondary)
                                     .size(Size::Compact)
                                     .loading(self.adding)
@@ -399,12 +400,7 @@ impl Render for ModesView {
             .min_h_0()
             .flex()
             .flex_col()
-            .child(ui::page(
-                "modes-page",
-                "Modes",
-                "Bundle a Lua mode with this pack, and choose which mode the pack starts in.",
-                sections,
-            ))
+            .child(ui::page_body("modes-page", sections))
             .children(dialog)
     }
 }

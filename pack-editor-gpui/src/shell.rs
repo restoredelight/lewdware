@@ -1,4 +1,4 @@
-//! The open pack's window: toolbar (name, save state, import, undo/redo, save, the pack menu),
+//! The open pack's window: toolbar (editable name, save state, undo/redo, save, the pack menu),
 //! the sidebar's views, the active view, and what's drawn over them -- the import window, the
 //! "drop to import" overlay and the Edgeware import warnings. Ported from
 //! `pack-editor/src/lib/Editor.svelte` and `EditorToolbar.svelte`.
@@ -8,19 +8,23 @@
 
 use std::collections::HashMap;
 
+use gpui_kit::assets::IconName;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, px, AnyView, App, Context, Entity, ExternalPaths, FocusHandle, FontWeight, Global,
-    SharedString, Subscription, WeakEntity, Window,
+    div, px, AnyView, App, Context, Entity, ExternalPaths, FocusHandle, Focusable, FontWeight,
+    Global, KeyDownEvent, SharedString, Subscription, WeakEntity, Window,
 };
 use pack_editor_core::changes::{Scope, Scopes};
+use pack_editor_core::pack::ops::lifecycle::MetadataField;
 
 use crate::app::{ClosePack, DiscardChanges, ImportFiles, ImportFolder, Redo, Save, SaveAs, Undo};
-use crate::editor::{Editor, EditorEvent};
+use crate::editor::{CommitPending, Editor, EditorEvent};
 use crate::imports::{self, ImportWindow};
 use crate::menu::{Menu, MenuEntry};
 use crate::theme::{self, c};
-use crate::ui::{self, Button, NavItem, Size, Variant};
+use crate::ui::{self, Button, IconButton, NavItem, Size, Variant};
 use crate::views;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -65,12 +69,52 @@ impl View {
     }
 }
 
+impl View {
+    fn icon(self) -> IconName {
+        match self {
+            View::Popups => IconName::Image,
+            View::Audio => IconName::Music,
+            View::AllMedia => IconName::LayoutGrid,
+            View::Tags => IconName::Tag,
+            View::Artists => IconName::Brush,
+            View::Content => IconName::FileText,
+            View::Timeline => IconName::Clock,
+            View::Modes => IconName::CodeXml,
+            View::Metadata => IconName::Settings,
+        }
+    }
+}
+
+/// Grouped by who reads them: the built-in modes (Sandbox and Sequence) use the popup and audio
+/// media, the content and the timeline; custom modes draw from all the media and are bundled in
+/// Modes; tags, artists and metadata belong to the pack whichever mode runs it.
 const GROUPS: &[(&str, &[View])] = &[
-    ("Media", &[View::Popups, View::Audio, View::AllMedia]),
-    ("Organization", &[View::Tags, View::Artists]),
-    ("Behaviour", &[View::Content, View::Timeline]),
-    ("Pack", &[View::Modes, View::Metadata]),
+    (
+        "Built-in modes",
+        &[View::Popups, View::Audio, View::Content, View::Timeline],
+    ),
+    ("Custom modes", &[View::AllMedia, View::Modes]),
+    ("Pack", &[View::Tags, View::Artists, View::Metadata]),
 ];
+
+/// The "Import" menu, in the media tabs' toolbars.
+pub fn import_menu(disabled: bool) -> Menu {
+    let dispatch = |action: Box<dyn gpui_kit::Action>| {
+        move |window: &mut Window, cx: &mut App| window.dispatch_action(action.boxed_clone(), cx)
+    };
+    Menu::new("import-menu", "Import")
+        .variant(Variant::Secondary)
+        .icon(IconName::Upload)
+        .disabled(disabled)
+        .entry(MenuEntry::item(
+            "Add files...",
+            dispatch(Box::new(ImportFiles)),
+        ))
+        .entry(MenuEntry::item(
+            "Add folder...",
+            dispatch(Box::new(ImportFolder)),
+        ))
+}
 
 /// The open pack's shell, so a view can switch to another (the Tags view's "Media" menu, the
 /// inspector's "Used as"). Set when a shell is made.
@@ -107,13 +151,27 @@ pub struct Shell {
     /// The Edgeware warnings dialog takes focus once, when it first appears, so Escape closes it.
     warnings_focus: FocusHandle,
     warnings_focused: bool,
-    _changes: Subscription,
+    /// The pack's name, editable in place at the toolbar's left. It follows the pack while it
+    /// isn't focused (see `render`), and commits on Enter, blur, or `CommitPending`.
+    title: Entity<InputState>,
+    _title_events: Subscription,
+    _changes: [Subscription; 2],
 }
 
 impl Shell {
-    pub fn new(editor: Entity<Editor>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let _changes = Self::subscribe(&editor, cx);
         cx.set_global(CurrentShell(cx.weak_entity()));
+        let name = editor.read(cx).pack().name();
+        let title = cx.new(|cx| InputState::new(window, cx).default_value(name));
+        let _title_events = cx.subscribe(&title, |this, _, event: &InputEvent, cx| {
+            match event {
+                InputEvent::PressEnter { .. } | InputEvent::Blur => this.commit_title(cx),
+                // The box grows with what's typed.
+                InputEvent::Change => cx.notify(),
+                _ => {}
+            }
+        });
         Self {
             editor,
             view: View::Popups,
@@ -121,7 +179,41 @@ impl Shell {
             import_window: ImportWindowState::default(),
             warnings_focus: cx.focus_handle(),
             warnings_focused: false,
+            title,
+            _title_events,
             _changes,
+        }
+    }
+
+    /// Writes the typed title as the pack's name. A blank or unchanged title writes nothing, and
+    /// the field takes the stored name back on the next render once it loses focus.
+    fn commit_title(&mut self, cx: &mut Context<Self>) {
+        let text = self.title.read(cx).value().trim().to_string();
+        if text.is_empty() || text == self.editor.read(cx).pack().name() {
+            return;
+        }
+        self.editor.update(cx, |editor, cx| {
+            editor.apply(cx, |session| {
+                session.set_metadata(MetadataField::Name(text))
+            });
+        });
+    }
+
+    fn title_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                let name = self.editor.read(cx).pack().name();
+                self.title
+                    .update(cx, |input, cx| input.set_value(name, window, cx));
+                window.blur(cx);
+            }
+            "enter" => window.blur(cx),
+            _ => {}
         }
     }
 
@@ -138,7 +230,8 @@ impl Shell {
 
     /// Switches to `view`, once the current one has committed the field being typed in.
     pub fn show(&mut self, view: View, cx: &mut Context<Self>) {
-        self.editor.update(cx, |editor, cx| editor.commit_pending(cx));
+        self.editor
+            .update(cx, |editor, cx| editor.commit_pending(cx));
         let shell = cx.weak_entity();
         cx.defer(move |cx| {
             let _ = shell.update(cx, |shell, cx| shell.switch_to(view, cx));
@@ -155,69 +248,76 @@ impl Shell {
         cx.notify();
     }
 
-    fn subscribe(editor: &Entity<Editor>, cx: &mut Context<Self>) -> Subscription {
-        cx.subscribe(editor, |this, _, event: &EditorEvent, cx| match event {
-            EditorEvent::Changed(changes) => {
-                if changes.scopes.intersects(this.view.scopes()) {
-                    cx.notify();
+    fn subscribe(editor: &Entity<Editor>, cx: &mut Context<Self>) -> [Subscription; 2] {
+        [
+            cx.subscribe(editor, |this, _, event: &EditorEvent, cx| match event {
+                EditorEvent::Changed(changes) => {
+                    // The toolbar shows the name.
+                    if changes
+                        .scopes
+                        .intersects(this.view.scopes() | Scope::Metadata)
+                    {
+                        cx.notify();
+                    }
                 }
-            }
-        })
+            }),
+            cx.subscribe(editor, |this, _, _: &CommitPending, cx| {
+                this.commit_title(cx)
+            }),
+        ]
     }
 
-    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.editor.read(cx);
         let history = editor.history().clone();
-        let name = editor.pack().name();
         let dirty = editor.is_dirty();
         let saving = editor.saving;
         let error = editor.error.clone();
         let untitled = editor.pack().is_untitled();
         let busy = saving.is_some();
 
-        let state: SharedString = match saving {
-            Some(progress) if progress.total > 0 => {
+        // A routine state is a bare muted dot, with the detail in its tooltip; only saving
+        // progress is spelled out (`shared-ui/DESIGN.md`, "Routine states are not warnings").
+        let progress: Option<SharedString> = saving.map(|progress| {
+            if progress.total > 0 {
                 format!("Saving {} of {}", progress.saved, progress.total).into()
+            } else {
+                "Saving...".into()
             }
-            Some(_) => "Saving...".into(),
-            None if untitled => "Draft, not saved yet".into(),
-            None if dirty => "Unsaved changes".into(),
-            None => "Saved".into(),
-        };
-        let action = |id: &'static str, label: &'static str, action: Box<dyn gpui_kit::Action>| {
-            Button::new(id, label)
-                .variant(Variant::Quiet)
-                .size(Size::Compact)
-                .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
-        };
-        let dispatch = |action: Box<dyn gpui_kit::Action>| {
-            move |window: &mut Window, cx: &mut gpui_kit::App| {
-                window.dispatch_action(action.boxed_clone(), cx)
-            }
+        });
+        let state: Option<SharedString> = if untitled {
+            Some("Draft, not saved yet: choose where to save it on first save".into())
+        } else if dirty {
+            Some("Unsaved changes".into())
+        } else {
+            None
         };
         let modifier = if cfg!(target_os = "macos") {
             "Cmd"
         } else {
             "Ctrl"
         };
+        let dispatch = |action: Box<dyn gpui_kit::Action>| {
+            move |window: &mut Window, cx: &mut gpui_kit::App| {
+                window.dispatch_action(action.boxed_clone(), cx)
+            }
+        };
+        let icon_action = |id: &'static str,
+                           icon: IconName,
+                           tooltip: String,
+                           action: Box<dyn gpui_kit::Action>| {
+            IconButton::new(id, icon, tooltip)
+                .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+        };
         let dismiss = self.editor.clone();
 
-        let import = Menu::new("import-menu", "Import")
-            .variant(Variant::Secondary)
-            .disabled(busy)
-            .entry(MenuEntry::item(
-                "Add files...",
-                dispatch(Box::new(ImportFiles)),
-            ))
-            .entry(MenuEntry::item(
-                "Add folder...",
-                dispatch(Box::new(ImportFolder)),
-            ));
-        let mut more = Menu::new("pack-menu", "More").entry(
-            MenuEntry::item("Save as...", dispatch(Box::new(SaveAs)))
-                .hint(format!("{modifier}+Shift+S"))
-                .disabled(busy),
-        );
+        let mut more = Menu::new("pack-menu", "More pack actions")
+            .icon_only(IconName::EllipsisVertical)
+            .entry(
+                MenuEntry::item("Save as...", dispatch(Box::new(SaveAs)))
+                    .hint(format!("{modifier}+Shift+S"))
+                    .disabled(busy),
+            );
         if dirty && !untitled {
             more = more.entry(
                 MenuEntry::item("Discard changes", dispatch(Box::new(DiscardChanges)))
@@ -231,35 +331,87 @@ impl Shell {
                 .disabled(busy),
         );
 
+        let title_focused = self.title.read(cx).focus_handle(cx).is_focused(window);
+        // The box hugs the name, so the save-state dot sits right after it.
+        let typed: SharedString = self.title.read(cx).value().to_string().into();
+        let font_size = px(14.);
+        let text_width = window
+            .text_system()
+            .shape_line(
+                typed.clone(),
+                font_size,
+                &[gpui_kit::TextRun {
+                    len: typed.len(),
+                    font: gpui_kit::Font {
+                        weight: FontWeight::SEMIBOLD,
+                        ..gpui_kit::font(theme::FONT_SANS)
+                    },
+                    color: c(theme::TEXT),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            )
+            .width;
+        // The input's 10px padding each side, the border, and room for the caret (more while
+        // typing, so the text never scrolls under the padding).
+        let slack = if title_focused { px(40.) } else { px(26.) };
+        let title_width = (text_width + slack).clamp(px(80.), px(420.));
+        let entity = cx.entity();
+        let title = div()
+            .id("pack-title")
+            .w(title_width)
+            .h(theme::CONTROL_COMPACT)
+            .flex()
+            .items_center()
+            .rounded(theme::RADIUS_MD)
+            .border_1()
+            .text_size(px(14.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .map(|this| {
+                if title_focused {
+                    this.border_color(c(theme::BORDER_STRONG)).bg(c(theme::BG))
+                } else {
+                    this.border_color(gpui_kit::transparent_black())
+                        .hover(|style| style.border_color(c(theme::BORDER)))
+                }
+            })
+            .tooltip(|window, cx| Tooltip::new("Edit pack title").build(window, cx))
+            .on_key_down(move |event, window, cx| {
+                entity.update(cx, |this, cx| this.title_key_down(event, window, cx))
+            })
+            .child(
+                Input::new(&self.title)
+                    .appearance(false)
+                    .text_size(px(14.))
+                    .flex_1(),
+            );
+
         div()
             .flex_none()
             .h(px(44.))
-            .px_3()
+            .pl_1()
+            .pr_3()
             .flex()
             .items_center()
             .gap_2()
             .border_b_1()
             .border_color(c(theme::BORDER))
             .bg(c(theme::SURFACE))
-            .child(
-                div()
-                    .min_w_0()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .truncate()
-                    .child(name),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .when(dirty || busy, |this| {
-                        this.child(div().size(px(6.)).rounded_full().bg(c(theme::MUTED)))
-                    })
-                    .child(ui::readout(state)),
-            )
+            .child(title)
+            .when(busy || state.is_some(), |this| {
+                let tooltip = progress.clone().or(state.clone()).unwrap_or_default();
+                this.child(
+                    div()
+                        .id("save-state")
+                        .flex_none()
+                        .p_1()
+                        .child(div().size(px(6.)).rounded_full().bg(c(theme::MUTED)))
+                        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)),
+                )
+            })
+            .children(progress.map(ui::readout))
             .children(error.map(|error| {
                 div()
                     .id("edit-error")
@@ -275,9 +427,29 @@ impl Shell {
                     })
             }))
             .child(div().flex_1())
-            .child(import)
-            .child(action("undo", "Undo", Box::new(Undo)).disabled(!history.can_undo || busy))
-            .child(action("redo", "Redo", Box::new(Redo)).disabled(!history.can_redo || busy))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        icon_action(
+                            "undo",
+                            IconName::Undo2,
+                            format!("Undo ({modifier}+Z)"),
+                            Box::new(Undo),
+                        )
+                        .disabled(!history.can_undo || busy),
+                    )
+                    .child(
+                        icon_action(
+                            "redo",
+                            IconName::Redo2,
+                            format!("Redo ({modifier}+Shift+Z)"),
+                            Box::new(Redo),
+                        )
+                        .disabled(!history.can_redo || busy),
+                    ),
+            )
             .child(
                 Button::new("save", "Save")
                     .variant(Variant::Primary)
@@ -297,8 +469,8 @@ impl Shell {
                 .gap(px(2.))
                 .child(
                     div()
-                        .px_3()
-                        .pt_3()
+                        .px_2()
+                        .pt_4()
                         .pb_1()
                         .text_size(px(11.))
                         .text_color(c(theme::MUTED))
@@ -311,6 +483,7 @@ impl Shell {
                         view.label(),
                         view == self.view,
                     )
+                    .icon(view.icon())
                     .on_click(move |_, _, cx| shell.update(cx, |shell, cx| shell.show(view, cx)))
                 }))
         });
@@ -406,6 +579,15 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The title follows the pack (undo, redo, the Metadata view, another editor after Save
+        // As) whenever the author isn't typing in it.
+        let name = self.editor.read(cx).pack().name();
+        if !self.title.read(cx).focus_handle(cx).is_focused(window)
+            && self.title.read(cx).value().as_ref() != name
+        {
+            self.title
+                .update(cx, |input, cx| input.set_value(name, window, cx));
+        }
         let editor = self.editor.clone();
         let content = self
             .views
@@ -427,7 +609,7 @@ impl Render for Shell {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.toolbar(cx))
+            .child(self.toolbar(window, cx))
             .child(
                 div()
                     .flex_1()

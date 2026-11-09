@@ -101,8 +101,10 @@ bounded file handles from the model, including saved archives, rather than start
   the field unfocused. Ctrl+Z inside a focused field undoes the field's text, not the pack.
 - **Bulk edits run on the UI thread**: tagging, removing or restricting a stage across a
   10,000-file pack blocks for 100-200 ms until `Editor` can run writes in the background.
-- **Not ported yet:** per-popup settings (size, placement, caption), the toolbar's editable pack
-  title, importing from disk straight into a stage slot, and thumbnails in stage slots.
+- **Not ported yet:** per-popup settings (size, placement, caption), importing from disk
+  straight into a stage slot, and thumbnails in stage slots.
+- **Icons are opt-in:** gpui-kit embeds only its own ~100 Lucide icons. Any other icon has to be
+  listed in `shared-gpui/src/icons.rs`'s `ExtraIcons`, or it renders as nothing.
 - **Upload locks:** `ops::content::import_into_slot` has its own upload lock and encoder probe,
   separate from the shell's import pipeline; they should share one.
 - **No window icon**, as with config-gpui.

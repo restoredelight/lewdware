@@ -423,8 +423,8 @@ impl ContentView {
                     .gap(px(2.))
                     .child(
                         div()
-                            .px_3()
-                            .pt_3()
+                            .px_2()
+                            .pt_4()
                             .pb_1()
                             .text_size(px(11.))
                             .text_color(c(theme::MUTED))
@@ -435,24 +435,21 @@ impl ContentView {
                         div()
                             .id(tab.id())
                             .w_full()
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py(px(7.))
                             .flex()
                             .items_center()
                             .gap_2()
-                            .rounded(theme::RADIUS_SM)
-                            .border_l_2()
+                            .rounded(theme::RADIUS_MD)
                             .text_size(px(12.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .cursor_pointer()
+                            // The sidebar's filled row (`ui::NavItem`), with a count.
                             .map(|this| {
                                 if active {
-                                    this.bg(c(theme::SURFACE_RAISED))
-                                        .border_color(c(theme::ACCENT_HOVER))
-                                        .text_color(c(theme::TEXT))
+                                    this.bg(c(theme::SURFACE_RAISED)).text_color(c(theme::TEXT))
                                 } else {
-                                    this.border_color(gpui_kit::transparent_black())
-                                        .text_color(c(theme::MUTED))
+                                    this.text_color(c(theme::MUTED))
                                         .hover(|style| style.text_color(c(theme::TEXT)))
                                 }
                             })
@@ -480,24 +477,15 @@ impl ContentView {
             .children(groups)
     }
 
-    /// The note, title and description above every tab.
+    /// The title and description above every tab.
     fn heading(&self) -> impl IntoElement {
         div()
+            .max_w(px(672.))
             .flex()
             .flex_col()
-            .gap_4()
-            .child(ui::hint(
-                "Read by the built-in modes (Sandbox and Sequence). A custom mode reads none of this.",
-            ))
-            .child(
-                div()
-                    .max_w(px(672.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .child(ui::page_title(self.tab.title()))
-                    .child(ui::hint(self.tab.description()).text_size(px(13.))),
-            )
+            .gap(px(6.))
+            .child(ui::page_title(self.tab.title()))
+            .child(ui::hint(self.tab.description()).text_size(px(13.)))
     }
 
     /// The bar over a pool: how many there are, and the way to add one.

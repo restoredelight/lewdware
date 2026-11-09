@@ -342,11 +342,6 @@ impl Render for MetadataView {
                     ),
             )
             .child(self.line_field(Field::Version, "Version", cx));
-        ui::page(
-            "metadata-page",
-            "Metadata",
-            "The name, attribution and version shipped with this pack.",
-            [fields.into_any_element()],
-        )
+        ui::page_body("metadata-page", [fields.into_any_element()])
     }
 }

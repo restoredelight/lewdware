@@ -14,8 +14,8 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, px, AnyElement, ClipboardItem, Context, Entity, EventEmitter, FontWeight, SharedString,
-    Focusable, Subscription, Task, Window,
+    div, px, AnyElement, ClipboardItem, Context, Entity, EventEmitter, Focusable, FontWeight,
+    SharedString, Subscription, Task, Window,
 };
 use media_gpui::MediaView;
 use pack_editor_core::changes::Scope;
@@ -28,10 +28,10 @@ use shared::encode::FileInfo;
 
 use super::{format_duration, format_size, plural};
 use crate::editor::{CommitPending, Editor, EditorEvent};
-use crate::views::timeline::{stage_membership, StageMembership};
 use crate::shell::View;
 use crate::theme::{self, c};
 use crate::ui::{self, Button, RadioOption, Size, Variant};
+use crate::views::timeline::{stage_membership, StageMembership};
 
 pub(crate) const WIDTH: f32 = 320.;
 
@@ -99,39 +99,49 @@ impl Inspector {
                 this.commit_name(window, cx);
                 this.commit_source(window, cx);
             }),
-            cx.subscribe_in(&editor, window, |this, _, event: &EditorEvent, window, cx| {
-                let EditorEvent::Changed(changes) = event;
-                let primary_changed = this
-                    .primary
-                    .is_some_and(|id| changes.media.updated.contains(&id));
-                if primary_changed {
-                    this.sync_fields(window, cx);
-                }
-                if changes
-                    .scopes
-                    .intersects(Scope::Slots | Scope::Timeline | Scope::Attributes)
-                {
-                    this.refresh_reads(window, cx);
-                }
-                if changes
-                    .scopes
-                    .intersects(Scope::Media | Scope::Tags | Scope::Artists)
-                {
-                    cx.notify();
-                }
-            }),
+            cx.subscribe_in(
+                &editor,
+                window,
+                |this, _, event: &EditorEvent, window, cx| {
+                    let EditorEvent::Changed(changes) = event;
+                    let primary_changed = this
+                        .primary
+                        .is_some_and(|id| changes.media.updated.contains(&id));
+                    if primary_changed {
+                        this.sync_fields(window, cx);
+                    }
+                    if changes
+                        .scopes
+                        .intersects(Scope::Slots | Scope::Timeline | Scope::Attributes)
+                    {
+                        this.refresh_reads(window, cx);
+                    }
+                    if changes
+                        .scopes
+                        .intersects(Scope::Media | Scope::Tags | Scope::Artists)
+                    {
+                        cx.notify();
+                    }
+                },
+            ),
             cx.subscribe_in(&name, window, |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
                     this.commit_name(window, cx);
                 }
             }),
-            cx.subscribe_in(&source, window, |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                    this.commit_source(window, cx);
-                }
-            }),
-            cx.subscribe_in(&tag_input, window, |this, input, event: &InputEvent, window, cx| {
-                match event {
+            cx.subscribe_in(
+                &source,
+                window,
+                |this, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                        this.commit_source(window, cx);
+                    }
+                },
+            ),
+            cx.subscribe_in(
+                &tag_input,
+                window,
+                |this, input, event: &InputEvent, window, cx| match event {
                     InputEvent::PressEnter { .. } => {
                         let value = input.read(cx).value().trim().to_string();
                         if !value.is_empty() {
@@ -141,8 +151,8 @@ impl Inspector {
                     }
                     InputEvent::Change => cx.notify(),
                     _ => {}
-                }
-            }),
+                },
+            ),
             cx.subscribe_in(
                 &artist_input,
                 window,
@@ -362,7 +372,9 @@ impl Inspector {
             return;
         }
         self.editor.update(cx, |editor, cx| {
-            editor.apply(cx, |session| session.set_source_url(file.id, url.as_deref()))
+            editor.apply(cx, |session| {
+                session.set_source_url(file.id, url.as_deref())
+            })
         });
         self.sync_fields(window, cx);
     }
@@ -493,7 +505,11 @@ impl Inspector {
             .text_size(px(14.))
             .text_color(c(theme::MUTED))
             .cursor_pointer()
-            .hover(|style| style.bg(c(theme::SURFACE_RAISED)).text_color(c(theme::TEXT)))
+            .hover(|style| {
+                style
+                    .bg(c(theme::SURFACE_RAISED))
+                    .text_color(c(theme::TEXT))
+            })
             .child(icon)
             .on_click(move |_, window, cx| on_click(window, cx))
     }
@@ -566,57 +582,61 @@ impl Inspector {
                 )
         });
 
-        let mixed = summary.mixed.iter().enumerate().map(|(index, (name, count))| {
-            let add = entity.clone();
-            let remove = entity.clone();
-            let (add_name, remove_name) = (name.clone(), name.clone());
-            let small_button = |id: SharedString, icon| {
+        let mixed = summary
+            .mixed
+            .iter()
+            .enumerate()
+            .map(|(index, (name, count))| {
+                let add = entity.clone();
+                let remove = entity.clone();
+                let (add_name, remove_name) = (name.clone(), name.clone());
+                let small_button = |id: SharedString, icon| {
+                    div()
+                        .id((id, index))
+                        .size(px(22.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(11.))
+                        .text_color(c(theme::MUTED))
+                        .cursor_pointer()
+                        .hover(|style| style.text_color(c(theme::TEXT)))
+                        .child(icon)
+                };
                 div()
-                    .id((id, index))
-                    .size(px(22.))
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .text_size(px(11.))
-                    .text_color(c(theme::MUTED))
-                    .cursor_pointer()
-                    .hover(|style| style.text_color(c(theme::TEXT)))
-                    .child(icon)
-            };
-            div()
-                .flex()
-                .items_center()
-                .h(px(24.))
-                .pl_2()
-                .gap_1()
-                .rounded(theme::RADIUS_SM)
-                .border_1()
-                .border_dashed()
-                .border_color(c(theme::BORDER_STRONG))
-                .text_size(px(11.5))
-                .child(name.clone())
-                .child(ui::readout(format!("{count}/{}", files.len())))
-                .child(
-                    small_button(
-                        format!("{kind_id}-mixed-add").into(),
-                        gpui_kit::assets::IconName::Plus,
+                    .h(px(24.))
+                    .pl_2()
+                    .gap_1()
+                    .rounded(theme::RADIUS_SM)
+                    .border_1()
+                    .border_dashed()
+                    .border_color(c(theme::BORDER_STRONG))
+                    .text_size(px(11.5))
+                    .child(name.clone())
+                    .child(ui::readout(format!("{count}/{}", files.len())))
+                    .child(
+                        small_button(
+                            format!("{kind_id}-mixed-add").into(),
+                            gpui_kit::assets::IconName::Plus,
+                        )
+                        .on_click(move |_, _, cx| {
+                            add.update(cx, |this, cx| this.edit_label(kind, &add_name, true, cx))
+                        }),
                     )
-                    .on_click(move |_, _, cx| {
-                        add.update(cx, |this, cx| this.edit_label(kind, &add_name, true, cx))
-                    }),
-                )
-                .child(
-                    small_button(
-                        format!("{kind_id}-mixed-remove").into(),
-                        gpui_kit::assets::IconName::Close,
+                    .child(
+                        small_button(
+                            format!("{kind_id}-mixed-remove").into(),
+                            gpui_kit::assets::IconName::Close,
+                        )
+                        .on_click(move |_, _, cx| {
+                            remove.update(cx, |this, cx| {
+                                this.edit_label(kind, &remove_name, false, cx)
+                            })
+                        }),
                     )
-                    .on_click(move |_, _, cx| {
-                        remove.update(cx, |this, cx| {
-                            this.edit_label(kind, &remove_name, false, cx)
-                        })
-                    }),
-                )
-        });
+            });
 
         let suggestion_list = (!matches.is_empty()).then(|| {
             let entity = entity.clone();
@@ -759,33 +779,48 @@ impl Inspector {
         let editor = self.editor.clone();
         let id = file.id;
         Some(
-            Self::section("Used as").child(div().flex().flex_wrap().gap(px(5.)).children(
-                uses.into_iter().enumerate().map(move |(index, (label, target))| {
-                    let editor = editor.clone();
-                    div()
-                        .id(("used-as", index))
-                        .px(px(6.))
-                        .py(px(3.))
-                        .rounded(theme::RADIUS_SM)
-                        .border_1()
-                        .border_color(c(theme::BORDER))
-                        .bg(c(theme::BG))
-                        .text_size(px(11.))
-                        .cursor_pointer()
-                        .hover(|style| style.border_color(c(theme::BORDER_STRONG)))
-                        .child(label)
-                        .on_click(move |_, window, cx| match target {
-                            Target::Tab(tab) => super::reveal(&editor, tab, id, window, cx),
-                            Target::View(view) => crate::shell::show_view(view, window, cx),
-                        })
-                }),
-            )),
+            Self::section("Used as").child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(5.))
+                    .children(
+                        uses.into_iter()
+                            .enumerate()
+                            .map(move |(index, (label, target))| {
+                                let editor = editor.clone();
+                                div()
+                                    .id(("used-as", index))
+                                    .px(px(6.))
+                                    .py(px(3.))
+                                    .rounded(theme::RADIUS_SM)
+                                    .border_1()
+                                    .border_color(c(theme::BORDER))
+                                    .bg(c(theme::BG))
+                                    .text_size(px(11.))
+                                    .cursor_pointer()
+                                    .hover(|style| style.border_color(c(theme::BORDER_STRONG)))
+                                    .child(label)
+                                    .on_click(move |_, window, cx| match target {
+                                        Target::Tab(tab) => {
+                                            super::reveal(&editor, tab, id, window, cx)
+                                        }
+                                        Target::View(view) => {
+                                            crate::shell::show_view(view, window, cx)
+                                        }
+                                    })
+                            }),
+                    ),
+            ),
         )
-
     }
 
     /// Which timeline stages the single selected file is in (the timeline track's component).
-    fn stage_membership_slot(&mut self, file: &MediaFile, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn stage_membership_slot(
+        &mut self,
+        file: &MediaFile,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let membership = match &self.membership {
             Some(membership) => {
                 membership.update(cx, |m, cx| m.set_media(file.id, cx));
@@ -945,6 +980,7 @@ impl Render for Inspector {
                 let entity = entity.clone();
                 let id = primary.id;
                 Button::new("inspector-view", "View")
+                    .icon(gpui_kit::assets::IconName::Eye)
                     .variant(Variant::Quiet)
                     .size(Size::Compact)
                     .on_click(move |_, _, cx| {
@@ -992,22 +1028,24 @@ impl Render for Inspector {
             body = body.child(
                 Self::section("Media")
                     .child(Self::field_label("File name"))
-                    .child(self.field(
-                        &self.name,
-                        Some(
-                            Self::icon_button(
-                                "copy-name",
-                                gpui_kit::assets::IconName::Copy,
-                                move |_, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        copy_name.clone(),
-                                    ))
-                                },
-                            )
-                            .into_any_element(),
+                    .child(
+                        self.field(
+                            &self.name,
+                            Some(
+                                Self::icon_button(
+                                    "copy-name",
+                                    gpui_kit::assets::IconName::Copy,
+                                    move |_, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copy_name.clone(),
+                                        ))
+                                    },
+                                )
+                                .into_any_element(),
+                            ),
+                            cx,
                         ),
-                        cx,
-                    ))
+                    )
                     .children(self.name_error.clone().map(|error| {
                         div()
                             .text_size(px(11.))
@@ -1069,22 +1107,26 @@ impl Render for Inspector {
 
         let ids = self.ids.clone();
         body = body.child(
-            div().pt_3().border_t_1().border_color(c(theme::BORDER)).child(
-                Button::new(
-                    "inspector-remove",
-                    if single {
-                        "Remove item".to_string()
-                    } else {
-                        format!("Remove {} items", files.len())
-                    },
-                )
-                .variant(Variant::Destructive)
-                .size(Size::Compact)
-                .on_click(move |_, _, cx| {
-                    let ids = ids.clone();
-                    entity.update(cx, |_, cx| cx.emit(InspectorEvent::Remove(ids)))
-                }),
-            ),
+            div()
+                .pt_3()
+                .border_t_1()
+                .border_color(c(theme::BORDER))
+                .child(
+                    Button::new(
+                        "inspector-remove",
+                        if single {
+                            "Remove item".to_string()
+                        } else {
+                            format!("Remove {} items", files.len())
+                        },
+                    )
+                    .variant(Variant::Destructive)
+                    .size(Size::Compact)
+                    .on_click(move |_, _, cx| {
+                        let ids = ids.clone();
+                        entity.update(cx, |_, cx| cx.emit(InspectorEvent::Remove(ids)))
+                    }),
+                ),
         );
 
         shell.child(header).child(preview).child(body)

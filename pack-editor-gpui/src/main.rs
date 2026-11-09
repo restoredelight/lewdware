@@ -10,7 +10,7 @@ mod menu;
 mod shell;
 mod views;
 
-use shared_gpui::{runtime, theme, ui};
+use shared_gpui::{icons, runtime, theme, ui};
 
 use gpui_kit::{
     px, size, App, AppContext, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions,
@@ -22,7 +22,7 @@ fn main() {
     editor::detect_encoder();
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(shared_gpui::icons::AppAssets)
         .run(|cx: &mut App| {
             gpui_kit::init(cx);
             theme::install(cx);

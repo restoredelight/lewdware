@@ -27,7 +27,7 @@ fn main() {
     };
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(shared_gpui::icons::AppAssets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             theme::install(cx);

@@ -26,7 +26,7 @@ use pack_editor_core::session::library::{
 use crate::editor::{Editor, EditorEvent};
 use crate::shell::View;
 use crate::theme::{self, c};
-use crate::ui::{self, Button, DialogAction, Select, SelectOption, Size, Variant};
+use crate::ui::{self, Button, DialogAction, IconButton, Select, SelectOption, Size, Variant};
 
 /// One name in the table.
 #[derive(Clone)]
@@ -182,13 +182,16 @@ impl VocabularyView {
             String::new()
         };
         let input = cx.new(|cx| InputState::new(window, cx).default_value(initial));
-        let _events = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-            match event {
-                InputEvent::PressEnter { .. } => this.apply(window, cx),
-                InputEvent::Change => cx.notify(),
-                _ => {}
-            }
-        });
+        let _events =
+            cx.subscribe_in(
+                &input,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::PressEnter { .. } => this.apply(window, cx),
+                    InputEvent::Change => cx.notify(),
+                    _ => {}
+                },
+            );
         if mode == Mode::Rename {
             input.update(cx, |input, cx| input.focus(window, cx));
         }
@@ -306,9 +309,7 @@ impl VocabularyView {
         let open = self.menu.as_deref() == Some(row.name.as_str());
         let toggle = cx.entity();
         let name = row.name.clone();
-        let trigger = Button::new(SharedString::from(format!("media-{}", row.name)), "Media")
-            .variant(Variant::Quiet)
-            .size(Size::Compact)
+        let trigger = IconButton::new(SharedString::from(format!("media-{}", row.name)), gpui_kit::assets::IconName::Search, "Media")
             .disabled(row.media.all == 0)
             .on_click(move |_, _, cx| {
                 let name = name.clone();
@@ -424,16 +425,14 @@ impl VocabularyView {
             )
             .child(
                 div()
-                    .w(px(286.))
+                    .w(px(140.))
                     .flex()
                     .items_center()
                     .justify_end()
                     .gap(px(2.))
                     .child(self.media_menu(row, cx))
                     .child(
-                        Button::new(id("rename"), "Rename")
-                            .variant(Variant::Quiet)
-                            .size(Size::Compact)
+                        IconButton::new(id("rename"), gpui_kit::assets::IconName::Pencil, "Rename")
                             .on_click(move |_, window, cx| {
                                 let name = rename_name.clone();
                                 rename.update(cx, |this, cx| {
@@ -442,9 +441,7 @@ impl VocabularyView {
                             }),
                     )
                     .child(
-                        Button::new(id("merge"), "Merge")
-                            .variant(Variant::Quiet)
-                            .size(Size::Compact)
+                        IconButton::new(id("merge"), gpui_kit::assets::IconName::Merge, "Merge")
                             .disabled(self.rows.len() < 2)
                             .on_click(move |_, window, cx| {
                                 let name = merge_name.clone();
@@ -454,9 +451,7 @@ impl VocabularyView {
                             }),
                     )
                     .child(
-                        Button::new(id("delete"), "Delete")
-                            .variant(Variant::Quiet)
-                            .size(Size::Compact)
+                        IconButton::new(id("delete"), gpui_kit::assets::IconName::Trash, "Delete")
                             .on_click(move |_, window, cx| {
                                 let row = delete_row.clone();
                                 delete.update(cx, |this, cx| {
@@ -643,16 +638,13 @@ impl VocabularyView {
 
 impl Render for VocabularyView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (title, lede, empty) = match self.kind {
+        let (title, empty) = match self.kind {
             LabelKind::Tags => (
                 "Tags",
-                "The vocabulary used across media, Content and the Timeline. Rename one here and \
-                 it changes everywhere it's used.",
                 "Tags are created when you tag media or use them in Content and Timeline settings.",
             ),
             LabelKind::Artists => (
                 "Artists",
-                "Attribution recorded across media.",
                 "Artists are created when you credit media in the inspector.",
             ),
         };
@@ -775,46 +767,32 @@ impl Render for VocabularyView {
                     .flex_col()
                     .gap_5()
                     .child(
-                        div()
-                            .flex()
-                            .items_end()
-                            .justify_between()
-                            .gap_6()
-                            .child(
-                                div()
-                                    .max_w(px(560.))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(6.))
-                                    .child(ui::page_title(title))
-                                    .child(ui::hint(lede).text_size(px(13.))),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .w(px(220.))
-                                    .h(theme::CONTROL_COMPACT)
-                                    .px_2()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .rounded(theme::RADIUS_MD)
-                                    .border_1()
-                                    .border_color(c(theme::BORDER_STRONG))
-                                    .bg(c(theme::BG))
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .text_color(c(theme::MUTED))
-                                            .child(gpui_kit::assets::IconName::Search),
-                                    )
-                                    .child(
-                                        Input::new(&self.search)
-                                            .appearance(false)
-                                            .text_size(px(12.))
-                                            .flex_1(),
-                                    ),
-                            ),
+                        div().flex().items_end().justify_end().gap_6().child(
+                            div()
+                                .flex_none()
+                                .w(px(220.))
+                                .h(theme::CONTROL_COMPACT)
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .rounded(theme::RADIUS_MD)
+                                .border_1()
+                                .border_color(c(theme::BORDER_STRONG))
+                                .bg(c(theme::BG))
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .text_color(c(theme::MUTED))
+                                        .child(gpui_kit::assets::IconName::Search),
+                                )
+                                .child(
+                                    Input::new(&self.search)
+                                        .appearance(false)
+                                        .text_size(px(12.))
+                                        .flex_1(),
+                                ),
+                        ),
                     )
                     .children(error)
                     .child(table),

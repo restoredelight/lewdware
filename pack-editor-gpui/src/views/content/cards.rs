@@ -65,6 +65,7 @@ impl ContentView {
                     )
                     .child(
                         Button::new(remove_id, "Remove")
+                            .icon(gpui_kit::assets::IconName::Trash)
                             .variant(Variant::Destructive)
                             .size(Size::Compact)
                             .on_click(move |_, window, cx| {

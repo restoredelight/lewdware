@@ -117,6 +117,12 @@ Carmine is powerful only because it's rare. One red used to mean "primary,"
    **raised surface + a 2px carmine edge**; text stays white — the edge carries the
    accent. See `Tabs.svelte` vertical active state
    (`box-shadow: inset 2px 0 0 var(--color-accent-hover)`).
+
+   _Exception (November 2026, gpui port):_ the pack editor's vertical navs (the sidebar
+   and Content's sub-tabs) drop the edge. An active tab is a **raised, filled row** with
+   white text and icon; inactive tabs are muted and turn white on hover. Each sidebar
+   tab carries a Lucide icon (`shared-gpui/src/icons.rs`). `ui::NavItem` in
+   `shared-gpui` implements it, so config-gpui's nav follows suit.
 3. **Coral = careful.** Destructive actions are always **coral** (`#ff6b6b`), as
    text/outline, **never a carmine fill**. This is what lets a red fill never mean
    two things. (`Button` `variant="destructive"`: transparent bg, coral border/text.)

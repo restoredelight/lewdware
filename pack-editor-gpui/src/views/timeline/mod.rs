@@ -279,47 +279,30 @@ impl TimelineView {
     ) -> gpui_kit::Div {
         let enabled = snapshot.enabled;
         let view = cx.entity();
-        let bar = div()
+        let toggle = div()
             .flex_none()
-            .h(px(44.))
-            .px_4()
             .flex()
             .items_center()
-            .justify_between()
-            .gap_4()
-            .border_b_1()
-            .border_color(c(theme::BORDER))
+            .gap_2()
+            .child(ui::readout(if enabled { "Enabled" } else { "Disabled" }))
             .child(
-                div()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Timeline"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(ui::readout(if enabled { "Enabled" } else { "Disabled" }))
-                    .child(Toggle::new("timeline-enabled", enabled).on_change(
-                        move |on, window, cx| {
-                            view.update(cx, |this, cx| {
-                                this.commit_focused(window, cx);
-                                this.apply(cx, |session| session.set_timeline_enabled(on));
-                            })
-                        },
-                    )),
+                Toggle::new("timeline-enabled", enabled).on_change(move |on, window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.commit_focused(window, cx);
+                        this.apply(cx, |session| session.set_timeline_enabled(on));
+                    })
+                }),
             );
-        let lede = div()
+        let mut bar = div()
             .flex_none()
+            .min_h(px(48.))
             .px_4()
             .py_2()
+            .flex()
+            .items_center()
+            .gap_3()
             .border_b_1()
-            .border_color(c(theme::BORDER))
-            .child(ui::hint(
-                "Read by the built-in modes (Sandbox and Sequence). A custom mode reads none of this.",
-            ));
-        let mut header = div().flex_none().flex().flex_col().child(bar).child(lede);
+            .border_color(c(theme::BORDER));
         if enabled {
             let key: SharedString = "mode-name".into();
             let input = self.field(
@@ -333,31 +316,21 @@ impl TimelineView {
                 window,
                 cx,
             );
-            header = header.child(
-                div()
-                    .flex_none()
-                    .px_4()
-                    .py_2()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .border_b_1()
-                    .border_color(c(theme::BORDER))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Mode name"),
-                    )
-                    .child(self.field_box(&key, &input, None, window, cx).w(px(224.)))
-                    .child(
-                        ui::hint("What players see this mode called. Blank keeps \"Sequence\".")
-                            .text_size(px(11.)),
-                    ),
-            );
+            bar = bar
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Mode name"),
+                )
+                .child(self.field_box(&key, &input, None, window, cx).w(px(224.)))
+                .child(
+                    ui::hint("What players see this mode called. Blank keeps \"Sequence\".")
+                        .text_size(px(11.)),
+                );
         }
-        header
+        bar.child(div().flex_1()).child(toggle)
     }
 
     fn switched_off(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -442,6 +415,7 @@ impl TimelineView {
             )
             .child(
                 Button::new("add-stage", "Add stage")
+                    .icon(gpui_kit::assets::IconName::Plus)
                     .size(Size::Compact)
                     .full_width()
                     .on_click(cx.listener(move |this, _, window, cx| {

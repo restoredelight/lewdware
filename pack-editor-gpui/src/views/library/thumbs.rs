@@ -19,7 +19,10 @@ const CAPACITY: usize = 480;
 const BATCH: usize = 48;
 
 enum Slot {
-    Ready { image: Arc<RenderImage>, used: u64 },
+    Ready {
+        image: Arc<RenderImage>,
+        used: u64,
+    },
     /// No thumbnail stored, or it didn't decode: drawn as a placeholder, not asked for again.
     Missing,
 }

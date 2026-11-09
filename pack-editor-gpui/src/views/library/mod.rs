@@ -116,7 +116,11 @@ pub(crate) fn reveal(
     let editor_id = editor.entity_id();
     let mut state = load_tab(editor_id, tab, cx);
     let session = editor.read(cx).session();
-    if !state.filter.apply(tab, session.media().iter()).contains(&id) {
+    if !state
+        .filter
+        .apply(tab, session.media().iter())
+        .contains(&id)
+    {
         state.filter.clear();
     }
     state.selection.select_single(id);
