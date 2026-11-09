@@ -1,0 +1,36 @@
+[package]
+name = "pack-editor-gpui"
+version.workspace = true
+description = "Create and edit Lewdware packs (gpui port)"
+authors = ["restoredelight <restoreddelight@proton.me>"]
+edition = "2021"
+
+[dependencies]
+gpui-kit = "0.9.0"
+shared = { path = "../shared" }
+shared-gpui = { path = "../shared-gpui" }
+media-gpui = { path = "../media-gpui" }
+pack-editor-core = { path = "../pack-editor-core" }
+anyhow = "1"
+dirs = "6"
+futures = "0.3"
+# The media grid decodes the WebP thumbnails import stores (views/library/thumbs.rs). The same
+# version media-gpui and gpui use, so `image::Frame` is gpui's own type.
+image = { version = "0.25", default-features = false, features = ["webp", "png", "jpeg"] }
+smallvec = "1"
+# async-std, not tokio: zbus's tokio backend (rfd's or ashpd's `tokio` feature) makes gpui panic
+# at startup. See config-gpui/README.md, "zbus feature unification". Build with `-p`.
+rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "wayland", "async-std"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+# Holding off idle suspend while saving (src/keep_awake.rs). Linux goes through the desktop
+# portal; the same ashpd version and backend rfd already pulls in.
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+keepawake = "0.6"
+
+[features]
+static-ffmpeg = ["media-gpui/static-ffmpeg"]

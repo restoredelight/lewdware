@@ -5,6 +5,7 @@ members = [
     "lw",
     "pack-editor/src-tauri",
     "pack-editor-core",
+    "pack-editor-gpui",
     "shared",
     "config/src-tauri",
     "config-gpui",
