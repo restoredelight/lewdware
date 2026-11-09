@@ -16,6 +16,10 @@ version = "0.0.2"
 [patch.crates-io]
 pulseaudio = { git = "https://github.com/restoredelight/pulseaudio-rs.git", rev = "fafa8a05bfc36e38f4eda2be0db67c75dd8805ff" }
 
+[profile.dev]
+# Keep file/line backtraces without the large variable/type debug information.
+debug = "line-tables-only"
+
 [profile.profiling]
 inherits = "release"
 debug = true

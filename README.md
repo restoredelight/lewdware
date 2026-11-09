@@ -103,6 +103,12 @@ To run `lw`:
 cargo run -p lw -- <subcommand>
 ```
 
+Development builds use `line-tables-only` debug information to reduce build
+storage while keeping file names and line numbers in backtraces. Incremental
+compilation stays enabled for faster rebuilds. For debugging that needs local
+variables and types, use `CARGO_PROFILE_DEV_DEBUG=2 cargo build -p <crate>`
+(or set `CARGO_PROFILE_DEV_DEBUG=2` in your shell before building).
+
 ## More information
 
 - [`lewdware/README.md`](lewdware/README.md)
