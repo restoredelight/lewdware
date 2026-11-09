@@ -7,6 +7,8 @@ members = [
     "pack-editor-core",
     "shared",
     "config/src-tauri",
+    "config-gpui",
+    "shared-gpui",
     "supervisor"
 ]
 resolver = "3"
