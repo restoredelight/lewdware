@@ -37,7 +37,7 @@ use pack_editor_core::session::{Applied, Session};
 use shared::behaviour::editor as queries;
 use shared::behaviour::{Stage, Transition};
 
-use crate::editor::{Editor, EditorEvent};
+use crate::editor::{CommitPending, Editor, EditorEvent};
 use crate::shell::View;
 use crate::theme::{self, c};
 use crate::ui::{self, Button, DialogAction, Size, Toggle, Variant};
@@ -131,10 +131,14 @@ pub struct TimelineView {
     /// "Switch to a specific track" was chosen for this stage, and no track is picked yet.
     audio_picker_stage: Option<String>,
     _changes: Subscription,
+    _commit: Subscription,
 }
 
 impl TimelineView {
     fn new(editor: Entity<Editor>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let _commit = cx.subscribe(&editor, |this, _, _: &CommitPending, cx| {
+            this.commit_changed(cx)
+        });
         let _changes = cx.subscribe(&editor, |_, _, event: &EditorEvent, cx| match event {
             EditorEvent::Changed(changes) => {
                 // Tags and media for the tag lists and the slots' file names.
@@ -156,6 +160,7 @@ impl TimelineView {
             removing: None,
             audio_picker_stage: None,
             _changes,
+            _commit,
         }
     }
 

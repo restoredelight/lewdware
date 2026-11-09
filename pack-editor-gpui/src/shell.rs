@@ -136,8 +136,16 @@ impl Shell {
         cx.notify();
     }
 
-    /// Switches to `view`.
+    /// Switches to `view`, once the current one has committed the field being typed in.
     pub fn show(&mut self, view: View, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| editor.commit_pending(cx));
+        let shell = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = shell.update(cx, |shell, cx| shell.switch_to(view, cx));
+        });
+    }
+
+    fn switch_to(&mut self, view: View, cx: &mut Context<Self>) {
         // Media tabs own live previews. Drop them on navigation so hidden audio, decoder threads
         // and the last atlas image are released.
         if self.view != view && matches!(self.view, View::Popups | View::Audio | View::AllMedia) {

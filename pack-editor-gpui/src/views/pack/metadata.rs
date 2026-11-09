@@ -12,7 +12,7 @@ use pack_editor_core::changes::Scope;
 use pack_editor_core::pack::ops::lifecycle::MetadataField;
 use shared::pack::Metadata;
 
-use crate::editor::{Editor, EditorEvent};
+use crate::editor::{CommitPending, Editor, EditorEvent};
 use crate::theme::{self, c};
 use crate::ui;
 
@@ -111,6 +111,11 @@ impl MetadataView {
         subscriptions.push(cx.subscribe_in(
             &editor,
             window,
+            |this, _, _: &CommitPending, window, cx| this.commit_edited(window, cx),
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &editor,
+            window,
             |this, _, event: &EditorEvent, window, cx| match event {
                 EditorEvent::Changed(changes) => {
                     if changes.scopes.contains(Scope::Metadata) {
@@ -183,13 +188,22 @@ impl MetadataView {
 
     /// Commits each edited field that no longer has focus.
     fn commit_unfocused(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_pending(false, window, cx);
+    }
+
+    /// Commits every edited field, focused or not ([`CommitPending`]).
+    fn commit_edited(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_pending(true, window, cx);
+    }
+
+    fn commit_pending(&mut self, even_focused: bool, window: &mut Window, cx: &mut Context<Self>) {
         let pending = std::mem::take(&mut self.edited);
         for field in pending {
             let focused = match field {
                 Some(field) => self.input(field).focus_handle(cx).is_focused(window),
                 None => self.description.focus_handle(cx).is_focused(window),
             };
-            if focused {
+            if focused && !even_focused {
                 self.edited.push(field);
                 continue;
             }

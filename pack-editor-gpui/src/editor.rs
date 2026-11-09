@@ -34,6 +34,14 @@ pub enum EditorEvent {
 
 impl EventEmitter<EditorEvent> for Editor {}
 
+/// Asks every view to commit the text field being typed in, before something reads or leaves
+/// the pack (saving, closing, switching views). Blur isn't reliably reported, so a field's edit
+/// otherwise waits until a view next sees it unfocused. Handlers run in the order effects were
+/// queued: emit this, then `defer` whatever should see the committed edits.
+pub struct CommitPending;
+
+impl EventEmitter<CommitPending> for Editor {}
+
 /// A save in progress: files written so far, out of how many.
 #[derive(Clone, Copy, Default)]
 pub struct SaveProgress {
@@ -117,6 +125,11 @@ impl Editor {
         // views show.
         cx.notify();
         value
+    }
+
+    /// Emits [`CommitPending`]. Defer the work that depends on it.
+    pub fn commit_pending(&mut self, cx: &mut Context<Self>) {
+        cx.emit(CommitPending);
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {

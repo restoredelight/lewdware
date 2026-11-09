@@ -27,7 +27,7 @@ use pack_editor_core::session::library::{
 use shared::encode::FileInfo;
 
 use super::{format_duration, format_size, plural};
-use crate::editor::{Editor, EditorEvent};
+use crate::editor::{CommitPending, Editor, EditorEvent};
 use crate::views::timeline::{stage_membership, StageMembership};
 use crate::shell::View;
 use crate::theme::{self, c};
@@ -93,6 +93,12 @@ impl Inspector {
         });
 
         let subscriptions = vec![
+            // Focused or not: a click elsewhere can take focus without the input reporting a
+            // blur. Both are no-ops when the text matches the file.
+            cx.subscribe_in(&editor, window, |this, _, _: &CommitPending, window, cx| {
+                this.commit_name(window, cx);
+                this.commit_source(window, cx);
+            }),
             cx.subscribe_in(&editor, window, |this, _, event: &EditorEvent, window, cx| {
                 let EditorEvent::Changed(changes) = event;
                 let primary_changed = this
@@ -322,8 +328,14 @@ impl Inspector {
             return;
         };
         let value = self.name.read(cx).value().trim().to_string();
-        if value.is_empty() || value == file.file_name {
-            self.sync_fields(window, cx);
+        if value == file.file_name {
+            return;
+        }
+        if value.is_empty() {
+            // Only the name: resetting the source here would lose an uncommitted URL.
+            self.name.update(cx, |input, cx| {
+                input.set_value(file.file_name.clone(), window, cx)
+            });
             return;
         }
         let renamed = self.editor.update(cx, |editor, cx| {

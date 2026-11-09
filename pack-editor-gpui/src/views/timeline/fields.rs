@@ -186,6 +186,22 @@ impl TimelineView {
         cx.notify();
     }
 
+    /// Commits every field that leaving commits and whose text differs from what's stored,
+    /// focused or not: a click elsewhere can take focus without the input reporting a blur.
+    pub(super) fn commit_changed(&mut self, cx: &mut Context<Self>) {
+        let changed: Vec<SharedString> = self
+            .fields
+            .iter()
+            .filter(|(_, field)| {
+                field.on_blur && field.input.read(cx).value().trim() != field.shown.trim()
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in changed {
+            self.commit_field(&key, cx);
+        }
+    }
+
     /// Commits whichever field has focus, before the view switches away from it.
     pub(super) fn commit_focused(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let focused = self

@@ -151,6 +151,19 @@ impl Root {
         }
     }
 
+    /// Has the views commit the field being typed in, then runs `then`, which sees the edit.
+    fn after_commit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        if let Some(editor) = self.editor() {
+            editor.update(cx, |editor, cx| editor.commit_pending(cx));
+        }
+        cx.defer_in(window, then);
+    }
+
     fn refresh_recents(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let recents = runtime::blocking(recents::list).await.unwrap_or_default();
@@ -485,7 +498,9 @@ impl Root {
             return true;
         }
         // Closing the pack properly (and asking first if it has unsaved work) quits afterwards.
-        self.request_close(CloseIntent::Window, window, cx);
+        self.after_commit(window, cx, |this, window, cx| {
+            this.request_close(CloseIntent::Window, window, cx)
+        });
         false
     }
 
@@ -885,10 +900,16 @@ impl Render for Root {
                     editor.update(cx, |editor, cx| editor.redo(cx));
                 }
             }))
-            .on_action(cx.listener(|this, _: &Save, _, cx| this.save(false, None, cx)))
-            .on_action(cx.listener(|this, _: &SaveAs, _, cx| this.save(true, None, cx)))
+            .on_action(cx.listener(|this, _: &Save, window, cx| {
+                this.after_commit(window, cx, |this, _, cx| this.save(false, None, cx))
+            }))
+            .on_action(cx.listener(|this, _: &SaveAs, window, cx| {
+                this.after_commit(window, cx, |this, _, cx| this.save(true, None, cx))
+            }))
             .on_action(cx.listener(|this, _: &ClosePack, window, cx| {
-                this.request_close(CloseIntent::Pack, window, cx)
+                this.after_commit(window, cx, |this, window, cx| {
+                    this.request_close(CloseIntent::Pack, window, cx)
+                })
             }))
             .on_action(
                 cx.listener(|this, _: &DiscardChanges, window, cx| {

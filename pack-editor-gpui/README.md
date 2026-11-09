@@ -94,10 +94,11 @@ bounded file handles from the model, including saved archives, rather than start
 - **Native dialogs and drag and drop aren't driven by the headless check**: Save, Save As,
   Discard changes, every file picker, real drops and uploads into slots. The import and Edgeware
   paths were checked through debug-only hooks (`PACK_EDITOR_CHECK_*`, see `notes/lifecycle.md`).
-- **A focused text field isn't committed on Save or Close**; its edit lands only when it loses
-  focus. Ctrl+Z inside a focused field undoes the field's text, not the pack.
 - **gpui-component's `InputEvent::Blur`** never fires for multi-line inputs and didn't for
-  single-line ones headlessly; views commit when they next see the field unfocused instead.
+  single-line ones headlessly. Save, Save As, Close and switching views emit
+  `editor::CommitPending` first, and each view commits any field whose text differs from what's
+  stored, focused or not. Other clicks elsewhere still rely on Blur or on the view next seeing
+  the field unfocused. Ctrl+Z inside a focused field undoes the field's text, not the pack.
 - **Bulk edits run on the UI thread**: tagging, removing or restricting a stage across a
   10,000-file pack blocks for 100-200 ms until `Editor` can run writes in the background.
 - **Not ported yet:** per-popup settings (size, placement, caption), the toolbar's editable pack

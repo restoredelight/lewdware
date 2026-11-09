@@ -27,7 +27,7 @@ use pack_editor_core::session::Session;
 use shared::behaviour::editor::{self as behaviour_editor, MediaSlots};
 use shared::behaviour::ContentGroup;
 
-use crate::editor::{Editor, EditorEvent};
+use crate::editor::{CommitPending, Editor, EditorEvent};
 use crate::shell::View;
 use crate::theme::{self, c};
 use crate::ui::{self, Button, DialogAction, Size, Variant};
@@ -203,10 +203,14 @@ pub struct ContentView {
     /// Whether the "Make tag toggleable..." menu is open.
     toggle_menu_open: bool,
     _changes: Subscription,
+    _commit: Subscription,
 }
 
 impl ContentView {
     fn new(editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let _commit = cx.subscribe_in(&editor, window, |this, _, _: &CommitPending, window, cx| {
+            this.commit_editing(window, cx)
+        });
         let _changes = cx.subscribe_in(
             &editor,
             window,
@@ -232,6 +236,7 @@ impl ContentView {
             slots: SlotsState::default(),
             toggle_menu_open: false,
             _changes,
+            _commit,
         };
         this.reload(window, cx);
         this
