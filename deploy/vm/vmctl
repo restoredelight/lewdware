@@ -1,0 +1,577 @@
+#!/usr/bin/env python3
+"""Drive a quickemu VM headlessly for e2e/UI testing.
+
+Screenshots and input go through QEMU's QMP socket, so they work regardless of
+the guest OS (login screens, UAC prompts, tray, global hotkeys included).
+
+    vmctl up windows-11          boot headless (QMP + SPICE for watching)
+    vmctl shot [out.png]         screenshot; prints the path
+    vmctl wait [out.png] [--stable 3] [--timeout 120]
+                                 screenshot once the screen stops changing
+    vmctl click X Y [--button right] [--double]
+    vmctl move X Y
+    vmctl drag X1 Y1 X2 Y2
+    vmctl scroll X Y N           N>0 scrolls down, N<0 up
+    vmctl type "text"            US-layout typing
+    vmctl key ctrl+shift+esc     one combo per arg; several args = sequence
+    vmctl ssh -- CMD...          run a command in the guest
+    vmctl ready [--timeout 120]  wait for guest SSH to accept commands
+    vmctl sync [--dest C:/lw/lewdware]
+                                 copy the working tree (incl. uncommitted) into the guest
+    vmctl launch EXE [ARGS...]  (Windows/Linux) start a GUI app on the desktop
+    vmctl push LOCAL REMOTE     scp -r into the guest (REMOTE like C:/Users/Quickemu/x)
+    vmctl pull REMOTE LOCAL      scp -r out of the guest
+    vmctl snapshot save|load|list|delete [NAME]
+    vmctl down [--force]
+    vmctl status
+
+The VM is chosen with --vm or $VMCTL_VM (default windows-11); VMs live in
+$VMCTL_DIR (default ~/Machines). Coordinates are screenshot pixels.
+`type` assumes the guest's keyboard layout is US unless $VMCTL_LAYOUT or
+<vm dir>/vmctl-layout says otherwise (e.g. "gb").
+"""
+
+import argparse
+import json
+import os
+import posixpath
+import re
+import shlex
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+from vm_storage import ensure_ready, storage_lock
+
+VM_DIR = Path(os.environ.get("VMCTL_DIR", Path.home() / "Machines"))
+ABS_MAX = 0x7FFF
+STATE_DIR = Path(tempfile.gettempdir()) / f"vmctl-{os.getuid()}"
+
+
+def vm_paths(vm):
+    d = VM_DIR / vm
+    return {
+        "conf": VM_DIR / f"{vm}.conf",
+        "dir": d,
+        "qmp": d / f"{vm}-qmp.sock",
+        "pid": d / f"{vm}.pid",
+        "ports": d / f"{vm}.ports",
+    }
+
+
+class QMP:
+    def __init__(self, path):
+        if not Path(path).exists():
+            sys.exit(f"no QMP socket at {path} - start the VM with `vmctl up`")
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(str(path))
+        self.f = self.sock.makefile("rwb")
+        self._read()  # greeting
+        self.cmd("qmp_capabilities")
+
+    def _read(self):
+        while True:
+            line = self.f.readline()
+            if not line:
+                sys.exit("QMP connection closed")
+            msg = json.loads(line)
+            if "event" not in msg:
+                return msg
+
+    def cmd(self, name, **args):
+        req = {"execute": name}
+        if args:
+            req["arguments"] = args
+        self.f.write(json.dumps(req).encode() + b"\n")
+        self.f.flush()
+        resp = self._read()
+        if "error" in resp:
+            sys.exit(f"QMP {name}: {resp['error'].get('desc')}")
+        return resp.get("return")
+
+    def hmp(self, line):
+        return self.cmd("human-monitor-command", **{"command-line": line})
+
+    def events(self, events):
+        self.cmd("input-send-event", events=events)
+
+
+# --- screen -----------------------------------------------------------------
+
+def size_file(vm):
+    return STATE_DIR / f"{vm}.size"
+
+
+def screenshot(q, vm, out=None):
+    STATE_DIR.mkdir(exist_ok=True)
+    out = Path(out) if out else STATE_DIR / f"{vm}-{time.strftime('%H%M%S')}.png"
+    out = out.resolve()
+    q.cmd("screendump", filename=str(out), format="png")
+    # PNG IHDR: width/height at bytes 16..24
+    with open(out, "rb") as fh:
+        hdr = fh.read(24)
+    w, h = int.from_bytes(hdr[16:20], "big"), int.from_bytes(hdr[20:24], "big")
+    size_file(vm).write_text(f"{w} {h}")
+    return out, w, h
+
+
+_SIZE = None
+
+
+def screen_size(q, vm):
+    # Resolution changes during boot/driver switches, so look it up fresh once
+    # per invocation (a PPM header read; cheap).
+    global _SIZE
+    if _SIZE is None:
+        STATE_DIR.mkdir(exist_ok=True)
+        tmp = STATE_DIR / f"{vm}-size.ppm"
+        q.cmd("screendump", filename=str(tmp), format="ppm")
+        with open(tmp, "rb") as fh:
+            parts = fh.read(64).split()
+        _SIZE = (int(parts[1]), int(parts[2]))
+    return _SIZE
+
+
+# --- input ------------------------------------------------------------------
+
+def abs_events(q, vm, x, y):
+    w, h = screen_size(q, vm)
+    if not (0 <= x < w and 0 <= y < h):
+        sys.exit(f"({x}, {y}) is outside the {w}x{h} screen")
+    return [
+        {"type": "abs", "data": {"axis": "x", "value": x * ABS_MAX // w}},
+        {"type": "abs", "data": {"axis": "y", "value": y * ABS_MAX // h}},
+    ]
+
+
+def btn(button, down):
+    return {"type": "btn", "data": {"down": down, "button": button}}
+
+
+def key_ev(qcode, down):
+    return {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": qcode}}}
+
+
+KEY_ALIASES = {
+    "ctrl": "ctrl", "control": "ctrl", "shift": "shift", "alt": "alt",
+    "win": "meta_l", "super": "meta_l", "meta": "meta_l", "cmd": "meta_l",
+    "enter": "ret", "return": "ret", "esc": "esc", "escape": "esc",
+    "space": "spc", "tab": "tab", "backspace": "backspace", "bksp": "backspace",
+    "del": "delete", "delete": "delete", "ins": "insert", "insert": "insert",
+    "home": "home", "end": "end", "pgup": "pgup", "pageup": "pgup",
+    "pgdn": "pgdn", "pagedown": "pgdn", "up": "up", "down": "down",
+    "left": "left", "right": "right", "menu": "menu", "print": "print",
+    "-": "minus", "=": "equal", "[": "bracket_left", "]": "bracket_right",
+    ";": "semicolon", "'": "apostrophe", "`": "grave_accent", "\\": "backslash",
+    ",": "comma", ".": "dot", "/": "slash",
+}
+
+PLAIN = {c: c for c in "abcdefghijklmnopqrstuvwxyz0123456789"}
+PLAIN.update({" ": "spc", "\n": "ret", "\t": "tab", "-": "minus", "=": "equal",
+              "[": "bracket_left", "]": "bracket_right", ";": "semicolon",
+              "'": "apostrophe", "`": "grave_accent", "\\": "backslash",
+              ",": "comma", ".": "dot", "/": "slash"})
+SHIFTED = {c.upper(): c for c in "abcdefghijklmnopqrstuvwxyz"}
+SHIFTED.update(dict(zip('!@#$%^&*()_+{}:"~|<>?',
+                        "1234567890" + "-" + "=" + "[" + "]" + ";" + "'" + "`" + "\\" + "," + "." + "/")))
+
+
+# Per-layout overrides: char -> list of qcodes to hold together.
+LAYOUTS = {
+    "us": {},
+    "gb": {
+        '"': ["shift", "2"], "@": ["shift", "apostrophe"],
+        "#": ["backslash"], "~": ["shift", "backslash"],
+        "\\": ["less"], "|": ["shift", "less"],
+    },
+}
+
+
+def layout_for(vm):
+    name = os.environ.get("VMCTL_LAYOUT")
+    f = vm_paths(vm)["dir"] / "vmctl-layout"
+    if not name and f.exists():
+        name = f.read_text().strip()
+    name = name or "us"
+    if name not in LAYOUTS:
+        sys.exit(f"unknown layout {name!r}; known: {', '.join(LAYOUTS)}")
+    return LAYOUTS[name]
+
+
+def parse_key(name):
+    n = name.lower()
+    if n in KEY_ALIASES:
+        return KEY_ALIASES[n]
+    if len(n) == 1 and n in PLAIN:
+        return PLAIN[n]
+    if n.startswith("f") and n[1:].isdigit():
+        return n
+    return n  # assume a raw qcode
+
+
+def tap(q, codes, hold=0.03):
+    q.events([key_ev(c, True) for c in codes])
+    time.sleep(hold)
+    q.events([key_ev(c, False) for c in reversed(codes)])
+    time.sleep(0.02)
+
+
+def type_text(q, text, layout):
+    for ch in text:
+        if ch in layout:
+            tap(q, layout[ch])
+        elif ch in PLAIN:
+            tap(q, [PLAIN[ch]])
+        elif ch in SHIFTED:
+            tap(q, ["shift", PLAIN.get(SHIFTED[ch], SHIFTED[ch])])
+        else:
+            sys.exit(f"can't type {ch!r} (US layout ASCII only)")
+
+
+# --- lifecycle --------------------------------------------------------------
+
+def running(vm):
+    pid = vm_paths(vm)["pid"]
+    if not pid.exists():
+        return False
+    try:
+        os.kill(int(pid.read_text().strip()), 0)
+        return True
+    except (ValueError, ProcessLookupError, PermissionError):
+        return False
+
+
+def ssh_port(vm):
+    ports = vm_paths(vm)["ports"]
+    if ports.exists():
+        for line in ports.read_text().splitlines():
+            parts = line.split(",")
+            if parts[0] == "ssh":
+                return parts[1]
+    return "22220"
+
+
+def spice_port(vm):
+    ports = vm_paths(vm)["ports"]
+    if ports.exists():
+        for line in ports.read_text().splitlines():
+            parts = line.split(",")
+            if parts[0] == "spice":
+                return parts[1]
+    return None
+
+
+def guest_profile(vm):
+    """Guest-specific SSH settings; QMP input/screen control stays OS-independent."""
+    path = vm_paths(vm)["dir"] / "vmctl.json"
+    profile = json.loads(path.read_text()) if path.exists() else {}
+    conf = vm_paths(vm)["conf"].read_text()
+    match = re.search(r'''^guest_os\s*=\s*["']([^"']+)["']''', conf, re.MULTILINE)
+    detected = match[1] if match else "linux"
+    profile.setdefault("os", "windows" if detected.startswith("windows") else detected)
+    profile["user"] = os.environ.get("VMCTL_USER") or profile.get("user")
+    if not profile["user"]:
+        if profile["os"] == "windows":
+            profile["user"] = "Quickemu"
+        else:
+            sys.exit(f"set VMCTL_USER or 'user' in {path} for this guest's SSH account")
+    profile.setdefault("checkout", "C:/lw/lewdware" if profile["os"] == "windows" else "lewdware")
+    return profile
+
+
+def ssh_args(vm, scp=False):
+    profile = guest_profile(vm)
+    key = Path(os.environ.get("VMCTL_KEY", Path.home() / ".ssh" / "vmctl_ed25519"))
+    return ["scp" if scp else "ssh", "-P" if scp else "-p", ssh_port(vm),
+            "-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+            "-o", f"UserKnownHostsFile={vm_paths(vm)['dir'] / 'vmctl-known-hosts'}",
+            "-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=accept-new"], f"{profile['user']}@localhost"
+
+
+def up(vm):
+    p = vm_paths(vm)
+    if running(vm):
+        if p["qmp"].exists():
+            print(f"{vm} already running")
+            return
+        sys.exit(f"{vm} is running without a QMP socket (started outside vmctl?) - shut it down first")
+    if not p["conf"].exists():
+        sys.exit(f"no {p['conf']}")
+    p["qmp"].unlink(missing_ok=True)
+    log = STATE_DIR / f"{vm}-quickemu.log"
+    STATE_DIR.mkdir(exist_ok=True)
+    rel_qmp = p["qmp"].relative_to(VM_DIR)
+    extra = f"-qmp unix:{rel_qmp},server,nowait"
+    # quickemu sizes RAM from the host (8G here), which gets the VM OOM-killed
+    # when rust-analyzer + rustc are busy on a 16G host. A later -m wins.
+    # Snapshots must be loaded with the RAM size they were saved with.
+    ram_file = p["dir"] / "vmctl-ram"
+    ram = os.environ.get("VMCTL_RAM") or (ram_file.read_text().strip() if ram_file.exists() else "6G")
+    # Leave room for the host instead of launching into the OOM killer. Plain
+    # QEMU -m numbers are MiB. Do not count swap as available guest RAM.
+    match = re.fullmatch(r"(\d+)([MGT]?)", ram.upper())
+    if not match:
+        sys.exit("VMCTL_RAM must be an integer MiB value or use M/G/T (e.g. 3G)")
+    requested = int(match[1]) * {"": 1024**2, "M": 1024**2, "G": 1024**3, "T": 1024**4}[match[2]]
+    meminfo = Path("/proc/meminfo")
+    if meminfo.exists():
+        available = next(int(line.split()[1]) * 1024 for line in meminfo.read_text().splitlines()
+                         if line.startswith("MemAvailable:"))
+        if available < requested + 2 * 1024**3:
+            sys.exit(f"not enough host memory for {ram} plus 2 GiB headroom "
+                     f"({available / 1024**3:.1f} GiB available); reduce VMCTL_RAM or host load")
+    extra += f" -m {ram}"
+    # quickemu's Windows CPU line has +invtsc / migratable=no / hv_passthrough,
+    # all of which block savevm. A later -cpu overrides it with migratable flags.
+    if "windows" in p["conf"].read_text():
+        extra += (" -cpu host,+hypervisor,l3-cache=on,hv_relaxed,hv_vapic,"
+                  "hv_spinlocks=0x1fff,hv_time,hv_vpindex,hv_synic,hv_stimer,hv_runtime")
+    subprocess.Popen(
+        ["quickemu", "--vm", p["conf"].name, "--display", "none",
+         "--extra_args", extra],
+        cwd=VM_DIR, stdout=open(log, "w"), stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    for _ in range(100):
+        if p["qmp"].exists():
+            break
+        time.sleep(0.2)
+    else:
+        sys.exit(f"QMP socket never appeared; see {log}")
+    size_file(vm).unlink(missing_ok=True)
+    sp = spice_port(vm)
+    print(f"{vm} booting. ssh port {ssh_port(vm)}" + (f", watch with: remote-viewer spice://localhost:{sp}" if sp else ""))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--vm", default=os.environ.get("VMCTL_VM", "windows-11"))
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("up"); s.add_argument("name", nargs="?")
+    s = sub.add_parser("down"); s.add_argument("--force", action="store_true")
+    sub.add_parser("status")
+    s = sub.add_parser("ready"); s.add_argument("--timeout", type=float, default=120)
+    s = sub.add_parser("shot"); s.add_argument("out", nargs="?")
+    s = sub.add_parser("wait"); s.add_argument("out", nargs="?")
+    s.add_argument("--stable", type=float, default=3.0)
+    s.add_argument("--timeout", type=float, default=120.0)
+    s.add_argument("--tolerance", type=float, default=0.002,
+                   help="fraction of sampled bytes allowed to differ (default 0.2%%)")
+    s = sub.add_parser("move"); s.add_argument("x", type=int); s.add_argument("y", type=int)
+    s = sub.add_parser("click"); s.add_argument("x", type=int); s.add_argument("y", type=int)
+    s.add_argument("--button", default="left", choices=["left", "right", "middle"])
+    s.add_argument("--double", action="store_true")
+    s = sub.add_parser("drag")
+    for a in ("x1", "y1", "x2", "y2"):
+        s.add_argument(a, type=int)
+    s = sub.add_parser("scroll"); s.add_argument("x", type=int); s.add_argument("y", type=int)
+    s.add_argument("n", type=int)
+    s = sub.add_parser("type"); s.add_argument("text")
+    s = sub.add_parser("key"); s.add_argument("combos", nargs="+")
+    s = sub.add_parser("ssh"); s.add_argument("command", nargs=argparse.REMAINDER)
+    s = sub.add_parser("sync"); s.add_argument("--dest", help="guest checkout (defaults to vmctl.json or OS default)")
+    s.add_argument("--max-mb", type=int, default=10)
+    s = sub.add_parser("launch");s.add_argument("exe"); s.add_argument("args", nargs="*")
+    s = sub.add_parser("push");s.add_argument("local"); s.add_argument("remote")
+    s = sub.add_parser("pull"); s.add_argument("remote"); s.add_argument("local")
+    s = sub.add_parser("snapshot"); s.add_argument("op", choices=["save", "load", "list", "delete"])
+    s.add_argument("name", nargs="?")
+    s = sub.add_parser("hmp"); s.add_argument("line")
+
+    a = ap.parse_args()
+    vm = getattr(a, "name", None) if a.cmd == "up" and a.name else a.vm
+
+    if a.cmd == "up":
+        try:
+            with storage_lock(vm_paths(vm)["dir"]):
+                ensure_ready(vm_paths(vm)["dir"])
+                return up(vm)
+        except (OSError, RuntimeError) as error:
+            sys.exit(str(error))
+    if a.cmd == "status":
+        print(f"{vm}: {'running' if running(vm) else 'stopped'}"
+              f"{'' if not running(vm) or vm_paths(vm)['qmp'].exists() else ' (no QMP)'}")
+        return
+    if a.cmd == "ready":
+        ssh, host = ssh_args(vm)
+        deadline = time.monotonic() + a.timeout
+        last_error = "SSH has not answered"
+        print("waiting for guest SSH", flush=True)
+        while time.monotonic() < deadline:
+            try:
+                probe = subprocess.run([*ssh, host, "echo vmctl-ready"],
+                                       capture_output=True, text=True,
+                                       timeout=min(15, max(1, deadline - time.monotonic())))
+                if probe.returncode == 0 and "vmctl-ready" in probe.stdout.split():
+                    print("guest SSH ready; inspect the screen separately for desktop readiness")
+                    return
+                last_error = probe.stderr.strip() or f"SSH exited {probe.returncode}"
+            except subprocess.TimeoutExpired:
+                last_error = "SSH command timed out"
+            time.sleep(min(2, max(0, deadline - time.monotonic())))
+        sys.exit(f"guest not ready after {a.timeout}s: {last_error}")
+    if (a.cmd == "snapshot" and a.op != "list"
+            and (vm_paths(vm)["dir"] / ".vmctl-base" / "manifest.json").exists()):
+        sys.exit("this VM uses a disk-only baseline; shut down and use vm-storage reset --discard")
+    if a.cmd == "sync":
+        # Copy the working tree (tracked + untracked-not-ignored, so uncommitted
+        # work comes along) into the guest. mtimes are preserved, so unchanged
+        # files don't trigger cargo rebuilds.
+        import tarfile
+        root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+        files = subprocess.check_output(
+            ["git", "ls-files", "-co", "--exclude-standard", "-z"], cwd=root).decode().split("\0")
+        limit = a.max_mb * 1024 * 1024
+        STATE_DIR.mkdir(exist_ok=True)
+        tgz = STATE_DIR / f"{vm}-sync.tgz"
+        skipped, n = [], 0
+        with tarfile.open(tgz, "w:gz", compresslevel=3) as tf:
+            for f in filter(None, files):
+                p = root / f
+                if not p.is_file():
+                    continue  # deleted in the working tree
+                if p.stat().st_size > limit:
+                    skipped.append(f)
+                    continue
+                tf.add(p, arcname=f, recursive=False)
+                n += 1
+        for f in skipped:
+            print(f"skipped (> {a.max_mb} MB): {f}", file=sys.stderr)
+        profile = guest_profile(vm)
+        dest = a.dest or profile["checkout"]
+        parent = posixpath.dirname(dest.rstrip("/")) or "."
+        archive = posixpath.join(parent, ".vmctl-sync.tgz")
+        ssh, host = ssh_args(vm)
+        scp, _ = ssh_args(vm, scp=True)
+        if profile["os"] == "windows":
+            quote = lambda value: "'" + value.replace("'", "''") + "'"
+            prepare = f"$ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force {quote(parent)} | Out-Null"
+            extract = (f"$ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force {quote(dest)} | Out-Null; "
+                       f"tar -xzf {quote(archive)} -C {quote(dest)}; if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}; "
+                       f"Remove-Item -LiteralPath {quote(archive)}")
+        else:
+            prepare = f"mkdir -p -- {shlex.quote(parent)}"
+            extract = (f"mkdir -p -- {shlex.quote(dest)} && tar -xzf {shlex.quote(archive)} -C {shlex.quote(dest)} "
+                       f"&& rm -- {shlex.quote(archive)}")
+        subprocess.run([*ssh, host, prepare], check=True)
+        subprocess.run([*scp, "-q", str(tgz), f"{host}:{archive}"], check=True)
+        subprocess.run([*ssh, host, extract], check=True)
+        print(f"synced {n} files ({tgz.stat().st_size // 1024} KiB) to {dest}")
+        return
+    if a.cmd == "launch" and guest_profile(vm)["os"] == "linux":
+        # Inherit the actual logged-in desktop environment from its user manager,
+        # rather than guessing DISPLAY or importing an SSH login's tty environment.
+        command = (
+            "systemctl --user is-active --quiet graphical-session.target && "
+            "systemctl --user show-environment | grep -Eq '^XDG_SESSION_TYPE=(wayland|x11)$' && "
+            "systemctl --user show-environment | grep -Eq '^(WAYLAND_DISPLAY|DISPLAY)=.+' && "
+            "systemd-run --user --collect --property=Type=exec "
+            f"--unit=vmctl-launch-{time.time_ns()} -- {shlex.join([a.exe, *a.args])}"
+        )
+        a.cmd, a.command = "ssh", [command]
+    if a.cmd == "launch":
+        if guest_profile(vm)["os"] != "windows":
+            sys.exit("launch supports Windows and Linux with an active graphical systemd user session; use the macOS desktop")
+        # Windows: processes started over SSH live in session 0 (invisible).
+        # An interactive scheduled task runs on the logged-in desktop instead.
+        tr = subprocess.list2cmdline([a.exe, *a.args])
+        ps = ("schtasks /create /tn vmctl-launch /sc once /st 00:00 /it /f /tr '"
+              + tr.replace("'", "''") + "' | Out-Null; schtasks /run /tn vmctl-launch | Out-Null; "
+              "schtasks /delete /tn vmctl-launch /f | Out-Null")
+        a.cmd, a.command = "ssh", [ps]
+    if a.cmd in ("ssh", "push", "pull"):
+        if a.cmd == "ssh":
+            ssh, host = ssh_args(vm)
+            cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
+            os.execvp("ssh", [*ssh, host, *cmd])
+        scp, host = ssh_args(vm, scp=True)
+        remote = f"{host}:{a.remote}"
+        src, dst = ((a.local, remote) if a.cmd == "push" else (remote, a.local))
+        os.execvp("scp", [*scp, "-r", src, dst])
+
+    q = QMP(vm_paths(vm)["qmp"])
+
+    if a.cmd == "down":
+        if a.force:
+            q.cmd("quit")
+        else:
+            q.cmd("system_powerdown")
+        print("powering down" if not a.force else "killed")
+    elif a.cmd == "shot":
+        out, w, h = screenshot(q, vm, a.out)
+        print(f"{out} ({w}x{h})")
+    elif a.cmd == "wait":
+        # Wait until the screen hasn't changed (beyond a blinking cursor or
+        # clock tick) for --stable seconds, then shoot. Compares raw PPMs.
+        STATE_DIR.mkdir(exist_ok=True)
+        tmp = STATE_DIR / f"{vm}-wait.ppm"
+        deadline = time.time() + a.timeout
+        last, since = None, time.time()
+        while time.time() < deadline:
+            q.cmd("screendump", filename=str(tmp), format="ppm")
+            cur = tmp.read_bytes()
+            if last is None or len(cur) != len(last):
+                changed = True
+            else:
+                step = 64  # sample every 64th byte; plenty to catch real changes
+                diff = sum(1 for i in range(0, len(cur), step) if cur[i] != last[i])
+                changed = diff > (len(cur) // step) * a.tolerance
+            if changed:
+                last, since = cur, time.time()
+            elif time.time() - since >= a.stable:
+                break
+            time.sleep(0.5)
+        else:
+            print(f"timed out after {a.timeout}s (screen still changing)", file=sys.stderr)
+        out, w, h = screenshot(q, vm, a.out)
+        print(f"{out} ({w}x{h})")
+    elif a.cmd == "move":
+        q.events(abs_events(q, vm, a.x, a.y))
+    elif a.cmd == "click":
+        q.events(abs_events(q, vm, a.x, a.y))
+        time.sleep(0.05)
+        for _ in range(2 if a.double else 1):
+            q.events([btn(a.button, True)]); time.sleep(0.05)
+            q.events([btn(a.button, False)]); time.sleep(0.08)
+    elif a.cmd == "drag":
+        q.events(abs_events(q, vm, a.x1, a.y1)); time.sleep(0.05)
+        q.events([btn("left", True)]); time.sleep(0.1)
+        steps = 12
+        for i in range(1, steps + 1):
+            x = a.x1 + (a.x2 - a.x1) * i // steps
+            y = a.y1 + (a.y2 - a.y1) * i // steps
+            q.events(abs_events(q, vm, x, y)); time.sleep(0.02)
+        time.sleep(0.1)
+        q.events([btn("left", False)])
+    elif a.cmd == "scroll":
+        q.events(abs_events(q, vm, a.x, a.y)); time.sleep(0.05)
+        b = "wheel-down" if a.n > 0 else "wheel-up"
+        for _ in range(abs(a.n)):
+            q.events([btn(b, True)]); q.events([btn(b, False)]); time.sleep(0.03)
+    elif a.cmd == "type":
+        type_text(q, a.text, layout_for(vm))
+    elif a.cmd == "key":
+        for combo in a.combos:
+            tap(q, [parse_key(k) for k in combo.split("+")], hold=0.06)
+            time.sleep(0.1)
+    elif a.cmd == "snapshot":
+        if a.op == "list":
+            print(q.hmp("info snapshots"))
+        else:
+            if not a.name:
+                sys.exit("snapshot name required")
+            hmp_cmd = {"save": "savevm", "load": "loadvm", "delete": "delvm"}[a.op]
+            out = q.hmp(f"{hmp_cmd} {a.name}")
+            if out.strip():
+                print(out)
+            size_file(vm).unlink(missing_ok=True)
+    elif a.cmd == "hmp":
+        print(q.hmp(a.line))
+
+
+if __name__ == "__main__":
+    main()
