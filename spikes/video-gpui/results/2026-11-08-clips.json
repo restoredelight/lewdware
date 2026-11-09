@@ -1,0 +1,167 @@
+[
+  {
+    "clip": "1080p30.mp4",
+    "bytes": 30050675,
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "30/1",
+        "duration": "40.000000",
+        "nb_frames": "1200"
+      },
+      {
+        "codec_name": "opus",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0",
+        "duration": "40.000000",
+        "nb_frames": "2001"
+      }
+    ],
+    "format": {
+      "duration": "40.000000"
+    }
+  },
+  {
+    "clip": "1080p60.mp4",
+    "bytes": 40044039,
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "60/1",
+        "avg_frame_rate": "60/1",
+        "duration": "40.000000",
+        "nb_frames": "2400"
+      },
+      {
+        "codec_name": "opus",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0",
+        "duration": "40.000000",
+        "nb_frames": "2001"
+      }
+    ],
+    "format": {
+      "duration": "40.000000"
+    }
+  },
+  {
+    "clip": "720p30.mp4",
+    "bytes": 16075248,
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1280,
+        "height": 720,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "30/1",
+        "duration": "40.000000",
+        "nb_frames": "1200"
+      },
+      {
+        "codec_name": "opus",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0",
+        "duration": "40.000000",
+        "nb_frames": "2001"
+      }
+    ],
+    "format": {
+      "duration": "40.000000"
+    }
+  },
+  {
+    "clip": "real720p30.mp4",
+    "bytes": 40454730,
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1280,
+        "height": 720,
+        "pix_fmt": "yuv420p",
+        "color_range": "tv",
+        "color_space": "bt709",
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "30/1",
+        "duration": "58.900000",
+        "nb_frames": "1767"
+      },
+      {
+        "codec_name": "opus",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0",
+        "duration": "58.909000",
+        "nb_frames": "2946"
+      }
+    ],
+    "format": {
+      "duration": "58.909000"
+    }
+  },
+  {
+    "clip": "realalpha384.mp4",
+    "bytes": 196116,
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 384,
+        "height": 768,
+        "pix_fmt": "yuvj420p",
+        "color_range": "pc",
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "55/12",
+        "duration": "9.600000",
+        "nb_frames": "44"
+      }
+    ],
+    "format": {
+      "duration": "9.600000"
+    }
+  },
+  {
+    "clip": "transparent720p30.mp4",
+    "bytes": 20988264,
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1280,
+        "height": 1440,
+        "pix_fmt": "yuvj420p",
+        "color_range": "pc",
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "30/1",
+        "duration": "40.000000",
+        "nb_frames": "1200"
+      },
+      {
+        "codec_name": "opus",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0",
+        "duration": "40.000000",
+        "nb_frames": "2001"
+      }
+    ],
+    "format": {
+      "duration": "40.000000"
+    }
+  }
+]

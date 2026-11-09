@@ -1,0 +1,23 @@
+[package]
+name = "video-gpui-spike"
+version.workspace = true
+description = "Throwaway spike: can gpui play decoded video smoothly, in sync with audio? See README.md."
+authors = ["restoredelight"]
+edition = "2024"
+publish = false
+
+# Build and run with `-p video-gpui-spike` only; see config-gpui/README.md for why a workspace-wide
+# build (zbus's `tokio` feature) breaks gpui apps.
+
+[dependencies]
+gpui-kit = "0.9.0"
+media-gpui = { path = "../../media-gpui" }
+# Matches lewdware/Cargo.toml.
+ffmpeg-next = "9.0.0"
+anyhow = "1"
+libc = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+static-ffmpeg = ["ffmpeg-next/static", "media-gpui/static-ffmpeg"]

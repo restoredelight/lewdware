@@ -9,6 +9,8 @@ members = [
     "config/src-tauri",
     "config-gpui",
     "shared-gpui",
+    "media-gpui",
+    "spikes/video-gpui",
     "supervisor"
 ]
 resolver = "3"

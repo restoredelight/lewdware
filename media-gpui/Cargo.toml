@@ -1,0 +1,24 @@
+[package]
+name = "media-gpui"
+version.workspace = true
+edition = "2024"
+publish = false
+description = "Bounded media decoding and GPUI previews for the pack editor"
+
+[dependencies]
+gpui-kit = "0.9.0"
+shared-gpui = { path = "../shared-gpui" }
+ffmpeg-next = "9.0.0"
+rodio = { git = "https://github.com/RustAudio/rodio.git", rev = "c5f1e94290922fe4ee963ce6f85754ea6ba36243" }
+anyhow = "1"
+bytemuck = "1.24.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "avif-native"] }
+libc = "0.2"
+smallvec = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+static-ffmpeg = ["ffmpeg-next/static"]

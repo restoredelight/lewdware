@@ -1,0 +1,12 @@
+# Rebuilt executable SHA-256: 2023e82b08ac20aac7336fcbdf84bf2a8cbfd85e8680f000914c2f8f3ab5f7c7
+# Sequence-based gap counter; same VFR alpha clip and 30s/3s measurement.
+SUMMARY clip=realalpha384.mp4 present=Element scale=Gpu pump=Vsync frame=384x384 secs=30.1 cpu=20.1% rss_start=167 rss_end=168 rss_max=169 gpu_start=108 gpu_end=108 gpu_max=108 shown=114 expected=138 gaps=0 late_skips=0 superseded=0 late_gt_1frame=0 lateness_ms_p50=8.4 p95=15.4 max=16.1 drift_end_ms=+64.9 audio_rate=1.0000 gpu_growth_mb_s=-0.0 renders=1801 render_ms=0.07 paint_ms=1.60 decode_ms=0.01 convert_ms=0.26 audio=false
+
+# Warm-up boundary guard: non-leaking clip, --gpu-limit 1 --warmup 1.
+SUMMARY ABORTED(gpu-limit) clip=720p30.mp4 present=Element scale=Gpu pump=Vsync frame=1280x720 secs=1.1 cpu=42.9% rss_start=141 rss_end=199 rss_max=199 gpu_start=51 gpu_end=112 gpu_max=112 shown=32 expected=33 gaps=0 late_skips=0 superseded=0 late_gt_1frame=0 lateness_ms_p50=-10.3 p95=7.0 max=16.3 drift_end_ms=+31.0 audio_rate=0.0000 gpu_growth_mb_s=54.1 renders=59 render_ms=0.18 paint_ms=0.99 decode_ms=0.01 convert_ms=3.55 audio=true
+
+# Bounded-read control check: synthetic 720p, offset=1234 length=16075248.
+# Inspected screenshots: paused seek=5.000s, resumed=6.000s, paused=7.033s.
+# Shift_L primed X11 keyboard before Right/Space; separate paused Home check=0.000s.
+# Control summaries are not performance measurements because they include pauses/seeks.
+SUMMARY clip=bounded.bin present=Element scale=Gpu pump=Vsync frame=1280x720 secs=14.0 cpu=14.5% rss_start=182 rss_end=192 rss_max=192 gpu_start=106 gpu_end=110 gpu_max=110 shown=62 expected=420 gaps=0 late_skips=0 superseded=0 late_gt_1frame=0 lateness_ms_p50=-11.7 p95=7.0 max=8.3 drift_end_ms=-28.3 audio_rate=0.4998 gpu_growth_mb_s=0.3 renders=844 render_ms=0.05 paint_ms=0.06 decode_ms=0.01 convert_ms=1.07 audio=true
