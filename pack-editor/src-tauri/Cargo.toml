@@ -21,25 +21,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shared = { path = "../../shared" }
 converter = { path = "../../converter" }
+pack-editor-core = { path = "../../pack-editor-core" }
 anyhow = "1"
 axum = "0.8"
-blake3 = "1.8"
 dirs = "6"
-futures = "0.3"
-infer = "0.22.0"
-libc = "0.2"
-mime_guess = "2"
-r2d2 = "0.8"
-r2d2_sqlite = { version = "0.35.0", features = ["bundled"] }
-rayon = "1"
-reflink-copy = "0.1"
 rusqlite = { version = "0.40.1", features = ["array", "backup", "bundled", "fallible_uint", "session", "vtab"] }
-tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 uuid = { version = "1", features = ["v4"] }
-walkdir = "2"
 
 # Holding off idle suspend during long imports and saves (see src/keep_awake.rs). Linux goes
 # through the desktop portal instead, which keepawake does not use.
@@ -48,8 +38,3 @@ ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 keepawake = "0.6"
-
-[dev-dependencies]
-proptest = "1"
-tracing-subscriber = "0.3"
-zip = "2.2"

@@ -17,7 +17,7 @@ use uuid::Uuid;
 /// The behaviour tables are pulled in from `editor_db` rather than listed again, because that list
 /// already has to be exhaustive for the save/reopen copy to work -- and two exhaustive lists that
 /// have to agree is precisely the arrangement that stops agreeing.
-fn tracked_tables() -> impl Iterator<Item = &'static str> {
+pub fn tracked_tables() -> impl Iterator<Item = &'static str> {
     const CORE: &[&str] = &[
         "media",
         "tags",
@@ -43,7 +43,7 @@ pub struct Status {
 }
 
 pub fn record<T>(
-    connection: &mut Connection,
+    connection: &Connection,
     label: &str,
     storage_bytes: u64,
     media_refs: &[u64],
@@ -65,7 +65,7 @@ pub fn record<T>(
 /// row back exactly as it was produces an empty changeset and is not a change, however much SQL
 /// it ran to get there. Callers use it to decide whether the pack now has unsaved work.
 pub fn record_with_media_refs<T>(
-    connection: &mut Connection,
+    connection: &Connection,
     label: &str,
     storage_bytes: u64,
     operation: impl FnOnce(&Transaction<'_>) -> Result<(T, Vec<u64>)>,
@@ -139,16 +139,16 @@ pub fn record_with_media_refs<T>(
     Ok((value, true))
 }
 
-pub fn undo(connection: &mut Connection) -> Result<Status> {
+pub fn undo(connection: &Connection) -> Result<Status> {
     apply_at_cursor(connection, false)
 }
 
-pub fn redo(connection: &mut Connection) -> Result<Status> {
+pub fn redo(connection: &Connection) -> Result<Status> {
     apply_at_cursor(connection, true)
 }
 
-pub fn begin_media_import(connection: &mut Connection) -> Result<i64> {
-    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+pub fn begin_media_import(connection: &Connection) -> Result<i64> {
+    let tx = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
     let cursor: i64 = tx.query_row(
         "SELECT cursor FROM history_state WHERE singleton = 1",
         [],
@@ -183,14 +183,14 @@ pub fn begin_media_import(connection: &mut Connection) -> Result<i64> {
 }
 
 pub fn record_media_visibility<T>(
-    connection: &mut Connection,
+    connection: &Connection,
     label: &str,
     media_ids: &[u64],
     deleted: bool,
     operation: impl FnOnce(&Transaction<'_>) -> Result<T>,
 ) -> Result<T> {
     if media_ids.is_empty() {
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
         let value = operation(&tx)?;
         tx.commit()?;
         return Ok(value);
@@ -313,7 +313,7 @@ pub fn add_imported_media(
 ///
 /// Call once per pending entry, before `finish_media_import`.
 pub fn record_into_pending<T>(
-    connection: &mut Connection,
+    connection: &Connection,
     history_id: i64,
     operation: impl FnOnce(&Transaction<'_>) -> Result<T>,
 ) -> Result<T> {
@@ -344,11 +344,11 @@ pub fn record_into_pending<T>(
 /// Finalizes a pending media import. `label` overrides the default "Import N media items" for a
 /// caller that folded something else in and wants the entry named after the whole action.
 pub fn finish_media_import(
-    connection: &mut Connection,
+    connection: &Connection,
     history_id: i64,
     label: Option<&str>,
 ) -> Result<Status> {
-    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
     let count: i64 = tx.query_row(
         "SELECT COUNT(*) FROM history_media_refs WHERE history_id = ?",
         [history_id],
@@ -437,8 +437,8 @@ fn on_conflict(conflict: ConflictType, _item: ChangesetItem) -> ConflictAction {
     }
 }
 
-fn apply_at_cursor(connection: &mut Connection, redo: bool) -> Result<Status> {
-    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+fn apply_at_cursor(connection: &Connection, redo: bool) -> Result<Status> {
+    let tx = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
     let cursor: i64 = tx.query_row(
         "SELECT cursor FROM history_state WHERE singleton = 1",
         [],

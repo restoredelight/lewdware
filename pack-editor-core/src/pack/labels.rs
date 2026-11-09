@@ -4,7 +4,7 @@
 use super::*;
 
 use crate::history;
-use anyhow::{bail, Result};
+use anyhow::Result;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use shared::{behaviour::Behaviour, tags};
@@ -242,35 +242,8 @@ impl MediaPack {
     /// answers to "what breaks if I delete this?": one is captions and groups, the other is which
     /// media a timeline stage selects.
     pub async fn get_tag_rows(&self) -> Result<Vec<TagRow>> {
-        self.db_execute(move |conn| {
-            let mut statement = conn.prepare(
-                "SELECT tags.name,
-                        COUNT(DISTINCT media.id),
-                        (SELECT COUNT(*) FROM behaviour_content_group_tag t
-                             WHERE t.tag_id = tags.id)
-                          + (SELECT COUNT(*) FROM behaviour_content_entry_tag t WHERE t.tag_id = tags.id),
-                        (SELECT COUNT(*) FROM behaviour_stage_tag t WHERE t.tag_id = tags.id)
-                 FROM tags
-                 LEFT JOIN media_tags ON media_tags.tag_id = tags.id
-                 LEFT JOIN media ON media.id = media_tags.media_id AND media.deleted = FALSE
-                 GROUP BY tags.id ORDER BY tags.name COLLATE NOCASE",
-            )?;
-            let rows = statement.query_map([], |row| {
-                Ok(TagRow {
-                    name: row.get(0)?,
-                    media_count: row.get(1)?,
-                    content_uses: row.get(2)?,
-                    experience_uses: row.get(3)?,
-                })
-            })?;
-            // Same filter as `get_all_tags`: the Tags tab never lists a tag the author can't edit.
-            Ok(rows
-                .collect::<rusqlite::Result<Vec<TagRow>>>()?
-                .into_iter()
-                .filter(|row| !tags::is_managed(&row.name))
-                .collect())
-        })
-        .await
+        self.db_execute(move |conn| ops::library::tag_rows(&conn))
+            .await
     }
 
     /// Every media slot pointing at `media`, described the way an author would recognize it.
@@ -282,43 +255,8 @@ impl MediaPack {
     /// Includes stages of a switched-off timeline, deliberately: those slots still exist, and a
     /// removal would still empty them.
     pub async fn get_media_usage(&self, media: u64) -> Result<Vec<MediaUsage>> {
-        self.db_execute(move |conn| {
-            let mut usage = Vec::new();
-            let (wallpaper, splash): (Option<u64>, Option<u64>) = conn
-                .query_row(
-                    "SELECT wallpaper, splash FROM behaviour_content",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()?
-                .unwrap_or((None, None));
-            if wallpaper == Some(media) {
-                usage.push(MediaUsage {
-                    label: "Wallpaper".to_string(),
-                    target: MediaUsageTarget::Wallpaper,
-                });
-            }
-            if splash == Some(media) {
-                usage.push(MediaUsage {
-                    label: "Splash".to_string(),
-                    target: MediaUsageTarget::Splash,
-                });
-            }
-            let mut statement = conn.prepare(
-                "SELECT id, label FROM behaviour_stage WHERE wallpaper = ? ORDER BY position",
-            )?;
-            let stages: Vec<(String, String)> = statement
-                .query_map(params![media], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .collect::<rusqlite::Result<_>>()?;
-            for (id, label) in stages {
-                usage.push(MediaUsage {
-                    label: format!("Wallpaper for \u{201c}{label}\u{201d}"),
-                    target: MediaUsageTarget::Stage { id },
-                });
-            }
-            Ok(usage)
-        })
-        .await
+        self.db_execute(move |conn| ops::library::media_usage(&conn, media))
+            .await
     }
 
     /// Renames a tag. The behaviour document follows on its own: every tag list in it is a join
@@ -331,22 +269,8 @@ impl MediaPack {
         reject_managed_tag(&from)?;
         reject_managed_tag(&to)?;
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            history::record_with_media_refs(&mut conn, "Rename tag", 0, |tx| {
-                let media_ids = tag_media_ids(tx, &from)?;
-                let target_exists: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM tags WHERE name = ?)",
-                    params![to],
-                    |row| row.get(0),
-                )?;
-                if target_exists {
-                    bail!("A tag named \"{to}\" already exists. Merge the tags instead.");
-                }
-                tx.execute("UPDATE tags SET name = ? WHERE name = ?", params![to, from])?;
-                Ok(((), media_ids))
-            })
-        })
-        .await?;
+        self.db_execute(move |conn| ops::rename_tag(&conn, &from, &to))
+            .await?;
         self.mark_unsaved().await
     }
 
@@ -360,40 +284,8 @@ impl MediaPack {
         reject_managed_tag(&from)?;
         reject_managed_tag(&to)?;
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            history::record_with_media_refs(&mut conn, "Merge tags", 0, |tx| {
-                let media_ids = tag_media_ids(tx, &from)?;
-                tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![to])?;
-                let source: Option<u64> = tx
-                    .query_row("SELECT id FROM tags WHERE name = ?", params![from], |row| {
-                        row.get(0)
-                    })
-                    .optional()?;
-                let Some(source) = source else {
-                    return Ok(((), media_ids));
-                };
-                let target: u64 =
-                    tx.query_row("SELECT id FROM tags WHERE name = ?", params![to], |row| {
-                        row.get(0)
-                    })?;
-                for (table, key) in TAG_JOIN_TABLES {
-                    tx.execute(
-                        &format!("UPDATE OR IGNORE {table} SET tag_id = ?1 WHERE tag_id = ?2"),
-                        params![target, source],
-                    )?;
-                    let _ = key;
-                }
-                // Whatever the re-point skipped as a duplicate, plus the tag itself. Dropping
-                // the row would cascade the survivors away, so it goes last.
-                tx.execute(
-                    "UPDATE OR IGNORE media_tags SET tag_id = ?1 WHERE tag_id = ?2",
-                    params![target, source],
-                )?;
-                tx.execute("DELETE FROM tags WHERE id = ?", params![source])?;
-                Ok(((), media_ids))
-            })
-        })
-        .await?;
+        self.db_execute(move |conn| ops::merge_tag(&conn, &from, &to))
+            .await?;
         self.mark_unsaved().await
     }
 
@@ -404,14 +296,8 @@ impl MediaPack {
     /// to be three statements and a document rewrite.
     pub async fn delete_tag(&self, tag: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            history::record_with_media_refs(&mut conn, "Delete tag", 0, |tx| {
-                let media_ids = tag_media_ids(tx, &tag)?;
-                tx.execute("DELETE FROM tags WHERE name = ?", params![tag])?;
-                Ok(((), media_ids))
-            })
-        })
-        .await?;
+        self.db_execute(move |conn| ops::delete_tag(&conn, &tag))
+            .await?;
         self.mark_unsaved().await
     }
 
@@ -430,8 +316,8 @@ impl MediaPack {
     pub async fn add_tag(&self, id: u64, tag: String) -> Result<()> {
         reject_managed_tag(&tag)?;
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::record(&mut connection, "Add media tag", 0, &[id], |tx| {
+        self.db_execute(move |connection| {
+            history::record(&connection, "Add media tag", 0, &[id], |tx| {
                 let tag_id: u64 =
                     tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
                         row.get("id")
@@ -450,25 +336,19 @@ impl MediaPack {
     pub async fn create_and_add_tag(&self, id: u64, tag: String) -> Result<()> {
         reject_managed_tag(&tag)?;
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::record(
-                &mut connection,
-                "Create and add media tag",
-                0,
-                &[id],
-                |tx| {
-                    let tag_id: u64 = tx.query_row(
-                        "INSERT INTO tags (name) VALUES (?) RETURNING id",
-                        params![tag],
-                        |row| row.get("id"),
-                    )?;
-                    tx.execute(
-                        "INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?)",
-                        params![id, tag_id],
-                    )?;
-                    Ok(())
-                },
-            )
+        self.db_execute(move |connection| {
+            history::record(&connection, "Create and add media tag", 0, &[id], |tx| {
+                let tag_id: u64 = tx.query_row(
+                    "INSERT INTO tags (name) VALUES (?) RETURNING id",
+                    params![tag],
+                    |row| row.get("id"),
+                )?;
+                tx.execute(
+                    "INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?)",
+                    params![id, tag_id],
+                )?;
+                Ok(())
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -537,8 +417,8 @@ impl MediaPack {
 
     pub async fn remove_tag(&self, id: u64, tag: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::record(&mut connection, "Remove media tag", 0, &[id], |tx| {
+        self.db_execute(move |connection| {
+            history::record(&connection, "Remove media tag", 0, &[id], |tx| {
                 tx.execute(
                     "DELETE FROM media_tags WHERE media_id = ? AND tag_id IN (SELECT id FROM tags WHERE name = ?)",
                     params![id, tag],
@@ -556,23 +436,8 @@ impl MediaPack {
             return Ok(());
         }
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::record(&mut connection, "Add tag to media", 0, &ids, |tx| {
-                tx.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", params![tag])?;
-                let tag_id: u64 =
-                    tx.query_row("SELECT id FROM tags WHERE name = ?", params![tag], |row| {
-                        row.get("id")
-                    })?;
-                for id in &ids {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)",
-                        params![id, tag_id],
-                    )?;
-                }
-                Ok(())
-            })
-        })
-        .await?;
+        self.db_execute(move |conn| ops::add_tag_to_files(&conn, &ids, &tag))
+            .await?;
         self.mark_unsaved().await
     }
 
@@ -581,14 +446,8 @@ impl MediaPack {
             return Ok(());
         }
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::record(&mut connection, "Remove tag from media", 0, &ids, |tx| {
-                for id in &ids {
-                    tx.execute("DELETE FROM media_tags WHERE media_id = ? AND tag_id IN (SELECT id FROM tags WHERE name = ?)", params![id, tag])?;
-                }
-                Ok(())
-            })
-        }).await?;
+        self.db_execute(move |conn| ops::remove_tag_from_files(&conn, &ids, &tag))
+            .await?;
         self.mark_unsaved().await
     }
 
@@ -606,8 +465,8 @@ impl MediaPack {
 
     pub async fn add_artist(&self, id: u64, artist: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::record(&mut connection, "Add media artist", 0, &[id], |tx| {
+        self.db_execute(move |connection| {
+            history::record(&connection, "Add media artist", 0, &[id], |tx| {
                 let artist_id: u64 = tx.query_row(
                     "SELECT id FROM artists WHERE name = ?",
                     params![artist],
@@ -626,25 +485,19 @@ impl MediaPack {
 
     pub async fn create_and_add_artist(&self, id: u64, artist: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::record(
-                &mut connection,
-                "Create and add media artist",
-                0,
-                &[id],
-                |tx| {
-                    let artist_id: u64 = tx.query_row(
-                        "INSERT INTO artists (name) VALUES (?) RETURNING id",
-                        params![artist],
-                        |row| row.get("id"),
-                    )?;
-                    tx.execute(
-                        "INSERT INTO media_artists (media_id, artist_id) VALUES (?, ?)",
-                        params![id, artist_id],
-                    )?;
-                    Ok(())
-                },
-            )
+        self.db_execute(move |connection| {
+            history::record(&connection, "Create and add media artist", 0, &[id], |tx| {
+                let artist_id: u64 = tx.query_row(
+                    "INSERT INTO artists (name) VALUES (?) RETURNING id",
+                    params![artist],
+                    |row| row.get("id"),
+                )?;
+                tx.execute(
+                    "INSERT INTO media_artists (media_id, artist_id) VALUES (?, ?)",
+                    params![id, artist_id],
+                )?;
+                Ok(())
+            })
         })
         .await?;
         self.mark_unsaved().await
@@ -652,8 +505,8 @@ impl MediaPack {
 
     pub async fn remove_artist(&self, id: u64, artist: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::record(&mut connection, "Remove media artist", 0, &[id], |tx| {
+        self.db_execute(move |connection| {
+            history::record(&connection, "Remove media artist", 0, &[id], |tx| {
                 tx.execute(
                     "DELETE FROM media_artists WHERE media_id = ? AND artist_id IN (SELECT id FROM artists WHERE name = ?)",
                     params![id, artist],
@@ -696,60 +549,22 @@ impl MediaPack {
 
     pub async fn rename_artist(&self, from: String, to: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            history::record_with_media_refs(&mut conn, "Rename artist", 0, |tx| {
-                let media_ids = artist_media_ids(tx, &from)?;
-                let target_exists: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM artists WHERE name = ?)",
-                    params![to],
-                    |row| row.get(0),
-                )?;
-                if target_exists {
-                    bail!("An artist named \"{to}\" already exists. Merge the artists instead.");
-                }
-                let changed = tx.execute(
-                    "UPDATE artists SET name = ? WHERE name = ?",
-                    params![to, from],
-                )?;
-                if changed == 0 {
-                    tx.execute("INSERT INTO artists (name) VALUES (?)", params![to])?;
-                }
-                Ok(((), media_ids))
-            })
-        })
-        .await?;
+        self.db_execute(move |conn| ops::rename_artist(&conn, &from, &to))
+            .await?;
         self.mark_unsaved().await
     }
 
     pub async fn merge_artist(&self, from: String, to: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            history::record_with_media_refs(&mut conn, "Merge artists", 0, |tx| {
-            let media_ids = artist_media_ids(tx, &from)?;
-            tx.execute("INSERT OR IGNORE INTO artists (name) VALUES (?)", params![to])?;
-            tx.execute("INSERT OR IGNORE INTO media_artists (media_id, artist_id) SELECT media_artists.media_id, target.id FROM media_artists JOIN artists source ON source.id = media_artists.artist_id JOIN artists target ON target.name = ? WHERE source.name = ?", params![to, from])?;
-            tx.execute("DELETE FROM media_artists WHERE artist_id IN (SELECT id FROM artists WHERE name = ?)", params![from])?;
-            tx.execute("DELETE FROM artists WHERE name = ?", params![from])?;
-            Ok(((), media_ids))
-            })
-        }).await?;
+        self.db_execute(move |conn| ops::merge_artist(&conn, &from, &to))
+            .await?;
         self.mark_unsaved().await
     }
 
     pub async fn delete_artist(&self, artist: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            history::record_with_media_refs(&mut conn, "Delete artist", 0, |tx| {
-            let media_ids = artist_media_ids(tx, &artist)?;
-            tx.execute(
-                "DELETE FROM media_artists WHERE artist_id IN (SELECT id FROM artists WHERE name = ?)",
-                params![artist],
-            )?;
-            tx.execute("DELETE FROM artists WHERE name = ?", params![artist])?;
-            Ok(((), media_ids))
-            })
-        })
-        .await?;
+        self.db_execute(move |conn| ops::delete_artist(&conn, &artist))
+            .await?;
         self.mark_unsaved().await
     }
 
@@ -758,27 +573,8 @@ impl MediaPack {
             return Ok(());
         }
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            history::record(&mut conn, "Add artist to media", 0, &ids, |tx| {
-                tx.execute(
-                    "INSERT OR IGNORE INTO artists (name) VALUES (?)",
-                    params![artist],
-                )?;
-                let artist_id: u64 = tx.query_row(
-                    "SELECT id FROM artists WHERE name = ?",
-                    params![artist],
-                    |row| row.get("id"),
-                )?;
-                for id in &ids {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO media_artists (media_id, artist_id) VALUES (?, ?)",
-                        params![id, artist_id],
-                    )?;
-                }
-                Ok(())
-            })
-        })
-        .await?;
+        self.db_execute(move |conn| ops::add_artist_to_files(&conn, &ids, &artist))
+            .await?;
         self.mark_unsaved().await
     }
 
@@ -787,14 +583,8 @@ impl MediaPack {
             return Ok(());
         }
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            history::record(&mut conn, "Remove artist from media", 0, &ids, |tx| {
-            for id in &ids {
-                tx.execute("DELETE FROM media_artists WHERE media_id = ? AND artist_id IN (SELECT id FROM artists WHERE name = ?)", params![id, artist])?;
-            }
-            Ok(())
-            })
-        }).await?;
+        self.db_execute(move |conn| ops::remove_artist_from_files(&conn, &ids, &artist))
+            .await?;
         self.mark_unsaved().await
     }
 }

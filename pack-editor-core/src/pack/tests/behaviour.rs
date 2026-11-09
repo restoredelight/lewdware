@@ -723,9 +723,7 @@ fn membership_action(
         move |tx: &Transaction<'_>| {
             let plan = behaviour_editor::plan_stage_membership(tx, media, &stage, member)?;
             Ok(Prepared {
-                tag_actions: crate::commands::behaviour::stage::membership_tag_actions(
-                    media, &plan,
-                ),
+                tag_actions: crate::pack::membership_tag_actions(media, &plan),
                 value: plan,
                 retiring: Vec::new(),
             })

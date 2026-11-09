@@ -26,7 +26,8 @@ use shared::behaviour::{
 use tauri::State;
 
 use super::setter;
-use crate::pack::{BehaviourAction, BehaviourOutcome, Prepared, TagAction};
+use crate::pack::ops::timeline as ops;
+use crate::pack::{BehaviourAction, BehaviourOutcome};
 use crate::AppState;
 
 /// The result of changing one file's membership in a stage.
@@ -111,30 +112,8 @@ pub async fn remove_stage(
 ) -> Result<BehaviourOutcome, String> {
     state
         .with_pack(async |pack| {
-            let reading = id.clone();
-            pack.behaviour_edit(BehaviourAction::planned(
-                label,
-                move |tx: &Transaction<'_>| {
-                    Ok(Prepared {
-                        value: (),
-                        retiring: editor::stage_scenery(tx, &reading)?,
-                        // Both of them: a stage owns an inclusion tag and an exclusion tag, and
-                        // leaving either behind litters the pack with a tag nothing can reach.
-                        tag_actions: editor::stage_owned_tags(tx, &reading)?
-                            .into_iter()
-                            .map(|owned| {
-                                if also_remove_tag {
-                                    TagAction::Delete { tag: owned.tag }
-                                } else {
-                                    TagAction::RetireIfUnclaimed { tag: owned.tag }
-                                }
-                            })
-                            .collect(),
-                    })
-                },
-                move |tx: &Transaction<'_>, ()| editor::remove_stage(tx, &id),
-            ))
-            .await
+            pack.behaviour_edit(ops::remove_stage_action(id, also_remove_tag, label))
+                .await
         })
         .await
 }
@@ -160,38 +139,8 @@ pub async fn set_stage_label(
 ) -> Result<BehaviourOutcome, String> {
     state
         .with_pack(async |pack| {
-            let (stage, renaming) = (id.clone(), value.clone());
-            pack.behaviour_edit(BehaviourAction::planned(
-                label,
-                move |tx: &Transaction<'_>| {
-                    // Both sides: a stage owns `stage-peak` to put files in and `not-stage-peak` to
-                    // keep them out, and renaming only one leaves the pair disagreeing about which
-                    // stage they belong to.
-                    let mut renames = Vec::new();
-                    for owned in editor::stage_owned_tags(tx, &stage)? {
-                        if editor::stage_tag_shared(tx, &owned.tag, &stage)? {
-                            continue;
-                        }
-                        let to = if owned.excluded {
-                            editor::stage_exclude_tag_name(tx, &renaming, Some(&owned.tag))?
-                        } else {
-                            editor::stage_tag_name(tx, &renaming, Some(&owned.tag))?
-                        };
-                        if to != owned.tag {
-                            renames.push(TagAction::Rename {
-                                from: owned.tag,
-                                to,
-                            });
-                        }
-                    }
-                    Ok(Prepared {
-                        tag_actions: renames,
-                        ..Prepared::default()
-                    })
-                },
-                move |tx: &Transaction<'_>, ()| editor::set_stage_label(tx, &id, &value),
-            ))
-            .await
+            pack.behaviour_edit(ops::set_stage_label_action(id, value, label))
+                .await
         })
         .await
 }
@@ -243,41 +192,8 @@ pub async fn restrict_stage_content(
 ) -> Result<BehaviourOutcome, String> {
     state
         .with_pack(async |pack| {
-            let (naming, writing) = (id.clone(), id);
-            pack.behaviour_edit(BehaviourAction::planned(
-                label,
-                move |tx: &Transaction<'_>| {
-                    let Some(label) = editor::read_one_stage_label(tx, &naming)? else {
-                        anyhow::bail!("no stage {naming}");
-                    };
-                    // Already restricting: nothing to name, and nothing to seed.
-                    if editor::stage_restricts_content(tx, &naming)? {
-                        return Ok(Prepared::default());
-                    }
-                    let tag = editor::stage_tag_name(tx, &label, None)?;
-                    Ok(Prepared {
-                        // `media: None` is "every file in the pack", resolved against the pack
-                        // rather than by shipping every id across the IPC boundary to describe one
-                        // checkbox.
-                        tag_actions: vec![TagAction::Apply {
-                            tag: tag.clone(),
-                            media: None,
-                        }],
-                        value: Some(tag),
-                        retiring: Vec::new(),
-                    })
-                },
-                move |tx: &Transaction<'_>, tag: Option<String>| match tag {
-                    Some(tag) => editor::set_stage_content_tags(
-                        tx,
-                        &writing,
-                        Some(std::slice::from_ref(&tag)),
-                        Some(&tag),
-                    ),
-                    None => Ok(()),
-                },
-            ))
-            .await
+            pack.behaviour_edit(ops::restrict_stage_content_action(id, label))
+                .await
         })
         .await
 }
@@ -338,20 +254,7 @@ pub async fn set_stage_membership(
             }
 
             let outcome = pack
-                .behaviour_edit(BehaviourAction::planned(
-                    label,
-                    move |tx: &Transaction<'_>| {
-                        let plan = editor::plan_stage_membership(tx, media, &stage, member)?;
-                        Ok(Prepared {
-                            tag_actions: membership_tag_actions(media, &plan),
-                            value: plan,
-                            retiring: Vec::new(),
-                        })
-                    },
-                    |tx: &Transaction<'_>, plan: editor::MembershipPlan| {
-                        editor::apply_membership_creation(tx, &plan)
-                    },
-                ))
+                .behaviour_edit(ops::set_stage_membership_action(media, stage, member, label))
                 .await?;
             Ok(MembershipOutcome::Applied { outcome })
         })
@@ -372,19 +275,8 @@ pub async fn set_stage_audio_random(
 ) -> Result<BehaviourOutcome, String> {
     state
         .with_pack(async |pack| {
-            let stage = id.clone();
-            pack.behaviour_edit(BehaviourAction::planned(
-                label,
-                // The track this stage names *now*, not the one the front end last saw it naming.
-                move |tx: &Transaction<'_>| {
-                    Ok(Prepared {
-                        retiring: editor::stage_audio(tx, &stage)?.into_iter().collect(),
-                        ..Prepared::default()
-                    })
-                },
-                move |tx: &Transaction<'_>, ()| editor::set_stage_audio_random(tx, &id, random),
-            ))
-            .await
+            pack.behaviour_edit(ops::set_stage_audio_random_action(id, random, label))
+                .await
         })
         .await
 }
@@ -482,21 +374,3 @@ setter!(
     /// Removes one tag, and the stage's ownership of it if it owned it.
     remove_stage_tag(id: String, tag: String) |tx| editor::remove_stage_tag(tx, &id, &tag)
 );
-
-/// The tag work one membership toggle comes to: the rescue tags on, the stage's tags off.
-///
-/// Named so the tests can build the same action the command does — what they exercise is the phase
-/// ordering, and a hand-written pair of tag actions would exercise nothing.
-pub(crate) fn membership_tag_actions(media: u64, plan: &editor::MembershipPlan) -> Vec<TagAction> {
-    plan.apply
-        .iter()
-        .map(|tag| TagAction::Apply {
-            tag: tag.clone(),
-            media: Some(vec![media]),
-        })
-        .chain(plan.remove.iter().map(|tag| TagAction::Remove {
-            tag: tag.clone(),
-            media: vec![media],
-        }))
-        .collect()
-}

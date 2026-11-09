@@ -81,7 +81,7 @@ transparent videos (again, see the `lewdware` README for why we do this).
 
 pack-editor's own source code is MIT-licensed, same as the rest of this
 repository. However, the pack editor calls out to `ffmpeg`/`ffprobe` as
-separate subprocesses to encode media (see `src-tauri/src/encode.rs`), and
+separate subprocesses to encode media (see `../pack-editor-core/src/encode.rs`), and
 the distributed pack-editor installer bundles prebuilt copies of these
 binaries, which are built with GPL-only components (`libx264`) and are
 therefore licensed under **GPLv3**, not MIT.

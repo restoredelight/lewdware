@@ -4,6 +4,7 @@ members = [
     "lewdware",
     "lw",
     "pack-editor/src-tauri",
+    "pack-editor-core",
     "shared",
     "config/src-tauri",
     "supervisor"

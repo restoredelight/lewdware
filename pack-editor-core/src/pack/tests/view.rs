@@ -2,6 +2,47 @@
 
 use super::*;
 
+#[tokio::test]
+async fn native_preview_range_pins_loose_and_saved_bytes_across_save() {
+    use std::io::{Read, Seek, SeekFrom};
+    let dir = tempfile::tempdir().unwrap();
+    let pack = new_test_pack(&dir.path().join("preview.lwpack"), dir.path(), "Preview").await;
+    let bytes = b"native preview bytes";
+    let id = insert_staged_audio(&pack, bytes).await;
+    let open = || async {
+        pack.get_view()
+            .unwrap()
+            .open_file_range(
+                id,
+                Range {
+                    start: Some(0),
+                    end: None,
+                },
+            )
+            .await
+            .unwrap()
+            .0
+            .into_file_range()
+            .await
+            .unwrap()
+    };
+    let (mut loose, offset, length) = open().await;
+    assert_eq!((offset, length), (0, bytes.len() as u64));
+    let mut read = vec![0; length as usize];
+    loose.read_exact(&mut read).unwrap();
+    assert_eq!(read, bytes);
+    pack.save(|_, _| {}).await.unwrap();
+    let (mut archived, offset, length) = open().await;
+    assert!(offset > 0);
+    insert_staged_audio(&pack, b"another file forces a new save generation").await;
+    pack.save(|_, _| {}).await.unwrap();
+    archived.seek(SeekFrom::Start(offset)).unwrap();
+    read.resize(length as usize, 0);
+    archived.read_exact(&mut read).unwrap();
+    assert_eq!(read, bytes);
+    pack.close().await;
+}
+
 #[test]
 fn range_resolution_rejects_invalid_bounds_and_clamps_valid_ones() {
     assert!(resolve_range(

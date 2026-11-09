@@ -14,8 +14,7 @@ async fn embedded_modes_roundtrip_through_database_history() {
     let output = tempdir().unwrap();
     let data = tempdir().unwrap();
     let pack = new_test_pack(&output.path().join("modes.lwpack"), data.path(), "Modes").await;
-    let bytes =
-        include_bytes!("../../../../../default-modes/sandbox/build/Sandbox.lwmode").to_vec();
+    let bytes = include_bytes!("../../../../default-modes/sandbox/build/Sandbox.lwmode").to_vec();
 
     let id = pack.add_mode(bytes.clone()).await.unwrap();
     assert_eq!(pack.get_modes().await.unwrap(), vec![(id, bytes.clone())]);

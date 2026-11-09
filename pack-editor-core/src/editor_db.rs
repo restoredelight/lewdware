@@ -14,10 +14,13 @@ const ARCHIVE_STATE_KEY: &str = "__pack_editor_archive_state";
 /// corruption rather than a compile error.
 const MIGRATION_1: &str = concat!(
     include_str!("migrations/0001_init_schema.sql"),
-    include_str!("../../../shared/src/migrations/behaviour_schema.sql"),
+    include_str!("../../shared/src/migrations/behaviour_schema.sql"),
 );
 
-const MIGRATIONS: &[&str] = &[MIGRATION_1];
+const MIGRATIONS: &[&str] = &[
+    MIGRATION_1,
+    include_str!("migrations/0002_lookup_indexes.sql"),
+];
 
 /// The behaviour document's structural half (see `shared::behaviour::Behaviour`), in an order that
 /// satisfies its foreign keys: parents before children, stages before the transitions between them.

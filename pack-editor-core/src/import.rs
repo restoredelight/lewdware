@@ -11,19 +11,19 @@ use converter::{convert, ConversionOutput, ConvertedMedia, ZipSource};
 use futures::{stream, StreamExt};
 use shared::behaviour::MediaSlot;
 use shared::encode::{encode_file, hash_file, HardwareEncoder};
-use tauri::Emitter;
 use tempfile::TempDir;
 use tokio::sync::{oneshot, watch, RwLock};
 use uuid::Uuid;
 
 use crate::encode::{wait_cancelled, DiscardOnDrop, UploadErrorPayload};
+use crate::events::ImportEvent;
 use crate::pack::{AddOutcome, MediaFile};
 
 /// One slot `fill_slots_for` filled in, as the `import:slots-filled` payload carries it.
 #[derive(Debug, Clone, serde::Serialize)]
-struct FilledSlot {
-    slot: MediaSlot,
-    media_id: u64,
+pub struct FilledSlot {
+    pub slot: MediaSlot,
+    pub media_id: u64,
 }
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ pub async fn run_import(
     source: Arc<ZipSource>,
     media: Vec<ConvertedMedia>,
     media_references: Vec<(MediaSlot, String)>,
-    app: tauri::AppHandle,
+    events: crate::events::Events,
     encoder: HardwareEncoder,
     upload_lock: Arc<RwLock<()>>,
     mut cancel: watch::Receiver<bool>,
@@ -82,7 +82,6 @@ pub async fn run_import(
     // See encode::process_files: lifecycle operations drain this whole batch, not just one
     // file's final commit, before replacing or deleting the pack working directory.
     let _batch_guard = upload_lock.read().await;
-    let _awake = crate::keep_awake::acquire("Importing an Edgeware pack").await;
     let (dir, pack_id) = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {
@@ -96,19 +95,16 @@ pub async fn run_import(
     {
         Ok(staging) => Arc::new(staging),
         Err(error) => {
-            let _ = app.emit(
-                "upload:error",
-                UploadErrorPayload::new(
-                    &dir,
-                    format!("Could not create import staging directory: {error}"),
-                ),
-            );
-            let _ = app.emit("upload:done", ());
+            events(ImportEvent::Error(UploadErrorPayload::new(
+                &dir,
+                format!("Could not create import staging directory: {error}"),
+            )));
+            events(ImportEvent::Done);
             return;
         }
     };
     let total = media.len();
-    let _ = app.emit("upload:start", serde_json::json!({ "total": total }));
+    events(ImportEvent::Start { total });
 
     let limit = available_parallelism().map(|x| x.get()).ok();
 
@@ -116,7 +112,7 @@ pub async fn run_import(
 
     let process_all = stream::iter(media).for_each_concurrent(limit, |item| {
         let pack_state = pack_state.clone();
-        let app = app.clone();
+        let events = events.clone();
         let dir = dir.clone();
         let encoder = encoder.clone();
         let source = source.clone();
@@ -136,40 +132,35 @@ pub async fn run_import(
                         .remove(&suggested_name)
                         .unwrap_or_default();
 
-                    let _ = app.emit("upload:added", &media_file);
+                    events(ImportEvent::Added(media_file.clone()));
 
                     if !slots.is_empty() {
                         match fill_slots_for(&pack_state, pack_id, slots, media_file.id).await {
                             Ok(filled) if !filled.is_empty() => {
-                                let _ = app.emit("import:slots-filled", &filled);
+                                events(ImportEvent::SlotsFilled(filled));
                             }
                             Ok(_) => {}
                             Err(error) => {
-                                let _ = app.emit(
-                                    "upload:error",
-                                    UploadErrorPayload::new(
-                                        &dir,
-                                        format!(
-                                            "Could not fill in the pack's media slots: {error}"
-                                        ),
-                                    ),
-                                );
+                                events(ImportEvent::Error(UploadErrorPayload::new(
+                                    &dir,
+                                    format!("Could not fill in the pack's media slots: {error}"),
+                                )));
                             }
                         }
                     }
                 }
                 Ok(None) => {}
                 Err(ImportErrorKind::Skipped) => {
-                    let _ = app.emit("upload:skipped", &source_path);
+                    events(ImportEvent::Skipped(source_path.clone()));
                 }
                 Err(err) => {
-                    let _ = app.emit(
-                        "upload:error",
-                        UploadErrorPayload::new(Path::new(&source_path), err.to_string()),
-                    );
+                    events(ImportEvent::Error(UploadErrorPayload::new(
+                        Path::new(&source_path),
+                        err.to_string(),
+                    )));
                 }
             }
-            let _ = app.emit("upload:file-done", ());
+            events(ImportEvent::FileDone);
         }
     });
     tokio::pin!(process_all);
@@ -179,7 +170,7 @@ pub async fn run_import(
         _ = wait_cancelled(&mut cancel) => {}
     }
 
-    let _ = app.emit("upload:done", ());
+    events(ImportEvent::Done);
 }
 
 fn group_media_references(references: Vec<(MediaSlot, String)>) -> HashMap<String, Vec<MediaSlot>> {

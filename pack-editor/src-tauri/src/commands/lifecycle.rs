@@ -222,16 +222,19 @@ pub async fn import_edgeware_pack_dialog(
     state.cancel_uploads.send_replace(false);
     let cancel = state.cancel_uploads.subscribe();
 
-    tauri::async_runtime::spawn(import::run_import(
-        pack_state,
-        Arc::new(source),
-        media,
-        media_references,
-        app,
-        encoder,
-        upload_lock,
-        cancel,
-    ));
+    crate::keep_awake::spawn_awake(
+        "Importing an Edgeware pack",
+        import::run_import(
+            pack_state,
+            Arc::new(source),
+            media,
+            media_references,
+            crate::events::emitter(&app),
+            encoder,
+            upload_lock,
+            cancel,
+        ),
+    );
 
     Ok(Some(ImportResult { info, warnings }))
 }

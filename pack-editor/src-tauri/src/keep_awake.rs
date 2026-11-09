@@ -72,3 +72,14 @@ impl Drop for KeepAwake {
         }
     }
 }
+
+/// Spawns `work` on the async runtime, holding off idle suspend until it finishes.
+pub fn spawn_awake<F>(reason: &'static str, work: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    tauri::async_runtime::spawn(async move {
+        let _awake = acquire(reason).await;
+        work.await;
+    });
+}

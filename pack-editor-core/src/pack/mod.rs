@@ -1,10 +1,13 @@
 mod behaviour;
 mod labels;
 mod media;
+pub mod ops;
 mod save;
 mod view;
 
-pub(crate) use labels::MediaUsage;
+pub use behaviour::{behaviour_edit_on, membership_tag_actions};
+pub use labels::MediaUsage;
+pub use media::read_files;
 
 use save::process_pending_file_deletions;
 #[cfg(test)]
@@ -33,23 +36,20 @@ use shared::{
     tags,
 };
 use tokio::{
-    fs::{remove_file, File, OpenOptions},
+    fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::{mpsc, oneshot, Mutex as AsyncMutex, RwLock},
     task::{spawn_blocking, JoinHandle},
 };
 use uuid::Uuid;
 
-#[cfg(test)]
 use rusqlite::{types::Value, vtab::array::Array};
-/// Only `media_id_array` needs these, and it is test-only.
-#[cfg(test)]
 use std::rc::Rc;
 
 use crate::editor_db;
 use crate::history;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MediaFile {
     pub id: u64,
     pub file_info: FileInfo,
@@ -606,6 +606,7 @@ pub enum FileData {
 /// concerned: it would show the full duration (`+faststart` puts the header first) and stop dead
 /// part-way through. Streaming lets a response be as long as the range asked for while the memory
 /// it costs stays one chunk.
+#[allow(clippy::len_without_is_empty)] // A stream over a requested range, never empty.
 pub struct FileRangeStream {
     file: File,
     pub start: u64,
@@ -621,6 +622,14 @@ pub struct FileRangeStream {
 }
 
 impl FileRangeStream {
+    /// Hands a positioned range to a native decoder. The open file pins the archive generation
+    /// across ordinary save/rename, and the caller must bound positional reads to this length.
+    pub async fn into_file_range(mut self) -> io::Result<(fs::File, u64, u64)> {
+        let length = self.len();
+        let offset = self.file.stream_position().await?;
+        Ok((self.file.into_std().await, offset, length))
+    }
+
     pub fn len(&self) -> u64 {
         self.end - self.start
     }
@@ -1059,6 +1068,12 @@ impl MediaPack {
         self.path.is_none()
     }
 
+    /// Whether the working copy matches the pack file, without waiting for a save in progress.
+    /// For rendering: a save that's running reports the state from before it.
+    pub fn is_saved_now(&self) -> bool {
+        self.saved.load(Ordering::Relaxed)
+    }
+
     pub async fn is_saved(&self) -> bool {
         let _handle = self.saving.write().await;
         self.saved.load(Ordering::Relaxed)
@@ -1092,8 +1107,13 @@ impl MediaPack {
     }
 
     async fn mark_saved(&self) -> Result<()> {
+        self.mark_saved_now()
+    }
+
+    /// Removing one small marker file: quick enough to do inline, on any thread.
+    fn mark_saved_now(&self) -> Result<()> {
         if !self.saved.load(Ordering::Relaxed) {
-            if let Err(err) = remove_file(self.dir.join("UNSAVED")).await {
+            if let Err(err) = fs::remove_file(self.dir.join("UNSAVED")) {
                 if err.kind() != io::ErrorKind::NotFound {
                     return Err(err.into());
                 }
@@ -1101,6 +1121,45 @@ impl MediaPack {
             self.saved.store(true, Ordering::Relaxed);
         }
         Ok(())
+    }
+
+    // ── For `crate::session::Session`, which writes synchronously on a connection it holds ──
+
+    /// A connection of the caller's own from the pool.
+    pub fn connection(&self) -> Result<PooledConnection<SqliteConnectionManager>> {
+        Ok(self.db_pool.get()?)
+    }
+
+    /// Permission to write, held for the length of one edit. Fails rather than waits while a save
+    /// is running: a synchronous caller is on the UI thread, which must not block on a save.
+    pub fn try_edit_guard(&self) -> Result<tokio::sync::OwnedRwLockReadGuard<()>> {
+        self.saving
+            .clone()
+            .try_read_owned()
+            .map_err(|_| anyhow!("The pack is being saved. Try again in a moment."))
+    }
+
+    /// After a recorded edit that changed something: the pack has unsaved work, and the edit may
+    /// have released files for the garbage collector.
+    pub fn note_edited(&self) -> Result<()> {
+        self.mark_unsaved_now()?;
+        self.schedule_pending_file_deletions();
+        Ok(())
+    }
+
+    /// After an undo or redo: metadata may have moved with it, and the pack is saved exactly when
+    /// history is back at the saved state.
+    pub fn note_history_moved(
+        &self,
+        connection: &rusqlite::Connection,
+        status: &history::Status,
+    ) -> Result<()> {
+        *self.metadata.write().unwrap() = Metadata::read(connection)?;
+        if status.at_saved_state {
+            self.mark_saved_now()
+        } else {
+            self.note_edited()
+        }
     }
 
     async fn db_execute<T, F>(&self, mut f: F) -> Result<T>
@@ -1130,8 +1189,8 @@ impl MediaPack {
     pub async fn set_metadata(&self, metadata: &Metadata) -> Result<()> {
         let _handle = self.saving.read().await;
         let metadata_for_db = metadata.clone();
-        self.db_execute(move |mut connection| {
-            history::record(&mut connection, "Edit pack metadata", 0, &[], |tx| {
+        self.db_execute(move |connection| {
+            history::record(&connection, "Edit pack metadata", 0, &[], |tx| {
                 metadata_for_db.update(tx)?;
                 Ok(())
             })
@@ -1145,8 +1204,8 @@ impl MediaPack {
         let _handle = self.saving.read().await;
         let db_edit = edit.clone();
         let changed = self
-            .db_execute(move |mut connection| {
-                history::record(&mut connection, &label, 0, &[], |tx| db_edit.write(tx))
+            .db_execute(move |connection| {
+                history::record(&connection, &label, 0, &[], |tx| db_edit.write(tx))
             })
             .await?;
         edit.update_cached(&mut self.metadata.write().unwrap());
@@ -1337,8 +1396,7 @@ fn next_candidate_name(name: &str) -> String {
 
 /// Binds media ids for a `rarray(?)` subquery -- the only form of `IN (...)` that survives a set
 /// larger than SQLite's variable limit (see `bulk_remove_and_restore_exceeds_sqlite_variable_limit`).
-#[cfg(test)]
-fn media_id_array(ids: &[u64]) -> Result<Array> {
+pub(crate) fn media_id_array(ids: &[u64]) -> Result<Array> {
     let values = ids
         .iter()
         .map(|&id| Ok(Value::Integer(i64::try_from(id)?)))
@@ -1349,7 +1407,14 @@ fn media_id_array(ids: &[u64]) -> Result<Array> {
 fn sqlite_connection_manager(path: &Path) -> SqliteConnectionManager {
     SqliteConnectionManager::file(path).with_init(|conn| {
         array::load_module(conn)?;
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
+        // `synchronous = NORMAL`: in WAL mode, commits stop waiting for fsync (2.5-5.5ms each on
+        // a real disk, longer than the edit itself). The working copy can't be corrupted by
+        // this, and an app crash loses nothing; an OS crash or power cut can lose the last
+        // moments of edits. Saving writes the `.lwpack` through its own connections and is
+        // unaffected.
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;",
+        )
     })
 }
 

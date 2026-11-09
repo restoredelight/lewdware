@@ -24,8 +24,8 @@ impl MediaPack {
         let _handle = self.saving.read().await;
         let name = name.to_string();
         let label = format!("Edit pack data \"{name}\"");
-        self.db_execute(move |mut connection| {
-            history::record(&mut connection, &label, 0, &[], |tx| {
+        self.db_execute(move |connection| {
+            history::record(&connection, &label, 0, &[], |tx| {
                 tx.execute(
                     "INSERT OR REPLACE INTO pack_data (name, blob) VALUES (?, ?)",
                     params![name, blob],
@@ -94,8 +94,8 @@ impl MediaPack {
     /// callers that genuinely need an undoable whole-document replacement and for test setup.
     pub async fn replace_behaviour(&self, behaviour: Behaviour, label: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::record(&mut connection, &label, 0, &[], |tx| {
+        self.db_execute(move |connection| {
+            history::record(&connection, &label, 0, &[], |tx| {
                 write_behaviour(tx, &behaviour)
             })
         })
@@ -180,57 +180,10 @@ impl MediaPack {
         action: BehaviourAction<P>,
     ) -> Result<BehaviourOutcome> {
         let _handle = self.saving.read().await;
-        let BehaviourAction {
-            label,
-            prepare,
-            apply,
-        } = action;
-        let mut parts = Some((prepare, apply));
+        let mut action = Some(action);
         let (outcome, changed) = self
-            .db_execute(move |mut connection| {
-                let (prepare, apply) = parts.take().expect("the edit runs once");
-                history::record_with_media_refs(&mut connection, &label, 0, move |tx| {
-                    // Asked of the pack as it stands *now*, before anything is written: what this
-                    // stage's scenery is, and what its tag is called, are questions only the
-                    // pre-edit document can answer. One read, so the answers agree with each other.
-                    let Prepared {
-                        value,
-                        tag_actions,
-                        retiring,
-                    } = prepare(tx)?;
-
-                    // Before the edit, so the write lands against the tag names the action uses
-                    // rather than re-creating the ones a rename just left behind.
-                    let mut tags = TagActionOutcome::default();
-                    run_tag_actions_before_write(tx, &tag_actions, &mut tags)?;
-
-                    // Handed what `prepare` worked out, so a decision the tag phase already acted
-                    // on is the same one the rows are written from.
-                    apply(tx, value)?;
-
-                    // Asked *after* the edit, so "still referenced" means what it means once the
-                    // action has happened -- a wallpaper the retired stage shared with another
-                    // stage stays.
-                    let mut deleted_ids = Vec::new();
-                    for media in &retiring {
-                        if let Some(id) = delete_unreferenced_scenery(tx, *media)? {
-                            deleted_ids.push(id);
-                        }
-                    }
-                    run_tag_actions_after_write(tx, &tag_actions, &mut tags)?;
-
-                    // The retired file's bytes have to outlive the entry that dropped it, or undo
-                    // would restore a slot pointing at media the collector has taken away.
-                    let mut refs = deleted_ids.clone();
-                    refs.extend(tags.media_refs);
-                    let outcome = BehaviourOutcome {
-                        deleted_ids,
-                        removed_tags: tags.removed,
-                        renamed_tags: tags.renamed,
-                        media_tags: tags.media_tags,
-                    };
-                    Ok((outcome, refs))
-                })
+            .db_execute(move |connection| {
+                behaviour_edit_on(&connection, action.take().expect("the edit runs once"))
             })
             .await?;
         if changed {
@@ -238,6 +191,62 @@ impl MediaPack {
         }
         Ok(outcome)
     }
+}
+
+/// The body of [`MediaPack::behaviour_edit`], on a connection the caller holds: one transaction,
+/// one undo entry. Returns the outcome and whether the edit changed anything (an empty changeset
+/// is not a change, and records no entry). Doesn't mark the pack unsaved.
+pub fn behaviour_edit_on<P: Send + 'static>(
+    connection: &rusqlite::Connection,
+    action: BehaviourAction<P>,
+) -> Result<(BehaviourOutcome, bool)> {
+    let BehaviourAction {
+        label,
+        prepare,
+        apply,
+    } = action;
+    history::record_with_media_refs(connection, &label, 0, move |tx| {
+        // Asked of the pack as it stands *now*, before anything is written: what this
+        // stage's scenery is, and what its tag is called, are questions only the
+        // pre-edit document can answer. One read, so the answers agree with each other.
+        let Prepared {
+            value,
+            tag_actions,
+            retiring,
+        } = prepare(tx)?;
+
+        // Before the edit, so the write lands against the tag names the action uses
+        // rather than re-creating the ones a rename just left behind.
+        let mut tags = TagActionOutcome::default();
+        run_tag_actions_before_write(tx, &tag_actions, &mut tags)?;
+
+        // Handed what `prepare` worked out, so a decision the tag phase already acted
+        // on is the same one the rows are written from.
+        apply(tx, value)?;
+
+        // Asked *after* the edit, so "still referenced" means what it means once the
+        // action has happened -- a wallpaper the retired stage shared with another
+        // stage stays.
+        let mut deleted_ids = Vec::new();
+        for media in &retiring {
+            if let Some(id) = delete_unreferenced_scenery(tx, *media)? {
+                deleted_ids.push(id);
+            }
+        }
+        run_tag_actions_after_write(tx, &tag_actions, &mut tags)?;
+
+        // The retired file's bytes have to outlive the entry that dropped it, or undo
+        // would restore a slot pointing at media the collector has taken away.
+        let mut refs = deleted_ids.clone();
+        refs.extend(tags.media_refs);
+        let outcome = BehaviourOutcome {
+            deleted_ids,
+            removed_tags: tags.removed,
+            renamed_tags: tags.renamed,
+            media_tags: tags.media_tags,
+        };
+        Ok((outcome, refs))
+    })
 }
 
 /// Points `slot` at `media_id`, marking that file as scenery if the slot is what brought it into
@@ -296,4 +305,25 @@ pub(super) fn slot_label(slot: &MediaSlot) -> &'static str {
 
 pub(super) fn write_behaviour(tx: &rusqlite::Transaction<'_>, behaviour: &Behaviour) -> Result<()> {
     behaviour.write(tx)
+}
+
+/// The tag work one membership toggle comes to: the rescue tags on, the stage's tags off.
+///
+/// Named so the tests can build the same action the command does — what they exercise is the phase
+/// ordering, and a hand-written pair of tag actions would exercise nothing.
+pub fn membership_tag_actions(
+    media: u64,
+    plan: &behaviour_editor::MembershipPlan,
+) -> Vec<TagAction> {
+    plan.apply
+        .iter()
+        .map(|tag| TagAction::Apply {
+            tag: tag.clone(),
+            media: Some(vec![media]),
+        })
+        .chain(plan.remove.iter().map(|tag| TagAction::Remove {
+            tag: tag.clone(),
+            media: vec![media],
+        }))
+        .collect()
 }

@@ -8,7 +8,7 @@ use super::*;
 use std::{io, path::Path};
 
 use crate::history;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use rusqlite::{named_params, params, OptionalExtension, TransactionBehavior};
 use shared::behaviour::editor as behaviour_editor;
 use shared::{
@@ -46,7 +46,7 @@ impl MediaPack {
 
     pub async fn begin_media_import(&self) -> Result<i64> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| history::begin_media_import(&mut connection))
+        self.db_execute(move |connection| history::begin_media_import(&connection))
             .await
     }
 
@@ -56,8 +56,8 @@ impl MediaPack {
         label: Option<String>,
     ) -> Result<history::Status> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::finish_media_import(&mut connection, history_id, label.as_deref())
+        self.db_execute(move |connection| {
+            history::finish_media_import(&connection, history_id, label.as_deref())
         })
         .await
     }
@@ -240,23 +240,8 @@ impl MediaPack {
 
     pub async fn remove_files(&self, ids: Vec<u64>) -> Result<()> {
         let _handle = self.saving.read().await;
-        let label = if ids.len() == 1 {
-            "Remove media item".to_string()
-        } else {
-            format!("Remove {} media items", ids.len())
-        };
-        self.db_execute(move |mut conn| {
-            if ids.is_empty() {
-                return Ok(());
-            }
-            // The slot updates ride on the visibility history entry, so removing a wallpaper is
-            // one undo step and restores both the file and the reference together.
-            history::record_media_visibility(&mut conn, &label, &ids, true, |tx| {
-                behaviour_editor::clear_media_slots(tx, &ids)?;
-                Ok(())
-            })
-        })
-        .await?;
+        self.db_execute(move |conn| ops::library::remove_files(&conn, &ids))
+            .await?;
         self.mark_unsaved().await
     }
 
@@ -266,9 +251,7 @@ impl MediaPack {
 
     pub async fn undo(&self) -> Result<history::Status> {
         let _handle = self.saving.read().await;
-        let status = self
-            .db_execute(move |mut conn| history::undo(&mut conn))
-            .await?;
+        let status = self.db_execute(move |conn| history::undo(&conn)).await?;
         self.reload_metadata_from_db().await?;
         if status.at_saved_state {
             self.mark_saved().await?;
@@ -280,9 +263,7 @@ impl MediaPack {
 
     pub async fn redo(&self) -> Result<history::Status> {
         let _handle = self.saving.read().await;
-        let status = self
-            .db_execute(move |mut conn| history::redo(&mut conn))
-            .await?;
+        let status = self.db_execute(move |conn| history::redo(&conn)).await?;
         self.reload_metadata_from_db().await?;
         if status.at_saved_state {
             self.mark_saved().await?;
@@ -335,89 +316,7 @@ impl MediaPack {
 
     pub async fn get_files(&self) -> Result<Vec<MediaFile>> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT m.id, m.file_type, m.file_name, m.width, m.height, m.transparent,
-                        m.duration, m.audio, m.hash, COALESCE(l.length, p.length) AS length,
-                        m.source_url
-                 FROM media m
-                 LEFT JOIN loose_media l ON l.media_id = m.id
-                 LEFT JOIN pack_media p ON p.media_id = m.id
-                 WHERE m.deleted = FALSE",
-            )?;
-            let mut files: Vec<MediaFile> = {
-                let rows = stmt.query_and_then([], |row| -> Result<_> {
-                    Ok(MediaFile {
-                        id: row.get("id")?,
-                        file_name: row.get("file_name")?,
-                        file_info: FileInfo::try_from_parts(&FileInfoParts {
-                            file_type: row.get::<_, String>("file_type")?.parse()?,
-                            width: row.get("width")?,
-                            height: row.get("height")?,
-                            transparent: row.get("transparent")?,
-                            duration: row.get("duration")?,
-                            audio: row.get("audio")?,
-                        })?,
-                        hash: blake3::Hash::from_bytes(row.get("hash")?).to_string(),
-                        tags: vec![],
-                        artists: vec![],
-                        source_url: row.get("source_url")?,
-                        size: row.get::<_, Option<u64>>("length")?.unwrap_or(0),
-                        popup_eligible: false,
-                        explicit_only: false,
-                        audio_role: None,
-                    })
-                })?;
-                rows.collect::<Result<Vec<_>>>()?
-            };
-
-            // Build id → index map then load all tag/artist associations in one query each.
-            let id_to_idx: std::collections::HashMap<u64, usize> =
-                files.iter().enumerate().map(|(i, f)| (f.id, i)).collect();
-
-            let mut tag_stmt = conn.prepare(
-                "SELECT mt.media_id, t.name FROM media_tags mt JOIN tags t ON mt.tag_id = t.id",
-            )?;
-            let tag_rows = tag_stmt.query_map([], |row| {
-                Ok((row.get::<_, u64>("media_id")?, row.get::<_, String>("name")?))
-            })?;
-            for row in tag_rows {
-                let (media_id, tag_name) = row?;
-                if let Some(&idx) = id_to_idx.get(&media_id) {
-                    files[idx].tags.push(tag_name);
-                }
-            }
-
-            for file in &mut files {
-                file.explicit_only = file.tags.iter().any(|tag| tag == tags::EXPLICIT_ONLY_TAG);
-                file.popup_eligible = !matches!(&file.file_info, FileInfo::Audio { .. })
-                    && !file.explicit_only
-                    && !file.tags.iter().any(|tag| tag == tags::NON_POPUP_TAG);
-                file.audio_role = matches!(&file.file_info, FileInfo::Audio { .. }).then(|| {
-                    if file.tags.iter().any(|tag| tag == tags::POPUP_AUDIO_TAG) {
-                        "popup".to_string()
-                    } else {
-                        "background".to_string()
-                    }
-                });
-            }
-
-            let mut artist_stmt = conn.prepare(
-                "SELECT ma.media_id, a.name FROM media_artists ma JOIN artists a ON ma.artist_id = a.id",
-            )?;
-            let artist_rows = artist_stmt.query_map([], |row| {
-                Ok((row.get::<_, u64>("media_id")?, row.get::<_, String>("name")?))
-            })?;
-            for row in artist_rows {
-                let (media_id, artist_name) = row?;
-                if let Some(&idx) = id_to_idx.get(&media_id) {
-                    files[idx].artists.push(artist_name);
-                }
-            }
-
-            Ok(files)
-        })
-        .await
+        self.db_execute(move |conn| read_files(&conn, None)).await
     }
 
     /// Every tag the author owns. Managed tags are filtered out here rather than at each of the
@@ -453,21 +352,15 @@ impl MediaPack {
         let _handle = self.saving.read().await;
         let storage_bytes = file.len() as u64;
         let id = self
-            .db_execute(move |mut connection| {
-                history::record(
-                    &mut connection,
-                    "Add custom mode",
-                    storage_bytes,
-                    &[],
-                    |tx| {
-                        tx.query_row(
-                            "INSERT INTO modes (file) VALUES (?) RETURNING id",
-                            params![file],
-                            |row| row.get(0),
-                        )
-                        .map_err(Into::into)
-                    },
-                )
+            .db_execute(move |connection| {
+                history::record(&connection, "Add custom mode", storage_bytes, &[], |tx| {
+                    tx.query_row(
+                        "INSERT INTO modes (file) VALUES (?) RETURNING id",
+                        params![file],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+                })
             })
             .await?;
         self.mark_unsaved().await?;
@@ -476,14 +369,14 @@ impl MediaPack {
 
     pub async fn remove_mode(&self, id: u64) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
+        self.db_execute(move |connection| {
             let storage_bytes: u64 = connection.query_row(
                 "SELECT length(file) FROM modes WHERE id = ?",
                 [id],
                 |row| row.get(0),
             )?;
             history::record(
-                &mut connection,
+                &connection,
                 "Remove custom mode",
                 storage_bytes,
                 &[],
@@ -499,16 +392,8 @@ impl MediaPack {
 
     pub async fn set_source_url(&self, id: u64, url: Option<String>) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut connection| {
-            history::record(&mut connection, "Set media source", 0, &[id], |tx| {
-                tx.execute(
-                    "UPDATE media SET source_url = ? WHERE id = ?",
-                    params![url, id],
-                )?;
-                Ok(())
-            })
-        })
-        .await?;
+        self.db_execute(move |conn| ops::set_source_url(&conn, id, url.as_deref()))
+            .await?;
         self.mark_unsaved().await
     }
 
@@ -563,27 +448,8 @@ impl MediaPack {
     /// id exists to remove (`design/behaviour-storage.md`, step 1).
     pub async fn set_title(&self, id: u64, name: String) -> Result<()> {
         let _handle = self.saving.read().await;
-        let name_clone = name.clone();
-        let result = self
-            .db_execute(move |mut connection| {
-                history::record(&mut connection, "Rename media item", 0, &[id], |tx| {
-                    tx.execute(
-                        "UPDATE media SET file_name = ? WHERE id = ?",
-                        params![name_clone, id],
-                    )?;
-                    Ok(())
-                })
-            })
-            .await;
-
-        match result {
-            Ok(()) => {}
-            Err(err) if violates_unique_constraint(&err, "file_name") => {
-                bail!("A file named \"{name}\" already exists");
-            }
-            Err(err) => return Err(err),
-        }
-
+        self.db_execute(move |connection| ops::library::set_file_name(&connection, id, &name))
+            .await?;
         self.mark_unsaved().await?;
         Ok(())
     }
@@ -602,8 +468,8 @@ impl MediaPack {
     ) -> Result<Option<u64>> {
         let _handle = self.saving.read().await;
         let (result, changed) = self
-            .db_execute(move |mut conn| {
-                history::record_with_media_refs(&mut conn, slot_label(&slot), 0, |tx| {
+            .db_execute(move |conn| {
+                history::record_with_media_refs(&conn, slot_label(&slot), 0, |tx| {
                     let deleted = fill_media_slot_tx(tx, &slot, media_id, new_to_pack)?;
                     // The displaced file's bytes have to outlive the entry that dropped it, or undo
                     // would restore a slot pointing at media the collector has taken away.
@@ -630,8 +496,8 @@ impl MediaPack {
     ) -> Result<Option<u64>> {
         let _handle = self.saving.read().await;
         let result = self
-            .db_execute(move |mut conn| {
-                history::record_into_pending(&mut conn, history_id, |tx| {
+            .db_execute(move |conn| {
+                history::record_into_pending(&conn, history_id, |tx| {
                     let deleted = fill_media_slot_tx(tx, &slot, media_id, new_to_pack)?;
                     // The soft delete itself rides in the entry's changeset, but the collector only
                     // spares media some entry names -- and this one is displaced, not imported, so
@@ -660,8 +526,8 @@ impl MediaPack {
     pub async fn clear_media_slot(&self, slot: MediaSlot) -> Result<Option<u64>> {
         let _handle = self.saving.read().await;
         let (result, changed) = self
-            .db_execute(move |mut conn| {
-                history::record_with_media_refs(&mut conn, slot_label(&slot), 0, |tx| {
+            .db_execute(move |conn| {
+                history::record_with_media_refs(&conn, slot_label(&slot), 0, |tx| {
                     let Some(media) = behaviour_editor::slot_value(tx, &slot)? else {
                         return Ok((None, vec![]));
                     };
@@ -687,13 +553,13 @@ impl MediaPack {
     /// same toggle keeps any other file out of popups without involving a slot at all.
     pub async fn set_shown_as_popup(&self, id: u64, shown: bool) -> Result<()> {
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
+        self.db_execute(move |conn| {
             let label = if shown {
                 "Show media in popups"
             } else {
                 "Hide media from popups"
             };
-            history::record(&mut conn, label, 0, &[id], |tx| {
+            history::record(&conn, label, 0, &[id], |tx| {
                 if shown {
                     tx.execute(
                         "DELETE FROM media_tags WHERE media_id = ? AND tag_id IN
@@ -716,38 +582,8 @@ impl MediaPack {
             return Ok(());
         }
         let _handle = self.saving.read().await;
-        self.db_execute(move |mut conn| {
-            let label = if popup {
-                "Move audio to Popup"
-            } else {
-                "Move audio to Background"
-            };
-            history::record(&mut conn, label, 0, &ids, |tx| {
-                for id in &ids {
-                    let file_type: Option<String> = tx
-                        .query_row(
-                            "SELECT file_type FROM media WHERE id = ? AND deleted = 0",
-                            params![id],
-                            |row| row.get(0),
-                        )
-                        .optional()?;
-                    if file_type.as_deref() != Some("audio") {
-                        bail!("Only audio files can be assigned an audio role");
-                    }
-                    if popup {
-                        apply_tag(tx, *id, tags::POPUP_AUDIO_TAG)?;
-                    } else {
-                        tx.execute(
-                            "DELETE FROM media_tags WHERE media_id = ? AND tag_id IN
-                             (SELECT id FROM tags WHERE name = ?)",
-                            params![id, tags::POPUP_AUDIO_TAG],
-                        )?;
-                    }
-                }
-                Ok(())
-            })
-        })
-        .await?;
+        self.db_execute(move |conn| ops::library::set_popup_audio(&conn, &ids, popup))
+            .await?;
         self.mark_unsaved().await
     }
 }
@@ -786,4 +622,106 @@ pub(super) fn delete_unreferenced_scenery(
         tx.execute("UPDATE media SET deleted = 1 WHERE id = ?", params![id])?;
     }
     Ok(scenery)
+}
+
+/// Every visible (not soft-deleted) file with its tags and artists, or only those among `ids`.
+/// `ids` that are deleted or don't exist are left out rather than reported.
+pub fn read_files(conn: &rusqlite::Connection, ids: Option<&[u64]>) -> Result<Vec<MediaFile>> {
+    // Two forms of each query rather than `?1 IS NULL OR id IN ...`: the OR stops SQLite using
+    // the key, so re-reading one file after an edit would scan every file (~50ms at 10,000).
+    let selected = ids.map(media_id_array).transpose()?;
+    let filter = |column: &str| match selected {
+        Some(_) => format!("{column} IN (SELECT value FROM rarray(?1))"),
+        None => "?1 IS NULL".to_string(),
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT m.id, m.file_type, m.file_name, m.width, m.height, m.transparent,
+                m.duration, m.audio, m.hash, COALESCE(l.length, p.length) AS length,
+                m.source_url
+         FROM media m
+         LEFT JOIN loose_media l ON l.media_id = m.id
+         LEFT JOIN pack_media p ON p.media_id = m.id
+         WHERE m.deleted = FALSE AND {}",
+        filter("m.id")
+    ))?;
+    let mut files: Vec<MediaFile> = {
+        let rows = stmt.query_and_then(params![selected], |row| -> Result<_> {
+            Ok(MediaFile {
+                id: row.get("id")?,
+                file_name: row.get("file_name")?,
+                file_info: FileInfo::try_from_parts(&FileInfoParts {
+                    file_type: row.get::<_, String>("file_type")?.parse()?,
+                    width: row.get("width")?,
+                    height: row.get("height")?,
+                    transparent: row.get("transparent")?,
+                    duration: row.get("duration")?,
+                    audio: row.get("audio")?,
+                })?,
+                hash: blake3::Hash::from_bytes(row.get("hash")?).to_string(),
+                tags: vec![],
+                artists: vec![],
+                source_url: row.get("source_url")?,
+                size: row.get::<_, Option<u64>>("length")?.unwrap_or(0),
+                popup_eligible: false,
+                explicit_only: false,
+                audio_role: None,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>>>()?
+    };
+
+    // Build id → index map then load all tag/artist associations in one query each.
+    let id_to_idx: std::collections::HashMap<u64, usize> =
+        files.iter().enumerate().map(|(i, f)| (f.id, i)).collect();
+
+    let mut tag_stmt = conn.prepare(&format!(
+        "SELECT mt.media_id, t.name FROM media_tags mt JOIN tags t ON mt.tag_id = t.id WHERE {}",
+        filter("mt.media_id")
+    ))?;
+    let tag_rows = tag_stmt.query_map(params![selected], |row| {
+        Ok((
+            row.get::<_, u64>("media_id")?,
+            row.get::<_, String>("name")?,
+        ))
+    })?;
+    for row in tag_rows {
+        let (media_id, tag_name) = row?;
+        if let Some(&idx) = id_to_idx.get(&media_id) {
+            files[idx].tags.push(tag_name);
+        }
+    }
+
+    for file in &mut files {
+        file.explicit_only = file.tags.iter().any(|tag| tag == tags::EXPLICIT_ONLY_TAG);
+        file.popup_eligible = !matches!(&file.file_info, FileInfo::Audio { .. })
+            && !file.explicit_only
+            && !file.tags.iter().any(|tag| tag == tags::NON_POPUP_TAG);
+        file.audio_role = matches!(&file.file_info, FileInfo::Audio { .. }).then(|| {
+            if file.tags.iter().any(|tag| tag == tags::POPUP_AUDIO_TAG) {
+                "popup".to_string()
+            } else {
+                "background".to_string()
+            }
+        });
+    }
+
+    let mut artist_stmt = conn.prepare(&format!(
+        "SELECT ma.media_id, a.name FROM media_artists ma JOIN artists a ON ma.artist_id = a.id \
+         WHERE {}",
+        filter("ma.media_id")
+    ))?;
+    let artist_rows = artist_stmt.query_map(params![selected], |row| {
+        Ok((
+            row.get::<_, u64>("media_id")?,
+            row.get::<_, String>("name")?,
+        ))
+    })?;
+    for row in artist_rows {
+        let (media_id, artist_name) = row?;
+        if let Some(&idx) = id_to_idx.get(&media_id) {
+            files[idx].artists.push(artist_name);
+        }
+    }
+
+    Ok(files)
 }

@@ -16,17 +16,16 @@ use tokio::sync::{oneshot, watch, RwLock, Semaphore};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
-use tauri::Emitter;
-
 use shared::behaviour::MediaSlot;
 
+use crate::events::ImportEvent;
 use crate::pack::{AddOutcome, MediaFile};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct UploadErrorPayload {
-    path: String,
-    file_name: String,
-    error: String,
+    pub path: String,
+    pub file_name: String,
+    pub error: String,
 }
 
 impl UploadErrorPayload {
@@ -113,7 +112,7 @@ where
         if let Some(work) = self.work.take() {
             let output = std::mem::take(&mut self.output);
             let staging = self.staging.take();
-            tauri::async_runtime::spawn(async move {
+            tokio::spawn(async move {
                 let _ = work.await;
                 let _ = tokio::fs::remove_file(&output).await;
                 drop(staging);
@@ -179,11 +178,10 @@ pub fn is_media_path(path: &Path) -> anyhow::Result<bool> {
     Ok(false)
 }
 
-// Called from Tauri commands via AppHandle
 pub async fn process_files(
     pack_state: crate::PackState,
     paths: Vec<PathBuf>,
-    app: tauri::AppHandle,
+    events: crate::events::Events,
     encoder: HardwareEncoder,
     upload_lock: Arc<RwLock<()>>,
     mut cancel: watch::Receiver<bool>,
@@ -192,16 +190,15 @@ pub async fn process_files(
     // for the complete batch gives those operations a reliable way to cancel and drain imports,
     // including their pending history entry, rather than merely waiting for the final DB commit.
     let _batch_guard = upload_lock.read().await;
-    let _awake = crate::keep_awake::acquire("Importing media into a pack").await;
     let total = paths.len();
-    let _ = app.emit("upload:start", serde_json::json!({ "total": total }));
+    events(ImportEvent::Start { total });
 
     let (dir, pack_id) = {
         let lock = pack_state.lock().await;
         match lock.as_ref() {
             Some(pack) => (pack.dir().to_path_buf(), pack.id()),
             None => {
-                let _ = app.emit("upload:done", ());
+                events(ImportEvent::Done);
                 return;
             }
         }
@@ -212,14 +209,11 @@ pub async fn process_files(
     {
         Ok(staging) => Arc::new(staging),
         Err(error) => {
-            let _ = app.emit(
-                "upload:error",
-                UploadErrorPayload::new(
-                    &dir,
-                    format!("Could not create upload staging directory: {error}"),
-                ),
-            );
-            let _ = app.emit("upload:done", ());
+            events(ImportEvent::Error(UploadErrorPayload::new(
+                &dir,
+                format!("Could not create upload staging directory: {error}"),
+            )));
+            events(ImportEvent::Done);
             return;
         }
     };
@@ -229,16 +223,16 @@ pub async fn process_files(
             Some(pack) => match pack.begin_media_import().await {
                 Ok(id) => id,
                 Err(error) => {
-                    let _ = app.emit(
-                        "upload:error",
-                        UploadErrorPayload::new(&dir, format!("Could not begin import: {error}")),
-                    );
-                    let _ = app.emit("upload:done", ());
+                    events(ImportEvent::Error(UploadErrorPayload::new(
+                        &dir,
+                        format!("Could not begin import: {error}"),
+                    )));
+                    events(ImportEvent::Done);
                     return;
                 }
             },
             None => {
-                let _ = app.emit("upload:done", ());
+                events(ImportEvent::Done);
                 return;
             }
         }
@@ -248,7 +242,7 @@ pub async fn process_files(
 
     let process_all = stream::iter(paths).for_each_concurrent(limit, |path| {
         let pack_state = pack_state.clone();
-        let app = app.clone();
+        let events = events.clone();
         let dir = dir.clone();
         let encoder = encoder.clone();
         let upload_lock = upload_lock.clone();
@@ -267,20 +261,20 @@ pub async fn process_files(
             .await
             {
                 Ok(Some(media_file)) => {
-                    let _ = app.emit("upload:added", &media_file);
+                    events(ImportEvent::Added(media_file.clone()));
                 }
                 Ok(None) => {}
                 Err(ProcessErrorKind::Skipped) => {
-                    let _ = app.emit("upload:skipped", path.to_string_lossy().as_ref());
+                    events(ImportEvent::Skipped(path.to_string_lossy().into_owned()));
                 }
                 Err(err) => {
-                    let _ = app.emit(
-                        "upload:error",
-                        UploadErrorPayload::new(&path, err.to_string()),
-                    );
+                    events(ImportEvent::Error(UploadErrorPayload::new(
+                        &path,
+                        err.to_string(),
+                    )));
                 }
             }
-            let _ = app.emit("upload:file-done", ());
+            events(ImportEvent::FileDone);
         }
     });
     tokio::pin!(process_all);
@@ -297,18 +291,15 @@ pub async fn process_files(
         let lock = pack_state.lock().await;
         if let Some(pack) = lock.as_ref().filter(|pack| pack.id() == pack_id) {
             if let Err(error) = pack.finish_media_import(history_id, None).await {
-                let _ = app.emit(
-                    "upload:error",
-                    UploadErrorPayload::new(
-                        &dir,
-                        format!("Could not finalize import history: {error}"),
-                    ),
-                );
+                events(ImportEvent::Error(UploadErrorPayload::new(
+                    &dir,
+                    format!("Could not finalize import history: {error}"),
+                )));
             }
         }
     }
 
-    let _ = app.emit("upload:done", ());
+    events(ImportEvent::Done);
 }
 
 /// Brings in one file and puts it in `slot`, as a single action.
@@ -325,14 +316,13 @@ pub async fn process_files(
 pub async fn process_file_into_slot(
     pack_state: &crate::PackState,
     path: &Path,
-    app: &tauri::AppHandle,
+    events: &crate::events::Events,
     encoder: HardwareEncoder,
     upload_lock: &Arc<RwLock<()>>,
     slot: MediaSlot,
     label: String,
 ) -> anyhow::Result<(AddOutcome, Option<u64>)> {
     let _batch_guard = upload_lock.read().await;
-    let _awake = crate::keep_awake::acquire("Importing media into a pack").await;
     let (dir, pack_id) = {
         let lock = pack_state.lock().await;
         let pack = lock.as_ref().context("No pack is open")?;
@@ -400,7 +390,7 @@ pub async fn process_file_into_slot(
     let outcome = outcome?;
     let displaced = filled?.context("The pack was closed while importing")?;
     if let AddOutcome::Added(file) = &outcome {
-        let _ = app.emit("upload:added", file);
+        events(ImportEvent::Added(file.clone()));
     }
     Ok((outcome, displaced))
 }

@@ -80,10 +80,11 @@ pub async fn fill_media_slot_dialog(
         | shared::behaviour::MediaSlot::StagePromptSound { .. } => "Set stage sound",
         _ => "Set wallpaper",
     };
+    let _awake = crate::keep_awake::acquire("Importing media into a pack").await;
     let (outcome, deleted_id) = encode::process_file_into_slot(
         &state.pack,
         &path,
-        &app,
+        &crate::events::emitter(&app),
         encoder,
         &state.upload_lock,
         slot,

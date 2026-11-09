@@ -120,10 +120,10 @@ jobs:
           done
 
       - name: Run tests
-        run: cargo test -p lewdware-pack-editor -p lewdware-config -p lewdware-supervisor
+        run: cargo test -p lewdware-pack-editor -p pack-editor-core -p lewdware-config -p lewdware-supervisor
 
       - name: Clippy
-        run: cargo clippy -p lewdware-pack-editor -p lewdware-config -p lewdware-supervisor --all-targets -- -D warnings
+        run: cargo clippy -p lewdware-pack-editor -p pack-editor-core -p lewdware-config -p lewdware-supervisor --all-targets -- -D warnings
 
   rust-engine:
     name: Engine Rust tests

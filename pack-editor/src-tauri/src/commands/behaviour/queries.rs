@@ -7,6 +7,7 @@ use shared::behaviour::{
 use shared::behaviour::{AudioMedia, ContentGroup, PopupMedia, Stage, Transition};
 use tauri::State;
 
+use crate::pack::ops::timeline as ops;
 use crate::AppState;
 
 /// What the Content tab's badges and the Experience tab's header need, without reading either
@@ -57,14 +58,6 @@ pub struct TimelineDto {
     label: Option<String>,
 }
 
-#[derive(serde::Serialize)]
-pub struct StageRemovalImpact {
-    tag: Option<String>,
-    media: u64,
-    stages: Vec<String>,
-    content: u64,
-}
-
 #[tauri::command]
 pub async fn get_timeline(state: State<'_, AppState>) -> Result<Option<TimelineDto>, String> {
     state
@@ -100,30 +93,11 @@ pub async fn get_stage_membership(
 pub async fn get_stage_removal_impact(
     state: State<'_, AppState>,
     id: String,
-) -> Result<StageRemovalImpact, String> {
+) -> Result<ops::StageRemovalImpact, String> {
     state
         .with_pack(async |pack| {
-            pack.behaviour_query(move |conn| {
-                let tag = editor::stage_owned_tags(conn, &id)?
-                    .into_iter()
-                    .find(|owned| !owned.excluded)
-                    .map(|owned| owned.tag);
-                let Some(tag) = tag else {
-                    return Ok(StageRemovalImpact { tag: None, media: 0, stages: vec![], content: 0 });
-                };
-                let media = conn.query_row(
-                    "SELECT COUNT(*) FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name = ?1",
-                    [&tag], |row| row.get(0),
-                )?;
-                let stages = conn.prepare(
-                    "SELECT s.label FROM behaviour_stage_tag st JOIN tags t ON t.id = st.tag_id JOIN behaviour_stage s ON s.id = st.stage_id WHERE t.name = ?1 AND s.id <> ?2 ORDER BY s.position",
-                )?.query_map([&tag, &id], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
-                let content = conn.query_row(
-                    "SELECT (SELECT COUNT(*) FROM behaviour_content_group_tag x JOIN tags t ON t.id = x.tag_id WHERE t.name = ?1) + (SELECT COUNT(*) FROM behaviour_content_entry_tag x JOIN tags t ON t.id = x.tag_id WHERE t.name = ?1)",
-                    [&tag], |row| row.get(0),
-                )?;
-                Ok(StageRemovalImpact { tag: Some(tag), media, stages, content })
-            }).await
+            pack.behaviour_query(move |conn| ops::stage_removal_impact(conn, &id))
+                .await
         })
         .await
 }

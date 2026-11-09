@@ -40,14 +40,17 @@ pub async fn add_files_dialog(state: State<'_, AppState>, app: AppHandle) -> Res
     let upload_lock = state.upload_lock.clone();
     state.cancel_uploads.send_replace(false);
     let cancel = state.cancel_uploads.subscribe();
-    tauri::async_runtime::spawn(encode::process_files(
-        pack_state,
-        paths,
-        app,
-        encoder,
-        upload_lock,
-        cancel,
-    ));
+    crate::keep_awake::spawn_awake(
+        "Importing media into a pack",
+        encode::process_files(
+            pack_state,
+            paths,
+            crate::events::emitter(&app),
+            encoder,
+            upload_lock,
+            cancel,
+        ),
+    );
     Ok(())
 }
 
@@ -85,14 +88,17 @@ pub async fn add_folder_dialog(state: State<'_, AppState>, app: AppHandle) -> Re
     let upload_lock = state.upload_lock.clone();
     state.cancel_uploads.send_replace(false);
     let cancel = state.cancel_uploads.subscribe();
-    tauri::async_runtime::spawn(encode::process_files(
-        pack_state,
-        paths,
-        app,
-        encoder,
-        upload_lock,
-        cancel,
-    ));
+    crate::keep_awake::spawn_awake(
+        "Importing media into a pack",
+        encode::process_files(
+            pack_state,
+            paths,
+            crate::events::emitter(&app),
+            encoder,
+            upload_lock,
+            cancel,
+        ),
+    );
     Ok(())
 }
 
@@ -130,14 +136,17 @@ pub async fn add_paths(
     let upload_lock = state.upload_lock.clone();
     state.cancel_uploads.send_replace(false);
     let cancel = state.cancel_uploads.subscribe();
-    tauri::async_runtime::spawn(encode::process_files(
-        pack_state,
-        paths,
-        app,
-        encoder,
-        upload_lock,
-        cancel,
-    ));
+    crate::keep_awake::spawn_awake(
+        "Importing media into a pack",
+        encode::process_files(
+            pack_state,
+            paths,
+            crate::events::emitter(&app),
+            encoder,
+            upload_lock,
+            cancel,
+        ),
+    );
     Ok(())
 }
 

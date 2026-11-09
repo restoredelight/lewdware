@@ -68,7 +68,7 @@ YUV format (the difference is that NV12 combines the UV channels into a
 single channel). We use shaders for both formats (`shaders/yuv.wgsl` and
 `shaders/nv12.wgsl`).
 
-Videos are encoded using H.264 (see `../pack-editor/src-tauri/src/encode.rs`),
+Videos are encoded using H.264 (see `../pack-editor-core/src/encode.rs`),
 which most computers provide GPU decoding for. We encode transparent videos
 using a vertically packed format, where the top half of the video contains the
 YUV channels of the texture, and the bottom half contains the alpha channel.

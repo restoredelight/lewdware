@@ -1,12 +1,12 @@
 mod commands;
-mod editor_db;
-mod encode;
-mod history;
-mod import;
+mod events;
 mod keep_awake;
 mod media_server;
-mod pack;
-mod thumbnail;
+
+// The editor's model lives in `pack-editor-core`; these keep the `crate::pack::...` paths the
+// commands use.
+pub use pack_editor_core::PackState;
+use pack_editor_core::{encode, history, import, pack};
 
 use std::sync::{Arc, OnceLock};
 
@@ -18,8 +18,6 @@ use tokio::sync::{watch, Mutex, RwLock};
 use shared::encode::HardwareEncoder;
 
 use commands::*;
-
-pub type PackState = Arc<Mutex<Option<Arc<MediaPack>>>>;
 
 pub struct AppState {
     pub pack: PackState,

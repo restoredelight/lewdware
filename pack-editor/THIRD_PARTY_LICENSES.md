@@ -6,8 +6,8 @@ repository root [`LICENSE`](../LICENSE)).
 ## Bundled FFmpeg / ffprobe binaries (GPLv3)
 
 The pack-editor binary invokes `ffmpeg` and `ffprobe` as separate subprocesses
-to encode and inspect media (see `src-tauri/src/encode.rs` and
-`src-tauri/src/thumbnail.rs`), and the distributed pack-editor installer
+to encode and inspect media (see `../pack-editor-core/src/encode.rs` and
+`../pack-editor-core/src/thumbnail.rs`), and the distributed pack-editor installer
 bundles prebuilt copies of these executables alongside its own binary
 (`src-tauri/binaries/lewdware-ffmpeg`, `lewdware-ffprobe`; see
 `src-tauri/tauri.conf.json`'s `bundle.resources` and
