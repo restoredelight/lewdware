@@ -1,0 +1,6 @@
+[   0.0] Examining the guest ...
+[   9.0] Setting a random seed
+[   9.1] Uploading: /home/restoredelight/.ssh/vmctl_ed25519.pub to /root/vmctl-authorized-key
+[   9.1] Running: /tmp/mint-vm-setup.sh
+[ 125.2] SELinux relabelling
+[ 125.5] Finishing off

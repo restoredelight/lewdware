@@ -86,6 +86,7 @@ impl LewdwareApp {
                 .send(self.monitors.primary(event_loop).map_err(|err| err.into()))
                 .is_ok(),
             LuaRequest::Exit { tx } => {
+                self.mode_completed = true;
                 let _ = tx.send(());
                 event_loop.exit();
                 return true;

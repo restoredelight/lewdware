@@ -101,6 +101,7 @@ pub async fn lewdware_running() -> EngineStatusDto {
 pub struct SupervisorStatusDto {
     pub engine: EngineStatusDto,
     pub schedule: ScheduleStatusDto,
+    pub stop_shortcut: Option<shared::ipc::control::StopShortcutStatus>,
 }
 
 /// Follows the supervisor's status stream for the lifetime of the app, forwarding every update
@@ -115,6 +116,7 @@ pub async fn forward_supervisor_status(app: tauri::AppHandle) {
                     SupervisorStatusDto {
                         engine: engine_status_from(&info),
                         schedule: schedule_status_from(&info),
+                        stop_shortcut: Some(info.stop_shortcut.clone()),
                     },
                 );
             }
@@ -128,9 +130,11 @@ pub async fn forward_supervisor_status(app: tauri::AppHandle) {
                 Ok(shared::ipc::control::Response::Status(info)) => SupervisorStatusDto {
                     engine: engine_status_from(&info),
                     schedule: schedule_status_from(&info),
+                    stop_shortcut: Some(info.stop_shortcut.clone()),
                 },
                 _ => SupervisorStatusDto {
                     engine: EngineStatusDto::stopped(),
+                    stop_shortcut: None,
                     schedule: ScheduleStatusDto {
                         enabled: false,
                         next_exact_session: None,
@@ -143,5 +147,47 @@ pub async fn forward_supervisor_status(app: tauri::AppHandle) {
             };
         let _ = app.emit("supervisor:status", payload);
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
+/// Starting the supervisor here also starts registration, so Safety can show setup before launch.
+#[tauri::command]
+pub async fn stop_shortcut_status(
+    retry: Option<bool>,
+) -> Result<shared::ipc::control::StopShortcutStatus, String> {
+    shared::ipc::control::ensure_supervisor_running()
+        .await
+        .map_err(|e| e.to_string())?;
+    if retry == Some(true) {
+        match shared::ipc::control::request(&shared::ipc::control::Request::RefreshStopShortcut)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            shared::ipc::control::Response::Ok => {}
+            shared::ipc::control::Response::Error { message } => return Err(message),
+            _ => return Err("Unexpected shortcut refresh response".into()),
+        }
+    }
+    match shared::ipc::control::request(&shared::ipc::control::Request::Status)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        shared::ipc::control::Response::Status(info) => Ok(info.stop_shortcut),
+        _ => Err("Unexpected shortcut status response".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn setup_stop_shortcut() -> Result<(), String> {
+    shared::ipc::control::ensure_supervisor_running()
+        .await
+        .map_err(|e| e.to_string())?;
+    match shared::ipc::control::request(&shared::ipc::control::Request::SetupStopShortcut)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        shared::ipc::control::Response::Ok => Ok(()),
+        shared::ipc::control::Response::Error { message } => Err(message),
+        _ => Err("Unexpected shortcut setup response".into()),
     }
 }

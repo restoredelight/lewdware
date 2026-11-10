@@ -1,0 +1,20 @@
+Status(
+    StatusInfo {
+        session: Idle,
+        session_kind: None,
+        mode_path: None,
+        warning: None,
+        last_runtime_error: None,
+        last_exit: None,
+        schedule: ScheduleStatus {
+            enabled: false,
+            next_exact_session: None,
+            next_opportunity: None,
+            budget_remaining: 0,
+            budget_total: 0,
+            cooldown_until: None,
+        },
+    },
+)
+399 /Applications/Lewdware.app/Contents/MacOS/lewdware
+766 /Applications/Lewdware.app/Contents/MacOS/lewdware-supervisor

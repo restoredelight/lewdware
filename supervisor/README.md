@@ -59,3 +59,38 @@ probabilities. That quantity should be zero on average, with variance
 `sum(q * (1 - q))`. This discrete calibration remains valid when a closing tick has
 a large hazard but can still start at most one session. Details are in
 `residuals.rs`.
+
+## Stop shortcut
+
+The supervisor owns the emergency stop even when the engine is unresponsive. On X11 it listens
+for the configured key with `rdev`; on Wayland it uses the desktop's GlobalShortcuts portal.
+The Safety page reports the active backend and the shortcut actually assigned by the portal
+(the desktop can choose a different combination from the requested one).
+
+GNOME versions without that portal need a custom desktop shortcut. Choose **Set up desktop
+shortcut** in Safety to create the Lewdware-owned binding. It invokes this installed supervisor's
+`stop-immediately` command, preserves other custom bindings, and follows subsequent changes to
+the configured key. It requires `gsettings` and the GNOME media-key schemas. Removing the binding
+in GNOME settings leaves it removed until setup is requested again. On other Wayland desktops
+without the portal, bind `lewdware-supervisor stop-immediately` in the desktop's shortcut settings.
+
+The Linux packages include a hidden `com.lewdware.supervisor.desktop` entry for the daemon's
+portal identity. A source-only run may need that entry installed before a desktop will offer
+portal permissions.
+
+## Deliberate mode completion
+
+The engine returns the reserved `shared::ipc::engine::MODE_COMPLETED_EXIT_CODE` (42) after the
+Lua exit API deliberately ends a mode. The supervisor restores wallpaper and finishes the episode
+without crash backoff; scheduled completion starts the usual cooldown. Other uncommanded exits,
+including an unexplained zero status, retain crash recovery. An explicit pending replacement
+still takes precedence. The process status avoids a race with reading a final IPC message.
+
+## Desktop regression tests
+
+`cargo test -p lewdware-supervisor` includes Linux desktop regressions. They require
+`dbus-run-session`, `gsettings`, `glib-compile-schemas` and the dconf backend. The runner uses a
+private D-Bus, temporary user directories and test schemas; it does not change the real desktop.
+It tests GNOME binding preservation/updates, portal activation and revocation against a mock
+service, and completion/crash/scheduled lifecycle behavior. Native Wayland focus delivery still
+needs a real desktop VM check.

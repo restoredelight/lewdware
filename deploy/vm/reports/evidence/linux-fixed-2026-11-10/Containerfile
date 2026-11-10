@@ -1,0 +1,6 @@
+FROM docker.io/library/rust:1-bookworm AS rust
+FROM docker.io/library/ubuntu:24.04
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+ENV RUSTUP_HOME=/usr/local/rustup PATH=/usr/local/cargo/bin:$PATH DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl ca-certificates git pkg-config libclang-dev nasm libssl-dev libdbus-1-dev libasound2-dev libx11-dev libxi-dev libxtst-dev libxrandr-dev libxcursor-dev libdav1d-dev libudev-dev libfontconfig1-dev libfreetype6-dev cmake ninja-build meson patchelf && apt-get clean && rm -rf /var/lib/apt/lists/*

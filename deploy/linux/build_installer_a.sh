@@ -147,6 +147,18 @@ Type=Application
 Categories=Utility;Development;
 EOF
 
+# Portal identity for the windowless supervisor (also used in compositor permission dialogs).
+cat <<EOF > "$STAGE_DIR/usr/share/applications/com.lewdware.supervisor.desktop"
+[Desktop Entry]
+Name=Lewdware
+Comment=Lewdware session supervisor
+Exec=/usr/lib/lewdware/lewdware-supervisor
+Icon=lewdware
+Terminal=false
+Type=Application
+NoDisplay=true
+EOF
+
 # Copy app icon if exists (use a placeholder if not)
 if [ -f "config/src-tauri/icons/128x128.png" ]; then
   cp "config/src-tauri/icons/128x128.png" "$STAGE_DIR/usr/share/icons/hicolor/128x128/apps/lewdware.png"
@@ -276,6 +288,7 @@ exit 0
 /usr/bin/lw
 /usr/lib/lewdware/*
 /usr/share/applications/lewdware.desktop
+/usr/share/applications/com.lewdware.supervisor.desktop
 /usr/share/icons/hicolor/128x128/apps/lewdware.png
 %license /usr/share/licenses/lewdware/LICENSE
 EOF

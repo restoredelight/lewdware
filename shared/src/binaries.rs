@@ -88,7 +88,7 @@ pub fn find_config_binary() -> Option<Command> {
 }
 
 pub fn find_supervisor_binary() -> Option<Command> {
-    find_binary(supervisor_bin_name(), "supervisor")
+    find_binary(supervisor_bin_name(), "lewdware-supervisor")
 }
 
 pub fn find_supervisor_binary_path() -> Option<PathBuf> {

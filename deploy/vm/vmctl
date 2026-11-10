@@ -465,8 +465,15 @@ def main():
     if a.cmd == "launch" and guest_profile(vm)["os"] == "linux":
         # Inherit the actual logged-in desktop environment from its user manager,
         # rather than guessing DISPLAY or importing an SSH login's tty environment.
+        # Xfce imports its desktop environment but does not start graphical-session.target.
+        # In that case verify the imported session is still an active graphical login.
         command = (
-            "systemctl --user is-active --quiet graphical-session.target && "
+            "(systemctl --user is-active --quiet graphical-session.target || { "
+            "lw_session=$(systemctl --user show-environment | sed -n 's/^XDG_SESSION_ID=//p'); "
+            '[ -n "$lw_session" ] && '
+            '[ "$(loginctl show-session "$lw_session" --property=Active --value)" = yes ] && '
+            'loginctl show-session "$lw_session" --property=Type --value | grep -Eq "^(wayland|x11)$"; '
+            "}) && "
             "systemctl --user show-environment | grep -Eq '^XDG_SESSION_TYPE=(wayland|x11)$' && "
             "systemctl --user show-environment | grep -Eq '^(WAYLAND_DISPLAY|DISPLAY)=.+' && "
             "systemd-run --user --collect --property=Type=exec "

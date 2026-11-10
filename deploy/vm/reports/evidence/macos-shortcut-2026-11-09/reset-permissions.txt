@@ -1,0 +1,3 @@
+RESET_MARKER_ABSENT
+kTCCServiceAccessibility|/Applications/Lewdware.app/Contents/MacOS/lewdware-supervisor|2
+kTCCServiceListenEvent|com.lewdware|2

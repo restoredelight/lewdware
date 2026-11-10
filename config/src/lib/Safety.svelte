@@ -32,11 +32,14 @@
 	// never take effect should not claim to be "Allowed".
 	const wallpaperUsable = $derived(canRestoreOriginal || restore.kind === 'image');
 
+	const shortcut = $derived(store.stopShortcutStatus);
+
 	const stopKeyDisplay = $derived(
 		recording ? 'Press a key...' : store.config ? formatKey(store.config.stop_button) : ''
 	);
 
 	onMount(async () => {
+		await store.checkStopShortcut();
 		support = await api.wallpaperSupport().catch(() => null);
 		await checkInputMonitoringGranted();
 	});
@@ -60,6 +63,20 @@
 			cancelled = true;
 		};
 	});
+
+	async function retryStopShortcut() {
+		await store.checkStopShortcut(true);
+	}
+
+	async function setupStopShortcut() {
+		try {
+			await api.setupStopShortcut();
+			await store.checkStopShortcut();
+			taskFeedback.dismiss('stop-shortcut');
+		} catch (err) {
+			taskFeedback.error('stop-shortcut', `Couldn’t set up the desktop shortcut: ${String(err)}`);
+		}
+	}
 
 	async function checkInputMonitoringGranted() {
 		try {
@@ -166,6 +183,34 @@
 			<p class="text-muted text-xs">
 				Pressing this key combination stops a running session immediately.
 			</p>
+			<div class="text-muted font-mono text-xs" role="status">
+				{#if shortcut?.type === 'Registered'}
+					Registered via {shortcut.backend}: {shortcut.trigger}
+				{:else if shortcut?.type === 'Listening'}
+					Listening via {shortcut.backend}
+				{:else if shortcut?.type === 'SetupRequired' || shortcut?.type === 'Failed'}
+					{shortcut.message}
+				{:else if shortcut?.type === 'Checking'}
+					Checking desktop shortcut…
+				{:else}
+					Supervisor is idle. Check the shortcut to verify desktop setup.
+				{/if}
+			</div>
+			{#if shortcut?.type === 'Failed' || !shortcut}
+				<div>
+					<Button variant="secondary" size="compact" onclick={retryStopShortcut}
+						>{shortcut ? 'Retry shortcut' : 'Check shortcut'}</Button
+					>
+				</div>
+			{/if}
+			{#if shortcut?.type === 'SetupRequired' && shortcut.can_setup}
+				<div>
+					<Button variant="secondary" size="compact" onclick={setupStopShortcut}
+						>Set up desktop shortcut</Button
+					>
+				</div>
+			{/if}
+
 			{#if !inputMonitoringGranted}
 				<div
 					class="flex flex-col gap-2 rounded-md border border-[var(--ui-warning-border)] bg-[var(--ui-warning-bg)] px-3 py-2 text-sm text-[var(--ui-warning)]"

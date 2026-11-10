@@ -1,0 +1,8 @@
+#!/bin/sh
+if [ -e "$HOME/wallpaper-fail-restore" ]; then
+ case "$*" in *writeConfig*) echo 'vmctl injected Plasma write failure' >&2; exit 77;; esac
+fi
+if [ -e "$HOME/wallpaper-fail-read" ]; then
+ case "$*" in *out.push*) echo 'vmctl injected Plasma snapshot failure' >&2; exit 78;; esac
+fi
+exec /usr/bin/dbus-send "$@"

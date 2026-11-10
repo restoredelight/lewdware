@@ -1,0 +1,21 @@
+import argparse,json,pathlib,subprocess,time
+p=argparse.ArgumentParser();p.add_argument('--launcher',choices=['managed','sway'],required=True);a=p.parse_args()
+base=pathlib.Path('/home/restoredelight/projects/lewdware');ev=base/'deploy/vm/reports/evidence/linux-fixed-2026-11-10/fedora-sway';ev.mkdir(parents=True,exist_ok=True)
+def vm(*args,check=True):
+ r=subprocess.run([str(base/'deploy/vm/vmctl'),'--vm','fedora-44-sway',*args],capture_output=True,text=True)
+ print(r.stdout+r.stderr,flush=True)
+ with (ev/('idle-'+a.launcher+'.txt')).open('a') as f:f.write(repr(args)+'\n'+r.stdout+r.stderr)
+ if check and r.returncode:raise RuntimeError(args)
+ return r.stdout
+def guest(s):return vm('ssh','--',s)
+def probe(s):return guest('LW_WALLPAPER_EVIDENCE="$HOME/wallpaper-fixed-evidence" LW_WALLPAPER_FIXTURE="$HOME/wallpaper-fixture-fixed" LW_WALLPAPER_MODE="$HOME/lewdware-fixed/wallpaper-test.lwmode" python3 ~/wallpaper-probe-fixed.py '+s)
+home=guest('printf %s "$HOME"').strip()
+guest('cp ~/wallpaper-fixed-evidence/original.json ~/wallpaper-fixed-evidence/known.json')
+if a.launcher=='managed':vm('launch',home+'/lewdware-fixed/bin/lewdware-supervisor')
+else:guest('SWAYSOCK=$(systemctl --user show-environment | sed -n "s/^SWAYSOCK=//p") swaymsg exec '+home+'/lewdware-fixed/bin/lewdware-supervisor')
+time.sleep(1);probe('start hold');time.sleep(3);probe('stop');time.sleep(2);probe('check');probe('status')
+guest("for p in $(pgrep -x swaybg); do cat /proc/$p/cgroup; done")
+print('Waiting beyond the 60-second idle exit',flush=True);time.sleep(35);time.sleep(35)
+guest("python3 - <<'END'\nfrom pathlib import Path\nfor p in Path('/proc').iterdir():\n if not p.name.isdigit():continue\n try:\n  assert (p/'exe').resolve(strict=True).name != 'lewdware-supervisor',p.name\n except (OSError,RuntimeError):pass\nEND")
+probe('check');vm('shot',str(ev/('idle-'+a.launcher+'-after.png')))
+print('SWAY IDLE SURVIVAL PASSED',flush=True)

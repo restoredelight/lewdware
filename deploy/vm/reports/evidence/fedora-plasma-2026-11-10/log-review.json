@@ -1,0 +1,22 @@
+[
+  {
+    "level": "warn",
+    "message": "failed to restore wallpaper: could not talk to plasmashell",
+    "count": 1
+  },
+  {
+    "level": "warn",
+    "message": "Could not capture the current wallpaper, so it must not be changed: could not talk to plasmashell",
+    "count": 2
+  },
+  {
+    "level": "warn",
+    "message": "error setting XSETTINGS; Xft options won't reload automatically",
+    "count": 15
+  },
+  {
+    "level": "warn",
+    "message": "Cannot read the current wallpaper on this desktop, so refusing to change it",
+    "count": 1
+  }
+]

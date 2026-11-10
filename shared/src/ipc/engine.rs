@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 use super::{RecvHalf, SendHalf, Stream, prelude::*, socket_name, write_line};
 use crate::logging::LogRecord;
 
+/// Reserved process status for a mode deliberately ending via the Lua exit API.
+/// Zero alone is not completion: other event-loop shutdown paths can also return successfully.
+/// Kept below 256 so Unix and Windows observe the same value.
+pub const MODE_COMPLETED_EXIT_CODE: u8 = 42;
+
 // ─── Engine <-> supervisor protocol (long-lived duplex, one per session) ───────
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

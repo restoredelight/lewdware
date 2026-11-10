@@ -77,7 +77,8 @@ async fn run_services(
     config: AppConfig,
     tray: crate::tray::TrayUpdater,
 ) {
-    crate::stop_key::spawn_stop_thread(control_tx.clone(), config.stop_button);
+    let stop_shortcut =
+        crate::stop_key::StopShortcut::spawn(control_tx.clone(), config.stop_button);
     // Before anything else can stop us: the schedule engine reads every gap in its own uptime as
     // evidence about the user, so a stop that arrives unannounced is a stop that gets misread.
     crate::shutdown::spawn(control_tx.clone());
@@ -87,6 +88,7 @@ async fn run_services(
     // first publish still gets a coherent snapshot.
     let (status_tx, status_rx) = tokio::sync::watch::channel(shared::ipc::control::StatusInfo {
         session: shared::ipc::control::SessionState::Idle,
+        stop_shortcut: Default::default(),
         session_kind: None,
         mode_path: None,
         warning: None,
@@ -123,7 +125,14 @@ async fn run_services(
         });
     }
 
-    Control::new(control_tx, config.schedule, status_tx, dev_log_tx, tray)
-        .run(control_rx)
-        .await;
+    Control::new(
+        control_tx,
+        config.schedule,
+        status_tx,
+        dev_log_tx,
+        tray,
+        stop_shortcut,
+    )
+    .run(control_rx)
+    .await;
 }

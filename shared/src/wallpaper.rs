@@ -19,6 +19,8 @@ mod linux;
 mod macos;
 #[cfg(windows)]
 mod windows;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod xfce;
 
 #[cfg(all(unix, not(target_os = "macos")))]
 use linux as platform;
@@ -76,7 +78,9 @@ pub enum Snapshot {
     },
     /// One entry per `xfce4-desktop` property.
     Xfce {
-        entries: Vec<(String, String)>,
+        // Existing snapshots contain strings, which deserialize as Some. Null means this
+        // property was absent and must be removed after our temporary override.
+        entries: Vec<(String, Option<String>)>,
     },
     Windows {
         path: String,
@@ -167,6 +171,19 @@ pub fn set(path: &Path) -> Result<()> {
     platform::set(path)
 }
 
+/// Apply to the targets captured before the episode, including settings that were unset.
+/// An output/workspace added during an episode must not become an unsnapshotted write target.
+pub fn set_with_snapshot(path: &Path, snapshot: &Snapshot) -> Result<()> {
+    if !snapshot.is_restorable() {
+        bail!("cannot set wallpaper without a restorable snapshot");
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if let Snapshot::Xfce { entries } = snapshot {
+        return xfce::set(path, entries.iter().map(|(property, _)| property.as_str()));
+    }
+    set(path)
+}
+
 /// Whether `snapshot` describes a wallpaper pointing into [`crate::utils::temp_dir`]
 fn is_our_own_wallpaper(snapshot: &Snapshot) -> bool {
     let encoded = match serde_json::to_string(snapshot) {
@@ -218,6 +235,11 @@ pub fn default_restore_image_path() -> Result<std::path::PathBuf> {
 /// Runs a command, returning its stdout.
 #[allow(dead_code)]
 fn stdout_of(command: &'static str, args: &[&str]) -> Result<String> {
+    stdout_of_raw(command, args).map(|out| out.trim().to_owned())
+}
+
+#[allow(dead_code)]
+fn stdout_of_raw(command: &'static str, args: &[&str]) -> Result<String> {
     let mut cmd = Command::new(command);
     cmd.args(args);
     sanitize_child_env(&mut cmd);
@@ -232,7 +254,7 @@ fn stdout_of(command: &'static str, args: &[&str]) -> Result<String> {
     };
 
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
         bail!(
             "`{command}` exited with status {}: {}",
@@ -250,6 +272,11 @@ fn run_cmd(command: &'static str, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setting_without_a_restorable_snapshot_is_refused_before_desktop_access() {
+        assert!(set_with_snapshot(Path::new("/never-used.png"), &Snapshot::Unsupported).is_err());
+    }
 
     /// An episode that ends without restoring -- a crash, a kill, the stop shortcut -- leaves our own
     /// image on the desktop. The next snapshot must not record that as the user's wallpaper, or

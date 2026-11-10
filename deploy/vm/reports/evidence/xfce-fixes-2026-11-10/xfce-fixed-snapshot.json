@@ -1,0 +1,37 @@
+{
+  "backend": "xfce",
+  "entries": [
+    [
+      "/backdrop/screen0/monitorVirtual-1/workspace0/image-style",
+      null
+    ],
+    [
+      "/backdrop/screen0/monitorVirtual-1/workspace0/last-image",
+      null
+    ],
+    [
+      "/backdrop/screen0/monitorVirtual-1/workspace1/image-style",
+      null
+    ],
+    [
+      "/backdrop/screen0/monitorVirtual-1/workspace1/last-image",
+      null
+    ],
+    [
+      "/backdrop/screen0/monitorVirtual-1/workspace2/image-style",
+      null
+    ],
+    [
+      "/backdrop/screen0/monitorVirtual-1/workspace2/last-image",
+      null
+    ],
+    [
+      "/backdrop/screen0/monitorVirtual-1/workspace3/image-style",
+      null
+    ],
+    [
+      "/backdrop/screen0/monitorVirtual-1/workspace3/last-image",
+      null
+    ]
+  ]
+}

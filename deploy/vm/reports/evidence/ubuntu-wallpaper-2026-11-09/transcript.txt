@@ -1,0 +1,143 @@
+('ssh', '--', 'python3 ~/wallpaper-guest.py status; python3 ~/wallpaper-guest.py check')
+{"type": "Status", "session": {"type": "Running", "pid": 3030}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/first-reset.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/first-reset.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-guest.py status; python3 ~/wallpaper-guest.py check')
+{"type": "Status", "session": {"type": "Running", "pid": 3453}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///tmp/lewdware-tmp/.tmpNs1BQ1.avif'", "picture-uri-dark": "'file:///tmp/lewdware-tmp/.tmpNs1BQ1.avif'", "picture-options": "'zoom'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+{"picture-uri": "'file:///tmp/lewdware-tmp/.tmpNs1BQ1.avif'", "picture-uri-dark": "'file:///tmp/lewdware-tmp/.tmpNs1BQ1.avif'", "picture-options": "'zoom'"}
+Traceback (most recent call last):
+  File "/home/ashbythorpe/wallpaper-guest.py", line 25, in <module>
+    actual=settings(); expected=json.loads((root/'wallpaper-known.json').read_text()); print(json.dumps(actual)); assert actual==expected,(actual,expected)
+                                                                                                                         ^^^^^^^^^^^^^^^^
+AssertionError: ({'picture-uri': "'file:///tmp/lewdware-tmp/.tmpNs1BQ1.avif'", 'picture-uri-dark': "'file:///tmp/lewdware-tmp/.tmpNs1BQ1.avif'", 'picture-options': "'zoom'"}, {'picture-uri': "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", 'picture-uri-dark': "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", 'picture-options': "'scaled'"})
+('ssh', '--', 'python3 ~/wallpaper-guest.py start explicit')
+{"type": "Ok"}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/explicit-A.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/explicit-A.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-guest.py status')
+{"type": "Status", "session": {"type": "Running", "pid": 3752}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///tmp/lewdware-tmp/.tmpislIfR.avif'", "picture-uri-dark": "'file:///tmp/lewdware-tmp/.tmpislIfR.avif'", "picture-options": "'zoom'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/explicit-B.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/explicit-B.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-guest.py status')
+{"type": "Status", "session": {"type": "Running", "pid": 3752}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///tmp/lewdware-tmp/.tmprWwLDp.avif'", "picture-uri-dark": "'file:///tmp/lewdware-tmp/.tmprWwLDp.avif'", "picture-options": "'zoom'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/explicit-reset.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/explicit-reset.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-guest.py status; python3 ~/wallpaper-guest.py check')
+{"type": "Status", "session": {"type": "Running", "pid": 3752}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py stop')
+{"type": "Ok"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py status; python3 ~/wallpaper-guest.py check')
+{"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+snapshot ABSENT
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py start hold')
+{"type": "Ok"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py status')
+{"type": "Status", "session": {"type": "Running", "pid": 4263}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///tmp/lewdware-tmp/.tmpqD29Pm.avif'", "picture-uri-dark": "'file:///tmp/lewdware-tmp/.tmpqD29Pm.avif'", "picture-options": "'zoom'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+('key', 'shift+esc')
+('ssh', '--', 'python3 ~/wallpaper-guest.py status')
+{"type": "Status", "session": {"type": "Running", "pid": 4263}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///tmp/lewdware-tmp/.tmpqD29Pm.avif'", "picture-uri-dark": "'file:///tmp/lewdware-tmp/.tmpqD29Pm.avif'", "picture-options": "'zoom'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+('ssh', '--', 'python3 ~/wallpaper-guest.py StopSession')
+{"type": "Ok"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py status; python3 ~/wallpaper-guest.py check')
+{"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+snapshot ABSENT
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/graceful-stop-restored.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/graceful-stop-restored.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-guest.py start hold')
+Traceback (most recent call last):
+  File "/home/ashbythorpe/wallpaper-guest.py", line 21, in <module>
+    cfg.write_text(json.dumps(c)); request('StartSession',mode_path=str(root/'wallpaper-test.lwmode'),dev=False,replace=False)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ashbythorpe/wallpaper-guest.py", line 6, in request
+    s=socket.socket(socket.AF_UNIX); s.settimeout(15); s.connect('\0lewdware-supervisor.sock'); s.sendall((json.dumps(dict(type=kind,**extra))+'\n').encode()); r=json.loads(s.makefile().readline()); print(json.dumps(r)); return r
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ConnectionRefusedError: [Errno 111] Connection refused
+('ssh', '--', 'python3 ~/wallpaper-guest.py start hold')
+{"type": "Ok"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py kill-engine')
+{"type": "Status", "session": {"type": "Running", "pid": 4913}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+killing exact guest engine 4913
+('ssh', '--', 'python3 ~/wallpaper-guest.py status; python3 ~/wallpaper-guest.py check')
+{"type": "Status", "session": {"type": "RestartPending", "attempt": 1, "max_attempts": 3, "retry_in_secs": 1, "last_error": null}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": {"code": null, "classification": "Crashed", "error": null}, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+snapshot ABSENT
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/engine-crash-restored.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/engine-crash-restored.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-guest.py status; python3 ~/wallpaper-guest.py stop')
+{"type": "Status", "session": {"type": "Running", "pid": 5149}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///tmp/lewdware-tmp/.tmpKbgE5i.avif'", "picture-uri-dark": "'file:///tmp/lewdware-tmp/.tmpKbgE5i.avif'", "picture-options": "'zoom'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+{"type": "Ok"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py check')
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py start hold')
+{"type": "Ok"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py kill-both')
+{"type": "Status", "session": {"type": "Running", "pid": 5416}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+killing exact guest supervisor 4836
+killing exact guest engine 5416
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/stranded-wallpaper.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/stranded-wallpaper.png (1280x800)
+('launch', '/usr/lib/lewdware/lewdware-supervisor')
+Running as unit: vmctl-launch-1794260082622803242.service; invocation ID: c0169def9d40417e96b2d5b7d1a87b26
+('ssh', '--', 'python3 ~/wallpaper-guest.py status; python3 ~/wallpaper-guest.py check')
+{"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+snapshot ABSENT
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/startup-recovered.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/startup-recovered.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-guest.py permission off; python3 ~/wallpaper-guest.py start hold')
+{"type": "Ok"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py status; python3 ~/wallpaper-guest.py check; python3 ~/wallpaper-guest.py stop')
+{"type": "Status", "session": {"type": "Running", "pid": 5758}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+{"type": "Ok"}
+('ssh', '--', 'python3 ~/wallpaper-guest.py permission on')
+('launch', '/usr/lib/lewdware/lewdware-supervisor')
+Running as unit: vmctl-launch-1794260250065525075.service; invocation ID: 81d1ca09db494adcaac3333e7eedb1c6
+('key', 'ctrl+alt+t')
+('ssh', '--', 'python3 ~/wallpaper-guest.py start hold')
+{"type": "Ok"}
+('key', 'shift+esc')
+('ssh', '--', 'python3 ~/wallpaper-guest.py status')
+{"type": "Status", "session": {"type": "Running", "pid": 6726}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///tmp/lewdware-tmp/.tmpLnvDvQ.avif'", "picture-uri-dark": "'file:///tmp/lewdware-tmp/.tmpLnvDvQ.avif'", "picture-options": "'zoom'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/shortcut-native-wayland-fails.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/ubuntu-wallpaper-2026-11-09/shortcut-native-wayland-fails.png (1280x800)
+('click', '110', '180')
+('key', 'shift+esc')
+('ssh', '--', 'python3 ~/wallpaper-guest.py status; python3 ~/wallpaper-guest.py check')
+{"type": "Status", "session": {"type": "Running", "pid": 6726}, "session_kind": "Manual", "mode_path": "/home/ashbythorpe/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///tmp/lewdware-tmp/.tmpLnvDvQ.avif'", "picture-uri-dark": "'file:///tmp/lewdware-tmp/.tmpLnvDvQ.avif'", "picture-options": "'zoom'"}
+snapshot {"backend":"gsettings","schema":"org.gnome.desktop.background","entries":[["picture-uri","'file:///home/ashbythorpe/wallpaper-fixture/A.png'"],["picture-uri-dark","'file:///home/ashbythorpe/wallpaper-fixture/B.png'"],["picture-options","'scaled'"]]}
+{"picture-uri": "'file:///tmp/lewdware-tmp/.tmpLnvDvQ.avif'", "picture-uri-dark": "'file:///tmp/lewdware-tmp/.tmpLnvDvQ.avif'", "picture-options": "'zoom'"}
+Traceback (most recent call last):
+  File "/home/ashbythorpe/wallpaper-guest.py", line 42, in <module>
+    actual=settings(); expected=json.loads((root/'wallpaper-known.json').read_text()); print(json.dumps(actual)); assert actual==expected,(actual,expected)
+                                                                                                                         ^^^^^^^^^^^^^^^^
+AssertionError: ({'picture-uri': "'file:///tmp/lewdware-tmp/.tmpLnvDvQ.avif'", 'picture-uri-dark': "'file:///tmp/lewdware-tmp/.tmpLnvDvQ.avif'", 'picture-options': "'zoom'"}, {'picture-uri': "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", 'picture-uri-dark': "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", 'picture-options': "'scaled'"})

@@ -31,6 +31,13 @@ pub struct SessionExit {
     pub we_commanded_stop: bool,
 }
 
+impl SessionExit {
+    pub fn mode_completed(&self) -> bool {
+        self.status.and_then(|s| s.code())
+            == Some(i32::from(shared::ipc::engine::MODE_COMPLETED_EXIT_CODE))
+    }
+}
+
 /// Spawns the child process and its supervising task. Returns the pid and a channel for sending
 /// it `SessionCommand`s.
 pub fn spawn(
@@ -140,5 +147,61 @@ async fn read_reports(seq: u64, recv: RecvHalf, control_tx: mpsc::Sender<Control
         {
             return;
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    /// Run stateful regressions with a private D-Bus and private settings/data directories.
+    /// They cannot connect to the user's desktop or delete a real wallpaper recovery snapshot.
+    #[test]
+    fn desktop_and_lifecycle_regressions() {
+        let dir = tempfile::tempdir().unwrap();
+        // The host may be KDE and have no GNOME schema package. Supply the relevant public
+        // schema types/defaults so the real gsettings/dconf integration remains portable.
+        let schema = dir.path().join("org.gnome.test.gschema.xml");
+        std::fs::write(&schema, r#"<schemalist>
+          <schema id="org.gnome.settings-daemon.plugins.media-keys" path="/org/gnome/settings-daemon/plugins/media-keys/">
+            <key name="custom-keybindings" type="as"><default>[]</default></key>
+          </schema>
+          <schema id="org.gnome.settings-daemon.plugins.media-keys.custom-keybinding">
+            <key name="name" type="s"><default>''</default></key>
+            <key name="command" type="s"><default>''</default></key>
+            <key name="binding" type="s"><default>''</default></key>
+          </schema>
+        </schemalist>"#).unwrap();
+        assert!(
+            std::process::Command::new("glib-compile-schemas")
+                .arg(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        let output = std::process::Command::new("dbus-run-session")
+            .arg("--")
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "isolated_regression",
+                "--ignored",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("LEWDWARE_ISOLATED_TEST", "1")
+            .env("GSETTINGS_SCHEMA_DIR", dir.path())
+            .env("XDG_DATA_HOME", dir.path().join("data"))
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
+            .env("XDG_CACHE_HOME", dir.path().join("cache"))
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("XAUTHORITY")
+            .env("GSETTINGS_BACKEND", "dconf")
+            .env("XDG_CURRENT_DESKTOP", "GNOME")
+            .env("XDG_SESSION_TYPE", "wayland")
+            .status()
+            .expect("dbus-run-session is required for desktop regression tests");
+        assert!(
+            output.success(),
+            "isolated desktop regressions failed: {output}"
+        );
     }
 }

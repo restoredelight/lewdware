@@ -1,0 +1,5 @@
+Local desktop console after first boot:
+printf '[Match]\nName=enp0s9\n[Network]\nDHCP=yes\n' | sudo tee /etc/systemd/network/20-vmctl.network
+sudo systemctl enable --now systemd-networkd
+sudo networkctl reload
+sudo networkctl reconfigure enp0s9

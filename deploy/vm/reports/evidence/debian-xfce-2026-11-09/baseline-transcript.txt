@@ -1,0 +1,52 @@
+('vmctl', 'up')
+debian-13-xfce booting. ssh port 22220, watch with: remote-viewer spice://localhost:5930
+('vmctl', 'ready')
+waiting for guest SSH
+guest SSH ready; inspect the screen separately for desktop readiness
+('vmctl', 'ssh', '--', 'printf baseline-reset-marker > ~/vmctl-reset-marker.txt; cat ~/vmctl-reset-marker.txt; dpkg-query -W lewdware; sha256sum ~/wallpaper-fixture/wallpaper.lwpack')
+baseline-reset-markerlewdware	0.0.2
+14a59dfe55536c65d7eb60cc00c7fab82baf7bdcec7894d2fffda24c35e8e3ec  /home/tester/wallpaper-fixture/wallpaper.lwpack
+('vmctl', 'down')
+powering down
+('vmctl', 'status')
+debian-13-xfce: running
+('vmctl', 'status')
+debian-13-xfce: running
+('vmctl', 'status')
+debian-13-xfce: running
+('vmctl', 'status')
+debian-13-xfce: running
+('vmctl', 'status')
+debian-13-xfce: running
+('vmctl', 'status')
+debian-13-xfce: stopped
+('vm-storage', 'reset', '--discard')
+Fresh disk overlays and firmware/TPM state restored; test changes discarded.
+('vmctl', 'up')
+debian-13-xfce booting. ssh port 22220, watch with: remote-viewer spice://localhost:5930
+('vmctl', 'ready')
+waiting for guest SSH
+guest SSH ready; inspect the screen separately for desktop readiness
+('vmctl', 'ssh', '--', 'test ! -e ~/vmctl-reset-marker.txt && echo RESET_MARKER_ABSENT && dpkg-query -W lewdware && sha256sum ~/wallpaper-fixture/wallpaper.lwpack && test -s ~/wallpaper-test.lwmode && echo MODE_RETAINED')
+RESET_MARKER_ABSENT
+lewdware	0.0.2
+14a59dfe55536c65d7eb60cc00c7fab82baf7bdcec7894d2fffda24c35e8e3ec  /home/tester/wallpaper-fixture/wallpaper.lwpack
+MODE_RETAINED
+('vmctl', 'launch', '/usr/bin/lewdware')
+Running as unit: vmctl-launch-1794261542924297958.service; invocation ID: afb8fbca22cb4cf0a8610b587de85d95
+('vmctl', 'shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/debian-xfce-2026-11-09/reset-app.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/debian-xfce-2026-11-09/reset-app.png (1280x800)
+('vmctl', 'down')
+powering down
+('vmctl', 'status')
+debian-13-xfce: running
+('vmctl', 'status')
+debian-13-xfce: running
+('vmctl', 'status')
+debian-13-xfce: running
+('vmctl', 'status')
+debian-13-xfce: running
+('vmctl', 'status')
+debian-13-xfce: stopped
+('vm-storage', 'reset', '--discard')
+Fresh disk overlays and firmware/TPM state restored; test changes discarded.

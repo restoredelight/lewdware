@@ -1,0 +1,41 @@
+('vmctl', 'up')
+fedora-44-plasma booting. ssh port 22220, watch with: remote-viewer spice://localhost:5930
+('vmctl', 'ready')
+waiting for guest SSH
+guest SSH ready; inspect the screen separately for desktop readiness
+('vmctl', 'ssh', '--', 'printf baseline-reset-marker > ~/vmctl-reset-marker.txt; cat ~/vmctl-reset-marker.txt; rpm -q lewdware; sha256sum ~/wallpaper-fixture/wallpaper.lwpack')
+baseline-reset-markerlewdware-0.0.2-1.x86_64
+14a59dfe55536c65d7eb60cc00c7fab82baf7bdcec7894d2fffda24c35e8e3ec  /home/tester/wallpaper-fixture/wallpaper.lwpack
+('vmctl', 'ssh', '--', 'sudo systemctl poweroff')
+('vmctl', 'status')
+fedora-44-plasma: running
+('vmctl', 'status')
+fedora-44-plasma: running
+('vmctl', 'status')
+fedora-44-plasma: stopped
+('vm-storage', 'reset', '--discard')
+Fresh disk overlays and firmware/TPM state restored; test changes discarded.
+('vmctl', 'up')
+fedora-44-plasma booting. ssh port 22220, watch with: remote-viewer spice://localhost:5930
+('vmctl', 'ready')
+waiting for guest SSH
+guest SSH ready; inspect the screen separately for desktop readiness
+('vmctl', 'ssh', '--', 'test ! -e ~/vmctl-reset-marker.txt && echo RESET_MARKER_ABSENT && rpm -q lewdware && sha256sum ~/wallpaper-fixture/wallpaper.lwpack && test -s ~/wallpaper-test.lwmode && echo MODE_RETAINED')
+RESET_MARKER_ABSENT
+lewdware-0.0.2-1.x86_64
+14a59dfe55536c65d7eb60cc00c7fab82baf7bdcec7894d2fffda24c35e8e3ec  /home/tester/wallpaper-fixture/wallpaper.lwpack
+MODE_RETAINED
+('vmctl', 'ssh', '--', 'for i in $(seq 1 40); do systemctl --user is-active --quiet graphical-session.target && exit 0; sleep 1; done; exit 1')
+('vmctl', 'launch', '/usr/bin/lewdware')
+Running as unit: vmctl-launch-1794340233493612685.service; invocation ID: 8c42c4d918cc49d396fc3661f7870d90
+('vmctl', 'shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/reset-app.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/reset-app.png (1280x800)
+('vmctl', 'ssh', '--', 'sudo systemctl poweroff')
+('vmctl', 'status')
+fedora-44-plasma: running
+('vmctl', 'status')
+fedora-44-plasma: running
+('vmctl', 'status')
+fedora-44-plasma: stopped
+('vm-storage', 'reset', '--discard')
+Fresh disk overlays and firmware/TPM state restored; test changes discarded.

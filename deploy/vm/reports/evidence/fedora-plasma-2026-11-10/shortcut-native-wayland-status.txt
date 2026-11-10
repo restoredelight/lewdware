@@ -1,0 +1,5 @@
+{"time": "2026-11-10T19:45:02.016040+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:45:02.034699+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:45:02.036716+00:00", "kind": "snapshot", "value": null}
+{"time": "2026-11-10T19:45:02.232173+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+{"time": "2026-11-10T19:45:03.388210+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}

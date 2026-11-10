@@ -1,0 +1,18 @@
+exec(open('/tmp/run-other-wallpaper.py').read().split("supervisor();probe('start explicit')")[0])
+def terminate_supervisor():
+ guest("python3 -c \"import runpy,os,signal; p=runpy.run_path(\'wallpaper-probe.py\'); os.kill(p[\'exact_pid\'](\'lewdware-supervisor\'),signal.SIGTERM)\"")
+ time.sleep(1)
+supervisor()
+guest('mkdir -p ~/wallpaper-fail-bin; cp ~/kde-dbus-fault-wrapper ~/wallpaper-fail-bin/dbus-send; chmod +x ~/wallpaper-fail-bin/dbus-send; systemctl --user show-environment | sed -n \'s/^PATH=//p\' > ~/wallpaper-evidence/original-manager-path.txt')
+terminate_supervisor()
+guest('systemctl --user set-environment PATH=/home/tester/wallpaper-fail-bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin')
+supervisor();probe('start hold');time.sleep(2);guest('touch ~/wallpaper-fail-restore');probe('stop');time.sleep(2)
+probe('status');guest('test -s ~/.local/share/lewdware/wallpaper-snapshot.json && cp ~/.local/share/lewdware/wallpaper-snapshot.json ~/wallpaper-evidence/failed-restore-snapshot.json');shot('restore-failed-retained')
+guest('rm ~/wallpaper-fail-restore');terminate_supervisor();supervisor();time.sleep(2);probe('check');probe('status');shot('restore-retry-succeeded')
+guest('touch ~/wallpaper-fail-read');probe('start hold');time.sleep(2);probe('check');probe('status');probe('stop');time.sleep(1)
+# Snapshot reads fail, but set scripts still work; an explicit fallback can therefore be tested.
+guest("python3 - <<'GUEST'\nimport json,runpy\nfrom pathlib import Path\np=runpy.run_path('wallpaper-probe.py');c=json.loads(p['CONFIG'].read_text());c['wallpaper']['restore']={'kind':'image','path':str(Path.home()/'wallpaper-fixture/B.png')};p['CONFIG'].write_text(json.dumps(c))\nexpected=p['settings']();p['EVIDENCE'].joinpath('before-fallback.json').write_text(json.dumps(expected));expected[0]['image']=(Path.home()/'wallpaper-fixture/B.png').as_uri();p['EVIDENCE'].joinpath('known.json').write_text(json.dumps(expected))\nGUEST")
+probe('start hold');time.sleep(2);probe('status');shot('fallback-active');probe('stop');time.sleep(2);probe('check');probe('status');shot('fallback-restored')
+guest("rm ~/wallpaper-fail-read; python3 - <<'GUEST'\nimport json,runpy\np=runpy.run_path('wallpaper-probe.py'); c=json.loads(p['CONFIG'].read_text());c['wallpaper']['restore']={'kind':'original'};p['CONFIG'].write_text(json.dumps(c));saved=json.loads((p['EVIDENCE']/'before-fallback.json').read_text());p['apply_settings'](saved);(p['EVIDENCE']/'known.json').write_text(json.dumps(saved))\nGUEST")
+terminate_supervisor();guest('systemctl --user set-environment "PATH=$(cat ~/wallpaper-evidence/original-manager-path.txt)"')
+print('PLASMA FAULT AND FALLBACK CASES FINISHED',flush=True)

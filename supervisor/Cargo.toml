@@ -27,6 +27,7 @@ uuid = { version = "1.18.1", features = ["serde"] }
 # built in the same cargo invocation, and gpui's own portal code (config-gpui, the pack editor's
 # gpui port) then panics on threads with no tokio runtime. async-io runs its own reactor, and its
 # futures await fine from tokio tasks.
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "global_shortcuts"] }
 ksni = { version = "0.3.6", default-features = false, features = ["async-io"] }
 zbus = { version = "5", default-features = false, features = ["async-io"] }
 futures-util = { version = "0.3", default-features = false }
@@ -67,3 +68,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31.3", features = ["signal"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1.48.0", features = ["test-util"] }

@@ -1,0 +1,99 @@
+NAME="Fedora Linux"
+VERSION="44 (Cloud Edition)"
+RELEASE_TYPE=stable
+ID=fedora
+VERSION_ID=44
+VERSION_CODENAME=""
+PRETTY_NAME="Fedora Linux 44 (Cloud Edition)"
+ANSI_COLOR="0;38;2;60;110;180"
+LOGO=fedora-logo-icon
+CPE_NAME="cpe:/o:fedoraproject:fedora:44"
+HOME_URL="https://fedoraproject.org/"
+DOCUMENTATION_URL="https://docs.fedoraproject.org/en-US/fedora/f44/"
+SUPPORT_URL="https://ask.fedoraproject.org/"
+BUG_REPORT_URL="https://bugzilla.redhat.com/"
+REDHAT_BUGZILLA_PRODUCT="Fedora"
+REDHAT_BUGZILLA_PRODUCT_VERSION=44
+REDHAT_SUPPORT_PRODUCT="Fedora"
+REDHAT_SUPPORT_PRODUCT_VERSION=44
+SUPPORT_END=2027-05-19
+VARIANT="Cloud Edition"
+VARIANT_ID=cloud
+Linux vmctl-fedora-plasma 6.19.10-300.fc44.x86_64 #1 SMP PREEMPT_DYNAMIC Wed Mar 25 18:23:49 UTC 2026 x86_64 GNU/Linux
+HOME=/home/tester
+LANG=en_US.UTF-8
+LOGNAME=tester
+PATH=/home/tester/.local/bin:/home/tester/bin:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin
+SHELL=/bin/bash
+USER=tester
+XDG_RUNTIME_DIR=/run/user/1000
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+DEBUGINFOD_IMA_CERT_PATH=/etc/keys/ima:
+DEBUGINFOD_URLS=$'ima:enforcing https://debuginfod.fedoraproject.org/ ima:ignore '
+DESKTOP_SESSION=plasma
+DISPLAY=:0
+EDITOR=/usr/bin/nano
+GDK_CORE_DEVICE_EVENTS=1
+GPG_TTY=/dev/tty1
+HISTCONTROL=ignoredups
+HISTSIZE=1000
+HOSTNAME=vmctl-fedora-plasma
+ICEAUTHORITY=/run/user/1000/iceauth_gDpOTi
+KDEDIRS=/usr
+KDE_APPLICATIONS_AS_SCOPE=1
+KDE_FULL_SESSION=true
+KDE_SESSION_UID=1000
+KDE_SESSION_VERSION=6
+LESSOPEN=$'||/usr/bin/lesspipe.sh %s'
+LS_COLORS=
+MAIL=/var/spool/mail/tester
+PWD=/home/tester
+QT_WAYLAND_RECONNECT=1
+SESSION_MANAGER=local/unix:@/tmp/.ICE-unix/1741,unix/unix:/tmp/.ICE-unix/1741
+SSH_AUTH_SOCK=/run/user/1000/ssh-agent.socket
+WAYLAND_DISPLAY=wayland-1
+XAUTHORITY=/run/user/1000/xauth_jpqMHB
+XDG_CONFIG_DIRS=/home/tester/.config/kdedefaults:/etc/xdg:/usr/share/kde-settings/kde-profile/default/xdg
+XDG_CURRENT_DESKTOP=KDE
+XDG_DATA_DIRS=/usr/share/kde-settings/kde-profile/default/share:/usr/local/share:/usr/share
+XDG_MENU_PREFIX=plasma-
+XDG_SEAT=seat0
+XDG_SEAT_PATH=/org/freedesktop/DisplayManager/Seat0
+XDG_SESSION_CLASS=user
+XDG_SESSION_DESKTOP=KDE
+XDG_SESSION_ID=1
+XDG_SESSION_PATH=/org/freedesktop/DisplayManager/Session0
+XDG_SESSION_TYPE=wayland
+XDG_VTNR=1
+XKB_DEFAULT_LAYOUT=us
+XKB_DEFAULT_MODEL=pc105+inet
+XKB_DEFAULT_OPTIONS=terminate:ctrl_alt_bksp
+_JAVA_AWT_WM_NONREPARENTING=1
+Type=wayland
+Active=yes
+plasma-workspace-6.8.2-1.fc44.x86_64
+kwin-6.8.2-3.fc44.x86_64
+webkit2gtk4.1-2.54.2-1.fc44.x86_64
+lewdware-0.0.2-1.x86_64
+3bb02562b71d4380eb517399c0e6c0291337a1c177d2945a8f3c1523b23efff4  /usr/bin/lewdware
+ad82226a33bce6a6962e94160839f1cdc2f9ba11953b5ae2d6f5bbb3385c229e  /usr/lib/lewdware/lewdware-engine
+f96fda947a1a3f51eb35c252159fb1484d50ec07315a8a21669a376021f56fbb  /usr/lib/lewdware/lewdware-supervisor
+028f3db7089b9f4dc41eca98c5d038eba30adff00529ace321931fa20762dd16  /home/tester/wallpaper-test.lwmode
+14a59dfe55536c65d7eb60cc00c7fab82baf7bdcec7894d2fffda24c35e8e3ec  /home/tester/wallpaper-fixture/wallpaper.lwpack
+/usr/share/wayland-sessions:
+plasma.desktop
+
+/usr/share/xsessions:
+[Desktops]
+Id_1=ece37838-4f44-428f-b1ac-e45fe067d0f0
+Number=1
+Rows=1
+
+[Tiling][ece37838-4f44-428f-b1ac-e45fe067d0f0][15ddf763-52ce-4eab-9a9e-ec1f4b095ffc]
+padding=4
+tiles={"layoutDirection":"horizontal","tiles":[{"width":0.25},{"width":0.5},{"width":0.25}]}
+
+[Xwayland]
+Scale=1
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda3        24G  4.1G   20G  17% /

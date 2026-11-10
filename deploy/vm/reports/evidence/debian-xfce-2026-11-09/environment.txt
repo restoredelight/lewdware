@@ -1,0 +1,80 @@
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.7
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+Linux vmctl-debian-xfce 6.12.115+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01) x86_64 GNU/Linux
+HOME=/home/tester
+LANG=C.UTF-8
+LOGNAME=tester
+PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+SHELL=/bin/bash
+USER=tester
+XDG_RUNTIME_DIR=/run/user/1000
+QT_ACCESSIBILITY=1
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+DESKTOP_SESSION=xfce
+DISPLAY=:0
+GDMSESSION=xfce
+GPG_AGENT_INFO=/run/user/1000/gnupg/S.gpg-agent:0:1
+PWD=/home/tester
+SSH_AUTH_SOCK=/run/user/1000/openssh_agent
+XAUTHLOCALHOSTNAME=
+XAUTHORITY=/home/tester/.Xauthority
+XDG_CACHE_HOME=/home/tester/.cache
+XDG_CONFIG_DIRS=/etc/xdg
+XDG_CONFIG_HOME=/home/tester/.config
+XDG_CURRENT_DESKTOP=XFCE
+XDG_DATA_DIRS=/usr/share/xfce4:/usr/local/share/:/usr/share/:/usr/share
+XDG_GREETER_DATA_DIR=/var/lib/lightdm/data/tester
+XDG_MENU_PREFIX=xfce-
+XDG_SEAT=seat0
+XDG_SEAT_PATH=/org/freedesktop/DisplayManager/Seat0
+XDG_SESSION_CLASS=user
+XDG_SESSION_DESKTOP=xfce
+XDG_SESSION_ID=1
+XDG_SESSION_PATH=/org/freedesktop/DisplayManager/Session0
+XDG_SESSION_TYPE=x11
+Type=x11
+Active=yes
+lewdware	0.0.2
+libwebkit2gtk-4.1-0:amd64	2.54.0-1~deb13u3
+xfce4-session	4.20.2-2
+xfdesktop4	4.20.1-1
+3bb02562b71d4380eb517399c0e6c0291337a1c177d2945a8f3c1523b23efff4  /usr/bin/lewdware
+ad82226a33bce6a6962e94160839f1cdc2f9ba11953b5ae2d6f5bbb3385c229e  /usr/lib/lewdware/lewdware-engine
+f96fda947a1a3f51eb35c252159fb1484d50ec07315a8a21669a376021f56fbb  /usr/lib/lewdware/lewdware-supervisor
+028f3db7089b9f4dc41eca98c5d038eba30adff00529ace321931fa20762dd16  /home/tester/wallpaper-test.lwmode
+14a59dfe55536c65d7eb60cc00c7fab82baf7bdcec7894d2fffda24c35e8e3ec  /home/tester/wallpaper-fixture/wallpaper.lwpack
+/backdrop/screen0/monitor0/brightness                      0
+/backdrop/screen0/monitor0/color-style                     1
+/backdrop/screen0/monitor0/color1                          [7936,16128,28416,65535]
+/backdrop/screen0/monitor0/color2                          [26880,34048,46848,65535]
+/backdrop/screen0/monitor0/image-path                      /usr/share/images/desktop-base/default
+/backdrop/screen0/monitor0/image-show                      true
+/backdrop/screen0/monitor0/last-image                      /home/tester/wallpaper-fixture/Original ' 雪.png
+/backdrop/screen0/monitor0/last-single-image               /usr/share/images/desktop-base/default
+/backdrop/screen0/monitor1/brightness                      0
+/backdrop/screen0/monitor1/color-style                     1
+/backdrop/screen0/monitor1/color1                          [7936,16128,28416,65535]
+/backdrop/screen0/monitor1/color2                          [26880,34048,46848,65535]
+/backdrop/screen0/monitor1/image-path                      /usr/share/images/desktop-base/default
+/backdrop/screen0/monitor1/image-show                      true
+/backdrop/screen0/monitor1/last-image                      /home/tester/wallpaper-fixture/Original ' 雪.png
+/backdrop/screen0/monitor1/last-single-image               /usr/share/images/desktop-base/default
+/backdrop/screen0/monitorVirtual-1/workspace0/image-style  3
+/backdrop/screen0/monitorVirtual-1/workspace0/last-image   /home/tester/wallpaper-fixture/Original ' 雪.png
+/backdrop/screen0/monitorVirtual-1/workspace1/image-style  3
+/backdrop/screen0/monitorVirtual-1/workspace1/last-image   /home/tester/wallpaper-fixture/Original ' 雪.png
+/backdrop/screen0/monitorVirtual-1/workspace2/image-style  3
+/backdrop/screen0/monitorVirtual-1/workspace2/last-image   /home/tester/wallpaper-fixture/Original ' 雪.png
+/backdrop/screen0/monitorVirtual-1/workspace3/image-style  3
+/backdrop/screen0/monitorVirtual-1/workspace3/last-image   /home/tester/wallpaper-fixture/Original ' 雪.png
+/last-settings-migration-version                           1
+/last/window-height                                        547
+/last/window-width                                         672

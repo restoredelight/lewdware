@@ -67,7 +67,7 @@ enum Probe {
     },
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<std::process::ExitCode> {
     let cli = Cli::parse();
 
     // Handled before anything else: a probe is a short-lived run, not a session. It must not touch
@@ -80,7 +80,8 @@ fn main() -> Result<()> {
             Probe::TestAudio { device } => audio::play_test_tone(
                 (device != shared::audio::TEST_AUDIO_DEFAULT).then_some(device),
             ),
-        };
+        }
+        .map(|()| std::process::ExitCode::SUCCESS);
     }
 
     let Cli {
@@ -178,5 +179,9 @@ fn main() -> Result<()> {
         .inspect_err(|err| report_fatal_startup_error(err))?;
     event_loop.run_app(&mut app)?;
 
-    Ok(())
+    Ok(if app.mode_completed {
+        std::process::ExitCode::from(shared::ipc::engine::MODE_COMPLETED_EXIT_CODE)
+    } else {
+        std::process::ExitCode::SUCCESS
+    })
 }

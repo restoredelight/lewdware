@@ -1,0 +1,24 @@
+/backdrop/screen0/monitor0/brightness                      0
+/backdrop/screen0/monitor0/color-style                     1
+/backdrop/screen0/monitor0/color1                          [7936,16128,28416,65535]
+/backdrop/screen0/monitor0/color2                          [26880,34048,46848,65535]
+/backdrop/screen0/monitor0/image-path                      /usr/share/images/desktop-base/default
+/backdrop/screen0/monitor0/image-show                      true
+/backdrop/screen0/monitor0/last-image                      /usr/share/images/desktop-base/default
+/backdrop/screen0/monitor0/last-single-image               /usr/share/images/desktop-base/default
+/backdrop/screen0/monitor1/brightness                      0
+/backdrop/screen0/monitor1/color-style                     1
+/backdrop/screen0/monitor1/color1                          [7936,16128,28416,65535]
+/backdrop/screen0/monitor1/color2                          [26880,34048,46848,65535]
+/backdrop/screen0/monitor1/image-path                      /usr/share/images/desktop-base/default
+/backdrop/screen0/monitor1/image-show                      true
+/backdrop/screen0/monitor1/last-image                      /usr/share/images/desktop-base/default
+/backdrop/screen0/monitor1/last-single-image               /usr/share/images/desktop-base/default
+/backdrop/screen0/monitorVirtual-1/workspace0/last-image   /untouched-workspace.png
+/backdrop/screen0/monitorVirtual-1/workspace2/image-style  4
+/backdrop/screen0/monitorVirtual-1/workspace2/last-image   /home/tester/wallpaper-fixture/Original ' 雪.png 
+/backdrop/single-workspace-mode                            true
+/backdrop/single-workspace-number                          2
+/last-settings-migration-version                           1
+/last/window-height                                        547
+/last/window-width                                         672

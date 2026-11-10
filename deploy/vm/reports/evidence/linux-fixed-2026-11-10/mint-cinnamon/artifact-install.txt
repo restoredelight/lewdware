@@ -1,0 +1,66 @@
+waiting for guest SSH
+guest SSH ready; inspect the screen separately for desktop readiness
+bin/lewdware-engine: OK
+bin/lewdware-supervisor: OK
+bin/lw: OK
+lib/libasound.so.2: OK
+lib/libbsd.so.0: OK
+lib/libdav1d.so.7: OK
+lib/libmd.so.0: OK
+wallpaper-test.lwmode: OK
+SOURCE_INPUTS_VERIFIED 1093 82f77f686a0f8ec4139d4c4497bf2719f7d85f7b
+HOME=/home/tester
+LANG=en_GB.UTF-8
+LANGUAGE=en_GB:en
+LOGNAME=tester
+PATH=/home/tester/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+SHELL=/bin/bash
+USER=tester
+XDG_DATA_DIRS=/usr/share/cinnamon:/home/tester/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share
+XDG_RUNTIME_DIR=/run/user/1000
+GTK_MODULES=gail:atk-bridge
+QT_ACCESSIBILITY=1
+CLUTTER_IM_MODULE=ibus
+COMPIZ_CONFIG_PROFILE=mint
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+DESKTOP_SESSION=cinnamon
+DISPLAY=:0
+GDMSESSION=cinnamon
+GDM_LANG=en_GB
+GNOME_DESKTOP_SESSION_ID=this-is-deprecated
+GNOME_KEYRING_CONTROL=/run/user/1000/keyring
+GPG_AGENT_INFO=/run/user/1000/gnupg/S.gpg-agent:0:1
+GSM_SKIP_SSH_AGENT_WORKAROUND=true
+GTK3_MODULES=xapp-gtk3-module
+GTK_IM_MODULE=ibus
+IM_CONFIG_PHASE=1
+PWD=/home/tester
+QT_IM_MODULE=ibus
+QT_IM_MODULES=$'wayland;ibus'
+SESSION_MANAGER=local/mint-wallpaper:@/tmp/.ICE-unix/1001,unix/mint-wallpaper:/tmp/.ICE-unix/1001
+SHLVL=0
+SSH_AUTH_SOCK=/run/user/1000/keyring/ssh
+XAUTHORITY=/home/tester/.Xauthority
+XDG_CONFIG_DIRS=/etc/xdg/xdg-cinnamon:/etc/xdg
+XDG_CURRENT_DESKTOP=X-Cinnamon
+XDG_GREETER_DATA_DIR=/var/lib/lightdm-data/tester
+XDG_SEAT_PATH=/org/freedesktop/DisplayManager/Seat0
+XDG_SESSION_CLASS=user
+XDG_SESSION_DESKTOP=cinnamon
+XDG_SESSION_ID=c1
+XDG_SESSION_PATH=/org/freedesktop/DisplayManager/Session0
+XDG_SESSION_TYPE=x11
+XMODIFIERS=@im=ibus
+_=/usr/bin/dbus-update-activation-environment
+NAME="Linux Mint"
+VERSION="22.3 (Zena)"
+ID=linuxmint
+ID_LIKE="ubuntu debian"
+PRETTY_NAME="Linux Mint 22.3"
+VERSION_ID="22.3"
+HOME_URL="https://www.linuxmint.com/"
+SUPPORT_URL="https://forums.linuxmint.com/"
+BUG_REPORT_URL="http://linuxmint-troubleshooting-guide.readthedocs.io/en/latest/"
+PRIVACY_POLICY_URL="https://www.linuxmint.com/"
+VERSION_CODENAME=zena
+UBUNTU_CODENAME=noble

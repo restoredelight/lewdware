@@ -1,0 +1,11 @@
+{
+  "state": "stopped",
+  "active_overlays": "fresh after verified reset",
+  "writable_files": [
+    "disk.qcow2",
+    "OVMF_VARS.qcow2"
+  ],
+  "qemu_img_check": "both active overlays passed with no errors",
+  "reset_marker": "absent after reset",
+  "app_and_fixture": "retained and verified"
+}

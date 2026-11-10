@@ -1,0 +1,17 @@
+[
+  {
+    "level": "warn",
+    "message": "failed to restore wallpaper: `xfconf-query` exited with status 77: vmctl injected xfconf write failure",
+    "count": 1
+  },
+  {
+    "level": "warn",
+    "message": "Could not capture the current wallpaper, so it must not be changed: `xfconf-query` exited with status 78: vmctl injected xfconf read failure",
+    "count": 2
+  },
+  {
+    "level": "warn",
+    "message": "Cannot read the current wallpaper on this desktop, so refusing to change it",
+    "count": 1
+  }
+]

@@ -328,6 +328,7 @@ export interface EngineStatusDto {
 
 /** Payload of the `supervisor:status` event, pushed on every supervisor state change. */
 export interface SupervisorStatusDto {
+	stop_shortcut: StopShortcutStatus | null;
 	engine: EngineStatusDto;
 	schedule: ScheduleStatusDto;
 }
@@ -534,3 +535,10 @@ export interface PickPackResult {
 export interface UploadModeResult {
 	mode_groups: ModeGroupDto[];
 }
+
+export type StopShortcutStatus =
+	| { type: 'Checking' }
+	| { type: 'Registered'; backend: string; trigger: string }
+	| { type: 'Listening'; backend: string }
+	| { type: 'SetupRequired'; message: string; can_setup: boolean }
+	| { type: 'Failed'; message: string };

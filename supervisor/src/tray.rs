@@ -62,6 +62,13 @@ pub struct TrayUpdater {
 }
 
 impl TrayUpdater {
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        Self {
+            tx: mpsc::channel(1).0,
+        }
+    }
+
     pub fn set(&self, view: TrayView) {
         let _ = self.tx.try_send(view);
     }

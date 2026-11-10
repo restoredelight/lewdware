@@ -1,0 +1,12 @@
+('ssh', '--', 'printf %s "$HOME"')
+/home/tester('launch', '/home/tester/lewdware-fixed/bin/lewdware-supervisor')
+Running as unit: vmctl-launch-1794347252994681380.service; invocation ID: 2222603c151e4452a7466b0d514973b2
+('ssh', '--', 'LW_WALLPAPER_EVIDENCE="$HOME/wallpaper-fixed-evidence" LW_WALLPAPER_FIXTURE="$HOME/wallpaper-fixture-fixed" LW_WALLPAPER_MODE="$HOME/lewdware-fixed/wallpaper-test.lwmode" python3 ~/wallpaper-probe-fixed.py status')
+Traceback (most recent call last):
+  File "/home/tester/wallpaper-probe-fixed.py", line 305, in <module>
+    main()
+  File "/home/tester/wallpaper-probe-fixed.py", line 251, in main
+    request('Status')
+  File "/home/tester/wallpaper-probe-fixed.py", line 46, in request
+    s.connect('\0lewdware-supervisor.sock')
+ConnectionRefusedError: [Errno 111] Connection refused

@@ -1,0 +1,165 @@
+2026-06-20T02:15:04.510713Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:66: Spawning panic thread
+2026-06-20T02:15:04.510875Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:68: Panic thread started
+2026-06-20T02:15:04.510887Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:94: Panic listener starting: watching for Escape with modifiers Modifiers { alt: false, ctrl: false, shift: true, meta: false }
+2026-06-20T02:15:04.516383Z  INFO lewdware_engine::app: lewdware/src/app.rs:80: AppConfig { pack_path: Some("/home/ashbythorpe/Downloads/My Pack.lwpack"), uploaded_modes: [], mode: Default("default"), mode_options: {}, tags: None, panic_button: Key { name: "Escape", code: "Escape", modifiers: Modifiers { alt: false, ctrl: false, shift: true, meta: false } }, disabled_monitors: [] }
+2026-06-20T02:15:04.516745Z  INFO shared::read_pack: shared/src/read_pack.rs:266: Header { index_offset: 178751919, index_length: 831488, metadata_offset: 179583407, metadata_length: 37, id: c894f8cb-24d0-406e-b2fd-babd0b0c2614 }
+2026-06-20T02:15:04.518153Z  INFO shared::db: shared/src/db.rs:18: Migrating from 1 to 1
+2026-06-20T02:15:04.518166Z  INFO shared::db: shared/src/db.rs:24: Executed migrations
+2026-06-20T02:15:04.518382Z  INFO shared::mode::header: shared/src/mode/header.rs:77: LWMODE
+2026-06-20T02:15:04.518391Z  INFO shared::mode::read: shared/src/mode/read.rs:13: Header { metadata_offset: 573, metadata_length: 323, version_major: 0, version_minor: 0 }
+2026-06-20T02:15:04.518443Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:130: Read header and metadata
+2026-06-20T02:15:04.519075Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:323: 1
+2026-06-20T02:15:04.519084Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:323: 1000
+2026-06-20T02:15:04.583359Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:176: Code finished
+2026-06-20T02:15:05.572367Z ERROR lewdware_engine::video: lewdware/src/video.rs:159: No audio stream available
+2026-06-20T02:15:05.572970Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:05.592229Z  INFO lewdware_engine::app: lewdware/src/app.rs:318: 1
+2026-06-20T02:15:06.621139Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 1
+2026-06-20T02:15:06.621443Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:06.649321Z  WARN lewdware_engine::lua::interval: lewdware/src/lua/interval.rs:74: interval watch channel closed
+2026-06-20T02:15:07.665655Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 1
+2026-06-20T02:15:07.665879Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:08.621576Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 2
+2026-06-20T02:15:08.621690Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:09.634867Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 2
+2026-06-20T02:15:09.635025Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:10.546739Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 3
+2026-06-20T02:15:10.546880Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:11.649068Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 3
+2026-06-20T02:15:11.649196Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:12.615518Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 2
+2026-06-20T02:15:12.615670Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:13.627906Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:13.630743Z  INFO lewdware_engine::app: lewdware/src/app.rs:318: 4
+2026-06-20T02:15:14.758864Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 4
+2026-06-20T02:15:14.759074Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:15.792887Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 5
+2026-06-20T02:15:15.793327Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:16.823387Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 5
+2026-06-20T02:15:16.824235Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:17.608562Z ERROR lewdware_engine::video: lewdware/src/video.rs:159: No audio stream available
+2026-06-20T02:15:17.614986Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:17.620192Z  INFO lewdware_engine::app: lewdware/src/app.rs:318: 6
+2026-06-20T02:15:18.726232Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 6
+2026-06-20T02:15:18.726429Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:19.736207Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 7
+2026-06-20T02:15:19.736374Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:20.601645Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 8
+2026-06-20T02:15:20.602703Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:21.664974Z ERROR lewdware_engine::video: lewdware/src/video.rs:159: No audio stream available
+2026-06-20T02:15:21.667880Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:21.685137Z  INFO lewdware_engine::app: lewdware/src/app.rs:318: 9
+2026-06-20T02:15:22.602466Z ERROR lewdware_engine::video: lewdware/src/video.rs:159: No audio stream available
+2026-06-20T02:15:22.611035Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:22.625325Z  INFO lewdware_engine::app: lewdware/src/app.rs:318: 10
+2026-06-20T02:15:23.667521Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 10
+2026-06-20T02:15:23.667672Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:24.649195Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 11
+2026-06-20T02:15:24.654411Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:25.826466Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 12
+2026-06-20T02:15:25.827077Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:26.796409Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 13
+2026-06-20T02:15:26.797582Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:27.715545Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 14
+2026-06-20T02:15:27.716063Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:28.711789Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 14
+2026-06-20T02:15:28.712600Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:29.845271Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 14
+2026-06-20T02:15:29.894882Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:30.803326Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 15
+2026-06-20T02:15:30.803554Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:35.394491Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:66: Spawning panic thread
+2026-06-20T02:15:35.394661Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:68: Panic thread started
+2026-06-20T02:15:35.394677Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:94: Panic listener starting: watching for Escape with modifiers Modifiers { alt: false, ctrl: false, shift: true, meta: false }
+2026-06-20T02:15:35.397631Z  INFO lewdware_engine::app: lewdware/src/app.rs:80: AppConfig { pack_path: Some("/home/ashbythorpe/Downloads/My Pack.lwpack"), uploaded_modes: [], mode: Default("default"), mode_options: {}, tags: None, panic_button: Key { name: "Escape", code: "Escape", modifiers: Modifiers { alt: false, ctrl: false, shift: true, meta: false } }, disabled_monitors: [] }
+2026-06-20T02:15:35.397836Z  INFO shared::read_pack: shared/src/read_pack.rs:266: Header { index_offset: 178751919, index_length: 831488, metadata_offset: 179583407, metadata_length: 37, id: c894f8cb-24d0-406e-b2fd-babd0b0c2614 }
+2026-06-20T02:15:35.400698Z  INFO shared::db: shared/src/db.rs:18: Migrating from 1 to 1
+2026-06-20T02:15:35.400719Z  INFO shared::db: shared/src/db.rs:24: Executed migrations
+2026-06-20T02:15:35.400974Z  INFO shared::mode::header: shared/src/mode/header.rs:77: LWMODE
+2026-06-20T02:15:35.400982Z  INFO shared::mode::read: shared/src/mode/read.rs:13: Header { metadata_offset: 573, metadata_length: 323, version_major: 0, version_minor: 0 }
+2026-06-20T02:15:35.401013Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:130: Read header and metadata
+2026-06-20T02:15:35.401794Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:323: 1
+2026-06-20T02:15:35.401808Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:323: 1000
+2026-06-20T02:15:35.436452Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:176: Code finished
+2026-06-20T02:15:36.511034Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 0
+2026-06-20T02:15:36.511223Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:37.508823Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 1
+2026-06-20T02:15:37.509023Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:38.473195Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 2
+2026-06-20T02:15:38.473411Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:39.430649Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 3
+2026-06-20T02:15:39.430749Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:40.495482Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 4
+2026-06-20T02:15:40.495643Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:40.500294Z  WARN lewdware_engine::lua::interval: lewdware/src/lua/interval.rs:74: interval watch channel closed
+2026-06-20T02:15:41.473945Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 5
+2026-06-20T02:15:41.474092Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:42.533904Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 6
+2026-06-20T02:15:42.534038Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:43.544524Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 6
+2026-06-20T02:15:43.546317Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:49.441253Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:66: Spawning panic thread
+2026-06-20T02:15:49.441404Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:68: Panic thread started
+2026-06-20T02:15:49.441422Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:94: Panic listener starting: watching for KeyQ with modifiers Modifiers { alt: false, ctrl: false, shift: true, meta: false }
+2026-06-20T02:15:49.445447Z  INFO lewdware_engine::app: lewdware/src/app.rs:80: AppConfig { pack_path: Some("/home/ashbythorpe/Downloads/My Pack.lwpack"), uploaded_modes: [], mode: Default("default"), mode_options: {}, tags: None, panic_button: Key { name: "Q", code: "KeyQ", modifiers: Modifiers { alt: false, ctrl: false, shift: true, meta: false } }, disabled_monitors: [] }
+2026-06-20T02:15:49.445666Z  INFO shared::read_pack: shared/src/read_pack.rs:266: Header { index_offset: 178751919, index_length: 831488, metadata_offset: 179583407, metadata_length: 37, id: c894f8cb-24d0-406e-b2fd-babd0b0c2614 }
+2026-06-20T02:15:49.446803Z  INFO shared::db: shared/src/db.rs:18: Migrating from 1 to 1
+2026-06-20T02:15:49.446809Z  INFO shared::db: shared/src/db.rs:24: Executed migrations
+2026-06-20T02:15:49.447020Z  INFO shared::mode::header: shared/src/mode/header.rs:77: LWMODE
+2026-06-20T02:15:49.447025Z  INFO shared::mode::read: shared/src/mode/read.rs:13: Header { metadata_offset: 573, metadata_length: 323, version_major: 0, version_minor: 0 }
+2026-06-20T02:15:49.447061Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:130: Read header and metadata
+2026-06-20T02:15:49.447779Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:323: 1
+2026-06-20T02:15:49.447794Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:323: 1000
+2026-06-20T02:15:49.493903Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:176: Code finished
+2026-06-20T02:15:50.511981Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 0
+2026-06-20T02:15:50.512198Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:51.539130Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 1
+2026-06-20T02:15:51.539386Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:52.478625Z ERROR lewdware_engine::video: lewdware/src/video.rs:159: No audio stream available
+2026-06-20T02:15:52.479243Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:52.491250Z  INFO lewdware_engine::app: lewdware/src/app.rs:318: 3
+2026-06-20T02:15:52.492793Z  WARN lewdware_engine::lua::interval: lewdware/src/lua/interval.rs:74: interval watch channel closed
+2026-06-20T02:15:53.505714Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 3
+2026-06-20T02:15:53.506158Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:54.522413Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 4
+2026-06-20T02:15:54.522545Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:15:55.548318Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 5
+2026-06-20T02:15:55.548484Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:17:05.783095Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:66: Spawning panic thread
+2026-06-20T02:17:05.783269Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:68: Panic thread started
+2026-06-20T02:17:05.783283Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:94: Panic listener starting: watching for KeyE with modifiers Modifiers { alt: false, ctrl: false, shift: true, meta: false }
+2026-06-20T02:17:05.786787Z  INFO lewdware_engine::app: lewdware/src/app.rs:80: AppConfig { pack_path: Some("/home/ashbythorpe/Downloads/My Pack.lwpack"), uploaded_modes: [], mode: Default("default"), mode_options: {}, tags: None, panic_button: Key { name: "E", code: "KeyE", modifiers: Modifiers { alt: false, ctrl: false, shift: true, meta: false } }, disabled_monitors: [] }
+2026-06-20T02:17:05.787097Z  INFO shared::read_pack: shared/src/read_pack.rs:266: Header { index_offset: 178751919, index_length: 831488, metadata_offset: 179583407, metadata_length: 37, id: c894f8cb-24d0-406e-b2fd-babd0b0c2614 }
+2026-06-20T02:17:05.788699Z  INFO shared::db: shared/src/db.rs:18: Migrating from 1 to 1
+2026-06-20T02:17:05.788726Z  INFO shared::db: shared/src/db.rs:24: Executed migrations
+2026-06-20T02:17:05.789056Z  INFO shared::mode::header: shared/src/mode/header.rs:77: LWMODE
+2026-06-20T02:17:05.789134Z  INFO shared::mode::read: shared/src/mode/read.rs:13: Header { metadata_offset: 573, metadata_length: 323, version_major: 0, version_minor: 0 }
+2026-06-20T02:17:05.789186Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:130: Read header and metadata
+2026-06-20T02:17:05.789853Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:323: 1
+2026-06-20T02:17:05.789865Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:323: 1000
+2026-06-20T02:17:05.914597Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:176: Code finished
+2026-06-20T02:17:06.883981Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:17:06.891956Z  INFO lewdware_engine::app: lewdware/src/app.rs:318: 1
+2026-06-20T02:17:07.863006Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 1
+2026-06-20T02:17:07.863143Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:17:07.869861Z  WARN lewdware_engine::lua::interval: lewdware/src/lua/interval.rs:74: interval watch channel closed
+2026-06-20T02:17:10.232383Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:66: Spawning panic thread
+2026-06-20T02:17:10.232525Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:68: Panic thread started
+2026-06-20T02:17:10.232538Z  INFO lewdware_engine::utils: lewdware/src/utils.rs:94: Panic listener starting: watching for KeyR with modifiers Modifiers { alt: false, ctrl: false, shift: false, meta: false }
+2026-06-20T02:17:10.235971Z  INFO lewdware_engine::app: lewdware/src/app.rs:80: AppConfig { pack_path: Some("/home/ashbythorpe/Downloads/My Pack.lwpack"), uploaded_modes: [], mode: Default("default"), mode_options: {}, tags: None, panic_button: Key { name: "r", code: "KeyR", modifiers: Modifiers { alt: false, ctrl: false, shift: false, meta: false } }, disabled_monitors: [] }
+2026-06-20T02:17:10.236249Z  INFO shared::read_pack: shared/src/read_pack.rs:266: Header { index_offset: 178751919, index_length: 831488, metadata_offset: 179583407, metadata_length: 37, id: c894f8cb-24d0-406e-b2fd-babd0b0c2614 }
+2026-06-20T02:17:10.238579Z  INFO shared::db: shared/src/db.rs:18: Migrating from 1 to 1
+2026-06-20T02:17:10.238624Z  INFO shared::db: shared/src/db.rs:24: Executed migrations
+2026-06-20T02:17:10.239063Z  INFO shared::mode::header: shared/src/mode/header.rs:77: LWMODE
+2026-06-20T02:17:10.239081Z  INFO shared::mode::read: shared/src/mode/read.rs:13: Header { metadata_offset: 573, metadata_length: 323, version_major: 0, version_minor: 0 }
+2026-06-20T02:17:10.239183Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:130: Read header and metadata
+2026-06-20T02:17:10.240100Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:323: 1
+2026-06-20T02:17:10.240117Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:323: 1000
+2026-06-20T02:17:10.307177Z  INFO lewdware_engine::lua: lewdware/src/lua/mod.rs:176: Code finished
+2026-06-20T02:17:11.350568Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 0
+2026-06-20T02:17:11.350779Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:17:12.345004Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1
+2026-06-20T02:17:12.351601Z  INFO lewdware_engine::app: lewdware/src/app.rs:318: 2
+2026-06-20T02:17:12.351943Z  WARN lewdware_engine::lua::interval: lewdware/src/lua/interval.rs:74: interval watch channel closed
+2026-06-20T02:17:13.555825Z  INFO lewdware_engine::app: lewdware/src/app.rs:265: Windows: 2
+2026-06-20T02:17:13.555929Z  INFO winit::platform_impl::linux::x11::window: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/linux/x11/window.rs:192: Guessed window scale factor: 1

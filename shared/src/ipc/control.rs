@@ -35,6 +35,13 @@ pub enum Request {
     },
     StopSession,
     StopImmediately,
+    /// Configure the desktop-owned stop binding (GNOME fallback).
+    SetupStopShortcut,
+    RefreshStopShortcut,
+    /// Asks the desktop to show its own settings for the stop shortcut (the GlobalShortcuts
+    /// portal's `ConfigureShortcuts`). Only valid while the status is `Registered` with
+    /// `can_configure`.
+    ConfigureStopShortcut,
     /// Ends a running schedule pause early.
     ///
     /// The pause lives on the schedule engine rather than in `config.json`, so it survives a
@@ -68,6 +75,47 @@ pub struct StatusInfo {
     pub last_runtime_error: Option<String>,
     pub last_exit: Option<ExitInfo>,
     pub schedule: ScheduleStatus,
+    #[serde(default = "missing_shortcut_status")]
+    pub stop_shortcut: StopShortcutStatus,
+}
+
+fn missing_shortcut_status() -> StopShortcutStatus {
+    StopShortcutStatus::Failed {
+        message: "The running supervisor is an older build. Stop any session, then restart Lewdware with the updated supervisor.".into(),
+    }
+}
+
+/// Actual shortcut coverage, independent of whether an engine is running.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum StopShortcutStatus {
+    #[default]
+    Checking,
+    Registered {
+        backend: String,
+        trigger: String,
+        /// The desktop owns the binding (the GlobalShortcuts portal): `trigger` is what it bound,
+        /// the configured `stop_button` was only a suggestion for the first bind, and changing the
+        /// shortcut happens in the desktop's own settings. False when the supervisor wrote the
+        /// binding itself, so `trigger` is the configured key.
+        #[serde(default)]
+        managed_by_desktop: bool,
+        /// The desktop can open its settings for this shortcut on request
+        /// ([`Request::ConfigureStopShortcut`]; GlobalShortcuts portal version 2 and later).
+        #[serde(default)]
+        can_configure: bool,
+    },
+    /// A native event listener is running; this is not compositor registration.
+    Listening {
+        backend: String,
+    },
+    SetupRequired {
+        message: String,
+        can_setup: bool,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 /// Schedule-engine status for display -- not itself the source of truth (that's
@@ -138,6 +186,7 @@ pub struct ExitInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExitClassification {
     Graceful,
+    Completed,
     Killed,
     Crashed,
 }
@@ -290,6 +339,37 @@ mod tests {
     }
 
     #[test]
+    fn older_supervisor_status_requires_an_update_instead_of_checking_forever() {
+        let value = serde_json::json!({
+            "session": {"type": "Idle"}, "session_kind": null, "mode_path": null,
+            "warning": null, "last_runtime_error": null, "last_exit": null,
+            "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null,
+                "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}
+        });
+        let status: StatusInfo = serde_json::from_value(value).unwrap();
+        assert!(
+            matches!(status.stop_shortcut, StopShortcutStatus::Failed { message } if message.contains("older build"))
+        );
+    }
+
+    #[test]
+    fn registered_status_from_an_older_supervisor_is_not_desktop_managed() {
+        let status: StopShortcutStatus = serde_json::from_str(
+            r#"{"type":"Registered","backend":"Desktop portal","trigger":"Shift+Esc"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            status,
+            StopShortcutStatus::Registered {
+                backend: "Desktop portal".into(),
+                trigger: "Shift+Esc".into(),
+                managed_by_desktop: false,
+                can_configure: false,
+            }
+        );
+    }
+
+    #[test]
     fn request_variants_roundtrip() {
         roundtrip(Request::Status);
         roundtrip(Request::SubscribeStatus);
@@ -307,6 +387,9 @@ mod tests {
         });
         roundtrip(Request::StopSession);
         roundtrip(Request::StopImmediately);
+        roundtrip(Request::SetupStopShortcut);
+        roundtrip(Request::RefreshStopShortcut);
+        roundtrip(Request::ConfigureStopShortcut);
         roundtrip(Request::ReloadConfig);
     }
 
@@ -340,6 +423,7 @@ mod tests {
                 classification: ExitClassification::Crashed,
                 error: Some("crashed".to_string()),
             }),
+            stop_shortcut: StopShortcutStatus::Checking,
             schedule: ScheduleStatus {
                 enabled: true,
                 next_exact_session: Some(Utc::now()),

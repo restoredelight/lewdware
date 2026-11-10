@@ -1,0 +1,46 @@
+()
+Nov 09 21:37:30 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     atom 0x101 (_NET_WM_STATE), time 496419, state PropertyNewValue
+Nov 09 21:37:30 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: LeaveNotify event, serial 38, synthetic NO, window 0x1400001,
+Nov 09 21:37:30 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     root 0x215, subw 0x0, time 496427, (109,110), root:(109,179),
+Nov 09 21:37:30 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     mode NotifyNormal, detail NotifyAncestor, same_screen YES,
+Nov 09 21:37:30 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     focus NO, state 0
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: EnterNotify event, serial 38, synthetic NO, window 0x1400001,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     root 0x215, subw 0x0, time 536392, (109,110), root:(109,179),
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     mode NotifyNormal, detail NotifyAncestor, same_screen YES,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     focus NO, state 0
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: KeymapNotify event, serial 38, synthetic NO, window 0x0,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     keys:  21  0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:            0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: LeaveNotify event, serial 38, synthetic NO, window 0x1400001,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     root 0x215, subw 0x0, time 536392, (39,-20), root:(39,49),
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     mode NotifyNormal, detail NotifyAncestor, same_screen YES,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     focus NO, state 0
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: FocusIn event, serial 38, synthetic NO, window 0x1400001,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     mode NotifyNormal, detail NotifyNonlinear
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: KeymapNotify event, serial 38, synthetic NO, window 0x0,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     keys:  21  0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:            0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: PropertyNotify event, serial 38, synthetic NO, window 0x1400001,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     atom 0x101 (_NET_WM_STATE), time 536398, state PropertyNewValue
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: KeyPress event, serial 38, synthetic NO, window 0x1400001,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     root 0x215, subw 0x0, time 536637, (39,-20), root:(39,49),
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     state 0x0, keycode 50 (keysym 0xffe1, Shift_L), same_screen YES,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     XLookupString gives 0 bytes:
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     XmbLookupString gives 0 bytes:
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     XFilterEvent returns: False
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: KeyPress event, serial 38, synthetic NO, window 0x1400001,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     root 0x215, subw 0x0, time 536640, (39,-20), root:(39,49),
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     state 0x1, keycode 9 (keysym 0xff1b, Escape), same_screen YES,
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: [41B blob data]
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: [43B blob data]
+Nov 09 21:38:10 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     XFilterEvent returns: False
+Nov 09 21:38:11 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: KeyRelease event, serial 38, synthetic NO, window 0x1400001,
+Nov 09 21:38:11 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     root 0x215, subw 0x0, time 536648, (39,-20), root:(39,49),
+Nov 09 21:38:11 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     state 0x1, keycode 9 (keysym 0xff1b, Escape), same_screen YES,
+Nov 09 21:38:11 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: [41B blob data]
+Nov 09 21:38:11 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     XFilterEvent returns: False
+Nov 09 21:38:11 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]: KeyRelease event, serial 38, synthetic NO, window 0x1400001,
+Nov 09 21:38:11 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     root 0x215, subw 0x0, time 536656, (39,-20), root:(39,49),
+Nov 09 21:38:11 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     state 0x1, keycode 50 (keysym 0xffe1, Shift_L), same_screen YES,
+Nov 09 21:38:11 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     XLookupString gives 0 bytes:
+Nov 09 21:38:11 ashbythorpe-Standard-PC-Q35-ICH9-2009 xev[6424]:     XFilterEvent returns: False

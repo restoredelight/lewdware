@@ -1,14 +1,30 @@
 # VM UI testing
 
+Source fixes and live backend verification:
+[Xfce defaults and stopping during restart backoff](reports/xfce-backoff-fixes-2026-11-10.md).
+The installed baseline applications below remain CI 0.0.2.
+
+Latest Linux results: [Ubuntu wallpaper and shortcut diagnosis](reports/ubuntu-wallpaper-2026-11-09.md)
+and [Debian Xfce wallpaper coverage](reports/debian-xfce-2026-11-09.md), plus
+[Fedora Plasma wallpaper coverage](reports/fedora-plasma-2026-11-10.md).
+
+All three use the same CI 0.0.2 binaries; source sync does not replace them.
+
+| Desktop / session | Wallpaper results | Shift+Escape observed |
+| --- | --- | --- |
+| Ubuntu GNOME Wayland, XWayland engine | Change/reset and crash recovery passed | Fails with native focus; passes with XWayland focus |
+| Debian Xfce X11, X11 engine | Configured workspace values restore; stock legacy-only properties fail to change visible wallpaper | Passed |
+| Fedora Plasma Wayland, XWayland engine | Default/explicit images, color plugin, crash recovery, failure retention and fallback restoration passed | Passed, including native Wayland Konsole focus |
+
 `vmctl` lets an agent inspect and operate a quickemu guest through QMP screenshots
 and input. SSH handles source sync, builds, file transfer, and logs. No guest UI
 automation service is required. VMs live in `~/Machines` by default.
 
 Windows 11 and Ubuntu 24.04 have verified desktop control, SSH, source sync and
 visible application launch. Ubuntu's gallery run found text-input and global
-stop failures on GNOME/Wayland; see its report. macOS boot/login, ANSI keyboard
-setup and requested password change are verified; SSH and app testing remain
-pending host memory headroom. Both guests are stopped.
+stop failures on GNOME/Wayland; see its report. macOS now has verified SSH/source sync, installed app launch, gallery input and
+config Stop. Its baseline/reset marker test passed. Global stop passed after enabling
+Input Monitoring for the parent Lewdware app; see the shortcut follow-up report.
 
 Continue Unix guest setup with Ubuntu first, then one macOS guest. For each,
 verify screenshot/input, SSH/file transfer/source sync, visible app launch, the
@@ -121,9 +137,14 @@ silently creating a blank replacement disk.
 Original files are retained under `.vmctl-retired-*` until the new guest has
 booted and its reset has been verified. Never delete `.vmctl-base` while active
 overlays reference it. Moving the VM directory requires updating backing paths.
-Never edit a backing image in place. Refreshing a baseline is currently a manual
-operation: flatten the powered-off guest into a separate bundle, verify it, and
-initialize a new baseline rather than changing one used by existing overlays.
+Never edit a backing image in place. To retain a deliberately prepared setup, shut the guest down and run
+`deploy/vm/vm-storage --vm <name> refresh`. This flattens and compares each
+active image into a new immutable generation under `.vmctl-base/generations/`,
+copies raw state, and installs fresh overlays. It preserves all earlier backing
+files and retires the previous overlays. The manifest switches while the
+transition journal blocks boot/reset; an interrupted refresh journal includes
+the new manifest, and the generation saves `previous-manifest.json` for recovery.
+Do not remove old generations until their retained overlays are no longer needed.
 
 For each test run:
 
@@ -176,10 +197,11 @@ can reuse the same localhost forwarding port. Verify a new guest's fingerprint
 on its visible desktop before accepting its first SSH connection.
 `sync` uses PowerShell commands on Windows and Unix shell/tar commands on
 Linux/macOS. `push`, `pull`, and `ssh` use the same account. Non-Windows guests
-require an explicit account. On Linux, `launch` requires an active systemd user
-`graphical-session.target` and desktop display/session variables in that manager.
+require an explicit account. On Linux, `launch` requires desktop display/session
+variables in the user manager, plus an active `graphical-session.target` or an
+imported `XDG_SESSION_ID` that logind confirms is an active graphical login.
 It uses `systemd-run --user` to inherit the logged-in desktop environment. This
-is verified on Ubuntu GNOME/Wayland; inspect a screenshot after each launch.
+is verified on Ubuntu GNOME/Wayland and Debian Xfce/X11; inspect a screenshot after each launch.
 macOS still requires a desktop launcher until a launch helper is verified there.
 An SSH process does not itself prove an app appeared on the interactive desktop.
 
@@ -203,7 +225,7 @@ package tests that package's source, not the current uncommitted applications.
 | Guest | Build delivery | Setup still needed |
 | --- | --- | --- |
 | Windows 11 | Baseline apps, copied Windows bundles, or native builds for uncommitted code | Full media and installer/update test cases |
-| macOS | Matching Intel CI package downloaded | SSH/key, resolution adjustment, graphical app launch, permissions and baseline/reset verification |
+| macOS | Installed matching Intel CI package 0.0.2 | Media/installer/update cases; Input Monitoring required for global stop |
 | Linux | Ubuntu installed CI Debian package; prefer compatible bundles/packages elsewhere | Ubuntu keyboard/global-stop findings; other GNOME/KDE and X11/Wayland sessions |
 
 Linux guests usually do not need their own Rust toolchain. Copy a compatible
@@ -228,7 +250,33 @@ Storage tooling checks use tiny real qcow2 images:
 python3 -m unittest discover -s deploy/vm -p test_storage.py
 ```
 
+## Synthetic wallpaper fixture
+
+`make-wallpaper-pack.py OUTPUT --source EXACT_SOURCE_CHECKOUT` creates a
+deterministic media pack using that checkout's schemas (format 0 or 1), labeled
+A/B images with different aspect ratios and contrasting corners, and SHA-256
+hashes. Use the exact CI source above for the installed 0.0.2 packages. Build
+`dev-modes/wallpaper-test` with `lw mode build`; its README describes the timed
+scenarios. This exercises wallpaper through the real Lua API and supervisor.
+
+For Xfce/Plasma guests, copy `wallpaper-probe.py` to the guest, the fixture folder
+to `~/wallpaper-fixture`, and the compiled mode to `~/wallpaper-test.lwmode`.
+Run `python3 ~/wallpaper-probe.py prepare` to preserve original settings, then
+`known` to establish an explicit restore image. The probe records JSONL and exact
+raw comparisons under `~/wallpaper-evidence`. Inspect the desktop before/change/
+restore too: existing xfconf keys alone did not describe a stock Xfce desktop.
+The report distinguishes that failure from configured-state restoration passes.
+Stop timed scenarios before their Lua exit if avoiding the old CI restart bug.
+
 ## Test history
+
+- [2026-11-10 Fedora Plasma wallpaper, color plugin, recovery and fallback](reports/fedora-plasma-2026-11-10.md)
+- [2026-11-09 Debian Xfce wallpaper, crash recovery, and verified baseline](reports/debian-xfce-2026-11-09.md)
+- [2026-11-09 Ubuntu wallpaper and native/XWayland shortcut diagnosis](reports/ubuntu-wallpaper-2026-11-09.md)
+
+- [2026-11-09 macOS shortcut diagnosis and permission-preserving baseline](reports/macos-shortcut-2026-11-09.md)
+
+- [2026-11-09 macOS app/gallery and storage setup](reports/macos-2026-11-09.md)
 
 - [2026-11-08 Ubuntu setup, gallery findings and baseline](reports/ubuntu-2026-11-08.md)
 - [2026-11-08 macOS boot and pending login/setup](reports/macos-2026-11-08.md)

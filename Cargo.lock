@@ -5728,6 +5728,7 @@ name = "lewdware-supervisor"
 version = "0.0.2"
 dependencies = [
  "anyhow",
+ "ashpd 0.13.13",
  "block2 0.6.2",
  "chrono",
  "clap",
@@ -5747,6 +5748,7 @@ dependencies = [
  "serde_json",
  "shared",
  "tao",
+ "tempfile",
  "tokio",
  "tracing",
  "tray-icon",
@@ -9606,6 +9608,7 @@ dependencies = [
  "which",
  "windows 0.62.2",
  "winreg 0.56.0",
+ "x11rb",
  "zbus",
  "zstd",
 ]

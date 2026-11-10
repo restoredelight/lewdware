@@ -22,7 +22,8 @@ impl LewdwareApp {
             return Ok(false);
         }
 
-        if let Err(err) = shared::wallpaper::set(file.path()) {
+        if let Err(err) = shared::wallpaper::set_with_snapshot(file.path(), &self.default_wallpaper)
+        {
             tracing::warn!("Error setting wallpaper: {err}");
             return Ok(false);
         }

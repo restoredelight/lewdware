@@ -1,0 +1,3 @@
+2026-06-20T02:14:59.467233Z  INFO shared::read_pack: shared/src/read_pack.rs:266: Header { index_offset: 178751919, index_length: 831488, metadata_offset: 179583407, metadata_length: 37, id: c894f8cb-24d0-406e-b2fd-babd0b0c2614 }
+2026-06-20T02:14:59.490784Z  INFO shared::db: shared/src/db.rs:18: Migrating from 1 to 1
+2026-06-20T02:14:59.490806Z  INFO shared::db: shared/src/db.rs:24: Executed migrations

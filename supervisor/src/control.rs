@@ -38,6 +38,7 @@ pub enum ControlMessage {
         respond_to: oneshot::Sender<Response>,
     },
     StopKeyPressed,
+    StopShortcutChanged(shared::ipc::control::StopShortcutStatus),
     /// A tray menu item was clicked. One variant for every item, rather than v1's single
     /// "the menu was clicked" -- see `tray.rs` on why the id lookup matters.
     TrayAction {
@@ -194,6 +195,8 @@ pub struct Control {
     status_tx: watch::Sender<StatusInfo>,
     dev_log_tx: tokio::sync::broadcast::Sender<(Uuid, shared::logging::LogRecord)>,
     tray: TrayUpdater,
+    stop_shortcut: crate::stop_key::StopShortcut,
+    shortcut_status: shared::ipc::control::StopShortcutStatus,
 }
 
 impl Control {
@@ -203,6 +206,7 @@ impl Control {
         status_tx: watch::Sender<StatusInfo>,
         dev_log_tx: tokio::sync::broadcast::Sender<(Uuid, shared::logging::LogRecord)>,
         tray: TrayUpdater,
+        stop_shortcut: crate::stop_key::StopShortcut,
     ) -> Self {
         Self {
             episode: None,
@@ -214,6 +218,8 @@ impl Control {
             status_tx,
             dev_log_tx,
             tray,
+            stop_shortcut,
+            shortcut_status: Default::default(),
         }
     }
 
@@ -247,10 +253,67 @@ impl Control {
 
     async fn handle(&mut self, msg: ControlMessage) {
         match msg {
+            // Desktop configuration may wait for D-Bus; it must never delay an emergency stop.
+            ControlMessage::Request {
+                req: Request::SetupStopShortcut,
+                respond_to,
+            } => {
+                if !matches!(
+                    &self.shortcut_status,
+                    shared::ipc::control::StopShortcutStatus::SetupRequired {
+                        can_setup: true,
+                        ..
+                    }
+                ) {
+                    let _ = respond_to.send(Response::Error {
+                        message: "Desktop shortcut setup is not available".into(),
+                    });
+                } else {
+                    let shortcut = self.stop_shortcut.clone();
+                    tokio::spawn(async move {
+                        let response = match shortcut.setup().await {
+                            Ok(()) => Response::Ok,
+                            Err(err) => Response::Error {
+                                message: err.to_string(),
+                            },
+                        };
+                        let _ = respond_to.send(response);
+                    });
+                }
+            }
+            ControlMessage::Request {
+                req: Request::ConfigureStopShortcut,
+                respond_to,
+            } => {
+                if !matches!(
+                    &self.shortcut_status,
+                    shared::ipc::control::StopShortcutStatus::Registered {
+                        can_configure: true,
+                        ..
+                    }
+                ) {
+                    let _ = respond_to.send(Response::Error {
+                        message: "This desktop can't open its shortcut settings for Lewdware"
+                            .into(),
+                    });
+                } else {
+                    let shortcut = self.stop_shortcut.clone();
+                    tokio::spawn(async move {
+                        let response = match shortcut.configure().await {
+                            Ok(()) => Response::Ok,
+                            Err(err) => Response::Error {
+                                message: format!("{err:#}"),
+                            },
+                        };
+                        let _ = respond_to.send(response);
+                    });
+                }
+            }
             ControlMessage::Request { req, respond_to } => {
                 let response = self.handle_request(req).await;
                 let _ = respond_to.send(response);
             }
+            ControlMessage::StopShortcutChanged(status) => self.shortcut_status = status,
             ControlMessage::StopKeyPressed => self.stop_immediately().await,
             ControlMessage::TrayAction { action } => self.on_tray_action(action).await,
             ControlMessage::SessionExited { seq, exit } => self.on_session_exited(seq, exit).await,
@@ -338,10 +401,7 @@ impl Control {
                 }
             }
             Request::StopSession => {
-                if let Some(episode) = self.episode.as_mut().filter(|e| e.is_active()) {
-                    episode.intent = Intent::Stopping;
-                    let _ = episode.to_session.send(SessionCommand::Terminate).await;
-                }
+                self.stop_episode(Intent::Stopping).await;
                 Response::Ok
             }
             Request::StopImmediately => {
@@ -353,8 +413,17 @@ impl Control {
                 self.tick_schedule().await;
                 Response::Ok
             }
+            Request::RefreshStopShortcut => {
+                self.stop_shortcut.refresh();
+                Response::Ok
+            }
+            // Handled asynchronously in `handle`, keeping emergency-stop delivery responsive.
+            Request::SetupStopShortcut | Request::ConfigureStopShortcut => Response::Error {
+                message: "Shortcut setup requires a one-shot control request".into(),
+            },
             Request::ReloadConfig => match shared::user_config::load_config() {
                 Ok(cfg) => {
+                    self.stop_shortcut.reload(cfg.stop_button);
                     self.schedule.set_config(cfg.schedule);
                     self.tick_schedule().await;
                     Response::Ok
@@ -372,11 +441,40 @@ impl Control {
     /// no-op. During a grace notification it is the immediate equivalent of Cancel, so that
     /// already-spent firing starts the ordinary gap too.
     async fn stop_immediately(&mut self) {
+        self.stop_episode(Intent::StoppingImmediately).await;
+    }
+
+    /// A backoff has no live session task to acknowledge a kill. Complete that stop here;
+    /// removing the episode also invalidates any already-queued BackoffElapsed message.
+    async fn stop_episode(&mut self, intent: Intent) {
         let cancelled_start = self.pending_start.take().is_some();
 
+        if self
+            .episode
+            .as_ref()
+            .is_some_and(|episode| matches!(episode.phase, Phase::RestartPending { .. }))
+        {
+            let episode = self.episode.take().unwrap();
+            wallpaper::restore(&episode.wallpaper_snapshot);
+            if episode.kind == SessionKind::Scheduled {
+                self.schedule.note_session_ended(Local::now());
+            }
+            self.arm_idle_timer(None);
+            if episode.kind == SessionKind::Scheduled {
+                self.tick_schedule().await;
+            }
+            return;
+        }
         if let Some(episode) = self.episode.as_mut().filter(|e| e.is_active()) {
-            episode.intent = Intent::StoppingImmediately;
-            let _ = episode.to_session.send(SessionCommand::Kill).await;
+            episode.intent = intent;
+            // A later stop overrides an earlier replacement request.
+            episode.pending_restart = None;
+            let command = if intent == Intent::StoppingImmediately {
+                SessionCommand::Kill
+            } else {
+                SessionCommand::Terminate
+            };
+            let _ = episode.to_session.send(command).await;
         } else if cancelled_start {
             self.schedule.note_start_cancelled(Local::now());
             self.tick_schedule().await;
@@ -470,9 +568,10 @@ impl Control {
     }
 
     async fn on_session_exited(&mut self, seq: u64, exit: SessionExit) {
-        let Some(mut episode) = self.episode.take().filter(|e| e.seq == seq) else {
+        if self.episode.as_ref().is_none_or(|e| e.seq != seq) {
             return;
-        };
+        }
+        let mut episode = self.episode.take().unwrap();
 
         wallpaper::restore(&episode.wallpaper_snapshot);
 
@@ -480,6 +579,8 @@ impl Control {
             ExitClassification::Killed
         } else if exit.we_commanded_stop {
             ExitClassification::Graceful
+        } else if exit.mode_completed() {
+            ExitClassification::Completed
         } else {
             ExitClassification::Crashed
         };
@@ -515,7 +616,7 @@ impl Control {
         // window; the record is cleared only on an intentional stop or once retry gives up.
         let was_scheduled = episode.kind == SessionKind::Scheduled;
 
-        if episode.intent != Intent::None {
+        if episode.intent != Intent::None || classification == ExitClassification::Completed {
             if was_scheduled {
                 self.schedule.note_session_ended(Local::now());
             }
@@ -568,7 +669,8 @@ impl Control {
         let Some(episode) = self.episode.as_ref().filter(|e| e.seq == seq) else {
             return;
         };
-        if !matches!(episode.phase, Phase::RestartPending { .. }) {
+        if !matches!(episode.phase, Phase::RestartPending { .. }) || episode.intent != Intent::None
+        {
             return;
         }
 
@@ -870,6 +972,7 @@ impl Control {
 
         match &self.episode {
             None => StatusInfo {
+                stop_shortcut: self.shortcut_status.clone(),
                 session: SessionState::Idle,
                 session_kind: None,
                 mode_path: None,
@@ -879,6 +982,7 @@ impl Control {
                 schedule,
             },
             Some(episode) => StatusInfo {
+                stop_shortcut: self.shortcut_status.clone(),
                 session: match &episode.phase {
                     Phase::Starting => SessionState::Starting,
                     Phase::Running => SessionState::Running {
@@ -1033,5 +1137,219 @@ fn notify_gave_up(message: &str) {
         .show()
     {
         tracing::warn!("failed to show give-up notification: {err}");
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    fn control(kind: SessionKind) -> Control {
+        let (control_tx, _) = mpsc::channel(64);
+        let initial = StatusInfo {
+            session: SessionState::Idle,
+            session_kind: None,
+            mode_path: None,
+            warning: None,
+            last_runtime_error: None,
+            last_exit: None,
+            stop_shortcut: Default::default(),
+            schedule: ScheduleStatus {
+                enabled: false,
+                next_exact_session: None,
+                next_opportunity: None,
+                budget_remaining: 0,
+                budget_total: 0,
+                cooldown_until: None,
+            },
+        };
+        let mut schedule = schedule::ScheduleEngine::with_parts(
+            Default::default(),
+            Box::new(schedule::AssumePresent),
+            Box::new(schedule::SystemRng),
+        );
+        if kind == SessionKind::Scheduled {
+            schedule
+                .note_session_started(shared::schedule::SessionLength::UntilStopped, Local::now());
+        }
+        Control {
+            episode: Some(Episode {
+                seq: 1,
+                kind,
+                rule_id: None,
+                overrides: None,
+                mode_path: None,
+                dev: false,
+                pid: Some(123),
+                phase: Phase::Running,
+                attempts: 0,
+                wallpaper_snapshot: shared::wallpaper::Snapshot::Unsupported,
+                to_session: mpsc::channel(8).0,
+                warning: None,
+                last_runtime_error: None,
+                last_exit: None,
+                pending_restart: None,
+                dev_stream_id: None,
+                intent: Intent::None,
+            }),
+            next_seq: 2,
+            control_tx,
+            schedule,
+            schedule_generation: 0,
+            pending_start: None,
+            status_tx: watch::channel(initial).0,
+            dev_log_tx: tokio::sync::broadcast::channel(8).0,
+            tray: TrayUpdater::for_test(),
+            stop_shortcut: crate::stop_key::StopShortcut::for_test(),
+            shortcut_status: Default::default(),
+        }
+    }
+
+    fn exited(code: i32) -> SessionExit {
+        SessionExit {
+            status: Some(std::process::ExitStatus::from_raw(code << 8)),
+            we_commanded_stop: false,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    #[ignore = "run by session::tests::desktop_and_lifecycle_regressions with isolated user directories"]
+    async fn isolated_regression_stop_during_backoff() {
+        assert!(std::env::var_os("LEWDWARE_ISOLATED_TEST").is_some());
+        for kind in [
+            SessionKind::Manual,
+            SessionKind::Dev,
+            SessionKind::Scheduled,
+        ] {
+            for immediate in [false, true] {
+                let mut control = control(kind);
+                let (tx, mut rx) = mpsc::channel(64);
+                control.control_tx = tx;
+                control.on_session_exited(1, exited(101)).await;
+                assert!(matches!(
+                    control.episode.as_ref().unwrap().phase,
+                    Phase::RestartPending { .. }
+                ));
+                tokio::task::yield_now().await; // install the real retry sleep
+                let request = if immediate {
+                    Request::StopImmediately
+                } else {
+                    Request::StopSession
+                };
+                assert_eq!(control.handle_request(request.clone()).await, Response::Ok);
+                assert_eq!(control.status_info().session, SessionState::Idle);
+                assert!(control.episode.is_none());
+                let cooldown = control.status_info().schedule.cooldown_until;
+                assert_eq!(cooldown.is_some(), kind == SessionKind::Scheduled);
+                // Repeated stops must not finish or charge the scheduled session twice.
+                control.handle_request(request).await;
+                assert_eq!(control.status_info().schedule.cooldown_until, cooldown);
+                tokio::time::advance(Duration::from_secs(30)).await;
+                tokio::task::yield_now().await;
+                let mut timer_delivered = false;
+                while let Ok(message) = rx.try_recv() {
+                    if let ControlMessage::BackoffElapsed { seq } = message {
+                        timer_delivered = true;
+                        control.on_backoff_elapsed(seq).await;
+                    }
+                }
+                assert!(
+                    timer_delivered,
+                    "exercise the queued callback after cancellation"
+                );
+                assert!(control.episode.is_none());
+                assert_eq!(control.next_seq, 2, "no restart spawn was attempted");
+                // A new episode is startable immediately; an old callback cannot replace it.
+                let mut next = super::tests::control(SessionKind::Manual)
+                    .episode
+                    .take()
+                    .unwrap();
+                next.seq = 2;
+                control.episode = Some(next);
+                control.on_backoff_elapsed(1).await;
+                assert_eq!(control.episode.as_ref().unwrap().seq, 2);
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "run by session::tests::desktop_and_lifecycle_regressions with isolated user directories"]
+    async fn isolated_regression_stop_overrides_replacement() {
+        assert!(std::env::var_os("LEWDWARE_ISOLATED_TEST").is_some());
+        for immediate in [false, true] {
+            let mut control = control(SessionKind::Manual);
+            let (tx, mut rx) = mpsc::channel(8);
+            let episode = control.episode.as_mut().unwrap();
+            episode.to_session = tx;
+            episode.pending_restart = Some((Some("replacement.lwmode".into()), false, None));
+            control
+                .handle_request(if immediate {
+                    Request::StopImmediately
+                } else {
+                    Request::StopSession
+                })
+                .await;
+            assert!(control.episode.as_ref().unwrap().pending_restart.is_none());
+            assert!(matches!(
+                (immediate, rx.try_recv().unwrap()),
+                (true, SessionCommand::Kill) | (false, SessionCommand::Terminate)
+            ));
+            control.on_session_exited(1, exited(0)).await;
+            assert!(control.episode.is_none());
+            assert_eq!(control.next_seq, 2);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "run by session::tests::desktop_and_lifecycle_regressions with isolated user directories"]
+    async fn isolated_regression_lifecycle() {
+        assert!(std::env::var_os("LEWDWARE_ISOLATED_TEST").is_some());
+        let completed = i32::from(shared::ipc::engine::MODE_COMPLETED_EXIT_CODE);
+        for kind in [
+            SessionKind::Manual,
+            SessionKind::Dev,
+            SessionKind::Scheduled,
+        ] {
+            let mut control = control(kind);
+            control.on_session_exited(1, exited(completed)).await;
+            assert!(
+                control.episode.is_none(),
+                "completion must never retry: {kind:?}"
+            );
+            assert_eq!(control.status_info().session, SessionState::Idle);
+            assert_eq!(
+                control.status_info().schedule.cooldown_until.is_some(),
+                kind == SessionKind::Scheduled
+            );
+        }
+        for code in [0, 1, 101] {
+            let mut control = control(SessionKind::Manual);
+            control.on_session_exited(1, exited(code)).await;
+            assert!(matches!(
+                control.episode.as_ref().unwrap().phase,
+                Phase::RestartPending { .. }
+            ));
+            assert_eq!(
+                control
+                    .episode
+                    .as_ref()
+                    .unwrap()
+                    .last_exit
+                    .as_ref()
+                    .unwrap()
+                    .classification,
+                ExitClassification::Crashed
+            );
+        }
+        let mut control = control(SessionKind::Manual);
+        control.on_session_exited(99, exited(completed)).await;
+        assert!(
+            control.episode.is_some(),
+            "stale exit must leave the current episode intact"
+        );
+        control.episode.as_mut().unwrap().intent = Intent::StoppingImmediately;
+        control.on_session_exited(1, exited(101)).await;
+        assert!(control.episode.is_none(), "explicit stop must never retry");
     }
 }

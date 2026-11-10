@@ -21,6 +21,7 @@ import type {
 	ScheduleDto,
 	ScheduleStatusDto,
 	SupervisorStatusDto,
+	StopShortcutStatus,
 	ThemeCatalogueDto,
 	Volume,
 	WallpaperRestore
@@ -119,6 +120,9 @@ class AppStore {
 	// come from one fetch at startup.
 	engineStatus = $state<EngineStatusDto>({ running: false, error: null, warning: null });
 
+	stopShortcutStatus = $state<StopShortcutStatus | null>(null);
+	checkingStopShortcut = $state(false);
+
 	scheduleStatus = $state<ScheduleStatusDto>({
 		enabled: false,
 		next_exact_session: null,
@@ -143,8 +147,31 @@ class AppStore {
 	}
 
 	applySupervisorStatus(status: SupervisorStatusDto) {
+		// Disconnection is normal when the idle supervisor exits. Keep a startup error visible
+		// until a successful check, rather than replacing it with an unexplained unavailable state.
+		if (
+			status.stop_shortcut ||
+			(!this.checkingStopShortcut && this.stopShortcutStatus?.type !== 'Failed')
+		) {
+			this.stopShortcutStatus = status.stop_shortcut;
+		}
 		this.engineStatus = status.engine;
 		this.scheduleStatus = status.schedule;
+	}
+
+	async checkStopShortcut(retry = false) {
+		this.checkingStopShortcut = true;
+		this.stopShortcutStatus = { type: 'Checking' };
+		try {
+			this.stopShortcutStatus = await api.stopShortcutStatus(retry);
+		} catch (err) {
+			this.stopShortcutStatus = {
+				type: 'Failed',
+				message: `Couldn’t check the stop shortcut: ${String(err)}`
+			};
+		} finally {
+			this.checkingStopShortcut = false;
+		}
 	}
 
 	async refreshSupervisorStatus() {

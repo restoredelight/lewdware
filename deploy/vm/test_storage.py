@@ -69,6 +69,50 @@ class StorageTests(unittest.TestCase):
             storage.reset(self.directory)
         self.assertEqual(digest, hashlib.sha256(active.read_bytes()).digest())
 
+    def test_refresh_retains_changes_and_preserves_previous_backing_files(self):
+        self.initialize()
+        base = self.directory / storage.BASE / "files" / "disk.qcow2"
+        digest = hashlib.sha256(base.read_bytes()).digest()
+        storage.run("qemu-io", "-f", "qcow2", "-c", "write -P 0xab 0 4096",
+                    self.directory / "disk.qcow2")
+        (self.directory / "firmware.fd").write_bytes(b"approved state")
+        with storage.storage_lock(self.directory):
+            storage.refresh(self.directory)
+        manifest = json.loads((self.directory / storage.BASE / "manifest.json").read_text())
+        new_base = storage.baseline_file(self.directory, manifest, "disk.qcow2")
+        self.assertNotEqual(base, new_base)
+        self.assertEqual(digest, hashlib.sha256(base.read_bytes()).digest())
+        retired = self.directory / manifest["retired"] / "disk.qcow2"
+        storage.run("qemu-img", "compare", "-q", retired, new_base)
+        storage.run("qemu-io", "-f", "qcow2", "-c", "write -P 0xcd 0 4096",
+                    self.directory / "disk.qcow2")
+        (self.directory / "firmware.fd").write_bytes(b"later change")
+        with storage.storage_lock(self.directory):
+            storage.reset(self.directory)
+        storage.run("qemu-img", "compare", "-q", new_base, self.directory / "disk.qcow2")
+        self.assertEqual((self.directory / "firmware.fd").read_bytes(), b"approved state")
+        self.assertEqual(digest, hashlib.sha256(base.read_bytes()).digest())
+
+    def test_interrupted_refresh_keeps_old_manifest_and_blocks_boot(self):
+        self.initialize()
+        path = self.directory / storage.BASE / "manifest.json"
+        before = path.read_bytes()
+        replace = os.replace
+
+        def fail_install(source, target):
+            if ".vmctl-overlay-staging-" in str(source):
+                raise OSError("simulated refresh interruption")
+            replace(source, target)
+
+        with patch.object(storage.os, "replace", side_effect=fail_install):
+            with self.assertRaisesRegex(OSError, "simulated"):
+                storage.refresh(self.directory)
+        self.assertEqual(before, path.read_bytes())
+        journal = json.loads((self.directory / storage.TRANSITION).read_text())
+        self.assertIn("generation", journal["new_manifest"])
+        with self.assertRaisesRegex(RuntimeError, "interrupted"):
+            storage.ensure_ready(self.directory)
+
     def test_paths_cannot_escape_vm_or_alias_each_other(self):
         with self.assertRaises(ValueError):
             storage.checked_names(self.directory, ["../escape"])

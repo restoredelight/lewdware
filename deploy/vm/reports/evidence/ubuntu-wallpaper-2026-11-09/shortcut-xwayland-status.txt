@@ -1,0 +1,4 @@
+{"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}
+snapshot ABSENT
+{"picture-uri": "'file:///home/ashbythorpe/wallpaper-fixture/A.png'", "picture-uri-dark": "'file:///home/ashbythorpe/wallpaper-fixture/B.png'", "picture-options": "'scaled'"}

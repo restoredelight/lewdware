@@ -1,0 +1,15 @@
+exec(open('/tmp/run-other-wallpaper.py').read().split("supervisor();probe('start explicit')")[0])
+guest('mkdir -p ~/wallpaper-fail-bin; cp ~/xfconf-fault-wrapper ~/wallpaper-fail-bin/xfconf-query; chmod +x ~/wallpaper-fail-bin/xfconf-query; systemctl --user show-environment | sed -n \'s/^PATH=//p\' > ~/wallpaper-evidence/original-manager-path.txt')
+def terminate_supervisor():
+ guest("python3 -c 'import wallpaper_probe'" if False else "python3 -c \"import runpy,os,signal; p=runpy.run_path(\'wallpaper-probe.py\'); os.kill(p[\'exact_pid\'](\'lewdware-supervisor\'),signal.SIGTERM)\"")
+ time.sleep(1)
+terminate_supervisor()
+guest('systemctl --user set-environment PATH=/home/tester/wallpaper-fail-bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games')
+supervisor();probe('start hold');time.sleep(2);guest('touch ~/wallpaper-fail-restore');probe('stop');time.sleep(2)
+probe('status');guest('test -s ~/.local/share/lewdware/wallpaper-snapshot.json && cp ~/.local/share/lewdware/wallpaper-snapshot.json ~/wallpaper-evidence/failed-restore-snapshot.json');shot('restore-failed-retained')
+guest('rm ~/wallpaper-fail-restore');terminate_supervisor();supervisor();time.sleep(1);probe('check');probe('status');shot('restore-retry-succeeded')
+# Unreadable originals without a fallback must not permit wallpaper changes.
+probe('check');guest('touch ~/wallpaper-fail-read');probe('start hold');time.sleep(2);probe('check');probe('status');probe('stop');time.sleep(1);guest('rm ~/wallpaper-fail-read')
+terminate_supervisor()
+guest('systemctl --user set-environment "PATH=$(cat ~/wallpaper-evidence/original-manager-path.txt)"')
+print('FAULT CASES FINISHED',flush=True)

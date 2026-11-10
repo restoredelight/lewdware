@@ -1,0 +1,11 @@
+{
+  "source_head": "82f77f686a0f8ec4139d4c4497bf2719f7d85f7b",
+  "source_manifest_sha256": "f026e54f1375b390c09a0244b7cd504003cc77711d5c9afb5c6997ae23acbbfe",
+  "builder": "localhost/lewdware-vm-builder:ubuntu24",
+  "builder_image_id": "65cc085bddacac00ccf8d113604914ad70e6d4c241fe55dd436297ede20fb90e",
+  "mint_iso_verified_sha256": "a081ab202cfda17f6924128dbd2de8b63518ac0531bcfe3f1a1b88097c459bd4",
+  "fedora_source_verified_sha256": "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f",
+  "mint_iso_source": "https://pub.linuxmint.io/stable/22.3/linuxmint-22.3-cinnamon-64bit.iso",
+  "fedora_source": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+  "note": "Preparation provenance only; live test results are recorded separately."
+}

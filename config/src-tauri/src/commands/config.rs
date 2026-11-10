@@ -10,17 +10,21 @@ pub fn get_config(state: State<'_>) -> ConfigDto {
 }
 
 #[tauri::command]
-pub fn save_config(state: State<'_>, config: ConfigDto) -> Result<(), String> {
-    let mut current = state.config.lock().unwrap();
-    let mut new_config = apply_config_dto(&current, config);
-    if let Mode::Experience { ref mut pack } = new_config.mode {
-        if pack.is_none() {
-            *pack = state.pack.lock().unwrap().as_ref().map(|p| p.id);
+pub async fn save_config(state: State<'_>, config: ConfigDto) -> Result<(), String> {
+    {
+        let mut current = state.config.lock().unwrap();
+        let mut new_config = apply_config_dto(&current, config);
+        if let Mode::Experience { ref mut pack } = new_config.mode {
+            if pack.is_none() {
+                *pack = state.pack.lock().unwrap().as_ref().map(|p| p.id);
+            }
         }
-    }
 
-    let uploaded = state.uploaded.lock().unwrap();
-    save_to_disk(&new_config, &uploaded).map_err(|e| e.to_string())?;
-    *current = new_config;
+        let uploaded = state.uploaded.lock().unwrap();
+        save_to_disk(&new_config, &uploaded).map_err(|e| e.to_string())?;
+        *current = new_config;
+    }
+    // Apply the new shortcut to an already resident supervisor after the file is written.
+    let _ = shared::ipc::control::request(&shared::ipc::control::Request::ReloadConfig).await;
     Ok(())
 }

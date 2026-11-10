@@ -1,0 +1,14 @@
+Linux mint-wallpaper 6.14.0-37-generic #37~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Nov 20 10:25:38 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+Cinnamon 6.6.4
+caja	1.26.3+mint1
+cinnamon	6.6.4+zena
+lightdm	1.30.0-0ubuntu14
+mate-session-manager	1.26.1-2build2
+muffin	6.6.1+zena
+[Seat:*]
+autologin-guest=false
+autologin-user=tester
+autologin-user-timeout=0
+cinnamon2d.desktop
+cinnamon.desktop
+mate.desktop

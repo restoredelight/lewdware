@@ -1,0 +1,3 @@
+fce3ec9d619010f08b6e910cb6651ba5dab8ab797690197b965f2916045d22de  /tmp/lewdware-vm-artifacts/linux/lewdware_0.0.2_x86_64.rpm
+028f3db7089b9f4dc41eca98c5d038eba30adff00529ace321931fa20762dd16  dev-modes/wallpaper-test/build/Wallpaper test.lwmode
+14a59dfe55536c65d7eb60cc00c7fab82baf7bdcec7894d2fffda24c35e8e3ec  /tmp/wallpaper-fixture-v0/wallpaper.lwpack

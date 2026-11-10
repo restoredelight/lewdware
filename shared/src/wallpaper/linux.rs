@@ -9,7 +9,7 @@ use std::{env, path::Path};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::{Snapshot, daemons, kde, run_cmd, stdout_of};
+use super::{Snapshot, daemons, kde, run_cmd, stdout_of, xfce};
 
 const GNOME_SCHEMA: &str = "org.gnome.desktop.background";
 
@@ -20,7 +20,6 @@ const GNOME_KEYS: &[&str] = &["picture-uri", "picture-uri-dark", "picture-option
 
 /// Fill the screen, cropping the overflow -- the one behaviour `set` offers, per backend.
 const GNOME_FILL: &str = "zoom";
-const XFCE_FILL: &str = "5";
 const LXDE_FILL: &str = "crop";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -150,21 +149,9 @@ pub fn snapshot() -> Result<Snapshot> {
                 entries,
             })
         }
-        Desktop::Xfce => {
-            let entries = xfce_properties()?
-                .into_iter()
-                .map(|property| {
-                    let value = xfconf_get(&property)?;
-                    Ok((property, value))
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            if entries.is_empty() {
-                bail!("xfconf reported no desktop wallpaper properties");
-            }
-
-            Ok(Snapshot::Xfce { entries })
-        }
+        Desktop::Xfce => Ok(Snapshot::Xfce {
+            entries: xfce::snapshot()?,
+        }),
         // Compositors and window managers with no wallpaper setting of their own: ask whichever
         // wallpaper daemon is actually running.
         Desktop::Other => daemons::snapshot(),
@@ -216,14 +203,8 @@ pub fn set(path: &Path) -> Result<()> {
             Ok(())
         }
         Desktop::Xfce => {
-            for property in xfce_properties()? {
-                if property.ends_with("last-image") {
-                    xfconf_set(&property, path)?;
-                } else {
-                    xfconf_set(&property, XFCE_FILL)?;
-                }
-            }
-            Ok(())
+            let targets = xfce::targets()?;
+            xfce::set(Path::new(path), targets.iter().map(String::as_str))
         }
         // LXQt is LXDE's Qt successor and ships the same file manager under a different name.
         desktop @ (Desktop::Lxde | Desktop::Lxqt) => {
@@ -263,12 +244,7 @@ pub fn restore(snapshot: &Snapshot) -> Result<()> {
             }
             Ok(())
         }
-        Snapshot::Xfce { entries } => {
-            for (property, value) in entries {
-                xfconf_set(property, value)?;
-            }
-            Ok(())
-        }
+        Snapshot::Xfce { entries } => xfce::restore(entries),
         Snapshot::Awww { .. }
         | Snapshot::Hyprpaper { .. }
         | Snapshot::Swaybg { .. }
@@ -299,38 +275,6 @@ fn dconf_read(key: &str) -> Result<Option<String>> {
 
 fn dconf_write(key: &str, value: &str) -> Result<()> {
     run_cmd("dconf", &["write", key, value])
-}
-
-fn xfce_properties() -> Result<Vec<String>> {
-    let listing = stdout_of("xfconf-query", &["--channel", "xfce4-desktop", "--list"])?;
-
-    Ok(listing
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.ends_with("last-image") || line.ends_with("image-style"))
-        .map(str::to_owned)
-        .collect())
-}
-
-fn xfconf_get(property: &str) -> Result<String> {
-    stdout_of(
-        "xfconf-query",
-        &["--channel", "xfce4-desktop", "--property", property],
-    )
-}
-
-fn xfconf_set(property: &str, value: &str) -> Result<()> {
-    run_cmd(
-        "xfconf-query",
-        &[
-            "--channel",
-            "xfce4-desktop",
-            "--property",
-            property,
-            "--set",
-            value,
-        ],
-    )
 }
 
 /// Wraps a value as a single-quoted GVariant string, the form `gsettings` and `dconf` both read

@@ -95,6 +95,8 @@ pub fn run() {
             commands::process::launch_lewdware,
             commands::process::stop_lewdware,
             commands::process::lewdware_running,
+            commands::process::stop_shortcut_status,
+            commands::process::setup_stop_shortcut,
             commands::schedule::get_schedule_status,
             commands::schedule::set_schedule_enabled,
             commands::schedule::reload_supervisor_schedule,

@@ -39,6 +39,7 @@ use pending::{PendingItem, PendingItemOpts, Requirement, RequirementState};
 /// * `requirement_owners`: Routes each independent decode request back to its owning pending item.
 pub struct LewdwareApp {
     running: bool,
+    pub mode_completed: bool,
     config: Arc<AppConfig>,
     wgpu_state: Option<Arc<WgpuState>>,
     items: HashMap<ItemId, ItemSlot>,
@@ -147,6 +148,7 @@ impl LewdwareApp {
 
         Ok(Self {
             running: false,
+            mode_completed: false,
             config,
             wgpu_state,
             items: HashMap::new(),

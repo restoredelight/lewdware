@@ -1,0 +1,187 @@
+('launch', '/usr/lib/lewdware/lewdware-supervisor')
+Running as unit: vmctl-launch-1794339695829053764.service; invocation ID: ad00ab69179c40a2982c3b2acbbd6871
+('ssh', '--', 'python3 ~/wallpaper-probe.py start explicit')
+{"time": "2026-11-10T19:41:36.876687+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:41:40.134280+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Running", "pid": 3092}, "session_kind": "Manual", "mode_path": "/home/tester/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:41:40.142885+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///tmp/lewdware-tmp/.tmpjHdMZK.avif", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:41:40.143169+00:00", "kind": "snapshot", "value": {"backend": "kde", "desktops": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/explicit-A.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/explicit-A.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:41:53.451781+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Running", "pid": 3092}, "session_kind": "Manual", "mode_path": "/home/tester/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:41:53.461277+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///tmp/lewdware-tmp/.tmp4Bu0Be.avif", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:41:53.461505+00:00", "kind": "snapshot", "value": {"backend": "kde", "desktops": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/explicit-B.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/explicit-B.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:42:07.817210+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:42:08.070908+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Running", "pid": 3092}, "session_kind": "Manual", "mode_path": "/home/tester/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:42:08.078681+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:42:08.079002+00:00", "kind": "snapshot", "value": {"backend": "kde", "desktops": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/explicit-reset.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/explicit-reset.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-probe.py stop')
+{"time": "2026-11-10T19:42:08.358670+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:42:09.588910+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:42:09.798223+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:42:09.806466+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:42:09.806699+00:00", "kind": "snapshot", "value": null}
+('ssh', '--', 'python3 ~/wallpaper-probe.py start hold')
+{"time": "2026-11-10T19:42:10.021886+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('key', 'shift+esc')
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:42:13.491513+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:42:13.499344+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:42:13.499540+00:00", "kind": "snapshot", "value": null}
+('ssh', '--', 'python3 ~/wallpaper-probe.py stop')
+{"time": "2026-11-10T19:42:13.716947+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:42:14.961739+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/global-or-immediate-stop.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/global-or-immediate-stop.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-probe.py start hold')
+{"time": "2026-11-10T19:42:15.247192+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py StopSession')
+{"time": "2026-11-10T19:42:17.549745+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:42:18.793429+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+Traceback (most recent call last):
+  File "/home/tester/wallpaper-probe.py", line 184, in <module>
+    main()
+    ~~~~^^
+  File "/home/tester/wallpaper-probe.py", line 151, in main
+    request('Status')
+    ~~~~~~~^^^^^^^^^^
+  File "/home/tester/wallpaper-probe.py", line 40, in request
+    s.connect('\0lewdware-supervisor.sock')
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ConnectionRefusedError: [Errno 111] Connection refused
+('launch', '/usr/lib/lewdware/lewdware-supervisor')
+Running as unit: vmctl-launch-1794339788512970965.service; invocation ID: 8a113b6212df4a7cb54db236ce301e64
+('ssh', '--', 'python3 ~/wallpaper-probe.py start hold')
+{"time": "2026-11-10T19:43:09.385019+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py kill-engine && sleep 0.3 && python3 ~/wallpaper-probe.py check && python3 ~/wallpaper-probe.py status && sleep 3 && python3 ~/wallpaper-probe.py stop')
+{"time": "2026-11-10T19:43:11.745770+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Running", "pid": 3894}, "session_kind": "Manual", "mode_path": "/home/tester/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:43:11.746000+00:00", "kind": "kill-engine", "value": 3894}
+{"time": "2026-11-10T19:43:12.116258+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+{"time": "2026-11-10T19:43:12.159675+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "RestartPending", "attempt": 1, "max_attempts": 3, "retry_in_secs": 1, "last_error": null}, "session_kind": "Manual", "mode_path": "/home/tester/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": {"code": null, "classification": "Crashed", "error": null}, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:43:12.180201+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:43:12.180626+00:00", "kind": "snapshot", "value": null}
+{"time": "2026-11-10T19:43:15.255568+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:43:16.522492+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py start hold')
+{"time": "2026-11-10T19:43:16.752866+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py kill-both')
+{"time": "2026-11-10T19:43:18.982996+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Running", "pid": 4068}, "session_kind": "Manual", "mode_path": "/home/tester/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:43:18.990038+00:00", "kind": "kill-supervisor", "value": 3852}
+{"time": "2026-11-10T19:43:18.990236+00:00", "kind": "kill-engine", "value": 4068}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/stranded.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/stranded.png (1280x800)
+('launch', '/usr/lib/lewdware/lewdware-supervisor')
+Running as unit: vmctl-launch-1794339799108431692.service; invocation ID: 6eaf03e1e9974801bc123142038ac28a
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:43:20.992878+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:43:21.202579+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:43:21.211297+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:43:21.211516+00:00", "kind": "snapshot", "value": null}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/startup-recovered.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/startup-recovered.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-probe.py permission off')
+('ssh', '--', 'python3 ~/wallpaper-probe.py start hold')
+{"time": "2026-11-10T19:43:21.695592+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:43:23.926972+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:43:24.144764+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Running", "pid": 4319}, "session_kind": "Manual", "mode_path": "/home/tester/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:43:24.153385+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:43:24.153728+00:00", "kind": "snapshot", "value": {"backend": "kde", "desktops": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py stop')
+{"time": "2026-11-10T19:43:24.362397+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py permission on')
+('ssh', '--', 'python3 ~/wallpaper-probe.py start missing')
+{"time": "2026-11-10T19:43:25.802427+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:43:28.040076+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:43:28.269321+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Running", "pid": 4519}, "session_kind": "Manual", "mode_path": "/home/tester/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:43:28.281657+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:43:28.281960+00:00", "kind": "snapshot", "value": {"backend": "kde", "desktops": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py stop')
+{"time": "2026-11-10T19:43:28.499123+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:43:29.719094+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:43:29.926339+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:43:29.933892+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:43:29.934088+00:00", "kind": "snapshot", "value": null}
+('launch', '/usr/lib/lewdware/lewdware-supervisor')
+Running as unit: vmctl-launch-1794339829587760421.service; invocation ID: 060f4029b91f41a9b939ef999d793f43
+('ssh', '--', "mkdir -p ~/wallpaper-fail-bin; cp ~/kde-dbus-fault-wrapper ~/wallpaper-fail-bin/dbus-send; chmod +x ~/wallpaper-fail-bin/dbus-send; systemctl --user show-environment | sed -n 's/^PATH=//p' > ~/wallpaper-evidence/original-manager-path.txt")
+('ssh', '--', 'python3 -c "import runpy,os,signal; p=runpy.run_path(\'wallpaper-probe.py\'); os.kill(p[\'exact_pid\'](\'lewdware-supervisor\'),signal.SIGTERM)"')
+('ssh', '--', 'systemctl --user set-environment PATH=/home/tester/wallpaper-fail-bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin')
+('launch', '/usr/lib/lewdware/lewdware-supervisor')
+Running as unit: vmctl-launch-1794339831910896429.service; invocation ID: 7db3a95acba949cf9e6a64aa4a262968
+('ssh', '--', 'python3 ~/wallpaper-probe.py start hold')
+{"time": "2026-11-10T19:43:52.804625+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'touch ~/wallpaper-fail-restore')
+('ssh', '--', 'python3 ~/wallpaper-probe.py stop')
+{"time": "2026-11-10T19:43:55.217383+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:43:57.441914+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:43:57.449991+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///tmp/lewdware-tmp/.tmpDisJkA.avif", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:43:57.450234+00:00", "kind": "snapshot", "value": {"backend": "kde", "desktops": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}}
+('ssh', '--', 'test -s ~/.local/share/lewdware/wallpaper-snapshot.json && cp ~/.local/share/lewdware/wallpaper-snapshot.json ~/wallpaper-evidence/failed-restore-snapshot.json')
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/restore-failed-retained.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/restore-failed-retained.png (1280x800)
+('ssh', '--', 'rm ~/wallpaper-fail-restore')
+('ssh', '--', 'python3 -c "import runpy,os,signal; p=runpy.run_path(\'wallpaper-probe.py\'); os.kill(p[\'exact_pid\'](\'lewdware-supervisor\'),signal.SIGTERM)"')
+('launch', '/usr/lib/lewdware/lewdware-supervisor')
+Running as unit: vmctl-launch-1794339839151956377.service; invocation ID: f127b9ce43704ad9b3a07d50580abad5
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:44:02.262543+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:44:02.720192+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:44:02.743407+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:44:02.743839+00:00", "kind": "snapshot", "value": null}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/restore-retry-succeeded.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/restore-retry-succeeded.png (1280x800)
+('ssh', '--', 'touch ~/wallpaper-fail-read')
+('ssh', '--', 'python3 ~/wallpaper-probe.py start hold')
+{"time": "2026-11-10T19:44:03.681352+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:44:06.183487+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:44:06.610757+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Running", "pid": 5372}, "session_kind": "Manual", "mode_path": "/home/tester/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:44:06.632553+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/Original%20%27%20%E9%9B%AA.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:44:06.632999+00:00", "kind": "snapshot", "value": null}
+('ssh', '--', 'python3 ~/wallpaper-probe.py stop')
+{"time": "2026-11-10T19:44:07.091570+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', "python3 - <<'GUEST'\nimport json,runpy\nfrom pathlib import Path\np=runpy.run_path('wallpaper-probe.py');c=json.loads(p['CONFIG'].read_text());c['wallpaper']['restore']={'kind':'image','path':str(Path.home()/'wallpaper-fixture/B.png')};p['CONFIG'].write_text(json.dumps(c))\nexpected=p['settings']();p['EVIDENCE'].joinpath('before-fallback.json').write_text(json.dumps(expected));expected[0]['image']=(Path.home()/'wallpaper-fixture/B.png').as_uri();p['EVIDENCE'].joinpath('known.json').write_text(json.dumps(expected))\nGUEST")
+('ssh', '--', 'python3 ~/wallpaper-probe.py start hold')
+{"time": "2026-11-10T19:44:09.162859+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:44:11.575348+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Running", "pid": 5573}, "session_kind": "Manual", "mode_path": "/home/tester/wallpaper-test.lwmode", "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:44:11.591484+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///tmp/lewdware-tmp/.tmp6OgQy8.avif", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:44:11.591983+00:00", "kind": "snapshot", "value": {"backend": "fixed_image", "path": "/home/tester/wallpaper-fixture/B.png"}}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/fallback-active.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/fallback-active.png (1280x800)
+('ssh', '--', 'python3 ~/wallpaper-probe.py stop')
+{"time": "2026-11-10T19:44:12.141648+00:00", "kind": "ipc", "value": {"type": "Ok"}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py check')
+{"time": "2026-11-10T19:44:14.551745+00:00", "kind": "restoration", "value": {"actual": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/B.png", "fill_mode": "2"}], "expected": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/B.png", "fill_mode": "2"}], "passed": true}}
+('ssh', '--', 'python3 ~/wallpaper-probe.py status')
+{"time": "2026-11-10T19:44:14.939960+00:00", "kind": "ipc", "value": {"type": "Status", "session": {"type": "Idle"}, "session_kind": null, "mode_path": null, "warning": null, "last_runtime_error": null, "last_exit": null, "schedule": {"enabled": false, "next_exact_session": null, "next_opportunity": null, "budget_remaining": 0, "budget_total": 0, "cooldown_until": null}}}
+{"time": "2026-11-10T19:44:14.958280+00:00", "kind": "settings", "value": [{"id": 1, "plugin": "org.kde.image", "image": "file:///home/tester/wallpaper-fixture/B.png", "fill_mode": "2"}]}
+{"time": "2026-11-10T19:44:14.958623+00:00", "kind": "snapshot", "value": null}
+('shot', '/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/fallback-restored.png')
+/home/restoredelight/projects/lewdware/deploy/vm/reports/evidence/fedora-plasma-2026-11-10/fallback-restored.png (1280x800)
+('ssh', '--', "rm ~/wallpaper-fail-read; python3 - <<'GUEST'\nimport json,runpy\np=runpy.run_path('wallpaper-probe.py'); c=json.loads(p['CONFIG'].read_text());c['wallpaper']['restore']={'kind':'original'};p['CONFIG'].write_text(json.dumps(c));saved=json.loads((p['EVIDENCE']/'before-fallback.json').read_text());p['apply_settings'](saved);(p['EVIDENCE']/'known.json').write_text(json.dumps(saved))\nGUEST")
+('ssh', '--', 'python3 -c "import runpy,os,signal; p=runpy.run_path(\'wallpaper-probe.py\'); os.kill(p[\'exact_pid\'](\'lewdware-supervisor\'),signal.SIGTERM)"')
+('ssh', '--', 'systemctl --user set-environment "PATH=$(cat ~/wallpaper-evidence/original-manager-path.txt)"')

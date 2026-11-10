@@ -1,0 +1,13 @@
+{
+  "id": "cc5aa4f1-6bbb-476a-9a48-645b4d651742",
+  "name": "Wallpaper test",
+  "version": "0.1.0",
+  "include": ["src"],
+  "entrypoint": "src/main.lua",
+  "options": {
+    "scenario": {
+      "label": "Scenario", "type": "enum", "default": "explicit",
+      "values": {"explicit": "A, B, reset, exit", "completion": "A, B, exit", "hold": "A until stopped", "missing": "Missing media lookup; no wallpaper change"}
+    }
+  }
+}

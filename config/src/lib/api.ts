@@ -5,6 +5,7 @@ import type {
 	ConfigDto,
 	DiagnosticsDto,
 	EngineStatusDto,
+	StopShortcutStatus,
 	Key,
 	ModeGroupDto,
 	ModeId,
@@ -82,6 +83,10 @@ export const api = {
 	stopLewdware: () => invoke<void>('stop_lewdware'),
 
 	lewdwareRunning: () => invoke<EngineStatusDto>('lewdware_running'),
+
+	stopShortcutStatus: (retry = false) =>
+		invoke<StopShortcutStatus>('stop_shortcut_status', { retry }),
+	setupStopShortcut: () => invoke<void>('setup_stop_shortcut'),
 
 	getScheduleStatus: () => invoke<ScheduleStatusDto>('get_schedule_status'),
 

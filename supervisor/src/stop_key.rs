@@ -1,16 +1,111 @@
 use std::collections::HashSet;
 use std::thread;
 
+use shared::ipc::control::StopShortcutStatus;
 use shared::user_config::{Key, Modifiers};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, watch};
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(all(test, target_os = "linux"))]
+mod portal_tests;
 
 use crate::control::ControlMessage;
+
+/// A request to show the desktop's settings for the stop shortcut, answered once the desktop has
+/// taken it (or refused).
+pub type ConfigureRequest = oneshot::Sender<anyhow::Result<()>>;
+
+/// Owns the configured key for the lifetime of the supervisor. Native listeners read the
+/// latest value on each event; compositor backends close and replace their registration.
+#[derive(Clone)]
+pub struct StopShortcut {
+    key: watch::Sender<Key>,
+    /// To the compositor backend, which holds the session the desktop's settings belong to. Closed
+    /// on backends that bind the key themselves.
+    configure: mpsc::Sender<ConfigureRequest>,
+}
+
+impl StopShortcut {
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        Self {
+            key: watch::channel(shared::user_config::AppConfig::default().stop_button).0,
+            configure: mpsc::channel(1).0,
+        }
+    }
+
+    pub fn spawn(control_tx: mpsc::Sender<ControlMessage>, key: Key) -> Self {
+        let (key_tx, key_rx) = watch::channel(key);
+        let (configure_tx, configure_rx) = mpsc::channel(4);
+        #[cfg(target_os = "linux")]
+        if linux::is_wayland() {
+            tokio::spawn(linux::run(control_tx, key_rx, configure_rx));
+            return Self {
+                key: key_tx,
+                configure: configure_tx,
+            };
+        }
+        drop(configure_rx);
+        spawn_native_thread(control_tx, key_rx);
+        Self {
+            key: key_tx,
+            configure: configure_tx,
+        }
+    }
+
+    /// Asks the desktop to show its settings for the stop shortcut (GlobalShortcuts portal
+    /// version 2). Fails on backends where Lewdware binds the key itself.
+    pub async fn configure(&self) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+        let (reply, answer) = oneshot::channel();
+        self.configure
+            .send(reply)
+            .await
+            .map_err(|_| anyhow::anyhow!("This desktop has no shortcut settings to open"))?;
+        tokio::time::timeout(std::time::Duration::from_secs(10), answer)
+            .await
+            .context("The desktop didn't answer")?
+            .map_err(|_| anyhow::anyhow!("The desktop shortcut session closed"))?
+    }
+
+    pub fn reload(&self, key: Key) {
+        self.key.send_if_modified(|current| {
+            if *current == key {
+                false
+            } else {
+                *current = key;
+                true
+            }
+        });
+    }
+
+    pub fn refresh(&self) {
+        let key = self.key.borrow().clone();
+        self.key.send_replace(key);
+    }
+
+    pub async fn setup(&self) -> anyhow::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            let key = self.key.borrow().clone();
+            linux::setup_gnome(&key).await?;
+            // The key may have changed while gsettings was running. Refresh the latest value,
+            // rather than writing the captured key back over a concurrent config reload.
+            self.refresh();
+            Ok(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        anyhow::bail!("Desktop shortcut setup is only used by GNOME on Wayland")
+    }
+}
 
 /// Spawn a thread that listens for the stop shortcut being pressed, sending
 /// [ControlMessage::StopKeyPressed] on match. Moved here wholesale from the engine (which used
 /// to own this thread directly) -- the supervisor is now the sole owner of the shortcut, alive
 /// even if a session hangs.
-pub fn spawn_stop_thread(control_tx: mpsc::Sender<ControlMessage>, target_key: Key) {
+fn spawn_native_thread(control_tx: mpsc::Sender<ControlMessage>, mut target: watch::Receiver<Key>) {
+    let runtime = tokio::runtime::Handle::current();
     tracing::info!("Spawning stop-shortcut thread");
     thread::spawn(move || {
         tracing::info!("Stop-shortcut thread started");
@@ -31,46 +126,59 @@ pub fn spawn_stop_thread(control_tx: mpsc::Sender<ControlMessage>, target_key: K
             }
         }
 
-        let rdev_key = match key_to_rdev(&target_key) {
-            Some(x) => x,
-            None => {
-                tracing::error!("Key cannot be matched: {:?}", target_key.code);
+        loop {
+            target.borrow_and_update();
+            let _ = control_tx.blocking_send(ControlMessage::StopShortcutChanged(
+                StopShortcutStatus::Listening {
+                    backend: if cfg!(target_os = "linux") {
+                        "X11"
+                    } else {
+                        "Native"
+                    }
+                    .into(),
+                },
+            ));
+
+            let mut keys = HashSet::new();
+            let event_target = target.clone();
+
+            let event_tx = control_tx.clone();
+            if let Err(err) = rdev::listen(move |event| {
+                if let rdev::EventType::KeyPress(key) = event.event_type {
+                    keys.insert(key);
+
+                    let target_key = event_target.borrow().clone();
+                    if Some(key) == key_to_rdev(&target_key) {
+                        let modifiers = rdev_keys_to_modifiers(&keys);
+
+                        if modifier_matches(&modifiers, &target_key.modifiers)
+                            && let Err(err) = event_tx.blocking_send(ControlMessage::StopKeyPressed)
+                        {
+                            tracing::error!("Could not send stop-shortcut event: {}", err);
+                        }
+                    }
+                } else if let rdev::EventType::KeyRelease(key) = event.event_type {
+                    keys.remove(&key);
+                }
+            }) {
+                let _ = control_tx.blocking_send(ControlMessage::StopShortcutChanged(
+                    StopShortcutStatus::Failed {
+                        message: format!("Stop shortcut listener failed: {err:?}"),
+                    },
+                ));
+                #[cfg(target_vendor = "apple")]
+                tracing::error!(
+                    "Stop shortcut listener failed (this usually means accessibility permission was not granted): {:?}",
+                    err
+                );
+                #[cfg(not(target_vendor = "apple"))]
+                tracing::error!("Stop shortcut listener failed: {:?}", err);
+            }
+            // rdev returned (usually a missing display/permission). A retry or key edit may
+            // recover it; wait for that request rather than repeatedly opening the display.
+            if runtime.block_on(target.changed()).is_err() {
                 return;
             }
-        };
-
-        tracing::info!(
-            "Stop-shortcut listener starting: watching for {:?} with modifiers {:?}",
-            rdev_key,
-            target_key.modifiers
-        );
-
-        let mut keys = HashSet::new();
-
-        if let Err(err) = rdev::listen(move |event| {
-            if let rdev::EventType::KeyPress(key) = event.event_type {
-                keys.insert(key);
-
-                if key == rdev_key {
-                    let modifiers = rdev_keys_to_modifiers(&keys);
-
-                    if modifier_matches(&modifiers, &target_key.modifiers)
-                        && let Err(err) = control_tx.blocking_send(ControlMessage::StopKeyPressed)
-                    {
-                        tracing::error!("Could not send stop-shortcut event: {}", err);
-                    }
-                }
-            } else if let rdev::EventType::KeyRelease(key) = event.event_type {
-                keys.remove(&key);
-            }
-        }) {
-            #[cfg(target_vendor = "apple")]
-            tracing::error!(
-                "Stop shortcut listener failed (this usually means accessibility permission was not granted): {:?}",
-                err
-            );
-            #[cfg(not(target_vendor = "apple"))]
-            tracing::error!("Stop shortcut listener failed: {:?}", err);
         }
     });
 }

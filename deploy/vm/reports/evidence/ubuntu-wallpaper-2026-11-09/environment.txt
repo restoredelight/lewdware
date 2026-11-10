@@ -1,0 +1,554 @@
+3bb02562b71d4380eb517399c0e6c0291337a1c177d2945a8f3c1523b23efff4  /usr/bin/lewdware
+ad82226a33bce6a6962e94160839f1cdc2f9ba11953b5ae2d6f5bbb3385c229e  /usr/lib/lewdware/lewdware-engine
+f96fda947a1a3f51eb35c252159fb1484d50ec07315a8a21669a376021f56fbb  /usr/lib/lewdware/lewdware-supervisor
+HOME=/home/ashbythorpe
+LANG=en_US.UTF-8
+LOGNAME=ashbythorpe
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin
+SHELL=/bin/bash
+USER=ashbythorpe
+XDG_RUNTIME_DIR=/run/user/1000
+GTK_MODULES=gail:atk-bridge
+QT_ACCESSIBILITY=1
+XDG_DATA_DIRS=/usr/share/ubuntu:/usr/share/gnome:/usr/local/share/:/usr/share/:/var/lib/snapd/desktop
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+DEBUGINFOD_URLS=$'https://debuginfod.ubuntu.com '
+DESKTOP_SESSION=ubuntu
+DISPLAY=:0
+GDMSESSION=ubuntu
+GNOME_DESKTOP_SESSION_ID=this-is-deprecated
+GNOME_SETUP_DISPLAY=:1
+GNOME_SHELL_SESSION_MODE=ubuntu
+GSM_SKIP_SSH_AGENT_WORKAROUND=true
+IM_CONFIG_PHASE=1
+PWD=/home/ashbythorpe
+QT_IM_MODULE=ibus
+SESSION_MANAGER=local/ashbythorpe-Standard-PC-Q35-ICH9-2009:@/tmp/.ICE-unix/1284,unix/ashbythorpe-Standard-PC-Q35-ICH9-2009:/tmp/.ICE-unix/1284
+SHLVL=0
+SSH_AUTH_SOCK=/run/user/1000/keyring/ssh
+USERNAME=ashbythorpe
+WAYLAND_DISPLAY=wayland-0
+XAUTHORITY=/run/user/1000/.mutter-Xwaylandauth.SZHNY3
+XDG_CONFIG_DIRS=/etc/xdg/xdg-ubuntu:/etc/xdg
+XDG_CURRENT_DESKTOP=ubuntu:GNOME
+XDG_MENU_PREFIX=gnome-
+XDG_SESSION_CLASS=user
+XDG_SESSION_DESKTOP=ubuntu
+XDG_SESSION_TYPE=wayland
+XMODIFIERS=@im=ibus
+_=/usr/bin/gnome-session
+gnome-shell	46.0-0ubuntu6~24.04.13
+xdg-desktop-portal	1.18.4-1ubuntu2.24.04.2
+xdg-desktop-portal-gnome	46.2-0ubuntu1
+node /org/freedesktop/portal/desktop {
+  interface org.freedesktop.DBus.Properties {
+    methods:
+      Get(in  s interface_name,
+          in  s property_name,
+          out v value);
+      GetAll(in  s interface_name,
+             out a{sv} properties);
+      Set(in  s interface_name,
+          in  s property_name,
+          in  v value);
+    signals:
+      PropertiesChanged(s interface_name,
+                        a{sv} changed_properties,
+                        as invalidated_properties);
+    properties:
+  };
+  interface org.freedesktop.DBus.Introspectable {
+    methods:
+      Introspect(out s xml_data);
+    signals:
+    properties:
+  };
+  interface org.freedesktop.DBus.Peer {
+    methods:
+      Ping();
+      GetMachineId(out s machine_uuid);
+    signals:
+    properties:
+  };
+  interface org.freedesktop.portal.Inhibit {
+    methods:
+      Inhibit(in  s window,
+              in  u flags,
+              in  a{sv} options,
+              out o handle);
+      CreateMonitor(in  s window,
+                    in  a{sv} options,
+                    out o handle);
+      QueryEndResponse(in  o session_handle);
+    signals:
+      StateChanged(o session_handle,
+                   a{sv} state);
+    properties:
+      readonly u version = 3;
+  };
+  interface org.freedesktop.portal.Background {
+    methods:
+      RequestBackground(in  s parent_window,
+                        in  a{sv} options,
+                        out o handle);
+      SetStatus(in  a{sv} options);
+    signals:
+    properties:
+      readonly u version = 2;
+  };
+  interface org.freedesktop.portal.Location {
+    methods:
+      CreateSession(in  a{sv} options,
+                    out o handle);
+      Start(in  o session_handle,
+            in  s parent_window,
+            in  a{sv} options,
+            out o handle);
+    signals:
+      LocationUpdated(o session_handle,
+                      a{sv} location);
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.Notification {
+    methods:
+      AddNotification(in  s id,
+                      in  a{sv} notification);
+      RemoveNotification(in  s id);
+    signals:
+      ActionInvoked(s id,
+                    s action,
+                    av parameter);
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.Screenshot {
+    methods:
+      Screenshot(in  s parent_window,
+                 in  a{sv} options,
+                 out o handle);
+      PickColor(in  s parent_window,
+                in  a{sv} options,
+                out o handle);
+    signals:
+    properties:
+      readonly u version = 2;
+  };
+  interface org.freedesktop.portal.Account {
+    methods:
+      GetUserInformation(in  s window,
+                         in  a{sv} options,
+                         out o handle);
+    signals:
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.NetworkMonitor {
+    methods:
+      GetAvailable(out b available);
+      GetMetered(out b metered);
+      GetConnectivity(out u connectivity);
+      GetStatus(out a{sv} status);
+      CanReach(in  s hostname,
+               in  u port,
+               out b reachable);
+    signals:
+      changed();
+    properties:
+      readonly u version = 3;
+  };
+  interface org.freedesktop.portal.Print {
+    methods:
+      Print(in  s parent_window,
+            in  s title,
+            in  h fd,
+            in  a{sv} options,
+            out o handle);
+      PreparePrint(in  s parent_window,
+                   in  s title,
+                   in  a{sv} settings,
+                   in  a{sv} page_setup,
+                   in  a{sv} options,
+                   out o handle);
+    signals:
+    properties:
+      readonly u version = 2;
+  };
+  interface org.freedesktop.portal.Settings {
+    methods:
+      ReadAll(in  as namespaces,
+              out a{sa{sv}} value);
+      @org.freedesktop.DBus.Deprecated("true")
+      Read(in  s namespace,
+           in  s key,
+           out v value);
+      ReadOne(in  s namespace,
+              in  s key,
+              out v value);
+    signals:
+      SettingChanged(s namespace,
+                     s key,
+                     v value);
+    properties:
+      readonly u version = 2;
+  };
+  interface org.freedesktop.portal.GameMode {
+    methods:
+      QueryStatus(in  i pid,
+                  out i result);
+      RegisterGame(in  i pid,
+                   out i result);
+      UnregisterGame(in  i pid,
+                     out i result);
+      QueryStatusByPid(in  i target,
+                       in  i requester,
+                       out i result);
+      RegisterGameByPid(in  i target,
+                        in  i requester,
+                        out i result);
+      UnregisterGameByPid(in  i target,
+                          in  i requester,
+                          out i result);
+      QueryStatusByPIDFd(in  h target,
+                         in  h requester,
+                         out i result);
+      RegisterGameByPIDFd(in  h target,
+                          in  h requester,
+                          out i result);
+      UnregisterGameByPIDFd(in  h target,
+                            in  h requester,
+                            out i result);
+    signals:
+    properties:
+      readonly b Active = false;
+      readonly u version = 4;
+  };
+  interface org.freedesktop.portal.RemoteDesktop {
+    methods:
+      CreateSession(in  a{sv} options,
+                    out o handle);
+      SelectDevices(in  o session_handle,
+                    in  a{sv} options,
+                    out o handle);
+      Start(in  o session_handle,
+            in  s parent_window,
+            in  a{sv} options,
+            out o handle);
+      NotifyPointerMotion(in  o session_handle,
+                          in  a{sv} options,
+                          in  d dx,
+                          in  d dy);
+      NotifyPointerMotionAbsolute(in  o session_handle,
+                                  in  a{sv} options,
+                                  in  u stream,
+                                  in  d x,
+                                  in  d y);
+      NotifyPointerButton(in  o session_handle,
+                          in  a{sv} options,
+                          in  i button,
+                          in  u state);
+      NotifyPointerAxis(in  o session_handle,
+                        in  a{sv} options,
+                        in  d dx,
+                        in  d dy);
+      NotifyPointerAxisDiscrete(in  o session_handle,
+                                in  a{sv} options,
+                                in  u axis,
+                                in  i steps);
+      NotifyKeyboardKeycode(in  o session_handle,
+                            in  a{sv} options,
+                            in  i keycode,
+                            in  u state);
+      NotifyKeyboardKeysym(in  o session_handle,
+                           in  a{sv} options,
+                           in  i keysym,
+                           in  u state);
+      NotifyTouchDown(in  o session_handle,
+                      in  a{sv} options,
+                      in  u stream,
+                      in  u slot,
+                      in  d x,
+                      in  d y);
+      NotifyTouchMotion(in  o session_handle,
+                        in  a{sv} options,
+                        in  u stream,
+                        in  u slot,
+                        in  d x,
+                        in  d y);
+      NotifyTouchUp(in  o session_handle,
+                    in  a{sv} options,
+                    in  u slot);
+      ConnectToEIS(in  o session_handle,
+                   in  a{sv} options,
+                   out h fd);
+    signals:
+    properties:
+      readonly u AvailableDeviceTypes = 7;
+      readonly u version = 2;
+  };
+  interface org.freedesktop.portal.MemoryMonitor {
+    methods:
+    signals:
+      LowMemoryWarning(y level);
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.OpenURI {
+    methods:
+      OpenURI(in  s parent_window,
+              in  s uri,
+              in  a{sv} options,
+              out o handle);
+      OpenFile(in  s parent_window,
+               in  h fd,
+               in  a{sv} options,
+               out o handle);
+      OpenDirectory(in  s parent_window,
+                    in  h fd,
+                    in  a{sv} options,
+                    out o handle);
+    signals:
+    properties:
+      readonly u version = 3;
+  };
+  interface org.freedesktop.portal.Realtime {
+    methods:
+      MakeThreadRealtimeWithPID(in  t process,
+                                in  t thread,
+                                in  u priority);
+      MakeThreadHighPriorityWithPID(in  t process,
+                                    in  t thread,
+                                    in  i priority);
+    signals:
+    properties:
+      readonly i MaxRealtimePriority = 20;
+      readonly i MinNiceLevel = -15;
+      readonly x RTTimeUSecMax = 200000;
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.Secret {
+    methods:
+      RetrieveSecret(in  h fd,
+                     in  a{sv} options,
+                     out o handle);
+    signals:
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.WebExtensions {
+    methods:
+      CreateSession(in  a{sv} options,
+                    out o session_handle);
+      GetManifest(in  o session_handle,
+                  in  s name,
+                  in  s extension_or_origin,
+                  out s json_manifest);
+      Start(in  o session_handle,
+            in  s name,
+            in  s extension_or_origin,
+            in  a{sv} options,
+            out o handle);
+      GetPipes(in  o session_handle,
+               in  a{sv} options,
+               out h stdin,
+               out h stdout,
+               out h stderr);
+    signals:
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.Wallpaper {
+    methods:
+      SetWallpaperURI(in  s parent_window,
+                      in  s uri,
+                      in  a{sv} options,
+                      out o handle);
+      SetWallpaperFile(in  s parent_window,
+                       in  h fd,
+                       in  a{sv} options,
+                       out o handle);
+    signals:
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.Camera {
+    methods:
+      AccessCamera(in  a{sv} options,
+                   out o handle);
+      OpenPipeWireRemote(in  a{sv} options,
+                         out h fd);
+    signals:
+    properties:
+      readonly b IsCameraPresent = false;
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.InputCapture {
+    methods:
+      CreateSession(in  s parent_window,
+                    in  a{sv} options,
+                    out o handle);
+      GetZones(in  o session_handle,
+               in  a{sv} options,
+               out o handle);
+      SetPointerBarriers(in  o session_handle,
+                         in  a{sv} options,
+                         in  aa{sv} barriers,
+                         in  u zone_set,
+                         out o handle);
+      Enable(in  o session_handle,
+             in  a{sv} options);
+      Disable(in  o session_handle,
+              in  a{sv} options);
+      Release(in  o session_handle,
+              in  a{sv} options);
+      ConnectToEIS(in  o session_handle,
+                   in  a{sv} options,
+                   out h fd);
+    signals:
+      Disabled(o session_handle,
+               a{sv} options);
+      Activated(o session_handle,
+                a{sv} options);
+      Deactivated(o session_handle,
+                  a{sv} options);
+      ZonesChanged(o session_handle,
+                   a{sv} options);
+    properties:
+      readonly u SupportedCapabilities = 15;
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.Device {
+    methods:
+      AccessDevice(in  u pid,
+                   in  as devices,
+                   in  a{sv} options,
+                   out o handle);
+    signals:
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.PowerProfileMonitor {
+    methods:
+    signals:
+    properties:
+      readonly b power-saver-enabled = false;
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.DynamicLauncher {
+    methods:
+      Install(in  s token,
+              in  s desktop_file_id,
+              in  s desktop_entry,
+              in  a{sv} options);
+      PrepareInstall(in  s parent_window,
+                     in  s name,
+                     in  v icon_v,
+                     in  a{sv} options,
+                     out o handle);
+      RequestInstallToken(in  s name,
+                          in  v icon_v,
+                          in  a{sv} options,
+                          out s token);
+      Uninstall(in  s desktop_file_id,
+                in  a{sv} options);
+      GetDesktopEntry(in  s desktop_file_id,
+                      out s contents);
+      GetIcon(in  s desktop_file_id,
+              out v icon_v,
+              out s icon_format,
+              out u icon_size);
+      Launch(in  s desktop_file_id,
+             in  a{sv} options);
+    signals:
+    properties:
+      readonly u SupportedLauncherTypes = 3;
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.ScreenCast {
+    methods:
+      CreateSession(in  a{sv} options,
+                    out o handle);
+      SelectSources(in  o session_handle,
+                    in  a{sv} options,
+                    out o handle);
+      Start(in  o session_handle,
+            in  s parent_window,
+            in  a{sv} options,
+            out o handle);
+      OpenPipeWireRemote(in  o session_handle,
+                         in  a{sv} options,
+                         out h fd);
+    signals:
+    properties:
+      readonly u AvailableSourceTypes = 7;
+      readonly u AvailableCursorModes = 7;
+      readonly u version = 5;
+  };
+  interface org.freedesktop.portal.Clipboard {
+    methods:
+      RequestClipboard(in  o session_handle,
+                       in  a{sv} options);
+      SetSelection(in  o session_handle,
+                   in  a{sv} options);
+      SelectionWrite(in  o session_handle,
+                     in  u serial,
+                     out h fd);
+      SelectionWriteDone(in  o session_handle,
+                         in  u serial,
+                         in  b success);
+      SelectionRead(in  o session_handle,
+                    in  s mime_type,
+                    out h fd);
+    signals:
+      SelectionOwnerChanged(o session_handle,
+                            a{sv} options);
+      SelectionTransfer(o session_handle,
+                        s mime_type,
+                        u serial);
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.Email {
+    methods:
+      ComposeEmail(in  s parent_window,
+                   in  a{sv} options,
+                   out o handle);
+    signals:
+    properties:
+      readonly u version = 4;
+  };
+  interface org.freedesktop.portal.Trash {
+    methods:
+      TrashFile(in  h fd,
+                out u result);
+    signals:
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.ProxyResolver {
+    methods:
+      Lookup(in  s uri,
+             out as proxies);
+    signals:
+    properties:
+      readonly u version = 1;
+  };
+  interface org.freedesktop.portal.FileChooser {
+    methods:
+      OpenFile(in  s parent_window,
+               in  s title,
+               in  a{sv} options,
+               out o handle);
+      SaveFile(in  s parent_window,
+               in  s title,
+               in  a{sv} options,
+               out o handle);
+      SaveFiles(in  s parent_window,
+                in  s title,
+                in  a{sv} options,
+                out o handle);
+    signals:
+    properties:
+      readonly u version = 3;
+  };
+};
